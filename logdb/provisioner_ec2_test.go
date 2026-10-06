@@ -28,6 +28,7 @@ type fakeEC2Instance struct {
 	imageID      string // ImageId from the RunInstances request ("" if none)
 	state        string // pending | running | terminated
 	pendingPolls int
+	launched     time.Time // zero unless a test sets it (the export sweep reads LaunchTime)
 }
 
 type fakeEC2 struct {

@@ -315,7 +315,25 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 
 	prov.Start(cfg.Ctx)
 	startRetentionJanitor(cfg.Ctx, prov, cfg.AWSRegion)
+	startArchiveSweeper(cfg.Ctx, prov)
 	return prov, nil
+}
+
+// startArchiveSweeper starts the loop that removes orphaned export resources and
+// logs an ALERT for shards stuck in ARCHIVING. It always runs in prod: the
+// stuck-archive alert applies to in-process archives too. Orphan removal needs
+// the export wired; without it only the alert runs.
+func startArchiveSweeper(ctx context.Context, prov *Provisioner) {
+	sw := &ArchiveSweeper{
+		Store:    ShardStore{prov.store},
+		Clock:    time.Now,
+		IsLeader: prov.isLeader,
+	}
+	if lister, ok := prov.config.Exports.(ExportLister); ok {
+		sw.Resources = lister
+	}
+	sw.Start(ctx)
+	log.Printf("coordinator: archive sweeper started (orphan removal=%v, stuck-archive alert after %s)", sw.Resources != nil, archivingStuckAfter)
 }
 
 // startRetentionJanitor wires and starts the daily archive retention

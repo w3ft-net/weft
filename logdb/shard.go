@@ -288,6 +288,29 @@ func (s ShardStore) CountActiveExports() (int, error) {
 	return int(n), err
 }
 
+// StuckShard is a shard that has been ARCHIVING since Since.
+type StuckShard struct {
+	ShardID  string    `gorm:"column:shard_id"`
+	Since    time.Time `gorm:"column:since"`
+	Attempts int       `gorm:"column:attempts"`
+}
+
+// StuckArchiving returns the shards currently ARCHIVING whose most recent entry
+// into ARCHIVING (from shard_operations, which the row trigger writes on every
+// state change) is before the given time.
+func (s ShardStore) StuckArchiving(before time.Time) ([]StuckShard, error) {
+	var out []StuckShard
+	err := s.db().Raw(`
+		SELECT r.id AS shard_id, MAX(o.ts) AS since, r.export_attempt AS attempts
+		FROM shard_records r
+		JOIN shard_operations o ON o.shard_id = r.id AND o.to_state = 'ARCHIVING'
+		WHERE r.state = 'ARCHIVING'
+		GROUP BY r.id, r.export_attempt
+		HAVING MAX(o.ts) < ?
+		ORDER BY since`, before).Scan(&out).Error
+	return out, err
+}
+
 // LatestShardDiskBytes returns the disk footprint (.duckdb + WAL + spill) in
 // the shard's most recent heartbeat, or 0 if it has none. It sizes the export
 // instance; the WAL and spill make it a slight overestimate of the .duckdb

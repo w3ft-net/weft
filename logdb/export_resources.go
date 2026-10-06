@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -316,6 +317,98 @@ func (x *ExportResources) Cleanup(ctx context.Context, shardID string) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// ExportResource is one export snapshot or instance found in AWS, with the
+// identity its tags carry. Created is zero when EC2 did not report a time.
+type ExportResource struct {
+	Kind    string // "instance" or "snapshot"
+	ID      string
+	ShardID string
+	Attempt int
+	Created time.Time
+}
+
+// ListExportResources returns every live export instance and every export
+// snapshot in the account, found by the export_shard_id tag. Instances that
+// are already terminated are skipped: nothing is left to remove. It is the
+// sweep's view of the world, independent of what the shard rows say.
+func (x *ExportResources) ListExportResources(ctx context.Context) ([]ExportResource, error) {
+	hasTag := ec2types.Filter{Name: aws.String("tag-key"), Values: []string{exportTagShard}}
+	var out []ExportResource
+
+	insts, err := x.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{hasTag, {
+			Name:   aws.String("instance-state-name"),
+			Values: []string{"pending", "running", "stopping", "stopped"},
+		}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list export instances: %w", err)
+	}
+	for _, r := range insts.Reservations {
+		for _, inst := range r.Instances {
+			if inst.InstanceId == nil {
+				continue
+			}
+			res := exportResourceFromTags("instance", *inst.InstanceId, inst.Tags)
+			if inst.LaunchTime != nil {
+				res.Created = *inst.LaunchTime
+			}
+			out = append(out, res)
+		}
+	}
+
+	snaps, err := x.ec2.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
+		OwnerIds: []string{"self"}, Filters: []ec2types.Filter{hasTag},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list export snapshots: %w", err)
+	}
+	for _, s := range snaps.Snapshots {
+		if s.SnapshotId == nil {
+			continue
+		}
+		res := exportResourceFromTags("snapshot", *s.SnapshotId, s.Tags)
+		if s.StartTime != nil {
+			res.Created = *s.StartTime
+		}
+		out = append(out, res)
+	}
+	return out, nil
+}
+
+func exportResourceFromTags(kind, id string, tags []ec2types.Tag) ExportResource {
+	r := ExportResource{Kind: kind, ID: id}
+	for _, t := range tags {
+		switch aws.ToString(t.Key) {
+		case exportTagShard:
+			r.ShardID = aws.ToString(t.Value)
+		case exportTagAttempt:
+			r.Attempt, _ = strconv.Atoi(aws.ToString(t.Value))
+		}
+	}
+	return r
+}
+
+// DeleteExportResource removes one export instance or snapshot. A resource
+// that is already gone is success: the sweep races the FSM's own cleanup.
+func (x *ExportResources) DeleteExportResource(ctx context.Context, r ExportResource) error {
+	switch r.Kind {
+	case "instance":
+		_, err := x.ec2.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{r.ID}})
+		if err != nil && !instanceAlreadyGone(err) {
+			return fmt.Errorf("terminate %s: %w", r.ID, err)
+		}
+	case "snapshot":
+		_, err := x.ec2.DeleteSnapshot(ctx, &ec2.DeleteSnapshotInput{SnapshotId: aws.String(r.ID)})
+		if err != nil && !snapshotAlreadyGone(err) {
+			return fmt.Errorf("delete snapshot %s: %w", r.ID, err)
+		}
+	default:
+		return fmt.Errorf("unknown export resource kind %q (%s)", r.Kind, r.ID)
+	}
+	return nil
 }
 
 // snapshotAlreadyGone reports whether a delete error means the snapshot is

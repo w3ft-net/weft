@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -17,9 +18,10 @@ import (
 // ── fakeExportEC2: tag-filtering EC2ExportAPI ───────────────────────
 
 type fakeSnapshot struct {
-	id    string
-	tags  map[string]string
-	state ec2types.SnapshotState
+	id      string
+	tags    map[string]string
+	state   ec2types.SnapshotState
+	started time.Time // zero unless a test sets it (the export sweep reads StartTime)
 }
 
 type fakeExportEC2 struct {
@@ -49,7 +51,16 @@ func tagMap(specs []ec2types.TagSpecification, rt ec2types.ResourceType) map[str
 
 func matchesTagFilters(tags map[string]string, filters []ec2types.Filter) bool {
 	for _, f := range filters {
-		key, ok := strings.CutPrefix(aws.ToString(f.Name), "tag:")
+		name := aws.ToString(f.Name)
+		if name == "tag-key" { // has the tag at all, any value
+			for _, k := range f.Values {
+				if _, has := tags[k]; !has {
+					return false
+				}
+			}
+			continue
+		}
+		key, ok := strings.CutPrefix(name, "tag:")
 		if !ok {
 			continue
 		}
@@ -58,6 +69,14 @@ func matchesTagFilters(tags map[string]string, filters []ec2types.Filter) bool {
 		}
 	}
 	return true
+}
+
+func tagList(tags map[string]string) []ec2types.Tag {
+	var out []ec2types.Tag
+	for k, v := range tags {
+		out = append(out, ec2types.Tag{Key: aws.String(k), Value: aws.String(v)})
+	}
+	return out
 }
 
 func (f *fakeExportEC2) CreateSnapshot(_ context.Context, in *ec2.CreateSnapshotInput, _ ...func(*ec2.Options)) (*ec2.CreateSnapshotOutput, error) {
@@ -85,9 +104,13 @@ func (f *fakeExportEC2) DescribeSnapshots(_ context.Context, in *ec2.DescribeSna
 		if !matchesTagFilters(s.tags, in.Filters) {
 			continue
 		}
-		out = append(out, ec2types.Snapshot{
-			SnapshotId: aws.String(s.id), State: s.state, Progress: aws.String("42%"),
-		})
+		snap := ec2types.Snapshot{
+			SnapshotId: aws.String(s.id), State: s.state, Progress: aws.String("42%"), Tags: tagList(s.tags),
+		}
+		if !s.started.IsZero() {
+			snap.StartTime = aws.Time(s.started)
+		}
+		out = append(out, snap)
 	}
 	return &ec2.DescribeSnapshotsOutput{Snapshots: out}, nil
 }
@@ -135,10 +158,15 @@ func (f *fakeExportEC2) DescribeInstances(_ context.Context, in *ec2.DescribeIns
 		if len(wantStates) > 0 && !ec2Contains(wantStates, inst.state) {
 			continue
 		}
-		out = append(out, ec2types.Instance{
+		i := ec2types.Instance{
 			InstanceId: aws.String(inst.id),
 			State:      &ec2types.InstanceState{Name: ec2types.InstanceStateName(inst.state)},
-		})
+			Tags:       tagList(inst.tags),
+		}
+		if !inst.launched.IsZero() {
+			i.LaunchTime = aws.Time(inst.launched)
+		}
+		out = append(out, i)
 	}
 	return &ec2.DescribeInstancesOutput{Reservations: []ec2types.Reservation{{Instances: out}}}, nil
 }

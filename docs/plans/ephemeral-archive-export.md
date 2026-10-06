@@ -359,8 +359,33 @@ volume (the block device mapping asks for `/dev/sdf`).
   placeholder until Phase 0 measurements replace it.
 - Not covered by tests: anything against real AWS.
 
-**Phase 4 — sweep + alerts.** Orphan sweep for tagged export resources;
-alert on ARCHIVING older than N× the expected export time.
+**Phase 4 — sweep + alerts. DONE (code).** `logdb/export_sweep.go`, an
+`ArchiveSweeper` loop (every 15 min, leader-gated) started by `startProd`
+whether or not the export is enabled:
+- **Orphan removal.** `ExportResources.ListExportResources` finds every
+  live export instance and every export snapshot by the `export_shard_id`
+  tag; the sweep removes what nothing references. A resource is an orphan
+  when it is older than 15 min **and** its shard row is gone, its shard is
+  ARCHIVED or GONE, or it is not the snapshot or instance the shard's
+  current attempt records (a superseded attempt). The 15-minute grace lets
+  the FSM adopt a resource it created but had not yet recorded. Anything
+  older than 4h goes regardless (the FSM fails an attempt at 3h, so this
+  only catches what that missed). A resource with no creation time is never
+  swept. Deletes treat "already gone" as success, and one failure does not
+  stop the rest.
+- **Stuck-archive alert.** A shard ARCHIVING for longer than 6h (twice the
+  attempt deadline) logs
+  `ALERT archiving-stuck shard=<id> age=<d> export_attempts=<n>` every
+  pass. It runs without the export too, since an in-process archive that
+  cannot finish (4a672d0d) is stuck the same way. Entry time comes from
+  `shard_operations`, which the row trigger writes on every state change.
+- **The alert is a log line, not a built-in notification.** A cron or
+  monitor on that line is the operating account's configuration and stays
+  out of git. The attempt-cap line from Phase 3 is the other one to watch.
+- Dev (`startDev`) does not start the sweeper.
+- Not covered by tests: the sweep against real AWS, including whether the
+  `tag-key` filter and tag-based `DescribeSnapshots` behave as the fake
+  does, and listing past a single results page.
 
 **Phase 5 — roll out.** Ship, then re-evaluate `4a672d0d`: it should
 complete on its own once the coordinator runs the new path. Only if it
