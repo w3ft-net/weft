@@ -3,6 +3,8 @@
 package logdb
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,9 +30,9 @@ func TestShardStore_BeginExportAttemptIsACompareAndSet(t *testing.T) {
 	ss, _ := exportFactsFixture(t)
 	started := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
 
-	won, err := ss.BeginExportAttempt("s-test", 0, "r7g.large", started)
-	if err != nil || !won {
-		t.Fatalf("first claim: won=%v err=%v", won, err)
+	claim, err := ss.BeginExportAttempt("s-test", 0, "r7g.large", started, 5)
+	if err != nil || claim != ExportClaimWon {
+		t.Fatalf("first claim: %v err=%v", claim, err)
 	}
 	sh := getShardRow(t, ss)
 	if sh.ExportAttempt != 1 || sh.ExportInstanceType != "r7g.large" || sh.ExportStartedAt == nil || !sh.ExportStartedAt.Equal(started) {
@@ -39,20 +41,157 @@ func TestShardStore_BeginExportAttemptIsACompareAndSet(t *testing.T) {
 
 	// A second coordinator that read attempt=0 before the first claim lost the
 	// race: it must not start attempt 1 again.
-	won, err = ss.BeginExportAttempt("s-test", 0, "r7g.2xlarge", started)
+	claim, err = ss.BeginExportAttempt("s-test", 0, "r7g.2xlarge", started, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if won {
-		t.Fatal("a stale claim (attempt 0) won after attempt 1 was already begun")
+	if claim != ExportClaimLost {
+		t.Fatalf("a stale claim (attempt 0) = %v after attempt 1 was already begun, want lost", claim)
 	}
 	if got := getShardRow(t, ss); got.ExportAttempt != 1 || got.ExportInstanceType != "r7g.large" {
 		t.Fatalf("losing claim changed the row: %+v", got)
 	}
 
-	// The next legitimate attempt claims from the current value.
-	if won, err = ss.BeginExportAttempt("s-test", 1, "r7g.xlarge", started); err != nil || !won {
-		t.Fatalf("attempt 2: won=%v err=%v", won, err)
+	// The next legitimate attempt claims from the current value (the facts of the
+	// failed attempt are cleared first, as the FSM does).
+	if err := ss.ClearExportFacts("s-test"); err != nil {
+		t.Fatal(err)
+	}
+	if claim, err = ss.BeginExportAttempt("s-test", 1, "r7g.xlarge", started, 5); err != nil || claim != ExportClaimWon {
+		t.Fatalf("attempt 2: %v err=%v", claim, err)
+	}
+}
+
+// The cap on concurrent exports is enforced by the claim itself, atomically, so
+// a bucket cohort reaching ARCHIVING together cannot start more attempts than
+// the cap, and a shard held by the cap has not started anything: no counter
+// moved, no clock running.
+func TestShardStore_BeginExportAttemptHonorsTheCap(t *testing.T) {
+	ss, db := exportFactsFixture(t)
+	bucket := seedBucket(t, db, BucketStasis)
+	if err := ss.SaveShard(&Shard{
+		ID: "s-other", State: StateArchiving, BucketID: bucket.ID, Tier: "small",
+		WindowStart: time.Now(), WindowEnd: time.Now(), CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+
+	if claim, err := ss.BeginExportAttempt("s-test", 0, "r7g.large", started, 1); err != nil || claim != ExportClaimWon {
+		t.Fatalf("first shard: %v err=%v", claim, err)
+	}
+	claim, err := ss.BeginExportAttempt("s-other", 0, "r7g.large", started, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claim != ExportClaimHeld {
+		t.Fatalf("second shard at cap 1 = %v, want held", claim)
+	}
+	other, _, _ := ss.GetShard("s-other")
+	if other.ExportAttempt != 0 || other.ExportStartedAt != nil {
+		t.Fatalf("a held claim changed the row: %+v", other)
+	}
+
+	// A higher cap admits it.
+	if claim, _ = ss.BeginExportAttempt("s-other", 0, "r7g.large", started, 2); claim != ExportClaimWon {
+		t.Fatalf("second shard at cap 2 = %v, want won", claim)
+	}
+}
+
+// The cap must hold when many shards are evaluated at once, which is exactly
+// how a bucket cohort reaching ARCHIVING together arrives. This needs a real
+// pooled connection and committed rows (the fixtures' transaction-scoped store
+// cannot run goroutines), so it seeds its own and cleans up after itself. Without
+// the advisory lock every claimant reads "0 in flight" before any has written,
+// and more than the cap start.
+func TestShardStore_BeginExportAttemptCapHoldsUnderConcurrentClaims(t *testing.T) {
+	db, err := store.Open(store.TestDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ss := ShardStore{db}
+	bucket := seedBucket(t, db, BucketStasis)
+
+	const shards, cap = 12, 3
+	ids := make([]string, shards)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("s-conc-%d-%d", time.Now().UnixNano(), i)
+		if err := ss.SaveShard(&Shard{ID: ids[i], State: StateArchiving, BucketID: bucket.ID, Tier: "small",
+			WindowStart: time.Now(), WindowEnd: time.Now(), CreatedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, id := range ids {
+			db.DB().Exec("DELETE FROM shard_operations WHERE shard_id = ?", id)
+			db.DB().Exec("DELETE FROM shard_records WHERE id = ?", id)
+		}
+		db.DB().Exec("DELETE FROM buckets WHERE id = ?", bucket.ID)
+	})
+
+	var (
+		wg      sync.WaitGroup
+		start   = make(chan struct{})
+		mu      sync.Mutex
+		results = map[ExportClaim]int{}
+		errs    []error
+	)
+	for _, id := range ids {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			<-start
+			claim, err := ss.BeginExportAttempt(id, 0, "r7g.large", time.Now(), cap)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs = append(errs, err)
+				return
+			}
+			results[claim]++
+		}(id)
+	}
+	close(start)
+	wg.Wait()
+
+	if len(errs) > 0 {
+		t.Fatalf("claims errored: %v", errs)
+	}
+	if results[ExportClaimWon] != cap || results[ExportClaimHeld] != shards-cap || results[ExportClaimLost] != 0 {
+		t.Fatalf("with %d concurrent claims at cap %d: won=%d held=%d lost=%d, want exactly %d won and %d held",
+			shards, cap, results[ExportClaimWon], results[ExportClaimHeld], results[ExportClaimLost], cap, shards-cap)
+	}
+	var started int64
+	db.DB().Raw("SELECT COUNT(*) FROM shard_records WHERE id IN ? AND export_started_at IS NOT NULL", ids).Scan(&started)
+	if started != cap {
+		t.Fatalf("%d attempts recorded as in flight, want %d", started, cap)
+	}
+}
+
+// A failed attempt gives its slot back, and a shard that has used up its
+// attempts (facts cleared, counter kept) holds none.
+func TestShardStore_ClearingFactsFreesTheSlot(t *testing.T) {
+	ss, db := exportFactsFixture(t)
+	bucket := seedBucket(t, db, BucketStasis)
+	if err := ss.SaveShard(&Shard{
+		ID: "s-other", State: StateArchiving, BucketID: bucket.ID, Tier: "small",
+		WindowStart: time.Now(), WindowEnd: time.Now(), CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	if claim, _ := ss.BeginExportAttempt("s-test", 0, "r7g.large", started, 1); claim != ExportClaimWon {
+		t.Fatal("setup claim failed")
+	}
+	if claim, _ := ss.BeginExportAttempt("s-other", 0, "r7g.large", started, 1); claim != ExportClaimHeld {
+		t.Fatal("expected held")
+	}
+	if err := ss.ClearExportFacts("s-test"); err != nil {
+		t.Fatal(err)
+	}
+	if claim, err := ss.BeginExportAttempt("s-other", 0, "r7g.large", started, 1); err != nil || claim != ExportClaimWon {
+		t.Fatalf("after the slot freed: %v err=%v", claim, err)
 	}
 }
 
@@ -83,7 +222,7 @@ func TestShardStore_ExportFactsAreNarrowWrites(t *testing.T) {
 func TestShardStore_ClearExportFactsKeepsTheAttemptCounter(t *testing.T) {
 	ss, _ := exportFactsFixture(t)
 	started := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
-	if _, err := ss.BeginExportAttempt("s-test", 0, "r7g.large", started); err != nil {
+	if _, err := ss.BeginExportAttempt("s-test", 0, "r7g.large", started, 5); err != nil {
 		t.Fatal(err)
 	}
 	_ = ss.SetExportSnapshot("s-test", "snap-1")
@@ -100,34 +239,6 @@ func TestShardStore_ClearExportFactsKeepsTheAttemptCounter(t *testing.T) {
 	// distinct from the last; clearing the facts must not reset it.
 	if got.ExportAttempt != 1 {
 		t.Fatalf("attempt counter = %d, want 1 (cleared with the facts)", got.ExportAttempt)
-	}
-}
-
-func TestShardStore_CountActiveExports(t *testing.T) {
-	ss, db := exportFactsFixture(t)
-	if n, err := ss.CountActiveExports(); err != nil || n != 0 {
-		t.Fatalf("no exports: n=%d err=%v", n, err)
-	}
-	if err := ss.SetExportInstance("s-test", "i-export"); err != nil {
-		t.Fatal(err)
-	}
-	if n, _ := ss.CountActiveExports(); n != 1 {
-		t.Fatalf("one export instance: n=%d", n)
-	}
-	// A snapshot alone is not a running instance: it does not count against the
-	// instance cap.
-	bucket := seedBucket(t, db, BucketStasis)
-	if err := ss.SaveShard(&Shard{
-		ID: "s-other", State: StateArchiving, BucketID: bucket.ID, Tier: "small",
-		WindowStart: time.Now(), WindowEnd: time.Now(), CreatedAt: time.Now(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := ss.SetExportSnapshot("s-other", "snap-9"); err != nil {
-		t.Fatal(err)
-	}
-	if n, _ := ss.CountActiveExports(); n != 1 {
-		t.Fatalf("a snapshot-only shard counted: n=%d", n)
 	}
 }
 
@@ -170,7 +281,7 @@ func TestRefreshFromStore_SyncsExportFacts(t *testing.T) {
 	}
 
 	started := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
-	if _, err := ss.BeginExportAttempt("s-test", 0, "r7g.xlarge", started); err != nil {
+	if _, err := ss.BeginExportAttempt("s-test", 0, "r7g.xlarge", started, 5); err != nil {
 		t.Fatal(err)
 	}
 	_ = ss.SetExportSnapshot("s-test", "snap-7")

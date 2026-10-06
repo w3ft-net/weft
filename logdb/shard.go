@@ -28,11 +28,10 @@ type shardRowStore interface {
 	LatestPreRecoveryState(id string) (ShardState, error)
 
 	// Ephemeral archive export facts (migration 080).
-	BeginExportAttempt(id string, prevAttempt int, instanceType string, startedAt time.Time) (bool, error)
+	BeginExportAttempt(id string, prevAttempt int, instanceType string, startedAt time.Time, maxActive int) (ExportClaim, error)
 	SetExportSnapshot(id, snapshotID string) error
 	SetExportInstance(id, instanceID string) error
 	ClearExportFacts(id string) error
-	CountActiveExports() (int, error)
 	LatestShardDiskBytes(id string) (int64, error)
 }
 
@@ -236,20 +235,74 @@ func (s ShardStore) ClearShardInstance(id string) error {
 		Select("InstanceID").Updates(&Shard{InstanceID: ""}).Error
 }
 
+// ExportClaim is the outcome of BeginExportAttempt.
+type ExportClaim int
+
+const (
+	// ExportClaimWon: this caller started the shard's next attempt.
+	ExportClaimWon ExportClaim = iota
+	// ExportClaimLost: another evaluator already claimed this shard's next
+	// attempt (a leader handover), or the shard row is gone.
+	ExportClaimLost
+	// ExportClaimHeld: the cap on concurrent attempts is reached. Nothing was
+	// written: no attempt number was taken and no clock started.
+	ExportClaimHeld
+)
+
+// exportClaimLockKey serializes every export claim in the cluster (an
+// arbitrary constant; "WeFt").
+const exportClaimLockKey int64 = 0x57654674
+
 // BeginExportAttempt claims the next export attempt for a shard: it moves
 // export_attempt from prevAttempt to prevAttempt+1 and records the chosen
-// instance type and start time, only if export_attempt is still prevAttempt.
-// It reports whether this caller won, so two evaluators racing (a leader
-// handover) cannot both start the same attempt.
-func (s ShardStore) BeginExportAttempt(id string, prevAttempt int, instanceType string, startedAt time.Time) (bool, error) {
-	res := s.db().Model(&Shard{}).
-		Where("id = ? AND export_attempt = ?", id, prevAttempt).
-		Updates(map[string]any{
-			"export_attempt":       prevAttempt + 1,
-			"export_instance_type": instanceType,
-			"export_started_at":    startedAt,
-		})
-	return res.RowsAffected == 1, res.Error
+// instance type and start time, provided export_attempt is still prevAttempt
+// (else ExportClaimLost, so two evaluators racing across a leader handover
+// cannot both start the same attempt) and fewer than maxActive other shards
+// have an attempt in flight (else ExportClaimHeld).
+//
+// The cap is checked here, in the same transaction as the claim, because that
+// is the only place it can be exact: shards are evaluated concurrently, so a
+// count taken before a later write would let several of them pass it together,
+// and a cap that only held the launch would leave a held shard's attempt clock
+// running while it queued. A transaction-scoped advisory lock serializes the
+// claims; "in flight" means export_started_at is set, which ClearExportFacts
+// resets, so a finished or failed attempt gives its slot back.
+func (s ShardStore) BeginExportAttempt(id string, prevAttempt int, instanceType string, startedAt time.Time, maxActive int) (ExportClaim, error) {
+	claim := ExportClaimLost
+	err := s.db().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", exportClaimLockKey).Error; err != nil {
+			return err
+		}
+		var current []int
+		if err := tx.Model(&Shard{}).Where("id = ?", id).Pluck("export_attempt", &current).Error; err != nil {
+			return err
+		}
+		if len(current) != 1 || current[0] != prevAttempt {
+			return nil // lost: the row is gone, or someone else already claimed
+		}
+		var active int64
+		if err := tx.Model(&Shard{}).Where("export_started_at IS NOT NULL AND id <> ?", id).Count(&active).Error; err != nil {
+			return err
+		}
+		if int(active) >= maxActive {
+			claim = ExportClaimHeld
+			return nil
+		}
+		res := tx.Model(&Shard{}).Where("id = ? AND export_attempt = ?", id, prevAttempt).
+			Updates(map[string]any{
+				"export_attempt":       prevAttempt + 1,
+				"export_instance_type": instanceType,
+				"export_started_at":    startedAt,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 1 {
+			claim = ExportClaimWon
+		}
+		return nil
+	})
+	return claim, err
 }
 
 // SetExportSnapshot records the snapshot taken for the current export attempt.
@@ -275,17 +328,6 @@ func (s ShardStore) ClearExportFacts(id string) error {
 			"export_instance_type": nil,
 			"export_started_at":    nil,
 		}).Error
-}
-
-// CountActiveExports returns how many shards have an export instance
-// launched. It backs the cap on concurrent exports, which exists to stay under
-// EC2 vCPU quotas when a bucket cohort reaches ARCHIVING together.
-func (s ShardStore) CountActiveExports() (int, error) {
-	var n int64
-	err := s.db().Model(&Shard{}).
-		Where("export_instance_id IS NOT NULL AND export_instance_id <> ''").
-		Count(&n).Error
-	return int(n), err
 }
 
 // StuckShard is a shard that has been ARCHIVING since Since.

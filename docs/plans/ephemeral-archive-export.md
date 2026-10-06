@@ -177,10 +177,19 @@ What changes is `evaluateArchiving` (`logdb/shardsm.go`):
    (not `shard_id`), and `weft-export` neither heartbeats nor registers,
    so shard reconciliation (the ghost-instance incident class) never
    sees it.
-8. **Global concurrency cap.** A bucket cohort rotates on one `WindowEnd`,
-   so many shards hit ARCHIVING in the same tick. Cap in-flight exports
-   from the DB (rows with `export_instance_id` set), not per coordinator,
-   to stay under EC2 vCPU quotas. Cap value is an open question below.
+8. **Global concurrency cap, enforced at the claim.** A bucket cohort
+   rotates on one `WindowEnd`, so many shards hit ARCHIVING in the same
+   tick and are evaluated concurrently. The cap bounds export *attempts in
+   flight* (`export_started_at` set), cluster-wide, to stay under EC2 vCPU
+   quotas. It is applied inside `BeginExportAttempt`, in the same
+   transaction as the claim, under a transaction-scoped advisory lock. Two
+   earlier designs were wrong and are worth remembering: counting running
+   instances before launching is a check-then-act race (twelve concurrent
+   claims all passed a cap of 3, reproduced by removing the lock from the
+   test), and holding only the *launch* leaves a queued shard's attempt
+   clock and counter running, so a cohort larger than the cap burned its
+   retry budget waiting. A shard held by the cap has started nothing: no
+   attempt number, no clock, no AWS call.
 9. **Observability.** Because derived phases are invisible in the
    `ARCHIVING` state name, log one line per phase transition and surface
    the phase and attempt in `weft-admin` shard output.
@@ -241,6 +250,14 @@ export-capacity table (bytes → RAM/time per instance type).
   fails the export.
 - Output location: `<prefix>/<shard-id>.attempt-N[.parquet]`, one per
   attempt (see the rollout checklist, item 0, for why).
+- The `<prefix>` the export uses is `<PARQUET_DIR>/<label>` where the label is
+  the shard's service name **sanitized** to `[A-Za-z0-9._-]` (other characters
+  become `_`, at most 64 characters, never `.` or `..`): the prefix travels
+  through an EC2 tag, the host's shell and a systemd environment file, the
+  host rejects anything outside `[A-Za-z0-9._:/-]`, and a shard's sole
+  service name is customer-controlled. Launch, manifest polling and output
+  cleanup all derive the prefix from the same function (`exportS3Prefix`),
+  so they cannot disagree. The in-process archive keeps the raw name.
 - Manifest key: `<prefix>/_manifests/<shard-id>.json` (`ManifestKey`).
   Fields: shard id, attempt, parquet path, rows, db bytes, per-customer
   stats, started/finished. `attempt` lets the coordinator ignore a stale
@@ -333,9 +350,10 @@ volume (the block device mapping asks for `/dev/sdf`).
   `RefreshFromStore` likewise copies by hand, and a new leader needs it to
   see the old leader's in-flight attempt. Two tests fail without these.
 - **Phases, derived each tick, chained while nothing needs to wait:** claim
-  attempt (size from the shard's latest heartbeat `disk_bytes`) → snapshot
-  → wait → launch (held by the concurrency cap) → wait for manifest →
-  record archive → clean up → retire the shard's own volume and instance.
+  attempt (size from the shard's latest heartbeat `disk_bytes`; the
+  concurrency cap is applied here, atomically) → snapshot → wait → launch →
+  wait for manifest → record archive → clean up → retire the shard's own
+  volume and instance.
 - **Failure:** snapshot error, instance ended with no manifest (re-checking
   the manifest once, since the host can write it and power off between two
   polls), or the 3h attempt deadline fails the attempt: clean up, clear
@@ -607,8 +625,12 @@ no rollback.
    just fails the attempt and retries from the snapshot, so spot is safe,
    but keep on-demand as the fallback so a capacity drought can't block
    archiving.
-6. **Concurrent-export cap.** A fixed number or derived from the EC2
-   vCPU quota?
+6. **Concurrent-export cap value.** It is a config knob
+   (`EXPORT_MAX_CONCURRENT`, default 2 in code, 1 in the Terraform default).
+   With a cohort of shards rotating together, the cap sets how long the last
+   shard waits: roughly (cohort size ÷ cap) × the export time. Tune it once
+   the drill gives a real export time. The EC2 vCPU quota (256) is not the
+   constraint.
 7. **Cost sanity.** Per shard per window: one snapshot (~3–30 GB for the
    duration of the export), one short volume, one short instance.
    Estimate against actual shard count before shipping.

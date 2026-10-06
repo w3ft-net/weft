@@ -125,13 +125,12 @@ func (f *fakeConcurrentShardStore) LatestPreRecoveryState(id string) (ShardState
 
 // The export-fact methods are never reached by the shards these tests drive
 // (none is ARCHIVING with an export in flight); they only satisfy the interface.
-func (f *fakeConcurrentShardStore) BeginExportAttempt(string, int, string, time.Time) (bool, error) {
-	return false, nil
+func (f *fakeConcurrentShardStore) BeginExportAttempt(string, int, string, time.Time, int) (ExportClaim, error) {
+	return ExportClaimLost, nil
 }
 func (f *fakeConcurrentShardStore) SetExportSnapshot(string, string) error { return nil }
 func (f *fakeConcurrentShardStore) SetExportInstance(string, string) error { return nil }
 func (f *fakeConcurrentShardStore) ClearExportFacts(string) error          { return nil }
-func (f *fakeConcurrentShardStore) CountActiveExports() (int, error)       { return 0, nil }
 func (f *fakeConcurrentShardStore) LatestShardDiskBytes(string) (int64, error) {
 	return 0, nil
 }

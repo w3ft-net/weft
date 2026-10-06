@@ -5,6 +5,8 @@ package logdb
 import (
 	"context"
 	"errors"
+	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -161,7 +163,8 @@ type exportFixture struct {
 	launcher *fakeLauncher
 	volumes  *fakeVolumeManager
 	live     *fakeArchivableShard
-	clock    time.Time
+	clock    time.Time // the fixture's fixed reference time
+	now      time.Time // what the shard's clock reads; tests advance it
 }
 
 func newExportFixture(t *testing.T, customize ...func(*ShardDeps)) *exportFixture {
@@ -177,7 +180,9 @@ func newExportFixture(t *testing.T, customize ...func(*ShardDeps)) *exportFixtur
 		live:     &fakeArchivableShard{id: "s-test", archivePath: "s3://in-process-must-not-run"},
 		clock:    time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC),
 	}
+	f.now = f.clock
 	f.sm, f.db, _ = makeFixtureShardSM(t, StateArchiving, func(d *ShardDeps) {
+		d.Clock = func() time.Time { return f.now }
 		d.Launcher = f.launcher
 		d.Volumes = f.volumes
 		d.ParquetDir = "s3://weft"
@@ -207,6 +212,20 @@ func (f *exportFixture) heartbeat(t *testing.T, diskBytes int64) {
 		INSERT INTO shard_heartbeats (shard_id, addr, instance_id, state, row_count, disk_bytes, beat_at)
 		VALUES ('s-test', '', '', 'READ_ONLY', 0, ?, ?)`, diskBytes, f.clock.Add(-time.Minute)).Error; err != nil {
 		t.Fatalf("seed heartbeat: %v", err)
+	}
+}
+
+// occupyASlot gives another shard an export attempt in flight, so the cap sees
+// it. The cap is generous for this setup claim; the test's own cap is what bites.
+func (f *exportFixture) occupyASlot(t *testing.T, id string) {
+	t.Helper()
+	bucket := seedBucket(t, f.db, BucketStasis)
+	if err := f.ss.SaveShard(&Shard{ID: id, State: StateArchiving, BucketID: bucket.ID, Tier: "small",
+		WindowStart: f.clock, WindowEnd: f.clock, CreatedAt: f.clock}); err != nil {
+		t.Fatal(err)
+	}
+	if claim, err := f.ss.BeginExportAttempt(id, 0, "r7g.large", f.clock, 100); err != nil || claim != ExportClaimWon {
+		t.Fatalf("occupy a slot: %v err=%v", claim, err)
 	}
 }
 
@@ -552,37 +571,66 @@ func TestShardExport_AttemptCapStopsRetryingButKeepsTheData(t *testing.T) {
 	f.assertDataIntact(t) // stays ARCHIVING with the volume: it is never auto-GONE
 }
 
-func TestShardExport_ConcurrencyCapHoldsTheLaunch(t *testing.T) {
+// The cap holds the CLAIM, not the launch: a shard held by it has started
+// nothing (no attempt number, no clock, no snapshot, no cost), and it proceeds
+// the tick a slot frees.
+func TestShardExport_ConcurrencyCapHoldsTheClaim(t *testing.T) {
 	f := newExportFixture(t, func(d *ShardDeps) { d.MaxConcurrentExports = 1 })
-	// Another shard already has an export instance running.
-	bucket := seedBucket(t, f.db, BucketStasis)
-	if err := f.ss.SaveShard(&Shard{ID: "s-busy", State: StateArchiving, BucketID: bucket.ID, Tier: "small",
-		WindowStart: f.clock, WindowEnd: f.clock, CreatedAt: f.clock}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.ss.SetExportInstance("s-busy", "i-other-export"); err != nil {
-		t.Fatal(err)
-	}
-	f.seedAttempt(t, 1, f.clock, "snap-1", "")
-	f.ops.snapState = ExportSnapshotState{State: "completed"}
+	f.occupyASlot(t, "s-busy")
 
 	f.evaluate(t)
 
-	if len(f.ops.launchCalls) != 0 {
-		t.Fatalf("launched past the concurrency cap: %v", f.ops.launchCalls)
+	row := f.row(t)
+	if row.ExportAttempt != 0 || row.ExportStartedAt != nil || row.ExportSnapshotID != "" {
+		t.Fatalf("a shard held by the cap started something: %+v", row)
 	}
-	if len(f.ops.cleanupCalls) != 0 {
-		t.Fatalf("a held launch must not fail the attempt: %v", f.ops.cleanupCalls)
+	if len(f.ops.createCalls) != 0 || len(f.ops.launchCalls) != 0 || len(f.ops.cleanupCalls) != 0 {
+		t.Fatalf("a held shard touched AWS: snapshots=%v launches=%v cleanups=%v", f.ops.createCalls, f.ops.launchCalls, f.ops.cleanupCalls)
 	}
 	f.assertDataIntact(t)
 
-	// Capacity frees up: the next tick launches.
+	// Capacity frees up: the next tick claims and snapshots.
 	if err := f.ss.ClearExportFacts("s-busy"); err != nil {
 		t.Fatal(err)
 	}
 	f.evaluate(t)
-	if len(f.ops.launchCalls) != 1 {
-		t.Fatalf("did not launch once capacity freed: %v", f.ops.launchCalls)
+	if row := f.row(t); row.ExportAttempt != 1 || row.ExportSnapshotID != "snap-1" {
+		t.Fatalf("did not proceed once capacity freed: %+v", row)
+	}
+}
+
+// Waiting behind the cap must not burn the retry budget. The attempt clock and
+// the attempt counter start at the claim, so a shard queued for longer than the
+// attempt deadline (a whole cohort rotating together at a low cap) still gets
+// its full first attempt, not a failed one it never ran.
+func TestShardExport_QueueingBehindTheCapDoesNotConsumeAttempts(t *testing.T) {
+	f := newExportFixture(t, func(d *ShardDeps) { d.MaxConcurrentExports = 1 })
+	f.occupyASlot(t, "s-busy")
+
+	// Held for far longer than an attempt may take, across many ticks.
+	for i := 0; i < 5; i++ {
+		f.evaluate(t)
+		f.now = f.now.Add(exportAttemptTimeout)
+	}
+	if row := f.row(t); row.ExportAttempt != 0 {
+		t.Fatalf("queueing consumed attempts: export_attempt = %d", row.ExportAttempt)
+	}
+	if len(f.ops.cleanupCalls) != 0 {
+		t.Fatalf("queueing was treated as a failed attempt: %v", f.ops.cleanupCalls)
+	}
+
+	// The slot frees: the shard gets attempt 1 with a fresh clock.
+	if err := f.ss.ClearExportFacts("s-busy"); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate(t)
+	row := f.row(t)
+	if row.ExportAttempt != 1 || row.ExportStartedAt == nil || !row.ExportStartedAt.Equal(f.now) {
+		t.Fatalf("first attempt after queueing: %+v (clock should start at %v)", row, f.now)
+	}
+	f.evaluate(t)
+	if len(f.ops.cleanupCalls) != 0 {
+		t.Fatalf("the first attempt was failed by time spent queueing: %v", f.ops.cleanupCalls)
 	}
 }
 
@@ -655,6 +703,77 @@ func TestShardExport_NilExportsKeepsTheInProcessArchive(t *testing.T) {
 	}
 	if f.state(t) != StateArchived {
 		t.Fatalf("state = %q, want ARCHIVED", f.state(t))
+	}
+}
+
+// ── export prefix safety ────────────────────────────────────────────
+
+// The export prefix travels through an EC2 tag and the host's shell and systemd
+// environment file, so it is built from a sanitized label. The in-process
+// archive's prefix uses the raw service name, which is customer-controlled and
+// can hold spaces, quotes or newlines.
+var exportPrefixAllowed = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`) // the same set deploy/export-role.sh enforces
+
+func TestExportS3Prefix_IsAlwaysSafeForTheHost(t *testing.T) {
+	sh := &Shard{deps: &ShardDeps{ParquetDir: "s3://weft"}}
+	svc := func(names ...string) []store.ShardService {
+		var out []store.ShardService
+		for i, n := range names {
+			out = append(out, store.ShardService{NamespaceID: uint(i + 1), Service: n})
+		}
+		return out
+	}
+	cases := []struct {
+		name     string
+		services []store.ShardService
+		want     string
+	}{
+		{"plain name is unchanged", svc("warp"), "s3://weft/warp"},
+		{"a space", svc("my service"), "s3://weft/my_service"},
+		{"a slash does not nest", svc("a/b"), "s3://weft/a_b"},
+		{"a newline", svc("x\ny"), "s3://weft/x_y"},
+		{"shell metacharacters", svc("$(id);rm"), "s3://weft/__id__rm"},
+		{"quotes", svc(`a"b'c`), "s3://weft/a_b_c"},
+		{"non-ASCII", svc("héllo"), "s3://weft/h_llo"},
+		{"dots only could escape the directory", svc(".."), "s3://weft/_"},
+		{"a single dot", svc("."), "s3://weft/_"},
+		{"an overlong name is truncated", svc(strings.Repeat("a", 200)), "s3://weft/" + strings.Repeat("a", 64)},
+		{"several services collapse as before", svc("a", "b"), "s3://weft/2-apps"},
+		{"none", nil, "s3://weft/shared"},
+	}
+	for _, c := range cases {
+		got := sh.exportS3Prefix(c.services)
+		if got != c.want {
+			t.Errorf("%s: exportS3Prefix = %q, want %q", c.name, got, c.want)
+		}
+		if !exportPrefixAllowed.MatchString(got) {
+			t.Errorf("%s: %q contains characters the export host rejects", c.name, got)
+		}
+	}
+}
+
+// End to end: a shard whose only service has a space in its name must still
+// export. Launch, manifest poll and output cleanup all use the same safe prefix.
+func TestShardExport_ServiceNameWithASpaceStillExports(t *testing.T) {
+	f := newExportFixture(t)
+	f.sm.Services = []store.ShardService{{NamespaceID: 1, Service: "my service"}}
+	f.seedAttempt(t, 1, f.clock, "snap-1", "")
+	f.ops.snapState = ExportSnapshotState{State: "completed"}
+
+	f.evaluate(t) // launches
+	if len(f.ops.launchCalls) != 1 {
+		t.Fatalf("launch calls = %d", len(f.ops.launchCalls))
+	}
+	if got := f.ops.launchCalls[0].Prefix; got != "s3://weft/my_service" || !exportPrefixAllowed.MatchString(got) {
+		t.Fatalf("launch prefix = %q, want the sanitized s3://weft/my_service", got)
+	}
+
+	// The coordinator polls the manifest at the key derived from the same prefix.
+	f.ops.instState = "terminated"
+	f.manifest.manifests["s3://weft/my_service/_manifests/s-test.json"] = goodManifest(1)
+	f.evaluate(t)
+	if f.row(t).ParquetPath == "" {
+		t.Fatal("the manifest at the sanitized key was never found")
 	}
 }
 

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/graybeardcorp/weft/shard"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // The ephemeral archive export, from the shard FSM's side
@@ -125,6 +127,44 @@ func exportInstanceEnded(state string) bool {
 	return false
 }
 
+// exportS3Prefix is the archive prefix the export uses. It is the in-process
+// archiveS3Prefix with the service label sanitized, because the prefix does not
+// only name an S3 location: it travels through an EC2 tag, the export host's
+// shell, and a systemd environment file, and a shard's sole service name is
+// customer-controlled (the ingest API only requires it to be non-empty). A name
+// with a space, quote or newline would otherwise be rejected by the host's
+// validation and fail every attempt. Coordinator and host must agree on the
+// prefix, so launch, manifest polling and output cleanup all use this one.
+func (sh *Shard) exportS3Prefix(services []store.ShardService) string {
+	return fmt.Sprintf("%s/%s", sh.deps.ParquetDir, exportLabel(serviceNames(services)))
+}
+
+// maxExportLabelLen keeps the prefix well inside EC2's 256-character tag value.
+const maxExportLabelLen = 64
+
+// exportLabel is joinServices with every character outside [A-Za-z0-9._-]
+// replaced by '_', truncated, and never "." or "..".
+func exportLabel(apps []string) string {
+	label := joinServices(apps)
+	var b strings.Builder
+	for _, r := range label {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	s := b.String()
+	if len(s) > maxExportLabelLen {
+		s = s[:maxExportLabelLen]
+	}
+	if s == "" || strings.Trim(s, ".") == "" {
+		return "_"
+	}
+	return s
+}
+
 // hasExportFacts reports whether any export resource is recorded on the shard.
 func (sh *Shard) hasExportFacts() bool {
 	sh.mu.RLock()
@@ -160,11 +200,17 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("shardsm %s: %w", sh.ID, err)
 		}
-		won, err := d.Store.BeginExportAttempt(sh.ID, attempt, typ, now)
+		claim, err := d.Store.BeginExportAttempt(sh.ID, attempt, typ, now, d.maxConcurrentExports())
 		if err != nil {
 			return fmt.Errorf("shardsm %s: begin export attempt: %w", sh.ID, err)
 		}
-		if !won {
+		switch claim {
+		case ExportClaimHeld:
+			// Nothing started: no attempt number taken, no clock running, no AWS
+			// call made. The shard simply waits for a slot, however long that takes.
+			log.Printf("shardsm %s: export held, the cap of %d concurrent export attempts is reached", sh.ID, d.maxConcurrentExports())
+			return nil
+		case ExportClaimLost:
 			log.Printf("shardsm %s: another evaluator claimed export attempt %d; deferring to it", sh.ID, attempt+1)
 			return nil
 		}
@@ -219,19 +265,12 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 		return nil // pending: poll again next tick
 	}
 
-	// Launch the export instance.
+	// Launch the export instance. The concurrency cap was already applied when
+	// this attempt was claimed, so there is nothing to check here.
 	if instID == "" {
-		n, err := d.Store.CountActiveExports()
-		if err != nil {
-			return fmt.Errorf("shardsm %s: count active exports: %w", sh.ID, err)
-		}
-		if n >= d.maxConcurrentExports() {
-			log.Printf("shardsm %s: export launch held, %d/%d exports already running", sh.ID, n, d.maxConcurrentExports())
-			return nil
-		}
 		id, err := d.Exports.LaunchInstance(ctx, ExportSpec{
 			ShardID: sh.ID, Attempt: attempt, SnapshotID: snapID, InstanceType: itype, AZ: az,
-			Prefix: sh.archiveS3Prefix(services),
+			Prefix: sh.exportS3Prefix(services),
 		})
 		if err != nil {
 			log.Printf("shardsm %s: export instance launch, retrying next tick: %v", sh.ID, err)
@@ -248,7 +287,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 	}
 
 	// Wait for the manifest.
-	key := shard.ManifestKey(sh.archiveS3Prefix(services), sh.ID)
+	key := shard.ManifestKey(sh.exportS3Prefix(services), sh.ID)
 	m, found, err := d.ExportManifests.Get(ctx, key)
 	if err != nil {
 		log.Printf("shardsm %s: poll export manifest %s, retrying next tick: %v", sh.ID, key, err)
@@ -294,7 +333,7 @@ func (sh *Shard) deleteAttemptOutput() bool {
 		log.Printf("shardsm %s: no output deleter configured; attempt %d's partial output (if any) is left in place", sh.ID, attempt)
 		return true
 	}
-	for _, p := range shard.ExportOutputPaths(sh.archiveS3Prefix(services), sh.ID, attempt) {
+	for _, p := range shard.ExportOutputPaths(sh.exportS3Prefix(services), sh.ID, attempt) {
 		if err := sh.deps.ExportOutputs.DeleteParquet(p); err != nil {
 			log.Printf("shardsm %s: delete failed attempt %d's output %s, retrying next tick: %v", sh.ID, attempt, p, err)
 			return false
