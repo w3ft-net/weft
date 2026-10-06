@@ -318,11 +318,46 @@ Assumption to verify on the first real launch: `ebsnvme-id` maps the
 snapshot-restored volume to `/dev/sdf` the way it does for a shard's
 volume (the block device mapping asks for `/dev/sdf`).
 
-**Phase 3 — FSM wiring.** Replace step 1 in `evaluateArchiving` with
-A–E, add G cleanup, persist the new facts (migration at the next free
-version above the collapsed schema's max). Tests: crash/resume at every
-step boundary; retry after the export instance dies; manifest absent →
-no completion.
+**Phase 3 — FSM wiring. DONE (code; off until configured).** In
+`logdb/shard_export.go`, with the hooks in `evaluateArchiving`:
+- **Facts:** migration 080 adds `export_snapshot_id`, `export_instance_id`,
+  `export_instance_type`, `export_started_at` and a monotonic
+  `export_attempt` to `shard_records`. The shard row type is the gorm
+  model, so they are fields on `Shard`. Narrow writers on `ShardStore`;
+  `BeginExportAttempt` is a compare-and-set on the counter.
+- **Trap found and pinned:** `SaveShard` upserts the whole row from
+  `persistedCopy()`, which lists fields by hand. Without the new fields
+  every ordinary persist would have written the export facts back empty.
+  `RefreshFromStore` likewise copies by hand, and a new leader needs it to
+  see the old leader's in-flight attempt. Two tests fail without these.
+- **Phases, derived each tick, chained while nothing needs to wait:** claim
+  attempt (size from the shard's latest heartbeat `disk_bytes`) → snapshot
+  → wait → launch (held by the concurrency cap) → wait for manifest →
+  record archive → clean up → retire the shard's own volume and instance.
+- **Failure:** snapshot error, instance ended with no manifest (re-checking
+  the manifest once, since the host can write it and power off between two
+  polls), or the 3h attempt deadline fails the attempt: clean up, clear
+  facts, keep the counter. The next attempt steps up one instance class.
+  A stale manifest (earlier attempt) is ignored. An instance EC2 does not
+  know yet is *not* treated as ended; a host that truly vanished is caught
+  by the deadline. After 3 attempts the shard stays ARCHIVING with its
+  volume and a log line per tick; set `export_attempt = 0` to re-arm.
+- **Retire is held until the archive is recorded and the export resources
+  are gone**, so a failed cleanup keeps the shard's volume. The export does
+  not use the live handle, so a restarted coordinator still drives it.
+- `AdminDelete` mid-export cleans up the shard's export resources.
+- **Wiring:** `EXPORT_LAUNCH_TEMPLATE` and `EXPORT_MAX_CONCURRENT` from the
+  environment; enabled only with the template, shard subnets and an
+  `s3://` `PARQUET_DIR`. Anything missing logs why and leaves shards
+  archiving in process (the old behavior); it never fails boot.
+- **Dropped:** the pre-snapshot `CHECKPOINT`. It would need a new gRPC
+  method, and Phase 1 showed a crash-consistent copy replays its WAL fully.
+- **Multi-coordinator:** only the `shard-fsm-leader` lease holder runs
+  `Evaluate`, so a double start needs a leader handover; the AWS calls are
+  idempotent by tag and the attempt claim is a compare-and-set.
+- **Seed values:** the instance-size table (`defaultExportSizing`) is a
+  placeholder until Phase 0 measurements replace it.
+- Not covered by tests: anything against real AWS.
 
 **Phase 4 — sweep + alerts.** Orphan sweep for tagged export resources;
 alert on ARCHIVING older than N× the expected export time.
