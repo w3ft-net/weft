@@ -566,7 +566,7 @@ func (s *DuckDBShard) Archive(ctx context.Context, s3Prefix string) (string, []C
 	// about to be exported. Cheaper here (one GROUP BY over local DuckDB)
 	// than a re-scan of the written parquet over S3/Lambda later.
 	statsStart := time.Now()
-	stopSampling := s.sampleArchiveMemory(ctx, attempt, "stats", archiveSampleInterval)
+	stopSampling := s.sampleArchiveMemory(attempt, "stats", archiveSampleInterval)
 	stats, err := s.customerStats(ctx)
 	stopSampling()
 	if err != nil {
@@ -575,7 +575,7 @@ func (s *DuckDBShard) Archive(ctx context.Context, s3Prefix string) (string, []C
 	log.Printf("archive attempt=%d stats customers=%d took=%s %s",
 		attempt, len(stats), time.Since(statsStart).Round(time.Millisecond), s.nativeMemoryDiag(ctx))
 
-	stopSampling = s.sampleArchiveMemory(ctx, attempt, "copy", archiveSampleInterval)
+	stopSampling = s.sampleArchiveMemory(attempt, "copy", archiveSampleInterval)
 	path, rows, err := s.exportArchive(ctx, attempt, s3Prefix)
 	stopSampling()
 	if err != nil {

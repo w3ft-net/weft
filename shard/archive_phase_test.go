@@ -116,7 +116,7 @@ func TestDuckDBShard_ArchiveLogsFailure(t *testing.T) {
 func TestDuckDBShard_SampleArchiveMemoryLogsWhileRunning(t *testing.T) {
 	s := archiveFixtureShard(t)
 	out := captureLog(t, func() {
-		stop := s.sampleArchiveMemory(context.Background(), 1, "copy", 5*time.Millisecond)
+		stop := s.sampleArchiveMemory(1, "copy", 5*time.Millisecond)
 		time.Sleep(60 * time.Millisecond)
 		stop()
 	})
@@ -131,6 +131,38 @@ func TestDuckDBShard_SampleArchiveMemoryLogsWhileRunning(t *testing.T) {
 	after := captureLog(t, func() { time.Sleep(30 * time.Millisecond) })
 	if after != "" {
 		t.Fatalf("sampler kept logging after stop: %q", after)
+	}
+}
+
+// The S3 path pins the pool to one connection (S3Config.ConfigureDuckDB), and
+// the COPY holds it for the whole export. Sampling must not need a pooled
+// connection, or no reading would ever print while the export runs.
+func TestDuckDBShard_SampleArchiveMemoryDoesNotNeedAPooledConnection(t *testing.T) {
+	s := archiveFixtureShard(t)
+	s.db.SetMaxOpenConns(1)
+	held, err := s.db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+
+	var out string
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		out = captureLog(t, func() {
+			stop := s.sampleArchiveMemory(1, "copy", 5*time.Millisecond)
+			time.Sleep(60 * time.Millisecond)
+			stop()
+		})
+	}()
+	select {
+	case <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("sampler blocked waiting for the held connection")
+	}
+	if n := strings.Count(out, "archive attempt=1 progress"); n < 2 {
+		t.Fatalf("got %d samples while the connection was held, want >=2:\n%s", n, out)
 	}
 }
 
