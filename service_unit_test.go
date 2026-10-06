@@ -1,6 +1,7 @@
 package weft_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -35,7 +36,7 @@ func TestServiceUnitFlagsAreDefined(t *testing.T) {
 	for _, svc := range services {
 		svc := svc
 		t.Run(filepath.Base(svc), func(t *testing.T) {
-			bin, flags, err := parseSystemdExecStart(svc)
+			bin, subcmd, flags, err := parseSystemdExecStart(svc)
 			if err != nil {
 				t.Fatalf("parse %s: %v", svc, err)
 			}
@@ -46,29 +47,67 @@ func TestServiceUnitFlagsAreDefined(t *testing.T) {
 			if pkg == "" {
 				t.Skipf("ExecStart=%s is not a Go binary in cmd/", bin)
 			}
-			defined, err := goFlagsDefinedIn(pkg)
+			problems, err := unitFlagProblems(subcmd, flags, pkg)
 			if err != nil {
 				t.Fatalf("scan flags in %s: %v", pkg, err)
 			}
-			for _, f := range flags {
-				if _, ok := defined[f]; !ok {
-					t.Errorf("ExecStart passes --%s but %s does not define it. The binary will crash on boot with `flag provided but not defined: -%s`. Either remove --%s from the unit or register it via flag.X(\"%s\", ...) in main.go.",
-						f, pkg, f, f, f)
-				}
+			for _, p := range problems {
+				t.Error(p)
 			}
 		})
 	}
 }
 
+// unitFlagProblems returns one message per flag a unit passes that its binary
+// does not define. With a subcommand (`weft-shard export --db=...`) the flags
+// are checked against that subcommand's own flag.NewFlagSet alone, because
+// that is where the binary parses them: a flag defined only for the subcommand
+// must not satisfy a top-level use, nor the reverse. An ExecStart word that
+// names no FlagSet in the package is not a subcommand and the check falls back
+// to the top-level flags, as it always did.
+func unitFlagProblems(subcmd string, flags []string, pkg string) ([]string, error) {
+	var (
+		defined map[string]struct{}
+		where   = pkg
+		hint    = `register it via flag.X("%s", ...) in main.go`
+	)
+	if subcmd != "" {
+		subs, err := goSubcommandFlagsIn(pkg)
+		if err != nil {
+			return nil, err
+		}
+		if set, ok := subs[subcmd]; ok {
+			defined = set
+			where = pkg + " subcommand " + subcmd
+			hint = `register it on the "` + subcmd + `" flag.NewFlagSet (fs.X("%s", ...))`
+		}
+	}
+	if defined == nil {
+		var err error
+		if defined, err = goFlagsDefinedIn(pkg); err != nil {
+			return nil, err
+		}
+	}
+	var problems []string
+	for _, f := range flags {
+		if _, ok := defined[f]; !ok {
+			problems = append(problems, fmt.Sprintf("ExecStart passes --%s but %s does not define it. The binary will crash on boot with `flag provided but not defined: -%s`. Either remove --%s from the unit or "+hint+".",
+				f, where, f, f, f))
+		}
+	}
+	return problems, nil
+}
+
 // parseSystemdExecStart reads a unit file and returns the absolute
-// binary path plus the list of --flag names found in its ExecStart.
-// Handles line continuations: lines ending with `\` are concatenated
-// onto the ExecStart string. Stops at the first ExecStart (our units
-// only have one).
-func parseSystemdExecStart(path string) (string, []string, error) {
+// binary path, the subcommand (the first word after the binary that is
+// not a --flag, "" if none), and the list of --flag names found in its
+// ExecStart. Handles line continuations: lines ending with `\` are
+// concatenated onto the ExecStart string. Stops at the first ExecStart
+// (our units only have one).
+func parseSystemdExecStart(path string) (string, string, []string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	var exec strings.Builder
 	inExec := false
@@ -90,16 +129,20 @@ func parseSystemdExecStart(path string) (string, []string, error) {
 		break
 	}
 	if !inExec {
-		return "", nil, nil
+		return "", "", nil, nil
 	}
 	fields := strings.Fields(exec.String())
 	if len(fields) == 0 {
-		return "", nil, nil
+		return "", "", nil, nil
 	}
 	bin := fields[0]
+	var subcmd string
 	var flags []string
 	for _, f := range fields[1:] {
 		if !strings.HasPrefix(f, "--") {
+			if subcmd == "" {
+				subcmd = f
+			}
 			continue
 		}
 		name := strings.TrimPrefix(f, "--")
@@ -111,7 +154,7 @@ func parseSystemdExecStart(path string) (string, []string, error) {
 		}
 		flags = append(flags, name)
 	}
-	return bin, flags, nil
+	return bin, subcmd, flags, nil
 }
 
 // goPackageForBinary maps a deploy ExecStart path like
@@ -181,4 +224,105 @@ func goFlagsDefinedIn(pkgDir string) (map[string]struct{}, error) {
 		}
 	}
 	return flagNames, nil
+}
+
+// flagDefiningMethods are the flag.FlagSet methods that register a flag; the
+// name is the first string argument (second for the *Var forms). Methods like
+// Set or Lookup also take a string but do not define anything.
+var flagDefiningMethods = map[string]bool{
+	"String": true, "Int": true, "Int64": true, "Uint": true, "Uint64": true,
+	"Bool": true, "Float64": true, "Duration": true, "Func": true, "BoolFunc": true,
+	"StringVar": true, "IntVar": true, "Int64Var": true, "UintVar": true, "Uint64Var": true,
+	"BoolVar": true, "Float64Var": true, "DurationVar": true, "Var": true, "TextVar": true,
+}
+
+// goSubcommandFlagsIn AST-walks pkgDir and returns, per subcommand, the flags
+// registered on its flag.NewFlagSet("<subcommand>", ...). Within each function it
+// binds the variable a NewFlagSet is assigned to, then collects the literal flag
+// names registered on that variable, so two subcommands in one package stay
+// separate and a flag set in one function cannot claim another's variable.
+func goSubcommandFlagsIn(pkgDir string) (map[string]map[string]struct{}, error) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, pkgDir, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	stringArg := func(call *ast.CallExpr, idx int) (string, bool) {
+		if len(call.Args) <= idx {
+			return "", false
+		}
+		lit, ok := call.Args[idx].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return "", false
+		}
+		s, err := strconv.Unquote(lit.Value)
+		return s, err == nil
+	}
+	out := map[string]map[string]struct{}{}
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				sets := map[string]string{} // FlagSet variable → subcommand name
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					as, ok := n.(*ast.AssignStmt)
+					if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+						return true
+					}
+					lhs, ok := as.Lhs[0].(*ast.Ident)
+					call, ok2 := as.Rhs[0].(*ast.CallExpr)
+					if !ok || !ok2 {
+						return true
+					}
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || sel.Sel.Name != "NewFlagSet" {
+						return true
+					}
+					if pkgIdent, ok := sel.X.(*ast.Ident); !ok || pkgIdent.Name != "flag" {
+						return true
+					}
+					if name, ok := stringArg(call, 0); ok {
+						sets[lhs.Name] = name
+						if out[name] == nil {
+							out[name] = map[string]struct{}{}
+						}
+					}
+					return true
+				})
+				if len(sets) == 0 {
+					continue
+				}
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || !flagDefiningMethods[sel.Sel.Name] {
+						return true
+					}
+					recv, ok := sel.X.(*ast.Ident)
+					if !ok {
+						return true
+					}
+					subcmd, ok := sets[recv.Name]
+					if !ok {
+						return true
+					}
+					idx := 0
+					if strings.HasSuffix(sel.Sel.Name, "Var") {
+						idx = 1
+					}
+					if name, ok := stringArg(call, idx); ok {
+						out[subcmd][name] = struct{}{}
+					}
+					return true
+				})
+			}
+		}
+	}
+	return out, nil
 }
