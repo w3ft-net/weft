@@ -500,14 +500,24 @@ Verified read-only against the live account (`kevcons aws`):
       `<id>/…`, `<id>.parquet` and `_manifests/…`.
 
 Still to do:
-- [ ] `terraform init` then `terraform plan` in `prod/weft`; expected: **3
-      to add** (`module.export_fleet.aws_launch_template.export`,
+- [x] `terraform plan` in `prod/weft` (2026-10-06): my three resources are
+      exactly as designed (`module.export_fleet.aws_launch_template.export`,
       `module.export_fleet.aws_security_group.export`,
-      `aws_iam_role_policy.coordinator_export_output_cleanup`), two new
-      outputs, **no change to the `app_config_blob` SSM parameter, nothing
-      destroyed**. Any other change is live drift (see the Stripe notes in
-      `prod/weft/main.tf`): stop and look before applying. Per the repo rule an
-      apply is run by you, teeing to a log.
+      `aws_iam_role_policy.coordinator_export_output_cleanup`), `Role=export`,
+      no `shard_tier`, the shared instance profile, **`app_config_blob`
+      untouched**. But the full plan was **14 to add, 7 to change**, so 18
+      changes are pre-existing and unrelated: three ASGs' launch-template
+      version `198 → $Latest` (the module sets `instance_refresh`, so this
+      would roll the coordinators, compute and the loom producer for no
+      functional change), the GitHub deploy role (OIDC trust narrowed, and
+      the `PackerIAMPassRole` statement removed from the packer policy, which
+      may break CI AMI builds), 11 new `pgbouncer` resources, and the RDS
+      parameter group and instance (log_statement and autovacuum tuning, one
+      pending-reboot). **Do not apply the saved plan.** Apply only mine:
+      re-plan with `-target=module.weft.module.export_fleet
+      -target=module.weft.aws_iam_role_policy.coordinator_export_output_cleanup`,
+      expect 3 to add, then apply that plan. Per the repo rule the apply is
+      run by you, teeing to a log.
 - [ ] Check whether this stack's apply also touches the cold-shard Lambda (it
       reverts to a placeholder; redeploy after if so).
 - [ ] Stage 3 (after the drill): set `archive_export_enabled = true`; that
