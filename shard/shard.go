@@ -124,6 +124,12 @@ type DuckDBShard struct {
 	db       *sql.DB
 	rowCount atomic.Int64
 	qstats   queryStats
+
+	// archiveMu guards the single in-flight archive attempt (see beginArchive).
+	archiveMu      sync.Mutex
+	archiveRunning bool
+	archiveAttempt int64
+	archiveStarted time.Time
 }
 
 // queryStats accumulates per-query execution timings between telemetry samples;
@@ -536,26 +542,55 @@ func dirSize(root string) int64 {
 	return total
 }
 
-func (s *DuckDBShard) Archive(_ context.Context, s3Prefix string) (string, []CustomerStat, error) {
-	// Capture per-customer stats first, off the same local handle that's
-	// about to be exported. Cheaper here (one GROUP BY over local DuckDB)
-	// than a re-scan of the written parquet over S3/Lambda later.
-	stats, err := s.customerStats()
-	if err != nil {
-		return "", nil, fmt.Errorf("customer stats: %w", err)
-	}
-	path, err := s.exportArchive(s3Prefix)
+// Archive exports the shard to Parquet and returns the path and per-customer
+// stats. It honors ctx (a cancelled attempt stops the DuckDB statement), runs
+// at most one attempt at a time (ErrArchiveInFlight otherwise), and logs each
+// phase with the shard's native memory state so a stuck export is diagnosable
+// from the shard log alone.
+func (s *DuckDBShard) Archive(ctx context.Context, s3Prefix string) (string, []CustomerStat, error) {
+	attempt, end, err := s.beginArchive()
 	if err != nil {
 		return "", nil, err
 	}
+	defer end()
+
+	start := time.Now()
+	fail := func(phase string, err error) (string, []CustomerStat, error) {
+		log.Printf("archive attempt=%d failed phase=%s after=%s err=%v %s",
+			attempt, phase, time.Since(start).Round(time.Millisecond), err, s.nativeMemoryDiag(context.WithoutCancel(ctx)))
+		return "", nil, err
+	}
+	log.Printf("archive attempt=%d start shard=%s prefix=%s %s", attempt, s.id, s3Prefix, s.nativeMemoryDiag(ctx))
+
+	// Capture per-customer stats first, off the same local handle that's
+	// about to be exported. Cheaper here (one GROUP BY over local DuckDB)
+	// than a re-scan of the written parquet over S3/Lambda later.
+	statsStart := time.Now()
+	stopSampling := s.sampleArchiveMemory(ctx, attempt, "stats", archiveSampleInterval)
+	stats, err := s.customerStats(ctx)
+	stopSampling()
+	if err != nil {
+		return fail("stats", fmt.Errorf("customer stats: %w", err))
+	}
+	log.Printf("archive attempt=%d stats customers=%d took=%s %s",
+		attempt, len(stats), time.Since(statsStart).Round(time.Millisecond), s.nativeMemoryDiag(ctx))
+
+	stopSampling = s.sampleArchiveMemory(ctx, attempt, "copy", archiveSampleInterval)
+	path, rows, err := s.exportArchive(ctx, attempt, s3Prefix)
+	stopSampling()
+	if err != nil {
+		return fail("export", err)
+	}
+	log.Printf("archive attempt=%d done path=%s rows=%d total=%s %s",
+		attempt, path, rows, time.Since(start).Round(time.Millisecond), s.nativeMemoryDiag(ctx))
 	return path, stats, nil
 }
 
 // customerStats summarizes each customer's row count and ts span in the
 // logs table. Drives the retention janitor's classify-without-scanning
 // pass (see docs/plans/retention-janitor.md).
-func (s *DuckDBShard) customerStats() ([]CustomerStat, error) {
-	return scanCustomerStats(s.db, `
+func (s *DuckDBShard) customerStats(ctx context.Context) ([]CustomerStat, error) {
+	return scanCustomerStats(ctx, s.db, `
 		SELECT COALESCE(customer_id, 0), MIN(ts), MAX(ts), COUNT(*)
 		FROM logs GROUP BY 1`)
 }
@@ -564,8 +599,8 @@ func (s *DuckDBShard) customerStats() ([]CustomerStat, error) {
 // and scans it into CustomerStat rows. The query must project exactly
 // those four columns in that order; COALESCE the customer so the scan
 // target is always a plain string (the column is nullable).
-func scanCustomerStats(db *sql.DB, query string) ([]CustomerStat, error) {
-	rows, err := db.Query(query)
+func scanCustomerStats(ctx context.Context, db *sql.DB, query string) ([]CustomerStat, error) {
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -584,33 +619,49 @@ func scanCustomerStats(db *sql.DB, query string) ([]CustomerStat, error) {
 // exportArchive writes the logs table to Parquet (single file or
 // time-partitioned, sized by pickPartitionGranularity) and returns the
 // path. S3 when S3ConfigFromEnv is set, otherwise a local directory.
-func (s *DuckDBShard) exportArchive(s3Prefix string) (string, error) {
-	gran, err := s.pickPartitionGranularity()
+// It also returns the number of rows the COPY wrote. attempt tags the phase
+// log lines (see Archive).
+func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix string) (path string, rows int64, err error) {
+	plan, err := s.planPartitions(ctx)
 	if err != nil {
-		return "", fmt.Errorf("partition sizing: %w", err)
+		return "", 0, fmt.Errorf("partition sizing: %w", err)
 	}
+	log.Printf("archive attempt=%d sizing db_bytes=%d est_parquet_bytes=%d target_files=%d granularity=%q",
+		attempt, plan.dbBytes, plan.estParquetBytes, plan.targetFiles, string(plan.gran))
+
+	copyStart := time.Now()
+	log.Printf("archive attempt=%d copy start %s", attempt, s.nativeMemoryDiag(ctx))
+	defer func() {
+		if err == nil {
+			log.Printf("archive attempt=%d copy done rows=%d took=%s", attempt, rows, time.Since(copyStart).Round(time.Millisecond))
+		}
+	}()
 
 	if s3cfg := S3ConfigFromEnv(); s3cfg != nil {
 		if err := s3cfg.ConfigureDuckDB(s.db); err != nil {
-			return "", err
+			return "", 0, err
 		}
-		return s.exportParquet(fmt.Sprintf("%s/%s", s3Prefix, s.id), gran)
+		return s.exportParquet(ctx, fmt.Sprintf("%s/%s", s3Prefix, s.id), plan.gran)
 	}
 
 	dir := fmt.Sprintf("%s/%s", s3Prefix, s.id)
-	if gran == "" {
+	if plan.gran == "" {
 		// Small shard — single file, no partition.
 		path := dir + ".parquet"
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return "", fmt.Errorf("mkdir for %s: %w", path, err)
+			return "", 0, fmt.Errorf("mkdir for %s: %w", path, err)
 		}
-		_, err := s.db.Exec(fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", path))
-		return path, err
+		res, err := s.db.ExecContext(ctx, fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", path))
+		if err != nil {
+			return "", 0, err
+		}
+		n, _ := res.RowsAffected()
+		return path, n, nil
 	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", fmt.Errorf("mkdir for %s: %w", dir, err)
+		return "", 0, fmt.Errorf("mkdir for %s: %w", dir, err)
 	}
-	return s.exportParquet(dir, gran)
+	return s.exportParquet(ctx, dir, plan.gran)
 }
 
 const targetFileBytes = 150 * 1024 * 1024 // 150 MB
@@ -624,77 +675,93 @@ const (
 	gran1Min  partitionGranularity = "time_bucket(INTERVAL '1 minute', ts)"
 )
 
-// pickPartitionGranularity determines how to split the archive export.
-// Returns "" if the data is small enough for a single file.
-func (s *DuckDBShard) pickPartitionGranularity() (partitionGranularity, error) {
-	var dbBytes int64
+// partitionPlan is the archive export's sizing decision: the inputs
+// (dbBytes, the estimated Parquet size and target file count derived from it)
+// and the resulting granularity. gran is "" when the data fits a single file.
+type partitionPlan struct {
+	gran            partitionGranularity
+	dbBytes         int64
+	estParquetBytes int64
+	targetFiles     int64
+}
+
+// planPartitions determines how to split the archive export.
+func (s *DuckDBShard) planPartitions(ctx context.Context) (partitionPlan, error) {
+	var p partitionPlan
 	if s.dbPath != "" && s.dbPath != ":memory:" {
 		fi, err := os.Stat(s.dbPath)
 		if err == nil {
-			dbBytes = fi.Size()
+			p.dbBytes = fi.Size()
 		}
 	}
-	if dbBytes == 0 {
+	if p.dbBytes == 0 {
 		// Fallback: query row count and estimate ~200 bytes/row in Parquet.
 		var count int64
-		if err := s.db.QueryRow("SELECT COUNT(*) FROM logs").Scan(&count); err != nil {
-			return "", err
+		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM logs").Scan(&count); err != nil {
+			return p, err
 		}
-		dbBytes = count * 500 // rough DuckDB row size to approximate
+		p.dbBytes = count * 500 // rough DuckDB row size to approximate
 	}
 
-	estimatedParquet := int64(float64(dbBytes) * 0.4)
-	if estimatedParquet < 100*1024*1024 {
-		return "", nil
+	p.estParquetBytes = int64(float64(p.dbBytes) * 0.4)
+	if p.estParquetBytes < 100*1024*1024 {
+		return p, nil
 	}
 
-	targetFiles := estimatedParquet / targetFileBytes
-	if targetFiles < 2 {
-		return "", nil
+	p.targetFiles = p.estParquetBytes / targetFileBytes
+	if p.targetFiles < 2 {
+		return p, nil
 	}
 
 	var tsMin, tsMax time.Time
-	err := s.db.QueryRow("SELECT MIN(ts), MAX(ts) FROM logs").Scan(&tsMin, &tsMax)
+	err := s.db.QueryRowContext(ctx, "SELECT MIN(ts), MAX(ts) FROM logs").Scan(&tsMin, &tsMax)
 	if err != nil {
-		return "", err
+		return p, err
 	}
 	span := tsMax.Sub(tsMin)
 	if span <= 0 {
-		return "", nil
+		return p, nil
 	}
 
-	interval := span / time.Duration(targetFiles)
+	interval := span / time.Duration(p.targetFiles)
 	switch {
 	case interval >= 24*time.Hour:
-		return granDay, nil
+		p.gran = granDay
 	case interval >= time.Hour:
-		return granHour, nil
+		p.gran = granHour
 	case interval >= 10*time.Minute:
-		return gran10Min, nil
+		p.gran = gran10Min
 	default:
-		return gran1Min, nil
+		p.gran = gran1Min
 	}
+	return p, nil
 }
 
-// exportParquet writes partitioned (or single-file) Parquet to the given path.
+// exportParquet writes partitioned (or single-file) Parquet to the given path
+// and returns it with the number of rows written.
 // If gran is empty, writes a single file at path+".parquet".
 // If gran is set, writes hive-partitioned files under path/.
-func (s *DuckDBShard) exportParquet(path string, gran partitionGranularity) (string, error) {
+func (s *DuckDBShard) exportParquet(ctx context.Context, path string, gran partitionGranularity) (string, int64, error) {
 	if gran == "" {
 		outPath := path + ".parquet"
-		_, err := s.db.Exec(fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", outPath))
-		return outPath, err
+		res, err := s.db.ExecContext(ctx, fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", outPath))
+		if err != nil {
+			return outPath, 0, err
+		}
+		n, _ := res.RowsAffected()
+		return outPath, n, nil
 	}
 	// Partitioned export: DuckDB writes hive-style directories.
 	sql := fmt.Sprintf(
 		"COPY (SELECT *, %s AS _part FROM logs) TO '%s' (FORMAT PARQUET, PARTITION_BY (_part), OVERWRITE_OR_IGNORE)",
 		string(gran), path,
 	)
-	_, err := s.db.Exec(sql)
+	res, err := s.db.ExecContext(ctx, sql)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return path + "/**/*.parquet", nil
+	n, _ := res.RowsAffected()
+	return path + "/**/*.parquet", n, nil
 }
 
 // ExportToParquet exports the logs table to a single Parquet file (local path).

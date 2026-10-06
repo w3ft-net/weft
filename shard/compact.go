@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -28,7 +29,7 @@ func CaptureStats(parquetPath string, s3cfg *S3Config) ([]CustomerStat, error) {
 			return nil, err
 		}
 	}
-	return scanCustomerStats(db, fmt.Sprintf(
+	return scanCustomerStats(context.Background(), db, fmt.Sprintf(
 		"SELECT COALESCE(customer_id, 0), MIN(ts), MAX(ts), COUNT(*) FROM %s GROUP BY 1",
 		parquetReadExpr(parquetPath)))
 }
@@ -112,7 +113,7 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 		return res, nil // nothing survives → caller deletes the source
 	}
 
-	stats, err := scanCustomerStats(db, fmt.Sprintf(
+	stats, err := scanCustomerStats(context.Background(), db, fmt.Sprintf(
 		"SELECT COALESCE(customer_id, 0), MIN(ts), MAX(ts), COUNT(*) FROM (%s) GROUP BY 1", keep))
 	if err != nil {
 		return CompactResult{}, fmt.Errorf("survivor stats: %w", err)
