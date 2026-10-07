@@ -676,8 +676,10 @@ archived through the export.
   zombie row (17.4M rows, dead since 2026-07-13, no volume, instance or
   S3 output), held the slot with `ARCHIVING export has no volume to
   snapshot` every minute until it was removed with
-  `weft-admin force-remove`. Fix: don't claim without a volume (failing test
-  first). Also look for other ARCHIVING rows with an empty `ebs_volume_id`.
+  `weft-admin force-remove`. **Fixed**: `advanceExport` now requires a volume
+  before it claims a slot (`TestShardExport_ShardWithoutAVolumeDoesNotTakeASlot`);
+  such a shard waits unclaimed and the 6h stuck-archive alert surfaces it. Still
+  worth looking for other ARCHIVING rows with an empty `ebs_volume_id`.
 - `weft-admin` is not on `PATH` on the coordinator; use
   `sudo /opt/app/bin/weft-admin-run <cmd>`.
 - `kevcons` has no config "apply without writing" command; `config set`

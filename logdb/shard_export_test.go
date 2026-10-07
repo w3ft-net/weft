@@ -599,6 +599,41 @@ func TestShardExport_ConcurrencyCapHoldsTheClaim(t *testing.T) {
 	}
 }
 
+// A shard with no volume has nothing to snapshot, so it must not take one of
+// the scarce export slots: with the cap at 1, a dead ARCHIVING row (instance
+// and volume long gone) that claimed the slot would block every healthy shard's
+// export until its attempt deadline, three times over. It waits unclaimed
+// instead (the stuck-archive alert is what surfaces it).
+func TestShardExport_ShardWithoutAVolumeDoesNotTakeASlot(t *testing.T) {
+	f := newExportFixture(t, func(d *ShardDeps) { d.MaxConcurrentExports = 1 })
+	f.sm.mu.Lock()
+	f.sm.EBSVolumeID = ""
+	f.sm.mu.Unlock()
+
+	for i := 0; i < 3; i++ {
+		f.evaluate(t)
+	}
+
+	row := f.row(t)
+	if row.ExportAttempt != 0 || row.ExportStartedAt != nil {
+		t.Fatalf("a volume-less shard claimed an export attempt: %+v", row)
+	}
+	if len(f.ops.createCalls) != 0 || len(f.ops.launchCalls) != 0 {
+		t.Fatalf("a volume-less shard touched AWS: snapshots=%v launches=%v", f.ops.createCalls, f.ops.launchCalls)
+	}
+
+	// The slot is still free for a healthy shard.
+	bucket := seedBucket(t, f.db, BucketStasis)
+	if err := f.ss.SaveShard(&Shard{ID: "s-healthy", State: StateArchiving, BucketID: bucket.ID, Tier: "small",
+		WindowStart: f.clock, WindowEnd: f.clock, CreatedAt: f.clock}); err != nil {
+		t.Fatal(err)
+	}
+	if claim, err := f.ss.BeginExportAttempt("s-healthy", 0, "r7g.large", f.clock, 1); err != nil || claim != ExportClaimWon {
+		t.Fatalf("the volume-less shard is holding the only slot: claim=%v err=%v", claim, err)
+	}
+	f.assertDataIntact(t)
+}
+
 // Waiting behind the cap must not burn the retry budget. The attempt clock and
 // the attempt counter start at the claim, so a shard queued for longer than the
 // attempt deadline (a whole cohort rotating together at a low cap) still gets

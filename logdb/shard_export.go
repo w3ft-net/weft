@@ -192,6 +192,14 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 				sh.ID, attempt, maxExportAttempts, volumeID)
 			return nil
 		}
+		// A shard with no volume has nothing to snapshot. Claiming a slot for it
+		// would hold one of the few export slots for the whole attempt deadline,
+		// for every attempt, blocking healthy shards; it waits unclaimed instead
+		// (the stuck-archive alert surfaces it).
+		if volumeID == "" {
+			log.Printf("shardsm %s: ARCHIVING export has no volume to snapshot; not claiming an export slot", sh.ID)
+			return nil
+		}
 		diskBytes, err := d.Store.LatestShardDiskBytes(sh.ID)
 		if err != nil {
 			return fmt.Errorf("shardsm %s: read disk size for export sizing: %w", sh.ID, err)
