@@ -548,47 +548,142 @@ logs for `janitor:` errors; widening delete on customer data is your call.
 Use a `drill-` shard id and a scratch prefix, never the real archive prefix,
 so nothing the coordinator or janitor reads is touched.
 
-- [ ] Snapshot `4a672d0d`'s volume (a read-only operation on prod; `kevcons aws`).
-- [ ] Launch one export host by hand from the export template, from the new
+**Run 2026-10-07 (AMI `ami-03aaf26cfc925ead3`, GitSHA `a89ca35`). Core path
+passed; the weftd log and one failure drill are open (below).** Runbook:
+`docs/runbooks/export-drill.md`.
+
+- [x] Snapshot `4a672d0d`'s volume (a read-only operation on prod; `kevcons aws`).
+      100 GiB, about 9 minutes to complete.
+- [x] Launch one export host by hand from the export template, from the new
       AMI: `Role=export`, tags `export_shard_id=drill-<n>`, `export_attempt=1`,
       `export_prefix=s3://<archive bucket>/_export-drill`, the snapshot at
       `/dev/sdf`, shutdown behavior terminate. Start with `r7g.xlarge`.
+      The SSM agent was online about 30 s after launch and the export began
+      about 10 s after that.
 - [ ] Verify the assumptions this design rests on:
-  - [ ] `ebsnvme-id` maps the restored volume to `/dev/sdf`; it mounts at
-        `/mnt/export`; `shard.duckdb` opens (WAL replay).
-  - [ ] `weft-export.service` runs; `/opt/app/logs/export.log` fills; the log
-        reaches weft (`/log/weft/export/…`) through weftd.
-  - [ ] Parquet and `_manifests/drill-<n>.json` appear under the scratch
-        prefix; the manifest's rows match the shard's `row_count`.
-  - [ ] The host terminates itself and its restored volume is deleted.
-  - [ ] The host did **not** register or heartbeat as a shard.
-- [ ] **Capture the numbers**: wall time, peak RSS, PSI, spill bytes, partition
-      count (the Phase 0 progress lines). Put them in the instance-size table
-      (`defaultExportSizing` is a seed; there is no env override yet).
-- [ ] Failure drills: terminate a host mid-export (no manifest, no partial
-      "success"); export a copy with no `logs` table (must fail, not write an
-      empty archive).
-- [ ] Delete the drill snapshot, scratch prefix and any leftovers. If the
-      sweeper is on, a `drill-` resource has no shard row and is removed
-      after 15 minutes, so run the drill before enabling.
+  - [x] The restored volume mounts at `/mnt/export` (it appeared as
+        `nvme1n1`; I did not run `ebsnvme-id` itself) and `shard.duckdb`
+        opens (all 22,404,273 rows exported, so the WAL replay is fine).
+  - [x] `weft-export.service` runs; `/opt/app/logs/export.log` fills.
+  - [ ] The log reaches weft (`/log/weft/export/main.log`) through weftd.
+        **Not met (2026-10-07 drill):** weftd ran and shipped
+        `/log/weft/export/metrics.log` (rows to 30 s after the export ended),
+        but `main.log` never appeared. See the weftd TODO below.
+  - [x] Parquet and `_manifests/drill-<n>.json` appear under the scratch
+        prefix; the manifest's rows (22,404,273) match the shard's `row_count`
+        (checked by hand against `shard_records`).
+  - [x] The host terminates itself and its restored volume is deleted
+        (checked for all four hosts; the volume goes with the instance).
+  - [x] The host did **not** register or heartbeat as a shard
+        (`shard_heartbeats` had no rows for it, and the live shard's `addr`
+        and `instance_id` were unchanged).
+- [x] **Capture the numbers.** One shard, a 3.0 GB DuckDB (22.4 M rows, 2
+      customers), `date_trunc('hour', ts)` partitions, 7 target files:
+
+      | | r7g.xlarge (4 vCPU, 31 GB) | r7g.large (2 vCPU, 16 GB) |
+      |---|---|---|
+      | stats scan | 11.9 s | 23.1 s |
+      | COPY | not captured | 4m35s |
+      | export wall time | about 3m10s | 4m58s |
+      | peak RSS | over 7.6 GB (still climbing when sampled) | 7.6 GiB |
+      | swap / PSI full / spill | 0 / 0 / 0 | 0 / 0 / 0 |
+      | output | 208 files, 2.5 GiB | 199 files, 2.47 GiB |
+
+      Peak RSS is about 2.6x the DB size, so a 3x-the-DB memory rule of thumb
+      fits both runs with room. `r7g.large` is comfortable for this shard;
+      `r7g.medium` (8 GB) was not tried and looks marginal at that ratio.
+      **The sizing estimate is about 2x low**: `est_parquet_bytes` was 1.2 GB
+      against 2.5 GiB written (it only affects file count). Not yet copied
+      into `defaultExportSizing`. Launch to export start was about 26 s, and
+      launch to terminated about 6.5 min.
+- [ ] Failure drills:
+  - [x] Terminate a host mid-export (attempt 2, killed about 90 s into the
+        COPY): no manifest was written (the manifest on S3 stayed attempt 1's),
+        59 partial objects (713 MB) were left under `…attempt-2/`, and the
+        restored volume was deleted with the instance.
+  - [x] A host with no restored volume (attempt 3): the host powered itself
+        off (`Client.InstanceInitiatedShutdown`) within about 2 minutes, with
+        no output and no manifest. **Not seen:** the
+        `restored volume never appeared at /dev/sdf` message itself (the
+        console output was empty and the host's disk was gone).
+  - [ ] Export a copy with no `logs` table (must fail, not write an empty
+        archive). Not run.
+- [x] Delete the drill snapshot, scratch prefix and any leftovers. Done
+      2026-10-07 (466 objects, 6.0 GB; the bucket is unversioned, so they are
+      gone). If the sweeper is on, a `drill-` resource has no shard row and
+      is removed after 15 minutes, so run the drill before enabling.
+- [ ] **TODO (important): weftd must read a new log from the start on boot.**
+      An export host lives about 5 minutes, and `export.log` is the only
+      record of its phases and failures (the host and its disk are gone
+      afterwards, and the coordinator only sees the manifest). Today two things
+      lose it, both visible in the drill (weftd shipped metrics but no
+      `main.log`):
+      1. `weftd.NewTailer` (`weftd/tailer.go`) seeks to the end of the file,
+         so lines written before the tailer opens are dropped. `startup.sh`
+         starts the export unit before weftd, and the `start`, `stats`,
+         `sizing` and `copy start` lines are written in the first ~25 s,
+         exactly the sizing numbers and the early failure reasons.
+      2. `onboardAndRun` (`cmd/weftd/main.go`) blocks in `WaitForConfiguration`
+         until the `export` source is configured on the coordinator, and does
+         not start the tailer until then. A short-lived host may never get
+         there. (Inferred from the code; the host's weftd journal was not
+         captured, so not confirmed.)
+      Fix both: a per-source "read from start" option (a weftd change, so it
+      needs a version bump and a release per the auto-upgrade rules), and the
+      `export` source configured once so a new host starts tailing at once.
+      Then re-run one small export and confirm `main.log` has the `start`
+      line. Not blocking the rollout (the manifest and the coordinator's
+      attempt state are the completion signal); it blocks debugging the first
+      real failure.
 
 ### 5. Enable, one shard
+
+**Done 2026-10-07.** Enabled in prod (`EXPORT_MAX_CONCURRENT=1`); `4a672d0d`
+archived through the export.
 
 - [ ] Optional cleanup for `4a672d0d`: its days of failed in-process attempts
       left partial files under `<prefix>/<id>/`. The export writes to
       `<id>.attempt-N` and the archive records that path, so the old files
-      are never read; they only cost storage. List them, confirm nothing
-      references them, then delete.
-- [ ] Check the shard host is not still running an old in-process `COPY`
+      are never read; they only cost storage. Found 10 objects (58.7 MB)
+      under `32-apps/shard-20260921T0000-4a672d0d/`. The coordinator role
+      cannot delete them (no `s3:DeleteObject`, as expected), so this is a
+      manual delete. Not done.
+- [x] Check the shard host is not still running an old in-process `COPY`
       (the old binary ignores its context): look for CPU and swap thrash.
-- [ ] Terraform: set `EXPORT_LAUNCH_TEMPLATE` and `EXPORT_MAX_CONCURRENT=1`;
+      Quiet: weft-shard at 85 MB RSS, load falling.
+- [x] Terraform: set `EXPORT_LAUNCH_TEMPLATE` and `EXPORT_MAX_CONCURRENT=1`;
       watch for the SSM warning; restart coordinators one at a time.
-- [ ] Log shows `archive export enabled (template=… max_concurrent=1)`.
-- [ ] Watch `4a672d0d`: `export attempt 1/3 begun` → snapshot → launch →
+      Both coordinators were replaced one at a time (not `kevcons config
+      set`, which runs `load-app-env` alone and restarts every instance at
+      once; see the note under "Gaps found" below).
+- [x] Log shows `archive export enabled (template=… max_concurrent=1)`.
+      Both new coordinators, plus `archive sweeper started`. Coordinator
+      app logs are in `/opt/app/logs/coordinator.log`, not the journal.
+- [x] Watch `4a672d0d`: `export attempt 1/3 begun` → snapshot → launch →
       manifest → `archived to …` → volume deleted → ARCHIVED.
-- [ ] Compare: archived row count equals the shard's `row_count`; a query over
-      the archived shard returns what the live one did.
-- [ ] Snapshot, export instance and restored volume are all gone.
+      18:19:06 begun (`r7g.large`), 18:23:07 launched, 18:28:06 archived,
+      18:28:10 ARCHIVED (UTC). About 5 minutes from launch.
+- [x] Compare: archived row count equals the shard's `row_count`
+      (22,404,273 both). 
+- [ ] A query over the archived shard returns what the live one did. Not
+      checked: the live shard was already retired when I looked.
+- [x] Snapshot, export instance and restored volume are all gone (and the
+      shard's own host and data volume are retired).
+
+**Gaps found by the first real run**
+- A volume-less ARCHIVING shard claims the single global slot and sits on it
+  (`advanceExport` claims before it checks for a volume). `d1c1b361`, a
+  zombie row (17.4M rows, dead since 2026-07-13, no volume, instance or
+  S3 output), held the slot with `ARCHIVING export has no volume to
+  snapshot` every minute until it was removed with
+  `weft-admin force-remove`. Fix: don't claim without a volume (failing test
+  first). Also look for other ARCHIVING rows with an empty `ebs_volume_id`.
+- `weft-admin` is not on `PATH` on the coordinator; use
+  `sudo /opt/app/bin/weft-admin-run <cmd>`.
+- `kevcons` has no config "apply without writing" command; `config set`
+  would also drop `AWS_REGION`/`S3_REGION`/`APP_NAME` (those are appended by
+  `fetch-config.sh`, not `load-app-env`). Suggested new command: `kevcons
+  config apply`, rolling, one instance at a time, health-gated.
 
 ### 6. Widen
 
