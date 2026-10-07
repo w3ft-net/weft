@@ -641,13 +641,14 @@ passed; the weftd log and one failure drill are open (below).** Runbook:
 **Done 2026-10-07.** Enabled in prod (`EXPORT_MAX_CONCURRENT=1`); `4a672d0d`
 archived through the export.
 
-- [ ] Optional cleanup for `4a672d0d`: its days of failed in-process attempts
+- [x] Optional cleanup for `4a672d0d`: its days of failed in-process attempts
       left partial files under `<prefix>/<id>/`. The export writes to
       `<id>.attempt-N` and the archive records that path, so the old files
       are never read; they only cost storage. Found 10 objects (58.7 MB)
       under `32-apps/shard-20260921T0000-4a672d0d/`. The coordinator role
-      cannot delete them (no `s3:DeleteObject`, as expected), so this is a
-      manual delete. Not done.
+      cannot delete them (no `s3:DeleteObject`, as expected), so this was a
+      manual delete. Done 2026-10-07; the live `…attempt-1/` archive was
+      left intact.
 - [x] Check the shard host is not still running an old in-process `COPY`
       (the old binary ignores its context): look for CPU and swap thrash.
       Quiet: weft-shard at 85 MB RSS, load falling.
@@ -678,8 +679,9 @@ archived through the export.
   snapshot` every minute until it was removed with
   `weft-admin force-remove`. **Fixed**: `advanceExport` now requires a volume
   before it claims a slot (`TestShardExport_ShardWithoutAVolumeDoesNotTakeASlot`);
-  such a shard waits unclaimed and the 6h stuck-archive alert surfaces it. Still
-  worth looking for other ARCHIVING rows with an empty `ebs_volume_id`.
+  such a shard waits unclaimed and the 6h stuck-archive alert surfaces it. A
+  query for other ARCHIVING rows with an empty `ebs_volume_id` found none
+  (2026-10-07).
 - `weft-admin` is not on `PATH` on the coordinator; use
   `sudo /opt/app/bin/weft-admin-run <cmd>`.
 - `kevcons` has no config "apply without writing" command; `config set`
