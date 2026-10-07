@@ -47,3 +47,19 @@ esac
 
 printf "DB_DSN='host=%s port=%s dbname=%s user=%s password=%s sslmode=%s'\n" \
     "$host" "$port" "$name" "$user" "$pass" "$ssl"
+
+# DATABASE_HOST may be PgBouncer. Migrations always go straight to RDS
+# (DATABASE_DIRECT_HOST): their session-scoped advisory lock would stay
+# behind on a transaction-mode pooler's server connection.
+direct_host="${DATABASE_DIRECT_HOST:-}"
+direct_port="${DATABASE_DIRECT_PORT:-5432}"
+if [ -n "$direct_host" ]; then
+    case "$direct_host" in
+        *\'*)
+            echo "load-app-env-extra: DATABASE_DIRECT_HOST contains an apostrophe; refusing to compose DB_MIGRATE_DSN" >&2
+            exit 1
+            ;;
+    esac
+    printf "DB_MIGRATE_DSN='host=%s port=%s dbname=%s user=%s password=%s sslmode=%s'\n" \
+        "$direct_host" "$direct_port" "$name" "$user" "$pass" "$ssl"
+fi

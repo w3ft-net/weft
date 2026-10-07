@@ -41,7 +41,10 @@ func main() {
 		log.Println("WARNING: using default DB DSN — set --db-dsn or DB_DSN in production")
 	}
 
-	s, err := store.Open(dsn)
+	if err := store.Migrate(store.MigrateDSN(dsn)); err != nil {
+		log.Fatalf("migrate database: %v", err)
+	}
+	s, err := store.Connect(dsn)
 	if err != nil {
 		log.Fatalf("open database: %v", err)
 	}

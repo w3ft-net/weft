@@ -164,9 +164,12 @@ func main() {
 		dsn = "host=localhost dbname=weft user=weft password=weft sslmode=disable"
 		log.Println("WARNING: using default DB DSN — set --db-dsn or DB_DSN in production")
 	}
-	d, err := store.Open(dsn)
+	if err := store.Migrate(store.MigrateDSN(dsn)); err != nil {
+		log.Fatalf("store.Migrate: %v", err)
+	}
+	d, err := store.Connect(dsn)
 	if err != nil {
-		log.Fatalf("store.Open: %v", err)
+		log.Fatalf("store.Connect: %v", err)
 	}
 	db = d
 	defer db.Close()

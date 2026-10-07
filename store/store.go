@@ -42,6 +42,15 @@ func maxOpenConns() int {
 	return dbMaxOpenConnsDefault
 }
 
+// MigrateDSN returns the DSN to run migrations over: $DB_MIGRATE_DSN (a
+// direct connection to RDS, bypassing PgBouncer) if set, else dsn.
+func MigrateDSN(dsn string) string {
+	if v := os.Getenv("DB_MIGRATE_DSN"); v != "" {
+		return v
+	}
+	return dsn
+}
+
 // Store manages all weft PostgreSQL state in a single unified package.
 type Store struct {
 	db *gorm.DB
@@ -86,13 +95,22 @@ func (s *Store) SetSchemaCache(c *SchemaCache) {
 	s.schemaCache = c
 }
 
-// Open connects to the database and ensures all goose migrations have been
-// applied. Schema is authoritative from the .sql files under store/migrations;
-// we no longer use GORM AutoMigrate.
+// Open ensures all goose migrations have been applied, then connects.
+// Schema is authoritative from the .sql files under store/migrations; we no
+// longer use GORM AutoMigrate.
 func Open(dsn string) (*Store, error) {
 	if err := Migrate(dsn); err != nil {
 		return nil, err
 	}
+	return Connect(dsn)
+}
+
+// Connect connects without migrating. Prod processes migrate over a direct
+// connection to RDS (MigrateDSN) and connect through PgBouncer: Migrate's
+// session-scoped advisory lock and the schema.sql restore's session
+// settings would stay behind on a transaction-mode pooler's server
+// connections.
+func Connect(dsn string) (*Store, error) {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})

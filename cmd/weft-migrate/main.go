@@ -9,11 +9,12 @@
 // embedded goose runner records applied migrations in the
 // `goose_db_version` table.
 //
-// The DSN comes from $DB_DSN, written into /opt/app/.env by
-// load-app-env's per-app hook (deploy/load-app-env-extra.sh, which
-// composes the DSN from DATABASE_HOST/NAME/USER/PASSWORD that
-// load-app-env populated from the SSM config blob and the
-// credentials secret). --db-dsn is available for one-off manual
+// The DSN comes from $DB_MIGRATE_DSN (a direct connection to RDS,
+// bypassing PgBouncer), else $DB_DSN. Both are written into
+// /opt/app/.env by load-app-env's per-app hook
+// (deploy/load-app-env-extra.sh, which composes them from the
+// DATABASE_* values load-app-env populated from the SSM config blob and
+// the credentials secret). --db-dsn is available for one-off manual
 // runs.
 package main
 
@@ -28,11 +29,11 @@ import (
 )
 
 func main() {
-	dsn := flag.String("db-dsn", os.Getenv("DB_DSN"), "postgres DSN (defaults to $DB_DSN)")
+	dsn := flag.String("db-dsn", store.MigrateDSN(os.Getenv("DB_DSN")), "postgres DSN (defaults to $DB_MIGRATE_DSN, else $DB_DSN)")
 	flag.Parse()
 
 	if *dsn == "" {
-		log.Fatal("weft-migrate: no DSN provided (set --db-dsn or $DB_DSN)")
+		log.Fatal("weft-migrate: no DSN provided (set --db-dsn, $DB_MIGRATE_DSN or $DB_DSN)")
 	}
 
 	start := time.Now()
