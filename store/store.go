@@ -118,6 +118,12 @@ func Open(dsn string) (*Store, error) {
 func Connect(dsn string) (*Store, error) {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
+		// A single INSERT/UPDATE/DELETE is already atomic; GORM's default
+		// BEGIN/COMMIT wrap would add two round trips per write. Nothing here
+		// relies on it: there are no model hooks, no association writes, and
+		// every multi-statement path (including CreateInBatches over several
+		// batches) runs inside an explicit Transaction.
+		SkipDefaultTransaction: true,
 	})
 	if err != nil {
 		return nil, err
