@@ -1479,7 +1479,7 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.AgentToken{}).Where("id = ?", uint(id)).Update("revoked", true).Error; err != nil {
+	if err := s.store.RevokeAgentToken(uint(id)); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

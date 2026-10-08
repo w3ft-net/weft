@@ -174,6 +174,18 @@ func main() {
 	db = d
 	defer db.Close()
 
+	// Ack-cycling weftd agents open a stream per active file every commit
+	// interval; keep auth and the last-seen stamp off the database for those.
+	db.EnableAuthCache()
+	agentSeen := store.NewAgentSeenTracker(db)
+	seenCtx, seenCancel := context.WithCancel(context.Background())
+	seenDone := make(chan struct{})
+	go func() {
+		defer close(seenDone)
+		agentSeen.Run(seenCtx, 30*time.Second)
+	}()
+	defer func() { seenCancel(); <-seenDone }() // runs before db.Close
+
 	// Notifier is built from db so it can pre-resolve aliases for the
 	// alert stage. Sharing one instance between Coordinator and
 	// CronExecutor below keeps interactive `alert --notify=foo` and
@@ -391,6 +403,7 @@ func main() {
 		Store:      db,
 		CfgPtr:     cfgPtr,
 		Classifier: classifier,
+		AgentSeen:  agentSeen,
 	}
 	pb.RegisterWeftCoordinatorServer(srv, coordSvc)
 

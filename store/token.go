@@ -124,6 +124,41 @@ type AgentAuthResult struct {
 // other token. Callers that must reject a token from the wrong ingest
 // path (SyslogServer) use ValidateAgentTokenForProducer instead.
 func (s *Store) ValidateAgentToken(token string) (*AgentAuthResult, error) {
+	if s.authCache == nil {
+		return s.lookupAgentToken(token)
+	}
+	return s.authCache.get(hashAgentToken(token), func() (*AgentAuthResult, error) {
+		return s.lookupAgentToken(token)
+	})
+}
+
+// EnableAuthCache puts a short-TTL in-process cache in front of
+// ValidateAgentToken. Only long-running servers opt in: a revoked token
+// stays valid on a process that did not perform the revoke for up to
+// authCacheTTL plus jitter (66s).
+func (s *Store) EnableAuthCache() {
+	s.authCache = newAuthCache(authCacheTTL, authCacheNegTTL, authCacheMaxEntries)
+}
+
+const (
+	authCacheTTL        = 60 * time.Second
+	authCacheNegTTL     = 5 * time.Second // short so a just-minted token isn't rejected for long
+	authCacheMaxEntries = 10_000
+)
+
+// RevokeAgentToken marks a token revoked and drops it from this process's
+// auth cache so the revoke takes effect here immediately.
+func (s *Store) RevokeAgentToken(id uint) error {
+	if err := s.crossTenant().Model(&AgentToken{}).Where("id = ?", id).Update("revoked", true).Error; err != nil {
+		return err
+	}
+	if s.authCache != nil {
+		s.authCache.invalidateTokenID(id)
+	}
+	return nil
+}
+
+func (s *Store) lookupAgentToken(token string) (*AgentAuthResult, error) {
 	var t AgentToken
 	// The auth path: the customer is the *result* of this lookup, not an
 	// input, so it must run unscoped (keyed by the secret token hash).

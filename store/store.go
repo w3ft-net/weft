@@ -84,6 +84,11 @@ type Store struct {
 	// weft-admin, weft-migrate) transparently always fall through to
 	// Postgres.
 	schemaCache *SchemaCache
+
+	// authCache is the optional in-process ValidateAgentToken cache
+	// (auth_cache.go). Nil unless EnableAuthCache is called, so tests and
+	// CLIs that never opt in always read through to Postgres.
+	authCache *authCache
 }
 
 // SetSchemaCache attaches (or, passed nil, detaches) the shared Valkey
@@ -217,6 +222,25 @@ func (s *Store) TruncateTestTables() {
 	// test happened to run next. A broken fixture should say so.
 	if err := s.db.Exec("TRUNCATE TABLE cron_results, cron_watches, shell_functions, agent_tokens, notify_configs, namespace_permissions, org_permissions, namespaces, alert_incidents, device_codes, magic_links, memberships, shard_records, subscriptions, users, organizations CASCADE").Error; err != nil {
 		panic(fmt.Sprintf("store: TruncateTestTables: %v", err))
+	}
+}
+
+// OnSQLForTest calls fn with the text of every statement the store runs
+// (queries, updates, creates, raw execs) until the returned remove func is
+// called. Test-only: for asserting that a path does or does not touch the
+// database. name must be unique per registration.
+func (s *Store) OnSQLForTest(name string, fn func(sql string)) (remove func()) {
+	cb := func(db *gorm.DB) { fn(db.Statement.SQL.String()) }
+	cbs := s.db.Callback()
+	cbs.Query().After("gorm:query").Register(name+":query", cb)
+	cbs.Create().After("gorm:create").Register(name+":create", cb)
+	cbs.Update().After("gorm:update").Register(name+":update", cb)
+	cbs.Raw().After("gorm:raw").Register(name+":raw", cb)
+	return func() {
+		cbs.Query().Remove(name + ":query")
+		cbs.Create().Remove(name + ":create")
+		cbs.Update().Remove(name + ":update")
+		cbs.Raw().Remove(name + ":raw")
 	}
 }
 

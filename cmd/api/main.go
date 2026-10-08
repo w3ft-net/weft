@@ -50,6 +50,11 @@ func main() {
 	}
 	defer s.Close()
 
+	// Every HTTP ingest request validates its token here and the coordinator
+	// validates it again on the forwarded stream; cache the lookup so a warm
+	// token costs a map read instead of three SELECTs per request.
+	s.EnableAuthCache()
+
 	// Shared Valkey-backed cache for ingest-time schema lookups
 	// (api.enrichRow/enrichRows, SyslogServer) — see
 	// docs/plans/cloudwatch-kinesis-subscription.md. Same "empty disables"

@@ -114,6 +114,10 @@ type Server struct {
 	// one): ClassifyAsync falls back to deterministic envelope/JSON
 	// detection only, same as before this existed.
 	Classifier ingest.Classifier
+
+	// AgentSeen batches the agent_tokens last_seen_* stamps written on
+	// every IngestStream open. Nil is fine (tests): stamps are dropped.
+	AgentSeen *store.AgentSeenTracker
 }
 
 func (s *Server) tokenLimiter() *ingestLimiter {
@@ -510,26 +514,16 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	authEnv := auth.Env
 
 	// Read the agent's reported client identity from gRPC metadata and
-	// (a) record it on the token row for the operator dashboard and the
+	// (a) record it for the operator dashboard and the
 	// deprecation-window query, and (b) enforce the hard floor — an
 	// agent below WEFTD_HARD_FLOOR is refused outright. Soft tolerance
 	// for old wire shapes happens per-row inside the parse path, keyed
 	// on the recorded version.
 	clientID := readClientID(stream.Context())
 	if clientID != "" {
-		now := time.Now()
-		// Ingest-path write by token id (already authenticated upstream).
-		if err := s.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).
-			Model(&store.AgentToken{}).Where("id = ?", auth.TokenID).
-			Updates(map[string]any{
-				"last_seen_version": clientID,
-				"last_seen_at":      &now,
-			}).Error; err != nil {
-			// Don't kill the stream over a version-stamp write failure —
-			// the customer's logs flowing is more important than the
-			// operator dashboard being current.
-			log.Printf("ingest-stream: record agent version (token=%d, %q): %v", auth.TokenID, clientID, err)
-		}
+		// Batched in memory and flushed by AgentSeen.Run: a per-open UPDATE
+		// would multiply by hosts x files under ack cycling.
+		s.AgentSeen.Touch(auth.TokenID, clientID, time.Now())
 	}
 	if floor := s.runtimeCfg().WeftdHardFloor; floor != "" {
 		if clientBelow(clientID, floor) {
