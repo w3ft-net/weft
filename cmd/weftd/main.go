@@ -108,6 +108,7 @@ type Config struct {
 	Dimensions map[string]string `yaml:"dimensions"` // file-sourced dimension values; see docs/plans/dimensions-from-files.md
 	Sources    []SourceConfig    `yaml:"sources"`
 	AutoUpdate *bool             `yaml:"auto_update"` // self-replace on a newer release; nil = on (set false to opt out)
+	Checkpoint CheckpointConfig  `yaml:"checkpoint"`  // file-offset checkpointing; on by default
 }
 
 // autoUpdateEnabled resolves the auto_update gate. Unset (nil) means on:
@@ -276,6 +277,14 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// File-offset checkpointing: resume tailed files where delivery left off.
+	// Never fatal; a host that cannot checkpoint tails as it always has.
+	flushEvery := configureCheckpointing(cfg.Checkpoint)
+	if checkpoints != nil {
+		go checkpoints.Run(ctx, flushEvery)
+		go runCheckpointStatsReporter(ctx)
+	}
 
 	// Background self-update: once a day, fetch the release manifest and,
 	// when a newer weftd is published, download + verify + swap the binary
@@ -459,7 +468,7 @@ func main() {
 				// Single file: onboard once, then tail.
 				go func() {
 					if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, "", hostname, fullApp, func() {
-						runFileTailer(ctx, coordClient, hostname, fullApp, src.Path, -1)
+						runFileTailer(ctx, coordClient, hostname, fullApp, src.Path, true)
 					}); err != nil {
 						log.Printf("[%s] onboard failed: %v", fullApp, err)
 					}
@@ -494,6 +503,12 @@ func main() {
 	<-sig
 	log.Println("shutting down")
 	cancel()
+	// Let every file tailer deliver and ack what it has read, then persist
+	// the final offsets. Bounded by the shippers' shutdown timeout.
+	tailers.shutdown()
+	if err := checkpoints.Close(); err != nil {
+		log.Printf("checkpoint: final flush: %v", err)
+	}
 }
 
 // onboardAndRun checks if a source is already configured. If so, runs the
@@ -794,52 +809,6 @@ func streamScannedLines(ctx context.Context, client pb.WeftCoordinatorClient, sc
 	}
 }
 
-// runFileTailer tails path from byte offset start (negative = EOF).
-func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, instance, app, path string, start int64) {
-	tailer, err := weftd.NewTailer(path, start)
-	if err != nil {
-		log.Printf("[%s] open %s: %v", app, path, err)
-		return
-	}
-	defer tailer.Close()
-
-	lines := tailer.Lines()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	ss := &streamState{}
-	var buf []string
-
-	for {
-		select {
-		case <-ctx.Done():
-			flushWithReconnect(ctx, client, ss, buf, instance, app)
-			if ss.stream != nil {
-				ss.stream.CloseAndRecv()
-			}
-			return
-		case line, ok := <-lines:
-			if !ok {
-				flushWithReconnect(ctx, client, ss, buf, instance, app)
-				if ss.stream != nil {
-					ss.stream.CloseAndRecv()
-				}
-				return
-			}
-			buf = append(buf, line.Text)
-			if len(buf) >= 100 {
-				flushWithReconnect(ctx, client, ss, buf, instance, app)
-				buf = buf[:0]
-			}
-		case <-ticker.C:
-			if len(buf) > 0 {
-				flushWithReconnect(ctx, client, ss, buf, instance, app)
-				buf = buf[:0]
-			}
-		}
-	}
-}
-
 // fixedPrefix returns the longest leading run of `pattern` that contains
 // no glob wildcard. Trailing characters after the last separator are
 // dropped so the prefix is always a directory path. For
@@ -980,7 +949,8 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, inst
 	}
 	tailing := make(map[string]bool)
 
-	startFile := func(p string, start int64) {
+	// startup is false for files created while running: brand new, read from 0.
+	startFile := func(p string, startup bool) {
 		if tailing[p] {
 			return
 		}
@@ -993,7 +963,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, inst
 		fullApp := namespace + "/" + app + "/" + kind
 		go func() {
 			if err := onboardAndRun(ctx, client, token, app, p, "", instance, fullApp, func() {
-				runFileTailer(ctx, client, instance, fullApp, p, start)
+				runFileTailer(ctx, client, instance, fullApp, p, startup)
 			}); err != nil {
 				log.Printf("[%s] onboard failed: %v", fullApp, err)
 			}
@@ -1004,7 +974,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, inst
 	startMatching := func() {
 		paths, _ := globMatch(pattern)
 		for _, p := range paths {
-			startFile(p, -1)
+			startFile(p, true)
 		}
 	}
 
@@ -1055,7 +1025,7 @@ watch:
 					log.Printf("[%s] new file %s", namespace, event.Name)
 					// Brand new by construction: read from the top so lines written
 					// between creation and our open are not lost.
-					startFile(event.Name, 0)
+					startFile(event.Name, false)
 				}
 			}
 		case err, ok := <-watcher.Errors:
