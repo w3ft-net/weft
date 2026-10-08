@@ -63,31 +63,31 @@ function CustomerDetail({ name, onClose }: { name: string; onClose: () => void }
   }
 
   return (
-    <div className="dash-card" data-testid="admin-customer-detail">
+    <div className="dash-card dash-card-accent" data-testid="admin-customer-detail">
       <div className="dash-card-header">
         <h2 className="dash-card-title">{detail.display_name || detail.name}</h2>
-        <button className="btn-action" onClick={onClose} data-testid="admin-customer-close-button">Close</button>
+        <button className="btn-action" onClick={onClose} data-testid="admin-customer-close-button">close</button>
       </div>
 
       <div className="usage-stats">
         <div className="usage-stat">
-          <div className="usage-stat-label">Name</div>
-          <div className="usage-stat-value" style={{ fontSize: '1rem' }}>{detail.name}</div>
+          <div className="usage-stat-label">name</div>
+          <div className="usage-stat-value">{detail.name}</div>
         </div>
         <div className="usage-stat">
-          <div className="usage-stat-label">Tier</div>
-          <div className="usage-stat-value" style={{ fontSize: '1rem' }}>
+          <div className="usage-stat-label">tier</div>
+          <div className="usage-stat-value">
             {sub ? sub.tier : 'none'}
             {isComp && <span className="admin-comp-badge">comp</span>}
           </div>
         </div>
         <div className="usage-stat">
-          <div className="usage-stat-label">Status</div>
-          <div className="usage-stat-value" style={{ fontSize: '1rem' }}>{sub?.status || 'inactive'}</div>
+          <div className="usage-stat-label">status</div>
+          <div className="usage-stat-value">{sub?.status || 'inactive'}</div>
         </div>
         <div className="usage-stat">
-          <div className="usage-stat-label">Created</div>
-          <div className="usage-stat-value" style={{ fontSize: '1rem' }}>
+          <div className="usage-stat-label">created</div>
+          <div className="usage-stat-value">
             {new Date(detail.created_at).toLocaleDateString()}
           </div>
         </div>
@@ -95,11 +95,11 @@ function CustomerDetail({ name, onClose }: { name: string; onClose: () => void }
 
       {/* Namespaces */}
       {detail.namespaces.length > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <div className="form-label" style={{ marginBottom: 8 }}>Namespaces</div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div className="admin-subsection">
+          <div className="form-section-label">namespaces</div>
+          <div className="admin-tag-row">
             {detail.namespaces.map(ns => (
-              <span key={ns.id} className="dash-tier-badge" style={{ fontSize: '0.7rem' }}>{ns.name}</span>
+              <span key={ns.id} className="dash-tier-badge">{ns.name}</span>
             ))}
           </div>
         </div>
@@ -107,11 +107,11 @@ function CustomerDetail({ name, onClose }: { name: string; onClose: () => void }
 
       {/* Team */}
       {detail.team.length > 0 && (
-        <div style={{ marginBottom: 20 }}>
-          <div className="form-label" style={{ marginBottom: 8 }}>Team</div>
+        <div className="admin-subsection">
+          <div className="form-section-label">team</div>
           <div className="dash-table-wrap">
             <table className="dash-table" data-testid="admin-customer-team-table">
-              <thead><tr><th>Email</th><th>Role</th><th>Status</th></tr></thead>
+              <thead><tr><th>email</th><th>role</th><th>status</th></tr></thead>
               <tbody>
                 {detail.team.map(m => (
                   <tr key={m.email}>
@@ -128,11 +128,11 @@ function CustomerDetail({ name, onClose }: { name: string; onClose: () => void }
 
       {/* Comp controls */}
       <div className="create-token-form" data-testid="admin-customer-comp-form">
-        <div className="form-label" style={{ marginBottom: 12 }}>Comp subscription</div>
+        <div className="form-section-label">comp subscription</div>
         {!isComp && (
           <div className="form-row">
             <div className="form-field">
-              <label className="form-label">Tier</label>
+              <label className="form-label">tier</label>
               <select className="form-input" value={compTier} onChange={e => setCompTier(e.target.value)}
                 data-testid="admin-comp-tier-select">
                 <option value="swatch">swatch</option>
@@ -141,14 +141,14 @@ function CustomerDetail({ name, onClose }: { name: string; onClose: () => void }
               </select>
             </div>
             <div className="form-field">
-              <label className="form-label">Reason</label>
+              <label className="form-label">reason</label>
               <input className="form-input" placeholder="e.g. beta-tester" value={compReason}
                 onChange={e => setCompReason(e.target.value)} data-testid="admin-comp-reason-input" />
             </div>
           </div>
         )}
         {isComp && sub?.comp_reason && (
-          <div className="dash-empty" style={{ padding: '0 0 12px' }}>Reason: {sub.comp_reason}</div>
+          <div className="dash-empty">reason: {sub.comp_reason}</div>
         )}
         <button
           className={`btn-action ${isComp ? 'btn-action-danger' : 'btn-action-primary'}`}
@@ -161,8 +161,8 @@ function CustomerDetail({ name, onClose }: { name: string; onClose: () => void }
       </div>
 
       {/* Tier override */}
-      <div className="create-token-form" style={{ marginTop: 12 }} data-testid="admin-customer-tier-form">
-        <div className="form-label" style={{ marginBottom: 12 }}>Set tier</div>
+      <div className="create-token-form" data-testid="admin-customer-tier-form">
+        <div className="form-section-label">set tier</div>
         <div className="form-row">
           <div className="form-field">
             <select className="form-input" value={tierSelect} onChange={e => setTierSelect(e.target.value)}
@@ -173,7 +173,7 @@ function CustomerDetail({ name, onClose }: { name: string; onClose: () => void }
               <option value="bolt">bolt</option>
             </select>
           </div>
-          <div className="form-field" style={{ flex: 0 }}>
+          <div className="form-field form-field-shrink">
             <button className="btn-action btn-action-primary" onClick={handleSetTier}
               disabled={saving || !tierSelect} data-testid="admin-tier-set-button">
               {saving ? '...' : 'Set'}
@@ -223,16 +223,16 @@ function NewCustomerForm({ onCreated }: { onCreated: () => void }) {
     return (
       <div className="dash-card" data-testid="admin-new-customer-card">
         <div className="dash-card-header">
-          <h2 className="dash-card-title">New comp account</h2>
+          <h2 className="dash-card-title">new comp account</h2>
           <button className="btn-action btn-action-primary" onClick={() => { setOpen(true); setCreated(null) }}
-            data-testid="admin-new-customer-open-button">New account</button>
+            data-testid="admin-new-customer-open-button">new account</button>
         </div>
         {created && (
-          <div className="dash-empty" style={{ padding: '0 0 4px' }} data-testid="admin-new-customer-result">
-            Created <strong>{created.name}</strong> ({created.comp_reason} / {created.tier}) for {created.owner_email}.
+          <div className="dash-empty" data-testid="admin-new-customer-result">
+            created <strong>{created.name}</strong> ({created.comp_reason} / {created.tier}) for {created.owner_email}.
             {created.login_url && (
-              <div style={{ marginTop: 6 }}>
-                Login link: <a href={created.login_url} data-testid="admin-new-customer-login-link">{created.login_url}</a>
+              <div>
+                login link: <a href={created.login_url} data-testid="admin-new-customer-login-link">{created.login_url}</a>
               </div>
             )}
           </div>
@@ -244,26 +244,26 @@ function NewCustomerForm({ onCreated }: { onCreated: () => void }) {
   return (
     <div className="dash-card" data-testid="admin-new-customer-card">
       <div className="dash-card-header">
-        <h2 className="dash-card-title">New comp account</h2>
+        <h2 className="dash-card-title">new comp account</h2>
         <button className="btn-action" onClick={() => { setOpen(false); reset() }}
-          data-testid="admin-new-customer-cancel-button">Cancel</button>
+          data-testid="admin-new-customer-cancel-button">cancel</button>
       </div>
       <div className="create-token-form" data-testid="admin-new-customer-form">
         <div className="form-row">
           <div className="form-field">
-            <label className="form-label">Owner email</label>
+            <label className="form-label">owner email</label>
             <input className="form-input" type="email" placeholder="owner@acme.com" value={email}
               onChange={e => setEmail(e.target.value)} data-testid="admin-new-customer-email-input" />
           </div>
           <div className="form-field">
-            <label className="form-label">Org name</label>
+            <label className="form-label">org name</label>
             <input className="form-input" placeholder="acme" value={orgName}
               onChange={e => setOrgName(e.target.value)} data-testid="admin-new-customer-org-input" />
           </div>
         </div>
         <div className="form-row">
           <div className="form-field">
-            <label className="form-label">Tier</label>
+            <label className="form-label">tier</label>
             <select className="form-input" value={tier} onChange={e => setTier(e.target.value)}
               data-testid="admin-new-customer-tier-select">
               <option value="swatch">swatch</option>
@@ -272,7 +272,7 @@ function NewCustomerForm({ onCreated }: { onCreated: () => void }) {
             </select>
           </div>
           <div className="form-field">
-            <label className="form-label">Reason</label>
+            <label className="form-label">reason</label>
             <input className="form-input" placeholder="e.g. design-partner" value={reason}
               onChange={e => setReason(e.target.value)} data-testid="admin-new-customer-reason-input" />
           </div>
@@ -283,7 +283,7 @@ function NewCustomerForm({ onCreated }: { onCreated: () => void }) {
             {saving ? 'Creating...' : 'Create comp account'}
           </button>
         </div>
-        {error && <div className="form-error" style={{ marginTop: 8 }}>{error}</div>}
+        {error && <div className="form-error">{error}</div>}
       </div>
     </div>
   )
@@ -306,7 +306,7 @@ function CustomersTab() {
       <NewCustomerForm onCreated={load} />
       <div className="dash-card" data-testid="admin-customers-card">
         <div className="dash-card-header">
-          <h2 className="dash-card-title">Customers</h2>
+          <h2 className="dash-card-title">customers</h2>
           <span className="watch-count-badge">{customers.length}</span>
         </div>
         {customers.length === 0 ? (
@@ -315,21 +315,21 @@ function CustomersTab() {
           <div className="dash-table-wrap">
             <table className="dash-table" data-testid="admin-customers-table">
               <thead>
-                <tr><th>Name</th><th>Display</th><th>Tier</th><th>Status</th><th>Created</th></tr>
+                <tr><th>name</th><th>display</th><th>tier</th><th>status</th><th>created</th></tr>
               </thead>
               <tbody>
                 {customers.map(c => (
                   <tr
                     key={c.id}
                     onClick={() => setSelected(selected === c.name ? null : c.name)}
-                    style={{ cursor: 'pointer' }}
-                    className={selected === c.name ? 'admin-row-selected' : ''}
+                   
+                    className={`admin-row${selected === c.name ? ' admin-row-selected' : ''}`}
                     data-testid={`admin-customer-row-${c.name}`}
                   >
                     <td className="token-label">{c.name}</td>
                     <td>{c.display_name}</td>
                     <td>
-                      <span className="dash-tier-badge" style={{ fontSize: '0.68rem' }}>{c.tier}</span>
+                      <span className="dash-tier-badge">{c.tier}</span>
                       {c.is_comp && <span className="admin-comp-badge">comp</span>}
                     </td>
                     <td>
@@ -389,7 +389,7 @@ function ShardRow({ shard, onRefresh }: { shard: AdminShard; onRefresh: () => vo
   return (
     <>
       <tr data-testid={`admin-shard-row-${shard.ID}`}>
-        <td className="token-label" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}
+        <td className="token-label admin-cell-truncate admin-cell-narrow"
           title={shard.ID}>{shard.ID}</td>
         <td>
           <span className={`token-status ${shard.State === 'INGESTING' ? 'token-status-active' : shard.State === 'ARCHIVED' ? 'token-status-revoked' : ''}`}>
@@ -400,14 +400,14 @@ function ShardRow({ shard, onRefresh }: { shard: AdminShard; onRefresh: () => vo
         <td className="token-date">{shard.WindowEnd?.slice(0, 10)}</td>
         <td>{shard.RowCount.toLocaleString()}</td>
         <td>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div className="form-actions">
             {shard.State === 'READ_ONLY' && !confirming && (
               <button className="btn-action" onClick={() => setConfirming('archive')}
-                data-testid={`admin-shard-archive-${shard.ID}-button`}>Archive</button>
+                data-testid={`admin-shard-archive-${shard.ID}-button`}>archive</button>
             )}
             {shard.State === 'ARCHIVED' && !confirming && (
               <button className="btn-action btn-action-danger" onClick={() => setConfirming('delete')}
-                data-testid={`admin-shard-delete-${shard.ID}-button`}>Delete</button>
+                data-testid={`admin-shard-delete-${shard.ID}-button`}>delete</button>
             )}
             {confirming === 'archive' && (
               <>
@@ -415,7 +415,7 @@ function ShardRow({ shard, onRefresh }: { shard: AdminShard; onRefresh: () => vo
                   data-testid={`admin-shard-archive-confirm-${shard.ID}-button`}>
                   {busy ? '...' : 'Confirm archive'}
                 </button>
-                <button className="btn-action" onClick={() => setConfirming(null)}>Cancel</button>
+                <button className="btn-action" onClick={() => setConfirming(null)}>cancel</button>
               </>
             )}
             {confirming === 'delete' && (
@@ -424,7 +424,7 @@ function ShardRow({ shard, onRefresh }: { shard: AdminShard; onRefresh: () => vo
                   data-testid={`admin-shard-delete-confirm-${shard.ID}-button`}>
                   {busy ? '...' : 'Confirm delete'}
                 </button>
-                <button className="btn-action" onClick={() => setConfirming(null)}>Cancel</button>
+                <button className="btn-action" onClick={() => setConfirming(null)}>cancel</button>
               </>
             )}
             {confirming === 'force-delete' && (
@@ -433,14 +433,14 @@ function ShardRow({ shard, onRefresh }: { shard: AdminShard; onRefresh: () => vo
                   data-testid={`admin-shard-force-delete-${shard.ID}-button`}>
                   {busy ? '...' : 'Force delete'}
                 </button>
-                <button className="btn-action" onClick={() => setConfirming(null)}>Cancel</button>
+                <button className="btn-action" onClick={() => setConfirming(null)}>cancel</button>
               </>
             )}
           </div>
         </td>
       </tr>
       {error && (
-        <tr><td colSpan={6} className="form-error" style={{ padding: '4px 12px' }}>{error}</td></tr>
+        <tr><td colSpan={6} className="form-error">{error}</td></tr>
       )}
     </>
   )
@@ -479,21 +479,21 @@ function BucketDetail({ bucket, onClose }: { bucket: AdminBucket; onClose: () =>
   const services = bucket.Services.length > 0 ? bucket.Services : ['(catch-all)']
 
   return (
-    <div className="dash-card" data-testid="admin-bucket-detail">
+    <div className="dash-card dash-card-accent" data-testid="admin-bucket-detail">
       <div className="dash-card-header">
         <h2 className="dash-card-title">Bucket #{bucket.ID}</h2>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="form-actions">
           {!editing && (
             <button className="btn-action btn-action-primary" onClick={() => setEditing(true)}
-              data-testid="admin-bucket-edit-button">Edit</button>
+              data-testid="admin-bucket-edit-button">edit</button>
           )}
-          <button className="btn-action" onClick={onClose} data-testid="admin-bucket-close-button">Close</button>
+          <button className="btn-action" onClick={onClose} data-testid="admin-bucket-close-button">close</button>
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+      <div className="admin-tag-row">
         {services.map(a => (
-          <span key={a} className="dash-tier-badge" style={{ fontSize: '0.68rem' }}>{a}</span>
+          <span key={a} className="dash-tier-badge">{a}</span>
         ))}
       </div>
 
@@ -501,18 +501,18 @@ function BucketDetail({ bucket, onClose }: { bucket: AdminBucket; onClose: () =>
         <div className="create-token-form" data-testid="admin-bucket-edit-form">
           <div className="form-row">
             <div className="form-field">
-              <label className="form-label">Window duration</label>
+              <label className="form-label">window duration</label>
               <input className="form-input" value={windowDur} onChange={e => setWindowDur(e.target.value)}
                 data-testid="admin-bucket-window-input" />
             </div>
             <div className="form-field">
-              <label className="form-label">Target ingesting</label>
+              <label className="form-label">target ingesting</label>
               <input className="form-input" type="number" min="1" value={targetCount}
                 onChange={e => setTargetCount(e.target.value)}
                 data-testid="admin-bucket-target-input" />
             </div>
             <div className="form-field">
-              <label className="form-label">Tier</label>
+              <label className="form-label">tier</label>
               <select className="form-input" value={tier} onChange={e => setTier(e.target.value)}
                 data-testid="admin-bucket-tier-select">
                 <option value="small">small</option>
@@ -524,37 +524,37 @@ function BucketDetail({ bucket, onClose }: { bucket: AdminBucket; onClose: () =>
           <div className="form-actions">
             <button className="btn-action btn-action-primary" onClick={handleSave} disabled={saving}
               data-testid="admin-bucket-save-button">{saving ? 'Saving...' : 'Save'}</button>
-            <button className="btn-action" onClick={() => setEditing(false)}>Cancel</button>
+            <button className="btn-action" onClick={() => setEditing(false)}>cancel</button>
           </div>
-          {error && <div className="form-error" style={{ marginTop: 8 }}>{error}</div>}
+          {error && <div className="form-error">{error}</div>}
         </div>
       ) : (
-        <div className="usage-stats" style={{ marginBottom: 20 }}>
+        <div className="usage-stats">
           <div className="usage-stat">
-            <div className="usage-stat-label">Window</div>
-            <div className="usage-stat-value" style={{ fontSize: '1rem' }}>{bucket.WindowDuration}</div>
+            <div className="usage-stat-label">window</div>
+            <div className="usage-stat-value">{bucket.WindowDuration}</div>
           </div>
           <div className="usage-stat">
-            <div className="usage-stat-label">Target ingesting</div>
-            <div className="usage-stat-value" style={{ fontSize: '1rem' }}>{bucket.TargetIngestingCount}</div>
+            <div className="usage-stat-label">target ingesting</div>
+            <div className="usage-stat-value">{bucket.TargetIngestingCount}</div>
           </div>
           <div className="usage-stat">
-            <div className="usage-stat-label">Tier</div>
-            <div className="usage-stat-value" style={{ fontSize: '1rem' }}>{bucket.Tier}</div>
+            <div className="usage-stat-label">tier</div>
+            <div className="usage-stat-value">{bucket.Tier}</div>
           </div>
         </div>
       )}
 
       {/* Shards drilldown */}
-      <div style={{ marginTop: 12 }}>
-        <div className="form-label" style={{ marginBottom: 8 }}>Shards ({shards.length})</div>
+      <div className="admin-subsection">
+        <div className="form-section-label">shards ({shards.length})</div>
         {shards.length === 0 ? (
           <div className="dash-empty">No shards in this bucket.</div>
         ) : (
           <div className="dash-table-wrap">
             <table className="dash-table" data-testid="admin-shards-table">
               <thead>
-                <tr><th>ID</th><th>State</th><th>Start</th><th>End</th><th>Rows</th><th></th></tr>
+                <tr><th>ID</th><th>state</th><th>start</th><th>end</th><th>rows</th><th></th></tr>
               </thead>
               <tbody>
                 {shards.map(s => (
@@ -585,7 +585,7 @@ function BucketsTab() {
     <>
       <div className="dash-card" data-testid="admin-buckets-card">
         <div className="dash-card-header">
-          <h2 className="dash-card-title">Buckets</h2>
+          <h2 className="dash-card-title">buckets</h2>
           <span className="watch-count-badge">{buckets.length}</span>
         </div>
         {buckets.length === 0 ? (
@@ -594,7 +594,7 @@ function BucketsTab() {
           <div className="dash-table-wrap">
             <table className="dash-table" data-testid="admin-buckets-table">
               <thead>
-                <tr><th>ID</th><th>Services</th><th>Window</th><th>Target</th><th>Tier</th></tr>
+                <tr><th>ID</th><th>services</th><th>window</th><th>target</th><th>tier</th></tr>
               </thead>
               <tbody>
                 {buckets.map(b => {
@@ -603,15 +603,15 @@ function BucketsTab() {
                     <tr
                       key={b.ID}
                       onClick={() => setSelected(selected?.ID === b.ID ? null : b)}
-                      style={{ cursor: 'pointer' }}
-                      className={selected?.ID === b.ID ? 'admin-row-selected' : ''}
+                     
+                      className={`admin-row${selected?.ID === b.ID ? ' admin-row-selected' : ''}`}
                       data-testid={`admin-bucket-row-${b.ID}`}
                     >
                       <td className="token-label">{b.ID}</td>
-                      <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>{services}</td>
+                      <td className="admin-cell-truncate">{services}</td>
                       <td>{b.WindowDuration}</td>
                       <td>{b.TargetIngestingCount}</td>
-                      <td><span className="dash-tier-badge" style={{ fontSize: '0.68rem' }}>{b.Tier}</span></td>
+                      <td><span className="dash-tier-badge">{b.Tier}</span></td>
                     </tr>
                   )
                 })}
@@ -640,7 +640,7 @@ export default function Admin() {
       <main className="app-main" data-testid="admin-main">
         <div className="dash-content">
           <div className="dash-header">
-            <h1 className="dash-page-title">Admin</h1>
+            <h1 className="dash-page-title">admin</h1>
           </div>
 
           <div className="admin-tabs" data-testid="admin-tabs">
@@ -649,14 +649,14 @@ export default function Admin() {
               onClick={() => setTab('customers')}
               data-testid="admin-customers-tab"
             >
-              Customers
+              customers
             </button>
             <button
               className={`admin-tab${tab === 'buckets' ? ' admin-tab-active' : ''}`}
               onClick={() => setTab('buckets')}
               data-testid="admin-buckets-tab"
             >
-              Buckets
+              buckets
             </button>
           </div>
 

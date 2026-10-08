@@ -119,17 +119,18 @@ export default function Panes() {
   const rects = useMemo(() => layoutRects(root), [root])
 
   if (!ready) {
-    return <div className="panes-loading">booting shell…</div>
+    return <div className="panes-loading tui-cursor">booting shell</div>
   }
 
   return (
     <div className="panes-root">
       <div className="panes-bar panes-bar-top">
-        <span className="panes-title">weft panes</span>
+        <span className="panes-title">weft</span>
+        <span className="panes-sub">panes</span>
         <span className="panes-hint">
-          <kbd>Ctrl-B</kbd> then <kbd>%</kbd> split &#124; <kbd>"</kbd> split &#8210;{' '}
-          <kbd>←↑→↓</kbd> move &#183; <kbd>o</kbd> next &#183; <kbd>x</kbd> close &#183;{' '}
-          <kbd>z</kbd> zoom &#183; <kbd>1</kbd>-<kbd>9</kbd> jump
+          <kbd>C-b</kbd> then <kbd>%</kbd> split &#124;  <kbd>"</kbd> split &#8210;{'  '}
+          <kbd>←↑→↓</kbd> move  <kbd>o</kbd> next  <kbd>x</kbd> close{'  '}
+          <kbd>z</kbd> zoom  <kbd>1</kbd>-<kbd>9</kbd> jump
         </span>
       </div>
 
@@ -159,10 +160,12 @@ export default function Panes() {
       </div>
 
       <div className="panes-bar panes-bar-status">
-        <span>{paneList.length} pane{paneList.length === 1 ? '' : 's'}</span>
-        <span className="panes-focus">focus: {focused}</span>
-        {prefix && <span className="panes-prefix">PREFIX</span>}
-        {zoomed && <span className="panes-zoom">ZOOM {zoomed}</span>}
+        <span className="panes-seg panes-brand">weft</span>
+        <span className="panes-seg panes-focus">{focused}</span>
+        <span className="panes-seg">{paneList.length} pane{paneList.length === 1 ? '' : 's'}</span>
+        <span className="panes-fill" />
+        {prefix && <span className="panes-seg panes-prefix">prefix</span>}
+        {zoomed && <span className="panes-seg panes-zoom">zoom {zoomed}</span>}
       </div>
     </div>
   )
@@ -249,8 +252,9 @@ function PaneView({
           data-testid={`pane-close-${id}`}
           onClick={onClose}
           title="close pane"
+          aria-label={`close pane ${id}`}
         >
-          ✕
+          [x]
         </button>
       </div>
       <div

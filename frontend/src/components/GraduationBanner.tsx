@@ -29,8 +29,11 @@ export default function GraduationBanner() {
   return (
     <div className="graduation-banner" data-testid="graduation-banner">
       <div className="graduation-banner-body">
-        <div className="graduation-banner-title">You've graduated.</div>
-        <div className="graduation-banner-copy">
+        <span className="graduation-banner-title">
+          <span className="graduation-banner-sigil" aria-hidden="true">✓</span>
+          you've graduated.
+        </span>{' '}
+        <span className="graduation-banner-copy">
           Loom Inc has been removed from your orgs. Time to set up your own
           namespaces and start streaming logs — head to{' '}
           <Link to="/namespaces" data-testid="graduation-banner-namespaces-link">
@@ -45,7 +48,7 @@ export default function GraduationBanner() {
             manual
           </Link>
           .
-        </div>
+        </span>
       </div>
       <button
         type="button"
@@ -55,7 +58,7 @@ export default function GraduationBanner() {
         data-testid="graduation-banner-dismiss-button"
         aria-label="Dismiss"
       >
-        ×
+        [x]
       </button>
     </div>
   )

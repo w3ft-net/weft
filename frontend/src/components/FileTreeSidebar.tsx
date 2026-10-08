@@ -105,8 +105,9 @@ export default function FileTreeSidebar({
           className="shell-query-sidebar-close"
           onClick={onClose}
           data-testid={`${testIdPrefix}-sidebar-close-button`}
+          aria-label="close"
         >
-          ×
+          [x]
         </button>
       </div>
       {state.loading && state.entries === null ? (
@@ -173,9 +174,9 @@ function FileTreeRow({
       {entry.is_dir && expanded && children && (
         <ul className="file-tree-children">
           {children.length === 0 ? (
-            <li className="file-tree-empty">empty</li>
+            <li className="file-tree-empty"><span className="file-tree-branch" aria-hidden="true">└─</span>(empty)</li>
           ) : (
-            children.map(child => {
+            children.map((child, i) => {
               const childPath = absPath + '/' + child.name
               const childSafe = child.name.replace(/[^a-zA-Z0-9-]/g, '_')
               return (
@@ -190,8 +191,8 @@ function FileTreeRow({
                     disabled={child.is_dir}
                     data-testid={`${testIdPrefix}-${child.is_dir ? 'dir' : 'file'}-${safeName}-${childSafe}`}
                   >
-                    <span className="file-tree-icon">
-                      {child.is_dir ? '▸' : ''}
+                    <span className="file-tree-branch" aria-hidden="true">
+                      {i === children.length - 1 ? '└─' : '├─'}
                     </span>
                     {child.name}{child.is_dir ? '/' : ''}
                   </button>

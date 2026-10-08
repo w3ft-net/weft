@@ -127,11 +127,11 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
           </h2>
           {level === 'samples' && (
             <button
-              className="shell-trace-modal-back"
+              className="shell-trace-modal-back tui-btn"
               onClick={() => { setLevel('list'); setFocusIdx(null) }}
               data-testid="shell-trace-modal-back-button"
             >
-              ‹ back
+              back
             </button>
           )}
           <button
@@ -140,13 +140,13 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
             data-testid="shell-trace-modal-close-button"
             aria-label="Close"
           >
-            ×
+            [x]
           </button>
         </header>
 
         <div className="shell-trace-modal-body">
           {loading ? (
-            <div className="shell-trace-modal-loading">Loading…</div>
+            <div className="shell-trace-modal-loading tui-cursor">loading</div>
           ) : error ? (
             <div className="shell-trace-modal-error" data-testid="shell-trace-modal-error">{error}</div>
           ) : spec.mode === 'gap' ? (
@@ -176,7 +176,7 @@ function stripAnsi(s: string): string {
 
 function GapView({ rows, maxGapNs }: { rows: TraceRow[]; maxGapNs: number }) {
   if (rows.length === 0) {
-    return <div className="shell-trace-modal-empty">No lines found.</div>
+    return <div className="shell-trace-modal-empty">#&nbsp;no lines found</div>
   }
   return (
     <div className="shell-trace-gap-list" data-testid="shell-trace-gap-list">
@@ -214,7 +214,7 @@ function RollupListView({
   onSelect: (i: number) => void
 }) {
   if (rows.length === 0) {
-    return <div className="shell-trace-modal-empty">No spans found.</div>
+    return <div className="shell-trace-modal-empty">#&nbsp;no spans found</div>
   }
   return (
     <table className="shell-trace-rollup-table" data-testid="shell-trace-rollup-table">
@@ -278,7 +278,7 @@ function RollupListView({
 function SamplesView({ row }: { row: SpanRollupRow }) {
   const occs: SpanOccurrence[] = row.Occurrences ?? []
   if (occs.length === 0) {
-    return <div className="shell-trace-modal-empty">No occurrences.</div>
+    return <div className="shell-trace-modal-empty">#&nbsp;no occurrences</div>
   }
   return (
     <table className="shell-trace-samples-table" data-testid="shell-trace-samples-table">

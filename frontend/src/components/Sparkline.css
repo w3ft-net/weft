@@ -1,31 +1,26 @@
+/* Legend rows read like aligned terminal output: ■ tag ........ value */
 .watch-legend {
   list-style: none;
-  margin: 0;
-  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
 }
 
 .watch-legend-row {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  line-height: 1.2;
+  align-items: baseline;
+  gap: 1ch;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--text-primary);
 }
 
 .watch-legend-swatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
   flex-shrink: 0;
+  line-height: 1;
 }
 
 .watch-legend-tag {
-  color: var(--text-dim);
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -34,7 +29,6 @@
 }
 
 .watch-legend-value {
-  color: var(--text-primary);
-  font-weight: 600;
+  color: var(--amber);
   flex-shrink: 0;
 }

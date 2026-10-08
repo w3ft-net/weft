@@ -48,11 +48,12 @@ export default function AddKinesisSource({
   }
 
   return (
-    <div className="psc-row" data-testid={`${testidPrefix}-form`}>
+    <div className="psc-row psc-row-form" data-testid={`${testidPrefix}-form`}>
       <div className="psc-body">
-        <div className="psc-advanced">
+        <div className="psc-form-title">add kinesis source</div>
+        <div className="psc-advanced psc-advanced-stack">
           <label className="psc-field">
-            <span className="psc-label">Service name</span>
+            <span className="psc-label">service:</span>
             <input
               type="text"
               value={service}
@@ -63,7 +64,7 @@ export default function AddKinesisSource({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">CloudWatch log group</span>
+            <span className="psc-label">log group:</span>
             <input
               type="text"
               value={logGroup}
@@ -74,7 +75,7 @@ export default function AddKinesisSource({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Region</span>
+            <span className="psc-label">region:</span>
             <input
               type="text"
               value={region}
@@ -85,33 +86,33 @@ export default function AddKinesisSource({
           </label>
         </div>
 
-        <div className="psc-meta">
-          After adding, deploy the Firehose CloudFormation stack against
-          this log group. Once events start arriving, this source appears
-          under "Pending sources" to finish configuring.
-        </div>
+        <p className="psc-hint">
+          after adding, deploy the Firehose CloudFormation stack against
+          this log group. once events arrive, the source shows up under
+          “pending sources” to finish configuring.
+        </p>
 
         {error && (
           <div className="psc-error" data-testid={`${testidPrefix}-error`}>
-            {error}
+            error: {error}
           </div>
         )}
 
         <div className="psc-actions">
           <button
-            className="btn-action btn-action-primary"
+            className="tui-btn tui-btn-primary"
             onClick={submit}
             disabled={!complete || submitting}
             data-testid={`${testidPrefix}-submit-button`}
           >
-            {submitting ? 'Adding…' : 'Add Kinesis source'}
+            {submitting ? 'adding…' : 'add source'}
           </button>
           <button
-            className="psc-textbtn"
+            className="tui-btn"
             onClick={onCancel}
             data-testid={`${testidPrefix}-cancel-button`}
           >
-            Cancel
+            cancel
           </button>
         </div>
       </div>

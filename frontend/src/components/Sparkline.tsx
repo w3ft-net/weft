@@ -5,6 +5,7 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import { type CronResult } from '../lib/api'
+import { CHART_COLORS } from './chartColors'
 import './Sparkline.css'
 
 export interface SparkPoint {
@@ -19,15 +20,15 @@ export interface SparkSeries {
   latest: string
 }
 
-const ACCENT = '#e67e22'
-
+// Tagged series never use the untagged cyan, so "(untagged)" stays
+// distinguishable when it's drawn alongside tags.
 const TAG_PALETTE = [
-  ACCENT, '#7ec8ff', '#a29bfe', '#ffb36b',
-  '#6de3a0', '#ff7aa8', '#ffd36b', '#9ef0d8',
+  '#5fd787', '#af87ff', '#ffaf00', '#5fd7d7',
+  '#ff87af', '#87afff', '#d7d75f', '#d787d7',
 ]
 
 export function colorForTag(tag: string): string {
-  if (tag === '') return ACCENT
+  if (tag === '') return CHART_COLORS.line
   let h = 0
   for (let i = 0; i < tag.length; i++) {
     h = (h * 31 + tag.charCodeAt(i)) & 0xffff
@@ -135,19 +136,24 @@ function mergeSeriesData(seriesList: SparkSeries[]): Record<string, number>[] {
 
 // ── Sparkline component ───────────────────────────────────────────────────
 
+export interface SparkBand {
+  y: number
+  tone: 'warn' | 'crit'
+}
+
 interface SparklineProps {
   series: SparkSeries[]
+  // bands are extra dashed reference lines (dashboard warn/crit levels).
+  bands?: SparkBand[]
   threshold?: number | null
   condition?: 'above' | 'below' | 'eq' | 'neq' | null
   height?: number
   showTimeAxis?: boolean
 }
 
-const TICK_STYLE = { fontSize: 10, fill: '#484f58', fontFamily: "'JetBrains Mono', monospace" }
-const SAFE_FILL = 'rgba(109, 227, 160, 0.10)'
-const THRESH_STROKE = 'rgba(239, 85, 85, 0.65)'
+const TICK_STYLE = { fontSize: 10, fill: CHART_COLORS.tick, fontFamily: "'JetBrains Mono', monospace" }
 
-export function Sparkline({ series, threshold, condition, height = 48, showTimeAxis = false }: SparklineProps) {
+export function Sparkline({ series, bands = [], threshold, condition, height = 48, showTimeAxis = false }: SparklineProps) {
   const drawable = series.filter(s => s.points.length >= 2)
   const data = useMemo(() => mergeSeriesData(drawable), [drawable])
   if (data.length < 2) return null
@@ -167,6 +173,10 @@ export function Sparkline({ series, threshold, condition, height = 48, showTimeA
   if (hasThresh) {
     if ((threshold as number) < yMin) yMin = threshold as number
     if ((threshold as number) > yMax) yMax = threshold as number
+  }
+  for (const b of bands) {
+    if (b.y < yMin) yMin = b.y
+    if (b.y > yMax) yMax = b.y
   }
   if (yMin === yMax) { yMin -= 0.5; yMax += 0.5 }
 
@@ -192,7 +202,7 @@ export function Sparkline({ series, threshold, condition, height = 48, showTimeA
           <ReferenceArea
             y1={condition === 'above' ? yMin : (threshold as number)}
             y2={condition === 'above' ? (threshold as number) : yMax}
-            fill={SAFE_FILL}
+            fill={CHART_COLORS.safe}
             ifOverflow="hidden"
           />
         )}
@@ -202,17 +212,27 @@ export function Sparkline({ series, threshold, condition, height = 48, showTimeA
             key={s.tag || '_'}
             dataKey={seriesKey(s.tag)}
             stroke={s.color}
-            strokeWidth={1.5}
+            strokeWidth={1}
             dot={false}
             isAnimationActive={false}
             connectNulls={false}
           />
         ))}
 
+        {bands.map(b => (
+          <ReferenceLine
+            key={`${b.tone}-${b.y}`}
+            y={b.y}
+            stroke={b.tone === 'crit' ? CHART_COLORS.crit : CHART_COLORS.warn}
+            strokeOpacity={0.7}
+            strokeDasharray="2 3"
+          />
+        ))}
+
         {hasThresh && (
           <ReferenceLine
             y={threshold as number}
-            stroke={THRESH_STROKE}
+            stroke={CHART_COLORS.crit}
             strokeDasharray="4 3"
             data-testid="sparkline-threshold-line"
           />
@@ -231,7 +251,7 @@ export function SparkLegend({ series }: { series: SparkSeries[] }) {
           className="watch-legend-row"
           data-testid={`watch-legend-row-${s.tag || '_'}`}
         >
-          <span className="watch-legend-swatch" style={{ background: s.color }} />
+          <span className="watch-legend-swatch" style={{ color: s.color }}>■</span>
           <span className="watch-legend-tag">{s.tag}</span>
           <span className="watch-legend-value">{s.latest}</span>
         </li>

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import SidebarNav from '../components/SidebarNav'
+import Pane from '../components/Pane'
 import PendingSourceConfigure from '../components/PendingSourceConfigure'
 import AddKinesisSource from '../components/AddKinesisSource'
 import ConfiguredSourcesList from '../components/ConfiguredSourcesList'
@@ -10,6 +11,7 @@ import {
 } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import './Dashboard.css'
+import './Namespaces.css'
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', {
@@ -112,102 +114,113 @@ export default function Namespaces() {
     return tokens.filter(t => t.namespace === nsName)
   }
 
+  const pendingTotal = pendingSources.length
+
   return (
     <div className="app-layout">
       <SidebarNav />
       <main className="app-main" data-testid="namespaces-main">
-        <div className="dash-content">
-          <div className="dash-header">
-            <h1 className="dash-page-title">Namespaces</h1>
-            {user && <div className="dash-empty" style={{ marginTop: 4 }}>{user.email}</div>}
-          </div>
+        <div className="ns-content">
+          <header className="ns-header">
+            <h1 className="ns-title"><span className="tui-dim">~/</span>namespaces</h1>
+            {user && <span className="ns-who">{user.email}</span>}
+          </header>
 
           {/* New token reveal */}
           {newTokenSecret && (
-            <div className="token-reveal" data-testid="namespace-token-reveal">
-              <div className="token-reveal-label">Token created — copy now, it won't be shown again.</div>
-              <div className="token-reveal-value" data-testid="namespace-token-secret">{newTokenSecret}</div>
+            <Pane title="token created" className="ns-reveal" data-testid="namespace-token-reveal">
+              <p className="ns-reveal-note">copy it now — it won't be shown again.</p>
+              <div className="ns-reveal-kv">
+                <span className="ns-key">token:</span>
+                <code className="ns-reveal-value" data-testid="namespace-token-secret">{newTokenSecret}</code>
+              </div>
               {newTokenEndpoint && (
                 <>
-                  <div className="token-reveal-label" style={{ marginTop: 8 }}>
-                    Endpoint — paste both into the platform's log-stream config.
+                  <div className="ns-reveal-kv">
+                    <span className="ns-key">endpoint:</span>
+                    <code className="ns-reveal-value" data-testid="namespace-token-endpoint">{newTokenEndpoint}</code>
                   </div>
-                  <div className="token-reveal-value" data-testid="namespace-token-endpoint">{newTokenEndpoint}</div>
+                  <p className="ns-hint">paste both into the platform's log-stream config.</p>
                 </>
               )}
-              <div className="form-actions">
-                <button className="btn-action btn-action-primary" data-testid="namespace-token-copy-button"
+              <div className="ns-actions">
+                <button className="tui-btn tui-btn-primary" data-testid="namespace-token-copy-button"
                   onClick={() => { navigator.clipboard.writeText(newTokenSecret); setCopied(true); setTimeout(() => setCopied(false), 2000) }}>
-                  {copied ? 'Copied!' : 'Copy to clipboard'}
+                  {copied ? 'copied' : 'copy to clipboard'}
                 </button>
-                <button className="btn-action" onClick={() => { setNewTokenSecret(''); setNewTokenEndpoint('') }}
-                  data-testid="namespace-token-reveal-done-button">Done</button>
+                <button className="tui-btn" onClick={() => { setNewTokenSecret(''); setNewTokenEndpoint('') }}
+                  data-testid="namespace-token-reveal-done-button">done</button>
               </div>
-            </div>
+            </Pane>
           )}
 
-          <div className="dash-card" data-testid="namespaces-card">
-            <div className="dash-card-header">
-              <h2 className="dash-card-title">Namespaces</h2>
-              {!showCreate && (
-                <button className="btn-action btn-action-primary" onClick={() => setShowCreate(true)}
-                  data-testid="namespace-create-button">+ Create</button>
-              )}
-            </div>
-
+          <Pane
+            title="namespaces"
+            meta={namespaces.length > 0 ? `${namespaces.length}` : undefined}
+            actions={!showCreate && (
+              <button className="tui-btn tui-btn-primary" onClick={() => setShowCreate(true)}
+                data-testid="namespace-create-button">new</button>
+            )}
+            data-testid="namespaces-card"
+          >
             {showCreate && (
-              <form className="create-token-form" onSubmit={handleCreate} data-testid="namespace-create-form">
-                <div className="form-row">
-                  <div className="form-field">
-                    <label className="form-label">Namespace name</label>
-                    <input className="form-input" placeholder="e.g., weft, grantcentral"
-                      value={newName} onChange={e => setNewName(e.target.value)}
-                      data-testid="namespace-name-input" required autoFocus />
-                  </div>
-                </div>
-                {error && <div className="form-error">{error}</div>}
-                <div className="form-actions">
-                  <button type="submit" className="btn-action btn-action-primary"
+              <form className="ns-form" onSubmit={handleCreate} data-testid="namespace-create-form">
+                <label className="ns-field">
+                  <span className="ns-key">name:</span>
+                  <input placeholder="e.g. weft, grantcentral"
+                    value={newName} onChange={e => setNewName(e.target.value)}
+                    data-testid="namespace-name-input" required autoFocus />
+                </label>
+                {error && <div className="ns-error">error: {error}</div>}
+                <div className="ns-actions">
+                  <button type="submit" className="tui-btn tui-btn-primary"
                     disabled={creating} data-testid="namespace-create-submit-button">
-                    {creating ? 'Creating...' : 'Create'}
+                    {creating ? 'creating…' : 'create'}
                   </button>
-                  <button type="button" className="btn-action" onClick={() => { setShowCreate(false); setError('') }}
-                    data-testid="namespace-create-cancel-button">Cancel</button>
+                  <button type="button" className="tui-btn" onClick={() => { setShowCreate(false); setError('') }}
+                    data-testid="namespace-create-cancel-button">cancel</button>
                 </div>
               </form>
             )}
 
             {namespaces.length === 0 && !showCreate ? (
-              <div className="dash-empty">No namespaces yet. Create one to start ingesting logs.</div>
+              <div className="ns-empty tui-cursor">no namespaces yet. create one to start ingesting logs.</div>
             ) : (
-              <div className="func-list">
+              <div className="ns-list">
                 {namespaces.map(ns => {
                   const nsTokens = tokensForNamespace(ns.name)
                   const nsPending = pendingForNamespace(ns.name)
+                  const nsSources = sourcesForNamespace(ns.name)
                   const isExpanded = expanded === ns.name
 
                   return (
-                    <div key={ns.name} className="func-row" data-testid={`namespace-row-${ns.name}`}>
-                      <button className="func-name" onClick={() => setExpanded(isExpanded ? null : ns.name)}
+                    <div key={ns.name} className={`ns-row${isExpanded ? ' ns-row-open' : ''}`} data-testid={`namespace-row-${ns.name}`}>
+                      <button className="ns-toggle" onClick={() => setExpanded(isExpanded ? null : ns.name)}
+                        aria-expanded={isExpanded}
                         data-testid={`namespace-toggle-${ns.name}`}>
-                        <span className="func-name-text">{ns.name}</span>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <span className="ns-chevron">{isExpanded ? '▾' : '▸'}</span>
+                        <span className="ns-name">{ns.name}/</span>
+                        <span className="ns-count">
                           {nsPending.length > 0 && (
-                            <span className="namespace-pending-badge" data-testid={`namespace-pending-badge-${ns.name}`}>
-                              {nsPending.length} pending source{nsPending.length === 1 ? '' : 's'}
+                            <span className="ns-pending" data-testid={`namespace-pending-badge-${ns.name}`}>
+                              +{nsPending.length} pending
                             </span>
                           )}
-                          <span className="watch-count-badge">{nsTokens.length} token{nsTokens.length !== 1 ? 's' : ''}</span>
-                          <span className="func-chevron">{isExpanded ? '▾' : '▸'}</span>
-                        </div>
+                        </span>
+                        <span className="ns-count">{nsSources.length} source{nsSources.length !== 1 ? 's' : ''}</span>
+                        <span className="ns-count">{nsTokens.length} token{nsTokens.length !== 1 ? 's' : ''}</span>
                       </button>
 
                       {isExpanded && (
-                        <div className="func-detail">
+                        <div className="ns-detail">
                           {/* Pending sources — shown first so they're the obvious thing to act on */}
                           {nsPending.length > 0 && (
-                            <div className="namespace-pending-section" data-testid={`namespace-pending-${ns.name}`}>
-                              <div className="namespace-subsection-title">Pending sources</div>
+                            <Pane
+                              title="pending sources"
+                              meta={`${nsPending.length}`}
+                              className="ns-sub ns-sub-pending"
+                              data-testid={`namespace-pending-${ns.name}`}
+                            >
                               {nsPending.map(src => (
                                 <PendingSourceConfigure
                                   key={`${src.namespace}/${src.service}`}
@@ -215,95 +228,110 @@ export default function Namespaces() {
                                   onConfigured={loadData}
                                 />
                               ))}
-                            </div>
+                            </Pane>
                           )}
 
                           {/* Configured sources (CloudWatch push + weftd) */}
-                          <div className="namespace-pending-section">
-                            <div className="namespace-subsection-title">Sources</div>
+                          <Pane
+                            title="sources"
+                            className="ns-sub"
+                            actions={showAddKinesis !== ns.name && (
+                              <button
+                                className="tui-btn"
+                                onClick={() => setShowAddKinesis(ns.name)}
+                                data-testid={`namespace-add-kinesis-${ns.name}-button`}
+                              >
+                                add kinesis source
+                              </button>
+                            )}
+                          >
+                            {nsSources.length === 0 && showAddKinesis !== ns.name && (
+                              <div className="ns-empty">no sources configured.</div>
+                            )}
                             <ConfiguredSourcesList
                               namespace={ns.name}
-                              sources={sourcesForNamespace(ns.name)}
+                              sources={nsSources}
                               onChanged={loadData}
                             />
-                            {showAddKinesis === ns.name ? (
+                            {showAddKinesis === ns.name && (
                               <AddKinesisSource
                                 namespace={ns.name}
                                 onAdded={() => { setShowAddKinesis(null); loadData() }}
                                 onCancel={() => setShowAddKinesis(null)}
                               />
-                            ) : (
-                              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                                <button
-                                  className="btn-action"
-                                  onClick={() => setShowAddKinesis(ns.name)}
-                                  data-testid={`namespace-add-kinesis-${ns.name}-button`}
-                                >
-                                  + Add Kinesis source
-                                </button>
-                              </div>
                             )}
-                          </div>
+                          </Pane>
 
                           {/* Tokens for this namespace.
                               The raw token is no longer retrievable after
                               creation (hashed at rest). Show prefix + label
                               so humans can identify tokens; revoke by id. */}
-                          {nsTokens.length > 0 && (
-                            <div className="dash-table-wrap" style={{ marginBottom: 12 }}>
-                              <table className="dash-table" data-testid={`namespace-tokens-${ns.name}`}>
-                                <thead>
-                                  <tr><th>Prefix</th><th>Label</th><th>Env</th><th>For</th><th>Status</th><th>Created</th><th></th></tr>
-                                </thead>
-                                <tbody>
-                                  {nsTokens.map(t => (
-                                    <tr key={t.id} data-testid={`namespace-token-row-${t.id}`}>
-                                      <td className="token-prefix">
-                                        <code>{t.prefix}…</code>
-                                      </td>
-                                      <td className="token-label">{t.label}</td>
-                                      <td className="token-env">{t.env || <span className="dash-empty">—</span>}</td>
-                                      <td className="token-env" data-testid={`namespace-token-producer-${t.id}`}>
-                                        {t.producer ? (
-                                          <span title={t.endpoint}>{t.producer}: <code>{t.endpoint}</code></span>
-                                        ) : <span className="dash-empty">—</span>}
-                                      </td>
-                                      <td><span className={`token-status token-status-${t.status}`}>{t.status}</span></td>
-                                      <td className="token-date">{formatDate(t.created_at)}</td>
-                                      <td>
-                                        {t.status === 'active' && (
-                                          <button className="btn-action btn-action-danger"
-                                            onClick={() => handleRevoke(t.id)}
-                                            data-testid={`namespace-token-revoke-${t.id}`}>Revoke</button>
-                                        )}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          )}
+                          <Pane
+                            title="tokens"
+                            className="ns-sub"
+                            actions={showTokenForm !== ns.name && (
+                              <button className="tui-btn tui-btn-primary"
+                                onClick={() => setShowTokenForm(ns.name)}
+                                data-testid={`namespace-add-token-${ns.name}`}>new token</button>
+                            )}
+                          >
+                            {nsTokens.length === 0 && showTokenForm !== ns.name && (
+                              <div className="ns-empty">no tokens. create one to connect weftd or a log stream.</div>
+                            )}
+                            {nsTokens.length > 0 && (
+                              <div className="ns-table-wrap">
+                                <table className="tui-table" data-testid={`namespace-tokens-${ns.name}`}>
+                                  <thead>
+                                    <tr><th>prefix</th><th>label</th><th>env</th><th>for</th><th>status</th><th>created</th><th></th></tr>
+                                  </thead>
+                                  <tbody>
+                                    {nsTokens.map(t => (
+                                      <tr key={t.id} className={t.status === 'revoked' ? 'ns-token-revoked' : undefined} data-testid={`namespace-token-row-${t.id}`}>
+                                        <td className="ns-token-prefix">{t.prefix}…</td>
+                                        <td className="ns-token-label">{t.label}</td>
+                                        <td>{t.env || <span className="tui-dim">-</span>}</td>
+                                        <td data-testid={`namespace-token-producer-${t.id}`}>
+                                          {t.producer ? (
+                                            <span title={t.endpoint}>{t.producer} <span className="tui-dim">{t.endpoint}</span></span>
+                                          ) : <span className="tui-dim">-</span>}
+                                        </td>
+                                        <td>
+                                          <span className={`tui-tag ${t.status === 'active' ? 'tui-tag-ok' : ''}`}>{t.status}</span>
+                                        </td>
+                                        <td className="tui-dim">{formatDate(t.created_at)}</td>
+                                        <td className="ns-token-action">
+                                          {t.status === 'active' && (
+                                            <button className="tui-btn tui-btn-danger"
+                                              onClick={() => handleRevoke(t.id)}
+                                              data-testid={`namespace-token-revoke-${t.id}`}>revoke</button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
 
-                          {/* Create token form */}
-                          {showTokenForm === ns.name ? (
-                            <div className="create-token-form" style={{ marginTop: 8 }}>
-                              <div className="form-row">
-                                <div className="form-field">
-                                  <label className="form-label">Label</label>
-                                  <input className="form-input" placeholder="prod-web-01" value={tokenLabel}
+                            {/* Create token form */}
+                            {showTokenForm === ns.name && (
+                              <div className="ns-form ns-form-token">
+                                <label className="ns-field">
+                                  <span className="ns-key">label:</span>
+                                  <input placeholder="prod-web-01" value={tokenLabel}
                                     onChange={e => setTokenLabel(e.target.value)}
                                     data-testid={`namespace-token-label-${ns.name}`} />
-                                </div>
-                                <div className="form-field">
-                                  <label className="form-label">Env <span className="dash-empty">(optional)</span></label>
-                                  <input className="form-input" placeholder="prod" value={tokenEnv}
+                                </label>
+                                <label className="ns-field">
+                                  <span className="ns-key">env:</span>
+                                  <input placeholder="prod (optional)" value={tokenEnv}
                                     onChange={e => setTokenEnv(e.target.value)}
                                     data-testid={`namespace-token-env-${ns.name}`} />
-                                </div>
+                                </label>
                                 {producers.length > 0 && (
-                                  <div className="form-field">
-                                    <label className="form-label">For <span className="dash-empty">(optional)</span></label>
-                                    <select className="form-input" value={tokenProducer}
+                                  <label className="ns-field">
+                                    <span className="ns-key">for:</span>
+                                    <select value={tokenProducer}
                                       onChange={e => setTokenProducer(e.target.value)}
                                       data-testid={`namespace-token-producer-${ns.name}`}>
                                       <option value="">weftd / API (default)</option>
@@ -313,27 +341,24 @@ export default function Namespaces() {
                                         </option>
                                       ))}
                                     </select>
-                                  </div>
+                                  </label>
                                 )}
-                              </div>
-                              {tokenProducer && (
-                                <div className="dash-empty" style={{ marginTop: -4, marginBottom: 8 }}>
-                                  Endpoint: <code>{producers.find(p => p.name === tokenProducer)?.endpoint}</code> — paste
-                                  both the token and this endpoint into {tokenProducer}'s log-stream config.
+                                {tokenProducer && (
+                                  <p className="ns-hint">
+                                    endpoint: <code>{producers.find(p => p.name === tokenProducer)?.endpoint}</code> — paste
+                                    both the token and this endpoint into {tokenProducer}'s log-stream config.
+                                  </p>
+                                )}
+                                <div className="ns-actions">
+                                  <button className="tui-btn tui-btn-primary"
+                                    onClick={() => handleCreateToken(ns.name)}
+                                    data-testid={`namespace-token-create-${ns.name}`}>create token</button>
+                                  <button className="tui-btn" onClick={() => { setShowTokenForm(null); setTokenEnv(''); setTokenProducer('') }}
+                                    data-testid={`namespace-token-cancel-${ns.name}-button`}>cancel</button>
                                 </div>
-                              )}
-                              <div className="form-actions">
-                                <button className="btn-action btn-action-primary"
-                                  onClick={() => handleCreateToken(ns.name)}
-                                  data-testid={`namespace-token-create-${ns.name}`}>Create token</button>
-                                <button className="btn-action" onClick={() => { setShowTokenForm(null); setTokenEnv(''); setTokenProducer('') }}>Cancel</button>
                               </div>
-                            </div>
-                          ) : (
-                            <button className="btn-action btn-action-primary"
-                              onClick={() => setShowTokenForm(ns.name)}
-                              data-testid={`namespace-add-token-${ns.name}`}>+ Add token</button>
-                          )}
+                            )}
+                          </Pane>
                         </div>
                       )}
                     </div>
@@ -341,7 +366,13 @@ export default function Namespaces() {
                 })}
               </div>
             )}
-          </div>
+          </Pane>
+
+          {pendingTotal > 0 && (
+            <p className="ns-footnote">
+              <span className="tui-hi">+{pendingTotal}</span> source{pendingTotal === 1 ? '' : 's'} waiting for a schema — expand the namespace to confirm.
+            </p>
+          )}
         </div>
       </main>
     </div>

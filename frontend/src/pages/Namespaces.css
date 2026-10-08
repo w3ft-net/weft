@@ -1,0 +1,141 @@
+/* Namespaces — reads like `ls -l` over namespaces, each expanding into
+   nested panes for pending sources, sources and tokens. */
+
+.ns-content {
+  max-width: 1100px;
+  padding: 24px 3ch 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.ns-header {
+  display: flex;
+  align-items: baseline;
+  gap: 2ch;
+}
+
+.ns-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-bright);
+}
+
+.ns-who { color: var(--text-dim); }
+
+.ns-key { color: var(--text-dim); }
+
+.ns-empty { color: var(--text-dim); padding: 2px 0; }
+
+.ns-hint { color: var(--text-dim); margin: 4px 0; }
+.ns-hint code { color: var(--text-primary); }
+
+.ns-error { color: var(--red); margin: 6px 0; }
+
+.ns-actions {
+  display: flex;
+  gap: 2ch;
+  margin-top: 10px;
+}
+
+/* ── Forms: `key:` on the left, input on the right ─────── */
+.ns-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 12px;
+  margin-bottom: 10px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.ns-form-token {
+  border-bottom: none;
+  border-top: 1px dashed var(--border);
+  padding: 12px 0 0;
+  margin: 10px 0 0;
+}
+
+.ns-field {
+  display: grid;
+  grid-template-columns: 10ch minmax(0, 40ch);
+  align-items: center;
+}
+
+/* ── Namespace list ────────────────────────────────────── */
+.ns-list { display: flex; flex-direction: column; }
+
+.ns-toggle {
+  display: grid;
+  grid-template-columns: 3ch minmax(0, 1fr) 14ch 11ch 10ch;
+  align-items: baseline;
+  width: 100%;
+  padding: 2px 0;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ns-toggle:hover { background: var(--bg-elevated); }
+.ns-toggle:focus-visible { outline: none; background: var(--accent); color: var(--bg-deep); }
+.ns-toggle:focus-visible * { color: var(--bg-deep) !important; }
+
+.ns-chevron { color: var(--text-dim); text-align: center; }
+.ns-name { color: var(--accent); font-weight: 700; }
+.ns-count { color: var(--text-secondary); text-align: right; }
+.ns-pending { color: var(--amber); font-weight: 700; }
+
+.ns-row-open > .ns-toggle .ns-chevron { color: var(--accent); }
+
+.ns-detail {
+  margin: 8px 0 14px 3ch;
+  padding-left: 2ch;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ns-sub { padding: 16px 14px 12px; }
+
+/* The pending pane is the thing to act on — its frame goes amber. */
+.ns-sub-pending { border-color: var(--amber); }
+.ns-sub-pending > .tui-pane-head .tui-pane-title { color: var(--amber); }
+
+/* ── Tokens table ──────────────────────────────────────── */
+.ns-table-wrap { overflow-x: auto; }
+.ns-token-prefix { color: var(--text-bright); }
+.ns-token-revoked td { color: var(--text-dim); }
+.ns-token-action { text-align: right; }
+
+/* ── New-token reveal ──────────────────────────────────── */
+.ns-reveal { border-color: var(--amber); }
+.ns-reveal > .tui-pane-head .tui-pane-title { color: var(--amber); }
+.ns-reveal-note { color: var(--text-secondary); margin-bottom: 8px; }
+
+.ns-reveal-kv {
+  display: grid;
+  grid-template-columns: 10ch minmax(0, 1fr);
+  align-items: baseline;
+  margin: 2px 0;
+}
+
+.ns-reveal-value {
+  color: var(--text-bright);
+  background: var(--bg-deep);
+  border: 1px solid var(--border-bright);
+  padding: 2px 1ch;
+  word-break: break-all;
+  user-select: all;
+}
+
+.ns-footnote { color: var(--text-secondary); }
+
+@media (max-width: 768px) {
+  .ns-content { padding: 52px 2ch 32px; }
+  .ns-toggle { grid-template-columns: 3ch minmax(0, 1fr) auto; }
+  .ns-toggle .ns-count:not(:nth-of-type(3)) { display: none; }
+  .ns-field, .ns-reveal-kv { grid-template-columns: 1fr; }
+  .ns-detail { margin-left: 1ch; padding-left: 1ch; }
+}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
-import { Sparkline, SparkLegend, groupResultsByTag } from '../components/Sparkline'
+import { Sparkline, SparkLegend, groupResultsByTag, type SparkBand } from '../components/Sparkline'
 import {
   listDashboards, getDashboard,
   type DashboardListItem, type DashboardResponse,
@@ -60,29 +60,34 @@ export default function Dashboards() {
   )
 }
 
-// ── Switcher dropdown ──────────────────────────────────────────────────────
+// ── Switcher tab strip ─────────────────────────────────────────────────────
 
+// DashboardSwitcher is a one-line tab strip, like a tmux window list:
+//   prod │ billing │ edge
+// with the current dashboard in inverse video. The list lives under
+// data-testid="dashboards-switcher-select" (historical name from when it
+// was a <select>); each tab is dashboards-switcher-tab-<name>.
 function DashboardSwitcher({ list, currentName }: {
   list: DashboardListItem[]
   currentName: string
 }) {
-  const navigate = useNavigate()
   if (list.length <= 1) return null
   return (
-    <div className="dashboards-switcher">
-      <select
-        className="dashboards-switcher-select"
-        value={currentName}
-        onChange={e => navigate(`/dashboards/${encodeURIComponent(e.target.value)}`, { replace: true })}
-        data-testid="dashboards-switcher-select"
-      >
-        {list.map(d => (
-          <option key={d.name} value={d.name}>
-            {d.title && d.title !== d.name ? `${d.name} — ${d.title}` : d.name}
-          </option>
-        ))}
-      </select>
-    </div>
+    <nav className="dashboards-switcher" aria-label="dashboards" data-testid="dashboards-switcher-select">
+      {list.map(d => (
+        <Link
+          key={d.name}
+          to={`/dashboards/${encodeURIComponent(d.name)}`}
+          replace
+          title={d.title && d.title !== d.name ? d.title : undefined}
+          aria-current={d.name === currentName ? 'page' : undefined}
+          className={`dashboards-switcher-tab${d.name === currentName ? ' dashboards-switcher-tab-active' : ''}`}
+          data-testid={`dashboards-switcher-tab-${d.name}`}
+        >
+          {d.name}
+        </Link>
+      ))}
+    </nav>
   )
 }
 
@@ -91,7 +96,7 @@ function DashboardSwitcher({ list, currentName }: {
 function DashboardEmptyState() {
   return (
     <div className="dashboards-empty" data-testid="dashboards-empty-state">
-      <h1>No dashboards yet</h1>
+      <h1 className="tui-cursor">no dashboards yet</h1>
       <p>
         Dashboards are YAML files under <code>/etc/dashboards/</code>. Create one
         from the shell:
@@ -124,13 +129,18 @@ function DashboardView({ name, list }: { name: string; list: DashboardListItem[]
     return <div className="dashboards-error" data-testid="dashboards-error">{error}</div>
   }
   if (!data) {
-    return <div className="dashboards-loading">Loading…</div>
+    return <div className="dashboards-loading">loading {name}…</div>
   }
 
   return (
     <div className="dashboards-view" data-testid={`dashboards-view-${name}`}>
       {list && <DashboardSwitcher list={list} currentName={name} />}
-      {data.spec.title && <h1 className="dashboards-title">{data.spec.title}</h1>}
+      <header className="dashboards-head">
+        <h1 className="dashboards-title">{data.spec.title || name}</h1>
+        {data.updated_at && (
+          <span className="dashboards-updated">updated {relTime(data.updated_at)}</span>
+        )}
+      </header>
       {data.spec.sections.map((section, si) => (
         <CollapsibleSection
           key={si}
@@ -163,15 +173,18 @@ function CollapsibleSection({ title, testId, children }: {
   return (
     <section className="dashboards-section" data-testid={testId}>
       {title && (
-        <h2
-          className="dashboards-section-title dashboards-section-title-clickable"
-          onClick={() => setCollapsed(c => !c)}
-          data-testid={`section-toggle-${title}`}
-        >
-          <span className="dashboards-section-chevron">
-            {collapsed ? '▸' : '▾'}
-          </span>
-          {title}
+        <h2 className="dashboards-section-title">
+          <button
+            type="button"
+            className="dashboards-section-toggle"
+            onClick={() => setCollapsed(c => !c)}
+            aria-expanded={!collapsed}
+            data-testid={`section-toggle-${title}`}
+          >
+            <span className="dashboards-section-chevron">{collapsed ? '▸' : '▾'}</span>
+            {title.toLowerCase()}
+          </button>
+          <span className="dashboards-section-rule" aria-hidden="true" />
         </h2>
       )}
       {!collapsed && children}
@@ -186,18 +199,28 @@ function Tile({ tile, payload }: {
   payload: DashboardWatchPayload | null
 }) {
   const size = tile.size ?? 'md'
-  const className = `dashboards-tile dashboards-tile-${size}`
+  const className = `tui-pane dashboards-tile dashboards-tile-${size}`
+  const lastRun = payload?.watch.LastRunAt
+  const failed = !!payload?.watch.LastStatus && payload.watch.LastStatus !== 'ok'
   return (
     <div
       className={className}
       data-testid={`dashboards-tile-${tile.watch}`}
     >
-      <Link
-        to={`/watch/${encodeURIComponent(tile.watch)}`}
-        className="dashboards-tile-header"
-      >
-        <span className="dashboards-tile-watch">{tile.watch}</span>
-      </Link>
+      <div className="tui-pane-head">
+        <Link
+          to={`/watch/${encodeURIComponent(tile.watch)}`}
+          className="tui-pane-title dashboards-tile-header"
+          data-testid={`dashboards-tile-${tile.watch}-link`}
+        >
+          <span className="dashboards-tile-watch">{tile.watch}</span>
+        </Link>
+        {payload && (
+          <span className={`tui-pane-actions dashboards-tile-meta${failed ? ' dashboards-tone-crit' : ''}`}>
+            {failed ? payload.watch.LastStatus : lastRun ? relTime(lastRun) : 'pending'}
+          </span>
+        )}
+      </div>
       <div className="dashboards-tile-body">
         {payload === null
           ? <NoData />
@@ -232,14 +255,15 @@ function CounterTile({ tile, payload }: {
 }) {
   const latest = latestValue(payload)
   const tone = thresholdTone(tile.threshold, latest)
-  const text = latest === null
-    ? '—'
-    : tile.format
-      ? formatString(tile.format, latest)
-      : formatNum(latest)
+  // A format like "%d lines/5m" renders as a big number with the rest of
+  // the string as a dim unit. A format with no placeholder is treated as
+  // a bare unit suffix.
+  const { num, before, after } = splitFormat(tile.format, latest)
   return (
     <div className={`dashboards-counter dashboards-tone-${tone}`} data-testid={`counter-${tile.watch}`}>
-      {text}
+      {before && <span className="dashboards-counter-unit">{before}</span>}
+      <span className="dashboards-counter-num">{num}</span>
+      {after && <span className="dashboards-counter-unit">{after}</span>}
     </div>
   )
 }
@@ -256,14 +280,22 @@ function GaugeTile({ tile, payload }: {
   const pct = latest === null || max <= 0 ? 0 : Math.max(0, Math.min(1, latest / max))
   return (
     <div className="dashboards-gauge" data-testid={`gauge-${tile.watch}`}>
-      <div className="dashboards-gauge-bar">
-        <div
-          className={`dashboards-gauge-fill dashboards-tone-${tone}`}
-          style={{ width: `${pct * 100}%` }}
-        />
+      <div className="dashboards-gauge-bar" role="meter" aria-valuenow={latest ?? undefined} aria-valuemin={0} aria-valuemax={max}>
+        <span className="dashboards-gauge-bracket">[</span>
+        <span className="dashboards-gauge-track">
+          <span
+            className={`dashboards-gauge-fill dashboards-gauge-${tone}`}
+            style={{ width: `${pct * 100}%` }}
+          />
+        </span>
+        <span className="dashboards-gauge-bracket">]</span>
       </div>
       <div className="dashboards-gauge-value">
-        {latest === null ? '—' : formatNum(latest)} / {formatNum(max)}
+        <span className={`dashboards-gauge-num dashboards-gauge-${tone}`}>
+          {latest === null ? '—' : formatNum(latest)}
+        </span>
+        <span className="dashboards-counter-unit">/{formatNum(max)}</span>
+        <span className="dashboards-gauge-pct">{Math.round(pct * 100)}%</span>
       </div>
     </div>
   )
@@ -284,26 +316,30 @@ function SparklineTile({ tile, payload }: {
     return <NoData />
   }
 
+  const bands: SparkBand[] = []
+  if (typeof tile.threshold?.warn === 'number') bands.push({ y: tile.threshold.warn, tone: 'warn' })
+  if (typeof tile.threshold?.crit === 'number') bands.push({ y: tile.threshold.crit, tone: 'crit' })
+
   const tagged = series.some(s => s.tag !== '')
   const latest = !tagged && series.length === 1 ? series[0].latest : null
   const tone = latest !== null ? thresholdTone(tile.threshold, parseFloat(latest)) : 'normal'
 
   return (
     <div className="dashboards-sparkline-wrap" data-testid={`sparkline-${tile.watch}`}>
+      {!tagged && latest !== null && (
+        <div className={`dashboards-sparkline-latest dashboards-tone-${tone}`}>
+          {latest}
+        </div>
+      )}
       <Sparkline
         series={series}
+        bands={bands}
         threshold={payload.watch.AlertThreshold}
         condition={payload.watch.AlertCondition}
         height={80}
         showTimeAxis
       />
-      {tagged
-        ? <SparkLegend series={series} />
-        : latest !== null && (
-          <div className={`dashboards-sparkline-latest dashboards-tone-${tone}`}>
-            {latest}
-          </div>
-        )}
+      {tagged && <SparkLegend series={series} />}
     </div>
   )
 }
@@ -325,14 +361,16 @@ function TableTile({ tile, payload }: {
   if (rows.length === 0) return <NoData />
 
   return (
-    <table className="dashboards-table" data-testid={`table-${tile.watch}`}>
+    <table className="tui-table dashboards-table" data-testid={`table-${tile.watch}`}>
       <thead>
-        <tr>{cols.map(c => <th key={c}>{c}</th>)}</tr>
+        <tr>{cols.map((c, ci) => <th key={c} className={isNumericCol(rows, ci) ? 'dashboards-num' : undefined}>{c}</th>)}</tr>
       </thead>
       <tbody>
         {rows.map((row, i) => (
           <tr key={i}>
-            {cols.map((_, ci) => <td key={ci}>{row[ci] ?? ''}</td>)}
+            {cols.map((_, ci) => (
+              <td key={ci} className={isNumericCol(rows, ci) ? 'dashboards-num' : undefined}>{row[ci] ?? ''}</td>
+            ))}
           </tr>
         ))}
       </tbody>
@@ -341,6 +379,35 @@ function TableTile({ tile, payload }: {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+function isNumericCol(rows: string[][], ci: number): boolean {
+  return rows.length > 0 && rows.every(r => r[ci] === undefined || /^-?[\d.,]+%?$/.test(r[ci]))
+}
+
+function splitFormat(fmt: string | undefined, v: number | null): { num: string; before: string; after: string } {
+  if (v === null) return { num: '—', before: '', after: '' }
+  if (!fmt) return { num: formatNum(v), before: '', after: '' }
+  const m = fmt.match(/%(\.\d+)?[dfis]/)
+  if (!m || m.index === undefined) return { num: formatNum(v), before: '', after: ` ${fmt.trim()}` }
+  return {
+    num: formatString(m[0], v),
+    before: fmt.slice(0, m.index),
+    after: fmt.slice(m.index + m[0].length),
+  }
+}
+
+// relTime renders a timestamp as a short "3m ago" the way top/k9s show age.
+function relTime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime()
+  if (!Number.isFinite(ms)) return ''
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s ago`
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.round(m / 60)
+  if (h < 48) return `${h}h ago`
+  return `${Math.round(h / 24)}d ago`
+}
 
 function latestValue(payload: DashboardWatchPayload): number | null {
   for (const r of payload.results) {

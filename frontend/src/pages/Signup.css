@@ -1,73 +1,47 @@
+/* Signup + payment setup. Layout comes from Login.css (.login-*); this
+   file adds the plan line and the fine print. */
+
 .signup-tier {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
+  gap: 1ch;
 }
 
 .signup-tier-label {
-  color: var(--text-dim);
-  text-transform: uppercase;
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
+  flex: 0 0 7ch;
+  color: var(--text-secondary);
 }
 
+.signup-tier-label::after { content: ':'; color: var(--text-dim); }
+
 .signup-tier-value {
-  color: var(--text-primary);
   flex: 1;
+  color: var(--amber);
 }
 
 .signup-tier-change {
   color: var(--accent);
-  font-size: 0.78rem;
-  text-decoration: none;
-  transition: color 0.2s;
 }
 
-.signup-tier-change:hover {
-  color: var(--accent-hover);
-}
+.signup-tier-change::before { content: '['; color: var(--text-dim); margin-right: 0.5ch; }
+.signup-tier-change::after { content: ']'; color: var(--text-dim); margin-left: 0.5ch; }
 
 .signup-disclaimer {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
   color: var(--text-dim);
-  text-align: center;
-  margin: 0;
-  line-height: 1.5;
+  padding-left: 8ch;
 }
 
 .signup-login-prompt {
-  text-align: center;
-  margin-top: 20px;
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
   color: var(--text-dim);
 }
 
-.signup-login-prompt a {
-  color: var(--accent);
-  text-decoration: none;
-  transition: color 0.2s;
-}
+.signup-loading { color: var(--text-dim); }
 
-.signup-login-prompt a:hover {
-  color: var(--accent-hover);
-}
+/* Stripe's Payment Element renders in its own iframe; give it room. */
+.signup-payment-element { margin: 4px 0; }
 
-.signup-cancelled {
-  text-align: center;
-  padding: 8px 0;
-}
-
-.signup-cancelled p {
-  font-size: 0.9rem;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  margin-bottom: 20px;
+@media (max-width: 480px) {
+  .signup-tier { flex-wrap: wrap; }
+  .signup-tier-label { flex-basis: auto; }
+  .signup-disclaimer { padding-left: 0; }
 }

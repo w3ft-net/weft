@@ -5,11 +5,13 @@ import {
   ReferenceLine, ReferenceArea, ResponsiveContainer,
 } from 'recharts'
 import SidebarNav from '../components/SidebarNav'
+import Pane from '../components/Pane'
 import { colorForTag, niceTimeTicks, formatTimeTick } from '../components/Sparkline'
+import { CHART_COLORS } from '../components/chartColors'
 import { useAuth } from '../lib/AuthContext'
 import {
-  getWatch, getWatchChart,
-  type CronWatch, type ChartRange, type ChartPoint, type ChartResponse,
+  getWatch, getWatchChart, getWatchResults,
+  type CronWatch, type CronResult, type ChartRange, type ChartPoint, type ChartResponse,
   CHART_RANGES, CHART_RANGE_MS,
 } from '../lib/api'
 import './Watch.css'
@@ -87,10 +89,7 @@ function seriesKey(tag: string): string {
 
 // ── Chart ──────────────────────────────────────────────────────────────────
 
-const TICK_STYLE = { fontSize: 11, fill: '#484f58', fontFamily: "'JetBrains Mono', monospace" }
-const GRID_STROKE = '#21262d'
-const SAFE_FILL = 'rgba(109, 227, 160, 0.10)'
-const THRESH_STROKE = 'rgba(239, 85, 85, 0.65)'
+const TICK_STYLE = { fontSize: 11, fill: CHART_COLORS.tick, fontFamily: "'JetBrains Mono', monospace" }
 
 interface ChartProps {
   series: Series[]
@@ -143,7 +142,7 @@ function WatchChart({ series, hidden, threshold, condition, rangeStartMs, rangeE
     <div className="watch-chart-wrap" data-testid="watch-chart-svg">
       <ResponsiveContainer width="100%" height={240}>
         <LineChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
-          <CartesianGrid strokeDasharray="2 3" stroke={GRID_STROKE} vertical={false} />
+          <CartesianGrid strokeDasharray="1 3" stroke={CHART_COLORS.grid} vertical={false} />
           <XAxis
             dataKey="ts"
             type="number"
@@ -167,7 +166,7 @@ function WatchChart({ series, hidden, threshold, condition, rangeStartMs, rangeE
             <ReferenceArea
               y1={condition === 'above' ? vMin : (threshold as number)}
               y2={condition === 'above' ? (threshold as number) : vMax}
-              fill={SAFE_FILL}
+              fill={CHART_COLORS.safe}
               ifOverflow="hidden"
             />
           )}
@@ -177,7 +176,7 @@ function WatchChart({ series, hidden, threshold, condition, rangeStartMs, rangeE
               key={s.tag || '_'}
               dataKey={seriesKey(s.tag)}
               stroke={s.color}
-              strokeWidth={1.6}
+              strokeWidth={1}
               dot={false}
               isAnimationActive={false}
               connectNulls={false}
@@ -187,7 +186,7 @@ function WatchChart({ series, hidden, threshold, condition, rangeStartMs, rangeE
           {hasThresh && (
             <ReferenceLine
               y={threshold as number}
-              stroke={THRESH_STROKE}
+              stroke={CHART_COLORS.crit}
               strokeDasharray="4 3"
               label={false}
             />
@@ -195,12 +194,14 @@ function WatchChart({ series, hidden, threshold, condition, rangeStartMs, rangeE
 
           <Tooltip
             contentStyle={{
-              background: '#161b22',
-              border: '1px solid #21262d',
-              borderRadius: 6,
+              background: CHART_COLORS.surface,
+              border: `1px solid ${CHART_COLORS.border}`,
+              borderRadius: 0,
+              color: CHART_COLORS.text,
               fontFamily: "'JetBrains Mono', monospace",
               fontSize: 12,
             }}
+            cursor={{ stroke: CHART_COLORS.border, strokeDasharray: '2 2' }}
             labelFormatter={(v) => {
               const d = new Date(Number(v))
               return d.toUTCString().replace(' GMT', ' UTC')
@@ -229,6 +230,7 @@ export default function Watch() {
 
   const [watch, setWatch] = useState<CronWatch | null>(null)
   const [chart, setChart] = useState<ChartResponse | null>(null)
+  const [runs, setRuns] = useState<CronResult[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -237,6 +239,13 @@ export default function Watch() {
     getWatch(name)
       .then(setWatch)
       .catch(e => setError(String(e)))
+  }, [name])
+
+  useEffect(() => {
+    if (!name) return
+    getWatchResults(name)
+      .then(setRuns)
+      .catch(() => setRuns([]))
   }, [name])
 
   useEffect(() => {
@@ -277,27 +286,35 @@ export default function Watch() {
         <div className="watch-detail" data-testid="watch-detail-main">
           <div className="watch-detail-header">
             <Link to="/dashboards" className="watch-detail-back" data-testid="watch-detail-back-link">
-              ← Dashboards
+              dashboards
             </Link>
+            <span className="watch-detail-crumb-sep">/</span>
             <h1 className="watch-detail-name" data-testid="watch-detail-name">
               {name}
             </h1>
             {watch && (
               <div className="watch-detail-meta">
-                <span className="watch-detail-schedule">schedule: {watch.Schedule}</span>
-                <span className={`watch-detail-status watch-detail-status-${watch.LastStatus || 'pending'}`}>
-                  {watch.LastStatus ? `last: ${watch.LastStatus}` : 'waiting for first run'}
+                <span className="watch-detail-schedule">
+                  <span className="tui-dim">cron</span> {watch.Schedule}
+                </span>
+                <span className={`tui-tag watch-detail-status watch-detail-status-${watch.LastStatus || 'pending'}`}>
+                  {watch.LastStatus || 'waiting for first run'}
                 </span>
               </div>
             )}
-            {watch && (
-              <pre className="watch-detail-pipeline" data-testid="watch-detail-pipeline">
-                {watch.Pipeline}
-              </pre>
-            )}
           </div>
 
-          <div className="watch-detail-chart-card">
+          {watch && (
+            <pre className="watch-detail-pipeline" data-testid="watch-detail-pipeline">
+              {watch.Pipeline}
+            </pre>
+          )}
+
+          <Pane
+            className="watch-detail-chart-card"
+            title="history"
+            meta={chart ? `${range} · ${chart.granularity}` : undefined}
+          >
             {error && (
               <div className="watch-detail-error" data-testid="watch-detail-error">{error}</div>
             )}
@@ -334,7 +351,7 @@ export default function Watch() {
                     )
                   })}
                   <span className="watch-detail-gran" data-testid="watch-detail-granularity">
-                    granularity: {chart.granularity}
+                    {chart.granularity}
                   </span>
                 </div>
 
@@ -354,11 +371,15 @@ export default function Watch() {
                           onClick={() => toggleTag(s.tag)}
                           data-testid={`watch-detail-legend-toggle-${s.tag || '_'}`}
                         >
-                          <span className="watch-detail-legend-swatch" style={{ background: s.color }} />
+                          <span className="watch-detail-legend-swatch" style={{ color: s.color }}>■</span>
                           <span className="watch-detail-legend-tag">{label}</span>
                         </button>
                         <span className="watch-detail-legend-stats">
-                          n={s.count} · latest {fmtNum(s.latest)} · avg {fmtNum(s.avg)} · min {fmtNum(s.min)} · max {fmtNum(s.max)}
+                          <span>n <b>{s.count}</b></span>
+                          <span>last <b className="tui-hi">{fmtNum(s.latest)}</b></span>
+                          <span>avg <b>{fmtNum(s.avg)}</b></span>
+                          <span>min <b>{fmtNum(s.min)}</b></span>
+                          <span>max <b>{fmtNum(s.max)}</b></span>
                         </span>
                       </li>
                     )
@@ -369,9 +390,72 @@ export default function Watch() {
                 </ul>
               </>
             )}
-          </div>
+          </Pane>
+
+          <RecentRuns runs={runs} />
         </div>
       </main>
     </div>
+  )
+}
+
+// ── Recent runs ────────────────────────────────────────────────────────────
+
+const RECENT_RUNS = 10
+
+// RecentRuns lists the latest executions like a job log: when, how long,
+// exit status, parsed value. The newest run's output is shown below in a
+// terminal block so you can see exactly what the pipeline printed.
+function RecentRuns({ runs }: { runs: CronResult[] | null }) {
+  if (runs === null) return null
+  const recent = runs.slice(0, RECENT_RUNS)
+  const last = recent[0]
+  return (
+    <Pane
+      className="watch-runs"
+      title="runs"
+      meta={runs.length > 0 ? `last ${recent.length} of ${runs.length}` : undefined}
+      data-testid="watch-runs-pane"
+    >
+      {recent.length === 0 ? (
+        <div className="watch-detail-legend-empty">no runs yet</div>
+      ) : (
+        <>
+          <table className="tui-table watch-runs-table" data-testid="watch-runs-table">
+            <thead>
+              <tr>
+                <th>ran at (utc)</th>
+                <th>status</th>
+                <th className="watch-num">took</th>
+                <th>tag</th>
+                <th className="watch-num">value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recent.map(r => (
+                <tr key={r.ID} data-testid={`watch-run-row-${r.ID}`}>
+                  <td className="tui-dim">{new Date(r.RanAt).toISOString().slice(0, 19).replace('T', ' ')}</td>
+                  <td>
+                    <span className={`tui-tag ${r.ExitCode === 0 ? 'tui-tag-ok' : 'tui-tag-err'}`}>
+                      {r.ExitCode === 0 ? 'ok' : `fail ${r.ExitCode}`}
+                    </span>
+                  </td>
+                  <td className="watch-num">{r.DurationMs}ms</td>
+                  <td>{r.Tag || <span className="tui-dim">-</span>}</td>
+                  <td className="watch-num tui-hi">{r.Value === null ? <span className="tui-dim">-</span> : fmtNum(r.Value)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {last && (last.Stdout || last.Stderr) && (
+            <div className="watch-runs-output" data-testid="watch-runs-output">
+              <div className="watch-runs-output-head">output of last run</div>
+              {last.Stdout && <pre className="watch-runs-stdout">{last.Stdout.trimEnd()}</pre>}
+              {last.Stderr && <pre className="watch-runs-stderr">{last.Stderr.trimEnd()}</pre>}
+            </div>
+          )}
+        </>
+      )}
+    </Pane>
   )
 }

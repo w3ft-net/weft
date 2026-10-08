@@ -99,35 +99,35 @@ export default function ConfiguredSourcesList({
           >
             <div className="csl-row-main">
               <span className="csl-service">{s.service}</span>
-              <span className={`csl-badge csl-badge-${s.source_type}`}>{s.source_type}</span>
+              <span className={`tui-tag csl-badge csl-badge-${s.source_type}`}>{s.source_type}</span>
               {s.source_type === 'kinesis' && (
                 <span className="csl-meta">
-                  {s.log_group} · {s.region} · pushed via Firehose
+                  {s.log_group} <span className="csl-sep">{s.region}</span> <span className="csl-sep">firehose push</span>
                 </span>
               )}
             </div>
             <div className="csl-row-actions">
               <button
-                className="psc-textbtn"
+                className="tui-btn"
                 onClick={() => toggleSchema(s.service)}
                 data-testid={`configured-source-${s.service}-viewschema-button`}
               >
-                {open ? 'Hide schema' : 'View schema'}
+                {open ? 'hide schema' : 'schema'}
               </button>
               <button
-                className="psc-textbtn"
+                className="tui-btn"
                 disabled={busy[s.service]}
                 onClick={() => handleResample(s.service)}
                 data-testid={`configured-source-${s.service}-resample-button`}
               >
-                {busy[s.service] ? 'Resampling…' : 'Resample'}
+                {busy[s.service] ? 'resampling…' : 'resample'}
               </button>
               <button
-                className="psc-textbtn csl-remove"
+                className="tui-btn tui-btn-danger"
                 onClick={() => handleDelete(s.service)}
                 data-testid={`configured-source-${s.service}-remove-button`}
               >
-                Remove
+                remove
               </button>
             </div>
             {open && (
@@ -135,12 +135,12 @@ export default function ConfiguredSourcesList({
                 className="csl-schema-panel"
                 data-testid={`configured-source-${s.service}-schema-panel`}
               >
-                {sch === null && <span className="csl-meta csl-meta-dim">Loading…</span>}
+                {sch === null && <span className="csl-meta csl-meta-dim">loading…</span>}
                 {sch && sch.status === 'configured' && (
                   <>
                     {sch.resample_requested && (
                       <div className="csl-meta csl-meta-dim">
-                        Resample in progress: {sch.sample_collected ?? 0}/{sch.sample_target ?? 0} lines collected
+                        <span className="tui-tag tui-tag-warn">resampling {sch.sample_collected ?? 0}/{sch.sample_target ?? 0}</span> ingestion continues on the current schema
                       </div>
                     )}
                     <pre className="csl-schema-yaml">{sch.schema_yaml}</pre>
@@ -148,12 +148,12 @@ export default function ConfiguredSourcesList({
                 )}
                 {sch && sch.status === 'sampling' && (
                   <span className="csl-meta">
-                    {s.service} hasn’t emitted enough lines to sample yet ({sch.sample_collected ?? 0}/{sch.sample_target ?? 0}).
+                    <span className="tui-tag tui-tag-warn">sampling {sch.sample_collected ?? 0}/{sch.sample_target ?? 0}</span> {s.service} hasn’t emitted enough lines to sample yet.
                   </span>
                 )}
                 {sch && sch.status === 'pending' && (
                   <span className="csl-meta">
-                    A fresh sample is awaiting configuration ({sch.sample_collected ?? 0}/{sch.sample_target ?? 0} lines).
+                    <span className="tui-tag tui-tag-hi">pending</span> a fresh sample is awaiting configuration ({sch.sample_collected ?? 0}/{sch.sample_target ?? 0} lines).
                   </span>
                 )}
               </div>

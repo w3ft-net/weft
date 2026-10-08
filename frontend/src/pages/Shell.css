@@ -6,322 +6,208 @@
 
 /* ── Terminal wrapper ─────────────────────────────── */
 .shell-wrap {
+  --shell-chrome-h: 25px;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   position: relative;
+  overflow: hidden;
+  background: var(--bg-deep);
+}
+
+/* ── Chrome: a one-line tab bar over the terminal ─────
+   sh  browse:  /bin  /cron.d  /tmp  /etc
+   The open side pane's tab is drawn in inverse video. */
+.shell-chrome {
+  display: flex;
+  align-items: stretch;
+  height: var(--shell-chrome-h);
+  line-height: calc(var(--shell-chrome-h) - 1px);
+  border-bottom: 1px solid var(--border-bright);
+  flex-shrink: 0;
+  white-space: nowrap;
   overflow: hidden;
 }
 
-/* ── Chrome ──────────────────────────────────────── */
-.shell-chrome {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
+.shell-chrome-title {
+  padding: 0 1.5ch;
+  background: var(--border);
+  color: var(--text-bright);
+  font-weight: 700;
 }
 
+.shell-chrome-hint {
+  padding: 0 1ch 0 1.5ch;
+  color: var(--text-dim);
+}
+.shell-chrome-hint::after { content: ':'; }
+
 .shell-chrome-actions {
-  margin-left: auto;
   display: flex;
-  gap: 8px;
-  align-items: center;
+  align-items: stretch;
 }
 
 .shell-chrome-btn {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  padding: 4px 10px;
   background: none;
-  border: 1px solid var(--border-bright);
-  border-radius: 3px;
-  color: var(--text-dim);
+  border: none;
+  padding: 0 1ch;
+  color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.15s;
 }
 
-.shell-chrome-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+.shell-chrome-btn:hover,
+.shell-chrome-btn:focus-visible {
+  background: var(--bg-elevated);
+  color: var(--text-bright);
+  outline: none;
 }
 
-.shell-chrome-btn-active {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.shell-chrome-btn-danger {
-  border-color: rgba(224, 108, 117, 0.3);
-  color: var(--red);
-}
-
-.shell-chrome-btn-danger:hover {
-  border-color: var(--red);
-  color: var(--red);
+.shell-chrome-btn-active,
+.shell-chrome-btn-active:hover {
+  background: var(--accent);
+  color: var(--bg-deep);
+  font-weight: 700;
 }
 
 /* ── xterm.js container ─────────────────────────── */
 .shell-xterm-container {
   flex: 1;
   overflow: hidden;
-  background: #0f1117;
-  padding: 8px;
+  background: var(--bg-deep);
+  padding: 6px 8px;
 }
 
-/* xterm.js tuning — adjust these to taste */
-.shell-xterm-container .xterm-rows > div {
-  /* If glyphs clip, bump line-height here rather than in bridge.ts.
-     The xterm lineHeight option sets the cell height; this CSS override
-     can fine-tune the rendered row without re-initializing the terminal. */
-}
-
-/* ── Query sidebar ───────────────────────────────── */
+/* ── Side panes (/bin, /cron.d, /tmp, /etc) ─────────
+   Slide over the right edge of the terminal, separated by a rule. */
 .shell-query-sidebar {
   position: absolute;
-  top: 41px; /* below chrome */
+  top: var(--shell-chrome-h);
   right: 0;
   bottom: 0;
-  width: 300px;
-  background: var(--bg-elevated);
+  width: 36ch;
+  max-width: 100%;
+  background: var(--bg-surface);
   border-left: 1px solid var(--border-bright);
   display: flex;
   flex-direction: column;
   transform: translateX(100%);
-  transition: transform 0.2s ease;
+  visibility: hidden;
+  transition: transform 0.12s steps(3), visibility 0.12s;
   z-index: 10;
   overflow: hidden;
 }
 
 .shell-query-sidebar-open {
   transform: translateX(0);
+  visibility: visible;
 }
 
 .shell-query-sidebar-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
+  gap: 1ch;
+  padding: 2px 1ch;
+  border-bottom: 1px dashed var(--border-bright);
   flex-shrink: 0;
 }
 
-.shell-query-sidebar-badge {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  color: var(--text-dim);
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  padding: 1px 7px;
-  border-radius: 10px;
-  margin-left: auto;
-  margin-right: 8px;
+.shell-query-sidebar-title {
+  color: var(--text-bright);
+  font-weight: 700;
 }
 
-.shell-query-sidebar-title {
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.shell-query-sidebar-badge {
+  color: var(--text-dim);
+  margin-left: auto;
 }
 
 .shell-query-sidebar-close {
+  margin-left: auto;
   background: none;
   border: none;
   color: var(--text-dim);
-  font-size: 1.1rem;
   cursor: pointer;
-  line-height: 1;
   padding: 0 2px;
-  transition: color 0.15s;
 }
 
-.shell-query-sidebar-close:hover {
-  color: var(--text-primary);
+.shell-query-sidebar-badge + .shell-query-sidebar-close { margin-left: 0; }
+
+.shell-query-sidebar-close:hover,
+.shell-query-sidebar-close:focus-visible {
+  background: var(--text-primary);
+  color: var(--bg-deep);
+  outline: none;
 }
 
 .shell-query-empty {
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
   color: var(--text-dim);
-  padding: 20px 16px;
+  padding: 8px 1ch;
 }
+
+.shell-query-empty code { color: var(--green); }
 
 .shell-query-list {
   list-style: none;
   overflow-y: auto;
   flex: 1;
+  padding: 4px 0;
 }
 
 .shell-query-item {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 2px 1ch 4px;
   position: relative;
 }
 
-.shell-query-item:hover {
-  background: var(--bg-card);
-}
+.shell-query-item:hover { background: var(--bg-elevated); }
 
 .shell-query-name {
   background: none;
   border: none;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  font-weight: 600;
+  color: var(--accent);
+  font-weight: 700;
   cursor: pointer;
   padding: 0;
   text-align: left;
-  width: calc(100% - 20px);
-  margin-bottom: 4px;
   display: block;
+  max-width: calc(100% - 4ch);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.shell-query-name:hover {
-  color: var(--accent);
+.shell-query-name:hover,
+.shell-query-name:focus-visible {
+  background: var(--accent);
+  color: var(--bg-deep);
+  outline: none;
 }
 
 .shell-query-pipeline {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--green-dim);
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding-right: 24px;
+  padding-left: 2ch;
 }
+
+.shell-query-pipeline::before { content: '└ '; color: var(--border-bright); margin-left: -2ch; }
+
+.shell-query-schedule { color: var(--text-primary); }
 
 .shell-query-delete {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 2px;
+  right: 1ch;
   background: none;
   border: none;
   color: var(--text-dim);
-  font-size: 0.75rem;
   cursor: pointer;
-  padding: 2px 4px;
-  transition: color 0.15s;
+  padding: 0 2px;
 }
 
-.shell-query-delete:hover {
-  color: var(--red);
-}
-
-/* ── Save modal ──────────────────────────────────── */
-.shell-modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(8, 11, 16, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  backdrop-filter: blur(4px);
-}
-
-.shell-modal {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-bright);
-  border-radius: 8px;
-  padding: 28px;
-  width: 440px;
-  max-width: 90vw;
-}
-
-.shell-modal-title {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin-bottom: 16px;
-}
-
-.shell-modal-pipeline {
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  color: var(--green-dim);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 10px 12px;
-  margin-bottom: 16px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.shell-modal-input {
-  width: 100%;
-  padding: 10px 12px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-bright);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 0.88rem;
+.shell-query-delete:hover,
+.shell-query-delete:focus-visible {
+  background: var(--red);
+  color: var(--bg-deep);
   outline: none;
-  margin-bottom: 12px;
-  transition: border-color 0.2s;
-}
-
-.shell-modal-input:focus {
-  border-color: var(--accent);
-}
-
-.shell-modal-input::placeholder {
-  color: var(--text-dim);
-}
-
-.shell-modal-error {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: var(--red);
-  margin-bottom: 12px;
-}
-
-.shell-modal-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.shell-modal-btn {
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  padding: 8px 16px;
-  border-radius: 4px;
-  cursor: pointer;
-  border: 1px solid var(--border-bright);
-  background: none;
-  color: var(--text-secondary);
-  transition: all 0.15s;
-}
-
-.shell-modal-btn:hover:not(:disabled) {
-  border-color: var(--text-secondary);
-  color: var(--text-primary);
-}
-
-.shell-modal-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.shell-modal-btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg-deep);
-  font-weight: 600;
-}
-
-.shell-modal-btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  color: var(--bg-deep);
 }

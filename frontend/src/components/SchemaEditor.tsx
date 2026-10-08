@@ -32,8 +32,8 @@ export default function SchemaEditor({
   testidPrefix,
   sample,
   detection,
-  submitLabel = 'Looks good — configure',
-  submittingLabel = 'Configuring…',
+  submitLabel = 'looks good, configure',
+  submittingLabel = 'configuring…',
   onSubmit,
 }: {
   testidPrefix: string
@@ -105,7 +105,8 @@ export default function SchemaEditor({
       </p>
 
       <div className="psc-sample-label">
-        Sample ({visibleLines.length} of {sample.length} line{sample.length === 1 ? '' : 's'})
+        <span className="psc-prompt">$</span> head -{visibleLines.length} sample.log
+        <span className="psc-sample-count">{visibleLines.length}/{sample.length} line{sample.length === 1 ? '' : 's'}</span>
       </div>
       <pre className="psc-sample" data-testid={`${testidPrefix}-sample`}>
         {visibleLines.map((line, i) => (
@@ -120,14 +121,14 @@ export default function SchemaEditor({
           onClick={() => setShowAll(true)}
           data-testid={`${testidPrefix}-show-all-button`}
         >
-          Show {hiddenCount} more line{hiddenCount === 1 ? '' : 's'}
+          show {hiddenCount} more line{hiddenCount === 1 ? '' : 's'}
         </button>
       )}
 
       {showAdvanced && (
         <div className="psc-advanced">
           <label className="psc-field">
-            <span className="psc-label">Format</span>
+            <span className="psc-label">format:</span>
             <select
               value={form.format}
               onChange={e => update('format', e.target.value)}
@@ -140,7 +141,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Timestamp field</span>
+            <span className="psc-label">timestamp field:</span>
             <input
               type="text"
               value={form.timestamp_field}
@@ -151,7 +152,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Timestamp format</span>
+            <span className="psc-label">timestamp format:</span>
             <input
               type="text"
               value={form.timestamp_format}
@@ -162,7 +163,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Level field (optional)</span>
+            <span className="psc-label">level field<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.level_field}
@@ -173,7 +174,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Level pattern (optional)</span>
+            <span className="psc-label">level pattern<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.level_pattern}
@@ -184,7 +185,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Trace ID field (optional)</span>
+            <span className="psc-label">trace id field<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.trace_id_field}
@@ -195,7 +196,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Trace ID pattern (optional)</span>
+            <span className="psc-label">trace id pattern<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.trace_id_pattern}
@@ -206,7 +207,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Span name field (optional)</span>
+            <span className="psc-label">span name field<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.span_name_field}
@@ -217,7 +218,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Span name pattern (optional)</span>
+            <span className="psc-label">span name pattern<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.span_name_pattern}
@@ -228,7 +229,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Span ID field (optional)</span>
+            <span className="psc-label">span id field<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.span_id_field}
@@ -239,7 +240,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Span ID pattern (optional)</span>
+            <span className="psc-label">span id pattern<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.span_id_pattern}
@@ -250,7 +251,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Parent span ID field (optional)</span>
+            <span className="psc-label">parent span id field<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.parent_span_id_field}
@@ -261,7 +262,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Parent span ID pattern (optional)</span>
+            <span className="psc-label">parent span id pattern<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.parent_span_id_pattern}
@@ -272,7 +273,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Duration field (optional)</span>
+            <span className="psc-label">duration field<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.duration_ns_field}
@@ -283,7 +284,7 @@ export default function SchemaEditor({
           </label>
 
           <label className="psc-field">
-            <span className="psc-label">Duration pattern (optional)</span>
+            <span className="psc-label">duration pattern<span className="psc-opt">(opt)</span>:</span>
             <input
               type="text"
               value={form.duration_ns_pattern}
@@ -297,13 +298,13 @@ export default function SchemaEditor({
 
       {error && (
         <div className="psc-error" data-testid={`${testidPrefix}-error`}>
-          {error}
+          error: {error}
         </div>
       )}
 
       <div className="psc-actions">
         <button
-          className="btn-action btn-action-primary"
+          className="tui-btn tui-btn-primary"
           onClick={submit}
           disabled={submitting}
           data-testid={`${testidPrefix}-submit-button`}
@@ -311,11 +312,11 @@ export default function SchemaEditor({
           {submitting ? submittingLabel : submitLabel}
         </button>
         <button
-          className="psc-textbtn"
+          className="tui-btn"
           onClick={() => setShowAdvanced(!showAdvanced)}
           data-testid={`${testidPrefix}-advanced-button`}
         >
-          {showAdvanced ? 'Hide advanced' : 'Show advanced'}
+          {showAdvanced ? 'hide advanced' : 'advanced…'}
         </button>
       </div>
     </div>

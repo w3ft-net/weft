@@ -16,6 +16,14 @@ import './Shell.css'
 
 // ── Main Shell ───────────────────────────────────────────────────────────────
 
+// Cron LastStatus values (store/shell.go): "ok", "error", "stderr";
+// empty until the first run.
+const CRON_STATUS_TAG: Record<string, string> = {
+  ok: ' tui-tag-ok',
+  error: ' tui-tag-err',
+  stderr: ' tui-tag-warn',
+}
+
 export default function Shell() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -186,11 +194,8 @@ export default function Shell() {
         <div className="shell-wrap">
           {/* Chrome bar */}
           <div className="shell-chrome" data-testid="shell-chrome">
-            <div className="terminal-dots">
-              <span className="dot red" />
-              <span className="dot yellow" />
-              <span className="dot green" />
-            </div>
+            <span className="shell-chrome-title">sh</span>
+            <span className="shell-chrome-hint">browse</span>
             <div className="shell-chrome-actions">
               <button
                 className={`shell-chrome-btn${sidebarTab === 'functions' ? ' shell-chrome-btn-active' : ''}`}
@@ -237,10 +242,10 @@ export default function Shell() {
             <div className="shell-query-sidebar-header">
               <span className="shell-query-sidebar-title">/bin</span>
               <button className="shell-query-sidebar-close" onClick={() => setSidebarTab(null)}
-                data-testid="shell-functions-sidebar-close-button">×</button>
+                data-testid="shell-functions-sidebar-close-button" aria-label="close">[x]</button>
             </div>
             {functions.length === 0 ? (
-              <div className="shell-query-empty">No functions. Use <code>vi /bin/name</code> to create one.</div>
+              <div className="shell-query-empty">no functions yet. create one with <code>vi /bin/name</code></div>
             ) : (
               <ul className="shell-query-list">
                 {functions.map(f => (
@@ -249,7 +254,7 @@ export default function Shell() {
                       data-testid={`shell-function-select-${f.Name}`}>{f.Name}</button>
                     <div className="shell-query-pipeline">{f.Source.split('\n')[0]}</div>
                     <button className="shell-query-delete" onClick={() => handleFunctionDelete(f.Name)}
-                      data-testid={`shell-function-delete-${f.Name}`}>✕</button>
+                      data-testid={`shell-function-delete-${f.Name}`} aria-label={`delete ${f.Name}`}>rm</button>
                   </li>
                 ))}
               </ul>
@@ -275,14 +280,14 @@ export default function Shell() {
               <span className="shell-query-sidebar-title">/cron.d</span>
               <span className="shell-query-sidebar-badge">{watchLimits.count}/{watchLimits.limit}</span>
               <button className="shell-query-sidebar-close" onClick={() => setSidebarTab(null)}
-                data-testid="shell-watches-sidebar-close-button">×</button>
+                data-testid="shell-watches-sidebar-close-button" aria-label="close">[x]</button>
             </div>
             {watchLimits.limit === 0 ? (
-              <div className="shell-query-empty">Crons not available on trial. <a href="/account">Upgrade</a> to enable.</div>
+              <div className="shell-query-empty">crons aren't available on trial. <a href="/account">upgrade</a> to enable them.</div>
             ) : watches.length === 0 ? (
               <div className="shell-query-empty">
-                No crons. Use <code>vi /cron.d/name</code> to create one.
-                {watchLimits.min_interval && <><br/>Min interval: {watchLimits.min_interval}</>}
+                no crons yet. create one with <code>vi /cron.d/name</code>
+                {watchLimits.min_interval && <><br/>min interval: {watchLimits.min_interval}</>}
               </div>
             ) : (
               <ul className="shell-query-list">
@@ -291,10 +296,13 @@ export default function Shell() {
                     <button className="shell-query-name" onClick={() => handleWatchSelect(w.Name)}
                       data-testid={`shell-watch-select-${w.Name}`}>{w.Name}</button>
                     <div className="shell-query-pipeline">
-                      {w.Schedule} · {w.LastStatus || 'pending'}
+                      <span className="shell-query-schedule">{w.Schedule}</span>{' '}
+                      <span className={`tui-tag${CRON_STATUS_TAG[w.LastStatus] ?? ''}`}>
+                        {w.LastStatus || 'pending'}
+                      </span>
                     </div>
                     <button className="shell-query-delete" onClick={() => handleWatchDelete(w.Name)}
-                      data-testid={`shell-watch-delete-${w.Name}`}>✕</button>
+                      data-testid={`shell-watch-delete-${w.Name}`} aria-label={`delete ${w.Name}`}>rm</button>
                   </li>
                 ))}
               </ul>

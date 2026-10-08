@@ -1,38 +1,79 @@
+/* weft — TUI design tokens and primitives.
+
+   The app should read like a well-made terminal program, not a website:
+   one monospace face on a character grid, box-drawn panes, inverse video
+   for selection, and colour used the way a terminal uses ANSI colours —
+   to mean something. Palette is lifted from the landing page (xterm-256
+   flavoured indigo-black).
+
+   Colour roles:
+     --accent   cyan. Anything you can click or focus.
+     --amber    highlights: counts, current values, warnings-in-passing.
+     --brand    weft orange. Logo and brand marks only — never UI.
+     green/red/yellow  status only (ok / failed / warn). */
+
 :root {
-  --bg-deep: #080b10;
-  --bg-surface: #0d1117;
-  --bg-elevated: #161b22;
-  --bg-card: #1c2333;
-  --text-primary: #e6edf3;
-  --text-secondary: #8b949e;
-  --text-dim: #484f58;
-  --accent: #e67e22;
-  --accent-glow: rgba(230, 126, 34, 0.15);
-  --accent-hover: #f39c12;
-  --green: #2ecc71;
-  --green-dim: rgba(46, 204, 113, 0.6);
-  --cyan: #56b6c2;
-  --red: #e06c75;
-  --yellow: #e5c07b;
-  --purple: #c678dd;
-  --border: #21262d;
-  --border-bright: #30363d;
-  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
-  --font-body: 'Outfit', system-ui, sans-serif;
+  --bg-deep: #0a0a14;       /* page / terminal background */
+  --bg-surface: #0f0f1a;    /* pane interior */
+  --bg-elevated: #161628;   /* hover row, raised strip */
+  --bg-card: #0f0f1a;       /* legacy alias: panes are flat */
+  --bg-base: var(--bg-deep);
+  --bg-inverse: #c0c0d0;
+
+  --text-bright: #e0e0f0;
+  --text-primary: #c0c0d0;
+  --text-secondary: #8a8aaa;
+  --text-muted: #6c6c8c;
+  --text-dim: #555577;
+
+  --accent: #5fafd7;
+  --accent-hover: #87d7ff;
+  --accent-glow: rgba(95, 175, 215, 0.12);
+  --accent-bg: rgba(95, 175, 215, 0.12);
+  --accent-border: #5fafd7;
+  --amber: #ffaf00;
+  --brand: #ff8700;
+
+  --green: #5fd787;
+  --green-dim: rgba(95, 215, 135, 0.6);
+  --red: #ff5f5f;
+  --red-bg: rgba(255, 95, 95, 0.1);
+  --yellow: #ffd75f;
+  --yellow-bg: rgba(255, 215, 95, 0.1);
+  --cyan: #5fd7d7;
+  --purple: #af87ff;
+
+  --border: #252540;
+  --border-bright: #3a3a60;
+
+  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --font-body: var(--font-mono);
+
+  --statusbar-h: 24px;
 }
 
-*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  /* Terminals don't have rounded corners or drop shadows. */
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
 
 html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; }
 
 body {
-  font-family: var(--font-body);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-ligatures: none;
   background: var(--bg-deep);
   color: var(--text-primary);
-  line-height: 1.6;
+  line-height: 1.5;
   overflow-x: hidden;
 }
 
+/* Faint CRT scanlines, same as the landing page. */
 body::after {
   content: '';
   position: fixed;
@@ -42,7 +83,198 @@ body::after {
   z-index: 9999;
 }
 
+h1, h2, h3, h4, h5, h6 { font-family: var(--font-mono); font-weight: 700; }
+
 a { color: var(--accent); text-decoration: none; }
-a:hover { color: var(--accent-hover); }
+a:hover { color: var(--accent-hover); text-decoration: underline; text-underline-offset: 3px; }
 ::selection { background: var(--accent); color: var(--bg-deep); }
 .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Form controls default to the terminal look so nothing falls back to
+   browser chrome. Component classes refine from here. */
+button, input, select, textarea {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: inherit;
+}
+
+input, select, textarea {
+  background: var(--bg-deep);
+  border: 1px solid var(--border-bright);
+  color: var(--text-bright);
+  padding: 3px 8px;
+  caret-color: var(--accent);
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+input::placeholder, textarea::placeholder { color: var(--text-dim); }
+select { cursor: pointer; }
+option { background: var(--bg-surface); color: var(--text-primary); }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-bright); }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+* { scrollbar-color: var(--border-bright) transparent; scrollbar-width: thin; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  html { scroll-behavior: auto; }
+}
+
+/* ── App frame ───────────────────────────────────────────────────
+   Wraps every signed-in page (ProtectedRoute). Fills the viewport minus
+   the fixed status bar when the page has one (SidebarNav renders it;
+   /panes doesn't). Banners stack at the top; the page fills the rest and
+   scrolls inside its own .app-main, never the window. */
+.app-frame {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+.app-frame:has(.statusbar) { height: calc(100vh - var(--statusbar-h)); }
+.app-frame-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.app-frame-body > * { flex: 1; min-height: 0; }
+
+/* At narrow widths SidebarNav's hamburger floats over the top-left
+   corner; banners at the top of the frame indent to clear it. */
+@media (max-width: 768px) {
+  .app-frame > .verify-banner,
+  .app-frame > .graduation-banner { padding-left: 48px; }
+}
+
+/* ── TUI primitives ──────────────────────────────────────────────
+
+   .tui-pane       box with its title set into the top border:
+                   ┌─ title ────────── actions ─┐
+   .tui-btn        [ label ] — inverse video on hover/focus.
+   .tui-table      column-aligned rows, header in dim, row hover strip.
+   .tui-kbd        a key cap: inverse dim block.
+   .tui-tag        bracketed status word: [active]. */
+
+.tui-pane {
+  position: relative;
+  border: 1px solid var(--border-bright);
+  background: var(--bg-surface);
+  padding: 18px 16px 14px;
+  margin-top: 10px;
+}
+
+.tui-pane-head {
+  position: absolute;
+  top: -0.8em;
+  left: 1ch;
+  right: 1ch;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2ch;
+  pointer-events: none;
+  line-height: 1.5;
+}
+
+.tui-pane-title,
+.tui-pane-actions {
+  background: var(--bg-deep);
+  padding: 0 1ch;
+  pointer-events: auto;
+}
+
+.tui-pane-title {
+  color: var(--text-bright);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tui-pane-title::before { content: '─ '; color: var(--border-bright); font-weight: 400; }
+.tui-pane-title .tui-pane-meta { color: var(--text-dim); font-weight: 400; margin-left: 1ch; }
+
+.tui-pane-actions { display: flex; gap: 1ch; }
+
+/* A pane inside a pane sits on the surface colour, so its title knocks
+   out to that instead of the page colour. */
+.tui-pane .tui-pane .tui-pane-title,
+.tui-pane .tui-pane .tui-pane-actions { background: var(--bg-surface); }
+
+.tui-btn {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  padding: 0 2px;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.tui-btn::before { content: '['; color: var(--text-dim); margin-right: 1ch; }
+.tui-btn::after  { content: ']'; color: var(--text-dim); margin-left: 1ch; }
+.tui-btn:hover:not(:disabled),
+.tui-btn:focus-visible {
+  background: var(--text-primary);
+  color: var(--bg-deep);
+  text-decoration: none;
+  outline: none;
+}
+.tui-btn:hover:not(:disabled)::before, .tui-btn:hover:not(:disabled)::after,
+.tui-btn:focus-visible::before, .tui-btn:focus-visible::after { color: inherit; }
+
+.tui-btn-primary { color: var(--accent); }
+.tui-btn-primary:hover:not(:disabled), .tui-btn-primary:focus-visible { background: var(--accent); color: var(--bg-deep); }
+.tui-btn-danger { color: var(--red); }
+.tui-btn-danger:hover:not(:disabled), .tui-btn-danger:focus-visible { background: var(--red); color: var(--bg-deep); }
+.tui-btn:disabled { color: var(--text-dim); cursor: not-allowed; }
+
+.tui-table { width: 100%; border-collapse: collapse; }
+.tui-table th {
+  text-align: left;
+  font-weight: 400;
+  color: var(--text-dim);
+  padding: 2px 2ch 2px 0;
+  border-bottom: 1px dashed var(--border-bright);
+  white-space: nowrap;
+}
+.tui-table td { padding: 2px 2ch 2px 0; vertical-align: top; }
+.tui-table tbody tr:hover td { background: var(--bg-elevated); }
+
+.tui-kbd {
+  display: inline-block;
+  background: var(--border-bright);
+  color: var(--text-bright);
+  padding: 0 0.6ch;
+  line-height: 1.4;
+}
+
+.tui-tag { color: var(--text-secondary); white-space: nowrap; }
+.tui-tag::before { content: '['; color: var(--text-dim); }
+.tui-tag::after  { content: ']'; color: var(--text-dim); }
+.tui-tag-ok    { color: var(--green); }
+.tui-tag-warn  { color: var(--yellow); }
+.tui-tag-err   { color: var(--red); }
+.tui-tag-hi    { color: var(--amber); }
+
+.tui-dim { color: var(--text-dim); }
+.tui-hi  { color: var(--amber); }
+
+/* Blinking block cursor, for empty states and prompts. */
+.tui-cursor::after {
+  content: '█';
+  color: var(--accent);
+  margin-left: 0.5ch;
+  animation: tui-blink 1.1s steps(1) infinite;
+}
+@keyframes tui-blink { 50% { opacity: 0; } }

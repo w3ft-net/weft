@@ -1,18 +1,17 @@
-.manual-sidebar {
-  font-family: var(--font-mono);
-}
+/* Manual topic list — a file tree pane. Directories are categories,
+   entries are topics, the open topic is drawn in inverse video. */
 
-/* Wide-viewport rail: sits to the left of the topic body. Sticky so
-   scrolling a long topic doesn't lose the topic list. */
+/* Wide-viewport rail: sits to the left of the topic body. Sticky within
+   .app-main (the scroller) so scrolling a long topic keeps the list. */
 .manual-sidebar-wide {
-  width: 220px;
+  width: 30ch;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
-  padding: 36px 20px 36px 28px;
+  padding: 20px 0 24px;
   position: sticky;
   top: 0;
   align-self: flex-start;
-  max-height: 100vh;
+  max-height: 100cqh; /* .app-main's height — see Dashboard.css */
   overflow-y: auto;
 }
 
@@ -23,64 +22,51 @@
 .manual-sidebar-nav {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 12px;
+}
+
+.manual-sidebar-home,
+.manual-sidebar-topic {
+  display: block;
+  padding: 0 2ch;
+  color: var(--text-secondary);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .manual-sidebar-home {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
+  color: var(--text-bright);
+  font-weight: 700;
+}
+
+.manual-sidebar-home:hover,
+.manual-sidebar-topic:hover {
+  background: var(--bg-elevated);
+  color: var(--text-bright);
   text-decoration: none;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 6px;
 }
 
-.manual-sidebar-home:hover {
-  color: var(--accent);
-}
-
-.manual-sidebar-home-active {
-  color: var(--accent);
+.manual-sidebar-home-active,
+.manual-sidebar-home-active:hover,
+.manual-sidebar-topic-active,
+.manual-sidebar-topic-active:hover {
+  background: var(--accent);
+  color: var(--bg-deep);
 }
 
 .manual-sidebar-group-label {
-  font-size: 0.7rem;
-  font-weight: 600;
+  padding: 0 2ch;
   color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin-bottom: 6px;
 }
 
 .manual-sidebar-topics {
   list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 
-.manual-sidebar-topic {
-  display: block;
-  font-size: 0.82rem;
-  color: var(--text-secondary);
-  text-decoration: none;
-  padding: 4px 8px;
-  border-radius: 4px;
-  line-height: 1.4;
-  transition: background 0.15s, color 0.15s;
-}
-
-.manual-sidebar-topic:hover {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
-
-.manual-sidebar-topic-active {
-  color: var(--accent);
-  background: var(--bg-card);
-}
+.manual-sidebar-branch { color: var(--text-dim); }
+.manual-sidebar-topic-active .manual-sidebar-branch { color: var(--bg-deep); }
 
 /* Narrow-viewport details disclosure. The main app SidebarNav already
    owns the mobile hamburger; we don't want a second one fighting for
@@ -92,26 +78,22 @@
   }
   .manual-sidebar-narrow {
     display: block;
-    border-bottom: 1px solid var(--border);
-    padding: 16px 20px;
-    margin-bottom: 16px;
+    border-bottom: 1px dashed var(--border);
+    padding: 52px 0 12px;
   }
   .manual-sidebar-narrow summary {
     cursor: pointer;
-    font-size: 0.85rem;
     color: var(--accent);
-    padding: 4px 0;
+    padding: 0 16px;
     list-style: none;
   }
-  .manual-sidebar-narrow summary::before {
-    content: "▸ ";
-    display: inline-block;
-    transition: transform 0.15s;
-  }
-  .manual-sidebar-narrow[open] summary::before {
-    content: "▾ ";
-  }
+  .manual-sidebar-narrow summary::-webkit-details-marker { display: none; }
+  .manual-sidebar-narrow summary::before { content: '▸ '; }
+  .manual-sidebar-narrow[open] summary::before { content: '▾ '; }
   .manual-sidebar-narrow .manual-sidebar-nav {
-    margin-top: 14px;
+    margin-top: 10px;
   }
+  .manual-sidebar-narrow .manual-sidebar-home,
+  .manual-sidebar-narrow .manual-sidebar-topic,
+  .manual-sidebar-narrow .manual-sidebar-group-label { padding: 0 16px; }
 }

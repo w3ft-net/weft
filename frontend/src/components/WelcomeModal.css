@@ -1,86 +1,42 @@
+/* Welcome dialog — a .tui-pane over a dimmed backdrop. */
 .welcome-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(10, 10, 20, 0.75);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 200;
-  padding: 24px;
+  padding: 16px;
 }
 
 .welcome-modal {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 28px 32px;
-  max-width: 520px;
+  max-width: 64ch;
   width: 100%;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
-  font-family: var(--font-mono);
+  padding: 20px 3ch 14px;
+  margin: 0;
 }
 
-.welcome-modal-title {
-  margin: 0 0 16px;
-  font-size: 1.25rem;
-  color: var(--text-primary);
-  font-weight: 500;
-}
+/* The backdrop isn't the page colour, so knock the title out to the
+   pane's own surface instead. */
+.welcome-modal .tui-pane-title { background: var(--bg-surface); }
 
 .welcome-modal-body {
-  font-size: 0.92rem;
-  line-height: 1.55;
-  color: var(--text-secondary);
-  margin: 0 0 14px;
+  color: var(--text-primary);
+  margin: 0 0 12px;
+  max-width: 62ch;
 }
 
 .welcome-modal-body strong {
-  color: var(--accent);
-  font-weight: 600;
+  color: var(--amber);
+  font-weight: 700;
 }
 
-.welcome-modal-body-quiet {
-  color: var(--text-dim);
-  font-size: 0.84rem;
-}
+.welcome-modal-body-quiet { color: var(--text-dim); }
 
 .welcome-modal-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-  margin-top: 24px;
-}
-
-.welcome-modal-button {
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  padding: 8px 16px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  cursor: pointer;
-  background: transparent;
-  color: var(--text-secondary);
-  transition: border-color 0.2s, color 0.2s, background 0.2s;
-}
-
-.welcome-modal-button:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.welcome-modal-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.welcome-modal-button-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg-base);
-  font-weight: 600;
-}
-
-.welcome-modal-button-primary:hover:not(:disabled) {
-  background: transparent;
-  color: var(--accent);
+  gap: 2ch;
+  margin-top: 16px;
 }
