@@ -130,12 +130,12 @@ func SampleUnitLines(ctx context.Context, unit string, target int, progress func
 
 	done := make(chan struct{})
 	defer close(done)
-	linesCh := make(chan string)
+	linesCh := make(chan Line)
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		for sc.Scan() {
 			select {
-			case linesCh <- sc.Text():
+			case linesCh <- Line{Text: sc.Text()}:
 			case <-done:
 				return
 			}
@@ -187,10 +187,10 @@ func SampleLines(ctx context.Context, path string, target int, progress func([]s
 		progress(append([]string(nil), lines...))
 	}
 
-	// Follow the file for the rest. NewTailer seeks to end; lines written
+	// Follow the file for the rest. Starting at EOF, lines written
 	// in the tiny window between the read above and this open may be
 	// missed, which is acceptable for a sample.
-	tailer, err := NewTailer(path)
+	tailer, err := NewTailer(path, -1)
 	if err != nil {
 		// We just opened this file successfully, so a tailer failure is
 		// unexpected. Surface it rather than returning a partial sample
@@ -206,7 +206,7 @@ func SampleLines(ctx context.Context, path string, target int, progress func([]s
 // lines) until it has target of them or ctx is done, emitting throttled
 // progress. It returns the lines collected, which may be fewer than target
 // if ch closed or ctx was cancelled.
-func accumulate(ctx context.Context, target int, progress func([]string), ch <-chan string, seed []string) []string {
+func accumulate(ctx context.Context, target int, progress func([]string), ch <-chan Line, seed []string) []string {
 	lines := seed
 	tick := time.NewTicker(progressInterval)
 	defer tick.Stop()
@@ -218,8 +218,8 @@ func accumulate(ctx context.Context, target int, progress func([]string), ch <-c
 			if !ok {
 				return lines
 			}
-			if line != "" {
-				lines = append(lines, line)
+			if line.Text != "" {
+				lines = append(lines, line.Text)
 			}
 		case <-tick.C:
 			if progress != nil {

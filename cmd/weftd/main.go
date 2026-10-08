@@ -459,7 +459,7 @@ func main() {
 				// Single file: onboard once, then tail.
 				go func() {
 					if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, "", hostname, fullApp, func() {
-						runFileTailer(ctx, coordClient, hostname, fullApp, src.Path)
+						runFileTailer(ctx, coordClient, hostname, fullApp, src.Path, -1)
 					}); err != nil {
 						log.Printf("[%s] onboard failed: %v", fullApp, err)
 					}
@@ -794,8 +794,9 @@ func streamScannedLines(ctx context.Context, client pb.WeftCoordinatorClient, sc
 	}
 }
 
-func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, instance, app, path string) {
-	tailer, err := weftd.NewTailer(path)
+// runFileTailer tails path from byte offset start (negative = EOF).
+func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, instance, app, path string, start int64) {
+	tailer, err := weftd.NewTailer(path, start)
 	if err != nil {
 		log.Printf("[%s] open %s: %v", app, path, err)
 		return
@@ -825,7 +826,7 @@ func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, instanc
 				}
 				return
 			}
-			buf = append(buf, line)
+			buf = append(buf, line.Text)
 			if len(buf) >= 100 {
 				flushWithReconnect(ctx, client, ss, buf, instance, app)
 				buf = buf[:0]
@@ -979,7 +980,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, inst
 	}
 	tailing := make(map[string]bool)
 
-	startFile := func(p string) {
+	startFile := func(p string, start int64) {
 		if tailing[p] {
 			return
 		}
@@ -992,7 +993,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, inst
 		fullApp := namespace + "/" + app + "/" + kind
 		go func() {
 			if err := onboardAndRun(ctx, client, token, app, p, "", instance, fullApp, func() {
-				runFileTailer(ctx, client, instance, fullApp, p)
+				runFileTailer(ctx, client, instance, fullApp, p, start)
 			}); err != nil {
 				log.Printf("[%s] onboard failed: %v", fullApp, err)
 			}
@@ -1003,7 +1004,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, inst
 	startMatching := func() {
 		paths, _ := globMatch(pattern)
 		for _, p := range paths {
-			startFile(p)
+			startFile(p, -1)
 		}
 	}
 
@@ -1052,7 +1053,9 @@ watch:
 				matched, _ := matchPath(pattern, event.Name)
 				if matched {
 					log.Printf("[%s] new file %s", namespace, event.Name)
-					startFile(event.Name)
+					// Brand new by construction: read from the top so lines written
+					// between creation and our open are not lost.
+					startFile(event.Name, 0)
 				}
 			}
 		case err, ok := <-watcher.Errors:
