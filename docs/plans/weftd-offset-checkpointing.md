@@ -81,6 +81,47 @@ Every non-trivial row in that table increments a per-source counter (`skipped_by
 - **Corruption tolerant.** Unparseable `state.json` → log, rename it to `state.json.corrupt`, and behave as "no `state.json`" (EOF everywhere). Never fatal: a fatal-config agent can't auto-upgrade out of the problem (see the weftd release-pinning notes).
 - **Pruning by age only:** drop entries not updated in 7 days. Never prune on "path doesn't exist", which races rotation.
 
+## Stream-open cost (coordinator, ships before Phase 1)
+
+Ack cycling turns stream opens from a rare event into a steady one. Today each file holds one long-lived stream; after Phase 1 every active file opens one every `commit_interval`. The hot path of `IngestStream` must therefore touch no database in steady state. Three pieces, one work item:
+
+### 1. Token auth cache
+
+In-process, per coordinator, inside `Store.ValidateAgentToken` (`store/token.go`) so the gRPC (`server.go:440,770,1104`) and REST (`api/middleware.go:169`, `api/adapter.go:105`) callers all benefit.
+
+- Key: `hashAgentToken(token)`; the raw token is never stored. Value: a copy of `*AgentAuthResult` (callers get copies, never the cached pointer) plus an expiry.
+- Hit: read lock, unexpired entry, return. Miss or expired: `singleflight.Do(hash, ...)` runs the existing lookup once, so a fleet reconnecting with one shared token causes one query.
+- TTL 60s positive, ~5s negative (so a token probed just before creation isn't rejected for long). Map capped (~10k) with eviction on insert so a flood of random bad tokens can't grow it.
+- Expiry is checked lazily on read; no timers or goroutines per entry.
+- `ValidateAgentTokenForProducer` (syslog) stays uncached: different predicate, low volume.
+- Still unscoped (`crossTenant()`): the cache maps token to tenant and never takes a tenant as input, so the row-level security boundary is unchanged.
+- Invalidation: TTL is the baseline. `Revoke`/delete paths in `store/token.go` call `cache.Delete(hash)` locally. The other coordinator learns at TTL expiry (revocation delay bound: 66s). Redis invalidation over the `TailFanout` channel is a follow-up if that bound is unacceptable. An already-open stream stays authorized regardless (existing behaviour); cycling improves this since each cycle re-authenticates.
+- Metrics: hit, miss, coalesced, eviction.
+
+### 2. Jitter
+
+Each entry's TTL is drawn at insert as `base ± 10%` (`math/rand/v2`; this is load smoothing, not security), so entries created together (boot, fleet reconnect) expire across a ~12s window instead of in one burst, and re-draw on every refresh so the spread persists. The documented revocation bound is the upper edge (66s), not 60s. The clock and jitter source are injectable for tests.
+
+### 3. Batched `last_seen_*` stamps
+
+Replaces the inline `UPDATE` at `server.go:522`. `last_seen_version` is read only by `AgentsAtOrBelow` (dashboard and deprecation query), so this is a pure observability change.
+
+- `Touch(tokenID, version, now)` on stream open writes to an in-memory `dirty` map under a mutex: no I/O, so a DB stall can't block ingest.
+- A flusher (every ~30s, jittered) swaps `dirty` for a fresh map, drops entries unchanged from the last written value and within ~5 min of its timestamp, and issues one statement:
+  ```sql
+  UPDATE agent_tokens t SET last_seen_version = v.version, last_seen_at = v.at
+  FROM (VALUES ...) AS v(id, version, at)
+  WHERE t.id = v.id AND (t.last_seen_at IS NULL OR t.last_seen_at < v.at)
+  ```
+- On error, merge the batch back into `dirty` without clobbering newer entries and retry next tick. Never fail or block a stream. Final flush on graceful shutdown.
+- Two coordinators each flush their own view; the `last_seen_at <` guard keeps the older write from regressing the newer.
+- Cost: staleness up to one flush interval; a crash loses at most one interval of stamps (agents re-stamp on the next open). The hard-floor check uses the stream's own metadata (`clientBelow`), not the DB, so enforcement stays immediate.
+- Write volume drops from per-open to ~one batched statement per interval per coordinator, independent of host and file count.
+
+Net effect: a steady-state stream open is a hash, a map read, and a map write.
+
+Tests (failing first): cache hit/expiry/negative entry/size cap; `singleflight` coalescing under N concurrent misses; delete-on-revoke; jittered expiries land in [0.9, 1.1]×TTL and are not all equal; tracker coalescing, no-op suppression, retry-on-error without clobbering, stale-write no-op against a newer DB value; and an `IngestStream` test asserting zero DB queries on a second open with the same token.
+
 ## Phases
 
 ### Phase 0 — tailer correctness (ships alone)
@@ -106,7 +147,10 @@ Tests (failing first, per house rule — all of these fail on today's tailer):
 
 1. **Unacked window in `runFileTailer`.** Keep sent-but-unacked `Line`s in a bounded in-memory window (default 8 MiB). When it's full, stop reading from the tailer channel — backpressure is fine here, because the file is the buffer.
 2. **Ack cycling.** Every `commit_interval` (default 15s), and whenever the window is full, half-close the stream (`CloseAndRecv`). On a successful response, commit the `End` of the last line in the window to the store, clear the window, and open a fresh stream. On stream error, open a fresh stream and **resend the whole window** (at-least-once; duplicates are the accepted cost, same as the spool plan).
-   - Cost: one stream open per file per `commit_interval`. Every open runs `authenticateStream` plus an `agent_tokens` `UPDATE` (`server.go:518-533`). On a host tailing 50 files at 15s that's ~3.3 writes/s per host to RDS, which is a 1 GB t4g.micro shared with vimgym. **Before shipping, rate-limit that `last_seen_*` write on the coordinator (e.g. skip if updated <60s ago)**, or the fleet rollout turns into an RDS load test.
+   - Cost: one stream open per *active* file per `commit_interval`. Each open runs `authenticateStream`: three uncached SELECTs (`ValidateAgentToken` with `Preload("Organization")` and `Preload("Namespace")`) plus an `agent_tokens` `UPDATE` (`server.go:518-533`). A host with 50 active files at 15s is ~3.3 opens/s, i.e. ~10 SELECT/s and ~3.3 UPDATE/s per host, against a 1 GB t4g.micro shared with vimgym. **The coordinator work in "Stream-open cost" below must ship and deploy first.**
+   - Streams open lazily on the first line and are never opened or cycled with an empty window, so cost scales with active files, not tailed files.
+   - Open the next stream before closing the old one, so the send path doesn't stall for the ack round trip.
+   - `commit_interval` is jittered (±10%) per file so a fleet restarted together by self-update doesn't cycle in synchronized waves.
    - The coordinator idle reaper (`IngestStreamIdleTimeoutSeconds`) closes quiet streams with an error; that's just a stream error → resend → fine. On a quiet file, the empty window means nothing to resend.
 3. **Shutdown drain.** On `ctx.Done()`, flush the window using a fresh `context.WithTimeout(context.Background(), 5*time.Second)`, not the cancelled ctx. Commit only on a successful `CloseAndRecv`; whatever doesn't make it stays uncommitted and is re-read next start.
 4. **Fix the silent drop.** `sendLineWithReconnect`'s "send failed after reconnect" path must surface the error so the window is retained, instead of logging and moving on.
@@ -152,14 +196,14 @@ When `weftd-disk-spool.md` ships, the commit point moves from `IngestStreamRespo
 
 weftd fixes need a version bump; the self-update is strictly-newer and restart-gated. Cut a release per phase. Phase 1's very first restart *onto* the new version still loses in-flight lines: the old binary does the shutdown, so it's the old code's behavior. The guarantee starts from the second restart.
 
-Ship the coordinator `last_seen_*` rate-limit (Phase 1 item 2) and deploy it before the Phase 1 weftd release.
+Ship the coordinator stream-open work (auth cache, jitter, batched stamps) and deploy it before the Phase 1 weftd release.
 
 ## Estimated effort
 
 - Phase 0 — reader rewrite, truncation, rotation drain, glob-from-0, tests: **1.5 days**
 - Phase 1 — unacked window + ack cycling + shutdown drain + `CheckpointStore` + config + packaging + tests: **3 days**
-- Coordinator `last_seen_*` rate limit: **0.25 day**
+- Coordinator stream-open cost (auth cache + jitter + batched `last_seen_*` stamps + tests): **0.75 day**
 - Docs (`docs/manual/weftd.md` — what's checkpointed, the knobs, the resume table, the k8s hostPath requirement): **0.5 day**
 - Phase 2: folded into the spool plan's estimate.
 
-**Total through Phase 1: ~5.25 days.**
+**Total through Phase 1: ~5.75 days.**
