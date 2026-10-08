@@ -17,12 +17,13 @@ import './Dashboard.css'
 const ELEMENTS_APPEARANCE = {
   theme: 'night' as const,
   variables: {
-    colorPrimary: '#c9a96e',
-    colorBackground: '#141414',
-    colorText: '#e8e6e3',
-    colorDanger: '#d4635a',
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    borderRadius: '4px',
+    // Mirrors the TUI tokens in index.css (Stripe can't read CSS vars).
+    colorPrimary: '#5fafd7',
+    colorBackground: '#0f0f1a',
+    colorText: '#c0c0d0',
+    colorDanger: '#ff5f5f',
+    fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+    borderRadius: '0px',
   },
 }
 
@@ -37,6 +38,26 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
   })
+}
+
+// Meter renders a usage gauge on the character grid:
+//   [████████████░░░░░░░░░░░░░░░░] 38%
+// `cls` is the status colour class (usage-ok / -warn / -crit).
+const METER_CELLS = 40
+
+function Meter({ pct, cls, testId }: { pct: number; cls: string; testId?: string }) {
+  const filled = Math.round((pct / 100) * METER_CELLS)
+  return (
+    <div className="usage-bar-wrap">
+      <span className="usage-meter" data-testid={testId} role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+        <span className="usage-meter-bracket">[</span>
+        <span className={cls}>{'█'.repeat(filled)}</span>
+        <span className="usage-meter-empty">{'░'.repeat(METER_CELLS - filled)}</span>
+        <span className="usage-meter-bracket">]</span>
+      </span>
+      <span className={`usage-bar-pct ${cls}`}>{pct}%</span>
+    </div>
+  )
 }
 
 // ── Plan tiers ─────────────────────────────────────────────────────────────
@@ -76,15 +97,15 @@ function ConfirmForm({ onDone }: { onDone: (err?: string) => void }) {
   return (
     <form onSubmit={handleSubmit} data-testid="account-confirm-payment-form">
       <PaymentElement options={{ layout: 'tabs' }} />
-      {error && <div className="login-error" data-testid="account-confirm-error">{error}</div>}
-      <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+      {error && <div className="form-error" data-testid="account-confirm-error">{error}</div>}
+      <div className="form-actions account-confirm-actions">
         <button
           type="submit"
           className="btn-action btn-action-primary"
           disabled={!stripe || submitting}
           data-testid="account-confirm-submit-button"
         >
-          {submitting ? 'Confirming...' : 'Confirm payment'}
+          {submitting ? 'confirming...' : 'confirm payment'}
         </button>
         <button
           type="button"
@@ -92,7 +113,7 @@ function ConfirmForm({ onDone }: { onDone: (err?: string) => void }) {
           onClick={() => onDone('cancelled')}
           data-testid="account-confirm-cancel-button"
         >
-          Cancel
+          cancel
         </button>
       </div>
     </form>
@@ -138,12 +159,12 @@ function SubscriptionCard({ usage, onRefresh }: { usage: Usage | null; onRefresh
   const pct = usage
     ? Math.min(100, Math.round((usage.bytes_ingested / usage.tier_limit_bytes) * 100))
     : 0
-  const barColor = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)'
+  const meterClass = pct > 90 ? 'usage-crit' : pct > 70 ? 'usage-warn' : 'usage-ok'
 
   return (
     <div className="dash-card" data-testid="account-subscription-card">
       <div className="dash-card-header">
-        <h2 className="dash-card-title">Subscription</h2>
+        <h2 className="dash-card-title">subscription</h2>
         {usage && <span className="dash-tier-badge" data-testid="account-tier-badge">{usage.tier}</span>}
       </div>
 
@@ -155,15 +176,15 @@ function SubscriptionCard({ usage, onRefresh }: { usage: Usage | null; onRefresh
       )}
 
       {error && (
-        <div className="login-error" data-testid="account-subscription-error" style={{ marginBottom: 12 }}>
+        <div className="form-error" data-testid="account-subscription-error">
           {error}
         </div>
       )}
 
       {confirm && (
-        <div className="dash-card" style={{ marginBottom: 16, borderColor: 'var(--accent)' }} data-testid="account-confirm-modal">
+        <div className="dash-card dash-card-accent account-confirm" data-testid="account-confirm-modal">
           <div className="dash-card-header">
-            <h3 className="dash-card-title">Confirm payment</h3>
+            <h3 className="dash-card-title">confirm payment</h3>
           </div>
           <Elements stripe={confirm.stripePromise} options={{ clientSecret: confirm.clientSecret, appearance: ELEMENTS_APPEARANCE }}>
             <ConfirmForm onDone={(err) => {
@@ -179,33 +200,27 @@ function SubscriptionCard({ usage, onRefresh }: { usage: Usage | null; onRefresh
         <>
           <div className="usage-stats">
             <div className="usage-stat">
-              <div className="usage-stat-label">Ingested this period</div>
-              <div className="usage-stat-value" data-testid="account-bytes-ingested">
+              <div className="usage-stat-label">ingested this period</div>
+              <div className="usage-stat-value usage-stat-value-hi" data-testid="account-bytes-ingested">
                 {formatBytes(usage.bytes_ingested)}
               </div>
             </div>
             <div className="usage-stat">
-              <div className="usage-stat-label">Tier limit</div>
+              <div className="usage-stat-label">tier limit</div>
               <div className="usage-stat-value">{formatBytes(usage.tier_limit_bytes)}</div>
             </div>
             <div className="usage-stat">
-              <div className="usage-stat-label">Period start</div>
+              <div className="usage-stat-label">period start</div>
               <div className="usage-stat-value">{formatDate(usage.period_start)}</div>
             </div>
           </div>
-          <div className="usage-bar-wrap" style={{ marginBottom: usage.projected_overage_cents > 0 ? 8 : 24 }}>
-            <div className="usage-bar-track" data-testid="account-usage-bar">
-              <div className="usage-bar-fill" style={{ width: `${pct}%`, background: barColor }} />
-            </div>
-            <span className="usage-bar-pct" style={{ color: barColor }}>{pct}%</span>
-          </div>
+          <Meter pct={pct} cls={meterClass} testId="account-usage-bar" />
           {usage.projected_overage_cents > 0 && (
             <div
               className="usage-projected-overage"
               data-testid="account-projected-overage"
-              style={{ marginBottom: 24 }}
             >
-              Projected overage this period:{' '}
+              projected overage this period:{' '}
               <strong>${(usage.projected_overage_cents / 100).toFixed(2)}</strong>
               <span className="usage-projected-overage-hint">
                 {' '}— billed at period end.
@@ -215,17 +230,17 @@ function SubscriptionCard({ usage, onRefresh }: { usage: Usage | null; onRefresh
 
           {/* Metrics forecast */}
           {usage.metrics_forecast && usage.metrics_forecast.agents_with_metrics > 0 && (
-            <div className="usage-stats" style={{ marginBottom: 20 }} data-testid="account-metrics-forecast">
+            <div className="usage-stats" data-testid="account-metrics-forecast">
               <div className="usage-stat">
-                <div className="usage-stat-label">Metrics agents</div>
+                <div className="usage-stat-label">metrics agents</div>
                 <div className="usage-stat-value">{usage.metrics_forecast.agents_with_metrics}</div>
               </div>
               <div className="usage-stat">
-                <div className="usage-stat-label">Projected metrics</div>
+                <div className="usage-stat-label">projected metrics</div>
                 <div className="usage-stat-value">~{formatBytes(usage.metrics_forecast.projected_bytes_month)}/mo</div>
               </div>
               <div className="usage-stat">
-                <div className="usage-stat-label">Projected total</div>
+                <div className="usage-stat-label">projected total</div>
                 <div className="usage-stat-value">
                   ~{formatBytes(usage.bytes_ingested + usage.metrics_forecast.projected_bytes_month)}/mo
                 </div>
@@ -256,7 +271,7 @@ function SubscriptionCard({ usage, onRefresh }: { usage: Usage | null; onRefresh
                 <div>{plan.overage} overage</div>
               </div>
               {isCurrent ? (
-                <div className="plan-tile-badge">Current plan</div>
+                <div className="plan-tile-badge">current plan</div>
               ) : (
                 <button
                   className="btn-action btn-action-primary plan-tile-btn"
@@ -264,7 +279,7 @@ function SubscriptionCard({ usage, onRefresh }: { usage: Usage | null; onRefresh
                   disabled={upgrading !== null}
                   data-testid={`account-plan-select-${plan.tier}`}
                 >
-                  {upgrading === plan.tier ? 'Redirecting...' : isTrial ? 'Upgrade' : 'Switch'}
+                  {upgrading === plan.tier ? 'redirecting...' : isTrial ? 'upgrade' : 'switch'}
                 </button>
               )}
             </div>
@@ -324,7 +339,7 @@ function IntegrationsCard({ integrations, onRefresh }: { integrations: Integrati
   return (
     <div className="dash-card" data-testid="account-integrations-card">
       <div className="dash-card-header">
-        <h2 className="dash-card-title">Integrations</h2>
+        <h2 className="dash-card-title">integrations</h2>
       </div>
 
       {/* Slack */}
@@ -334,18 +349,18 @@ function IntegrationsCard({ integrations, onRefresh }: { integrations: Integrati
             <span className="integration-name">Slack</span>
             {slackConnected ? (
               <span className="integration-status integration-status-connected">
-                {integrations?.slack?.team_name || 'Connected'}
+                {integrations?.slack?.team_name || 'connected'}
               </span>
             ) : (
-              <span className="integration-status">Not connected</span>
+              <span className="integration-status">not connected</span>
             )}
           </div>
           {slackConnected ? (
             <button className="btn-action btn-action-danger" onClick={handleSlackDisconnect}
-              data-testid="account-slack-disconnect-button">Disconnect</button>
+              data-testid="account-slack-disconnect-button">disconnect</button>
           ) : (
             <button className="btn-action btn-action-primary" onClick={handleSlackConnect}
-              data-testid="account-slack-connect-button">Connect Slack</button>
+              data-testid="account-slack-connect-button">connect slack</button>
           )}
         </div>
       </div>
@@ -360,17 +375,17 @@ function IntegrationsCard({ integrations, onRefresh }: { integrations: Integrati
                 {Object.keys(pdKeys).length} service{Object.keys(pdKeys).length !== 1 ? 's' : ''}
               </span>
             ) : (
-              <span className="integration-status">No keys configured</span>
+              <span className="integration-status">no keys configured</span>
             )}
           </div>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div className="integration-actions">
             {!showPdForm && (
               <button className="btn-action btn-action-primary" onClick={() => setShowPdForm(true)}
-                data-testid="account-pd-add-button">+ Add key</button>
+                data-testid="account-pd-add-button">+ add key</button>
             )}
             {pdConnected && (
               <button className="btn-action btn-action-danger" onClick={handlePdDisconnect}
-                data-testid="account-pd-disconnect-button">Clear all</button>
+                data-testid="account-pd-disconnect-button">clear all</button>
             )}
           </div>
         </div>
@@ -389,17 +404,17 @@ function IntegrationsCard({ integrations, onRefresh }: { integrations: Integrati
 
         {/* Add PD key form */}
         {showPdForm && (
-          <form className="create-token-form" onSubmit={handlePdSave} style={{ marginTop: 12 }}
+          <form className="create-token-form" onSubmit={handlePdSave}
             data-testid="account-pd-form">
             <div className="form-row">
               <div className="form-field">
-                <label className="form-label">Service name</label>
+                <label className="form-label">service name</label>
                 <input className="form-input" placeholder="api" value={pdName}
                   onChange={e => setPdName(e.target.value)} required
                   data-testid="account-pd-name-input" />
               </div>
               <div className="form-field">
-                <label className="form-label">Routing key</label>
+                <label className="form-label">routing key</label>
                 <input className="form-input" placeholder="paste from PagerDuty" value={pdKey}
                   onChange={e => setPdKey(e.target.value)} required
                   data-testid="account-pd-key-input" />
@@ -407,15 +422,16 @@ function IntegrationsCard({ integrations, onRefresh }: { integrations: Integrati
             </div>
             <div className="form-actions">
               <button type="submit" className="btn-action btn-action-primary" disabled={pdSaving}
-                data-testid="account-pd-save-button">{pdSaving ? 'Saving...' : 'Save'}</button>
-              <button type="button" className="btn-action" onClick={() => setShowPdForm(false)}>Cancel</button>
+                data-testid="account-pd-save-button">{pdSaving ? 'saving...' : 'save'}</button>
+              <button type="button" className="btn-action" onClick={() => setShowPdForm(false)}
+                data-testid="account-pd-cancel-button">cancel</button>
             </div>
           </form>
         )}
       </div>
 
       {/* Info */}
-      <div className="dash-empty" style={{ paddingTop: 12 }}>
+      <div className="dash-empty">
         Configure notification routing in <code>/etc/notify.yaml</code> or per-cron with <code># notify: slack:#channel</code>
       </div>
       <div className="dash-empty" data-testid="account-integrations-cli-hint">
@@ -477,8 +493,8 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
   return (
     <div className="dash-card" data-testid="account-team-card">
       <div className="dash-card-header">
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <h2 className="dash-card-title">Team</h2>
+        <div className="dash-card-header-group">
+          <h2 className="dash-card-title">team</h2>
           {editingName ? (
             <form onSubmit={async (e) => {
               e.preventDefault()
@@ -487,22 +503,20 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
                 onRefresh()
               }
               setEditingName(false)
-            }} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            }} className="form-actions">
               <input
-                className="form-input"
                 value={orgNameInput}
                 onChange={e => setOrgNameInput(e.target.value)}
                 autoFocus
-                style={{ width: 180, padding: '4px 8px', fontSize: '0.82rem' }}
+                className="form-input form-input-inline"
                 data-testid="account-org-name-input"
               />
-              <button type="submit" className="btn-action btn-action-primary" style={{ padding: '4px 10px', fontSize: '0.75rem' }}>Save</button>
-              <button type="button" className="btn-action" style={{ padding: '4px 10px', fontSize: '0.75rem' }} onClick={() => setEditingName(false)}>Cancel</button>
+              <button type="submit" className="btn-action btn-action-primary" data-testid="account-org-name-save-button">save</button>
+              <button type="button" className="btn-action" onClick={() => setEditingName(false)} data-testid="account-org-name-cancel-button">cancel</button>
             </form>
           ) : (
             <span
-              className="watch-tile-name"
-              style={{ cursor: isOwner ? 'pointer' : 'default' }}
+              className={`watch-tile-name${isOwner ? ' watch-tile-name-editable' : ''}`}
               onClick={() => { if (isOwner) { setOrgNameInput(team?.org_name ?? ''); setEditingName(true) } }}
               title={isOwner ? 'Click to rename' : undefined}
               data-testid="account-org-name"
@@ -511,8 +525,8 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
             </span>
           )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span className="watch-count-badge">{seatsUsed} / {seatsLimit} seats</span>
+        <div className="dash-card-header-group">
+          <span className={`watch-count-badge${atLimit ? ' watch-count-at-limit' : ''}`}>{seatsUsed}/{seatsLimit} seats</span>
           {isOwner && !showInvite && (
             <button
               className="btn-action btn-action-primary"
@@ -521,7 +535,7 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
               title={atLimit ? 'Seat limit reached — upgrade to add more' : undefined}
               data-testid="account-invite-button"
             >
-              + Invite
+              + invite
             </button>
           )}
         </div>
@@ -531,7 +545,7 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
         <form className="create-token-form" onSubmit={handleInvite} data-testid="account-invite-form">
           <div className="form-row">
             <div className="form-field">
-              <label className="form-label">Email address</label>
+              <label className="form-label">email address</label>
               <input
                 className="form-input"
                 type="email"
@@ -552,7 +566,7 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
               disabled={inviting || !inviteEmail.trim()}
               data-testid="account-invite-submit-button"
             >
-              {inviting ? 'Sending...' : 'Send invite'}
+              {inviting ? 'sending...' : 'send invite'}
             </button>
             <button
               type="button"
@@ -560,7 +574,7 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
               onClick={() => { setShowInvite(false); setInviteError('') }}
               data-testid="account-invite-cancel-button"
             >
-              Cancel
+              cancel
             </button>
           </div>
         </form>
@@ -572,7 +586,7 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
         <div className="dash-table-wrap">
           <table className="dash-table" data-testid="account-team-table">
             <thead>
-              <tr><th>Email</th><th>Role</th><th>Status</th><th>Joined</th><th></th></tr>
+              <tr><th>email</th><th>role</th><th>status</th><th>joined</th><th></th></tr>
             </thead>
             <tbody>
               {members.map(m => (
@@ -594,20 +608,21 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
                   <td>
                     {isOwner && m.Role !== 'admin' && (
                       confirmRemove === m.ID ? (
-                        <div style={{ display: 'flex', gap: 6 }}>
+                        <div className="form-actions">
                           <button
                             className="btn-action btn-action-danger"
                             onClick={() => handleRemove(m.ID)}
                             disabled={removing === m.ID}
                             data-testid={`account-team-confirm-remove-${m.ID}`}
                           >
-                            {removing === m.ID ? '...' : 'Confirm'}
+                            {removing === m.ID ? '...' : 'confirm'}
                           </button>
                           <button
                             className="btn-action"
                             onClick={() => setConfirmRemove(null)}
+                            data-testid={`account-team-cancel-remove-${m.ID}`}
                           >
-                            Cancel
+                            cancel
                           </button>
                         </div>
                       ) : (
@@ -616,7 +631,7 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
                           onClick={() => setConfirmRemove(m.ID)}
                           data-testid={`account-team-remove-${m.ID}`}
                         >
-                          Remove
+                          remove
                         </button>
                       )
                     )}
@@ -701,7 +716,7 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
   return (
     <div className="dash-card" data-testid="account-permissions-card">
       <div className="dash-card-header">
-        <h2 className="dash-card-title">Permissions</h2>
+        <h2 className="dash-card-title">permissions</h2>
         {isOwner && (
           <button
             className="btn-action btn-action-primary"
@@ -709,12 +724,12 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
             disabled={!dirty || saving}
             data-testid="account-permissions-save-button"
           >
-            {saving ? 'Saving...' : 'Save changes'}
+            {saving ? 'saving...' : 'save changes'}
           </button>
         )}
       </div>
       {!isOwner && (
-        <div className="dash-empty" style={{ marginBottom: 12 }}>
+        <div className="dash-empty">
           Read-only view. Owners can edit write access to <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code> and per-namespace access.
         </div>
       )}
@@ -723,11 +738,11 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
         <table className="dash-table" data-testid="account-permissions-table">
           <thead>
             <tr>
-              <th>Email</th>
+              <th>email</th>
               <th>/bin</th>
               <th>/cron.d</th>
               <th>/etc</th>
-              <th>Namespaces</th>
+              <th>namespaces</th>
             </tr>
           </thead>
           <tbody>
@@ -754,8 +769,8 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
                     </td>
                   </tr>
                   {isExpanded && (
-                    <tr data-testid={`account-permissions-${m.ID}-ns-panel`}>
-                      <td colSpan={5} style={{ background: 'rgba(255,255,255,0.02)' }}>
+                    <tr className="dash-table-subrow" data-testid={`account-permissions-${m.ID}-ns-panel`}>
+                      <td colSpan={5}>
                         <NamespaceGrants
                           memberId={m.ID}
                           isOwner={isOwner}
@@ -772,7 +787,7 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
           </tbody>
         </table>
       </div>
-      <div className="dash-empty" style={{ marginTop: 10, fontSize: '0.78rem' }}>
+      <div className="dash-empty dash-hint">
         The same grants are available in the shell: <code>adduser &lt;email&gt; &lt;namespace&gt;</code> / <code>&lt;namespace&gt;+tokens</code>. See <code>man passwd</code>.
       </div>
     </div>
@@ -789,18 +804,18 @@ function NamespaceGrants({ memberId, isOwner, namespaces, perms, onFlip }: {
   onFlip: (ns: string, facet: 'read' | 'create_tokens') => void
 }) {
   if (namespaces.length === 0) {
-    return <div className="dash-empty" style={{ padding: '8px 4px' }}>No namespaces yet.</div>
+    return <div className="dash-empty">No namespaces yet.</div>
   }
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px,1fr) auto auto', gap: '4px 16px', alignItems: 'center', padding: '8px 4px' }}>
-      <div style={{ fontWeight: 600, fontSize: '0.78rem', opacity: 0.7 }}>namespace</div>
-      <div style={{ fontWeight: 600, fontSize: '0.78rem', opacity: 0.7 }}>read</div>
-      <div style={{ fontWeight: 600, fontSize: '0.78rem', opacity: 0.7 }}>+tokens</div>
+    <div className="ns-grants">
+      <div className="ns-grants-head">namespace</div>
+      <div className="ns-grants-head">read</div>
+      <div className="ns-grants-head">+tokens</div>
       {namespaces.map(ns => {
         const acl = perms.namespaces?.[ns.name] ?? { read: false }
         return (
           <Fragment key={ns.name}>
-            <div className="token-label" style={{ fontSize: '0.85rem' }}>{ns.name}</div>
+            <div className="token-label">{ns.name}</div>
             <input
               type="checkbox"
               checked={!!acl.read}
@@ -870,7 +885,7 @@ export default function Account() {
         <div className="dash-content">
           <div className="dash-header">
             <h1 className="dash-page-title">Account</h1>
-            {user && <div className="dash-empty" style={{ marginTop: 4 }}>{user.email}</div>}
+            {user && <div className="dash-empty">{user.email}</div>}
           </div>
 
           <SubscriptionCard usage={usage} onRefresh={loadData} />

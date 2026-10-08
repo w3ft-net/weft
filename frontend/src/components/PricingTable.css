@@ -1,7 +1,10 @@
+/* Pricing: three box-drawn panes, tier name set into the top border.
+   Rendered on the landing page (where --accent is brand orange) and
+   anywhere else the app needs a plan comparison. */
 .pricing-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
+  gap: 3ch;
   max-width: 1000px;
   margin: 0 auto;
 }
@@ -14,153 +17,129 @@
 }
 
 .pricing-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 32px 28px;
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-bright);
+  padding: 24px 2.5ch 18px;
   display: flex;
   flex-direction: column;
-  position: relative;
-  transition: border-color 0.3s, transform 0.3s;
+  font-size: 13px;
 }
 
-.pricing-card:hover {
-  border-color: var(--border-bright);
-  transform: translateY(-2px);
-}
+.pricing-card:hover { border-color: var(--text-dim); }
 
-.pricing-card.featured {
-  border-color: var(--accent);
-  box-shadow: 0 0 40px var(--accent-glow);
-}
+.pricing-card.featured { border-color: var(--accent); }
 
-.pricing-badge {
+.pricing-head {
   position: absolute;
-  top: -12px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--accent);
-  color: var(--bg-deep);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 4px 14px;
-  border-radius: 20px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  top: -0.8em;
+  left: 1ch;
+  right: 1ch;
+  display: flex;
+  justify-content: space-between;
+  line-height: 1.5;
+}
+
+.pricing-name,
+.pricing-badge {
+  background: var(--bg-deep);
+  padding: 0 1ch;
 }
 
 .pricing-name {
-  font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 1.5px;
-  margin-bottom: 16px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-bright);
 }
+.pricing-name::before { content: '─ '; color: var(--border-bright); font-weight: 400; }
+
+.pricing-badge { color: var(--accent); }
+.pricing-badge::before { content: '★ '; }
 
 .pricing-price {
   display: flex;
   align-items: baseline;
   gap: 2px;
-  margin-bottom: 24px;
+  margin-bottom: 14px;
 }
 
-.pricing-dollar {
-  font-size: 20px;
-  color: var(--text-secondary);
-  font-weight: 300;
-}
+.pricing-dollar { font-size: 18px; color: var(--text-dim); }
 
 .pricing-amount {
-  font-size: 48px;
+  font-size: 40px;
   font-weight: 700;
   line-height: 1;
-  color: var(--text-primary);
+  color: var(--text-bright);
 }
 
+.featured .pricing-amount { color: var(--accent); }
+
 .pricing-period {
-  font-size: 16px;
   color: var(--text-dim);
-  margin-left: 4px;
+  margin-left: 0.5ch;
 }
 
 .pricing-meta {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 16px 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 20px;
+  padding: 8px 0;
+  border-top: 1px dashed var(--border-bright);
+  border-bottom: 1px dashed var(--border-bright);
+  margin-bottom: 12px;
 }
 
 .pricing-meta-item {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
+  gap: 2ch;
 }
 
-.pricing-meta-label {
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-}
-
-.pricing-meta-value {
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-weight: 500;
-}
+.pricing-meta-label { color: var(--text-dim); }
+.pricing-meta-value { color: var(--text-primary); }
 
 .pricing-features {
   list-style: none;
   flex: 1;
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 
 .pricing-features li {
-  font-size: 14px;
   color: var(--text-secondary);
-  padding: 6px 0;
+  padding: 1px 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  gap: 1ch;
 }
 
-.pricing-check {
-  color: var(--green);
-  font-size: 14px;
-  font-weight: 700;
-}
+.pricing-check { color: var(--green); font-weight: 700; }
 
+/* CTA as a bracketed command; inverse on hover. */
 .pricing-cta {
   display: block;
   text-align: center;
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.2s;
+  padding: 4px 1ch;
   border: 1px solid var(--border-bright);
   color: var(--text-primary);
   background: transparent;
 }
+.pricing-cta::before { content: '$ '; color: var(--text-dim); }
 
-.pricing-cta:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-glow);
+.pricing-cta:hover,
+.pricing-cta:focus-visible {
+  background: var(--text-primary);
+  border-color: var(--text-primary);
+  color: var(--bg-deep);
+  text-decoration: none;
+  outline: none;
 }
+.pricing-cta:hover::before { color: inherit; }
 
 .featured .pricing-cta {
-  background: var(--accent);
-  color: var(--bg-deep);
   border-color: var(--accent);
+  color: var(--accent);
 }
 
-.featured .pricing-cta:hover {
-  background: var(--accent-hover);
+.featured .pricing-cta:hover,
+.featured .pricing-cta:focus-visible {
+  background: var(--accent);
   color: var(--bg-deep);
 }

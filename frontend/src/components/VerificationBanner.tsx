@@ -36,30 +36,31 @@ export default function VerificationBanner() {
   return (
     <div className="verify-banner" data-testid="verification-banner">
       <div className="verify-banner-msg">
-        <strong>Verify your email</strong> to unlock agent tokens, crons, and integrations.
+        <span className="verify-banner-sigil" aria-hidden="true">!</span>
+        <strong>verify your email</strong> to unlock agent tokens, crons, and integrations.
         {hoursLeft !== null && hoursLeft > 0 && (
-          <> Link expires in <strong>{hoursLeft}h</strong>.</>
+          <> the link expires in <strong>{hoursLeft}h</strong>.</>
         )}
       </div>
       <div className="verify-banner-actions">
         {status === 'idle' && (
           <button
-            className="verify-banner-btn"
+            className="verify-banner-btn tui-btn"
             onClick={handleResend}
             data-testid="verification-banner-resend-button"
           >
-            Resend email
+            resend email
           </button>
         )}
-        {status === 'sending' && <span className="verify-banner-status">Sending…</span>}
+        {status === 'sending' && <span className="verify-banner-status tui-cursor">sending</span>}
         {status === 'sent' && (
           <span className="verify-banner-status verify-banner-status-ok" data-testid="verification-banner-sent">
-            Sent — check your inbox.
+            sent. check your inbox.
           </span>
         )}
         {status === 'error' && (
           <span className="verify-banner-status verify-banner-status-err" data-testid="verification-banner-error">
-            {errMsg || 'Something went wrong.'}
+            {errMsg || "couldn't resend the email. try again."}
           </span>
         )}
       </div>

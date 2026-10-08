@@ -1,14 +1,13 @@
+/* One-shot success notice, styled like a terminal status line. */
 .graduation-banner {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  padding: 12px 20px;
-  background: linear-gradient(90deg, rgba(110, 200, 130, 0.18), rgba(110, 200, 130, 0.06));
-  border-bottom: 1px solid rgba(110, 200, 130, 0.5);
+  gap: 2ch;
+  padding: 3px 2ch;
+  background: rgba(95, 215, 135, 0.08);
+  border-bottom: 1px solid var(--border-bright);
   color: var(--text-primary);
-  font-family: var(--font-body);
-  font-size: 0.92rem;
 }
 
 .graduation-banner-body {
@@ -17,50 +16,43 @@
 }
 
 .graduation-banner-title {
-  font-weight: 600;
-  margin-bottom: 2px;
-  color: #b9e8c2;
-  letter-spacing: 0.01em;
+  font-weight: 700;
+  color: var(--green);
 }
 
-.graduation-banner-copy {
-  color: var(--text-secondary);
-  line-height: 1.5;
+.graduation-banner-sigil {
+  display: inline-block;
+  background: var(--green);
+  color: var(--bg-deep);
+  padding: 0 0.8ch;
+  margin-right: 1ch;
 }
+
+.graduation-banner-copy { color: var(--text-secondary); }
 
 .graduation-banner-copy a {
   color: var(--accent);
-  text-decoration: none;
-  border-bottom: 1px dashed currentColor;
-}
-
-.graduation-banner-copy a:hover {
-  color: var(--text-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .graduation-banner-dismiss {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   background: transparent;
-  border: 1px solid transparent;
+  border: none;
   color: var(--text-dim);
-  font-size: 1.2rem;
-  line-height: 1;
   cursor: pointer;
-  border-radius: 4px;
-  transition: color 0.15s, border-color 0.15s;
+  padding: 0 2px;
 }
 
-.graduation-banner-dismiss:hover:not(:disabled) {
-  color: var(--text-primary);
-  border-color: var(--border);
+.graduation-banner-dismiss:hover:not(:disabled),
+.graduation-banner-dismiss:focus-visible {
+  background: var(--text-primary);
+  color: var(--bg-deep);
+  outline: none;
 }
 
 .graduation-banner-dismiss:disabled {
-  opacity: 0.5;
+  color: var(--text-dim);
   cursor: default;
 }

@@ -13,6 +13,34 @@ import { execQuery, execFollow, cancelQuery, notifyBuiltinExecuted, setCurrentRa
 
 export type ShellBridge = BaseShellBridge
 
+// TERM_THEME maps xterm's ANSI palette onto the app's tokens (index.css)
+// so the terminal and the chrome around it read as one program: same
+// indigo-black ground, cyan cursor/selection, xterm-256-style colours.
+// Kept in hex because xterm can't read CSS variables.
+export const TERM_THEME = {
+  background: '#0a0a14',
+  foreground: '#c0c0d0',
+  cursor: '#5fafd7',
+  cursorAccent: '#0a0a14',
+  selectionBackground: 'rgba(95, 175, 215, 0.3)',
+  black: '#252540',
+  red: '#ff5f5f',
+  green: '#5fd787',
+  yellow: '#ffd75f',
+  blue: '#5fafd7',
+  magenta: '#af87ff',
+  cyan: '#5fd7d7',
+  white: '#c0c0d0',
+  brightBlack: '#555577',
+  brightRed: '#ff8787',
+  brightGreen: '#87ffaf',
+  brightYellow: '#ffaf00',
+  brightBlue: '#87d7ff',
+  brightMagenta: '#d7afff',
+  brightCyan: '#87ffff',
+  brightWhite: '#e0e0f0',
+}
+
 export interface ShellIdentity {
   user: string     // email-local-part for the prompt — alice@acme.test → "alice"
   customer: string // customer/team slug — "acme"
@@ -123,6 +151,7 @@ export async function initShellWasm(
   const bridge = await loadShellWasm(container, {
     wasmUrl: '/shell.wasm',
     callbacks,
+    themeOverrides: TERM_THEME,
   })
 
   terminalRef = bridge.terminal
@@ -211,6 +240,7 @@ export async function initShellPane(
   const bridge = await loadShellWasm(container, {
     wasmUrl: '/shell.wasm',
     callbacks,
+    themeOverrides: TERM_THEME,
     instance,
     interceptData,
   })

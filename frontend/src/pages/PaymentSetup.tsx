@@ -8,23 +8,38 @@ import {
   useElements,
 } from '@stripe/react-stripe-js'
 import { createSetupIntent } from '../lib/api'
+import Pane from '../components/Pane'
+import './Login.css'
 import './Signup.css'
 
 const TIER_LABELS: Record<string, string> = {
-  swatch: 'Swatch — $19/mo',
-  yard: 'Yard — $79/mo',
-  bolt: 'Bolt — $299/mo',
+  swatch: 'swatch  $19/mo',
+  yard: 'yard  $79/mo',
+  bolt: 'bolt  $299/mo',
 }
 
+// Stripe renders the Payment Element in its own iframe, so it can't see
+// our CSS variables — these mirror the tokens in index.css by value.
 const ELEMENTS_APPEARANCE = {
   theme: 'night' as const,
   variables: {
-    colorPrimary: '#c9a96e',
-    colorBackground: '#141414',
-    colorText: '#e8e6e3',
-    colorDanger: '#d4635a',
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    borderRadius: '4px',
+    colorPrimary: '#5fafd7',
+    colorBackground: '#0a0a14',
+    colorText: '#e0e0f0',
+    colorTextSecondary: '#8a8aaa',
+    colorTextPlaceholder: '#555577',
+    colorDanger: '#ff5f5f',
+    fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+    fontSizeBase: '13px',
+    borderRadius: '0px',
+    spacingUnit: '3px',
+  },
+  rules: {
+    '.Input': { border: '1px solid #3a3a60', boxShadow: 'none' },
+    '.Input:focus': { border: '1px solid #5fafd7', boxShadow: 'none' },
+    '.Tab': { border: '1px solid #3a3a60', boxShadow: 'none' },
+    '.Tab--selected': { borderColor: '#5fafd7', boxShadow: 'none' },
+    '.Label': { color: '#8a8aaa' },
   },
 }
 
@@ -55,22 +70,26 @@ function PaymentForm() {
 
   return (
     <form className="login-form" onSubmit={handleSubmit} data-testid="payment-setup-form">
-      <PaymentElement options={{ layout: 'tabs' }} />
+      <div className="signup-payment-element">
+        <PaymentElement options={{ layout: 'tabs' }} />
+      </div>
       {error && (
         <div className="login-error" data-testid="payment-setup-error">
           {error}
         </div>
       )}
-      <button
-        type="submit"
-        className="login-submit"
-        disabled={!stripe || submitting}
-        data-testid="payment-setup-submit-button"
-      >
-        {submitting ? 'Confirming...' : 'Start free trial'}
-      </button>
+      <div className="login-actions">
+        <button
+          type="submit"
+          className="tui-btn tui-btn-primary login-submit"
+          disabled={!stripe || submitting}
+          data-testid="payment-setup-submit-button"
+        >
+          {submitting ? 'confirming…' : 'start free trial'}
+        </button>
+      </div>
       <p className="signup-disclaimer">
-        Your card won't be charged until the 14-day trial ends. Cancel anytime.
+        no charge until the 14-day trial ends. cancel anytime.
       </p>
     </form>
   )
@@ -100,41 +119,44 @@ export default function PaymentSetup() {
 
   return (
     <div className="login-page">
-      <div className="login-card">
-        <div className="login-logo">weft</div>
-        <div className="login-tagline">one last step</div>
+      <img src="/weft-logo.svg" alt="weft" className="login-logo" />
+      <Pane title="payment" meta="step 2/2" className="login-card">
+        <p className="login-motd">one last step</p>
 
-        <div className="signup-tier" data-testid="payment-setup-tier">
-          <span className="signup-tier-label">Plan</span>
-          <span className="signup-tier-value">{TIER_LABELS[tier]}</span>
-        </div>
-
-        {loadError && (
-          <div className="login-error" data-testid="payment-setup-init-error">
-            {loadError}
+        <div className="login-form">
+          <div className="signup-tier" data-testid="payment-setup-tier">
+            <span className="signup-tier-label">plan</span>
+            <span className="signup-tier-value">{TIER_LABELS[tier]}</span>
           </div>
-        )}
 
-        {!loadError && (!stripePromise || !clientSecret) && (
-          <div className="dash-empty" data-testid="payment-setup-loading">Loading payment form...</div>
-        )}
+          {loadError && (
+            <div className="login-error" data-testid="payment-setup-init-error">
+              {loadError}
+            </div>
+          )}
 
-        {stripePromise && clientSecret && (
-          <Elements stripe={stripePromise} options={{ clientSecret, appearance: ELEMENTS_APPEARANCE }}>
-            <PaymentForm />
-          </Elements>
-        )}
+          {!loadError && (!stripePromise || !clientSecret) && (
+            <div className="signup-loading tui-cursor" data-testid="payment-setup-loading">loading payment form</div>
+          )}
 
+          {stripePromise && clientSecret && (
+            <Elements stripe={stripePromise} options={{ clientSecret, appearance: ELEMENTS_APPEARANCE }}>
+              <PaymentForm />
+            </Elements>
+          )}
+        </div>
+      </Pane>
+
+      <div className="login-foot">
         <button
           className="login-back"
           onClick={() => navigate('/dashboards')}
           data-testid="payment-setup-skip-button"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', marginTop: 16 }}
         >
-          Skip — add payment later
+          skip, add payment later
         </button>
         <Link to="/" className="login-back" data-testid="payment-setup-home-link">
-          ← Back to home
+          ← back to home
         </Link>
       </div>
     </div>

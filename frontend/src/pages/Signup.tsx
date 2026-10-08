@@ -2,12 +2,14 @@ import { useState, type FormEvent } from 'react'
 import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import { signup } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
+import Pane from '../components/Pane'
+import './Login.css'
 import './Signup.css'
 
 const TIER_LABELS: Record<string, string> = {
-  swatch: 'Swatch — $19/mo',
-  yard: 'Yard — $79/mo',
-  bolt: 'Bolt — $299/mo',
+  swatch: 'swatch  $19/mo',
+  yard: 'yard  $79/mo',
+  bolt: 'bolt  $299/mo',
 }
 
 export default function Signup() {
@@ -40,38 +42,42 @@ export default function Signup() {
 
   return (
     <div className="login-page">
-      <div className="login-card">
-        <div className="login-logo">weft</div>
-        <div className="login-tagline">log analysis for your Unix heart</div>
+      <img src="/weft-logo.svg" alt="weft" className="login-logo" />
+      <Pane title="create account" meta="step 1/2" className="login-card">
+        <p className="login-motd">log analysis for your unix heart</p>
 
         <form className="login-form" onSubmit={handleSubmit} data-testid="signup-form">
-          <label className="login-label" htmlFor="signup-email">Email address</label>
-          <input
-            id="signup-email"
-            type="email"
-            placeholder="you@company.com"
-            data-testid="signup-email-input"
-            className="login-input"
-            value={email}
-            onChange={e => setEmail(e.target.value)}
-            autoFocus
-            required
-          />
+          <div className="login-field">
+            <label className="login-label" htmlFor="signup-email">email</label>
+            <input
+              id="signup-email"
+              type="email"
+              placeholder="you@company.com"
+              data-testid="signup-email-input"
+              className="login-input"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              autoFocus
+              required
+            />
+          </div>
 
-          <label className="login-label" htmlFor="signup-org">Organization name</label>
-          <input
-            id="signup-org"
-            type="text"
-            placeholder="e.g., acme"
-            data-testid="signup-org-input"
-            className="login-input"
-            value={orgName}
-            onChange={e => setOrgName(e.target.value)}
-            required
-          />
+          <div className="login-field">
+            <label className="login-label" htmlFor="signup-org">org</label>
+            <input
+              id="signup-org"
+              type="text"
+              placeholder="acme"
+              data-testid="signup-org-input"
+              className="login-input"
+              value={orgName}
+              onChange={e => setOrgName(e.target.value)}
+              required
+            />
+          </div>
 
           <div className="signup-tier" data-testid="signup-tier-display">
-            <span className="signup-tier-label">Plan</span>
+            <span className="signup-tier-label">plan</span>
             <span className="signup-tier-value">{TIER_LABELS[tier]}</span>
             <a href="/#pricing" className="signup-tier-change" data-testid="signup-change-tier-link">change</a>
           </div>
@@ -85,26 +91,29 @@ export default function Signup() {
             </div>
           )}
 
-          <button
-            type="submit"
-            data-testid="signup-submit-button"
-            className="login-submit"
-            disabled={loading}
-          >
-            {loading ? 'Creating account...' : 'Start free trial'}
-          </button>
+          <div className="login-actions">
+            <button
+              type="submit"
+              data-testid="signup-submit-button"
+              className="tui-btn tui-btn-primary login-submit"
+              disabled={loading}
+            >
+              {loading ? 'creating account…' : 'start free trial'}
+            </button>
+          </div>
 
           <p className="signup-disclaimer">
-            Your card won't be charged until your 14-day trial ends. Cancel anytime.
+            no charge until your 14-day trial ends. cancel anytime.
           </p>
         </form>
+      </Pane>
 
-        <div className="signup-login-prompt">
-          Already have an account? <Link to="/login" data-testid="signup-existing-login-link">Log in</Link>
-        </div>
-
+      <div className="login-foot">
+        <span className="signup-login-prompt">
+          have an account? <Link to="/login" data-testid="signup-existing-login-link">log in</Link>
+        </span>
         <Link to="/" className="login-back" data-testid="signup-back-link">
-          ← Back to home
+          ← back to home
         </Link>
       </div>
     </div>

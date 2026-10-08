@@ -36,8 +36,10 @@ export default function PricingTable() {
     <div className="pricing-grid" data-testid="pricing-table">
       {TIERS.map(tier => (
         <div key={tier.name} className={`pricing-card ${tier.accent ? 'featured' : ''}`}>
-          {tier.accent && <div className="pricing-badge">Most popular</div>}
-          <h3 className="pricing-name">{tier.name}</h3>
+          <div className="pricing-head">
+            <h3 className="pricing-name">{tier.name.toLowerCase()}</h3>
+            {tier.accent && <span className="pricing-badge">most popular</span>}
+          </div>
           <div className="pricing-price">
             <span className="pricing-dollar">$</span>
             <span className="pricing-amount">{tier.price}</span>
@@ -45,28 +47,28 @@ export default function PricingTable() {
           </div>
           <div className="pricing-meta">
             <div className="pricing-meta-item">
-              <span className="pricing-meta-label">Retention</span>
+              <span className="pricing-meta-label">retention</span>
               <span className="pricing-meta-value">{tier.retention}</span>
             </div>
             <div className="pricing-meta-item">
-              <span className="pricing-meta-label">Volume</span>
+              <span className="pricing-meta-label">volume</span>
               <span className="pricing-meta-value">{tier.volume}</span>
             </div>
             <div className="pricing-meta-item">
-              <span className="pricing-meta-label">Overage</span>
+              <span className="pricing-meta-label">overage</span>
               <span className="pricing-meta-value">{tier.overage}</span>
             </div>
           </div>
           <ul className="pricing-features">
             {tier.features.map(f => (
               <li key={f}>
-                <span className="pricing-check">✓</span>
+                <span className="pricing-check">+</span>
                 {f}
               </li>
             ))}
           </ul>
           <Link to={`/signup?tier=${tier.name.toLowerCase()}`} className="pricing-cta" data-testid={`pricing-${tier.name.toLowerCase()}-button`}>
-            Start free trial
+            start free trial
           </Link>
         </div>
       ))}

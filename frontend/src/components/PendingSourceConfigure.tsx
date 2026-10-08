@@ -23,11 +23,14 @@ export default function PendingSourceConfigure({
   if (source.status === 'sampling') {
     return (
       <div className="psc-row" data-testid={`pending-source-row-${key}`}>
-        <div className="psc-header" data-testid={`pending-source-sampling-${key}`}>
+        <div className="psc-header psc-header-static" data-testid={`pending-source-sampling-${key}`}>
+          <span className="psc-chevron" />
           <span className="psc-service-name">{source.service}</span>
+          <span className="tui-tag tui-tag-warn">
+            sampling {source.sample_collected}/{source.sample_target}
+          </span>
           <span className="psc-meta">
-            {source.service} hasn’t emitted enough lines to sample yet (
-            {source.sample_collected}/{source.sample_target})
+            {source.service} hasn’t emitted enough lines to sample yet
           </span>
         </div>
       </div>
@@ -39,14 +42,16 @@ export default function PendingSourceConfigure({
       <button
         className="psc-header"
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
         data-testid={`pending-source-toggle-${key}`}
       >
+        <span className="psc-chevron">{expanded ? '▾' : '▸'}</span>
         <span className="psc-service-name">{source.service}</span>
+        <span className="tui-tag tui-tag-hi">pending</span>
         <span className="psc-meta">
           {source.instance || 'unknown host'}
-          {source.host_group ? ` · ${source.host_group}` : ''}
+          {source.host_group ? ` (${source.host_group})` : ''}
         </span>
-        <span className="psc-chevron">{expanded ? '▾' : '▸'}</span>
       </button>
 
       {expanded && (

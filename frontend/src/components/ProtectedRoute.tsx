@@ -31,13 +31,17 @@ export default function ProtectedRoute({ children, bare }: { children: ReactNode
 
   if (bare) return <>{children}</>
 
+  // app-frame owns the viewport height: banners take what they need at
+  // the top and the page gets the rest, so pages size themselves to their
+  // parent (height: 100%) rather than to 100vh — which would overflow by
+  // the banners' height whenever one is showing.
   return (
-    <>
+    <div className="app-frame">
       <VerificationBanner />
       <GraduationBanner />
       <WelcomeModal />
       <TourOverlay />
-      {children}
-    </>
+      <div className="app-frame-body">{children}</div>
+    </div>
   )
 }

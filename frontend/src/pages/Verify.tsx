@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useSearchParams, useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
 import { acceptInvite } from '../lib/api'
+import Pane from '../components/Pane'
+import './Login.css'
 import './Verify.css'
 
 type State = 'verifying' | 'needs-org' | 'creating' | 'success' | 'error' | 'invite-prompt'
@@ -85,92 +87,92 @@ export default function Verify() {
   }
 
   return (
-    <div className="verify-page">
-      <div className="verify-card">
-        <div className="verify-logo">weft</div>
-
+    <div className="login-page">
+      <img src="/weft-logo.svg" alt="weft" className="login-logo" />
+      <Pane title="weft verify" className="login-card">
         {state === 'verifying' && (
           <div className="verify-body" data-testid="verify-verifying-state">
-            <div className="verify-spinner" />
-            <p className="verify-status">Verifying magic link...</p>
+            <p className="verify-status">
+              <span className="verify-spinner" aria-hidden="true" />verifying magic link…
+            </p>
           </div>
         )}
 
         {state === 'needs-org' && (
           <div className="verify-body" data-testid="verify-org-state">
-            <p className="verify-status">Welcome{email ? `, ${email}` : ''}!</p>
-            <p className="verify-hint" style={{ marginBottom: 16 }}>Choose a name for your organization.</p>
-            <form onSubmit={handleCreateOrg}>
-              <input
-                className="verify-org-input"
-                type="text"
-                placeholder="e.g., kevlar, acme"
-                value={orgName}
-                onChange={e => setOrgName(e.target.value)}
-                autoFocus
-                required
-                data-testid="verify-org-name-input"
-                style={{
-                  width: '100%', padding: '10px 14px', marginBottom: 12,
-                  background: 'var(--bg-surface, #1a1d26)', border: '1px solid var(--border, #2d3345)',
-                  borderRadius: 4, color: 'var(--text-primary, #c8ccd4)',
-                  fontFamily: '"JetBrains Mono", monospace', fontSize: '0.9rem',
-                }}
-              />
-              <button
-                type="submit"
-                className="verify-accept-btn"
-                data-testid="verify-create-org-button"
-              >
-                Create account
-              </button>
+            <p className="verify-status">welcome{email ? `, ${email}` : ''}.</p>
+            <p className="verify-hint">choose a name for your organization.</p>
+            <form className="login-form" onSubmit={handleCreateOrg}>
+              <div className="login-field">
+                <label className="login-label" htmlFor="verify-org">org</label>
+                <input
+                  id="verify-org"
+                  className="login-input verify-org-input"
+                  type="text"
+                  placeholder="acme"
+                  value={orgName}
+                  onChange={e => setOrgName(e.target.value)}
+                  autoFocus
+                  required
+                  data-testid="verify-org-name-input"
+                />
+              </div>
+              <div className="login-actions">
+                <button
+                  type="submit"
+                  className="tui-btn tui-btn-primary verify-accept-btn"
+                  data-testid="verify-create-org-button"
+                >
+                  create account
+                </button>
+              </div>
             </form>
           </div>
         )}
 
         {state === 'creating' && (
           <div className="verify-body" data-testid="verify-creating-state">
-            <div className="verify-spinner" />
-            <p className="verify-status">Creating your account...</p>
+            <p className="verify-status">
+              <span className="verify-spinner" aria-hidden="true" />creating your account…
+            </p>
           </div>
         )}
 
         {state === 'invite-prompt' && (
           <div className="verify-body" data-testid="verify-invite-state">
-            <p className="verify-status">You've been invited to join a team on Weft.</p>
+            <p className="verify-status">you've been invited to join a team on weft.</p>
             <button
-              className="verify-accept-btn"
+              className="tui-btn tui-btn-primary verify-accept-btn"
               onClick={handleAcceptInvite}
               disabled={accepting}
               data-testid="verify-accept-invite-button"
             >
-              {accepting ? 'Joining...' : 'Accept Invite'}
+              {accepting ? 'joining…' : 'accept invite'}
             </button>
           </div>
         )}
 
         {state === 'success' && (
           <div className="verify-body" data-testid="verify-success-state">
-            <div className="verify-success-icon">✓</div>
-            <p className="verify-status verify-status-ok">Verified! Redirecting...</p>
+            <p className="verify-status verify-status-ok">verified</p>
+            <p className="verify-hint tui-cursor">redirecting</p>
           </div>
         )}
 
         {state === 'error' && (
           <div className="verify-body" data-testid="verify-error-state">
-            <div className="verify-error-icon">✗</div>
             <p className="verify-status verify-status-err">{errorMsg}</p>
-            <p className="verify-hint">Magic links expire after 15 minutes.</p>
+            <p className="verify-hint">magic links expire after 15 minutes.</p>
             <Link
               to="/login"
-              className="verify-back"
+              className="tui-btn verify-back"
               data-testid="verify-login-link"
             >
-              ← Request a new link
+              request a new link
             </Link>
           </div>
         )}
-      </div>
+      </Pane>
     </div>
   )
 }

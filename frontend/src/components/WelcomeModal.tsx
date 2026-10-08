@@ -1,5 +1,6 @@
 import { useAuth } from '../lib/AuthContext'
 import { advanceOnboarding, dismissOnboarding } from '../lib/api'
+import Pane from './Pane'
 import './WelcomeModal.css'
 
 // WelcomeModal renders for fresh signups whose onboarding_step is
@@ -49,8 +50,14 @@ export default function WelcomeModal() {
 
   return (
     <div className="welcome-modal-backdrop" data-testid="welcome-modal-backdrop">
-      <div className="welcome-modal" data-testid="welcome-modal">
-        <h2 className="welcome-modal-title">Welcome to weft.</h2>
+      <Pane
+        className="welcome-modal"
+        title="welcome to weft"
+        role="dialog"
+        aria-modal="true"
+        aria-label="welcome to weft"
+        data-testid="welcome-modal"
+      >
         <p className="welcome-modal-body">
           To help you learn weft at warp-speed, we've made you a member of{' '}
           <strong>Loom Inc</strong>{hasLoom ? '' : ' (still warming up — give it a moment)'} —
@@ -58,27 +65,28 @@ export default function WelcomeModal() {
           we'll walk you through every part of weft using Loom's data.
         </p>
         <p className="welcome-modal-body welcome-modal-body-quiet">
-          You can switch back to your own org any time using the dropdown
+          You can switch back to your own org any time using the org menu
           in the sidebar.
         </p>
         <div className="welcome-modal-actions">
           <button
-            className="welcome-modal-button welcome-modal-button-secondary"
+            className="tui-btn"
             onClick={handleSkip}
             data-testid="welcome-modal-skip-button"
           >
-            Skip
+            skip
           </button>
           <button
-            className="welcome-modal-button welcome-modal-button-primary"
+            className="tui-btn tui-btn-primary"
             onClick={handleStart}
             disabled={!hasLoom}
             data-testid="welcome-modal-start-button"
+            autoFocus
           >
-            Start the tour
+            start the tour
           </button>
         </div>
-      </div>
+      </Pane>
     </div>
   )
 }

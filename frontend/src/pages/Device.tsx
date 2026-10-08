@@ -26,19 +26,19 @@ export default function Device() {
   return (
     <div className="app-layout">
       <main className="app-main" data-testid="device-main">
-        <div className="dash-content" style={{ maxWidth: 480, paddingTop: 80 }}>
+        <div className="dash-content device-content">
           <div className="dash-card">
             <div className="dash-card-header">
-              <h2 className="dash-card-title">Authorize CLI</h2>
+              <h2 className="dash-card-title">authorize cli</h2>
             </div>
 
             {status === 'ready' && (
               <>
-                <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: 16 }}>
+                <p className="device-text">
                   The weft CLI is requesting access to your account
                   {user ? ` (${user.email})` : ''}.
                 </p>
-                <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: 'var(--text-dim)', marginBottom: 20 }}>
+                <p className="device-text device-text-dim">
                   Enter the code shown in your terminal. Only authorize a code you can see printed
                   by a `weft login` you ran yourself — never one from a link someone sent you.
                 </p>
@@ -48,35 +48,26 @@ export default function Device() {
                   onChange={(e) => setCode(e.target.value.toUpperCase())}
                   placeholder="XXXX-XX"
                   autoFocus
-                  style={{
-                    fontFamily: 'var(--font-mono)', fontSize: '2rem', fontWeight: 700,
-                    color: 'var(--accent)', textAlign: 'center', padding: '16px 0', marginBottom: 20,
-                    letterSpacing: '0.1em', width: '100%', background: 'transparent',
-                    border: '1px solid var(--border)', borderRadius: 6,
-                  }}
+                  className="device-code-input"
                   data-testid="device-user-code-input"
                 />
                 <button
                   className="btn-action btn-action-primary"
-                  style={{ width: '100%', padding: '12px' }}
                   onClick={handleApprove}
                   disabled={!code.trim()}
                   data-testid="device-approve-button"
                 >
-                  Authorize
+                  authorize
                 </button>
               </>
             )}
 
             {status === 'approving' && (
-              <div className="dash-empty">Authorizing...</div>
+              <div className="dash-empty tui-cursor">authorizing</div>
             )}
 
             {status === 'done' && (
-              <div style={{
-                fontFamily: 'var(--font-mono)', fontSize: '0.85rem',
-                color: 'var(--green)', padding: '20px 0',
-              }}>
+              <div className="device-done">
                 CLI authorized. You can close this tab — the CLI will pick it up automatically.
               </div>
             )}

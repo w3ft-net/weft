@@ -1,50 +1,58 @@
+/* Admin tabs: a window list, active tab in inverse video. */
 .admin-tabs {
   display: flex;
-  gap: 2px;
-  margin-bottom: 8px;
+  gap: 1ch;
+  border-bottom: 1px solid var(--border-bright);
 }
 
 .admin-tab {
-  font-family: var(--font-mono);
-  font-size: 0.82rem;
-  font-weight: 500;
-  padding: 8px 20px;
+  padding: 0 1.5ch;
   background: none;
-  border: 1px solid var(--border);
-  border-radius: 4px 4px 0 0;
-  color: var(--text-dim);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.admin-tab:hover {
+  border: none;
   color: var(--text-secondary);
-  border-color: var(--border-bright);
+  line-height: 1.7;
+  cursor: pointer;
+  text-transform: lowercase;
 }
 
-.admin-tab-active {
-  color: var(--text-primary);
-  border-color: var(--accent);
-  border-bottom-color: transparent;
-  background: var(--bg-elevated);
+.admin-tab:hover { background: var(--bg-elevated); color: var(--text-bright); }
+
+.admin-tab-active,
+.admin-tab-active:hover {
+  background: var(--accent);
+  color: var(--bg-deep);
+  font-weight: 700;
 }
 
 .admin-comp-badge {
-  font-family: var(--font-mono);
-  font-size: 0.62rem;
-  font-weight: 600;
   color: var(--cyan);
-  background: rgba(86, 182, 194, 0.08);
-  border: 1px solid rgba(86, 182, 194, 0.2);
-  padding: 1px 6px;
-  border-radius: 3px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-left: 6px;
-  vertical-align: middle;
+  margin-left: 1ch;
+}
+.admin-comp-badge::before { content: '['; color: var(--text-dim); }
+.admin-comp-badge::after { content: ']'; color: var(--text-dim); }
+
+.admin-row { cursor: pointer; }
+
+.admin-row-selected td,
+.admin-row-selected:hover td {
+  background: var(--accent-bg) !important;
+  color: var(--text-bright);
+}
+.admin-row-selected td:first-child { box-shadow: inset 2px 0 0 var(--accent) !important; }
+
+.admin-subsection { margin: 10px 0 14px; }
+
+.admin-tag-row {
+  display: flex;
+  gap: 1ch;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
 }
 
-.admin-row-selected td {
-  background: var(--bg-card) !important;
-  border-color: var(--accent);
+.admin-cell-truncate {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.admin-cell-narrow { max-width: 200px; }

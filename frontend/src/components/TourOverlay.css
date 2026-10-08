@@ -1,89 +1,74 @@
+/* Tour callout — a boxed pane pinned bottom-right, above the status bar,
+   with the step counter set into its top border:
+   ┌─ tour 2/3 ───────────────┐
+   │ copy…                     │
+   │ $ cmd             paste   │
+   │                 [ next ]  │
+   └───────────────────────────┘
+   Amber marks what the tour wants you to look at; nothing pulses. */
+
 .tour-overlay {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
-  width: 360px;
+  bottom: calc(var(--statusbar-h) + 16px);
+  right: 16px;
+  width: min(48ch, calc(100vw - 32px));
   background: var(--bg-surface);
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  padding: 18px 20px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
-  font-family: var(--font-body);
+  border: 1px solid var(--amber);
+  padding: 18px 2ch 12px;
   z-index: 150;
-  /* Pulse the border subtly so the overlay reads as "the live thing
-     guiding you" rather than blending into the page chrome. */
-  animation: tour-overlay-pulse 2.4s ease-in-out infinite;
-}
-
-@keyframes tour-overlay-pulse {
-  0%   { box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 0 0 var(--accent-glow, rgba(255, 200, 100, 0.4)); }
-  60%  { box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 0 6px transparent; }
-  100% { box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 0 0 transparent; }
 }
 
 .tour-overlay-progress {
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-bottom: 10px;
+  position: absolute;
+  top: -0.8em;
+  left: 1ch;
+  padding: 0 1ch;
+  background: var(--bg-surface);
+  color: var(--amber);
+  font-weight: 700;
+  line-height: 1.5;
 }
+.tour-overlay-progress::before { content: '─ '; color: var(--amber); font-weight: 400; }
 
 .tour-overlay-copy {
-  font-size: 0.92rem;
-  line-height: 1.55;
-  color: var(--text-secondary);
-  margin: 0 0 16px;
+  color: var(--text-primary);
+  margin: 0 0 12px;
 }
 
-.tour-overlay-copy-paragraph {
-  margin: 0 0 10px;
-}
+.tour-overlay-copy-paragraph { margin: 0 0 8px; }
+.tour-overlay-copy-paragraph:last-child { margin-bottom: 0; }
 
-.tour-overlay-copy-paragraph:last-child {
-  margin-bottom: 0;
-}
-
-.tour-overlay-copy code {
-  font-family: var(--font-mono);
-  font-size: 0.84em;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--bg-base);
-  color: var(--accent);
-  border: 1px solid var(--border);
-}
+.tour-overlay-copy code { color: var(--green); }
 
 .tour-overlay-actions {
   display: flex;
   justify-content: flex-end;
 }
 
-/* Re-paste affordance shown on shell-* steps. Looks like a quoted
-   command line so it reads as "click to drop this back in the
-   prompt" rather than a generic button. */
+/* Re-paste affordance on shell-* steps: reads as a quoted command line
+   you can click to drop back into the prompt. */
 .tour-overlay-paste {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 1ch;
   width: 100%;
-  padding: 6px 10px;
-  margin: -4px 0 12px;
-  background: var(--bg-base);
-  border: 1px dashed var(--border);
-  border-radius: 4px;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
+  padding: 2px 1ch;
+  margin: 0 0 10px;
+  background: var(--bg-deep);
+  border: 1px dashed var(--border-bright);
+  color: var(--text-bright);
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.2s, color 0.2s;
 }
 
-.tour-overlay-paste:hover {
+.tour-overlay-paste:hover,
+.tour-overlay-paste:focus-visible {
   border-color: var(--accent);
-  color: var(--accent);
+  border-style: solid;
+  outline: none;
 }
+
+.tour-overlay-paste-prompt { color: var(--accent); }
 
 .tour-overlay-paste-text {
   flex: 1;
@@ -94,65 +79,34 @@
   color: inherit;
 }
 
-.tour-overlay-button {
-  font-family: var(--font-mono);
-  font-size: 0.84rem;
-  padding: 7px 14px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  cursor: pointer;
-  background: transparent;
-  color: var(--text-secondary);
-  transition: border-color 0.2s, color 0.2s, background 0.2s;
-}
+.tour-overlay-paste-hint { color: var(--text-dim); }
+.tour-overlay-paste:hover .tour-overlay-paste-hint { color: var(--accent); }
 
-.tour-overlay-button:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.tour-overlay-button-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg-base);
-  font-weight: 600;
-}
-
-.tour-overlay-button-primary:hover {
-  background: transparent;
-  color: var(--accent);
-}
-
-/* Sidebar pulse for the tour-highlighted nav item. The body's
-   data-tour-highlight attribute names a data-testid; the sidebar's
-   matching link gets the pulse. Reuses the existing
-   sidebar-pending-pulse keyframes from SidebarNav.css. */
-body[data-tour-highlight] [data-testid] {
-  /* Default: not the highlighted one, no pulse. */
-}
-
+/* Highlight for the element the tour is pointing at. body's
+   data-tour-highlight attribute names a data-testid; the matching nav
+   link / shell tab gets an amber outline and a blinking marker. */
 body[data-tour-highlight="sidebar-dashboards-link"] [data-testid="sidebar-dashboards-link"],
 body[data-tour-highlight="sidebar-namespaces-link"] [data-testid="sidebar-namespaces-link"],
-body[data-tour-highlight="sidebar-downloads-link"] [data-testid="sidebar-downloads-link"] {
-  border: 1px solid var(--accent) !important;
-  border-radius: 6px;
-  animation: tour-sidebar-pulse 1.8s ease-in-out infinite;
-}
-
-/* Shell-chrome buttons — same pulse, applied to whichever button the
-   active shell-* step targets (functions for /bin lessons, watches
-   for /cron.d lessons, tmp / etc for the corresponding tree
-   sidebars). */
+body[data-tour-highlight="sidebar-downloads-link"] [data-testid="sidebar-downloads-link"],
 body[data-tour-highlight="shell-functions-toggle-button"] [data-testid="shell-functions-toggle-button"],
 body[data-tour-highlight="shell-watches-toggle-button"] [data-testid="shell-watches-toggle-button"],
 body[data-tour-highlight="shell-tmp-toggle-button"] [data-testid="shell-tmp-toggle-button"],
 body[data-tour-highlight="shell-etc-toggle-button"] [data-testid="shell-etc-toggle-button"] {
-  border-color: var(--accent) !important;
-  animation: tour-sidebar-pulse 1.8s ease-in-out infinite;
+  outline: 1px solid var(--amber);
+  outline-offset: -1px;
+  color: var(--amber);
 }
 
-@keyframes tour-sidebar-pulse {
-  0%   { box-shadow: 0 0 0 0 var(--accent-glow, rgba(255, 200, 100, 0.5)); }
-  70%  { box-shadow: 0 0 0 6px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
+body[data-tour-highlight="sidebar-dashboards-link"] [data-testid="sidebar-dashboards-link"]::after,
+body[data-tour-highlight="sidebar-namespaces-link"] [data-testid="sidebar-namespaces-link"]::after,
+body[data-tour-highlight="sidebar-downloads-link"] [data-testid="sidebar-downloads-link"]::after,
+body[data-tour-highlight="shell-functions-toggle-button"] [data-testid="shell-functions-toggle-button"]::after,
+body[data-tour-highlight="shell-watches-toggle-button"] [data-testid="shell-watches-toggle-button"]::after,
+body[data-tour-highlight="shell-tmp-toggle-button"] [data-testid="shell-tmp-toggle-button"]::after,
+body[data-tour-highlight="shell-etc-toggle-button"] [data-testid="shell-etc-toggle-button"]::after {
+  content: ' ◂';
+  color: var(--amber);
+  animation: tour-blink 1.1s steps(1) infinite;
 }
+
+@keyframes tour-blink { 50% { opacity: 0; } }

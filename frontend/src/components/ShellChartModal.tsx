@@ -41,6 +41,15 @@ export default function ShellChartModal({ spec, onClose }: Props) {
     return () => { cancelled = true }
   }, [spec.watch, isWatch])
 
+  // Esc closes, matching the label on the close button.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   const series = isWatch && results ? groupResultsByTag(results) : []
 
   return (
@@ -61,7 +70,7 @@ export default function ShellChartModal({ spec, onClose }: Props) {
               className="shell-chart-modal-link"
               data-testid="shell-chart-modal-watch-link"
             >
-              open watch page →
+              open watch
             </Link>
           )}
           <button
@@ -70,7 +79,7 @@ export default function ShellChartModal({ spec, onClose }: Props) {
             data-testid="shell-chart-modal-close-button"
             aria-label="Close"
           >
-            ×
+            esc
           </button>
         </header>
 
@@ -79,9 +88,9 @@ export default function ShellChartModal({ spec, onClose }: Props) {
             error ? (
               <div className="shell-chart-modal-error">{error}</div>
             ) : results === null ? (
-              <div className="shell-chart-modal-loading">Loading…</div>
+              <div className="shell-chart-modal-loading">loading…</div>
             ) : series.length === 0 ? (
-              <div className="shell-chart-modal-empty">No numeric data yet.</div>
+              <div className="shell-chart-modal-empty">no numeric data yet</div>
             ) : (
               <>
                 <Sparkline series={series} height={180} showTimeAxis />

@@ -30,7 +30,7 @@ function renderInlineBackticks(text: string): ReactNode[] {
 
 // PanelStep describes one step of the panel-tour stage. Each step
 // targets a specific sidebar item; the user advances by clicking the
-// pulsing item (which navigates AND auto-advances) or by hitting Next.
+// highlighted item (which navigates AND auto-advances) or by hitting Next.
 //
 // The shell-* steps live in a separate map below — their copy comes
 // from the server (onboarding_prompt), so the frontend only needs the
@@ -159,10 +159,10 @@ export default function TourOverlay() {
   if (panel) {
     copy = panel.copy
     const idx = PANEL_STEPS.findIndex(s => s.step === step)
-    progress = `Tour · ${idx + 1} of ${PANEL_STEPS.length}`
+    progress = `tour ${idx + 1}/${PANEL_STEPS.length}`
     const isLastPanel = idx === PANEL_STEPS.length - 1
     primaryAction = {
-      label: isLastPanel ? 'Drop into the shell →' : 'Next →',
+      label: isLastPanel ? 'drop into the shell' : 'next',
       testId: isLastPanel ? 'tour-overlay-shell-button' : 'tour-overlay-next-button',
       onClick: () => {
         advanceOnboarding(step)
@@ -180,13 +180,13 @@ export default function TourOverlay() {
     // running the lesson's Action verbatim (we pre-inject it into the
     // input).
     copy = user.onboarding_prompt || `Lesson ${step}…`
-    progress = 'Tour · shell phase'
+    progress = 'tour: shell'
   }
 
   const shellAction = isShell ? user.onboarding_action : undefined
 
   return (
-    <div className="tour-overlay" data-testid="tour-overlay">
+    <div className="tour-overlay" role="dialog" aria-label={progress} data-testid="tour-overlay">
       <div className="tour-overlay-progress" data-testid="tour-overlay-progress">
         {progress}
       </div>
@@ -204,23 +204,15 @@ export default function TourOverlay() {
             window.dispatchEvent(new CustomEvent('tour-action-paste'))
           }}
         >
-          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-            <path
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M5 3.5h6M5 3.5a1 1 0 0 0-1 1V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.5a1 1 0 0 0-1-1M6.5 2.5h3a1 1 0 0 1 1 1v.5h-5v-.5a1 1 0 0 1 1-1Z"
-            />
-          </svg>
+          <span className="tour-overlay-paste-prompt" aria-hidden="true">$</span>
           <code className="tour-overlay-paste-text">{shellAction}</code>
+          <span className="tour-overlay-paste-hint" aria-hidden="true">paste</span>
         </button>
       )}
       {primaryAction && (
         <div className="tour-overlay-actions">
           <button
-            className="tour-overlay-button tour-overlay-button-primary"
+            className="tour-overlay-button tui-btn tui-btn-primary"
             onClick={primaryAction.onClick}
             data-testid={primaryAction.testId}
           >

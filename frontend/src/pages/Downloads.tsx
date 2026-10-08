@@ -1,18 +1,20 @@
+import { useState } from 'react'
 import SidebarNav from '../components/SidebarNav'
+import Pane from '../components/Pane'
 import './Downloads.css'
 
 const RELEASES_BASE = 'https://releases.w3ft.net'
 
 const CLI_LINKS = [
-  { os: 'linux', arch: 'amd64', label: 'Linux x86_64' },
-  { os: 'linux', arch: 'arm64', label: 'Linux arm64' },
-  { os: 'darwin', arch: 'amd64', label: 'macOS Intel' },
-  { os: 'darwin', arch: 'arm64', label: 'macOS Apple Silicon' },
+  { os: 'linux', arch: 'amd64', label: 'linux x86_64' },
+  { os: 'linux', arch: 'arm64', label: 'linux arm64' },
+  { os: 'darwin', arch: 'amd64', label: 'macos intel' },
+  { os: 'darwin', arch: 'arm64', label: 'macos apple silicon' },
 ]
 
 const AGENT_LINKS = [
-  { arch: 'amd64', label: 'amd64 .deb' },
-  { arch: 'arm64', label: 'arm64 .deb' },
+  { arch: 'amd64', label: 'debian/ubuntu amd64' },
+  { arch: 'arm64', label: 'debian/ubuntu arm64' },
 ]
 
 function cliUrl(os: string, arch: string) {
@@ -23,20 +25,44 @@ function agentUrl(arch: string) {
   return `${RELEASES_BASE}/weftd/latest/weftd_latest_${arch}.deb`
 }
 
-function CodeBlock({ code, testId }: { code: string; testId: string }) {
+// CodeBlock renders shell commands as a terminal transcript: each
+// command line gets a `$` prompt, comment-only blocks (config files) don't.
+function CodeBlock({ code, testId, prompt = true }: { code: string; testId: string; prompt?: boolean }) {
+  const [copied, setCopied] = useState(false)
   function handleCopy() {
     navigator.clipboard.writeText(code)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1200)
   }
   return (
-    <div className="code-block" data-testid={testId}>
-      <pre className="code-block-pre">{code}</pre>
+    <div className="dl-code" data-testid={testId}>
+      <pre className="dl-code-pre">
+        {code.split('\n').map((line, i) => (
+          <div key={i} className={line.trimStart().startsWith('#') ? 'dl-code-comment' : undefined}>
+            {prompt && <span className="dl-code-prompt">$ </span>}
+            {line}
+          </div>
+        ))}
+      </pre>
       <button
-        className="code-block-copy"
+        className="tui-btn dl-code-copy"
         onClick={handleCopy}
         data-testid={`${testId}-copy`}
       >
-        copy
+        {copied ? 'copied' : 'copy'}
       </button>
+    </div>
+  )
+}
+
+function FileList({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="dl-files" role="list">
+      <div className="dl-file-head" aria-hidden="true">
+        <span>file</span>
+        <span>platform</span>
+      </div>
+      {children}
     </div>
   )
 }
@@ -48,38 +74,33 @@ export default function Downloads() {
       <main className="app-main" data-testid="downloads-main">
         <div className="downloads-content">
           <div className="dash-header">
-            <h1 className="dash-page-title">Downloads</h1>
+            <h1 className="dash-page-title">downloads</h1>
           </div>
 
           {/* weft CLI */}
-          <section className="dl-section" data-testid="downloads-cli-section">
-            <div className="dl-section-header">
-              <h2 className="dl-section-title">weft CLI</h2>
-              <span className="dl-section-sub">
-                The interactive shell for querying logs. Runs on Linux and macOS.
-              </span>
-            </div>
+          <Pane title="weft" meta="cli" data-testid="downloads-cli-section">
+            <p className="dl-section-sub">
+              The interactive shell for querying logs. Runs on Linux and macOS.
+            </p>
 
-            <div className="dl-grid">
+            <FileList>
               {CLI_LINKS.map(({ os, arch, label }) => (
                 <a
                   key={`${os}-${arch}`}
                   href={cliUrl(os, arch)}
-                  className="dl-link"
+                  className="dl-file"
+                  role="listitem"
                   data-testid={`downloads-cli-${os}-${arch}-link`}
                   download
                 >
-                  <span className="dl-link-icon">↓</span>
-                  <div>
-                    <div className="dl-link-label">{label}</div>
-                    <div className="dl-link-meta">weft-{os}-{arch}</div>
-                  </div>
+                  <span className="dl-file-name">weft-{os}-{arch}</span>
+                  <span className="dl-file-label">{label}</span>
                 </a>
               ))}
-            </div>
+            </FileList>
 
             <div className="dl-install">
-              <div className="dl-install-title">Quick install (Linux x86_64)</div>
+              <div className="dl-install-title">quick install, linux x86_64</div>
               <CodeBlock
                 testId="downloads-cli-install-block"
                 code={`curl -Lo weft ${cliUrl('linux', 'amd64')} && chmod +x weft && sudo mv weft /usr/local/bin/`}
@@ -87,43 +108,38 @@ export default function Downloads() {
             </div>
 
             <div className="dl-install">
-              <div className="dl-install-title">Quick install (macOS Apple Silicon)</div>
+              <div className="dl-install-title">quick install, macos apple silicon</div>
               <CodeBlock
                 testId="downloads-cli-macos-block"
                 code={`curl -Lo weft ${cliUrl('darwin', 'arm64')} && chmod +x weft && sudo mv weft /usr/local/bin/`}
               />
             </div>
-          </section>
+          </Pane>
 
           {/* weftd agent */}
-          <section className="dl-section" data-testid="downloads-agent-section">
-            <div className="dl-section-header">
-              <h2 className="dl-section-title">weftd agent</h2>
-              <span className="dl-section-sub">
-                Deploy on EC2 instances and containers to stream logs in real time via gRPC.
-              </span>
-            </div>
+          <Pane title="weftd" meta="agent" data-testid="downloads-agent-section">
+            <p className="dl-section-sub">
+              Deploy on EC2 instances and containers to stream logs in real time via gRPC.
+            </p>
 
-            <div className="dl-grid">
+            <FileList>
               {AGENT_LINKS.map(({ arch, label }) => (
                 <a
                   key={arch}
                   href={agentUrl(arch)}
-                  className="dl-link"
+                  className="dl-file"
+                  role="listitem"
                   data-testid={`downloads-weftd-${arch}-link`}
                   download
                 >
-                  <span className="dl-link-icon">↓</span>
-                  <div>
-                    <div className="dl-link-label">{label}</div>
-                    <div className="dl-link-meta">weftd_latest_{arch}.deb</div>
-                  </div>
+                  <span className="dl-file-name">weftd_latest_{arch}.deb</span>
+                  <span className="dl-file-label">{label}</span>
                 </a>
               ))}
-            </div>
+            </FileList>
 
             <div className="dl-install">
-              <div className="dl-install-title">1. Install the package</div>
+              <div className="dl-install-title"><span className="dl-step">1</span>install the package</div>
               <p className="dl-install-note">
                 The package enables weftd on boot but does <strong>not</strong> start
                 it — weftd refuses to run until you author its config (next step).
@@ -136,10 +152,10 @@ sudo dpkg -i weftd_latest_amd64.deb`}
             </div>
 
             <div className="dl-install">
-              <div className="dl-install-title">2. Author the config</div>
+              <div className="dl-install-title"><span className="dl-step">2</span>author the config</div>
               <p className="dl-install-note">
                 Create a token on the{' '}
-                <a href="/account" data-testid="downloads-account-link">Account</a>{' '}
+                <a href="/account" data-testid="downloads-account-link">account</a>{' '}
                 page. weftd is configured entirely by{' '}
                 <code>/etc/weftd/config.yaml</code> — the single source of truth,
                 never generated or overwritten by the package. Copy{' '}
@@ -147,6 +163,7 @@ sudo dpkg -i weftd_latest_amd64.deb`}
               </p>
               <CodeBlock
                 testId="downloads-agent-config-block"
+                prompt={false}
                 code={`# /etc/weftd/config.yaml
 endpoint: w3ft.net:443
 token: <your-agent-token>
@@ -174,7 +191,7 @@ sources:
             </div>
 
             <div className="dl-install">
-              <div className="dl-install-title">3. Start &amp; verify</div>
+              <div className="dl-install-title"><span className="dl-step">3</span>start and verify</div>
               <CodeBlock
                 testId="downloads-agent-verify-block"
                 code={`sudo systemctl start weftd
@@ -182,7 +199,7 @@ sudo systemctl status weftd
 journalctl -u weftd -f`}
               />
             </div>
-          </section>
+          </Pane>
         </div>
       </main>
     </div>
