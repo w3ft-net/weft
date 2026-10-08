@@ -113,6 +113,57 @@ sudo systemctl status weftd
 journalctl -u weftd -f
 ```
 
+### Resuming after a restart
+
+weftd remembers how far it has delivered each tailed file, so a restart
+(an upgrade, a reboot, a crash) picks up where it left off instead of
+skipping whatever was written in the meantime. The saved position means
+"the coordinator acknowledged everything up to here", not "weftd read up to
+here", so lines that were in flight when weftd stopped are sent again rather
+than lost. Delivery is at-least-once: after an unclean stop you may see a few
+seconds of lines twice, never a gap.
+
+State is kept in `/var/lib/weftd/checkpoints/`. The `.deb` unit creates it
+(`StateDirectory=weftd`). Everything is optional:
+
+```yaml
+checkpoint:
+  dir: /var/lib/weftd/checkpoints   # where state.json lives
+  enabled: true                     # set false to tail from the end on every start
+  flush_interval: 5s                # how often positions are written to disk
+  commit_interval: 15s              # how often delivered lines are acknowledged
+  max_resume_bytes: 256MiB          # per-file cap on backlog replayed after downtime
+```
+
+What weftd does for each file when it starts:
+
+| Situation | Starts at |
+|---|---|
+| First start with checkpointing (no state yet) | the end of the file |
+| File has no saved position (appeared while weftd was down) | the beginning |
+| File matches its saved position | the saved position |
+| File is shorter than the saved position (truncated) | the beginning |
+| File was replaced while weftd was down (rotated) | the beginning; the old file's unread tail is not recovered |
+| More than `max_resume_bytes` behind | the newest `max_resume_bytes`, from a line boundary |
+
+A file is matched by device, inode and a hash of its first kilobyte, so a
+reused inode is not mistaken for the same file. Files created while weftd is
+running are read from their first line. Every skip or replay is logged, and
+summarized once a minute as a `checkpoint stats` line per file.
+
+Notes:
+
+- **The first restart onto a version with checkpointing still loses lines in
+  flight**, because the old binary does the shutdown. The guarantee starts
+  from the second restart.
+- **Containers:** the state directory must survive the pod. On Kubernetes,
+  mount `/var/lib/weftd` from a `hostPath`; an `emptyDir` or the container
+  filesystem is wiped on every reschedule, which is exactly when you need it.
+- **Two weftd on one host** cannot share a state directory. The second one
+  logs that the directory is locked and runs without checkpointing.
+- A damaged `state.json` is moved to `state.json.corrupt` and weftd carries
+  on as if freshly installed; it never refuses to start.
+
 ### System metrics (optional)
 
 weftd can also ship host metrics alongside log lines. Opt in by

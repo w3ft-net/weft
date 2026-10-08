@@ -78,6 +78,7 @@ k8s:
 Chart resources:
 
 - `DaemonSet` with the weftd container.
+- A `hostPath` volume mounted at `/var/lib/weftd` for file-offset checkpoints (`docs/plans/weftd-offset-checkpointing.md`). Required, not optional: a container-local or `emptyDir` state dir dies with the pod, which loses every in-flight line on each reschedule or rollout.
 - `ServiceAccount` + `ClusterRole` (read-only on `pods` and `namespaces`) + `ClusterRoleBinding`.
 - `Secret` for the token, populated at install time.
 - `ConfigMap` rendered from values for runtime config.

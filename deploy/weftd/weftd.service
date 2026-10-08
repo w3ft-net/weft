@@ -11,6 +11,9 @@ StartLimitBurst=5
 [Service]
 Type=simple
 User=root
+# Persistent state (file-offset checkpoints) lives in /var/lib/weftd; systemd
+# creates it. A container-local or tmpfs state dir would defeat the point.
+StateDirectory=weftd
 # Optional: supplies WEFTD_TOKEN for the credential chain (env wins over
 # the file's token:). All structural config lives in the authored
 # /etc/weftd/config.yaml — there is no generated config anymore.

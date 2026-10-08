@@ -127,7 +127,8 @@ Handles standard log rotation patterns:
 
 - Detects rename/truncate (logrotate copytruncate)
 - Follows new file when the watched path is recreated
-- Tracks position via an offset file (`/var/lib/weftd/offsets.yaml`) to survive restarts
+- Drains the old file to EOF before switching to the new one, and rewinds on truncation
+- Persists a delivered-offset checkpoint per file (`/var/lib/weftd/checkpoints/state.json`) so restarts resume without gaps; see `docs/plans/weftd-offset-checkpointing.md` and the manual's "Resuming after a restart"
 
 ### Glob patterns
 

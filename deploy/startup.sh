@@ -208,6 +208,7 @@ After=network.target
 
 [Service]
 Type=simple
+StateDirectory=weftd
 ExecStart=/usr/local/bin/weftd --config=/etc/weftd/config.yaml
 Restart=always
 RestartSec=5

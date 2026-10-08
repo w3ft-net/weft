@@ -1,5 +1,7 @@
 # Plan: File-offset checkpointing in weftd
 
+**Status:** Phase 0 shipped to `main` (tailer rewrite). The stream-open coordinator work shipped to `main`. Phase 1 weftd side is implemented: `weftd/checkpoint.go` (store), `cmd/weftd/filetail.go` (acked-window shipper, shutdown drain), `cmd/weftd/checkpoint_config.go` (config), packaging, and manual. With checkpointing off (disabled, locked, or an unusable state dir) file tailing keeps the old single long-lived stream with no window or ack cycling. Not yet done: a per-host cap on total window memory, replay pacing / coordinator ring-buffer backpressure for large resumed backlogs, the bidirectional-ack alternative, and the overlap optimization above.
+
 Persist each tailed file's position to disk so weftd resumes where it left off across restarts, instead of unconditionally seeking to EOF on open — and make the persisted position mean "delivered", not "read", so resuming never skips rows that were in flight when weftd stopped.
 
 ## Why add this
@@ -149,7 +151,7 @@ Tests (failing first, per house rule — all of these fail on today's tailer):
 2. **Ack cycling.** Every `commit_interval` (default 15s), and whenever the window is full, half-close the stream (`CloseAndRecv`). On a successful response, commit the `End` of the last line in the window to the store, clear the window, and open a fresh stream. On stream error, open a fresh stream and **resend the whole window** (at-least-once; duplicates are the accepted cost, same as the spool plan).
    - Cost: one stream open per *active* file per `commit_interval`. Each open runs `authenticateStream`: three uncached SELECTs (`ValidateAgentToken` with `Preload("Organization")` and `Preload("Namespace")`) plus an `agent_tokens` `UPDATE` (`server.go:518-533`). A host with 50 active files at 15s is ~3.3 opens/s, i.e. ~10 SELECT/s and ~3.3 UPDATE/s per host, against a 1 GB t4g.micro shared with vimgym. **The coordinator work in "Stream-open cost" below must ship and deploy first.**
    - Streams open lazily on the first line and are never opened or cycled with an empty window, so cost scales with active files, not tailed files.
-   - Open the next stream before closing the old one, so the send path doesn't stall for the ack round trip.
+   - The ack round trip (`CloseAndRecv`) currently blocks the shipper's loop. The tailer's 1024-line channel absorbs it and the file is the buffer beyond that, so nothing is lost, but a busy file pauses for one RTT per cycle. Overlapping the next stream with the old one's ack is deferred: it needs strictly ordered commits across two outstanding windows, and a failed older ack has to force a resend of the newer one. Do it if the stall shows up in measurements.
    - `commit_interval` is jittered (±10%) per file so a fleet restarted together by self-update doesn't cycle in synchronized waves.
    - The coordinator idle reaper (`IngestStreamIdleTimeoutSeconds`) closes quiet streams with an error; that's just a stream error → resend → fine. On a quiet file, the empty window means nothing to resend.
 3. **Shutdown drain.** On `ctx.Done()`, flush the window using a fresh `context.WithTimeout(context.Background(), 5*time.Second)`, not the cancelled ctx. Commit only on a successful `CloseAndRecv`; whatever doesn't make it stays uncommitted and is re-read next start.
