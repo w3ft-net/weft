@@ -125,14 +125,38 @@ func identify(f *os.File) (FileID, error) {
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 		id.Dev, id.Ino = uint64(st.Dev), uint64(st.Ino) //nolint:unconvert // width differs per OS
 	}
+	id.FP, id.FPLen, err = fingerprintPrefix(f)
+	if err != nil {
+		return FileID{}, err
+	}
+	return id, nil
+}
+
+// fingerprintPrefix hashes up to the first fingerprintBytes of f and
+// reports how many bytes were hashed.
+func fingerprintPrefix(f *os.File) (string, int, error) {
 	buf := make([]byte, fingerprintBytes)
 	n, err := f.ReadAt(buf, 0)
 	if err != nil && err != io.EOF {
-		return FileID{}, err
+		return "", 0, err
 	}
 	sum := sha256.Sum256(buf[:n])
-	id.FP, id.FPLen = hex.EncodeToString(sum[:]), n
-	return id, nil
+	return hex.EncodeToString(sum[:]), n, nil
+}
+
+// fingerprint hashes the first n bytes of f. Resume uses it with the length
+// recorded at checkpoint time, so a file that has since grown still matches.
+func fingerprint(f *os.File, n int) (string, error) {
+	buf := make([]byte, n)
+	got, err := f.ReadAt(buf, 0)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	if got < n {
+		return "", io.ErrUnexpectedEOF // shorter than when checkpointed: not the same file
+	}
+	sum := sha256.Sum256(buf)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // Lines returns the channel of new log lines.
@@ -295,7 +319,21 @@ func (t *Tailer) takeLine() Line {
 		text += truncatedMarker
 	}
 	t.pending, t.skipped = t.pending[:0], 0
+	t.refreshIdentity()
 	return Line{Text: text, End: t.pos, File: t.id}
+}
+
+// refreshIdentity re-fingerprints a file that was shorter than
+// fingerprintBytes when opened, once it has grown. A checkpoint carrying the
+// short prefix hash would match almost any file; the full prefix is what makes
+// the identity meaningful. Stops costing anything once the prefix is full.
+func (t *Tailer) refreshIdentity() {
+	if t.id.FPLen >= fingerprintBytes || t.pos <= int64(t.id.FPLen) {
+		return
+	}
+	if fp, n, err := fingerprintPrefix(t.file); err == nil {
+		t.id.FP, t.id.FPLen = fp, n
+	}
 }
 
 // flushPartial emits an unterminated final line (end of a rotated file).

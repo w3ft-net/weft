@@ -210,3 +210,24 @@ func TestTailer_LinesCarryFileIdentity(t *testing.T) {
 		t.Errorf("identity not populated: %+v", l.File)
 	}
 }
+
+func TestTailer_FingerprintCompletesAsSmallFileGrows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.log")
+	appendFile(t, path, "")
+	tl, err := NewTailer(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tl.Close()
+
+	appendFile(t, path, "tiny\n")
+	first := nextLine(t, tl)
+	appendFile(t, path, strings.Repeat("y", 1500)+"\n")
+	big := nextLine(t, tl)
+	if big.File.FPLen != 1024 {
+		t.Fatalf("FPLen = %d after file passed 1 KiB, want 1024 (short prefix would match almost any file)", big.File.FPLen)
+	}
+	if big.File.FP == first.File.FP {
+		t.Error("fingerprint did not change when the prefix was extended")
+	}
+}
