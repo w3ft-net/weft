@@ -46,10 +46,29 @@ func TestIngestStream_RejectsDeletedCustomer(t *testing.T) {
 	custID, nsID := seedCustomerWithNamespace(t, custName, custName+"-ns")
 	ghostToken := seedAgentToken(t, custID, nsID, "ghost-agent")
 
-	// Sanity: the token validates BEFORE we delete the customer. If
-	// this fails the seeding scheme is wrong, not the validation.
-	if _, err := client.IngestStream(authedContext(ctx, ghostToken)); err != nil {
-		t.Fatalf("precondition: token rejected before customer delete: %v", err)
+	dbConn, err := sql.Open("pgx", postgresURL)
+	if err != nil {
+		t.Fatalf("open postgres: %v", err)
+	}
+	defer dbConn.Close()
+
+	// Sanity: the token row exists BEFORE we delete the customer. This checks
+	// the database, not a coordinator stream, on purpose: the coordinator
+	// caches validated tokens (store.EnableAuthCache, up to ~66s), so a stream
+	// opened here would warm the cache and the post-delete stream below would
+	// be served from it. That window for tokens revoked out-of-band is an
+	// accepted trade-off (docs/plans/weftd-offset-checkpointing.md, "Stream-open
+	// cost"); this test pins the other half of the contract: a token the
+	// coordinator has not seen is validated against the database and rejected
+	// once its row is gone.
+	var tokens int
+	if err := dbConn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM agent_tokens WHERE org_id = $1 AND revoked = false`, custID,
+	).Scan(&tokens); err != nil {
+		t.Fatalf("count agent tokens: %v", err)
+	}
+	if tokens != 1 {
+		t.Fatalf("precondition: want 1 live agent token for the ghost customer, got %d", tokens)
 	}
 
 	// ── 2. Delete the customer directly from Postgres — mirrors what
@@ -59,11 +78,6 @@ func TestIngestStream_RejectsDeletedCustomer(t *testing.T) {
 	deleteOrg(t, custName)
 
 	// Verify the customer row really is gone (paranoia, but cheap).
-	dbConn, err := sql.Open("pgx", postgresURL)
-	if err != nil {
-		t.Fatalf("open postgres: %v", err)
-	}
-	defer dbConn.Close()
 	var remaining int
 	if err := dbConn.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM organizations WHERE name = $1`, custName,
