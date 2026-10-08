@@ -166,6 +166,7 @@ func TestTouchHeartbeat_PersistsLastHeartbeatAt(t *testing.T) {
 	entry.mu.Lock()
 	entry.LastHeartbeatAt = hbAt
 	entry.RowCount = 42
+	entry.DiskBytes = 7 << 30
 	entry.BinarySHA = "deadbeefcafe1234"
 	entry.mu.Unlock()
 	reg.TouchHeartbeat(entry)
@@ -183,6 +184,9 @@ func TestTouchHeartbeat_PersistsLastHeartbeatAt(t *testing.T) {
 	}
 	if rec.RowCount != 42 {
 		t.Fatalf("row_count: got %d, want 42", rec.RowCount)
+	}
+	if rec.DiskBytes != 7<<30 {
+		t.Fatalf("disk_bytes: got %d, want %d (export sizing reads it from shard_records)", rec.DiskBytes, int64(7<<30))
 	}
 	if rec.BinarySHA != "deadbeefcafe1234" {
 		t.Fatalf("binary_sha: got %q, want %q (TouchHeartbeat must persist the build SHA so weft-admin can skip shards already on the target)", rec.BinarySHA, "deadbeefcafe1234")

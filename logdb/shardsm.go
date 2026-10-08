@@ -888,6 +888,9 @@ func (sh *Shard) configureOnHeartbeat(_ context.Context, args ...any) error {
 	if hb.RowCount > 0 {
 		sh.RowCount = hb.RowCount
 	}
+	if hb.DiskBytes > 0 {
+		sh.DiskBytes = hb.DiskBytes
+	}
 	if hb.BinarySHA != "" {
 		sh.BinarySHA = hb.BinarySHA
 	}
@@ -968,15 +971,30 @@ func (sh *Shard) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat) 
 	}
 
 	sh.mu.Lock()
-	sh.LastHeartbeatAt = sh.deps.Clock()
-	if hb.RowCount > 0 {
-		sh.RowCount = hb.RowCount
+	// Stamp when the beat happened, not when it was replayed: the catch-up
+	// sweep re-delivers beats up to a minute old, and stamping Clock() for
+	// those would keep a dead shard looking alive. Never move backwards, so
+	// the sweep re-delivering the beat the Heartbeat RPC already recorded
+	// changes nothing, and neither does it cost a write.
+	changed := false
+	if at := sh.deps.Clock().Add(-hb.Age); at.After(sh.LastHeartbeatAt) {
+		sh.LastHeartbeatAt = at
+		changed = true
 	}
-	if hb.BinarySHA != "" {
+	if hb.RowCount > 0 && hb.RowCount != sh.RowCount {
+		sh.RowCount = hb.RowCount
+		changed = true
+	}
+	if hb.DiskBytes > 0 && hb.DiskBytes != sh.DiskBytes {
+		sh.DiskBytes = hb.DiskBytes
+		changed = true
+	}
+	if hb.BinarySHA != "" && hb.BinarySHA != sh.BinarySHA {
 		sh.BinarySHA = hb.BinarySHA
+		changed = true
 	}
 	sh.mu.Unlock()
-	if sh.deps.Registry != nil {
+	if changed && sh.deps.Registry != nil {
 		sh.deps.Registry.TouchHeartbeat(sh)
 	}
 }

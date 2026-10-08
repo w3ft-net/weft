@@ -38,6 +38,8 @@ type fakeRegistryStore struct {
 	// from saves (SaveShard) since RecordIngestFailure/ResetIngestFailures
 	// persist via the narrow write, not a full SaveShard.
 	ingestFailureWrites int
+	// touches counts TouchHeartbeat calls.
+	touches int
 }
 
 func newFakeRegistryStore() *fakeRegistryStore {
@@ -85,11 +87,13 @@ func (f *fakeRegistryStore) GetShard(id string) (*Shard, bool, error) {
 	return r.persistedCopy(), true, nil
 }
 
-func (f *fakeRegistryStore) TouchHeartbeat(id string, rowCount int64, at time.Time, binarySHA string) error {
+func (f *fakeRegistryStore) TouchHeartbeat(id string, rowCount int64, at time.Time, binarySHA string, diskBytes int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.touches++
 	if rec, ok := f.records[id]; ok {
 		rec.RowCount = rowCount
+		rec.DiskBytes = diskBytes
 		rec.LastHeartbeatAt = at
 		rec.BinarySHA = binarySHA
 	}

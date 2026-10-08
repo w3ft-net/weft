@@ -208,9 +208,7 @@ func newExportFixture(t *testing.T, customize ...func(*ShardDeps)) *exportFixtur
 // heartbeat records a heartbeat whose disk footprint drives the instance sizing.
 func (f *exportFixture) heartbeat(t *testing.T, diskBytes int64) {
 	t.Helper()
-	if err := f.db.DB().Exec(`
-		INSERT INTO shard_heartbeats (shard_id, addr, instance_id, state, row_count, disk_bytes, beat_at)
-		VALUES ('s-test', '', '', 'READ_ONLY', 0, ?, ?)`, diskBytes, f.clock.Add(-time.Minute)).Error; err != nil {
+	if err := f.ss.TouchHeartbeat("s-test", 0, f.clock.Add(-time.Minute), "", diskBytes); err != nil {
 		t.Fatalf("seed heartbeat: %v", err)
 	}
 }

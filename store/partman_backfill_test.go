@@ -12,7 +12,8 @@ import (
 // create_parent calls and the collapsed migrations that ran them were
 // deleted) — so partman/retention was inert on every non-prod env.
 //
-// 050 reconstructs create_parent for all 7 managed tables. The cron
+// 050 reconstructs create_parent for every managed table (shard_heartbeats
+// left that set in migration 081). The cron
 // jobs are NOT asserted here: pg_cron only exists in the prod cron
 // database, so on weft_test the cron.schedule block is expected to be
 // skipped (tolerated) — see migration 050's guarded DO block.
@@ -24,7 +25,6 @@ func TestPartmanBackfill(t *testing.T) {
 		"public.cron_results_4h",
 		"public.cron_results_daily",
 		"public.cron_results_hourly",
-		"public.shard_heartbeats",
 		"public.tmp_file_lines",
 		"public.tmp_files",
 	}

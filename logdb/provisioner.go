@@ -32,10 +32,17 @@ var (
 	ErrShardHasResources    = errors.New("shard still owns an instance or volume")
 )
 
+// heartbeatRetention is how long a shard_heartbeats row survives without a
+// refresh. Far longer than any reader looks back (adoptFromHeartbeats reads one
+// minute), so it only bounds the table; the hour keeps a replaced instance's
+// last beat around for debugging.
+const heartbeatRetention = time.Hour
+
 // HeartbeatStore is the interface the provisioner needs for heartbeat operations.
 type HeartbeatStore interface {
 	LiveShardHeartbeats(since string) ([]store.ShardHeartbeat, error)
-	InsertHeartbeat(hb *store.ShardHeartbeat) error
+	RecordHeartbeat(hb *store.ShardHeartbeat) error
+	PruneShardHeartbeats(maxAge time.Duration) error
 }
 
 // ShardOpsStore is the shard_records read/stamp surface the provisioner
@@ -485,6 +492,12 @@ func (p *Provisioner) adoptFromHeartbeats() {
 		log.Printf("provisioner: heartbeat query failed: %v", err)
 		return
 	}
+	// The table keeps one row per source, so expired rows (replaced
+	// instances, christened ones, gone shards) are the only thing to trim.
+	// Idempotent and a handful of rows, so every coordinator may run it.
+	if err := p.config.Store.PruneShardHeartbeats(heartbeatRetention); err != nil {
+		log.Printf("provisioner: prune shard_heartbeats: %v", err)
+	}
 
 	for _, hb := range heartbeats {
 		p.ProcessHeartbeat(hb)
@@ -605,7 +618,7 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 // evaluateStateMachines. A non-leader coordinator that happens to receive
 // this heartbeat's RPC (heartbeats aren't sticky-routed to the leader)
 // silently drops it here — the persisted row from Server.Heartbeat's
-// InsertHeartbeat is unaffected, so the leader's own adoptFromHeartbeats
+// RecordHeartbeat is unaffected, so the leader's own adoptFromHeartbeats
 // catch-up sweep (unconditional, every tick) picks it up within one
 // PollInterval. See docs/plans/coordinator-horizontal-scaling.md #5.
 func (p *Provisioner) promoteOnHeartbeat(ctx context.Context, e *Shard, hb store.ShardHeartbeat) {

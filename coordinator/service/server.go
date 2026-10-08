@@ -1058,7 +1058,7 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 	// Persistence is opt-in: a Store-less Server still validates and
 	// dispatches, it just doesn't keep a row.
 	if s.Store != nil {
-		if err := s.Store.InsertHeartbeat(&hb); err != nil {
+		if err := s.Store.RecordHeartbeat(&hb); err != nil {
 			log.Printf("heartbeat: failed to persist for %s: %v", req.ShardId, err)
 		}
 	}

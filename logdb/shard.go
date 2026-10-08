@@ -113,7 +113,7 @@ func (s ShardStore) DeleteShard(id string) error {
 	return s.db().Delete(&Shard{}, "id = ?", id).Error
 }
 
-// TouchHeartbeat updates the heartbeat-owned fields (row_count,
+// TouchHeartbeat updates the heartbeat-owned fields (row_count, disk_bytes,
 // last_heartbeat_at, binary_sha) and nothing else — window bounds, state,
 // and services are left untouched so manual DB edits or reconciler-driven
 // changes aren't clobbered. Written via a map (not a struct) so a zero
@@ -121,13 +121,18 @@ func (s ShardStore) DeleteShard(id string) error {
 // so the column matches the in-memory LastHeartbeatAt that isStale()
 // consults at runtime. binarySHA is the shard's compile-time GitSHA — what
 // weft-admin reads to skip rolling a shard already on the target binary.
-func (s ShardStore) TouchHeartbeat(id string, rowCount int64, at time.Time, binarySHA string) error {
-	return s.db().Model(&Shard{}).Where("id = ?", id).
-		Updates(map[string]any{
-			"row_count":         rowCount,
-			"last_heartbeat_at": at,
-			"binary_sha":        binarySHA,
-		}).Error
+// diskBytes is only written when positive: a beat that doesn't report a
+// footprint must not erase the last known one, which sizes the export host.
+func (s ShardStore) TouchHeartbeat(id string, rowCount int64, at time.Time, binarySHA string, diskBytes int64) error {
+	cols := map[string]any{
+		"row_count":         rowCount,
+		"last_heartbeat_at": at,
+		"binary_sha":        binarySHA,
+	}
+	if diskBytes > 0 {
+		cols["disk_bytes"] = diskBytes
+	}
+	return s.db().Model(&Shard{}).Where("id = ?", id).Updates(cols).Error
 }
 
 // SetShardLaunchResult persists the identifiers a successful launch
@@ -353,15 +358,16 @@ func (s ShardStore) StuckArchiving(before time.Time) ([]StuckShard, error) {
 	return out, err
 }
 
-// LatestShardDiskBytes returns the disk footprint (.duckdb + WAL + spill) in
-// the shard's most recent heartbeat, or 0 if it has none. It sizes the export
-// instance; the WAL and spill make it a slight overestimate of the .duckdb
-// alone, which errs toward a bigger instance.
+// LatestShardDiskBytes returns the disk footprint (.duckdb + WAL + spill) from
+// the shard's most recent heartbeat that reported one, or 0 if it never has.
+// It sizes the export instance; the WAL and spill make it a slight
+// overestimate of the .duckdb alone, which errs toward a bigger instance.
+// Read from shard_records rather than shard_heartbeats: the heartbeat table
+// is transient and pruned, and this must still answer long after the shard's
+// instance stopped beating.
 func (s ShardStore) LatestShardDiskBytes(id string) (int64, error) {
 	var rows []struct{ DiskBytes int64 }
-	err := s.db().Raw(`
-		SELECT disk_bytes FROM shard_heartbeats
-		WHERE shard_id = ? ORDER BY beat_at DESC LIMIT 1`, id).Scan(&rows).Error
+	err := s.db().Raw(`SELECT disk_bytes FROM shard_records WHERE id = ?`, id).Scan(&rows).Error
 	if err != nil || len(rows) == 0 {
 		return 0, err
 	}

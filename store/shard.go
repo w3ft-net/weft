@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"time"
 )
 
 // The shard row model (formerly store.ShardRecord) and its row methods now
@@ -49,30 +50,65 @@ type ShardHeartbeat struct {
 	State      string
 	RowCount   int64
 	DiskBytes  int64
-	BinarySHA  string // shard binary's compile-time GitSHA; weft-admin reads it for skip-if-current. Not persisted to the heartbeat log table.
-	BeatAt     string // RFC3339
+	BinarySHA  string // shard binary's compile-time GitSHA; weft-admin reads it for skip-if-current. Not persisted to the heartbeat table.
+	// Age is how long before it was read this beat was recorded, by the
+	// database's own clock. Zero for a beat just received over RPC. Carried as
+	// an age rather than a timestamp so replaying it needs no agreement
+	// between the coordinator's clock and the database's.
+	Age time.Duration
 }
 
-// InsertHeartbeat writes a heartbeat row. Uses raw SQL since the table
-// is partitioned and not managed by GORM AutoMigrate.
-func (s *Store) InsertHeartbeat(hb *ShardHeartbeat) error {
+// RecordHeartbeat upserts the latest beat for this source. The table is a
+// "who is alive right now" view, not a log: one row per (shard_id,
+// instance_id), where an unclaimed instance beats with an empty shard_id.
+// Raw SQL because the table isn't managed by GORM AutoMigrate.
+func (s *Store) RecordHeartbeat(hb *ShardHeartbeat) error {
 	return s.db.Exec(`
-		INSERT INTO shard_heartbeats (shard_id, addr, instance_id, state, row_count, disk_bytes, beat_at)
-		VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-		hb.ShardID, hb.Addr, hb.InstanceID, hb.State, hb.RowCount, hb.DiskBytes).Error
+		INSERT INTO shard_heartbeats (shard_id, instance_id, addr, state, row_count, disk_bytes, beat_at)
+		VALUES (?, ?, ?, ?, ?, ?, NOW())
+		ON CONFLICT (shard_id, instance_id) DO UPDATE SET
+			addr = EXCLUDED.addr, state = EXCLUDED.state, row_count = EXCLUDED.row_count,
+			disk_bytes = EXCLUDED.disk_bytes, beat_at = EXCLUDED.beat_at`,
+		hb.ShardID, hb.InstanceID, hb.Addr, hb.State, hb.RowCount, hb.DiskBytes).Error
 }
 
-// LiveShardHeartbeats returns the most recent heartbeat per shard
-// where beat_at is within the given duration. A shard with no heartbeat
-// in this window is considered dead.
+// LiveShardHeartbeats returns the beats within the given duration: the newest
+// per claimed shard (a replaced instance's old row must not resurface its dead
+// addr), and every unclaimed instance's own beat. A shard with no beat in this
+// window is considered dead.
 func (s *Store) LiveShardHeartbeats(since string) ([]ShardHeartbeat, error) {
-	var results []ShardHeartbeat
+	var rows []struct {
+		ShardHeartbeat
+		AgeSeconds float64
+	}
 	err := s.db.Raw(`
-		SELECT DISTINCT ON (shard_id)
-			shard_id, addr, instance_id, state, row_count, disk_bytes, beat_at
+		(SELECT DISTINCT ON (shard_id)
+			shard_id, addr, instance_id, state, row_count, disk_bytes,
+			EXTRACT(EPOCH FROM NOW() - beat_at)::float8 AS age_seconds
 		FROM shard_heartbeats
-		WHERE beat_at > NOW() - ?::interval
-		ORDER BY shard_id, beat_at DESC`,
-		since).Scan(&results).Error
-	return results, err
+		WHERE shard_id <> '' AND beat_at > NOW() - ?::interval
+		ORDER BY shard_id, beat_at DESC)
+		UNION ALL
+		(SELECT shard_id, addr, instance_id, state, row_count, disk_bytes,
+			EXTRACT(EPOCH FROM NOW() - beat_at)::float8 AS age_seconds
+		FROM shard_heartbeats
+		WHERE shard_id = '' AND beat_at > NOW() - ?::interval)`,
+		since, since).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	results := make([]ShardHeartbeat, len(rows))
+	for i, r := range rows {
+		results[i] = r.ShardHeartbeat
+		results[i].Age = time.Duration(r.AgeSeconds * float64(time.Second))
+	}
+	return results, nil
+}
+
+// PruneShardHeartbeats deletes rows not refreshed within maxAge: replaced
+// instances, unclaimed instances that have since been christened, and shards
+// that are gone.
+func (s *Store) PruneShardHeartbeats(maxAge time.Duration) error {
+	return s.db.Exec(`DELETE FROM shard_heartbeats WHERE beat_at < NOW() - make_interval(secs => ?)`,
+		maxAge.Seconds()).Error
 }

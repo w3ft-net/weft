@@ -150,7 +150,11 @@ func (m *mockHeartbeatStore) LiveShardHeartbeats(since string) ([]store.ShardHea
 	return m.heartbeats, nil
 }
 
-func (m *mockHeartbeatStore) InsertHeartbeat(hb *store.ShardHeartbeat) error {
+func (m *mockHeartbeatStore) RecordHeartbeat(hb *store.ShardHeartbeat) error {
+	return nil
+}
+
+func (m *mockHeartbeatStore) PruneShardHeartbeats(time.Duration) error {
 	return nil
 }
 

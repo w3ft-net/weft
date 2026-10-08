@@ -300,22 +300,28 @@ func TestRefreshFromStore_SyncsExportFacts(t *testing.T) {
 }
 
 func TestShardStore_LatestShardDiskBytes(t *testing.T) {
-	ss, db := exportFactsFixture(t)
+	ss, _ := exportFactsFixture(t)
 	if n, err := ss.LatestShardDiskBytes("s-test"); err != nil || n != 0 {
-		t.Fatalf("no heartbeats: n=%d err=%v, want 0 and no error", n, err)
+		t.Fatalf("no heartbeats yet: n=%d err=%v, want 0 and no error", n, err)
 	}
-	// Explicit beat_at: InsertHeartbeat stamps NOW(), which is constant within
-	// the test's transaction and would collide on the primary key.
-	now := time.Now()
-	for i, disk := range []int64{100, 300} {
-		beatAt := now.Add(time.Duration(i) * time.Minute)
-		if err := db.DB().Exec(`
-			INSERT INTO shard_heartbeats (shard_id, addr, instance_id, state, row_count, disk_bytes, beat_at)
-			VALUES (?, '', '', 'READ_ONLY', 0, ?, ?)`, "s-test", disk, beatAt).Error; err != nil {
+	// The footprint lives on shard_records (written by TouchHeartbeat), so it
+	// outlives the transient shard_heartbeats rows and a database restart.
+	for _, disk := range []int64{100, 300} {
+		if err := ss.TouchHeartbeat("s-test", 0, time.Now(), "", disk); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if n, err := ss.LatestShardDiskBytes("s-test"); err != nil || n != 300 {
 		t.Fatalf("latest disk bytes = %d err=%v, want 300 (the newest heartbeat)", n, err)
+	}
+	// A beat that doesn't report a footprint must not erase the last known one.
+	if err := ss.TouchHeartbeat("s-test", 0, time.Now(), "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := ss.LatestShardDiskBytes("s-test"); err != nil || n != 300 {
+		t.Fatalf("after a beat reporting 0: disk bytes = %d err=%v, want 300 (kept)", n, err)
+	}
+	if n, err := ss.LatestShardDiskBytes("s-unknown"); err != nil || n != 0 {
+		t.Fatalf("unknown shard: n=%d err=%v, want 0 and no error", n, err)
 	}
 }

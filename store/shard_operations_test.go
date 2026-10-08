@@ -90,3 +90,27 @@ func TestShardOperationsAuditTrigger(t *testing.T) {
 	}
 	want(latest(), "INGESTING", "NULL")
 }
+
+// The audit function ignores UPDATEs that don't change state, but a plain
+// row trigger still invokes it for every one of them, and the heartbeat path
+// updates shard_records every few seconds per shard. The UPDATE trigger must
+// filter in its WHEN clause so those never call into plpgsql at all.
+func TestShardOperationsAuditTriggerOnlyFiresOnStateChange(t *testing.T) {
+	db := testOpen(t)
+
+	var unfiltered []string
+	if err := db.db.Raw(`
+		SELECT t.tgname
+		FROM pg_trigger t
+		JOIN pg_proc p ON p.oid = t.tgfoid
+		WHERE t.tgrelid = 'public.shard_records'::regclass
+		  AND NOT t.tgisinternal
+		  AND p.proname = 'log_shard_operation'
+		  AND (t.tgtype & 16) <> 0          -- fires on UPDATE
+		  AND t.tgqual IS NULL              -- with no WHEN condition`).Scan(&unfiltered).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(unfiltered) > 0 {
+		t.Fatalf("triggers firing the audit function on every shard_records UPDATE: %v", unfiltered)
+	}
+}

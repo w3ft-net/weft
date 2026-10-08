@@ -57,6 +57,10 @@ type Shard struct {
 	LaunchAttempts  int        `gorm:"not null;default:0;column:launch_attempts"` // per-shard launch retry counter
 	BinarySHA       string     `gorm:"not null;default:'';column:binary_sha"`     // shard's compile-time GitSHA from its heartbeat; weft-admin skips a shard whose SHA already matches the target binary
 
+	// DiskBytes is the last non-zero footprint (.duckdb + WAL + spill) the shard
+	// reported (migration 081); it sizes the archive export host.
+	DiskBytes int64 `gorm:"not null;default:0;column:disk_bytes"`
+
 	// ── ephemeral archive export (migration 080) ──
 	// The persisted facts evaluateArchiving derives the export's phase from
 	// (docs/plans/ephemeral-archive-export.md). ExportAttempt is monotonic and
@@ -189,7 +193,7 @@ type RegistryStore interface {
 	DeleteShard(id string) error
 	ListShards() ([]*Shard, error)
 	GetShard(id string) (*Shard, bool, error)
-	TouchHeartbeat(id string, rowCount int64, at time.Time, binarySHA string) error
+	TouchHeartbeat(id string, rowCount int64, at time.Time, binarySHA string, diskBytes int64) error
 	// SetShardIngestFailures persists the consecutive-ingest-failure
 	// counter. Narrow write, mirroring TouchHeartbeat — see
 	// RecordIngestFailure/ResetIngestFailures.
@@ -270,6 +274,7 @@ func (e *Shard) persistedCopy() *Shard {
 		ParquetPath:     e.ParquetPath,
 		Tier:            e.Tier,
 		RowCount:        e.RowCount,
+		DiskBytes:       e.DiskBytes,
 		CreatedAt:       e.CreatedAt,
 		EBSVolumeID:     e.EBSVolumeID,
 		HeartbeatToken:  e.HeartbeatToken,
@@ -308,7 +313,7 @@ func (r *ShardRegistry) PersistState(entry *Shard) {
 }
 
 // TouchHeartbeat persists only the heartbeat-owned fields (row_count,
-// last_heartbeat_at, and binary_sha) without overwriting lifecycle-owned
+// disk_bytes, last_heartbeat_at, and binary_sha) without overwriting lifecycle-owned
 // fields like window bounds, state, or apps. Prevents the heartbeat path
 // from clobbering manual DB edits or reconciler-driven state changes.
 func (r *ShardRegistry) TouchHeartbeat(entry *Shard) {
@@ -319,8 +324,9 @@ func (r *ShardRegistry) TouchHeartbeat(entry *Shard) {
 	rowCount := entry.RowCount
 	at := entry.LastHeartbeatAt
 	sha := entry.BinarySHA
+	disk := entry.DiskBytes
 	entry.mu.RUnlock()
-	if err := r.store.TouchHeartbeat(entry.ID, rowCount, at, sha); err != nil {
+	if err := r.store.TouchHeartbeat(entry.ID, rowCount, at, sha, disk); err != nil {
 		log.Printf("registry: touch heartbeat %s: %v", entry.ID, err)
 	}
 }
@@ -360,6 +366,7 @@ func (r *ShardRegistry) RefreshFromStore() {
 		entry.ParquetPath = f.ParquetPath
 		entry.Tier = f.Tier
 		entry.RowCount = f.RowCount
+		entry.DiskBytes = f.DiskBytes
 		entry.EBSVolumeID = f.EBSVolumeID
 		entry.HeartbeatToken = f.HeartbeatToken
 		entry.BucketID = f.BucketID

@@ -300,7 +300,7 @@ Single Postgres DB (gorm auto-migrate) holds all configuration and metadata:
 
 **Operational:** AgentToken, ShardRecord (includes `ebs_volume_id` cache of the shard's data volume — authoritative binding is the volume's `tag:shard_id`, this column is a coordinator-side convenience), LogGroup, ShellFunction, CronWatch, CronResult, NotifyConfig, AlertIncident, SavedQuery
 
-**Metered:** usage_hourly / usage_daily (pg_partman partitioned), ingestion_errors, shard_heartbeats
+**Metered:** usage_hourly / usage_daily (pg_partman partitioned), ingestion_errors, shard_heartbeats (latest beat per source, pruned hourly; not partitioned)
 
 ## Frontend
 
