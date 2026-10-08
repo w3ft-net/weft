@@ -11,7 +11,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict PoHbz82gOO3yHzmFx5sbO5ommDdYnIKmUqtdnpAc68bsLJYIebrguVTWi20rafP
+\restrict HM1FYywopcbBrqph62FyAFVxT2lbVhFyTMMZobsAHBJR3mYImpV5wMWR6hl84je
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -534,21 +534,6 @@ CREATE TABLE partman.template_public_cron_results_hourly (
     sum_sq double precision NOT NULL,
     min double precision NOT NULL,
     max double precision NOT NULL
-);
-
-
---
--- Name: template_public_shard_heartbeats; Type: TABLE; Schema: partman; Owner: -
---
-
-CREATE TABLE partman.template_public_shard_heartbeats (
-    shard_id text NOT NULL,
-    addr text NOT NULL,
-    instance_id text,
-    state text NOT NULL,
-    row_count bigint NOT NULL,
-    disk_bytes bigint NOT NULL,
-    beat_at timestamp with time zone NOT NULL
 );
 
 
@@ -1505,24 +1490,8 @@ CREATE TABLE public.shard_archive_stats (
 
 CREATE TABLE public.shard_heartbeats (
     shard_id text NOT NULL,
+    instance_id text DEFAULT ''::text NOT NULL,
     addr text NOT NULL,
-    instance_id text,
-    state text NOT NULL,
-    row_count bigint DEFAULT 0 NOT NULL,
-    disk_bytes bigint DEFAULT 0 NOT NULL,
-    beat_at timestamp with time zone NOT NULL
-)
-PARTITION BY RANGE (beat_at);
-
-
---
--- Name: shard_heartbeats_default; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.shard_heartbeats_default (
-    shard_id text NOT NULL,
-    addr text NOT NULL,
-    instance_id text,
     state text NOT NULL,
     row_count bigint DEFAULT 0 NOT NULL,
     disk_bytes bigint DEFAULT 0 NOT NULL,
@@ -1572,7 +1541,8 @@ CREATE TABLE public.shard_records (
     export_instance_id text,
     export_instance_type text,
     export_started_at timestamp with time zone,
-    export_attempt integer DEFAULT 0 NOT NULL
+    export_attempt integer DEFAULT 0 NOT NULL,
+    disk_bytes bigint DEFAULT 0 NOT NULL
 );
 
 
@@ -1935,13 +1905,6 @@ ALTER TABLE ONLY public.cron_results ATTACH PARTITION public.cron_results_defaul
 --
 
 ALTER TABLE ONLY public.cron_results_hourly ATTACH PARTITION public.cron_results_hourly_default DEFAULT;
-
-
---
--- Name: shard_heartbeats_default; Type: TABLE ATTACH; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats ATTACH PARTITION public.shard_heartbeats_default DEFAULT;
 
 
 --
@@ -2349,15 +2312,7 @@ ALTER TABLE ONLY public.shard_archive_stats
 --
 
 ALTER TABLE ONLY public.shard_heartbeats
-    ADD CONSTRAINT shard_heartbeats_pkey PRIMARY KEY (shard_id, beat_at);
-
-
---
--- Name: shard_heartbeats_default shard_heartbeats_default_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.shard_heartbeats_default
-    ADD CONSTRAINT shard_heartbeats_default_pkey PRIMARY KEY (shard_id, beat_at);
+    ADD CONSTRAINT shard_heartbeats_pkey PRIMARY KEY (shard_id, instance_id);
 
 
 --
@@ -2945,6 +2900,13 @@ CREATE INDEX shard_archive_stats_org_idx ON public.shard_archive_stats USING btr
 
 
 --
+-- Name: shard_heartbeats_beat_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX shard_heartbeats_beat_at_idx ON public.shard_heartbeats USING btree (beat_at);
+
+
+--
 -- Name: tmp_file_lines_default_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3029,13 +2991,6 @@ ALTER INDEX public.cron_results_hourly_pkey ATTACH PARTITION public.cron_results
 
 
 --
--- Name: shard_heartbeats_default_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.shard_heartbeats_pkey ATTACH PARTITION public.shard_heartbeats_default_pkey;
-
-
---
 -- Name: tmp_file_lines_default_file_id_line_num_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -3099,10 +3054,17 @@ CREATE TRIGGER log_groups_fill_org_id_bi BEFORE INSERT OR UPDATE ON public.log_g
 
 
 --
--- Name: shard_records shard_records_audit; Type: TRIGGER; Schema: public; Owner: -
+-- Name: shard_records shard_records_audit_row; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER shard_records_audit AFTER INSERT OR DELETE OR UPDATE ON public.shard_records FOR EACH ROW EXECUTE FUNCTION public.log_shard_operation();
+CREATE TRIGGER shard_records_audit_row AFTER INSERT OR DELETE ON public.shard_records FOR EACH ROW EXECUTE FUNCTION public.log_shard_operation();
+
+
+--
+-- Name: shard_records shard_records_audit_state; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER shard_records_audit_state AFTER UPDATE ON public.shard_records FOR EACH ROW WHEN ((old.state IS DISTINCT FROM new.state)) EXECUTE FUNCTION public.log_shard_operation();
 
 
 --
@@ -3252,13 +3214,13 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict PoHbz82gOO3yHzmFx5sbO5ommDdYnIKmUqtdnpAc68bsLJYIebrguVTWi20rafP
+\unrestrict HM1FYywopcbBrqph62FyAFVxT2lbVhFyTMMZobsAHBJR3mYImpV5wMWR6hl84je
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict UXDkooNyoKtlWYsafN7eBaTqSHFBN5UfSNOOPD8CocByp1eDgA0fsJxjwBBC397
+\restrict 3M7qITwrJiXg7Wrv216VBNJUMZiOieWQYk75tNe9WSj2sTa4xncdRx1YPKRbTbJ
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -3292,13 +3254,13 @@ SELECT pg_catalog.setval('public.buckets_new_id_seq', 1, true);
 -- PostgreSQL database dump complete
 --
 
-\unrestrict UXDkooNyoKtlWYsafN7eBaTqSHFBN5UfSNOOPD8CocByp1eDgA0fsJxjwBBC397
+\unrestrict 3M7qITwrJiXg7Wrv216VBNJUMZiOieWQYk75tNe9WSj2sTa4xncdRx1YPKRbTbJ
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict bPAdpexTNw5sOcjUiHITBBAQmTfDOoBJp1JAG0K6B6Q6bLaAFdydbtvQtKmnylP
+\restrict CQVO4rgg8ExsQEwm7snVXoZUgO4tvwpAB3ND33X5xyfy0EGy3qduoZpyEZlhiDO
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -3397,20 +3359,22 @@ INSERT INTO public.goose_db_version VALUES (76, 77, true, '2026-09-23 16:02:05.0
 INSERT INTO public.goose_db_version VALUES (77, 78, true, '2026-10-03 20:21:23.03192');
 INSERT INTO public.goose_db_version VALUES (78, 79, true, '2026-10-05 01:04:59.866881');
 INSERT INTO public.goose_db_version VALUES (79, 80, true, '2026-10-06 21:54:55.931878');
+INSERT INTO public.goose_db_version VALUES (80, 81, true, '2026-10-08 22:12:06.185391');
+INSERT INTO public.goose_db_version VALUES (81, 82, true, '2026-10-08 22:12:06.201991');
 
 
 --
 -- Name: goose_db_version_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.goose_db_version_id_seq', 79, true);
+SELECT pg_catalog.setval('public.goose_db_version_id_seq', 81, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict bPAdpexTNw5sOcjUiHITBBAQmTfDOoBJp1JAG0K6B6Q6bLaAFdydbtvQtKmnylP
+\unrestrict CQVO4rgg8ExsQEwm7snVXoZUgO4tvwpAB3ND33X5xyfy0EGy3qduoZpyEZlhiDO
 
 
 -- +weft partman/cron reconstruction (generated by scripts/collapse-migrations.sh; do not hand-edit)
@@ -3418,7 +3382,6 @@ DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_tab
 DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.cron_results_4h') THEN PERFORM partman.create_parent(p_parent_table:='public.cron_results_4h',p_control:='bucket_start',p_type:='range',p_interval:='7 days',p_template_table:='partman.template_public_cron_results_4h',p_premake:=3,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
 DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.cron_results_daily') THEN PERFORM partman.create_parent(p_parent_table:='public.cron_results_daily',p_control:='bucket_start',p_type:='range',p_interval:='1 mon',p_template_table:='partman.template_public_cron_results_daily',p_premake:=3,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
 DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.cron_results_hourly') THEN PERFORM partman.create_parent(p_parent_table:='public.cron_results_hourly',p_control:='bucket_start',p_type:='range',p_interval:='1 day',p_template_table:='partman.template_public_cron_results_hourly',p_premake:=3,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
-DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.shard_heartbeats') THEN PERFORM partman.create_parent(p_parent_table:='public.shard_heartbeats',p_control:='beat_at',p_type:='range',p_interval:='01:00:00',p_template_table:='partman.template_public_shard_heartbeats',p_premake:=2,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
 DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.tmp_file_lines') THEN PERFORM partman.create_parent(p_parent_table:='public.tmp_file_lines',p_control:='updated_at',p_type:='range',p_interval:='01:00:00',p_template_table:='partman.template_public_tmp_file_lines',p_premake:=4,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
 DO $wpm$ BEGIN IF NOT EXISTS (SELECT 1 FROM partman.part_config WHERE parent_table='public.tmp_files') THEN PERFORM partman.create_parent(p_parent_table:='public.tmp_files',p_control:='updated_at',p_type:='range',p_interval:='01:00:00',p_template_table:='partman.template_public_tmp_files',p_premake:=4,p_automatic_maintenance:='on',p_default_table:=false); END IF; END $wpm$;
 
@@ -3426,7 +3389,6 @@ UPDATE partman.part_config SET retention='7 days',retention_keep_table='f',reten
 UPDATE partman.part_config SET retention='35 days',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=3,automatic_maintenance='on' WHERE parent_table='public.cron_results_4h';
 UPDATE partman.part_config SET retention='400 days',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=3,automatic_maintenance='on' WHERE parent_table='public.cron_results_daily';
 UPDATE partman.part_config SET retention='14 days',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=3,automatic_maintenance='on' WHERE parent_table='public.cron_results_hourly';
-UPDATE partman.part_config SET retention='5 minutes',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=2,automatic_maintenance='on' WHERE parent_table='public.shard_heartbeats';
 UPDATE partman.part_config SET retention='48 hours',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=4,automatic_maintenance='on' WHERE parent_table='public.tmp_file_lines';
 UPDATE partman.part_config SET retention='48 hours',retention_keep_table='f',retention_keep_index='t',infinite_time_partitions='f',premake=4,automatic_maintenance='on' WHERE parent_table='public.tmp_files';
 
