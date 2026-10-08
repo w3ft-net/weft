@@ -31,10 +31,13 @@ import (
 // IsOwner is about member management (inviting, granting, removing), not
 // about these four bits.
 type Session struct {
-	UserID              string
-	Email               string
-	ActiveOrgID         store.OrgID
-	ActiveCustomerName  string
+	UserID             string
+	Email              string
+	ActiveOrgID        store.OrgID
+	ActiveCustomerName string
+	// LastActiveOrgID is what users.last_active_org_id held when the session
+	// was built, so callers can tell whether pinning ActiveOrgID is a change.
+	LastActiveOrgID     *store.OrgID
 	Tier                store.Tier
 	EmailVerified       bool
 	IsOwner             bool
@@ -155,6 +158,7 @@ func BuildSession(st *store.Store, userID string, orgSelector string) (*Session,
 		Email:               user.Email,
 		ActiveOrgID:         activeID,
 		ActiveCustomerName:  active.Name,
+		LastActiveOrgID:     user.LastActiveOrgID,
 		Tier:                tier,
 		EmailVerified:       user.EmailVerifiedAt != nil,
 		IsOwner:             isOwner,

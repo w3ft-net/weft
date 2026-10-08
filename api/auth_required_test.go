@@ -128,6 +128,7 @@ func TestEndpointsRequireAuth(t *testing.T) {
 		{"POST", "/api/team/invite", session},
 		{"DELETE", "/api/team/some-id", session},
 		{"GET", "/api/sources/pending", session},
+		{"GET", "/api/sources/pending/count", session},
 		{"POST", "/api/sources/ns/app/configure", session},
 		{"GET", "/api/sources", session},
 		{"POST", "/api/sources/cloudwatch/sample", session},

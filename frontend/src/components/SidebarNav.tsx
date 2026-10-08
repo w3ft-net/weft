@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
-import { getPendingSources, onPendingSourcesChanged } from '../lib/api'
+import { getPendingSourceCount, onPendingSourcesChanged } from '../lib/api'
 import './SidebarNav.css'
 
 const NAV_ITEMS = [
@@ -24,8 +24,8 @@ export default function SidebarNav() {
 
   useEffect(() => {
     function refresh() {
-      getPendingSources()
-        .then(s => setPendingCount(s.length))
+      getPendingSourceCount()
+        .then(setPendingCount)
         .catch(() => {})
     }
     refresh()

@@ -333,6 +333,20 @@ func (s *Store) allLogGroups(statuses ...LogGroupStatus) ([]LogGroupJoined, erro
 	return results, err
 }
 
+// CountPendingLogGroups counts an org's sources that are still sampling or
+// awaiting configuration — the same set the pending list returns, without
+// loading the rows (and their sample/detection blobs).
+func (s *Store) CountPendingLogGroups(orgID OrgID) (int, error) {
+	var n int64
+	err := s.db.
+		Table("log_groups").
+		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
+		Where("namespaces.org_id = ? AND log_groups.status IN ?",
+			orgID, []LogGroupStatus{StatusSampling, StatusPending}).
+		Count(&n).Error
+	return int(n), err
+}
+
 // ── Pending log groups ─────────────────────────────────────────
 // A pending row holds the auto-detected schema candidate from a weftd
 // sample. The agent keeps re-submitting until the source transitions to

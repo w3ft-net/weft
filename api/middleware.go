@@ -34,7 +34,7 @@ const ActiveOrgHeader = "X-Active-Org"
 //
 // When the resolved active org differs from the user's stored
 // last_active_org_id, the middleware writes the new value back
-// async — that way reconnecting later (without an explicit X-Active-Org
+// — that way reconnecting later (without an explicit X-Active-Org
 // header) lands the user in the org they last operated in.
 func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,15 +70,19 @@ func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Hand
 	})
 }
 
-// persistLastActive flips users.last_active_org_id when the
-// resolved active org doesn't match what's stored. Runs in a goroutine
-// so the user-facing latency doesn't pay for the write; failures log
-// but never block the request (the next request will retry).
+// persistLastActive flips users.last_active_org_id when the resolved
+// active org doesn't match what the session loaded. It is synchronous,
+// but the write only happens on a change, so the common request pays
+// nothing; failures log but never block the request (the next request
+// will retry).
 func persistLastActive(st *store.Store, session *auth.Session) {
 	// An org-less session (a superadmin with no membership) has no active
 	// customer to pin. Writing 0 trips the last_active_org_id foreign
 	// key, so there's nothing to persist.
 	if session.ActiveOrgID == 0 {
+		return
+	}
+	if session.LastActiveOrgID != nil && *session.LastActiveOrgID == session.ActiveOrgID {
 		return
 	}
 	if err := st.UpdateUserLastActiveOrg(session.UserID, session.ActiveOrgID); err != nil {

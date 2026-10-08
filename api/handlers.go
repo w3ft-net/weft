@@ -323,6 +323,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Source onboarding (dashboard-authenticated).
 	auth.HandleFunc("GET /api/sources/pending", s.handlePendingSources)
+	auth.HandleFunc("GET /api/sources/pending/count", s.handlePendingSourcesCount)
 	auth.Handle("POST /api/sources/{namespace}/{app}/configure", protected(s.handleConfigureSource))
 	auth.Handle("POST /api/sources/{namespace}/{app}/resample", protected(s.handleResampleSource))
 	auth.HandleFunc("GET /api/sources/{namespace}/{app}/schema", s.handleSourceSchema)

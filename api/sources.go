@@ -140,16 +140,25 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 
 // ── Dashboard/CLI endpoints (JWT-authenticated) ────────────
 
+// handlePendingSourcesCount returns how many sources await attention. The
+// sidebar badge polls this; it needs the number, not the sample blobs.
+// GET /api/sources/pending/count
+func (s *Server) handlePendingSourcesCount(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+
+	n, err := s.store.CountPendingLogGroups(session.ActiveOrgID)
+	if err != nil {
+		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"count": n})
+}
+
 // handlePendingSources lists pending sources for the authenticated customer.
 // GET /api/sources/pending[?namespace=X]
 func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-
-	customer, err := s.store.GetOrgByName(session.ActiveCustomerName)
-	if err != nil {
-		http.Error(w, "customer not found", http.StatusNotFound)
-		return
-	}
 
 	namespace := r.URL.Query().Get("namespace")
 	var sources []store.LogGroupJoined
@@ -161,11 +170,11 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
 		Joins("JOIN organizations ON namespaces.org_id = organizations.id").
 		Where("log_groups.status IN ? AND organizations.id = ?",
-			[]store.LogGroupStatus{store.StatusSampling, store.StatusPending}, customer.ID)
+			[]store.LogGroupStatus{store.StatusSampling, store.StatusPending}, session.ActiveOrgID)
 	if namespace != "" {
 		q = q.Where("namespaces.name = ?", namespace)
 	}
-	err = q.Order("namespaces.name, log_groups.app").Find(&sources).Error
+	err := q.Order("namespaces.name, log_groups.app").Find(&sources).Error
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return

@@ -285,12 +285,15 @@ func (s *Store) GetUserByID(id string) (*User, error) {
 
 // UpdateUserLastActiveOrg flips users.last_active_org_id so a
 // reconnect lands the user back in the org they were last operating
-// in. No-op when orgID matches the existing value.
+// in. No-op when orgID matches the existing value: the WHERE clause matches
+// no row, so nothing is written (no dead tuple, no WAL).
 func (s *Store) UpdateUserLastActiveOrg(userID string, orgID OrgID) error {
-	return s.db.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
-		"last_active_org_id": orgID,
-		"updated_at":         time.Now(),
-	}).Error
+	return s.db.Model(&User{}).
+		Where("id = ? AND last_active_org_id IS DISTINCT FROM ?", userID, orgID).
+		Updates(map[string]any{
+			"last_active_org_id": orgID,
+			"updated_at":         time.Now(),
+		}).Error
 }
 
 // AdvanceOnboardingStep is a compare-and-swap on onboarding_step.

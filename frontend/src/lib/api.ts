@@ -643,6 +643,13 @@ export async function getPendingSources(namespace?: string): Promise<PendingSour
   return resp || []
 }
 
+// getPendingSourceCount is the cheap form of getPendingSources().length, for
+// the sidebar badge that polls every 30s.
+export async function getPendingSourceCount(): Promise<number> {
+  const resp = await apiFetch<{ count: number }>('/api/sources/pending/count')
+  return resp.count
+}
+
 export function configureSource(
   namespace: string,
   service: string,
