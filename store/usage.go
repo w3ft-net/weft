@@ -36,8 +36,8 @@ type UsageForDay struct {
 // rollup hourly); usage_hourly carries the live, partial total for the
 // current day. Reading daily for [start..today) and hourly for
 // [today..end) avoids the overlap that would otherwise double-count
-// days where the rollup has run but pg_partman hasn't yet dropped the
-// hourly partition.
+// days where the rollup has run but the hourly rows haven't been pruned
+// yet (rollup_usage_daily deletes usage_hourly rows older than 14 days).
 //
 // Worst-case staleness is the rollup cadence: a completed day D can
 // lag reality by up to one hour (the interval between rollup ticks).

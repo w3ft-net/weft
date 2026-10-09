@@ -173,3 +173,31 @@ func TestLiveShardHeartbeats_ReportsTheBeatsAge(t *testing.T) {
 		t.Fatalf("Age = %v, want ~30s", live[0].Age)
 	}
 }
+
+// Every beat rewrites its source's row, so the updates must be HOT (heap-only):
+// an index on a column the upsert changes (beat_at) disqualifies them and turns
+// each beat into a new tuple plus index entries. The table is a handful of rows;
+// nothing needs that index.
+func TestRecordHeartbeat_UpdatesAreHOT(t *testing.T) {
+	db := testOpen(t)
+	for i := int64(1); i <= 3; i++ {
+		if err := db.RecordHeartbeat(&ShardHeartbeat{ShardID: "s-hot", Addr: "a", InstanceID: "i-1", State: "INGESTING", RowCount: i}); err != nil {
+			t.Fatal(err)
+		}
+		// NOW() is constant inside the test transaction, so without this each
+		// upsert would rewrite beat_at with the value it already holds and
+		// look HOT whether or not beat_at is indexed.
+		setBeatAt(t, db, "s-hot", "i-1", time.Now().Add(-time.Duration(i)*time.Minute))
+	}
+	// pg_stat_xact_* counts only this transaction's own work, so it is
+	// visible here without waiting on the stats collector.
+	var upd, hot int64
+	row := db.db.Raw(`SELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_xact_user_tables WHERE relname = 'shard_heartbeats'`).Row()
+	if err := row.Scan(&upd, &hot); err != nil {
+		t.Fatal(err)
+	}
+	// 2 upsert updates + 3 backdating updates.
+	if upd != 5 || hot != upd {
+		t.Fatalf("%d updates, %d HOT; want 5 and all HOT (is there an index on a column the upsert changes?)", upd, hot)
+	}
+}

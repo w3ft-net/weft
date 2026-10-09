@@ -84,8 +84,7 @@ func TestQueryUsage_SplitsOnTodayBoundary(t *testing.T) {
 	yesterday := todayStart.Add(-24 * time.Hour)
 
 	// Yesterday — exists in BOTH hourly and daily (the idempotent
-	// rollup keeps hourly rows around until partman drops the
-	// partition). QueryUsage must read yesterday's value from daily
+	// rollup keeps hourly rows around until its 14-day prune). QueryUsage must read yesterday's value from daily
 	// only.
 	if err := upsertUsageHourly(db, cust, yesterday.Add(10*time.Hour), 1000); err != nil {
 		t.Fatal(err)
@@ -152,4 +151,41 @@ func mustOrg(t *testing.T, db *Store, name string) OrgID {
 		t.Fatalf("FindOrCreateOrg(%q): %v", name, err)
 	}
 	return o.ID
+}
+
+// TestRollupUsageDaily_PrunesOldHourly pins the retention for usage_hourly:
+// nothing else drops its rows (it has only a default partition and is not
+// registered with partman). The rollup re-rolls the last 3 days, so rows
+// older than the 14-day retention are already folded into usage_daily and
+// must go; younger rows must stay.
+func TestRollupUsageDaily_PrunesOldHourly(t *testing.T) {
+	db := testOpen(t)
+
+	cust := mustOrg(t, db, "usage-prune-test")
+	todayStart := time.Now().UTC().Truncate(24 * time.Hour)
+	old := todayStart.Add(-20 * 24 * time.Hour).Add(3 * time.Hour)
+	recent := todayStart.Add(-10 * 24 * time.Hour).Add(3 * time.Hour)
+	for _, h := range []time.Time{old, recent} {
+		if err := upsertUsageHourly(db, cust, h, 100); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := db.db.Exec("CALL public.rollup_usage_daily()").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	count := func(h time.Time) int64 {
+		var n int64
+		if err := db.db.Raw(`SELECT count(*) FROM usage_hourly WHERE org_id = ? AND hour = ?`, cust, h).Scan(&n).Error; err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := count(old); n != 0 {
+		t.Errorf("20-day-old hourly row survived the rollup, count = %d", n)
+	}
+	if n := count(recent); n != 1 {
+		t.Errorf("10-day-old hourly row was pruned, count = %d, want 1", n)
+	}
 }

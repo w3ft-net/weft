@@ -70,6 +70,47 @@ Nothing reads history. The durable liveness copy is `shard_records.last_heartbea
 
 **Adjacent finding, not fixed here:** the adopt tick is 60 s and `heartbeatStaleThreshold` (`logdb/registry.go:155`) is also 60 s. A follower coordinator learns about a shard's liveness only by polling this table, so its view sits on a knife-edge. That plausibly contributes to the follower staleness symptom behind the flaky `weft sh` reads. Item 4 below covers the related replay-stamp bug.
 
+## Deploy results (2026-10-09)
+
+Migrations 081 and 082 deployed 2026-10-08 evening. Two `scripts/db-snapshot.sql` samples, 03:11 and 09:55 UTC (6 h 43 m apart), give steady-state deltas.
+
+| Measure | Before | After |
+|---|---|---|
+| `weft` database size | 1105 MB | **101 MB** |
+| Disk blocks read | ~7M/hour (948M over ~5.6 days) | **294/hour** (1,976 in the window) |
+| Cache hit rate over the window | 35% (lifetime counter, still reads 35%) | **99.97%** |
+| Adopt query | 19.5 s mean, 58k blocks/call, ~88 h total exec time | **0.07 ms mean, 0 blocks read** |
+| Heartbeat write | 665 ms mean (`INSERT`) | **0.11 ms mean** (upsert) |
+| `shard_records` touch | 32.8 ms mean | **0.07 ms mean** |
+| partman maintenance (job 1) | failing every run since 10-06 21:00 | succeeding |
+| Deadlocks | 78 | 83, none since the deploy |
+
+Heartbeat-path execution time was ~140 h cumulative (adopt 88 h, insert 48 h, touch 3 h) over ~5.6 days, more than one core's worth. It is now ~2 s per 6.7 h.
+
+**The thrash was also slowing everything else.** Per-call means over the window, against the lifetime means from before:
+
+| Statement | Lifetime mean | In window |
+|---|---|---|
+| `rollup_usage_daily()` | 6.8 s | 166 ms |
+| `rollup_cron_hourly()` | 1.5 s | 37 ms |
+| `rollup_cron_4h()` | 1.3 s | 74 ms |
+| `rollup_cron_daily()` | 2.6 s | 58 ms |
+| `SELECT * FROM cron_results WHERE cron_watch_id = $1 …` (alert N+1) | 279 ms | 4.5 ms |
+
+Items 5 and 6 and the `usage_hourly` half of item 1 were costed using the thrash-era numbers. Re-rank them before doing them: their remaining value is mostly tidiness (unbounded growth, redundant indexes, write amplification), not latency.
+
+**Items 2 and 3.** `BEGIN` rose by 2,692 in the window while the heartbeat upserts and touches alone issued ~22,500 writes, so single-statement writes are no longer wrapped. `users` saw no updates (`n_tup_upd` flat at 1,324), but the window was overnight with almost no authenticated traffic (14 sequential scans of `users`), so that is consistent with item 2 rather than proof of it. Re-check during working hours.
+
+**Follow-up from this data: migration 083 (implemented, not deployed).** `shard_heartbeats` showed 16,988 updates and **0 HOT updates**. The `beat_at` index added in 081 is on a column every upsert changes, which disqualifies HOT, and with 4 rows the planner never used it (4,299 sequential scans). Migration 083 drops `shard_heartbeats_beat_at_idx` and sets `fillfactor = 50` so the upserts can chain HOT. `TestRecordHeartbeat_UpdatesAreHOT` (store) pins it, using `pg_stat_xact_user_tables` so the counts are visible inside the test transaction; it failed with 0 HOT before the migration. After deploying, `shard_heartbeats.n_tup_hot_upd` should track `n_tup_upd`.
+
+## Step 0 results (2026-10-09, `scripts/db-baseline-indexes.sql`)
+
+- **Item 7 is nearly worthless in bytes.** The 60 indexes with `idx_scan < 50` (non-PK) total well under 10 MB. The biggest is `cron_results_hourly_default_cron_watch_id_tag_bucket_start_idx` (5.7 MB, 0 scans); every other one is under 300 kB. The confirmed-unused set: the `watch_tag_bucket` duplicates, the per-partition `cron_results_*_deleted_at_idx` (0 scans except one with 8), `idx_shard_operations_ts` (0), and the single-column `deleted_at` indexes (0). Caveats from the full candidate list: `idx_cron_watches_deleted_at` has 9,164 scans, so it is in use and must stay; all three `memberships` indexes (`_org`, `_org_email`, `_org_user`) show 0 scans, not just `idx_memberships_org`. Dropping the rest still cuts write work on the busiest insert table (`cron_results`), but frees almost no memory. Do it only as part of a schema collapse pass, not for footprint.
+- **Retention sizes are small.** `alert_incidents` 11.4k rows / 2.8 MB, `shard_operations` 11.7k / 2.3 MB, `usage_hourly_default` 175k / 17 MB, `magic_links` and `device_codes` empty. `ingestion_errors` has no stats row (never written). Nothing is urgent; unbounded growth is the only argument for Tier 3.
+- **Cache pressure now comes from `usage_hourly_default` and `cron_results_hourly_default`**: they lead lifetime heap reads (183k and 140k blocks) among user tables, now that `shard_heartbeats` is gone. `cron_claims` is third (36k heap, 20k index reads).
+- **partman manages 6 tables**; `usage_hourly` and `usage_daily` are absent, which confirms item 1. pg_cron has the 5 expected jobs, all active.
+- Connections: 5 idle, nothing else. No pooling pressure.
+
 ## Step 0: capture prod baseline
 
 Before any index drop or retention change, capture and save:
@@ -98,6 +139,8 @@ Re-run the same queries after each tier to get before/after numbers. `scripts/au
 - Index `hour`, or add BRIN on it, for the rollup.
 - Optional, bigger win: accumulate per (org, hour) in memory and upsert on `(org_id, hour, coordinator_id)`. That keeps the no-race property and cuts ~240 rows to ~2.
 - Fix the `QueryUsage` comment.
+
+**Implemented (migration 084, not deployed).** Chose retention inside `rollup_usage_daily()` over converting to partman: the table is 17 MB, and converting a populated default-partition table is exactly the trap that wedged `shard_heartbeats`. The procedure now also deletes `usage_hourly` rows older than 14 days (the rollup re-rolls only the last 3), which reuses the existing hourly pg_cron job and works in environments without pg_cron. Migration 084 also drops the orphaned `partman.template_public_usage_{hourly,daily}` tables. `QueryUsage`'s comment is corrected. `TestRollupUsageDaily_PrunesOldHourly` failed before the migration (20-day-old row survived) and passes now; `go test -tags test ./store` is green. Also adds a BRIN index on `hour` (`idx_usage_hourly_hour_brin`): the rollup and the prune filter on `hour` alone, which `(org_id, hour)` cannot serve. The rows are insert-only and time-ordered, so BRIN is tiny. The gain is modest (the rollup is already 166 ms); the prune benefits most. First deploy deletes ~50k old rows in one statement; harmless at this size. Run `make collapse` after the deploy so `schema.sql` picks up the new procedure body.
 
 ### 2. Unconditional `UPDATE users` on every authenticated request
 
@@ -250,12 +293,16 @@ Nothing to fix:
 
 ## Order of work
 
-0. Item 0: deploy the shard_heartbeats redesign (see its rollout notes), then re-run the baseline queries and record the before/after numbers here.
-1. Step 0 baseline (finish the remaining pulls).
-2. Items 2 and 3: minutes each, immediate drop in write and round-trip volume.
-3. Item 1: migration plus partman registration; then `make collapse` after deploy.
-4. Item 4 (failing test for the replay-stamp bug first), then items 6 and 7.
-5. Items 5 and 8.
-6. Tier 3, as time allows.
+Done (2026-10-08/09): item 0 (migration 081), items 2, 3 and 4 (migration 082), and the HOT follow-up (migration 083, awaiting deploy). Measured results are under "Deploy results".
 
-Re-run the Step 0 queries after each step and record the deltas here.
+The deploy removed the cache thrash, which had been inflating every other slow query (see the table under "Deploy results"). What remains is mostly write amplification and unbounded growth, not latency, so the order below is by long-term risk rather than by the old latency numbers:
+
+1. **Deploy 083, then confirm item 2 during working hours.** Check `users.n_tup_upd` stays flat under real traffic, and that `shard_heartbeats.n_tup_hot_upd` now tracks `n_tup_upd`.
+2. **Finish Step 0.** The unused-index pull (`pg_stat_user_indexes`, `idx_scan < 50`) is still outstanding and gates item 7. Add `pg_stat_activity` and `partman.part_config` for the other tables while there.
+3. **Tier 3 (retention).** The real remaining risk is tables that only grow: `ingestion_errors`, `magic_links`, `device_codes`, closed `alert_incidents`, `shard_operations`, and uncapped `cron_results.stdout`. These do not hurt today at 101 MB, but nothing bounds them, and the instance has 1 GB of RAM.
+4. **Item 1 (`usage_hourly`).** Reframed as retention, not performance: the hourly rollup now takes 166 ms. It is still append-only with nothing dropping rows (172k rows back to April, about 9k/day), and its partman registration and orphaned templates are still wrong.
+5. **Item 7 (redundant indexes)**, once Step 0 confirms they are unused. Fewer indexes means less write I/O and less memory competing for a 46 MB `shared_buffers`.
+6. **Items 6, 5, 8, in that order, only if the measurements justify them.** The rollup rewrites (item 6) are still pure write amplification (`cron_results_hourly_default` has 74k updates), but the alert N+1 (item 5) is down to 4.5 ms a call and the provisioner reads (item 8) scan 39 shard rows. Re-measure before spending time here.
+7. **Decisions still open:** the 60 s adopt tick versus the 60 s `heartbeatStaleThreshold` knife-edge (item 4's note), and whether to add the `BuildSession` cache (item 2's note).
+
+Re-run `scripts/db-snapshot.sql` before and after each step and record the deltas here.
