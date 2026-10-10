@@ -71,6 +71,11 @@ interface Deliver {
   queryResult: (text: string, errMsg: string) => void
   followRow: (raw: string) => void
   followDone: (errMsg: string) => void
+  // Dirstack courier (index 0 == cwd). The server owns cd, so the pane
+  // core's stack rides out with every request and the post-run stack
+  // rides back on the "cwd" SSE event.
+  getDirStack: () => string[]
+  setDirStack: (stack: string[]) => void
 }
 
 function deliver(instance?: string): Deliver {
@@ -79,12 +84,16 @@ function deliver(instance?: string): Deliver {
       queryResult: (t, e) => window.wasmPaneQueryResult?.(instance, t, e),
       followRow: (r) => window.wasmPaneFollowRow?.(instance, r),
       followDone: (e) => window.wasmPaneFollowDone?.(instance, e),
+      getDirStack: () => window.wasmPaneGetDirStack?.(instance) ?? [],
+      setDirStack: (st) => window.wasmPaneSetDirStack?.(instance, st),
     }
   }
   return {
     queryResult: (t, e) => window.wasmHandleQueryResult(t, e),
     followRow: (r) => window.wasmHandleFollowRow(r),
     followDone: (e) => window.wasmHandleFollowDone(e),
+    getDirStack: () => window.wasmGetDirStack?.() ?? [],
+    setDirStack: (st) => window.wasmSetDirStack?.(st),
   }
 }
 
@@ -141,7 +150,7 @@ export async function execQuery(pipeline: string, instance?: string) {
     const res = await fetch(`${API_BASE}/api/shell/exec`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ pipeline, follow: false, range: currentRangeSpec }),
+      body: JSON.stringify({ pipeline, follow: false, range: currentRangeSpec, dirstack: out.getDirStack() }),
       signal: abortController.signal,
     })
     clearTimeout(timeout)
@@ -182,7 +191,7 @@ export async function execQuery(pipeline: string, instance?: string) {
         const raw = line.slice(5).trim()
         if (!raw || raw === '[DONE]') continue
         try {
-          const evt = JSON.parse(raw) as { type: string; step?: string; text?: string; message?: string; data?: { raw?: string } }
+          const evt = JSON.parse(raw) as { type: string; step?: string; text?: string; message?: string; stack?: string[]; data?: { raw?: string } }
           if (evt.type === 'line' && evt.data?.raw != null) {
             outputChunks.push(evt.data.raw)
           } else if (evt.type === 'stderr' && evt.text != null) {
@@ -194,6 +203,10 @@ export async function execQuery(pipeline: string, instance?: string) {
             outputChunks.push(`\x1b[91m${evt.text.replace(/\n$/, '')}\x1b[0m`)
           } else if (evt.type === 'tour_advance') {
             window.dispatchEvent(new CustomEvent('tour-advance', { detail: { step: evt.step } }))
+          } else if (evt.type === 'cwd' && evt.stack?.length) {
+            // Apply now, ahead of the queryResult delivered when the
+            // stream ends, so the redrawn prompt shows the new cwd.
+            out.setDirStack(evt.stack)
           } else if (evt.type === 'error') {
             out.queryResult('', evt.text || evt.message || 'unknown error')
             return
@@ -310,7 +323,7 @@ export async function execFollow(pipeline: string, instance?: string) {
     const res = await fetch(`${API_BASE}/api/shell/exec`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ pipeline, follow: true, range: currentRangeSpec }),
+      body: JSON.stringify({ pipeline, follow: true, range: currentRangeSpec, dirstack: out.getDirStack() }),
       signal: abortController.signal,
     })
 
@@ -343,11 +356,13 @@ export async function execFollow(pipeline: string, instance?: string) {
         const raw = line.slice(5).trim()
         if (!raw || raw === '[DONE]') continue
         try {
-          const evt = JSON.parse(raw) as { type: string; text?: string; data?: { raw?: string } }
+          const evt = JSON.parse(raw) as { type: string; text?: string; message?: string; data?: { raw?: string } }
           if (evt.type === 'line' && evt.data?.raw != null) {
             out.followRow(evt.data.raw)
-          } else if (evt.type === 'error' && evt.text != null) {
-            out.followDone(evt.text)
+          } else if (evt.type === 'error') {
+            // The server sends terminal errors as `message`; older
+            // paths used `text`. Never end a failed tail as a clean one.
+            out.followDone(evt.text || evt.message || 'unknown error')
             return
           }
         } catch {

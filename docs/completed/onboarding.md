@@ -42,7 +42,7 @@ ALTER TABLE users
 `onboarding_step` is a text enum:
 
 ```
-welcome → dashboards → namespaces → downloads →
+welcome → downloads → namespaces → dashboards →
   shell-ls → shell-cat → shell-grep-awk → shell-alert →
   shell-notify → shell-cron → shell-weftfunc →
   shell-bin-bash → shell-bin-lua → shell-usage →
@@ -104,9 +104,9 @@ Panel sequence:
 
 | Step          | Sidebar target | Copy beat                                 |
 |---------------|---------------|--------------------------------------------|
-| `dashboards`  | Dashboards    | "Live charts of every metric Loom emits."  |
-| `namespaces`  | Namespaces    | "Each app's logs live in its own namespace." |
 | `downloads`   | Downloads     | "Grab the CLI / weftd to ship your own logs." |
+| `namespaces`  | Namespaces    | "Each app's logs live in its own namespace." |
+| `dashboards`  | Dashboards    | "Live charts of every metric Loom emits."  |
 
 Advance trigger: clicking the highlighted sidebar item navigates
 to the route AND advances `onboarding_step` via

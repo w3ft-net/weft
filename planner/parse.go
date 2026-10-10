@@ -271,7 +271,14 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 		// directly and returns zero rows with no error at all. See
 		// docs/known-issues.md, "A pipeline whose first stage isn't
 		// cat/head/tail silently returns nothing".
+		//
+		// Filesystem-navigation commands (cd, ls, tree, ...) are exempt:
+		// a /log/ path there is a directory to browse, not a file to
+		// read, and warp+shellfs serve it correctly.
 		for _, a := range args {
+			if IsFilesystemCommand(name) {
+				break
+			}
 			if resolved := resolveSourcePath(a, cwd); strings.HasPrefix(resolved, "/log/") {
 				return nil, fmt.Errorf("pipeline must start with cat, head, or tail to read a /log/ path — %q can't be the first stage; try: tail %s | %s ...", name, resolved, name)
 			}

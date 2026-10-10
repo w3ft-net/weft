@@ -167,10 +167,12 @@ export default function TourOverlay() {
       onClick: () => {
         advanceOnboarding(step)
           .then(() => {
-            // Reload here — panel→shell handoff means the user is
-            // about to navigate to /shell where every cached query
-            // gets re-issued anyway.
-            window.location.reload()
+            // Hard navigation either way: every cached query gets
+            // re-issued after the step changes. The last panel step
+            // hands off to the shell, so it lands there; earlier
+            // steps stay on the current page.
+            if (isLastPanel) window.location.assign('/shell')
+            else window.location.reload()
           })
           .catch(e => console.error('panel-tour next:', e))
       },

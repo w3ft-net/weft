@@ -21,6 +21,10 @@ interface WasmWindow {
   wasmPaneQueryResult: ReturnType<typeof vi.fn>
   wasmPaneFollowRow: ReturnType<typeof vi.fn>
   wasmPaneFollowDone: ReturnType<typeof vi.fn>
+  wasmGetDirStack: ReturnType<typeof vi.fn>
+  wasmSetDirStack: ReturnType<typeof vi.fn>
+  wasmPaneGetDirStack: ReturnType<typeof vi.fn>
+  wasmPaneSetDirStack: ReturnType<typeof vi.fn>
 }
 
 function installWindow(): WasmWindow {
@@ -31,6 +35,10 @@ function installWindow(): WasmWindow {
     wasmPaneQueryResult: vi.fn(),
     wasmPaneFollowRow: vi.fn(),
     wasmPaneFollowDone: vi.fn(),
+    wasmGetDirStack: vi.fn(() => ['/']),
+    wasmSetDirStack: vi.fn(),
+    wasmPaneGetDirStack: vi.fn(() => ['/']),
+    wasmPaneSetDirStack: vi.fn(),
   }
   ;(globalThis as unknown as { window: WasmWindow }).window = w
   // authHeaders() interpolates the Vite-stamped build SHA into the
@@ -101,6 +109,32 @@ describe('query/follow result routing', () => {
     expect(w.wasmHandleQueryResult).not.toHaveBeenCalled()
   })
 
+  // The server (api/shell.go) emits terminal errors as
+  // {"type":"error","message":...} — not "text". A follow stream that
+  // dies on e.g. an unreachable coordinator must surface that message,
+  // not end as if the tail finished cleanly.
+  it('surfaces a server error event (message field) on a query', async () => {
+    const w = (globalThis as unknown as { window: WasmWindow }).window
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      sseResponse(['data: {"type":"error","message":"coordinator unavailable"}']),
+    ))
+
+    await execQuery('range 1d | count', 'pane-4#1')
+
+    expect(w.wasmPaneQueryResult).toHaveBeenCalledWith('pane-4#1', '', 'coordinator unavailable')
+  })
+
+  it('surfaces a server error event (message field) on a follow', async () => {
+    const w = (globalThis as unknown as { window: WasmWindow }).window
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      sseResponse(['data: {"type":"error","message":"coordinator unavailable"}']),
+    ))
+
+    await execFollow('range 1d | follow', 'pane-5#1')
+
+    expect(w.wasmPaneFollowDone).toHaveBeenCalledWith('pane-5#1', 'coordinator unavailable')
+  })
+
   it('delivers follow rows and completion to the initiating pane', async () => {
     const w = (globalThis as unknown as { window: WasmWindow }).window
     vi.stubGlobal('fetch', vi.fn(async () =>
@@ -125,5 +159,78 @@ describe('query/follow result routing', () => {
 
     expect(w.wasmHandleQueryResult).toHaveBeenCalledWith('solo\n', '')
     expect(w.wasmPaneQueryResult).not.toHaveBeenCalled()
+  })
+
+  // Dirstack courier: the server owns cd, so every request ships the
+  // core's cached stack (index 0 == cwd) and the post-run stack returns
+  // on a "cwd" SSE event. The CLI runner does both; the browser must too,
+  // or `cd` never sticks (the prompt stays at ~ and relative paths break).
+  describe('dirstack courier', () => {
+    it('sends the pane core\'s dirstack with a query', async () => {
+      const w = (globalThis as unknown as { window: WasmWindow }).window
+      w.wasmPaneGetDirStack.mockReturnValue(['/log/loom/prod/api', '/tmp'])
+      const fetchMock = vi.fn(async () => sseResponse(['data: {"type":"done"}']))
+      vi.stubGlobal('fetch', fetchMock)
+
+      await execQuery('pwd', 'pane-6#1')
+
+      const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)
+      expect(w.wasmPaneGetDirStack).toHaveBeenCalledWith('pane-6#1')
+      expect(body.dirstack).toEqual(['/log/loom/prod/api', '/tmp'])
+    })
+
+    it('sends the singleton core\'s dirstack when there is no instance', async () => {
+      const w = (globalThis as unknown as { window: WasmWindow }).window
+      w.wasmGetDirStack.mockReturnValue(['/log'])
+      const fetchMock = vi.fn(async () => sseResponse(['data: {"type":"done"}']))
+      vi.stubGlobal('fetch', fetchMock)
+
+      await execQuery('pwd')
+
+      const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)
+      expect(body.dirstack).toEqual(['/log'])
+    })
+
+    it('sends the dirstack with a follow too', async () => {
+      const w = (globalThis as unknown as { window: WasmWindow }).window
+      w.wasmPaneGetDirStack.mockReturnValue(['/log/loom/prod/api'])
+      const fetchMock = vi.fn(async () => sseResponse(['data: {"type":"line","data":{"raw":"x"}}']))
+      vi.stubGlobal('fetch', fetchMock)
+
+      await execFollow('tail -f main.log', 'pane-7#1')
+
+      const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)
+      expect(body.dirstack).toEqual(['/log/loom/prod/api'])
+    })
+
+    it('applies the returned cwd to the pane BEFORE delivering the result', async () => {
+      const w = (globalThis as unknown as { window: WasmWindow }).window
+      vi.stubGlobal('fetch', vi.fn(async () =>
+        sseResponse([
+          'data: {"type":"cwd","cwd":"/tmp","stack":["/tmp","/"]}',
+          'data: {"type":"done"}',
+        ]),
+      ))
+
+      await execQuery('cd /tmp', 'pane-8#1')
+
+      expect(w.wasmPaneSetDirStack).toHaveBeenCalledWith('pane-8#1', ['/tmp', '/'])
+      // The redrawn prompt must show the new cwd, so the stack has to be
+      // in place before the result event redraws it.
+      const setOrder = w.wasmPaneSetDirStack.mock.invocationCallOrder[0]
+      const resultOrder = w.wasmPaneQueryResult.mock.invocationCallOrder[0]
+      expect(setOrder).toBeLessThan(resultOrder)
+    })
+
+    it('applies the returned cwd to the singleton core when there is no instance', async () => {
+      const w = (globalThis as unknown as { window: WasmWindow }).window
+      vi.stubGlobal('fetch', vi.fn(async () =>
+        sseResponse(['data: {"type":"cwd","cwd":"/tmp","stack":["/tmp"]}', 'data: {"type":"done"}']),
+      ))
+
+      await execQuery('cd /tmp')
+
+      expect(w.wasmSetDirStack).toHaveBeenCalledWith(['/tmp'])
+    })
   })
 })

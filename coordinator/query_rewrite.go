@@ -208,6 +208,14 @@ func isQueryShape(pipe *bash.Pipeline) bool {
 	// off shellfs's LogMount and silently returns zero rows with no
 	// error at all. See docs/known-issues.md, "A pipeline whose first
 	// stage isn't cat/head/tail silently returns nothing".
+	//
+	// Filesystem-navigation commands (cd, ls, tree, ...) are exempt: a
+	// /log/ path there is a directory to browse, which warp+shellfs
+	// serve; wrapping it in a query callback made `ls /log/acme` and
+	// `cd /log/acme/prod/api` fail.
+	if planner.IsFilesystemCommand(sc.Words[0].Literal()) {
+		return false
+	}
 	for _, w := range sc.Words[1:] {
 		if strings.HasPrefix(w.Literal(), "/log/") {
 			return true

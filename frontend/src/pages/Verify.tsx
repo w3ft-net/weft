@@ -6,6 +6,11 @@ import Pane from '../components/Pane'
 import './Login.css'
 import './Verify.css'
 
+// Magic-link tokens are single-use. React.StrictMode runs the mount effect
+// twice in dev, which would send two verifies — the second 401s on the
+// already-consumed token. Share one in-flight call per token across runs.
+const inflightVerify = new Map<string, Promise<{ needs_org?: boolean; email?: string }>>()
+
 type State = 'verifying' | 'needs-org' | 'creating' | 'success' | 'error' | 'invite-prompt'
 
 export default function Verify() {
@@ -34,7 +39,12 @@ export default function Verify() {
     }
 
     // Normal login flow.
-    verify(token)
+    let call = inflightVerify.get(token)
+    if (!call) {
+      call = verify(token)
+      inflightVerify.set(token, call)
+    }
+    call
       .then(resp => {
         if (resp.needs_org) {
           setEmail(resp.email || '')

@@ -48,6 +48,9 @@ interface Fixture {
 async function bootShell(files: File[]): Promise<{
   exec: (command: string) => string
   dispatchedPipeline: () => string
+  getDirStack: () => string[]
+  setDirStack: (stack: string[]) => void
+  queryResult: (text: string, err: string) => string
 }> {
   const wasmPath = resolve(__dirname, '../../public/shell.wasm')
   const wasmBuffer = readFileSync(wasmPath)
@@ -127,6 +130,11 @@ async function bootShell(files: File[]): Promise<{
 
   const wasmHandleInput = (globalThis as Record<string, unknown>).wasmHandleInput as
     (data: string) => void
+  const g = globalThis as unknown as {
+    wasmGetDirStack: () => string[]
+    wasmSetDirStack: (stack: string[]) => void
+    wasmHandleQueryResult: (text: string, err: string) => void
+  }
 
   return {
     exec: (command: string) => {
@@ -137,6 +145,13 @@ async function bootShell(files: File[]): Promise<{
       return output
     },
     dispatchedPipeline: () => dispatched,
+    getDirStack: () => g.wasmGetDirStack() as string[],
+    setDirStack: (stack: string[]) => g.wasmSetDirStack(stack),
+    queryResult: (text: string, err: string) => {
+      output = ''
+      g.wasmHandleQueryResult(text, err)
+      return output
+    },
   }
 }
 
@@ -156,3 +171,32 @@ for (const fixture of fixtures as Fixture[]) {
     }
   })
 }
+
+// Dirstack courier through the real wasm: the server owns cd, so the host
+// reads the core's stack to ship with a request and writes back the stack
+// the server returns. Writing it before delivering the result must make
+// the redrawn prompt show the new cwd.
+describe('dirstack courier (wasm exports)', () => {
+  it('starts at the root and round-trips a stack set by the host', async () => {
+    const shell = await bootShell([])
+    expect(shell.getDirStack()[0]).toBe('/')
+    shell.setDirStack(['/log/loom/prod/api', '/tmp'])
+    expect(shell.getDirStack()).toEqual(['/log/loom/prod/api', '/tmp'])
+  })
+
+  it('ignores an empty stack instead of blanking the cwd', async () => {
+    const shell = await bootShell([])
+    shell.setDirStack(['/tmp'])
+    shell.setDirStack([])
+    expect(shell.getDirStack()).toEqual(['/tmp'])
+  })
+
+  it('redraws the prompt with the cwd a remote cd left behind', async () => {
+    const shell = await bootShell([])
+    shell.exec('cd /tmp')
+    expect(shell.dispatchedPipeline()).toBe('cd /tmp')
+    shell.setDirStack(['/tmp'])
+    const redraw = shell.queryResult('', '')
+    expect(redraw).toContain('/tmp')
+  })
+})

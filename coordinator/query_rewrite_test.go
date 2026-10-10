@@ -156,3 +156,34 @@ func singleCallbackInScript(t *testing.T, script *bash.Script) *bash.CallbackCom
 	}
 	return found[0]
 }
+
+// TestRewriteQueryPipelines_FilesystemCommandWithLogPath: cd/ls/tree on a
+// /log/ directory are filesystem navigation, not queries. They must be
+// left untouched for plain warp+shellfs to serve — wrapping them in a
+// query callback made `ls /log/loom` and `cd /log/loom/prod/api` fail
+// with "pipeline must start with cat, head, or tail".
+func TestRewriteQueryPipelines_FilesystemCommandWithLogPath(t *testing.T) {
+	for _, src := range []string{
+		`ls /log/loom`,
+		`ls -l /log/loom/prod/api`,
+		`cd /log/loom/prod/api`,
+		`tree /log/loom`,
+		`ls /log/loom | grep prod`,
+	} {
+		script, err := bash.Parse(src)
+		if err != nil {
+			t.Fatalf("parse %q: %v", src, err)
+		}
+		rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, "kevlar", 0, "", nil)
+		n := 0
+		bash.Walk(script, func(node bash.Node) bool {
+			if _, ok := node.(*bash.CallbackCommand); ok {
+				n++
+			}
+			return true
+		})
+		if n != 0 {
+			t.Errorf("%q: got %d query callbacks, want 0 (filesystem command must not be wrapped)", src, n)
+		}
+	}
+}
