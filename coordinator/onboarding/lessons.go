@@ -39,6 +39,42 @@ type Lesson struct {
 	// the user ends with Ctrl+C (exit 130). For these, the interrupt IS the
 	// completion rather than a failure to finish.
 	CompletesOnInterrupt bool
+	// ClosesWithModal marks a lesson whose command opens a modal over the
+	// shell. The command finishing does not complete the lesson: advancing
+	// would prefill the next command beneath the open modal. The lesson
+	// completes when the browser reports the modal closed.
+	ClosesWithModal bool
+}
+
+// Trigger is what the server observed that might complete a lesson.
+type Trigger int
+
+const (
+	// TriggerExec: the server's exec path saw the pipeline finish, from a
+	// client that renders its own output (the CLI).
+	TriggerExec Trigger = iota
+	// TriggerBrowserDone: the browser shell reported the line completed.
+	TriggerBrowserDone
+	// TriggerModalFetch: the exec path saw a pipeline a browser modal ran to
+	// fetch its own rows.
+	TriggerModalFetch
+	// TriggerModalClosed: the browser reported the user dismissed the modal.
+	TriggerModalClosed
+)
+
+// CompletesOn reports whether trigger completes the lesson at step. A lesson
+// that ClosesWithModal completes on the modal closing — or on a plain exec,
+// since a client with no modal has nothing else to wait for. Any other
+// lesson completes with its command and ignores modal closure.
+func CompletesOn(step string, trigger Trigger) bool {
+	lesson := Lookup(step)
+	if lesson == nil {
+		return false
+	}
+	if lesson.ClosesWithModal {
+		return trigger == TriggerModalClosed || trigger == TriggerExec
+	}
+	return trigger != TriggerModalClosed
 }
 
 // exitInterrupted is the exit status the shell reports when the user stops
@@ -79,7 +115,7 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-ls-loom",
-		Prompt: "`loom` here is our sole defined namespace. If you had additional namespaces, they would be sibling directories. Now `ls` again to see what's in /log/loom.",
+		Prompt: "`loom` here is our sole defined namespace. If you had additional namespaces, they would be sibling directories. Now run `tree` to see everything under /log/loom.",
 		Action: "tree /log/loom",
 	},
 	{
@@ -105,23 +141,24 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-grep-awk",
-		Action: "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print HOST, $1, $5}'",
+		Action: "tail main.log | grep ERROR | awk '{print HOST, $1, $5}'",
 		Prompt: "So obviously we have support for awk and grep, but the more material point is `HOST` in the awk program. Weft augments normal field variables in awk and jq with a number of meta-variables to help you isolate exactly where those log lines were produced. More info in the manual.",
 	},
 	{
 		Step:   "shell-trace-find",
-		Action: "tail /log/loom/prod/api/main.log | grep ' checkout ' | awk '{print TRACE_ID}'",
+		Action: "tail main.log | grep ' checkout ' | awk '{print TRACE_ID}'",
 		Prompt: "Loom's checkout flow hops from the API to an edge payment gateway to a background fulfillment worker — one user-facing request, three separate services. Each hop is tagged with the same trace_id. Copy one of the IDs printed above; you'll use it in the next step.",
 	},
 	{
-		Step:          "shell-trace",
-		Action:        "trace <paste the id you copied>",
-		ActionPattern: traceIDPipelinePattern,
-		Prompt:        "Now run `trace` on the ID you copied — but edit it in first, don't just re-run the line above verbatim. You'll get every line from every service that touched that one request, ordered by time, each tagged with which service produced it.",
+		Step:            "shell-trace",
+		Action:          "trace <paste the id you copied>",
+		ActionPattern:   traceIDPipelinePattern,
+		ClosesWithModal: true,
+		Prompt:          "Now run `trace` on the ID you copied — but edit it in first, don't just re-run the line above verbatim. You'll get every line from every service that touched that one request, ordered by time, each tagged with which service produced it. Press Esc to close the trace view when you're done and the tour continues.",
 	},
 	{
 		Step:   "shell-alert",
-		Action: "tail /log/loom/prod/api/main.log | grep ERROR | wc -l | alert above 0",
+		Action: "tail main.log | grep ERROR | wc -l | alert above 0",
 		Prompt: "Weft contains a special builtin called alert. For now, this is just going to log to stderr, but you can get all sorts of alerting targets on a cron (more info shortly). The api/prod stream emits errors at ~8% so this fires every time.",
 	},
 	{
@@ -188,7 +225,7 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-chart-pipe",
-		Action: "tail /log/loom/prod/api/main.log | grep ERROR | chart -x 1 --bucket 5m",
+		Action: "tail main.log | grep ERROR | chart -x 1 --bucket 5m",
 		Prompt: "`chart` doesn't need a saved cron behind it — pipe any pipeline straight into it and chart it directly, bucketed however you want. `-x 1` tells it to bucket by the timestamp in column 1; with no `-y`, it counts rows per bucket.",
 	},
 	{

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"github.com/graybeardcorp/weft/coordinator/onboarding"
 	"github.com/graybeardcorp/weft/internal/timerange"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -58,6 +59,9 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Pipeline string `json:"pipeline"`
 		Follow   bool   `json:"follow"`
+		// Modal is set by a browser modal fetching its own rows (the trace
+		// view). Its pipeline finishing is not the user finishing the lesson.
+		Modal bool `json:"modal"`
 		// Range is an unresolved time-window spec ("1d..", "30m..10m",
 		// "2026-04-01..2026-04-12", "05-14T09:00..05-14T17:00"). The
 		// server resolves it on every request against its own clock so a
@@ -128,6 +132,11 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		ctx = metadata.AppendToOutgoingContext(ctx, "weft-dirstack", d)
 	}
 
+	trigger := onboarding.TriggerExec
+	if req.Modal {
+		trigger = onboarding.TriggerModalFetch
+	}
+
 	// Capture the response trailer so the post-run dirstack (weft-final-
 	// dirstack) can be surfaced to the client after the stream ends.
 	var trailer metadata.MD
@@ -183,7 +192,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 			// execution) every other lesson already uses; there's no
 			// way to distinguish a deliberate stop from an accidental
 			// disconnect, which is an accepted tradeoff here.
-			s.maybeAdvanceShellLesson(session, req.Pipeline, nil)
+			s.maybeAdvanceShellLesson(session, req.Pipeline, nil, trigger)
 			return
 
 		case <-ticker.C:
@@ -204,7 +213,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 				// the current lesson's predicate, advance the step
 				// and emit the next lesson's prompt so the UI banner
 				// can update without waiting for a /me poll.
-				if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline, nil); advanced {
+				if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline, nil, trigger); advanced {
 					writeSSEEvent(w, map[string]any{
 						"type":   "tour_advance",
 						"step":   newStep,

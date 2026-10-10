@@ -29,35 +29,37 @@ func (m *LogMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 		return entries, nil
 	}
 
-	segs := strings.Split(rel, "/")
-	nsName := segs[0]
+	nsName := strings.SplitN(rel, "/", 2)[0]
 	if !m.canReadNamespace(nsName) {
 		return nil, fmt.Errorf("/log/%s: permission denied", rel)
 	}
 
-	switch len(segs) {
-	case 1:
-		var entries []fs.DirEntry
-		for _, env := range m.logEnvsInNamespace(nsName) {
-			entries = append(entries, &vfsDirEntry{name: env, dir: true})
+	// Every LogServices entry is a slash path whose last segment is the
+	// stream (rendered as <last>.log); everything before it is a
+	// directory, whether it is an env or a service.
+	prefix := rel + "/"
+	var entries []fs.DirEntry
+	seen := map[string]bool{}
+	found := false
+	for _, a := range m.cfg.LogServices {
+		if !strings.HasPrefix(a, prefix) {
+			continue
 		}
-		for _, app := range m.logServicesInNamespace(nsName) {
-			entries = append(entries, &vfsDirEntry{name: app + ".log"})
+		found = true
+		name, _, more := strings.Cut(strings.TrimPrefix(a, prefix), "/")
+		if !more {
+			name += ".log"
 		}
-		return entries, nil
-	case 2:
-		env := segs[1]
-		subServices := m.logServicesInNamespaceEnv(nsName, env)
-		if len(subServices) > 0 {
-			entries := make([]fs.DirEntry, len(subServices))
-			for i, app := range subServices {
-				entries[i] = &vfsDirEntry{name: app + ".log"}
-			}
-			return entries, nil
+		if seen[name] {
+			continue
 		}
+		seen[name] = true
+		entries = append(entries, &vfsDirEntry{name: name, dir: more})
 	}
-
-	return nil, fs.ErrNotExist
+	if !found && !m.isNamespace(rel) {
+		return nil, fs.ErrNotExist
+	}
+	return entries, nil
 }
 
 func (m *LogMount) ReadFile(rel string) ([]byte, error) {
@@ -79,24 +81,14 @@ func (m *LogMount) Stat(rel string) (fs.FileInfo, error) {
 	if rel == "" {
 		return &vfsFileInfo{name: "log", dir: true}, nil
 	}
-	segs := strings.Split(rel, "/")
-	nsName := segs[0]
+	nsName := strings.SplitN(rel, "/", 2)[0]
 
 	if !strings.HasSuffix(rel, ".log") {
-		for _, ns := range m.logNamespaces() {
-			if ns == nsName {
-				if !m.canReadNamespace(ns) {
-					return nil, fmt.Errorf("/log/%s: permission denied", rel)
-				}
-				return &vfsFileInfo{name: lastSegment(rel), dir: true}, nil
+		if m.isNamespace(rel) || m.hasLogDir(rel) {
+			if !m.canReadNamespace(nsName) {
+				return nil, fmt.Errorf("/log/%s: permission denied", rel)
 			}
-		}
-		if len(segs) == 2 {
-			for _, env := range m.logEnvsInNamespace(nsName) {
-				if env == segs[1] {
-					return &vfsFileInfo{name: segs[1], dir: true}, nil
-				}
-			}
+			return &vfsFileInfo{name: lastSegment(rel), dir: true}, nil
 		}
 	} else {
 		app := strings.TrimSuffix(rel, ".log")
@@ -125,15 +117,11 @@ func (m *LogMount) Remove(string) error            { return shellcore.ErrReadOnl
 // Permission is checked at most once per namespace (memoised) instead
 // of once per visited directory.
 func (m *LogMount) Walk(rel string) ([]string, error) {
-	var nsFilter, envFilter string
+	var nsFilter string
 	if rel != "" {
-		segs := strings.Split(rel, "/")
-		nsFilter = segs[0]
+		nsFilter = strings.SplitN(rel, "/", 2)[0]
 		if !m.canReadNamespace(nsFilter) {
 			return nil, fmt.Errorf("/log/%s: permission denied", rel)
-		}
-		if len(segs) > 1 {
-			envFilter = segs[1]
 		}
 	}
 
@@ -162,22 +150,13 @@ func (m *LogMount) Walk(rel string) ([]string, error) {
 			nsSeen[ns] = true
 			out = append(out, ns+"/")
 		}
-		switch {
-		case len(parts) == 1:
-			// Bare namespace, no app — the "ns/" marker is enough.
-		case len(parts) == 2:
-			if envFilter != "" {
-				continue // a 2-part entry has no env segment
-			}
-			out = append(out, ns+"/"+parts[1]+".log")
-		default:
-			env := parts[1]
-			if envFilter != "" && env != envFilter {
-				continue
-			}
-			app := strings.Join(parts[2:], "/")
-			out = append(out, ns+"/"+env+"/"+app+".log")
+		if len(parts) == 1 {
+			continue // bare namespace, no app — the "ns/" marker is enough
 		}
+		if rel != "" && a != rel && !strings.HasPrefix(a, rel+"/") {
+			continue
+		}
+		out = append(out, a+".log")
 	}
 	return out, nil
 }
@@ -200,53 +179,24 @@ func (m *LogMount) logNamespaces() []string {
 	return nss
 }
 
-func (m *LogMount) logServicesInNamespace(ns string) []string {
-	prefix := ns + "/"
-	var apps []string
-	for _, a := range m.cfg.LogServices {
-		if !strings.HasPrefix(a, prefix) {
-			continue
-		}
-		rest := strings.TrimPrefix(a, prefix)
-		if strings.Contains(rest, "/") {
-			continue
-		}
-		apps = append(apps, rest)
-	}
-	return apps
-}
-
-func (m *LogMount) logEnvsInNamespace(ns string) []string {
-	prefix := ns + "/"
-	seen := map[string]bool{}
-	var envs []string
-	for _, a := range m.cfg.LogServices {
-		if !strings.HasPrefix(a, prefix) {
-			continue
-		}
-		rest := strings.TrimPrefix(a, prefix)
-		i := strings.Index(rest, "/")
-		if i < 0 {
-			continue
-		}
-		env := rest[:i]
-		if !seen[env] {
-			seen[env] = true
-			envs = append(envs, env)
+func (m *LogMount) isNamespace(name string) bool {
+	for _, ns := range m.logNamespaces() {
+		if ns == name {
+			return true
 		}
 	}
-	return envs
+	return false
 }
 
-func (m *LogMount) logServicesInNamespaceEnv(ns, env string) []string {
-	prefix := ns + "/" + env + "/"
-	var apps []string
+// hasLogDir reports whether some service lives strictly below rel.
+func (m *LogMount) hasLogDir(rel string) bool {
+	prefix := rel + "/"
 	for _, a := range m.cfg.LogServices {
 		if strings.HasPrefix(a, prefix) {
-			apps = append(apps, strings.TrimPrefix(a, prefix))
+			return true
 		}
 	}
-	return apps
+	return false
 }
 
 func (m *LogMount) hasLogService(app string) bool {

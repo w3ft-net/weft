@@ -18,7 +18,8 @@ import (
 // strips pipe stages like `| chart ...` and runs inline builtins like
 // `history` locally, so neither ever reached the server's exec-path hook.
 // A failed command must not advance a lesson.
-func TestShellBuiltin_ExitCodeGatesLessonAdvance(t *testing.T) {
+func builtinHarness(t *testing.T) (setStep func(string), stepNow func() string, report func(map[string]any) int) {
+	t.Helper()
 	srv, s := testServer(t)
 	handler := srv.Handler()
 	jwt := superadminJWT(t, s)
@@ -49,13 +50,13 @@ func TestShellBuiltin_ExitCodeGatesLessonAdvance(t *testing.T) {
 		t.Fatalf("jwt: %v", err)
 	}
 
-	setStep := func(step string) {
+	setStep = func(step string) {
 		t.Helper()
 		if err := s.DB().Model(&store.User{}).Where("id = ?", user.ID).Update("onboarding_step", step).Error; err != nil {
 			t.Fatalf("set step: %v", err)
 		}
 	}
-	stepNow := func() string {
+	stepNow = func() string {
 		t.Helper()
 		u, err := s.GetUserByID(user.ID)
 		if err != nil {
@@ -63,7 +64,7 @@ func TestShellBuiltin_ExitCodeGatesLessonAdvance(t *testing.T) {
 		}
 		return u.OnboardingStep
 	}
-	report := func(payload map[string]any) int {
+	report = func(payload map[string]any) int {
 		t.Helper()
 		b, _ := json.Marshal(payload)
 		r := httptest.NewRequest("POST", "/api/shell/builtin", bytes.NewReader(b))
@@ -73,6 +74,11 @@ func TestShellBuiltin_ExitCodeGatesLessonAdvance(t *testing.T) {
 		handler.ServeHTTP(rec, r)
 		return rec.Code
 	}
+	return setStep, stepNow, report
+}
+
+func TestShellBuiltin_ExitCodeGatesLessonAdvance(t *testing.T) {
+	setStep, stepNow, report := builtinHarness(t)
 
 	setStep("shell-history")
 
@@ -112,5 +118,46 @@ func TestShellBuiltin_ExitCodeGatesLessonAdvance(t *testing.T) {
 	}
 	if got := stepNow(); got != "shell-history" {
 		t.Fatalf("an interrupted command advanced the lesson to %q", got)
+	}
+}
+
+// `trace <id>` opens a modal. Finishing the command must not move the tour on
+// (the next prefill would land under the open modal); closing the modal does.
+func TestShellBuiltin_TraceLessonAdvancesOnModalClose(t *testing.T) {
+	setStep, stepNow, report := builtinHarness(t)
+	const line = "trace 0123456789abcdef0123456789abcdef"
+
+	setStep("shell-trace")
+	if code := report(map[string]any{"pipeline": line, "exit_code": 0}); code != 204 {
+		t.Errorf("command completion: status %d, want 204", code)
+	}
+	if got := stepNow(); got != "shell-trace" {
+		t.Fatalf("completing `trace` advanced the lesson to %q before the modal closed", got)
+	}
+
+	if code := report(map[string]any{"pipeline": line, "exit_code": 1, "event": "modal_closed"}); code != 204 {
+		t.Errorf("modal closed after a failed load: status %d, want 204", code)
+	}
+	if got := stepNow(); got != "shell-trace" {
+		t.Fatalf("a failed trace advanced the lesson to %q", got)
+	}
+
+	if code := report(map[string]any{"pipeline": line, "exit_code": 0, "event": "modal_closed"}); code != 200 {
+		t.Errorf("modal closed: status %d, want 200", code)
+	}
+	if got := stepNow(); got == "shell-trace" {
+		t.Errorf("closing the trace modal did not advance the lesson")
+	}
+}
+
+// A modal-closed report never advances a lesson that isn't about a modal.
+func TestShellBuiltin_ModalCloseDoesNotAdvanceOtherLessons(t *testing.T) {
+	setStep, stepNow, report := builtinHarness(t)
+	setStep("shell-history")
+	if code := report(map[string]any{"pipeline": "history", "exit_code": 0, "event": "modal_closed"}); code != 204 {
+		t.Errorf("status %d, want 204", code)
+	}
+	if got := stepNow(); got != "shell-history" {
+		t.Fatalf("modal_closed advanced a non-modal lesson to %q", got)
 	}
 }

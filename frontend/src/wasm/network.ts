@@ -124,12 +124,24 @@ export function getCurrentRangeSpec(): string {
 // step: the server's exec-path hook may have advanced it already, and the
 // card still needs to refresh. Best effort — a failed report must never
 // disturb the shell.
-export async function reportCommandCompleted(pipeline: string, exitCode: number): Promise<void> {
+export function reportCommandCompleted(pipeline: string, exitCode: number): Promise<void> {
+  return postBuiltinReport({ pipeline, exit_code: exitCode })
+}
+
+// reportModalClosed tells the server the user dismissed the modal the given
+// line opened (`trace <id>`). A lesson whose command opens a modal completes
+// on this rather than on the command finishing, so the next lesson's prefill
+// never lands underneath an open modal.
+export function reportModalClosed(pipeline: string): Promise<void> {
+  return postBuiltinReport({ pipeline, exit_code: 0, event: 'modal_closed' })
+}
+
+async function postBuiltinReport(body: { pipeline: string; exit_code: number; event?: string }): Promise<void> {
   try {
     const res = await fetch(`${API_BASE}/api/shell/builtin`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ pipeline, exit_code: exitCode }),
+      body: JSON.stringify(body),
     })
     if (!res.ok) return
     let step: string | undefined
@@ -272,7 +284,9 @@ export async function fetchPipelineLines(pipeline: string, signal?: AbortSignal)
   const res = await fetch(`${API_BASE}/api/shell/exec`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ pipeline, follow: false, range: currentRangeSpec }),
+    // modal: this run feeds a modal's own rows, so its finishing must
+    // not complete a tour lesson (the modal closing does).
+    body: JSON.stringify({ pipeline, follow: false, modal: true, range: currentRangeSpec }),
     signal,
   })
 

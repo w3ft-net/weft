@@ -1,5 +1,5 @@
 import { useEffect, Fragment, type ReactNode } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/AuthContext'
 import { advanceOnboarding } from '../lib/api'
 import './TourOverlay.css'
@@ -83,6 +83,7 @@ const SHELL_HIGHLIGHT_TARGETS: Record<string, string> = {
 export default function TourOverlay() {
   const { user, refreshUser } = useAuth()
   const location = useLocation()
+  const navigate = useNavigate()
 
   const step = user?.onboarding_step
   const dismissed = user?.onboarding_dismissed
@@ -183,6 +184,15 @@ export default function TourOverlay() {
     // input).
     copy = user.onboarding_prompt || `Lesson ${step}…`
     progress = 'tour: shell'
+    // Following the sidebar highlights ends on a panel page with a shell
+    // card but no shell; give the user the way in.
+    if (location.pathname !== '/shell') {
+      primaryAction = {
+        label: 'drop into the shell',
+        testId: 'tour-overlay-shell-button',
+        onClick: () => navigate('/shell'),
+      }
+    }
   }
 
   const shellAction = isShell ? user.onboarding_action : undefined

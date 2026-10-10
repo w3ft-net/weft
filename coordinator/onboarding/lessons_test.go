@@ -16,9 +16,9 @@ func TestCheckPipeline(t *testing.T) {
 		{"shell-tail", "tail /log/loom/prod/api/main.log", true},
 		{"shell-tail-f", "tail -f /log/loom/prod/api/main.log", true},
 		{"shell-cd", "cd /log/loom/prod/api", true},
-		{"shell-grep-awk", "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print HOST, $1, $5}'", true},
-		{"shell-trace-find", "tail /log/loom/prod/api/main.log | grep ' checkout ' | awk '{print TRACE_ID}'", true},
-		{"shell-alert", "tail /log/loom/prod/api/main.log | grep ERROR | wc -l | alert above 0", true},
+		{"shell-grep-awk", "tail main.log | grep ERROR | awk '{print HOST, $1, $5}'", true},
+		{"shell-trace-find", "tail main.log | grep ' checkout ' | awk '{print TRACE_ID}'", true},
+		{"shell-alert", "tail main.log | grep ERROR | wc -l | alert above 0", true},
 		{"shell-notify", "cat /etc/notify.yaml", true},
 		{"shell-cron", "ls -l /cron.d/", true},
 		{"shell-bin-bash", "ls /bin/", true},
@@ -27,14 +27,14 @@ func TestCheckPipeline(t *testing.T) {
 		{"shell-weftfunc", "weft::avg error-rate 1h", true},
 		{"shell-history", "history", true},
 		{"shell-tmp", "echo hello > /tmp/note", true},
-		{"shell-chart-pipe", "tail /log/loom/prod/api/main.log | grep ERROR | chart -x 1 --bucket 5m", true},
+		{"shell-chart-pipe", "tail main.log | grep ERROR | chart -x 1 --bucket 5m", true},
 		{"shell-dashboard-yaml", "cat /etc/dashboards/prod.yaml", true},
 		{"shell-dashboard", "dashboard prod", true},
 
 		// shell-grep-awk's OLD $4 form no longer matches after the
 		// field-shift fix (trace_id inserted as loom-producer's line
 		// field 3 pushed everything right by one).
-		{"shell-grep-awk", "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print HOST, $1, $4}'", false},
+		{"shell-grep-awk", "tail main.log | grep ERROR | awk '{print HOST, $1, $4}'", false},
 		// shell-cron/shell-wit's OLD forms (pre -l / pre -p) no longer match.
 		{"shell-cron", "ls /cron.d/", false},
 		{"shell-wit", "wit log /bin/scan", false},
@@ -136,6 +136,64 @@ func TestAdvancesOnExit(t *testing.T) {
 	for _, c := range cases {
 		if got := AdvancesOnExit(c.step, c.exit); got != c.want {
 			t.Errorf("AdvancesOnExit(%q, %d) = %v, want %v", c.step, c.exit, got, c.want)
+		}
+	}
+}
+
+// shell-cd teaches that after cd-ing into a service directory the long
+// /log/... prefix can be dropped. Every later lesson that reads a log must
+// then use the short form, or it undercuts the lesson it just taught. Other
+// mounts (/etc, /cron.d, /bin, /tmp) are unaffected.
+func TestLessonsAfterCdUseRelativeLogPaths(t *testing.T) {
+	afterCd := false
+	for _, step := range Steps() {
+		if step == "shell-cd" {
+			afterCd = true
+			continue
+		}
+		if !afterCd {
+			continue
+		}
+		if a := Lookup(step).Action; strings.Contains(a, "/log/") {
+			t.Errorf("lesson %q follows shell-cd but its Action uses an absolute log path: %q", step, a)
+		}
+	}
+}
+
+// A lesson's prompt tells the user what to run; it must name the command the
+// prefilled Action actually runs.
+func TestShellLsLoomPromptMatchesAction(t *testing.T) {
+	l := Lookup("shell-ls-loom")
+	if !strings.Contains(l.Prompt, "`tree`") {
+		t.Errorf("shell-ls-loom Action is %q but the prompt never mentions `tree`: %q", l.Action, l.Prompt)
+	}
+}
+
+// A lesson whose command opens a modal (trace) completes when the browser
+// reports the modal closed, or — for clients with no modal, like the CLI —
+// when the server sees the pipeline finish. A browser must not complete it on
+// the command finishing or on the modal's own row fetch, or the next prefill
+// lands underneath the open modal. Every other lesson completes with its
+// command and ignores modal-close reports.
+func TestCompletesOn(t *testing.T) {
+	cases := []struct {
+		step    string
+		trigger Trigger
+		want    bool
+	}{
+		{"shell-trace", TriggerModalClosed, true},
+		{"shell-trace", TriggerExec, true},
+		{"shell-trace", TriggerBrowserDone, false},
+		{"shell-trace", TriggerModalFetch, false},
+		{"shell-history", TriggerExec, true},
+		{"shell-history", TriggerBrowserDone, true},
+		{"shell-history", TriggerModalFetch, true},
+		{"shell-history", TriggerModalClosed, false},
+		{"no-such-step", TriggerExec, false},
+	}
+	for _, c := range cases {
+		if got := CompletesOn(c.step, c.trigger); got != c.want {
+			t.Errorf("CompletesOn(%q, %v) = %v, want %v", c.step, c.trigger, got, c.want)
 		}
 	}
 }

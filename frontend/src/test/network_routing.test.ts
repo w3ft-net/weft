@@ -10,7 +10,7 @@
 // left pane 1 spinning "querying shards…" forever.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { execQuery, execFollow, reportCommandCompleted } from '../wasm/network'
+import { execQuery, execFollow, reportCommandCompleted, reportModalClosed, fetchPipelineLines } from '../wasm/network'
 
 // Minimal window stub carrying just the wasm* delivery exports the
 // network layer calls. In the plain-node vitest pool there is no DOM.
@@ -261,6 +261,18 @@ describe('reportCommandCompleted', () => {
     expect(JSON.parse(init.body as string)).toEqual({ pipeline: 'history', exit_code: 0 })
   })
 
+  it('reports a dismissed modal as its own event, so the tour can wait for it', async () => {
+    const fetchMock = vi.fn(async () => noContent())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await reportModalClosed('trace abc')
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toContain('/api/shell/builtin')
+    expect(JSON.parse(init.body as string)).toEqual({ pipeline: 'trace abc', exit_code: 0, event: 'modal_closed' })
+    expect(events).toEqual([{ type: 'tour-advance', detail: { step: undefined } }])
+  })
+
   it('tells the tour the new step when this report advanced it', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ step: 'shell-tmp' }) } as unknown as Response)))
 
@@ -282,5 +294,19 @@ describe('reportCommandCompleted', () => {
 
     await expect(reportCommandCompleted('ls', 0)).resolves.toBeUndefined()
     expect(events).toEqual([])
+  })
+})
+
+describe('fetchPipelineLines', () => {
+  it('marks its exec request as a modal fetch so the server does not treat it as the lesson finishing', async () => {
+    installWindow()
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 500, text: async () => 'stop here' } as unknown as Response))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchPipelineLines('trace abc').catch(() => {})
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toContain('/api/shell/exec')
+    expect(JSON.parse(init.body as string)).toMatchObject({ pipeline: 'trace abc', modal: true })
   })
 })

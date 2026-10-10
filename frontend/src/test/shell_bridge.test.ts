@@ -52,6 +52,9 @@ async function bootShell(files: File[]): Promise<{
   setDirStack: (stack: string[]) => void
   queryResult: (text: string, err: string) => string
   completions: () => Array<[string, number]>
+  setInput: (text: string) => void
+  type: (data: string) => string
+  followDone: (err: string) => string
 }> {
   const wasmPath = resolve(__dirname, '../../public/shell.wasm')
   const wasmBuffer = readFileSync(wasmPath)
@@ -138,6 +141,8 @@ async function bootShell(files: File[]): Promise<{
     wasmGetDirStack: () => string[]
     wasmSetDirStack: (stack: string[]) => void
     wasmHandleQueryResult: (text: string, err: string) => void
+    wasmSetInput: (text: string) => void
+    wasmHandleFollowDone: (err: string) => void
   }
 
   return {
@@ -149,6 +154,17 @@ async function bootShell(files: File[]): Promise<{
       return output
     },
     dispatchedPipeline: () => dispatched,
+    setInput: (text: string) => g.wasmSetInput(text),
+    type: (data: string) => {
+      output = ''
+      wasmHandleInput(data)
+      return output
+    },
+    followDone: (err: string) => {
+      output = ''
+      g.wasmHandleFollowDone(err)
+      return output
+    },
     completions: () => completed.slice(),
     getDirStack: () => g.wasmGetDirStack() as string[],
     setDirStack: (stack: string[]) => g.wasmSetDirStack(stack),
@@ -237,5 +253,35 @@ describe('commandCompleted host hook (wasm)', () => {
     const done = shell.completions().find(([line]) => line === 'cat /log/nope.log')
     expect(done).toBeDefined()
     expect(done![1]).not.toBe(0)
+  })
+})
+
+// The tour prefills the next command with setInput. Pressing Enter runs it;
+// typing instead replaces it rather than appending (OB-6).
+describe('prefilled input (wasm)', () => {
+  it('runs an untouched prefill verbatim on Enter', async () => {
+    const shell = await bootShell([])
+    shell.setInput('cat /etc/notify.yaml')
+    shell.type('\r')
+    expect(shell.dispatchedPipeline()).toBe('cat /etc/notify.yaml')
+  })
+
+  it('is replaced, not appended to, by typing', async () => {
+    const shell = await bootShell([])
+    shell.setInput('cat /etc/notify.yaml')
+    shell.exec('ls /tmp')
+    expect(shell.dispatchedPipeline()).toBe('ls /tmp')
+  })
+})
+
+// Ctrl+C stops a tail in the core; the host's cancellation then echoes back
+// as a follow-done. That echo must not announce the stop a second time (OB-8).
+describe('tail -f stop (wasm)', () => {
+  it('prints [tail stopped] once across Ctrl+C and the cancellation echo', async () => {
+    const shell = await bootShell([])
+    shell.exec('tail -f /log/a/b/main.log')
+    const out = shell.type('\x03') + shell.followDone('context canceled')
+    expect(out.split('[tail stopped]').length - 1).toBe(1)
+    expect(out).not.toContain('context canceled')
   })
 })

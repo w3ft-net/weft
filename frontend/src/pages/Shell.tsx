@@ -80,11 +80,11 @@ export default function Shell() {
         // `chart <name>` and `... | chart` open a modal with the
         // chart tile rendered in React. The modal owns its own
         // re-fetch for the watch form so it stays live.
-        (spec: ChartOpenSpec) => setChartSpec(spec),
+        (spec: ChartOpenSpec) => { setTraceSpec(null); setChartSpec(spec) },
         // `trace <id>`, `trace <id> --spans`, and `trace spans [name]`
         // open a modal that re-runs the pipeline itself and renders
         // gap/rollup/aggregate views — see ShellTraceModal.
-        (spec: TraceOpenSpec) => setTraceSpec(spec),
+        (spec: TraceOpenSpec) => { setChartSpec(null); setTraceSpec(spec) },
       )
       if (disposed) {
         bridge.dispose()
@@ -153,6 +153,12 @@ export default function Shell() {
   const handleFunctionSelect = useCallback((name: string) => {
     bridgeRef.current?.setInput(name)
     setSidebarTab(null)
+    bridgeRef.current?.terminal.focus()
+  }, [])
+
+  // Dismissing the modal hands the keyboard back to the terminal.
+  const closeTrace = useCallback(() => {
+    setTraceSpec(null)
     bridgeRef.current?.terminal.focus()
   }, [])
 
@@ -316,7 +322,7 @@ export default function Shell() {
         <ShellChartModal spec={chartSpec} onClose={() => setChartSpec(null)} />
       )}
       {traceSpec && (
-        <ShellTraceModal spec={traceSpec} onClose={() => setTraceSpec(null)} />
+        <ShellTraceModal spec={traceSpec} onClose={closeTrace} />
       )}
     </div>
   )

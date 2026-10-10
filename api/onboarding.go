@@ -256,12 +256,20 @@ func (s *Server) handleShellBuiltin(w http.ResponseWriter, r *http.Request) {
 		// shell core saw it. A failed command never advances a lesson.
 		// Omitted (older clients) means "no information", not success.
 		ExitCode *int `json:"exit_code"`
+		// Event is "modal_closed" when the report is the user dismissing a
+		// modal the line opened (see onboarding.Lesson.ClosesWithModal);
+		// empty for an ordinary command completion.
+		Event string `json:"event"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pipeline == "" {
 		http.Error(w, "pipeline required", http.StatusBadRequest)
 		return
 	}
-	if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline, req.ExitCode); advanced {
+	trigger := onboarding.TriggerBrowserDone
+	if req.Event == "modal_closed" {
+		trigger = onboarding.TriggerModalClosed
+	}
+	if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline, req.ExitCode, trigger); advanced {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"step":   newStep,
@@ -286,7 +294,10 @@ func (s *Server) handleShellBuiltin(w http.ResponseWriter, r *http.Request) {
 // browser reports it); nil means unknown and does not block the advance. A
 // non-zero code blocks it, except an interrupt on a lesson that
 // CompletesOnInterrupt.
-func (s *Server) maybeAdvanceShellLesson(session *auth.Session, pipeline string, exitCode *int) (newStep, prompt string, advanced bool) {
+//
+// trigger is what was observed; onboarding.CompletesOn decides whether it
+// completes the current lesson.
+func (s *Server) maybeAdvanceShellLesson(session *auth.Session, pipeline string, exitCode *int, trigger onboarding.Trigger) (newStep, prompt string, advanced bool) {
 	if session == nil || session.ActiveCustomerName != LoomCustomerSlug {
 		log.Printf("onboarding: skip — active org is %q, not loom", session.ActiveCustomerName)
 		return "", "", false
@@ -303,6 +314,9 @@ func (s *Server) maybeAdvanceShellLesson(session *auth.Session, pipeline string,
 	current := user.OnboardingStep
 	log.Printf("onboarding: step=%q pipeline=%q match=%v", current, pipeline, onboarding.CheckPipeline(current, pipeline))
 	if !onboarding.CheckPipeline(current, pipeline) {
+		return "", "", false
+	}
+	if !onboarding.CompletesOn(current, trigger) {
 		return "", "", false
 	}
 	if exitCode != nil && !onboarding.AdvancesOnExit(current, *exitCode) {
