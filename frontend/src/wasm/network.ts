@@ -112,20 +112,34 @@ export function getCurrentRangeSpec(): string {
   return currentRangeSpec
 }
 
-export function notifyBuiltinExecuted(pipeline: string) {
-  fetch(`${API_BASE}/api/shell/builtin`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ pipeline }),
-  }).then(async res => {
-    if (!res.ok || res.status !== 200) return
+// reportCommandCompleted tells the server a shell line finished, with the
+// exit code the shell core saw. The tour advances from this — the browser
+// knows exactly what the user ran and whether it worked, whereas the
+// server's exec path only sees the pipeline text the client chose to send
+// (pipe stages like `| chart ...` are handled locally and inline builtins
+// like `history` never leave the browser). A non-zero exit never advances
+// a lesson (enforced server-side).
+//
+// 'tour-advance' is dispatched whether or not this report advanced the
+// step: the server's exec-path hook may have advanced it already, and the
+// card still needs to refresh. Best effort — a failed report must never
+// disturb the shell.
+export async function reportCommandCompleted(pipeline: string, exitCode: number): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE}/api/shell/builtin`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ pipeline, exit_code: exitCode }),
+    })
+    if (!res.ok) return
     let step: string | undefined
-    try {
-      const body = await res.json() as { step?: string }
-      step = body.step
-    } catch { /* tolerate no-body */ }
+    if (res.status === 200) {
+      try {
+        step = ((await res.json()) as { step?: string }).step
+      } catch { /* tolerate no-body */ }
+    }
     window.dispatchEvent(new CustomEvent('tour-advance', { detail: { step } }))
-  }).catch(() => {})
+  } catch { /* best effort */ }
 }
 
 export function cancelQuery(instance?: string) {

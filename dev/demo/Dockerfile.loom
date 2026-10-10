@@ -1,0 +1,36 @@
+# weft-demo-loom: the Loom Inc producer for the dev stack — the same Go
+# cmd/loom-producer binary the prod producer host runs, plus weftd.
+#
+# One process writes all six Loom streams (3 apps x 2 envs), including the
+# checkout chains whose trace IDs the onboarding tour's trace lessons follow
+# across api -> edge -> worker; two weftd forwarders (one per env) ship them
+# under the per-env agent tokens, exactly like the prod host's
+# weftd-loom@{prod,sand} units. Build context must be ~/dev, as for the
+# other demo images:
+#
+#   docker build -f weft/dev/demo/Dockerfile.loom -t weft-demo-loom ~/dev
+
+FROM golang:1.26 AS builder
+WORKDIR /src
+COPY warp /src/warp
+COPY saaskit /src/saaskit
+COPY weft /src/weft
+WORKDIR /src/weft
+RUN rm -f go.work go.work.sum \
+ && go mod edit -replace github.com/graybeardcorp/warp=/src/warp \
+                -replace github.com/graybeardcorp/saaskit=/src/saaskit
+RUN go mod download
+RUN CGO_ENABLED=0 go build -o /out/weftd ./cmd/weftd \
+ && CGO_ENABLED=0 go build -o /out/loom-producer ./cmd/loom-producer
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /out/weftd /usr/local/bin/weftd
+COPY --from=builder /out/loom-producer /usr/local/bin/loom-producer
+COPY weft/deploy/loom-producer/streams.yaml /etc/loom-producer/streams.yaml
+COPY weft/dev/demo/loom-entrypoint.sh /usr/local/bin/loom-entrypoint.sh
+RUN chmod +x /usr/local/bin/loom-entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/loom-entrypoint.sh"]

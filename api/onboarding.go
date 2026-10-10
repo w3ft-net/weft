@@ -121,12 +121,11 @@ func (s *Server) graduateOnboarding(userID string) error {
 		return err
 	}
 
-	if err := s.store.DB().WithContext(store.WithOrg(context.Background(), cust.ID)).Model(&store.TeamMember{}).
-		Where("user_id = ?", userID).
-		Updates(map[string]any{
-			"status":     "removed",
-			"updated_at": time.Now(),
-		}).Error; err != nil {
+	// Revoke the Loom seat only. orgs.Store.RemoveMember is keyed on both
+	// org and user; a user_id-only update here is not narrowed to Loom by
+	// the org context and deactivates every membership the user holds,
+	// including their own org.
+	if err := s.store.Orgs.RemoveMember(context.Background(), cust.ID.String(), userID); err != nil {
 		return err
 	}
 
@@ -253,12 +252,16 @@ func (s *Server) handleShellBuiltin(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 	var req struct {
 		Pipeline string `json:"pipeline"`
+		// ExitCode is the completed line's exit status as the browser's
+		// shell core saw it. A failed command never advances a lesson.
+		// Omitted (older clients) means "no information", not success.
+		ExitCode *int `json:"exit_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pipeline == "" {
 		http.Error(w, "pipeline required", http.StatusBadRequest)
 		return
 	}
-	if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline); advanced {
+	if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline, req.ExitCode); advanced {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"step":   newStep,
@@ -278,7 +281,12 @@ func (s *Server) handleShellBuiltin(w http.ResponseWriter, r *http.Request) {
 // advanced=false (with empty step/prompt) for any of: not in Loom,
 // dismissed, no current shell lesson, predicate didn't match,
 // or store error (logged).
-func (s *Server) maybeAdvanceShellLesson(session *auth.Session, pipeline string) (newStep, prompt string, advanced bool) {
+//
+// exitCode is the completed line's exit status when the caller knows it (the
+// browser reports it); nil means unknown and does not block the advance. A
+// non-zero code blocks it, except an interrupt on a lesson that
+// CompletesOnInterrupt.
+func (s *Server) maybeAdvanceShellLesson(session *auth.Session, pipeline string, exitCode *int) (newStep, prompt string, advanced bool) {
 	if session == nil || session.ActiveCustomerName != LoomCustomerSlug {
 		log.Printf("onboarding: skip — active org is %q, not loom", session.ActiveCustomerName)
 		return "", "", false
@@ -295,6 +303,10 @@ func (s *Server) maybeAdvanceShellLesson(session *auth.Session, pipeline string)
 	current := user.OnboardingStep
 	log.Printf("onboarding: step=%q pipeline=%q match=%v", current, pipeline, onboarding.CheckPipeline(current, pipeline))
 	if !onboarding.CheckPipeline(current, pipeline) {
+		return "", "", false
+	}
+	if exitCode != nil && !onboarding.AdvancesOnExit(current, *exitCode) {
+		log.Printf("onboarding: step=%q exit=%d — not advancing", current, *exitCode)
 		return "", "", false
 	}
 	next := nextOnboardingStep(current)

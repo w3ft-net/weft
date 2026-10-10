@@ -172,8 +172,8 @@ func wasmInitPane(_ js.Value, args []js.Value) any {
 		Width:     width,
 		Height:    height,
 		Callbacks: cb,
-		OnAction:  handleWeftActionFor(cb),
 	})
+	reportCompletions(core, cb)
 
 	s := buildShell(cb, apps, buildSharedFS(cb))
 	s.ConfigureCore(core)
@@ -188,7 +188,7 @@ func wasmInitPane(_ js.Value, args []js.Value) any {
 // wasmInit(width: number, height: number, callbacks: object)
 // callbacks: write, startQuery, startFollow, cancelQuery, notifyQuit,
 // fsReadFile, fsWriteFile, fsReadDir, fsRemove, fsGetWatchResults,
-// onRangeChange, builtinExecuted, loadHistory, saveHistory, getUser,
+// onRangeChange, commandCompleted, loadHistory, saveHistory, getUser,
 // getCustomer, getServices.
 func wasmInit(_ js.Value, args []js.Value) any {
 	width := args[0].Int()
@@ -206,8 +206,8 @@ func wasmInit(_ js.Value, args []js.Value) any {
 		Width:     width,
 		Height:    height,
 		Callbacks: jsCallbacks,
-		OnAction:  handleWeftActionFor(jsCallbacks),
 	})
+	reportCompletions(core, jsCallbacks)
 
 	s := buildShell(jsCallbacks, apps, buildSharedFS(jsCallbacks))
 	s.ConfigureCore(core)
@@ -250,21 +250,20 @@ func readCustomer(cb js.Value) string {
 	return c
 }
 
-// handleWeftAction dispatches shellcore Actions warp's bridge doesn't
-// own. ActionExec / ActionFollow / ActionCancel / ActionVimSave /
-// ActionQuit are dispatched by warp directly and never reach here.
-// handleWeftActionFor returns an action handler bound to one pane's
-// callbacks, so ActionBuiltinExecuted notifies the pane that ran the
-// builtin rather than whichever pane happened to boot last.
-func handleWeftActionFor(cb js.Value) wasm.ActionHandler {
-	return func(a shellcore.Action) bool {
-		switch a := a.(type) {
-		case shellcore.ActionBuiltinExecuted:
-			if fn := cb.Get("builtinExecuted"); !fn.IsUndefined() && !fn.IsNull() {
-				cb.Call("builtinExecuted", a.Pipeline)
+// reportCompletions forwards every completed shell line to the host as
+// commandCompleted(line, exitCode). The core publishes CommandCompleted
+// for each line — inline builtins, dispatched pipelines (when their result
+// arrives) and failures alike — so the host can track progress (the
+// onboarding tour) from what the user actually ran and whether it
+// succeeded, rather than inferring it from the pipeline text the server
+// sees. Called once per core, for the single-pane shell and every pane.
+func reportCompletions(core *shellcore.ShellCore, cb js.Value) {
+	ch := shellcore.Subscribe[shellcore.CommandCompleted](core)
+	go func() {
+		for ev := range ch {
+			if fn := cb.Get("commandCompleted"); fn.Type() == js.TypeFunction {
+				cb.Call("commandCompleted", ev.Pipeline, ev.ExitCode)
 			}
-			return true
 		}
-		return false
-	}
+	}()
 }

@@ -35,6 +35,31 @@ type Lesson struct {
 	// intentional: re-pasting it unedited should not silently "succeed"
 	// without the user substituting a real discovered value.
 	ActionPattern *regexp.Regexp
+	// CompletesOnInterrupt marks a lesson whose command is a live stream
+	// the user ends with Ctrl+C (exit 130). For these, the interrupt IS the
+	// completion rather than a failure to finish.
+	CompletesOnInterrupt bool
+}
+
+// exitInterrupted is the exit status the shell reports when the user stops
+// a running command with Ctrl+C (128 + SIGINT).
+const exitInterrupted = 130
+
+// AdvancesOnExit reports whether a completed line with the given exit code
+// may advance the lesson at step. A clean exit does; an interrupt does only
+// for a lesson that CompletesOnInterrupt; any other failure never does.
+func AdvancesOnExit(step string, exitCode int) bool {
+	lesson := Lookup(step)
+	if lesson == nil {
+		return false
+	}
+	switch exitCode {
+	case 0:
+		return true
+	case exitInterrupted:
+		return lesson.CompletesOnInterrupt
+	}
+	return false
 }
 
 // traceIDPipelinePattern matches `trace <id>` where <id> is exactly
@@ -68,9 +93,10 @@ var lessons = []*Lesson{
 		Prompt: "Now tail some logs to see live API request lines flowing in. (Loom Inc might be a fake company but they have real servers.)",
 	},
 	{
-		Step:   "shell-tail-f",
-		Action: "tail -f /log/loom/prod/api/main.log",
-		Prompt: "`tail` on its own is a snapshot. Add `-f` and it keeps streaming as new lines arrive, same as any Unix tail. Watch a few lines come in, then stop whenever you're ready to move on.",
+		Step:                 "shell-tail-f",
+		CompletesOnInterrupt: true,
+		Action:               "tail -f /log/loom/prod/api/main.log",
+		Prompt:               "`tail` on its own is a snapshot. Add `-f` and it keeps streaming as new lines arrive, same as any Unix tail. Watch a few lines come in, then stop whenever you're ready to move on.",
 	},
 	{
 		Step:   "shell-cd",
@@ -84,7 +110,7 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-trace-find",
-		Action: "tail /log/loom/prod/api/main.log | grep checkout | awk '{print TRACE_ID}'",
+		Action: "tail /log/loom/prod/api/main.log | grep ' checkout ' | awk '{print TRACE_ID}'",
 		Prompt: "Loom's checkout flow hops from the API to an edge payment gateway to a background fulfillment worker — one user-facing request, three separate services. Each hop is tagged with the same trace_id. Copy one of the IDs printed above; you'll use it in the next step.",
 	},
 	{
@@ -156,7 +182,7 @@ var lessons = []*Lesson{
 		Prompt: "If you are working through an issue where it's easier to stage output from some one-liners and run `comm` or `join` on those files, dump them to /tmp. Because scratch files tend to abide by gas laws and fill the size of the container, we automatically delete files that haven't been written to for 48 hrs.",
 	},
 	{
-		Step:   "chart",
+		Step:   "shell-chart",
 		Action: "chart error-rate",
 		Prompt: "`chart` is another weft-specific builtin. It'll open a modal in the browser. The CLI will render right in the terminal with as much fidelity as it can.",
 	},

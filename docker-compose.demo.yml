@@ -1,7 +1,8 @@
 # Multi-customer demo overlay. See docs/plans/multi-customer-demo-seed.md.
 #
-# Brings up 12 service containers — 2 customers × 2 envs × 3 apps —
-# each running a weftd agent + a Python rate-shape generator. Token
+# Brings up 12 acme/globex service containers — 2 customers × 2 envs × 3
+# apps — each running a weftd agent + a Python rate-shape generator, plus
+# one loom-producer container (Loom Inc, the Go producer used in prod). Token
 # values come from dev/demo/tokens.env, minted by weft-demo-seed.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.demo.yml \
@@ -139,70 +140,23 @@ services:
       RATE_SHAPE: "sine:8,16,420"
       ERROR_RATIO: "0.05"
 
-  # Loom Inc — the populated demo org used by the onboarding tour.
-  # New signups get a read-only membership in this customer; the tour
-  # walks them through these streams. Keep error ratios non-trivial
-  # (~5-8%) so the "filter for ERROR" lessons have visible matches.
-  loom-api-sand:
-    <<: *demo-service
+  # Loom Inc — the populated demo org used by the onboarding tour. New
+  # signups get a read-only membership in this customer; the tour walks
+  # them through these streams. Unlike acme/globex (Python generator, one
+  # container per app), Loom runs the SAME Go cmd/loom-producer as the prod
+  # producer host: one container writes all six streams from
+  # deploy/loom-producer/streams.yaml — trace ID as field 3 of every line,
+  # plus checkout chains hopping api -> edge -> worker under one trace ID,
+  # which the tour's trace lessons follow — and two weftd forwarders ship
+  # them under the per-env tokens (LOOM_PROD_TOKEN / LOOM_SAND_TOKEN).
+  loom-producer:
+    build:
+      context: ..
+      dockerfile: weft/dev/demo/Dockerfile.loom
+    depends_on:
+      coordinator:
+        condition: service_started
+    restart: unless-stopped
     environment:
-      SERVICE: api
-      CUSTOMER: loom
-      ENV: sand
-      WEFTD_TOKEN: ${LOOM_API_SAND_TOKEN}
-      RATE_SHAPE: "const:6"
-      ERROR_RATIO: "0.05"
-
-  loom-api-prod:
-    <<: *demo-service
-    environment:
-      SERVICE: api
-      CUSTOMER: loom
-      ENV: prod
-      WEFTD_TOKEN: ${LOOM_API_PROD_TOKEN}
-      RATE_SHAPE: "sine:25,50,600"
-      # Onboarding tour drives `weft.avg error-rate 1h` and
-      # `chart error-rate` off this stream — a constant ratio
-      # would average to ~160 forever. Sine 4%..14% over 15min
-      # gives the cron a real signal to track.
-      ERROR_RATIO: "sine:0.04,0.10,900"
-
-  loom-worker-sand:
-    <<: *demo-service
-    environment:
-      SERVICE: worker
-      CUSTOMER: loom
-      ENV: sand
-      WEFTD_TOKEN: ${LOOM_WORKER_SAND_TOKEN}
-      RATE_SHAPE: "const:3"
-      ERROR_RATIO: "0.05"
-
-  loom-worker-prod:
-    <<: *demo-service
-    environment:
-      SERVICE: worker
-      CUSTOMER: loom
-      ENV: prod
-      WEFTD_TOKEN: ${LOOM_WORKER_PROD_TOKEN}
-      RATE_SHAPE: "sawtooth:5,0.08,30"
-      ERROR_RATIO: "0.04"
-
-  loom-edge-sand:
-    <<: *demo-service
-    environment:
-      SERVICE: edge
-      CUSTOMER: loom
-      ENV: sand
-      WEFTD_TOKEN: ${LOOM_EDGE_SAND_TOKEN}
-      RATE_SHAPE: "const:2"
-      ERROR_RATIO: "0.05"
-
-  loom-edge-prod:
-    <<: *demo-service
-    environment:
-      SERVICE: edge
-      CUSTOMER: loom
-      ENV: prod
-      WEFTD_TOKEN: ${LOOM_EDGE_PROD_TOKEN}
-      RATE_SHAPE: "const:6"
-      ERROR_RATIO: "0.05"
+      LOOM_PROD_TOKEN: ${LOOM_PROD_TOKEN}
+      LOOM_SAND_TOKEN: ${LOOM_SAND_TOKEN}

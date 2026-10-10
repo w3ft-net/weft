@@ -1,8 +1,8 @@
 # loom-producer stream definitions.
 #
-# Six streams = 3 apps × 2 envs. Shape / error_ratio values mirror
-# docker-compose.demo.yml's loom-* services, so prod produces the
-# same wire content as dev's compose stack.
+# Six streams = 3 apps × 2 envs. The dev stack runs this same file
+# (docker-compose.demo.yml's loom-producer, via dev/demo/Dockerfile.loom), so
+# dev and prod produce identical wire content.
 #
 # Files are tailed by /etc/systemd/system/weftd-loom@{prod,sand}.service,
 # which forward to ingest.w3ft.net:9020 under the env-bound agent
@@ -14,9 +14,8 @@ streams:
     shape: "sine:25,50,600"
     # 4%..14% sine over 900s — the onboarding tour's `weft.avg
     # error-rate 1h` and `chart error-rate` queries chart this curve.
-    # Keep in lockstep with docker-compose.demo.yml's loom-api-prod
-    # so the preseeded cron_results history transitions seamlessly
-    # into live data.
+    # Keep the curve in step with the seed's preseeded cron_results
+    # history (cmd/weft-demo-seed) so it transitions seamlessly into live data.
     error_ratio: "sine:0.04,0.10,900"
 
   - app: api

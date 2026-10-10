@@ -238,33 +238,24 @@ func seed(s *store.Store, tokensOut string) error {
 		// field isn't part of any routing lookup.
 		for _, app := range c.Apps {
 			fullApp := c.Name + "/" + app
-			// withTraceID is always false here: every dev-seeded
-			// customer — Loom included — runs the unmodified Python
-			// dev/demo/generator.py via docker-compose, which doesn't
-			// emit a trace ID field yet (see minimalSchemaYAML's doc
-			// comment). Only seedProdLoom's real Go loom-producer does.
 			if err := s.AddLogGroup(ns.ID, store.SourceTypeWeftd,
-				app, fullApp, "us-east-2", minimalSchemaYAML(app, false)); err != nil {
+				app, fullApp, "us-east-2", minimalSchemaYAML(app, emitsTraceID(c.Name))); err != nil {
 				return fmt.Errorf("log_group %s: %w", fullApp, err)
 			}
 		}
 
-		// Agent tokens — one per (app, env). Revoke any previous tokens
-		// with the same label so we don't accumulate orphans across restarts.
-		for _, app := range c.Apps {
-			for _, env := range c.Envs {
-				varName := tokenEnvVar(c.Name, app, env)
-				label := fmt.Sprintf("%s-%s-%s", c.Name, app, env)
-				_ = s.DB().WithContext(store.WithOrg(context.Background(), cust.ID)).
-					Model(&store.AgentToken{}).
-					Where("label = ? AND revoked = ?", label, false).
-					Update("revoked", true)
-				raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, label, env, "")
-				if err != nil {
-					return fmt.Errorf("token %s: %w", label, err)
-				}
-				tokenLines = append(tokenLines, mintedToken{varName: varName, raw: raw})
+		// Agent tokens per tokenPlan. Revoke any previous tokens with the
+		// same label so we don't accumulate orphans across restarts.
+		for _, t := range tokenPlan(c) {
+			_ = s.DB().WithContext(store.WithOrg(context.Background(), cust.ID)).
+				Model(&store.AgentToken{}).
+				Where("label = ? AND revoked = ?", t.Label, false).
+				Update("revoked", true)
+			raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, t.Label, t.Env, "")
+			if err != nil {
+				return fmt.Errorf("token %s: %w", t.Label, err)
 			}
+			tokenLines = append(tokenLines, mintedToken{varName: t.Var, raw: raw})
 		}
 
 		// Pre-seeded /bin and /cron.d content — give the team an initial
@@ -292,9 +283,46 @@ func seed(s *store.Store, tokensOut string) error {
 	return nil
 }
 
-func tokenEnvVar(customer, app, env string) string {
-	// e.g. ACME_API_SAND_TOKEN
-	return strings.ToUpper(fmt.Sprintf("%s_%s_%s_TOKEN", customer, app, env))
+// emitsTraceID reports whether a demo customer's producer writes a bare
+// trace ID as every line's third field, so its ingest schema may point
+// trace_id_field at field 3. Loom runs the Go cmd/loom-producer (the same
+// binary as prod, via dev/demo/Dockerfile.loom); acme and globex run the
+// Python dev/demo/generator.py, whose third field is the event name.
+func emitsTraceID(customer string) bool { return customer == "loom" }
+
+// tokenPlanEntry is one agent token a customer's producers need.
+type tokenPlanEntry struct {
+	Label string // agent token label, e.g. loom-prod
+	Var   string // tokens.env variable, e.g. LOOM_PROD_TOKEN
+	Env   string // env the token is bound to
+}
+
+// tokenPlan lists the agent tokens a customer needs. Loom mirrors the
+// prod producer host: one token per env, shared by the env's three apps
+// (a single weftd forwards api+worker+edge). The other demo customers get
+// one token per (app, env).
+func tokenPlan(c customerSpec) []tokenPlanEntry {
+	var plan []tokenPlanEntry
+	if c.Name == "loom" {
+		for _, env := range c.Envs {
+			plan = append(plan, tokenPlanEntry{
+				Label: fmt.Sprintf("%s-%s", c.Name, env),
+				Var:   strings.ToUpper(fmt.Sprintf("%s_%s_TOKEN", c.Name, env)),
+				Env:   env,
+			})
+		}
+		return plan
+	}
+	for _, app := range c.Apps {
+		for _, env := range c.Envs {
+			plan = append(plan, tokenPlanEntry{
+				Label: fmt.Sprintf("%s-%s-%s", c.Name, app, env),
+				Var:   strings.ToUpper(fmt.Sprintf("%s_%s_%s_TOKEN", c.Name, app, env)),
+				Env:   env,
+			})
+		}
+	}
+	return plan
 }
 
 // seedProdLoom seeds the Loom customer and mints two per-env tokens
@@ -382,7 +410,7 @@ func seedProdLoom(s *store.Store, tokensOut string) error {
 	for _, app := range loomSpec.Apps {
 		fullApp := loomSpec.Name + "/" + app
 		if err := s.AddLogGroup(ns.ID, store.SourceTypeWeftd,
-			app, fullApp, "us-east-2", minimalSchemaYAML(app, true)); err != nil {
+			app, fullApp, "us-east-2", minimalSchemaYAML(app, emitsTraceID(loomSpec.Name))); err != nil {
 			return fmt.Errorf("log_group %s: %w", fullApp, err)
 		}
 	}
@@ -404,19 +432,17 @@ func seedProdLoom(s *store.Store, tokensOut string) error {
 		}
 	}
 	var mintedLines []mintedToken
-	for _, env := range loomSpec.Envs {
-		label := fmt.Sprintf("%s-%s", loomSpec.Name, env) // e.g. loom-prod
-		if liveLabels[label] {
-			log.Printf("  token %s already live — skipping mint", label)
+	for _, t := range tokenPlan(*loomSpec) {
+		if liveLabels[t.Label] {
+			log.Printf("  token %s already live — skipping mint", t.Label)
 			continue
 		}
-		raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, label, env, "")
+		raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, t.Label, t.Env, "")
 		if err != nil {
-			return fmt.Errorf("token %s: %w", label, err)
+			return fmt.Errorf("token %s: %w", t.Label, err)
 		}
-		varName := strings.ToUpper(fmt.Sprintf("%s_%s_TOKEN", loomSpec.Name, env))
-		mintedLines = append(mintedLines, mintedToken{varName: varName, raw: raw})
-		log.Printf("  minted token %s", label)
+		mintedLines = append(mintedLines, mintedToken{varName: t.Var, raw: raw})
+		log.Printf("  minted token %s", t.Label)
 	}
 
 	// Scripts, crons, dashboards, notify aliases, error-rate history.
@@ -533,15 +559,12 @@ func upsertVerifiedUser(s *store.Store, email string, orgID store.OrgID) (*store
 // ingest, not seeded here.
 //
 // withTraceID adds trace_id_field: "3" — only correct for producers
-// that actually emit a bare trace ID as their line's 3rd field
-// (cmd/loom-producer's Go binary, since its checkout chain was added;
-// see cmd/loom-producer/line.go's formatLine). Every other demo
-// customer (acme, globex) and Loom's own dev-compose containers still
-// run the unmodified Python dev/demo/generator.py, whose field 3 is
-// the event name, not a trace ID — pointing trace_id_field at it there
-// would silently populate the reserved trace_id column with garbage
-// (e.g. the literal string "request"), so this only ever passes true
-// for Loom's prod seed.
+// that emit a bare trace ID as their line's 3rd field (cmd/loom-producer's
+// Go binary; see its line.go formatLine). acme and globex run the Python
+// dev/demo/generator.py, whose field 3 is the event name, not a trace ID —
+// pointing trace_id_field at it there would silently populate the reserved
+// trace_id column with garbage (e.g. the literal string "request"). Callers
+// pass emitsTraceID(customer).
 func minimalSchemaYAML(app string, withTraceID bool) string {
 	traceIDLine := ""
 	if withTraceID {

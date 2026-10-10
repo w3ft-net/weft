@@ -59,8 +59,10 @@ func TestRunOneChain_SharesTraceIDAcrossHops(t *testing.T) {
 }
 
 // TestRunOneChain_EventNames pins the event-name choice the tour's
-// discovery lesson (grep checkout) depends on — distinct from ambient
-// traffic's request/job_completed/etc. names.
+// discovery lesson (grep ' checkout ') depends on — distinct from ambient
+// traffic's request/job_completed/etc. names. (Ambient request lines can
+// still mention /checkout as a path, which is why the lesson greps for the
+// event token between spaces; see lesson_trace_test.go.)
 func TestRunOneChain_EventNames(t *testing.T) {
 	api, edge, worker := tempLogFile(t), tempLogFile(t), tempLogFile(t)
 	rng := rand.New(rand.NewPCG(3, 4))

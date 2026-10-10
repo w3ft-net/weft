@@ -9,7 +9,7 @@ import {
   type WasmCallbacks,
   type ShellBridge as BaseShellBridge,
 } from '@warp/shellcore-wasm'
-import { execQuery, execFollow, cancelQuery, notifyBuiltinExecuted, setCurrentRangeSpec } from './network'
+import { execQuery, execFollow, cancelQuery, reportCommandCompleted, setCurrentRangeSpec } from './network'
 
 export type ShellBridge = BaseShellBridge
 
@@ -141,7 +141,7 @@ export async function initShellWasm(
     traceOpen: (spec: TraceOpenSpec) => {
       if (onTraceOpen) onTraceOpen(spec)
     },
-    builtinExecuted: (pipeline: string) => notifyBuiltinExecuted(pipeline),
+    commandCompleted: (line: string, exitCode: number) => { void reportCommandCompleted(line, exitCode) },
   } as WasmCallbacks & {
     dashboardNavigate: (name: string) => void
     chartOpen: (spec: ChartOpenSpec) => void
@@ -234,7 +234,7 @@ export async function initShellPane(
     dashboardNavigate: () => {},
     chartOpen: () => {},
     traceOpen: () => {},
-    builtinExecuted: (pipeline: string) => notifyBuiltinExecuted(pipeline),
+    commandCompleted: (line: string, exitCode: number) => { void reportCommandCompleted(line, exitCode) },
   } as WasmCallbacks
 
   const bridge = await loadShellWasm(container, {

@@ -6,8 +6,10 @@
 // weftd-loom@{prod,sand}.service units, which forward to the
 // coordinator at ingest.w3ft.net:9020 under per-env agent tokens.
 //
-// Wire shape is byte-identical to dev/demo/generator.py — the
-// onboarding tour reads the same content in both dev and prod.
+// The dev stack runs this same binary (dev/demo/Dockerfile.loom), so the
+// onboarding tour reads identical content in dev and prod. (The Python
+// dev/demo/generator.py still feeds acme and globex, but its lines have no
+// trace ID field.)
 //
 // Usage:
 //

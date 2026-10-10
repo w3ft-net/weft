@@ -51,6 +51,7 @@ async function bootShell(files: File[]): Promise<{
   getDirStack: () => string[]
   setDirStack: (stack: string[]) => void
   queryResult: (text: string, err: string) => string
+  completions: () => Array<[string, number]>
 }> {
   const wasmPath = resolve(__dirname, '../../public/shell.wasm')
   const wasmBuffer = readFileSync(wasmPath)
@@ -61,6 +62,7 @@ async function bootShell(files: File[]): Promise<{
 
   let output = ''
   let dispatched = ''
+  const completed: Array<[string, number]> = []
 
   const callbacks = {
     write: (data: string) => { output += data },
@@ -118,6 +120,8 @@ async function bootShell(files: File[]): Promise<{
     fsGetWatchResults: () => ({ results: [] }),
     onRangeChange: () => {},
     builtinExecuted: () => {},
+    // Host hook: every completed shell line, with its exit code.
+    commandCompleted: (line: string, exitCode: number) => { completed.push([line, exitCode]) },
   }
 
   // wasmInit is registered by cmd/wasm/main.go
@@ -145,6 +149,7 @@ async function bootShell(files: File[]): Promise<{
       return output
     },
     dispatchedPipeline: () => dispatched,
+    completions: () => completed.slice(),
     getDirStack: () => g.wasmGetDirStack() as string[],
     setDirStack: (stack: string[]) => g.wasmSetDirStack(stack),
     queryResult: (text: string, err: string) => {
@@ -198,5 +203,39 @@ describe('dirstack courier (wasm exports)', () => {
     shell.setDirStack(['/tmp'])
     const redraw = shell.queryResult('', '')
     expect(redraw).toContain('/tmp')
+  })
+})
+
+// Lesson/progress tracking is driven from the browser: the shell core
+// publishes CommandCompleted for every line, and the wasm bridge forwards
+// it to the host as commandCompleted(line, exitCode). That covers inline
+// builtins (`history`) and lines whose pipe stages the client handles
+// itself, which the server's exec-path never sees in full.
+describe('commandCompleted host hook (wasm)', () => {
+  const settle = () => new Promise(r => setTimeout(r, 30))
+
+  it('reports an inline builtin with exit 0', async () => {
+    const shell = await bootShell([])
+    shell.exec('history')
+    await settle()
+    expect(shell.completions()).toContainEqual(['history', 0])
+  })
+
+  it('reports a dispatched line with the full text once its result arrives', async () => {
+    const shell = await bootShell([])
+    shell.exec('tail /log/a/b/main.log | grep ERROR')
+    shell.queryResult('', '')
+    await settle()
+    expect(shell.completions()).toContainEqual(['tail /log/a/b/main.log | grep ERROR', 0])
+  })
+
+  it('reports a failed line with a non-zero exit code', async () => {
+    const shell = await bootShell([])
+    shell.exec('cat /log/nope.log')
+    shell.queryResult('', 'boom')
+    await settle()
+    const done = shell.completions().find(([line]) => line === 'cat /log/nope.log')
+    expect(done).toBeDefined()
+    expect(done![1]).not.toBe(0)
   })
 })

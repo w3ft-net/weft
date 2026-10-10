@@ -1,6 +1,9 @@
 package onboarding
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCheckPipeline(t *testing.T) {
 	cases := []struct {
@@ -14,7 +17,7 @@ func TestCheckPipeline(t *testing.T) {
 		{"shell-tail-f", "tail -f /log/loom/prod/api/main.log", true},
 		{"shell-cd", "cd /log/loom/prod/api", true},
 		{"shell-grep-awk", "tail /log/loom/prod/api/main.log | grep ERROR | awk '{print HOST, $1, $5}'", true},
-		{"shell-trace-find", "tail /log/loom/prod/api/main.log | grep checkout | awk '{print TRACE_ID}'", true},
+		{"shell-trace-find", "tail /log/loom/prod/api/main.log | grep ' checkout ' | awk '{print TRACE_ID}'", true},
 		{"shell-alert", "tail /log/loom/prod/api/main.log | grep ERROR | wc -l | alert above 0", true},
 		{"shell-notify", "cat /etc/notify.yaml", true},
 		{"shell-cron", "ls -l /cron.d/", true},
@@ -97,6 +100,42 @@ func TestEveryLessonHasActionOrPattern(t *testing.T) {
 		l := Lookup(step)
 		if l.Action == "" && l.ActionPattern == nil {
 			t.Errorf("lesson %q has neither Action nor ActionPattern — no pipeline could ever advance it", step)
+		}
+	}
+}
+
+// TourOverlay renders the shell-phase card only for steps whose name starts
+// with "shell-" (any other non-panel step makes the overlay unmount, leaving
+// the user with no card and no prefilled command). Every lesson must keep
+// that prefix.
+func TestEveryLessonStepHasShellPrefix(t *testing.T) {
+	for _, step := range Steps() {
+		if !strings.HasPrefix(step, "shell-") {
+			t.Errorf("lesson step %q must start with \"shell-\" or the tour overlay disappears at that lesson", step)
+		}
+	}
+}
+
+// A lesson advances on a clean exit. Ctrl+C reports exit 130 (SIGINT), which
+// normally means "interrupted before it finished" — except for the live-tail
+// lesson, where stopping the stream is exactly how the lesson is completed.
+func TestAdvancesOnExit(t *testing.T) {
+	cases := []struct {
+		step string
+		exit int
+		want bool
+	}{
+		{"shell-history", 0, true},
+		{"shell-history", 1, false},
+		{"shell-history", 130, false}, // interrupting an ordinary command is not completing it
+		{"shell-tail-f", 0, true},
+		{"shell-tail-f", 130, true}, // stopping the live tail IS the lesson
+		{"shell-tail-f", 1, false},
+		{"no-such-step", 0, false},
+	}
+	for _, c := range cases {
+		if got := AdvancesOnExit(c.step, c.exit); got != c.want {
+			t.Errorf("AdvancesOnExit(%q, %d) = %v, want %v", c.step, c.exit, got, c.want)
 		}
 	}
 }

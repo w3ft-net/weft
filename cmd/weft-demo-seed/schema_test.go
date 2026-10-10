@@ -5,14 +5,12 @@ import (
 	"testing"
 )
 
-// TestMinimalSchemaYAML_TraceIDFieldGated pins the exact bug this gate
-// exists to prevent: trace_id_field must only ever be set for a
-// producer that actually emits a bare trace ID at field 3
-// (cmd/loom-producer's Go binary, prod-only). Every dev-seeded
-// customer — Loom included — still runs the unmodified Python
-// dev/demo/generator.py, which doesn't; pointing trace_id_field at
-// field 3 there would silently extract the event name into the
-// reserved trace_id column instead.
+// TestMinimalSchemaYAML_TraceIDFieldGated pins the bug this gate exists to
+// prevent: trace_id_field must only be set for a producer that emits a bare
+// trace ID at field 3 (cmd/loom-producer's Go binary). The Python
+// dev/demo/generator.py behind acme and globex doesn't; pointing
+// trace_id_field at its field 3 would silently extract the event name into
+// the reserved trace_id column instead. See emitsTraceID for who qualifies.
 func TestMinimalSchemaYAML_TraceIDFieldGated(t *testing.T) {
 	withTrace := minimalSchemaYAML("api", true)
 	if !strings.Contains(withTrace, `trace_id_field: "3"`) {

@@ -10,7 +10,7 @@
 // left pane 1 spinning "querying shards…" forever.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { execQuery, execFollow } from '../wasm/network'
+import { execQuery, execFollow, reportCommandCompleted } from '../wasm/network'
 
 // Minimal window stub carrying just the wasm* delivery exports the
 // network layer calls. In the plain-node vitest pool there is no DOM.
@@ -232,5 +232,55 @@ describe('query/follow result routing', () => {
 
       expect(w.wasmSetDirStack).toHaveBeenCalledWith(['/tmp'])
     })
+  })
+})
+
+// The browser reports every completed shell line to the server so the tour
+// advances from what the user actually ran. The card must refresh whether
+// or not this report was the one that advanced the step — the server's own
+// exec-path hook may have advanced it first, which would leave the card
+// stale.
+describe('reportCommandCompleted', () => {
+  const noContent = () => ({ ok: true, status: 204, json: async () => ({}) } as unknown as Response)
+  let events: Array<{ type: string; detail: unknown }>
+
+  beforeEach(() => {
+    const w = installWindow() as unknown as Record<string, unknown>
+    events = []
+    w.dispatchEvent = (e: Event) => { events.push({ type: e.type, detail: (e as CustomEvent).detail }); return true }
+  })
+
+  it('posts the full line and its exit code', async () => {
+    const fetchMock = vi.fn(async () => noContent())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await reportCommandCompleted('history', 0)
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toContain('/api/shell/builtin')
+    expect(JSON.parse(init.body as string)).toEqual({ pipeline: 'history', exit_code: 0 })
+  })
+
+  it('tells the tour the new step when this report advanced it', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ step: 'shell-tmp' }) } as unknown as Response)))
+
+    await reportCommandCompleted('history', 0)
+
+    expect(events).toEqual([{ type: 'tour-advance', detail: { step: 'shell-tmp' } }])
+  })
+
+  it('still asks the tour to refresh when the report did not advance anything', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => noContent()))
+
+    await reportCommandCompleted('tail -f /log/x', 0)
+
+    expect(events).toEqual([{ type: 'tour-advance', detail: { step: undefined } }])
+  })
+
+  it('does not throw when the API is unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('Failed to fetch') }))
+
+    await expect(reportCommandCompleted('ls', 0)).resolves.toBeUndefined()
+    expect(events).toEqual([])
   })
 })

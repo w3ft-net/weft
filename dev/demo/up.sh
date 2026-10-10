@@ -2,11 +2,12 @@
 # Bring up the multi-customer demo:
 #   1. ensure base stack (postgres, coordinator, etc.) is running
 #   2. mint fresh agent tokens via weft-demo-seed (always; old tokens revoked)
-#   3. start the 18 demo service containers (acme: 6, globex: 6, loom: 6)
+#   3. start the demo service containers (acme: 6, globex: 6) and the Loom
+#      producer (1 container running the same Go cmd/loom-producer as prod)
 #
 # Loom Inc is the populated org used by the onboarding tour — every
-# signup gets a read-only membership in it. Its producer containers
-# follow the same shape as acme/globex.
+# signup gets a read-only membership in it. Unlike acme/globex, its streams
+# come from the Go loom-producer, so they carry trace IDs.
 #
 #   ./dev/demo/up.sh
 
@@ -32,7 +33,7 @@ go build -o "${SEED_BIN}" ./cmd/weft-demo-seed
 
 # Always re-mint tokens so they match the current DB state. Without
 # this, a postgres volume recreate leaves tokens.env pointing at hashes
-# that no longer exist, and all 18 producers crash-loop on auth.
+# that no longer exist, and every producer crash-loops on auth.
 rm -f "${TOKENS}"
 
 echo "→ seeding customers/users/tokens (before API starts)"
@@ -47,7 +48,7 @@ WEFT_ALLOW_SCHEMA_BOOTSTRAP=1 "./${SEED_BIN}" --db-dsn "${DSN}" --tokens-out "${
 echo "→ building weft-server image + starting coordinator, api, compute"
 docker compose up -d --build compute coordinator api
 
-echo "→ bringing up 18 demo services (acme + globex + loom)"
+echo "→ bringing up 13 demo services (12 acme + globex, plus the loom producer)"
 docker compose \
   -f docker-compose.yml \
   -f docker-compose.demo.yml \
@@ -59,9 +60,7 @@ docker compose \
   globex-orders-staging globex-orders-prod \
   globex-billing-staging globex-billing-prod \
   globex-notifier-staging globex-notifier-prod \
-  loom-api-sand loom-api-prod \
-  loom-worker-sand loom-worker-prod \
-  loom-edge-sand loom-edge-prod
+  loom-producer
 
 cat <<'EOF'
 → done.

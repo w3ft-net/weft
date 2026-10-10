@@ -1,0 +1,17 @@
+# The build context is ~/dev (compose uses `context: ..`), so these
+# patterns are relative to that root, not to weft/. Without this file
+# every build streamed the whole tree to the daemon — including the
+# 500MB+ prod.sql dump and ~8GB of local dev/shard-data DuckDB files,
+# which filled the disk. The images only need Go sources, the embedded
+# migrations/schema, and deploy/ scripts from warp, saaskit and weft.
+**/.git
+**/node_modules
+weft/frontend
+weft/prod.sql
+weft/*.sql.gz
+weft/results*
+weft/*.log
+weft/coverage-baseline.*
+weft/dev/demo/tokens.env
+**/dist
+weft/dev/shard-data

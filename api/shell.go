@@ -183,7 +183,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 			// execution) every other lesson already uses; there's no
 			// way to distinguish a deliberate stop from an accidental
 			// disconnect, which is an accepted tradeoff here.
-			s.maybeAdvanceShellLesson(session, req.Pipeline)
+			s.maybeAdvanceShellLesson(session, req.Pipeline, nil)
 			return
 
 		case <-ticker.C:
@@ -204,7 +204,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 				// the current lesson's predicate, advance the step
 				// and emit the next lesson's prompt so the UI banner
 				// can update without waiting for a /me poll.
-				if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline); advanced {
+				if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline, nil); advanced {
 					writeSSEEvent(w, map[string]any{
 						"type":   "tour_advance",
 						"step":   newStep,
