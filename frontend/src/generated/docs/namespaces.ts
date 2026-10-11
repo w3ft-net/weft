@@ -9,6 +9,7 @@ const namespaces = {
   headings: [
     { level: 2, id: "create-a-namespace", text: "Create a namespace" },
     { level: 2, id: "log-path-layout", text: "Log path layout" },
+    { level: 3, id: "where-the-service-name-comes-from", text: "Where the service name comes from" },
   ],
   html: `<h2 id="create-a-namespace">Create a namespace</h2>
 <p>Namespaces group related log sources. A typical setup has one namespace per
@@ -42,6 +43,14 @@ never has to guess.</li>
 <code>heartbeats</code>, <code>metrics</code>, and <code>runtime</code> for services that emit
 telemetry. It is always present.</li>
 </ul>
+<h3 id="where-the-service-name-comes-from">Where the service name comes from</h3>
+<p>Each producer decides the service name; weft never rewrites it.</p>
+<p>| Producer | <code>&lt;service&gt;</code> | <code>&lt;kind&gt;</code> |
+|---|---|---|
+| weftd | The source's <code>service:</code> setting. If omitted: the systemd <code>unit:</code> name without <code>.service</code>, else the log file's name without its extension. | <code>main</code> unless the source sets a kind |
+| Heroku | The Heroku app name | The dyno process type (<code>web</code>, <code>worker</code>, ...); platform events go to <code>platform</code> |
+| Render | The Render service slug | The process type (<code>web</code>, <code>cron</code>, <code>bld</code>, ...) |
+| CloudWatch | The service you registered for the log group with <code>weft source add --service</code>. Events from unregistered log groups are dropped. | <code>main</code> |</p>
 <p>A namespace can hold env-less and env-bearing streams side by side
 as different tokens reauth over time. Env, region, deployment,
 host, and pod are query-time dimensions (<code>awk 'ENV == &quot;prod&quot;'</code>),

@@ -48,7 +48,7 @@ var manualCategories = []manualCategory{
 	{
 		ID:      "customize",
 		Label:   "Customize",
-		Summary: "Build named weft functions, save reusable scripts, share them across the team, and review their history with wit.",
+		Summary: "Build named weft functions, save reusable scripts, share them across the team, and review their history with git.",
 	},
 }
 

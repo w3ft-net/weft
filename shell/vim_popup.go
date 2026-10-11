@@ -107,7 +107,7 @@ func isVersionedPath(path string) bool {
 // line(s) become the commit message; comments and blank lines are
 // stripped.
 const messagePopupHeader = `# Commit message for %s.
-# One or more lines; the first line is the subject shown in ` + "`wit log`." + `
+# One or more lines; the first line is the subject shown in ` + "`git log`." + `
 # Save & exit (:wq) to record. Quit without saving (:q!) to skip.`
 
 // openMessagePopup swaps the active vim editor for a follow-up
@@ -139,7 +139,7 @@ func openMessagePopup(core *shellcore.ShellCore, path string, warnings []string)
 			core.ExitVim()
 		},
 	}
-	core.StartVimBuffer(":wit-message:", header, hooks)
+	core.StartVimBuffer(":git-message:", header, hooks)
 	// Move the cursor to the empty line below the comments so the
 	// user can start typing immediately.
 	if ed := core.VimEditor(); ed != nil {

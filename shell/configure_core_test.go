@@ -108,7 +108,7 @@ func TestConfigureCore_RangeBuiltinAcceptsSpec(t *testing.T) {
 
 // TestConfigureCore_HelpBuiltinsServesWeftCorpus locks in the
 // behavior that `help builtins` prints the weft-flavored corpus
-// (cat /log/<app>.log, ls /cron.d, wit, alert, range, etc.). Test
+// (cat /log/<app>.log, ls /cron.d, git, alert, range, etc.). Test
 // is the regression guard around the move that takes the docs_gen
 // constants + dispatch out of warp's shellcore (where it was the
 // hardcoded default) and into weft (where it lives as the
@@ -137,7 +137,7 @@ func TestConfigureCore_HelpBuiltinsServesWeftCorpus(t *testing.T) {
 	for _, marker := range []string{
 		"Querying logs",
 		"cat /log/",
-		"wit",
+		"git",
 		"chart",
 	} {
 		if !strings.Contains(visible, marker) {

@@ -25,7 +25,9 @@ delivery plus Firehose's buffering (roughly a minute at the lowest
 buffering setting the CloudFormation template uses). For sub-second
 tailing install weftd instead.</p>
 <h3 id="1-register-the-source">1. Register the source</h3>
-<p>Use the <code>weft</code> CLI to tell weft which log group maps to which service.
+<p>Use the <code>weft</code> CLI to tell weft which log group maps to which service
+(the <code>--service</code> you pick becomes the <code>&lt;service&gt;</code> path segment; see
+<strong>Namespaces</strong>).
 Run this from any machine with the <code>weft</code> binary installed and a valid
 login.</p>
 <pre><code>weft source add \\

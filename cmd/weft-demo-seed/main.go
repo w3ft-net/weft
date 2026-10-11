@@ -156,7 +156,7 @@ var shapes = map[shapeKey]string{
 }
 
 // errorRatios mirrors shapes — a couple of "noisy" services give the
-// alerting/wit demos something to fire on.
+// alerting/git demos something to fire on.
 var errorRatios = map[shapeKey]float64{
 	{"acme", "api", "prod"}:          0.08,
 	{"globex", "billing", "staging"}: 0.12,
@@ -259,7 +259,7 @@ func seed(s *store.Store, tokensOut string) error {
 		}
 
 		// Pre-seeded /bin and /cron.d content — give the team an initial
-		// state with multi-author wit history. Pass the customer slug
+		// state with multi-author git history. Pass the customer slug
 		// so the canned scripts/watches can reference paths that
 		// actually resolve in this customer's namespace.
 		if err := preseedScripts(s, cust.ID, c.Name, members); err != nil {
@@ -370,7 +370,7 @@ func seedProdLoom(s *store.Store, tokensOut string) error {
 	}
 
 	// Users — the same three @loom.test addresses dev uses. They're
-	// here in prod long-term to give wit log non-NULL authors for the
+	// here in prod long-term to give git log non-NULL authors for the
 	// preseeded /bin and /cron.d history; they're unreachable so a
 	// magic-link login attempt against them just dead-ends.
 	var members []*store.User
@@ -688,7 +688,7 @@ func preseedScripts(s *store.Store, custID store.OrgID, customerName string, mem
 	// Lua. The tour's `shell-bin-lua` lesson points here.
 	severityV1 := `#!/usr/bin/lua
 -- Weighted severity sum from a log stream. ERROR=1, WARN=0.1.
--- See /bin/severity for the version-history; ` + "`wit log /bin/severity`" + `.
+-- See /bin/severity for the version-history; ` + "`git log -- /bin/severity`" + `.
 local total = 0
 for line in lines() do
   if line:find("ERROR") then total = total + 1

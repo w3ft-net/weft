@@ -55,7 +55,7 @@ const NARRATIVES: { start: number; end: number; title: string; body: ReactNode }
     body: <>
       <code>chart</code> and <code>dashboard</code> render in both. scripts in{' '}
       <code>/bin</code> (bash or lua) compose into pipelines; every save is
-      versioned with <code>wit</code>.
+      versioned with <code>git</code>.
     </>,
   },
 ]

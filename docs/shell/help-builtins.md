@@ -54,16 +54,21 @@ web:
 - `paste <a> <b> [...]` — column-merge files line-by-line (`-d`)
 - `wc <files>` — `-l` lines, `-w` words, `-c` bytes, `-m` chars, `-L` longest line
 
-## Version history (wit)
+## Version history (git)
 
-- `wit log <path>` — list versions; `-p` includes diffs
-- `wit show <path> <ref>` — print a version's content
-- `wit diff <path> <a>..<b>` — unified diff between two refs
-- `wit checkout <path> <ref>` — make a past version the new HEAD
-- `wit amend [-m MSG] <path> [<ref>]` — set a commit message
+`git` is a subset of git over `/bin` and `/cron.d`; HEAD is the org's latest change.
 
-Refs: `HEAD`, `HEAD^`, `HEAD^N`, or a hash prefix (≥4 hex chars).
-Tracked under `/bin` and `/cron.d` only; last 5 versions retained.
+- `git log [-p] [--oneline] [-- <path>]` — list versions; `-p` includes diffs
+- `git show <rev>[:<path>]` — a commit, or a file's content at that revision
+- `git diff <a> <b> [-- <path>]` — unified diff between two revisions
+- `git blame <path>` — who last changed each line
+- `git restore --source=<rev> <path>` — make a past version current (a new commit)
+- `git revert <rev>` — undo one commit with a new commit
+- `git commit --amend -m MSG` — reword the latest commit
+
+Revisions: `HEAD`, `HEAD~N`, `<a>..<b>`, or a hash prefix (≥4 hex chars).
+Tracked under `/bin` and `/cron.d` only; last 5 past versions retained.
+Other git commands are refused as unsupported.
 
 ## Sharing
 

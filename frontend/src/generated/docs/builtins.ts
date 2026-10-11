@@ -11,7 +11,7 @@ const builtins = {
     { level: 2, id: "text-pipeline", text: "Text pipeline" },
     { level: 2, id: "filesystem", text: "Filesystem" },
     { level: 2, id: "working-on-saved-results", text: "Working on saved results" },
-    { level: 2, id: "version-history-wit", text: "Version history (wit)" },
+    { level: 2, id: "version-history-git", text: "Version history (git)" },
     { level: 2, id: "sharing", text: "Sharing" },
     { level: 2, id: "team-owners", text: "Team (owners)" },
     { level: 2, id: "alerting", text: "Alerting" },
@@ -60,16 +60,20 @@ const builtins = {
 <li><code>paste &lt;a&gt; &lt;b&gt; [...]</code> — column-merge files line-by-line (<code>-d</code>)</li>
 <li><code>wc &lt;files&gt;</code> — <code>-l</code> lines, <code>-w</code> words, <code>-c</code> bytes, <code>-m</code> chars, <code>-L</code> longest line</li>
 </ul>
-<h2 id="version-history-wit">Version history (wit)</h2>
+<h2 id="version-history-git">Version history (git)</h2>
+<p><code>git</code> is a subset of git over <code>/bin</code> and <code>/cron.d</code>; HEAD is the org's latest change.</p>
 <ul>
-<li><code>wit log &lt;path&gt;</code> — list versions; <code>-p</code> includes diffs</li>
-<li><code>wit show &lt;path&gt; &lt;ref&gt;</code> — print a version's content</li>
-<li><code>wit diff &lt;path&gt; &lt;a&gt;..&lt;b&gt;</code> — unified diff between two refs</li>
-<li><code>wit checkout &lt;path&gt; &lt;ref&gt;</code> — make a past version the new HEAD</li>
-<li><code>wit amend [-m MSG] &lt;path&gt; [&lt;ref&gt;]</code> — set a commit message</li>
+<li><code>git log [-p] [--oneline] [-- &lt;path&gt;]</code> — list versions; <code>-p</code> includes diffs</li>
+<li><code>git show &lt;rev&gt;[:&lt;path&gt;]</code> — a commit, or a file's content at that revision</li>
+<li><code>git diff &lt;a&gt; &lt;b&gt; [-- &lt;path&gt;]</code> — unified diff between two revisions</li>
+<li><code>git blame &lt;path&gt;</code> — who last changed each line</li>
+<li><code>git restore --source=&lt;rev&gt; &lt;path&gt;</code> — make a past version current (a new commit)</li>
+<li><code>git revert &lt;rev&gt;</code> — undo one commit with a new commit</li>
+<li><code>git commit --amend -m MSG</code> — reword the latest commit</li>
 </ul>
-<p>Refs: <code>HEAD</code>, <code>HEAD^</code>, <code>HEAD^N</code>, or a hash prefix (≥4 hex chars).
-Tracked under <code>/bin</code> and <code>/cron.d</code> only; last 5 versions retained.</p>
+<p>Revisions: <code>HEAD</code>, <code>HEAD~N</code>, <code>&lt;a&gt;..&lt;b&gt;</code>, or a hash prefix (≥4 hex chars).
+Tracked under <code>/bin</code> and <code>/cron.d</code> only; last 5 past versions retained.
+Other git commands are refused as unsupported.</p>
 <h2 id="sharing">Sharing</h2>
 <ul>
 <li><code>clipboard /bin/&lt;name&gt;</code> — copy a deep link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (<code>man clipboard</code>)</li>

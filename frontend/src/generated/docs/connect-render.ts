@@ -58,7 +58,8 @@ cron.log
 weft&gt; tail /log/myco/myservice/web.log
 </code></pre>
 <h3 id="how-render-services-map-to-pseudofiles">How Render services map to pseudofiles</h3>
-<p>Render's service slug becomes the weft service name; the process type
+<p>Render's service slug becomes the weft service name (see <strong>Namespaces</strong>
+for how every producer chooses its service name); the process type
 (<code>web</code>, <code>cron</code>, and an undocumented <code>bld</code> for build-step output) becomes
 <code>kind</code>; the trailing instance id is stamped on <code>instance</code> for per-instance
 filtering without splitting the pseudofile:</p>

@@ -156,9 +156,9 @@ generated files must match the source at commit time.
 
 ## Challenge: add a new man page
 
-**Goal:** add a `man wit` page that documents the version history
-commands (`wit log`, `wit show`, `wit diff`, `wit checkout`,
-`wit amend`), and make it appear in both the shell and the web
+**Goal:** add a `man git` page that documents the version history
+commands (`git log`, `git show`, `git diff`, `git restore`,
+`git commit --amend`), and make it appear in both the shell and the web
 manual.
 
 ### Setup

@@ -91,9 +91,9 @@ performance.</p>
 <h2 id="editing-a-script-with-vi">Editing a script with <code>vi</code></h2>
 <p><code>vi /bin/&lt;name&gt;</code> opens the script for editing. After <code>:w</code>, the
 shell drops you into a follow-up buffer asking for an optional
-commit message — <code>:wq</code> to record, <code>:q!</code> to skip. See <strong>wit</strong> for
-the full version-control workflow, including <code>wit log</code>,
-<code>wit show</code>, <code>wit diff</code>, <code>wit checkout</code>, and <code>wit amend</code>.</p>
+commit message — <code>:wq</code> to record, <code>:q!</code> to skip. See <strong>git</strong> for
+the full version-control workflow, including <code>git log</code>,
+<code>git show</code>, <code>git diff</code>, <code>git restore</code>, and <code>git commit --amend</code>.</p>
 <p>The five most recent past versions are kept; older saves are
 discarded. Watch this if you iterate quickly — there's no
 recycle bin past the cap.</p>

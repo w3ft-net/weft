@@ -111,9 +111,9 @@ performance.
 
 `vi /bin/<name>` opens the script for editing. After `:w`, the
 shell drops you into a follow-up buffer asking for an optional
-commit message — `:wq` to record, `:q!` to skip. See **wit** for
-the full version-control workflow, including `wit log`,
-`wit show`, `wit diff`, `wit checkout`, and `wit amend`.
+commit message — `:wq` to record, `:q!` to skip. See **git** for
+the full version-control workflow, including `git log`,
+`git show`, `git diff`, `git restore`, and `git commit --amend`.
 
 The five most recent past versions are kept; older saves are
 discarded. Watch this if you iterate quickly — there's no

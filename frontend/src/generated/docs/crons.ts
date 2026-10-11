@@ -52,9 +52,9 @@ plan — see the <strong>Account</strong> page for your current caps, or run
 <code>help cron</code> in the shell.</p>
 <h3 id="cron-version-history">Cron version history</h3>
 <p>Every save to <code>/cron.d/&lt;name&gt;</code> is captured. After <code>:w</code>, the shell
-prompts for an optional commit message; <code>wit log /cron.d/&lt;name&gt;</code>
-lists past versions, <code>wit checkout /cron.d/&lt;name&gt; HEAD^2</code> rolls
-back. Five most recent past versions are kept. See <strong>wit</strong> for
+prompts for an optional commit message; <code>git log -- /cron.d/&lt;name&gt;</code>
+lists past versions, <code>git restore --source=HEAD~2 /cron.d/&lt;name&gt;</code>
+rolls back. Five most recent past versions are kept. See <strong>git</strong> for
 the full surface.</p>
 `,
 } as const;

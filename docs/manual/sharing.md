@@ -38,7 +38,7 @@ Three things travel in the URL:
 The recipient lands at the script's HEAD version. Pinning to a
 specific past version isn't supported today; if a teammate needs to
 see how the script behaved before someone edited it, they pair the
-link with `wit log /bin/<name>` to read the history.
+link with `git log -- /bin/<name>` to read the history.
 
 ## Why this and not copy-paste
 
@@ -46,7 +46,7 @@ Pasting a pipeline directly into Slack loses the time window, often
 breaks single-quote rich content like `awk` and `jq` programs, and
 makes parameterised scripts hard to share. A `/bin/` script with a
 deep link sidesteps all three: the script body lives in your org's
-`/bin/`, version-tracked by `wit`, with the link carrying only the
+`/bin/`, version-tracked by `git`, with the link carrying only the
 runtime context (range + args).
 
 If the thing you want to share isn't a `/bin/` script yet, save it

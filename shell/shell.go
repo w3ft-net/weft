@@ -131,7 +131,7 @@ type Shell struct {
 
 // ConfigureCore wires every embedder-owned surface weft installs on a
 // fresh shellcore — syntax fallback, FS + chart/dashboard hookups,
-// user/customer prompt, range, help corpus, wit subcommand grammar,
+// user/customer prompt, range, help corpus, git subcommand grammar,
 // reserved names, `range` builtin, and the vim post-save popup. The
 // CLI Run() and the browser cmd/wasm bridge both go through this
 // single entry point. History persistence is intentionally NOT set
@@ -183,14 +183,14 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	core.SetHelp(weftHelp{tiers: defaultTierLimits{}})
 	// No client-side path rewriter anymore: the shell ships every line
 	// verbatim and the server (a real pkg/bash interpreter) resolves
-	// paths, so `wit log <path>` reaches it with the `log` subcommand
+	// paths, so `git log -- <path>` reaches it with the `log` subcommand
 	// keyword intact — no grammar registration needed.
 	// Reserve weft's natively-implemented command names so a saved
 	// /bin/<name> function can't shadow them. These run through the
 	// bash interpreter's RegisterCommand path (see
 	// coordinator/weftcmds.go), not shellcore's RegisterBuiltin.
 	for _, name := range []string{
-		"alert",
+		"alert", "git",
 		"weft.latest", "weft.avg", "weft.max", "weft.min",
 		"weft.sum", "weft.stddev", "weft.first", "weft.count",
 		"weft.percentile", "weft.delta", "weft.slope", "weft.rate",

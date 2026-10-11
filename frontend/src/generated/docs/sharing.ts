@@ -38,13 +38,13 @@ original shell quoting.</li>
 <p>The recipient lands at the script's HEAD version. Pinning to a
 specific past version isn't supported today; if a teammate needs to
 see how the script behaved before someone edited it, they pair the
-link with <code>wit log /bin/&lt;name&gt;</code> to read the history.</p>
+link with <code>git log -- /bin/&lt;name&gt;</code> to read the history.</p>
 <h2 id="why-this-and-not-copy-paste">Why this and not copy-paste</h2>
 <p>Pasting a pipeline directly into Slack loses the time window, often
 breaks single-quote rich content like <code>awk</code> and <code>jq</code> programs, and
 makes parameterised scripts hard to share. A <code>/bin/</code> script with a
 deep link sidesteps all three: the script body lives in your org's
-<code>/bin/</code>, version-tracked by <code>wit</code>, with the link carrying only the
+<code>/bin/</code>, version-tracked by <code>git</code>, with the link carrying only the
 runtime context (range + args).</p>
 <p>If the thing you want to share isn't a <code>/bin/</code> script yet, save it
 first:</p>

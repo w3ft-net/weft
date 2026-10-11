@@ -61,7 +61,7 @@ plan — see the **Account** page for your current caps, or run
 ### Cron version history
 
 Every save to `/cron.d/<name>` is captured. After `:w`, the shell
-prompts for an optional commit message; `wit log /cron.d/<name>`
-lists past versions, `wit checkout /cron.d/<name> HEAD^2` rolls
-back. Five most recent past versions are kept. See **wit** for
+prompts for an optional commit message; `git log -- /cron.d/<name>`
+lists past versions, `git restore --source=HEAD~2 /cron.d/<name>`
+rolls back. Five most recent past versions are kept. See **git** for
 the full surface.

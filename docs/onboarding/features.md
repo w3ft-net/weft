@@ -86,7 +86,7 @@ tail -n 500 /log/myco/api/main.log | awk 'LEVEL == "ERROR"' | wc -l
 - Results: stored in a `cron_results` table with timestamps,
   enabling time-series queries.
 - Version history: every save records a version in
-  `cron_version_history`. The `wit` commands operate on these.
+  `cron_version_history`. The `git` command (a subset of git, see `witrepo/`) reads and writes these.
 - Filesystem: `shellfs/shellfs.go` handles reads/writes to
   `/cron.d/` paths, validates the schedule header, and delegates
   to the store.
@@ -213,7 +213,7 @@ lua` shebang.
 - Execution: the coordinator loads the script body, parses it with
   `bash.Parse()`, applies the `BinScriptTransform` (query
   rewriter), and executes it.
-- Version history: same `wit` integration as crons.
+- Version history: same `git` integration as crons.
 - Store: scripts are rows in the `shell_functions` table, scoped
   to `customer_id`.
 

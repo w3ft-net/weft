@@ -7,9 +7,11 @@ const installWeftd = {
   category: "connect-source",
   order: 30,
   headings: [
+    { level: 3, id: "service-names", text: "Service names" },
     { level: 3, id: "token", text: "Token" },
     { level: 3, id: "file-sourced-dimensions", text: "File-sourced dimensions" },
     { level: 3, id: "schema-types", text: "Schema types" },
+    { level: 3, id: "resuming-after-a-restart", text: "Resuming after a restart" },
     { level: 3, id: "system-metrics-optional", text: "System metrics (optional)" },
     { level: 3, id: "app-api-emit-events-and-heartbeats-from-your-services", text: "App API: emit events and heartbeats from your services" },
   ],
@@ -64,6 +66,15 @@ generates or overwrites it. Start from <code>/etc/weftd/config.yaml.example</cod
 Repeated source fields can be DRYed with standard YAML anchors and
 merge keys (<code>&amp;name</code> / <code>&lt;&lt;: *name</code>); weftd ignores an <code>x-anchors:</code>
 holder block, so it's a convenient place to declare them.</p>
+<h3 id="service-names">Service names</h3>
+<p>Each source's <code>service:</code> sets the <code>&lt;service&gt;</code> segment of its
+pseudofile path. It is optional: for a systemd source (<code>unit:</code>) weftd
+uses the unit name without <code>.service</code>, and for a file source (<code>path:</code>)
+it uses the file's name without its extension, so
+<code>/var/log/myapp/api.log</code> becomes <code>api</code>. Set <code>service:</code> explicitly when
+several files should share one service, or when the derived name isn't
+the one you want. This is separate from the top-level <code>services:</code> list
+above, which only controls how host metrics fan out.</p>
 <h3 id="token">Token</h3>
 <p>Put <code>token:</code> in the config file, <strong>or</strong> supply it via the
 <code>WEFTD_TOKEN</code> environment variable (e.g. in <code>/etc/default/weftd</code>).
@@ -102,6 +113,49 @@ sudo systemctl enable --now weftd
 sudo systemctl status weftd
 journalctl -u weftd -f
 </code></pre>
+<h3 id="resuming-after-a-restart">Resuming after a restart</h3>
+<p>weftd remembers how far it has delivered each tailed file, so a restart
+(an upgrade, a reboot, a crash) picks up where it left off instead of
+skipping whatever was written in the meantime. The saved position means
+&quot;the coordinator acknowledged everything up to here&quot;, not &quot;weftd read up to
+here&quot;, so lines that were in flight when weftd stopped are sent again rather
+than lost. Delivery is at-least-once: after an unclean stop you may see a few
+seconds of lines twice, never a gap.</p>
+<p>State is kept in <code>/var/lib/weftd/checkpoints/</code>. The <code>.deb</code> unit creates it
+(<code>StateDirectory=weftd</code>). Everything is optional:</p>
+<pre><code class="language-yaml">checkpoint:
+  dir: /var/lib/weftd/checkpoints   # where state.json lives
+  enabled: true                     # set false to tail from the end on every start
+  flush_interval: 5s                # how often positions are written to disk
+  commit_interval: 15s              # how often delivered lines are acknowledged
+  max_resume_bytes: 256MiB          # per-file cap on backlog replayed after downtime
+</code></pre>
+<p>What weftd does for each file when it starts:</p>
+<p>| Situation | Starts at |
+|---|---|
+| First start with checkpointing (no state yet) | the end of the file |
+| File has no saved position (appeared while weftd was down) | the beginning |
+| File matches its saved position | the saved position |
+| File is shorter than the saved position (truncated) | the beginning |
+| File was replaced while weftd was down (rotated) | the beginning; the old file's unread tail is not recovered |
+| More than <code>max_resume_bytes</code> behind | the newest <code>max_resume_bytes</code>, from a line boundary |</p>
+<p>A file is matched by device, inode and a hash of its first kilobyte, so a
+reused inode is not mistaken for the same file. Files created while weftd is
+running are read from their first line. Every skip or replay is logged, and
+summarized once a minute as a <code>checkpoint stats</code> line per file.</p>
+<p>Notes:</p>
+<ul>
+<li><strong>The first restart onto a version with checkpointing still loses lines in
+flight</strong>, because the old binary does the shutdown. The guarantee starts
+from the second restart.</li>
+<li><strong>Containers:</strong> the state directory must survive the pod. On Kubernetes,
+mount <code>/var/lib/weftd</code> from a <code>hostPath</code>; an <code>emptyDir</code> or the container
+filesystem is wiped on every reschedule, which is exactly when you need it.</li>
+<li><strong>Two weftd on one host</strong> cannot share a state directory. The second one
+logs that the directory is locked and runs without checkpointing.</li>
+<li>A damaged <code>state.json</code> is moved to <code>state.json.corrupt</code> and weftd carries
+on as if freshly installed; it never refuses to start.</li>
+</ul>
 <h3 id="system-metrics-optional">System metrics (optional)</h3>
 <p>weftd can also ship host metrics alongside log lines. Opt in by
 attaching a <code>metrics:</code> block to any source in the config — the block

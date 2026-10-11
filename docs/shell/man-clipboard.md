@@ -88,4 +88,4 @@ clipboard /bin/check --range=yesterday..today -- prod
 
 ## SEE ALSO
 
-range, wit, vi, cat
+range, git, vi, cat
