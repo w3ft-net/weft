@@ -26,6 +26,7 @@ import (
 	"github.com/graybeardcorp/weft/shellfs"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/theme"
+	"github.com/graybeardcorp/weft/witrepo"
 )
 
 // TimeRange aliases logdb.TimeRange so callers inside the coordinator
@@ -1348,11 +1349,13 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		RegisterWeftPredicates(interp, wf)
 		interp.LuaExtensions = []luapkg.Extension{wf.LuaExtension()}
 
-		// `wit` version-history surface — log/show/diff/checkout/amend
-		// for /bin and /cron.d entities. Same scope as the weft.*
-		// helpers; one WitFuncs per request carries the acting user.
-		witFn := &WitFuncs{Store: c.Store, OrgID: custID, UserID: userID}
-		RegisterWitCommands(interp, witFn)
+		// `git` over /bin and /cron.d history — a strict subset of git
+		// backed by the live and history rows (see witrepo). Same scope
+		// as the weft.* helpers; the config carries the acting user.
+		RegisterGitCommand(interp, witrepo.Config{
+			Store: c.Store, OrgID: custID, UserID: userID,
+			Cwd: interp.DirStack().Cwd,
+		})
 
 		rewriteQueryPipelines(ctx, ast, c, tr, customer, custID, userID, alertCtx)
 		interp.BinScriptTransform = func(_ string, script *bash.Script) {

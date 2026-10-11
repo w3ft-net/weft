@@ -161,9 +161,9 @@ func (f *ShellFS) AmendVersionMessage(path, message string) error {
 	dir, name := splitPath(path)
 	switch dir {
 	case "bin":
-		return f.store.AmendShellFunctionMessage(f.custID, name, "HEAD", message)
+		return f.store.AmendShellFunctionMessage(f.custID, name, message)
 	case "cron.d":
-		return f.store.AmendCronWatchMessage(f.custID, name, "HEAD", message)
+		return f.store.AmendCronWatchMessage(f.custID, name, message)
 	default:
 		return fmt.Errorf("amend: %s: not a versioned namespace", path)
 	}

@@ -3,11 +3,7 @@ package store
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"testing"
-	"time"
-
-	"gorm.io/gorm"
 )
 
 // Helpers ----------------------------------------------------------
@@ -275,187 +271,9 @@ func TestShellFunction_ContentHashIsDeterministic(t *testing.T) {
 
 // Store API: Log --------------------------------------------------
 
-func TestLogShellFunction_OrderAndShape(t *testing.T) {
-	db := testOpen(t)
-	cust, _ := db.FindOrCreateOrg("vh-log")
-	user, _ := db.CreateUser("alice-log@example.test")
-
-	saves := []string{"echo v1", "echo v2", "echo v3"}
-	for _, src := range saves {
-		if err := db.SaveShellFunction(cust.ID, user.ID, "scan", src, "bash"); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	versions, err := db.LogShellFunction(cust.ID, "scan")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(versions) != 3 {
-		t.Fatalf("Log: got %d versions, want 3 (HEAD + 2 history)", len(versions))
-	}
-	// Newest first: v3 (HEAD), v2, v1.
-	if versions[0].Source != "echo v3" || !versions[0].IsHead {
-		t.Errorf("versions[0]: got source=%q IsHead=%v, want HEAD with v3",
-			versions[0].Source, versions[0].IsHead)
-	}
-	if versions[1].Source != "echo v2" || versions[1].IsHead {
-		t.Errorf("versions[1]: got source=%q IsHead=%v, want history v2",
-			versions[1].Source, versions[1].IsHead)
-	}
-	if versions[2].Source != "echo v1" || versions[2].IsHead {
-		t.Errorf("versions[2]: got source=%q IsHead=%v, want history v1",
-			versions[2].Source, versions[2].IsHead)
-	}
-}
-
 // Store API: ResolveRef -------------------------------------------
 
-func TestResolveShellFunctionRef_HEAD(t *testing.T) {
-	db := testOpen(t)
-	cust, _ := db.FindOrCreateOrg("vh-resolve-head")
-	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo current", "bash")
-
-	v, err := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v.Source != "echo current" || !v.IsHead {
-		t.Errorf("HEAD: got source=%q IsHead=%v, want current head row", v.Source, v.IsHead)
-	}
-}
-
-func TestResolveShellFunctionRef_HEADCaret(t *testing.T) {
-	db := testOpen(t)
-	cust, _ := db.FindOrCreateOrg("vh-resolve-caret")
-	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo old", "bash")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo new", "bash")
-
-	v, err := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD^")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v.Source != "echo old" {
-		t.Errorf("HEAD^: got source=%q, want %q", v.Source, "echo old")
-	}
-	if v.IsHead {
-		t.Errorf("HEAD^: IsHead should be false")
-	}
-}
-
-func TestResolveShellFunctionRef_HEADCaretN(t *testing.T) {
-	db := testOpen(t)
-	cust, _ := db.FindOrCreateOrg("vh-resolve-caretn")
-	user, _ := db.CreateUser("alice@example.test")
-	for _, s := range []string{"v1", "v2", "v3", "v4"} {
-		db.SaveShellFunction(cust.ID, user.ID, "scan", s, "bash")
-	}
-
-	v, err := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD^2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v.Source != "v2" {
-		t.Errorf("HEAD^2: got source=%q, want v2", v.Source)
-	}
-}
-
-func TestResolveShellFunctionRef_HashPrefix(t *testing.T) {
-	db := testOpen(t)
-	cust, _ := db.FindOrCreateOrg("vh-resolve-hash")
-	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo target", "bash")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo other", "bash")
-
-	target := hashOf("echo target")
-	prefix := target[:8]
-
-	v, err := db.ResolveShellFunctionRef(cust.ID, "scan", prefix)
-	if err != nil {
-		t.Fatalf("hash prefix lookup: %v", err)
-	}
-	if v.Source != "echo target" {
-		t.Errorf("by hash prefix: got source=%q, want target", v.Source)
-	}
-	if v.ContentHash != target {
-		t.Errorf("ContentHash: got %q, want %q", v.ContentHash, target)
-	}
-}
-
-func TestResolveShellFunctionRef_ShortPrefixRejected(t *testing.T) {
-	db := testOpen(t)
-	cust, _ := db.FindOrCreateOrg("vh-resolve-short")
-	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo target", "bash")
-
-	// 3 chars is below the 4-char minimum.
-	short := hashOf("echo target")[:3]
-	if _, err := db.ResolveShellFunctionRef(cust.ID, "scan", short); !errors.Is(err, ErrInvalidRef) {
-		t.Errorf("short prefix: got %v, want ErrInvalidRef", err)
-	}
-}
-
-func TestResolveShellFunctionRef_UnknownHash(t *testing.T) {
-	db := testOpen(t)
-	cust, _ := db.FindOrCreateOrg("vh-resolve-unknown")
-	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo here", "bash")
-
-	if _, err := db.ResolveShellFunctionRef(cust.ID, "scan", "deadbeef"); !errors.Is(err, ErrRefNotFound) {
-		t.Errorf("unknown hash: got %v, want ErrRefNotFound", err)
-	}
-}
-
-func TestResolveShellFunctionRef_BeyondCap(t *testing.T) {
-	db := testOpen(t)
-	cust, _ := db.FindOrCreateOrg("vh-resolve-beyond")
-	user, _ := db.CreateUser("alice@example.test")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "v1", "bash")
-
-	// HEAD^1 with no history should fail.
-	if _, err := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD^"); !errors.Is(err, ErrRefNotFound) {
-		t.Errorf("HEAD^ with no history: got %v, want ErrRefNotFound", err)
-	}
-	// HEAD^7 always fails (cap is 5).
-	if _, err := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD^7"); err == nil {
-		t.Errorf("HEAD^7 should error; got nil")
-	}
-}
-
 // Store API: Checkout ---------------------------------------------
-
-func TestCheckoutShellFunction_RoundTrip(t *testing.T) {
-	db := testOpen(t)
-	cust, _ := db.FindOrCreateOrg("vh-checkout")
-	alice, _ := db.CreateUser("alice@example.test")
-	bob, _ := db.CreateUser("bob@example.test")
-
-	// Alice writes v1, alice writes v2, bob writes v3.
-	db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1", "bash")
-	db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v2", "bash")
-	db.SaveShellFunction(cust.ID, bob.ID, "scan", "echo v3", "bash")
-
-	// Bob checks out HEAD^2 (which is v1 by alice).
-	if err := checkoutShellFunction(db, cust.ID, bob.ID, "scan", "HEAD^2"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Live row's source matches v1.
-	fn, err := db.GetShellFunction(cust.ID, "scan")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fn.Source != "echo v1" {
-		t.Errorf("after checkout: live source = %q, want echo v1", fn.Source)
-	}
-	// Original author of v1 was alice; checkout should preserve
-	// authored_by_user_id on the new live row.
-	if fn.CreatedByUserID == nil || *fn.CreatedByUserID != alice.ID {
-		t.Errorf("checkout should preserve original author; got %v, want alice", fn.CreatedByUserID)
-	}
-}
 
 // Store API: Amend ------------------------------------------------
 
@@ -468,7 +286,7 @@ func TestAmendShellFunctionMessage_HEAD_DoesNotCapture(t *testing.T) {
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v2", "bash")
 	before := historyCount(t, db, cust.ID, "scan")
 
-	if err := db.AmendShellFunctionMessage(cust.ID, "scan", "HEAD", "first message"); err != nil {
+	if err := db.AmendShellFunctionMessage(cust.ID, "scan", "first message"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -477,62 +295,8 @@ func TestAmendShellFunctionMessage_HEAD_DoesNotCapture(t *testing.T) {
 	}
 
 	// And the message persisted.
-	v, _ := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD")
+	v, _ := db.GetShellFunction(cust.ID, "scan")
 	if v.Message != "first message" {
 		t.Errorf("after amend: HEAD message = %q, want %q", v.Message, "first message")
 	}
-}
-
-func TestAmendShellFunctionMessage_HistoryRef(t *testing.T) {
-	db := testOpen(t)
-	cust, _ := db.FindOrCreateOrg("vh-amend-history")
-	user, _ := db.CreateUser("alice@example.test")
-
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "v1", "bash")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "v2", "bash")
-	db.SaveShellFunction(cust.ID, user.ID, "scan", "v3", "bash")
-
-	if err := db.AmendShellFunctionMessage(cust.ID, "scan", "HEAD^2", "v1's late label"); err != nil {
-		t.Fatal(err)
-	}
-
-	v, _ := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD^2")
-	if v.Message != "v1's late label" {
-		t.Errorf("HEAD^2 after amend: message = %q, want %q", v.Message, "v1's late label")
-	}
-	// HEAD and HEAD^ messages unchanged.
-	head, _ := db.ResolveShellFunctionRef(cust.ID, "scan", "HEAD")
-	if head.Message != "" {
-		t.Errorf("HEAD message changed unexpectedly: %q", head.Message)
-	}
-}
-
-// checkoutShellFunction mirrors the former Store.CheckoutShellFunction,
-// whose production logic moved to a caller outside the store package.
-func checkoutShellFunction(db *Store, orgID OrgID, userID, name, ref string) error {
-	target, err := db.ResolveShellFunctionRef(orgID, name, ref)
-	if err != nil {
-		return err
-	}
-	if target.IsHead {
-		return nil
-	}
-	return db.scoped(orgID).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
-			return err
-		}
-		updates := map[string]any{
-			"source":       target.Source,
-			"language":     target.Language,
-			"content_hash": target.ContentHash,
-			"message":      target.Message,
-			"updated_at":   time.Now(),
-		}
-		if target.AuthoredByUserID != nil {
-			updates["created_by_user_id"] = *target.AuthoredByUserID
-		}
-		return tx.Model(&ShellFunction{}).
-			Where("name = ?", name).
-			Updates(updates).Error
-	})
 }

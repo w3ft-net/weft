@@ -138,7 +138,7 @@ func (m *CronMount) AmendVersionMessage(rel, message string) error {
 	if !m.cfg.CanManageWatches {
 		return denyWrite("/cron.d", "cronmgr")
 	}
-	return m.cfg.Store.AmendCronWatchMessage(m.cfg.OrgID, rel, "HEAD", message)
+	return m.cfg.Store.AmendCronWatchMessage(m.cfg.OrgID, rel, message)
 }
 
 // --- Cron serialization (canonical, single source of truth) ---

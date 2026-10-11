@@ -631,7 +631,7 @@ func preseedScripts(s *store.Store, custID store.OrgID, customerName string, mem
 			if err := s.SaveShellFunction(custID, v.userID, "scan", v.source, "bash"); err != nil {
 				return fmt.Errorf("scan v%d: %w", i+1, err)
 			}
-			if err := s.AmendShellFunctionMessage(custID, "scan", "HEAD", v.message); err != nil {
+			if err := s.AmendShellFunctionMessage(custID, "scan", v.message); err != nil {
 				return fmt.Errorf("scan v%d message: %w", i+1, err)
 			}
 		}
@@ -651,7 +651,7 @@ func preseedScripts(s *store.Store, custID store.OrgID, customerName string, mem
 			if err := s.SaveShellFunction(custID, v.userID, "count_errors", v.source, "bash"); err != nil {
 				return fmt.Errorf("count_errors v%d: %w", i+1, err)
 			}
-			if err := s.AmendShellFunctionMessage(custID, "count_errors", "HEAD", v.message); err != nil {
+			if err := s.AmendShellFunctionMessage(custID, "count_errors", v.message); err != nil {
 				return fmt.Errorf("count_errors v%d message: %w", i+1, err)
 			}
 		}
@@ -673,7 +673,7 @@ func preseedScripts(s *store.Store, custID store.OrgID, customerName string, mem
 			if err := s.SaveShellFunction(custID, v.userID, "mem_history", v.source, "bash"); err != nil {
 				return fmt.Errorf("mem_history v%d: %w", i+1, err)
 			}
-			if err := s.AmendShellFunctionMessage(custID, "mem_history", "HEAD", v.message); err != nil {
+			if err := s.AmendShellFunctionMessage(custID, "mem_history", v.message); err != nil {
 				return fmt.Errorf("mem_history v%d message: %w", i+1, err)
 			}
 		}
@@ -702,7 +702,7 @@ print(string.format("%.1f", total))
 		if err := s.SaveShellFunction(custID, user2.ID, "severity", severityClean, "lua"); err != nil {
 			return fmt.Errorf("severity: %w", err)
 		}
-		if err := s.AmendShellFunctionMessage(custID, "severity", "HEAD", "lua-driven severity weighting"); err != nil {
+		if err := s.AmendShellFunctionMessage(custID, "severity", "lua-driven severity weighting"); err != nil {
 			return fmt.Errorf("severity message: %w", err)
 		}
 	}
@@ -727,7 +727,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 		if err := s.SaveShellFunction(custID, user3.ID, "status.lua", statusLua, "lua"); err != nil {
 			return fmt.Errorf("status.lua: %w", err)
 		}
-		if err := s.AmendShellFunctionMessage(custID, "status.lua", "HEAD", "lua via .lua extension; no shebang needed"); err != nil {
+		if err := s.AmendShellFunctionMessage(custID, "status.lua", "lua via .lua extension; no shebang needed"); err != nil {
 			return fmt.Errorf("status.lua message: %w", err)
 		}
 	}
@@ -752,7 +752,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 			if err := s.SaveCronWatch(custID, v.userID, "error-rate", errorRateSchedule, v.pipeline, nil); err != nil {
 				return fmt.Errorf("error-rate v%d: %w", i+1, err)
 			}
-			if err := s.AmendCronWatchMessage(custID, "error-rate", "HEAD", v.message); err != nil {
+			if err := s.AmendCronWatchMessage(custID, "error-rate", v.message); err != nil {
 				return fmt.Errorf("error-rate v%d message: %w", i+1, err)
 			}
 		}
@@ -789,7 +789,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 			if err := s.SaveCronWatch(custID, v.userID, "mem-pressure", "*/1 * * * *", v.pipeline, nil); err != nil {
 				return fmt.Errorf("mem-pressure v%d: %w", i+1, err)
 			}
-			if err := s.AmendCronWatchMessage(custID, "mem-pressure", "HEAD", v.message); err != nil {
+			if err := s.AmendCronWatchMessage(custID, "mem-pressure", v.message); err != nil {
 				return fmt.Errorf("mem-pressure v%d message: %w", i+1, err)
 			}
 		}

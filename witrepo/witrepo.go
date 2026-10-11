@@ -357,9 +357,9 @@ func (r *Repo) WriteFile(p, content, message string) (gitcore.ObjectID, error) {
 	}
 	if message != "" {
 		if kind == "bin" {
-			err = r.cfg.Store.AmendShellFunctionMessage(r.cfg.OrgID, name, "HEAD", message)
+			err = r.cfg.Store.AmendShellFunctionMessage(r.cfg.OrgID, name, message)
 		} else {
-			err = r.cfg.Store.AmendCronWatchMessage(r.cfg.OrgID, name, "HEAD", message)
+			err = r.cfg.Store.AmendCronWatchMessage(r.cfg.OrgID, name, message)
 		}
 		if err != nil {
 			return "", err
@@ -407,12 +407,12 @@ func (r *Repo) Reword(id gitcore.ObjectID, message string) error {
 		if err != nil || !perm.CanManageFunctions {
 			return fmt.Errorf("/bin: permission denied (need the binmgr group — ask an owner for `adduser <you> binmgr`)")
 		}
-		err = r.cfg.Store.AmendShellFunctionMessage(r.cfg.OrgID, m.name, "HEAD", message)
+		err = r.cfg.Store.AmendShellFunctionMessage(r.cfg.OrgID, m.name, message)
 	} else {
 		if err != nil || !perm.CanManageWatches {
 			return fmt.Errorf("/cron.d: permission denied (need the cronmgr group — ask an owner for `adduser <you> cronmgr`)")
 		}
-		err = r.cfg.Store.AmendCronWatchMessage(r.cfg.OrgID, m.name, "HEAD", message)
+		err = r.cfg.Store.AmendCronWatchMessage(r.cfg.OrgID, m.name, message)
 	}
 	r.built = nil
 	return err
