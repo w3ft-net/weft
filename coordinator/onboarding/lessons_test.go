@@ -23,7 +23,7 @@ func TestCheckPipeline(t *testing.T) {
 		{"shell-cron", "ls -l /cron.d/", true},
 		{"shell-bin-bash", "ls /bin/", true},
 		{"shell-bin-lua", "vim /bin/severity", true},
-		{"shell-wit", "wit log /bin/scan -p", true},
+		{"shell-wit", "git log -p -- /bin/scan", true},
 		{"shell-weftfunc", "weft::avg error-rate 1h", true},
 		{"shell-history", "history", true},
 		{"shell-tmp", "echo hello > /tmp/note", true},
@@ -37,7 +37,7 @@ func TestCheckPipeline(t *testing.T) {
 		{"shell-grep-awk", "tail main.log | grep ERROR | awk '{print HOST, $1, $4}'", false},
 		// shell-cron/shell-wit's OLD forms (pre -l / pre -p) no longer match.
 		{"shell-cron", "ls /cron.d/", false},
-		{"shell-wit", "wit log /bin/scan", false},
+		{"shell-wit", "git log -- /bin/scan", false},
 
 		// shell-trace is pattern-matched, not exact-match: a real
 		// 32-lowercase-hex trace ID advances even though it's never

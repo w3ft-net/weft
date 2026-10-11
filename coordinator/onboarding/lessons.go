@@ -182,9 +182,11 @@ var lessons = []*Lesson{
 		Prompt: "If your monitoring patterns need more than a one-liner or you want to parameterize, just add a script to /bin/. These are available to your entire organization. Bash and lua are the supported languages.",
 	},
 	{
+		// Step ID is historical ("shell-wit"): the lesson used to teach the
+		// `wit` command, which `git` replaced. Kept so recorded progress holds.
 		Step:   "shell-wit",
-		Action: "wit log /bin/scan -p",
-		Prompt: "The weft shell includes a lightweight version history tool for bin scripts and cron entries called `wit`. The name might not be clever, but you'll remember exactly what it's for! History tracking is automatic and users are prompted for commit messages in vim whenever they create or modify a file — `-p` shows the diff inline for each version.",
+		Action: "git log -p -- /bin/scan",
+		Prompt: "Bin scripts and cron entries have version history, and you read it with `git` — a subset of git that works on /bin and /cron.d, so what you know already works. History tracking is automatic and you're prompted for a commit message in vim whenever you create or modify a file. `-p` shows the diff inline for each version, and `-- /bin/scan` limits the log to one script (without it you get the whole org's changes).",
 	},
 	{
 		Step:   "shell-bin-lua",
