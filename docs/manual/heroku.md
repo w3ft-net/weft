@@ -60,6 +60,7 @@ weft> tail /log/myco/myapp/web.log
 ### How dynos and procs map to pseudofiles
 
 Each `(appname, procid)` pair from Heroku becomes its own weft sub-app.
+(See **Namespaces** for how every producer chooses its service name.)
 The dyno number (`.1`, `.2`) is dropped from the app name and stamped on
 `instance` instead, so cross-dyno aggregation stays cheap and a single
 `tail /log/.../web.log` covers every web dyno at once.

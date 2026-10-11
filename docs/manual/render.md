@@ -69,7 +69,8 @@ weft> tail /log/myco/myservice/web.log
 
 ### How Render services map to pseudofiles
 
-Render's service slug becomes the weft service name; the process type
+Render's service slug becomes the weft service name (see **Namespaces**
+for how every producer chooses its service name); the process type
 (`web`, `cron`, and an undocumented `bld` for build-step output) becomes
 `kind`; the trailing instance id is stamped on `instance` for per-instance
 filtering without splitting the pseudofile:

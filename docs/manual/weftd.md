@@ -67,6 +67,17 @@ Repeated source fields can be DRYed with standard YAML anchors and
 merge keys (`&name` / `<<: *name`); weftd ignores an `x-anchors:`
 holder block, so it's a convenient place to declare them.
 
+### Service names
+
+Each source's `service:` sets the `<service>` segment of its
+pseudofile path. It is optional: for a systemd source (`unit:`) weftd
+uses the unit name without `.service`, and for a file source (`path:`)
+it uses the file's name without its extension, so
+`/var/log/myapp/api.log` becomes `api`. Set `service:` explicitly when
+several files should share one service, or when the derived name isn't
+the one you want. This is separate from the top-level `services:` list
+above, which only controls how host metrics fan out.
+
 ### Token
 
 Put `token:` in the config file, **or** supply it via the

@@ -47,6 +47,17 @@ that carry one:
   `heartbeats`, `metrics`, and `runtime` for services that emit
   telemetry. It is always present.
 
+### Where the service name comes from
+
+Each producer decides the service name; weft never rewrites it.
+
+| Producer | `<service>` | `<kind>` |
+|---|---|---|
+| weftd | The source's `service:` setting. If omitted: the systemd `unit:` name without `.service`, else the log file's name without its extension. | `main` unless the source sets a kind |
+| Heroku | The Heroku app name | The dyno process type (`web`, `worker`, ...); platform events go to `platform` |
+| Render | The Render service slug | The process type (`web`, `cron`, `bld`, ...) |
+| CloudWatch | The service you registered for the log group with `weft source add --service`. Events from unregistered log groups are dropped. | `main` |
+
 A namespace can hold env-less and env-bearing streams side by side
 as different tokens reauth over time. Env, region, deployment,
 host, and pod are query-time dimensions (`awk 'ENV == "prod"'`),

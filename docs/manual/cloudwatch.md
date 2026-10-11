@@ -25,7 +25,9 @@ tailing install weftd instead.
 
 ### 1. Register the source
 
-Use the `weft` CLI to tell weft which log group maps to which service.
+Use the `weft` CLI to tell weft which log group maps to which service
+(the `--service` you pick becomes the `<service>` path segment; see
+**Namespaces**).
 Run this from any machine with the `weft` binary installed and a valid
 login.
 
