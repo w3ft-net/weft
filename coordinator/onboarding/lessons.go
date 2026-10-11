@@ -225,8 +225,8 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-chart-pipe",
-		Action: "tail main.log | grep ERROR | chart -x 1 --bucket 5m",
-		Prompt: "`chart` doesn't need a saved cron behind it — pipe any pipeline straight into it and chart it directly, bucketed however you want. `-x 1` tells it to bucket by the timestamp in column 1; with no `-y`, it counts rows per bucket.",
+		Action: "cat main.log | grep ERROR | chart -x 1 --bucket 5m",
+		Prompt: "`chart` doesn't need a saved cron behind it — pipe any pipeline straight into it and chart it directly, bucketed however you want. We use `cat` here rather than `tail` so the chart sees everything in your current range, not just the last few lines. `-x 1` tells it to bucket by the timestamp in column 1; with no `-y`, it counts rows per bucket.",
 	},
 	{
 		Step:   "shell-dashboard-yaml",

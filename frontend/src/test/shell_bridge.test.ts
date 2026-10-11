@@ -55,6 +55,7 @@ async function bootShell(files: File[]): Promise<{
   setInput: (text: string) => void
   type: (data: string) => string
   followDone: (err: string) => string
+  charts: () => Array<Record<string, unknown>>
 }> {
   const wasmPath = resolve(__dirname, '../../public/shell.wasm')
   const wasmBuffer = readFileSync(wasmPath)
@@ -66,6 +67,7 @@ async function bootShell(files: File[]): Promise<{
   let output = ''
   let dispatched = ''
   const completed: Array<[string, number]> = []
+  const charts: Array<Record<string, unknown>> = []
 
   const callbacks = {
     write: (data: string) => { output += data },
@@ -122,6 +124,7 @@ async function bootShell(files: File[]): Promise<{
     getServices: () => ['myapp'],
     fsGetWatchResults: () => ({ results: [] }),
     onRangeChange: () => {},
+    chartOpen: (spec: Record<string, unknown>) => { charts.push(spec) },
     builtinExecuted: () => {},
     // Host hook: every completed shell line, with its exit code.
     commandCompleted: (line: string, exitCode: number) => { completed.push([line, exitCode]) },
@@ -166,6 +169,7 @@ async function bootShell(files: File[]): Promise<{
       return output
     },
     completions: () => completed.slice(),
+    charts: () => charts.slice(),
     getDirStack: () => g.wasmGetDirStack() as string[],
     setDirStack: (stack: string[]) => g.wasmSetDirStack(stack),
     queryResult: (text: string, err: string) => {
@@ -283,5 +287,24 @@ describe('tail -f stop (wasm)', () => {
     const out = shell.type('\x03') + shell.followDone('context canceled')
     expect(out.split('[tail stopped]').length - 1).toBe(1)
     expect(out).not.toContain('context canceled')
+  })
+})
+
+// `... | chart` computes its plot in Go (flags applied) and hands the browser
+// finished series, not the raw rows (OB-5).
+describe('pipe-form chart (wasm)', () => {
+  it('opens the chart with the bucketed series', async () => {
+    const shell = await bootShell([])
+    shell.exec('tail /log/a/b/main.log | chart -x 1 --bucket 5m')
+    shell.queryResult([
+      '2026-10-10T12:00:01Z ERROR a',
+      '2026-10-10T12:02:40Z ERROR b',
+      '2026-10-10T12:07:00Z ERROR c',
+    ].join('\n') + '\n', '')
+    const [spec] = shell.charts()
+    expect(spec).toBeDefined()
+    const plot = JSON.parse(spec.plot as string)
+    expect(plot.timeX).toBe(true)
+    expect(plot.series[0].points.map((p: { y: number }) => p.y)).toEqual([2, 1])
   })
 })

@@ -80,15 +80,19 @@
 
 .shell-chart-modal-error { color: var(--red); }
 
-.shell-chart-modal-lines {
+.shell-chart-modal-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   font-size: 12px;
-  color: var(--text-primary);
-  background: var(--bg-deep);
-  border: 1px solid var(--border);
-  padding: 8px 1.5ch;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 480px;
-  overflow: auto;
 }
+.shell-chart-modal-bar-row {
+  display: grid;
+  grid-template-columns: minmax(8ch, 24ch) 1fr 8ch;
+  gap: 1ch;
+  align-items: center;
+}
+.shell-chart-modal-bar-label { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shell-chart-modal-bar-track { background: var(--bg-deep); height: 10px; }
+.shell-chart-modal-bar-fill { display: block; height: 100%; background: var(--accent, #5fd7d7); }
+.shell-chart-modal-bar-value { text-align: right; color: var(--text-bright); }

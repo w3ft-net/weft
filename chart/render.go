@@ -21,31 +21,35 @@ import (
 // call it directly without going through shellcore's pipe-stage
 // dispatch.
 func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) {
-	if !args.TagSpec.IsZero() {
-		return renderTagged(lines, args, w, h)
-	}
-
-	groups, ordered, isTimeX, errMsg := groupRows(lines, args)
+	plot, errMsg := PlotFromStream(lines, args)
 	if errMsg != "" {
 		return "", errMsg
 	}
-	if len(groups) == 0 {
-		return "", "no data points to chart"
+
+	// ParsePipeArgs rejects --tag with anything but -t line, so a tagged plot
+	// is always a line chart.
+	if len(plot.Series) > 1 || plot.Series[0].Tag != "" {
+		series := make([]chart.NamedSeries, 0, len(plot.Series))
+		for _, s := range plot.Series {
+			series = append(series, chart.NamedSeries{Label: s.Tag, Points: chartPoints(s.Points)})
+		}
+		return renderLine(chart.Line(w, h).Series(series), args, plot.TimeX)
 	}
 
+	pts := plot.Series[0].Points
 	switch args.Kind {
 	case "sparkline":
-		values := make([]float64, 0, len(ordered))
-		for _, key := range ordered {
-			values = append(values, reduce(args.Aggregate, groups[key]))
+		values := make([]float64, 0, len(pts))
+		for _, p := range pts {
+			values = append(values, p.Y)
 		}
 		return chart.Sparkline(values) + "\n", ""
 	case "bar":
-		labels := make([]string, 0, len(ordered))
-		vals := make([]float64, 0, len(ordered))
-		for _, key := range ordered {
-			labels = append(labels, key.label)
-			vals = append(vals, reduce(args.Aggregate, groups[key]))
+		labels := make([]string, 0, len(pts))
+		vals := make([]float64, 0, len(pts))
+		for _, p := range pts {
+			labels = append(labels, p.Label)
+			vals = append(vals, p.Y)
 		}
 		b := chart.Bar(w, h).BarValues(labels, vals)
 		if args.Title != "" {
@@ -57,57 +61,23 @@ func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) 
 		}
 		return out, ""
 	default: // line
-		pts := make([]chart.Point, 0, len(ordered))
-		for _, key := range ordered {
-			y := reduce(args.Aggregate, groups[key])
-			pts = append(pts, chart.Point{X: key.x, Y: y})
-		}
-		b := chart.Line(w, h).Points(pts)
-		if args.Title != "" {
-			b = b.Title(args.Title)
-		}
-		if isTimeX {
-			b = b.XAxisTime()
-		}
-		out, err := b.Render()
-		if err != nil {
-			return "", err.Error()
-		}
-		return out, ""
+		return renderLine(chart.Line(w, h).Points(chartPoints(pts)), args, plot.TimeX)
 	}
 }
 
-// renderTagged is RenderFromStream's --tag path: each row is first
-// split by its tag value, then bucketed by x independently within that
-// tag (via groupRowsByTag, which otherwise applies the exact same x/y
-// rules as the untagged path). One warp chart.NamedSeries comes out
-// per distinct tag value, feeding a single multi-series line chart.
-//
-// ParsePipeArgs already rejects --tag combined with anything but
-// -t line, so this never needs to branch on args.Kind.
-func renderTagged(lines []string, args PipeArgs, w, h int) (string, string) {
-	tagGroups, isTimeX, errMsg := groupRowsByTag(lines, args)
-	if errMsg != "" {
-		return "", errMsg
+func chartPoints(pts []PlotPoint) []chart.Point {
+	out := make([]chart.Point, len(pts))
+	for i, p := range pts {
+		out[i] = chart.Point{X: p.X, Y: p.Y}
 	}
-	if len(tagGroups) == 0 {
-		return "", "no data points to chart"
-	}
+	return out
+}
 
-	series := make([]chart.NamedSeries, 0, len(tagGroups))
-	for _, tg := range tagGroups {
-		pts := make([]chart.Point, 0, len(tg.ordered))
-		for _, key := range tg.ordered {
-			pts = append(pts, chart.Point{X: key.x, Y: reduce(args.Aggregate, tg.groups[key])})
-		}
-		series = append(series, chart.NamedSeries{Label: tg.tag, Points: pts})
-	}
-
-	b := chart.Line(w, h).Series(series)
+func renderLine(b *chart.Builder, args PipeArgs, timeX bool) (string, string) {
 	if args.Title != "" {
 		b = b.Title(args.Title)
 	}
-	if isTimeX {
+	if timeX {
 		b = b.XAxisTime()
 	}
 	out, err := b.Render()

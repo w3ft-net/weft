@@ -36,7 +36,7 @@ Pitfalls when driving the browser (these cost hours once):
 
 All 26 lessons verified live in xterm through graduation, in order: `ls /log`, `tree /log/loom`, `range 1h..`, `tail`, `tail -f` (+Ctrl+C), `cd`, grep/awk, trace-find, `trace <real id>`, alert, `cat /etc/notify.yaml`, `ls -l /cron.d/`, `cat /cron.d/error-rate`, `ls /bin/`, `wit log /bin/scan -p`, `vim /bin/severity`, `cat /etc/passwd`, `clipboard /bin/scan`, `weft::avg error-rate 1h`, `history`, `echo hello > /tmp/note`, `chart error-rate`, chart pipe stage, `cat /etc/dashboards/prod.yaml`, `dashboard prod`, `cat /etc/usage`.
 
-Not verified: the CLI tour (OB-1), email delivery (OB-11), prod data (OB-10).
+Not verified: email delivery (OB-11), prod data (OB-10). The CLI tour is out of scope.
 
 ## Fixed during this pass (regression coverage)
 
@@ -57,11 +57,7 @@ Not verified: the CLI tour (OB-1), email delivery (OB-11), prod data (OB-10).
 
 ## Known bugs and plan (priority order)
 
-**Coded, not yet re-verified in the browser: OB-2, OB-3, OB-4, OB-6, OB-7, OB-8, OB-9** (each has a test; the next manual pass should confirm them live). OB-4 caveat: the `[x]` button already closed the modal in a component test, so the observed "does nothing" was not reproduced; what was missing was Esc (now a capture-phase handler, so xterm behind the backdrop no longer sees it), refocus of the terminal on close, and chart/trace closing each other. The `shell-trace` lesson now completes on the modal closing, not on `trace` finishing: `ShellTraceModal` reports `event: modal_closed` from unmount (only for a trace that loaded), its own row fetch carries `modal: true` so the exec path ignores it, and `onboarding.CompletesOn` holds the rules. The CLI, which has no modal, still advances on exec. OB-6/OB-8 live in warp (`pkg/shellcore`, uncommitted there) and need the warp release + pin bump below.
-
-### OB-1 — CLI tour does not report client-side lessons (unverified, probable dead end)
-Nothing in `cmd/weft` or `shell/` calls `/api/shell/builtin` or subscribes to `CommandCompleted`. In the CLI, progress relies on the server exec path alone, so lessons whose command never reaches the server (`history`, `range`, `clipboard`, probably `dashboard`/`chart`) likely cannot advance.
-Plan: run the tour in the CLI (`weft`) against the dev stack and record where it sticks. If confirmed, mirror the browser hook in `cmd/weft/runner`: subscribe to `CommandCompleted` on the core and POST the completed line + exit code to `/api/shell/builtin` (same endpoint, same gating). Test: a runner-level test with a fake HTTP server asserting the report for `history`.
+**Coded, not yet re-verified in the browser: OB-2, OB-5, OB-3, OB-4, OB-6, OB-7, OB-8, OB-9** (each has a test; the next manual pass should confirm them live). OB-4 caveat: the `[x]` button already closed the modal in a component test, so the observed "does nothing" was not reproduced; what was missing was Esc (now a capture-phase handler, so xterm behind the backdrop no longer sees it), refocus of the terminal on close, and chart/trace closing each other. The `shell-trace` lesson now completes on the modal closing, not on `trace` finishing: `ShellTraceModal` reports `event: modal_closed` from unmount (only for a trace that loaded), its own row fetch carries `modal: true` so the exec path ignores it, and `onboarding.CompletesOn` holds the rules. The CLI, which has no modal, still advances on exec. OB-6/OB-8 live in warp (`pkg/shellcore`, uncommitted there) and need the warp release + pin bump below.
 
 ### OB-2 — The designed (sidebar) path ends without a way into the shell
 Clicking the highlighted sidebar items through the last panel step lands on the dashboards page with the shell card ("Hit enter…") but no shell and no button; only the "next"/"drop into the shell" fallback navigates. A user following the highlights must guess to open the shell.
@@ -75,7 +71,7 @@ Lesson 6 (`shell-cd`) teaches that after `cd /log/loom/prod/api` you can drop th
 | `shell-grep-awk` | `tail /log/loom/prod/api/main.log \| grep ERROR \| awk '{print HOST, $1, $5}'` | `tail main.log \| grep ERROR \| awk '{print HOST, $1, $5}'` |
 | `shell-trace-find` | `tail /log/loom/prod/api/main.log \| grep ' checkout ' \| awk '{print TRACE_ID}'` | `tail main.log \| grep ' checkout ' \| awk '{print TRACE_ID}'` |
 | `shell-alert` | `tail /log/loom/prod/api/main.log \| grep ERROR \| wc -l \| alert above 0` | `tail main.log \| grep ERROR \| wc -l \| alert above 0` |
-| `shell-chart-pipe` | `tail /log/loom/prod/api/main.log \| grep ERROR \| chart -x 1 --bucket 5m` | `tail main.log \| grep ERROR \| chart -x 1 --bucket 5m` |
+| `shell-chart-pipe` | `tail /log/loom/prod/api/main.log \| grep ERROR \| chart -x 1 --bucket 5m` | `cat main.log \| grep ERROR \| chart -x 1 --bucket 5m` (see OB-5) |
 
 Leave `/etc`, `/cron.d`, `/bin`, `/tmp` lessons absolute — they are different mounts and read naturally that way. Leave the preseeded cron/bin scripts absolute (they run outside any cwd).
 Dependencies: relative paths only work if the cwd is shipped with the request (web courier now does; the CLI already does). Verified manually that `tail main.log` resolves after `cd`.
@@ -89,9 +85,10 @@ Risks and plan:
 After `trace <id>` the result panel stays on screen for the rest of the session: Esc and its `[x]` do nothing, and it draws over vim and the chart panes (it hides the editor's lines and the chart).
 Plan: find the panel's owner (`traceOpen` callback / React trace view), make Esc and `[x]` dismiss it, and close it when another pane/overlay opens or a new command runs. Test: component test that Esc and `[x]` unmount it; manual pass step 4.
 
-### OB-5 — Chart-pipe pane shows raw rows instead of a chart
-`… | grep ERROR | chart -x 1 --bucket 5m` renders a pane listing the ERROR lines, not a plotted series. Suspected: `tail` returns ~10 rows that all fall into a single 5-minute bucket, so there is nothing to plot and it falls back to text. Unconfirmed.
-Plan: reproduce with a wider window (more rows / smaller bucket), inspect the chart request the shell builds (`chartRequestPipe`), and either pick lesson parameters that produce a visible series on the dev data or make the chart handle a single bucket. The lesson advances regardless; this is about the demo's payoff.
+### OB-5 — Chart-pipe pane shows raw rows instead of a chart (coded, not browser-verified)
+Two causes. (1) The web shell's pipe chart was a stub: `chartRequestPipe` dropped `-x/-y/--bucket/-a/--tag` and `ShellChartModal` printed the upstream rows in a `<pre>`. Now `chart.PlotFromStream` (shared with the CLI renderer) reduces the rows in Go, `cmd/wasm` ships the plot as JSON, and the modal draws it (Sparkline for line/sparkline, bars for bar); a single bucket says so instead of drawing nothing. (2) The lesson charted `tail … | grep ERROR`: ~10 rows at ~8% errors is 0–2 lines. It is now `cat main.log | grep ERROR | chart -x 1 --bucket 5m`, which covers the whole range (the tour has set `range 1h..` by then → ~12 buckets).
+Tests: `chart/plot_test.go`, `shell/chart_request_test.go`, `shell_chart_modal.test.tsx`, a real-wasm case in `shell_bridge.test.ts`, `lessons_test.go`.
+Verify live: the lesson draws a line with several points on dev data (check the bucket size against dev error rates).
 
 ### OB-6 — Typing over a prefilled command concatenates
 The tour prefills the next command into the input. Typing instead of pressing Enter appends to it (`cat /etc/notify.yamlcat /etc/notify.yaml`), then fails.

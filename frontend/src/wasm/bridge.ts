@@ -9,6 +9,7 @@ import {
   type WasmCallbacks,
   type ShellBridge as BaseShellBridge,
 } from '@warp/shellcore-wasm'
+import type { ChartPlot } from '../lib/chartPlot'
 import { execQuery, execFollow, cancelQuery, reportCommandCompleted, setCurrentRangeSpec } from './network'
 
 export type ShellBridge = BaseShellBridge
@@ -48,10 +49,10 @@ export interface ShellIdentity {
 
 // ChartOpenSpec is the payload the Go-side `chart` handler hands us
 // in place of rendering ASCII. Either `watch` (chart <name>) or
-// `lines` (... | chart) is populated.
+// `plot` (... | chart) is populated.
 export interface ChartOpenSpec {
   watch?: string
-  lines?: string[]
+  plot?: ChartPlot
   kind?: string
   title?: string
   limit?: number
@@ -131,8 +132,10 @@ export async function initShellWasm(
     // chartOpen is invoked by both `chart <name>` and `... | chart`
     // in the browser. The Go side hands us the parsed spec; the React
     // side renders the actual tile.
-    chartOpen: (spec: ChartOpenSpec) => {
-      if (onChartOpen) onChartOpen(spec)
+    chartOpen: (spec: ChartOpenSpec & { plot?: ChartPlot | string }) => {
+      // The Go side ships the plot as a JSON string (see cmd/wasm/main.go).
+      const plot = typeof spec.plot === 'string' ? (JSON.parse(spec.plot) as ChartPlot) : spec.plot
+      if (onChartOpen) onChartOpen({ ...spec, plot })
     },
     // traceOpen is invoked by the `trace` builtin inside cmd/wasm for
     // all three shapes (see shell.traceRequestBuiltin). The React side

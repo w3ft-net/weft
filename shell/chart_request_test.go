@@ -41,8 +41,8 @@ func TestConfigureCore_ChartBuiltin_EmitsWatchRequest(t *testing.T) {
 	if r.Kind != "bar" {
 		t.Errorf("Kind: got %q want bar", r.Kind)
 	}
-	if r.Lines != nil {
-		t.Errorf("watch form should not carry Lines; got %v", r.Lines)
+	if r.Plot != nil {
+		t.Errorf("watch form should not carry a Plot; got %v", r.Plot)
 	}
 }
 
@@ -88,7 +88,11 @@ func TestConfigureCore_ChartPipe_EmitsLinesRequest(t *testing.T) {
 		func(a shellcore.Action) {},
 	)
 	lines := []string{"1 200", "2 201", "3 199"}
-	args := chart.PipeArgs{Kind: "line", Title: "latency"}
+	parsed, msg := chart.ParsePipeArgs([]string{"-t", "line", "--title", "latency"})
+	if msg != "" {
+		t.Fatal(msg)
+	}
+	args := parsed.(chart.PipeArgs)
 
 	out, errMsg := render(core, lines, args)
 	if errMsg != "" {
@@ -105,8 +109,11 @@ func TestConfigureCore_ChartPipe_EmitsLinesRequest(t *testing.T) {
 		t.Fatalf("expected 1 emit, got %d", len(got))
 	}
 	r := got[0]
-	if len(r.Lines) != 3 || r.Lines[0] != "1 200" {
-		t.Errorf("Lines: got %v want %v", r.Lines, lines)
+	if r.Plot == nil || len(r.Plot.Series) != 1 || len(r.Plot.Series[0].Points) != 3 {
+		t.Fatalf("Plot: got %+v, want one series of 3 points", r.Plot)
+	}
+	if r.Plot.Series[0].Points[0].Y != 200 {
+		t.Errorf("first point y: got %v want 200", r.Plot.Series[0].Points[0].Y)
 	}
 	if r.Kind != "line" {
 		t.Errorf("Kind: got %q want line", r.Kind)
@@ -147,5 +154,37 @@ func TestConfigureCore_ChartPipe_FallbackToAsciiWhenChartNil(t *testing.T) {
 
 	if emitted {
 		t.Error("Shell.Chart should not be invoked when nil")
+	}
+}
+
+// The flags the user typed must reach the modal: bucketing and aggregation
+// happen before the request is emitted, not in the browser. Rows that give
+// nothing to plot are reported in the terminal like the CLI does, with no
+// empty modal opened.
+func TestConfigureCore_ChartPipe_AppliesBucketAndReportsNoData(t *testing.T) {
+	var got []ChartRequest
+	render := chartRequestPipe(func(r ChartRequest) { got = append(got, r) })
+	core := shellcore.NewShellCore(nil, 80, 24, func(b []byte) {}, func(a shellcore.Action) {})
+
+	parsed, msg := chart.ParsePipeArgs([]string{"-x", "1", "--bucket", "5m"})
+	if msg != "" {
+		t.Fatal(msg)
+	}
+	_, errMsg := render(core, []string{
+		"2026-10-10T12:00:01Z ERROR a",
+		"2026-10-10T12:02:40Z ERROR b",
+		"2026-10-10T12:07:00Z ERROR c",
+	}, parsed)
+	if errMsg != "" || len(got) != 1 {
+		t.Fatalf("errMsg=%q emits=%d", errMsg, len(got))
+	}
+	pts := got[0].Plot.Series[0].Points
+	if got[0].Kind != "line" || !got[0].Plot.TimeX || len(pts) != 2 || pts[0].Y != 2 {
+		t.Errorf("bucketed request = kind %q plot %+v, want a line over 2 five-minute buckets", got[0].Kind, got[0].Plot)
+	}
+
+	got = nil
+	if _, errMsg := render(core, nil, parsed); errMsg == "" || len(got) != 0 {
+		t.Errorf("no rows: errMsg=%q emits=%d, want an error and no modal", errMsg, len(got))
 	}
 }

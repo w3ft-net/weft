@@ -134,12 +134,12 @@ func buildShell(cb js.Value, apps []string, mfs *shellcore.MountFS) *shell.Shell
 				"title": r.Title,
 				"limit": r.Limit,
 			}
-			if r.Lines != nil {
-				items := make([]any, len(r.Lines))
-				for i, ln := range r.Lines {
-					items[i] = ln
+			if r.Plot != nil {
+				// JSON keeps the nested series out of syscall/js's
+				// hand-built value conversion; bridge.ts parses it back.
+				if b, err := json.Marshal(r.Plot); err == nil {
+					spec["plot"] = string(b)
 				}
-				spec["lines"] = items
 			}
 			cb.Call("chartOpen", spec)
 		},

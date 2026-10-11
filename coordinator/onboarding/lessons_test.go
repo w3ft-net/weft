@@ -27,7 +27,7 @@ func TestCheckPipeline(t *testing.T) {
 		{"shell-weftfunc", "weft::avg error-rate 1h", true},
 		{"shell-history", "history", true},
 		{"shell-tmp", "echo hello > /tmp/note", true},
-		{"shell-chart-pipe", "tail main.log | grep ERROR | chart -x 1 --bucket 5m", true},
+		{"shell-chart-pipe", "cat main.log | grep ERROR | chart -x 1 --bucket 5m", true},
 		{"shell-dashboard-yaml", "cat /etc/dashboards/prod.yaml", true},
 		{"shell-dashboard", "dashboard prod", true},
 

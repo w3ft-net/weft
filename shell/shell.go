@@ -229,11 +229,10 @@ type ChartRequest struct {
 	// Watch is the watch name when the user typed `chart <name>`.
 	// Empty when the request originates from `... | chart`.
 	Watch string
-	// Lines is the upstream pipeline snapshot for `... | chart`. The
-	// browser modal renders this directly; re-fetching the underlying
-	// pipeline isn't supported at this layer because the original
-	// pipeline string isn't reachable from a pipe-stage renderer.
-	Lines []string
+	// Plot is the grouped, bucketed and aggregated data for `... | chart`,
+	// reduced per the flags the user typed. The browser modal draws it
+	// directly; nil for the watch form.
+	Plot *chart.Plot
 	// Kind is line / bar / sparkline / area / table.
 	Kind string
 	// Title is the user-supplied title for pipe form (--title);
@@ -280,8 +279,12 @@ func chartRequestPipe(emit func(ChartRequest)) shellcore.PipeStageRenderFunc {
 		if !ok {
 			return "", "chart: internal error: parsed args not PipeArgs"
 		}
+		plot, errMsg := chart.PlotFromStream(lines, args)
+		if errMsg != "" {
+			return "", "chart: " + errMsg
+		}
 		emit(ChartRequest{
-			Lines: lines,
+			Plot:  &plot,
 			Kind:  args.Kind,
 			Title: args.Title,
 		})
@@ -322,7 +325,7 @@ type TraceRequest struct {
 	// Pipeline is the full "trace ..." pipeline to (re-)run — the
 	// browser modal fetches its own rows via the shell's existing
 	// async query path rather than being handed pre-fetched Lines,
-	// since the pipe-stage precedent (ChartRequest.Lines) doesn't
+	// since the pipe-stage precedent (ChartRequest.Plot) doesn't
 	// apply: `trace` is never a pipe-stage destination, always the
 	// pipeline's own source command.
 	Pipeline string

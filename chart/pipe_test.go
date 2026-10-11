@@ -319,3 +319,33 @@ func TestParseTime(t *testing.T) {
 		t.Error("string parsed as time unexpectedly")
 	}
 }
+
+// OB-5: an onboarding lesson once charted `tail main.log | grep ERROR | chart -x 1
+// --bucket 5m`. tail returns ~10 rows, which can all land in one bucket. This
+// pins what the native renderer does with that shape, so a "nothing to plot"
+// theory can be checked without a browser.
+func TestRenderFromStream_ErrorRowsInOneBucket(t *testing.T) {
+	args, msg := parsePipeArgs([]string{"-x", "1", "--bucket", "5m"})
+	if msg != "" {
+		t.Fatal(msg)
+	}
+	oneBucket := []string{
+		"2026-10-10T12:00:01Z ERROR a",
+		"2026-10-10T12:00:20Z ERROR b",
+		"2026-10-10T12:01:05Z ERROR c",
+		"2026-10-10T12:02:40Z ERROR d",
+	}
+	out, errMsg := RenderFromStream(oneBucket, args, 80, 12)
+	t.Logf("one bucket: errMsg=%q\n%s", errMsg, out)
+	if errMsg != "" || out == "" {
+		t.Errorf("single-bucket input should still render something, got err=%q out=%q", errMsg, out)
+	}
+
+	threeBuckets := append(oneBucket,
+		"2026-10-10T12:07:00Z ERROR e", "2026-10-10T12:08:00Z ERROR f", "2026-10-10T12:12:00Z ERROR g")
+	out, errMsg = RenderFromStream(threeBuckets, args, 80, 12)
+	t.Logf("three buckets: errMsg=%q\n%s", errMsg, out)
+	if errMsg != "" {
+		t.Errorf("multi-bucket input: %s", errMsg)
+	}
+}
