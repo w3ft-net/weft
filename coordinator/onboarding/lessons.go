@@ -219,14 +219,16 @@ var lessons = []*Lesson{
 		Prompt: "If you are working through an issue where it's easier to stage output from some one-liners and run `comm` or `join` on those files, dump them to /tmp. Because scratch files tend to abide by gas laws and fill the size of the container, we automatically delete files that haven't been written to for 48 hrs.",
 	},
 	{
-		Step:   "shell-chart",
-		Action: "chart error-rate",
-		Prompt: "`chart` is another weft-specific builtin. It'll open a modal in the browser. The CLI will render right in the terminal with as much fidelity as it can.",
+		Step:            "shell-chart",
+		Action:          "chart error-rate",
+		Prompt:          "`chart` is another weft-specific builtin. It'll open a modal in the browser. The CLI will render right in the terminal with as much fidelity as it can. Press Esc to close the chart and the tour continues.",
+		ClosesWithModal: true,
 	},
 	{
-		Step:   "shell-chart-pipe",
-		Action: "cat main.log | grep ERROR | chart -x 1 --bucket 5m",
-		Prompt: "`chart` doesn't need a saved cron behind it — pipe any pipeline straight into it and chart it directly, bucketed however you want. We use `cat` here rather than `tail` so the chart sees everything in your current range, not just the last few lines. `-x 1` tells it to bucket by the timestamp in column 1; with no `-y`, it counts rows per bucket.",
+		Step:            "shell-chart-pipe",
+		Action:          "cat main.log | grep ERROR | chart -x 1 --bucket 5m",
+		Prompt:          "`chart` doesn't need a saved cron behind it — pipe any pipeline straight into it and chart it directly, bucketed however you want. We use `cat` here rather than `tail` so the chart sees everything in your current range, not just the last few lines. `-x 1` tells it to bucket by the timestamp in column 1; with no `-y`, it counts rows per bucket. Press Esc to close the chart when you're done.",
+		ClosesWithModal: true,
 	},
 	{
 		Step:   "shell-dashboard-yaml",

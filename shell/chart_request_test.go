@@ -188,3 +188,34 @@ func TestConfigureCore_ChartPipe_AppliesBucketAndReportsNoData(t *testing.T) {
 		t.Errorf("no rows: errMsg=%q emits=%d, want an error and no modal", errMsg, len(got))
 	}
 }
+
+// A chart modal must be able to say which typed line opened it, so the tour
+// can complete the lesson when the modal closes. The pipe stage never sees the
+// upstream command, so the request carries the typed line from the core.
+func TestConfigureCore_ChartRequestsCarryTheTypedLine(t *testing.T) {
+	var got []ChartRequest
+	core := shellcore.NewShellCore(nil, 80, 24, func(b []byte) {}, func(a shellcore.Action) {})
+	s := &Shell{User: "alice", Chart: func(r ChartRequest) { got = append(got, r) }}
+	s.ConfigureCore(core)
+
+	type_ := func(line string) {
+		for _, r := range line {
+			core.HandleEvent(shellcore.KeyEvent{Rune: r})
+		}
+		core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
+	}
+
+	type_("chart error-rate")
+	type_("cat main.log | grep ERROR | chart -x 1 --bucket 5m")
+	core.HandleEvent(shellcore.ExecResultEvent{Text: "2026-10-10T12:00:01Z ERROR a\n2026-10-10T12:07:00Z ERROR b\n"})
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 chart requests, got %d", len(got))
+	}
+	if got[0].Pipeline != "chart error-rate" {
+		t.Errorf("watch form Pipeline = %q", got[0].Pipeline)
+	}
+	if got[1].Pipeline != "cat main.log | grep ERROR | chart -x 1 --bucket 5m" {
+		t.Errorf("pipe form Pipeline = %q", got[1].Pipeline)
+	}
+}

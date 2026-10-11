@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getWatchResults, type CronResult } from '../lib/api'
+import { useReportModalClosed } from '../lib/useReportModalClosed'
 import { Sparkline, SparkLegend, groupResultsByTag, formatSparkValue } from './Sparkline'
 import { plotToSpark, type ChartPlot } from '../lib/chartPlot'
 import './ShellChartModal.css'
@@ -9,6 +10,7 @@ import './ShellChartModal.css'
 // duplicate so this component has no import cycle into the wasm
 // bridge module.
 export interface ChartSpec {
+  pipeline?: string // the typed line that opened the chart
   watch?: string
   plot?: ChartPlot
   kind?: string
@@ -41,6 +43,13 @@ export default function ShellChartModal({ spec, onClose }: Props) {
       .catch(e => { if (!cancelled) setError(String(e)) })
     return () => { cancelled = true }
   }, [spec.watch, isWatch])
+
+  // The tour completes a chart lesson when this modal goes away, but only
+  // once it showed something (a cron chart still loading or failed did not
+  // teach the lesson).
+  const shown = useRef(false)
+  shown.current = isWatch ? results !== null && !error : !!spec.plot
+  useReportModalClosed(spec.pipeline, shown)
 
   // Esc closes, matching the label on the close button. Capture phase:
   // focus normally sits in the terminal behind the backdrop, and xterm

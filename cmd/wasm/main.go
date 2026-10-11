@@ -129,10 +129,11 @@ func buildShell(cb js.Value, apps []string, mfs *shellcore.MountFS) *shell.Shell
 		},
 		Chart: func(r shell.ChartRequest) {
 			spec := map[string]any{
-				"watch": r.Watch,
-				"kind":  r.Kind,
-				"title": r.Title,
-				"limit": r.Limit,
+				"pipeline": r.Pipeline,
+				"watch":    r.Watch,
+				"kind":     r.Kind,
+				"title":    r.Title,
+				"limit":    r.Limit,
 			}
 			if r.Plot != nil {
 				// JSON keeps the nested series out of syscall/js's

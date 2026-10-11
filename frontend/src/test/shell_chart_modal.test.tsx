@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 
 // recharts needs real layout; what matters here is which series reach it.
@@ -10,7 +11,10 @@ vi.mock('../components/Sparkline', async importOriginal => ({
     <div data-testid="spark-stub">{series.map(s => s.points.length).join(',')}</div>
   ),
 }))
-vi.mock('../lib/api', () => ({ getWatchResults: vi.fn() }))
+const getWatchResults = vi.fn()
+vi.mock('../lib/api', () => ({ getWatchResults: (...a: unknown[]) => getWatchResults(...a) }))
+const reportModalClosed = vi.fn()
+vi.mock('../wasm/network', () => ({ reportModalClosed: (p: string) => reportModalClosed(p) }))
 
 import ShellChartModal from '../components/ShellChartModal'
 import { plotToSpark, type ChartPlot } from '../lib/chartPlot'
@@ -93,5 +97,81 @@ describe('ShellChartModal Esc', () => {
     termInput.focus()
     fireEvent.keyDown(termInput, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+// The tour completes a chart lesson when its modal closes. The modal reports
+// its own disappearance against the typed line, once it actually showed
+// something.
+describe('ShellChartModal tour report', () => {
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  it('reports a dismissed pipe chart against the line that opened it', async () => {
+    const view = render(
+      <MemoryRouter>
+        <ShellChartModal spec={{ plot: line([1, 2]), pipeline: 'cat x | chart' }} onClose={() => {}} />
+      </MemoryRouter>,
+    )
+    expect(reportModalClosed).not.toHaveBeenCalled()
+    view.unmount()
+    await new Promise(r => setTimeout(r, 20))
+    expect(reportModalClosed).toHaveBeenCalledWith('cat x | chart')
+    expect(reportModalClosed).toHaveBeenCalledTimes(1)
+  })
+
+  // Dev builds mount, unmount and remount every component (StrictMode). That
+  // simulated unmount is not the user closing the modal.
+  it('does not report the dev-mode simulated unmount of a pipe chart', async () => {
+    const view = render(
+      <StrictMode>
+        <MemoryRouter>
+          <ShellChartModal spec={{ plot: line([1, 2]), pipeline: 'cat x | chart' }} onClose={() => {}} />
+        </MemoryRouter>
+      </StrictMode>,
+    )
+    await new Promise(r => setTimeout(r, 20))
+    expect(reportModalClosed).not.toHaveBeenCalled()
+    view.unmount()
+    await new Promise(r => setTimeout(r, 20))
+    expect(reportModalClosed).toHaveBeenCalledTimes(1)
+    expect(reportModalClosed).toHaveBeenCalledWith('cat x | chart')
+  })
+
+  it('reports a cron chart once its results loaded, not before', async () => {
+    getWatchResults.mockResolvedValueOnce([])
+    const spec = { watch: 'error-rate', pipeline: 'chart error-rate' }
+    const early = render(
+      <MemoryRouter>
+        <ShellChartModal spec={spec} onClose={() => {}} />
+      </MemoryRouter>,
+    )
+    early.unmount() // closed while still loading
+    expect(reportModalClosed).not.toHaveBeenCalled()
+
+    getWatchResults.mockResolvedValueOnce([])
+    const loaded = render(
+      <MemoryRouter>
+        <ShellChartModal spec={spec} onClose={() => {}} />
+      </MemoryRouter>,
+    )
+    await act(async () => {})
+    loaded.unmount()
+    await new Promise(r => setTimeout(r, 20))
+    expect(reportModalClosed).toHaveBeenCalledWith('chart error-rate')
+  })
+
+  it('does not report a cron chart that failed to load', async () => {
+    getWatchResults.mockRejectedValueOnce(new Error('boom'))
+    const view = render(
+      <MemoryRouter>
+        <ShellChartModal spec={{ watch: 'error-rate', pipeline: 'chart error-rate' }} onClose={() => {}} />
+      </MemoryRouter>,
+    )
+    await act(async () => {})
+    view.unmount()
+    expect(reportModalClosed).not.toHaveBeenCalled()
   })
 })

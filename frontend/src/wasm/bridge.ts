@@ -51,6 +51,7 @@ export interface ShellIdentity {
 // in place of rendering ASCII. Either `watch` (chart <name>) or
 // `plot` (... | chart) is populated.
 export interface ChartOpenSpec {
+  pipeline?: string // the typed line that opened the chart
   watch?: string
   plot?: ChartPlot
   kind?: string

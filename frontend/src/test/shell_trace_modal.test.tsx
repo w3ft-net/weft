@@ -64,6 +64,7 @@ describe('ShellTraceModal tour report', () => {
     await act(async () => {})
     expect(reportModalClosed).not.toHaveBeenCalled() // still open
     view.unmount()
+    await new Promise(r => setTimeout(r, 20))
     expect(reportModalClosed).toHaveBeenCalledTimes(1)
     expect(reportModalClosed).toHaveBeenCalledWith('trace abc')
   })

@@ -226,6 +226,9 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 // the parsed render options so the modal can fully reproduce what
 // the CLI would have drawn to scrollback.
 type ChartRequest struct {
+	// Pipeline is the line the user typed to open the chart, so the surface
+	// that renders it can report itself closed against that command.
+	Pipeline string
 	// Watch is the watch name when the user typed `chart <name>`.
 	// Empty when the request originates from `... | chart`.
 	Watch string
@@ -261,9 +264,10 @@ func chartRequestBuiltin(emit func(ChartRequest)) shellcore.BuiltinFunc {
 			return true
 		}
 		emit(ChartRequest{
-			Watch: parsed.Name,
-			Kind:  parsed.Kind,
-			Limit: parsed.Limit,
+			Pipeline: c.RunningPipeline(),
+			Watch:    parsed.Name,
+			Kind:     parsed.Kind,
+			Limit:    parsed.Limit,
 		})
 		return true
 	}
@@ -274,7 +278,7 @@ func chartRequestBuiltin(emit func(ChartRequest)) shellcore.BuiltinFunc {
 // terse placeholder to scrollback (so the user sees that something
 // happened — the chart itself appears in a separate React modal).
 func chartRequestPipe(emit func(ChartRequest)) shellcore.PipeStageRenderFunc {
-	return func(_ *shellcore.ShellCore, lines []string, parsed any) (string, string) {
+	return func(c *shellcore.ShellCore, lines []string, parsed any) (string, string) {
 		args, ok := parsed.(chart.PipeArgs)
 		if !ok {
 			return "", "chart: internal error: parsed args not PipeArgs"
@@ -284,9 +288,10 @@ func chartRequestPipe(emit func(ChartRequest)) shellcore.PipeStageRenderFunc {
 			return "", "chart: " + errMsg
 		}
 		emit(ChartRequest{
-			Plot:  &plot,
-			Kind:  args.Kind,
-			Title: args.Title,
+			Pipeline: c.RunningPipeline(),
+			Plot:     &plot,
+			Kind:     args.Kind,
+			Title:    args.Title,
 		})
 		return shellcore.DimText("[chart] opened in modal ("+strconv.Itoa(len(lines))+" rows)") + "\n", ""
 	}

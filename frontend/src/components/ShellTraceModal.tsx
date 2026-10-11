@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchPipelineLines, reportModalClosed } from '../wasm/network'
+import { fetchPipelineLines } from '../wasm/network'
+import { useReportModalClosed } from '../lib/useReportModalClosed'
 import { parseTraceRows, renderSpanRollup, type TraceRow, type SpanRollupRow, type SpanOccurrence } from '../wasm/traceExports'
 import { traceColorFor } from '../lib/traceColors'
 import './ShellTraceModal.css'
@@ -49,18 +50,11 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
   const [level, setLevel] = useState<'list' | 'samples'>('list')
   const [focusIdx, setFocusIdx] = useState<number | null>(null)
 
-  // The tour waits for this modal to go away before moving on. Report from
-  // unmount so every way of closing it counts (Esc, [x], backdrop, another
-  // modal replacing it), but only for a trace that loaded: one dismissed
-  // while loading or after an error did not teach the lesson.
+  // The tour waits for this modal to go away before moving on, but only for
+  // a trace that loaded.
   const shown = useRef(false)
   shown.current = !loading && !error && lines !== null
-  useEffect(() => {
-    const pipeline = spec.pipeline
-    return () => {
-      if (shown.current) void reportModalClosed(pipeline)
-    }
-  }, [spec.pipeline])
+  useReportModalClosed(spec.pipeline, shown)
 
   // Esc closes, matching the [x] button. Capture phase: focus normally sits
   // in the terminal behind the backdrop, and xterm must not see the key.

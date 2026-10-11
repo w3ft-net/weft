@@ -181,6 +181,10 @@ func TestCompletesOn(t *testing.T) {
 		trigger Trigger
 		want    bool
 	}{
+		{"shell-chart", TriggerModalClosed, true},
+		{"shell-chart", TriggerBrowserDone, false},
+		{"shell-chart-pipe", TriggerModalClosed, true},
+		{"shell-chart-pipe", TriggerBrowserDone, false},
 		{"shell-trace", TriggerModalClosed, true},
 		{"shell-trace", TriggerExec, true},
 		{"shell-trace", TriggerBrowserDone, false},
