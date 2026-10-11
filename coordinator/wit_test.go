@@ -215,7 +215,9 @@ func TestWit_Diff_Range(t *testing.T) {
 
 func TestWit_Checkout_AdvancesHEAD(t *testing.T) {
 	wf, _ := witHelper(t, "checkout", 3)
-	if _, _, code := runWit(t, wf, "checkout", "/bin/scan", "HEAD^2"); code != 0 {
+	grantWitPerms(t, wf, true, true)
+	if _, se, code := runWit(t, wf, "checkout", "/bin/scan", "HEAD^2"); code != 0 {
+		t.Log(se)
 		t.Fatalf("checkout: code=%d", code)
 	}
 	fn, _ := wf.Store.GetShellFunction(wf.OrgID, "scan")

@@ -1,18 +1,16 @@
 package coordinator
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/pmezard/go-difflib/difflib"
-	"gorm.io/gorm"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/warp/pkg/syntax"
+	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -398,87 +396,36 @@ func (w *WitFuncs) runCheckout(args []string, stdout, stderr io.Writer) int {
 	var hash string
 	switch kind {
 	case "bin":
-		v, err := w.Store.ResolveShellFunctionRef(w.OrgID, name, ref)
+		target, err := w.Store.ResolveShellFunctionRef(w.OrgID, name, ref)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit checkout: %v\n", err)
 			return 1
 		}
-		if err := func() error {
-			target, err := w.Store.ResolveShellFunctionRef(w.OrgID, name, ref)
-			if err != nil {
-				return err
+		if !target.IsHead {
+			content := target.Source
+			if target.Language == "lua" {
+				content = "#!/usr/bin/env lua\n" + content
 			}
-			if target.IsHead {
-				return nil
+			if err := w.writeMount("/bin/"+name, content); err != nil {
+				fmt.Fprintf(stderr, "wit checkout: %v\n", err)
+				return 1
 			}
-			return w.Store.DB().WithContext(store.WithOrg(context.Background(), w.OrgID)).Transaction(func(tx *gorm.DB) error {
-				if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", w.UserID).Error; err != nil {
-					return err
-				}
-				updates := map[string]any{
-					"source":       target.Source,
-					"language":     target.Language,
-					"content_hash": target.ContentHash,
-					"message":      target.Message,
-					"updated_at":   time.Now(),
-				}
-				if target.AuthoredByUserID != nil {
-					updates["created_by_user_id"] = *target.AuthoredByUserID
-				}
-				return tx.Model(&store.ShellFunction{}).
-					Where("name = ?", name).
-					Updates(updates).Error
-			})
-		}(); err != nil {
-			fmt.Fprintf(stderr, "wit checkout: %v\n", err)
-			return 1
 		}
-		hash = v.ContentHash
+		hash = target.ContentHash
 	case "cron.d":
-		v, err := w.Store.ResolveCronWatchRef(w.OrgID, name, ref)
+		target, err := w.Store.ResolveCronWatchRef(w.OrgID, name, ref)
 		if err != nil {
 			fmt.Fprintf(stderr, "wit checkout: %v\n", err)
 			return 1
 		}
-		if err := func() error {
-			target, err := w.Store.ResolveCronWatchRef(w.OrgID, name, ref)
-			if err != nil {
-				return err
+		if !target.IsHead {
+			content := mounts.SerializeCron(&store.CronWatch{Schedule: target.Schedule, Pipeline: target.Pipeline, Enabled: true})
+			if err := w.writeMount("/cron.d/"+name, content); err != nil {
+				fmt.Fprintf(stderr, "wit checkout: %v\n", err)
+				return 1
 			}
-			if target.IsHead {
-				return nil
-			}
-			compiled, err := store.CompileWatchPipeline(target.Pipeline)
-			if err != nil {
-				return err
-			}
-			return w.Store.DB().WithContext(store.WithOrg(context.Background(), w.OrgID)).Transaction(func(tx *gorm.DB) error {
-				if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", w.UserID).Error; err != nil {
-					return err
-				}
-				updates := map[string]any{
-					"schedule":        target.Schedule,
-					"pipeline":        target.Pipeline,
-					"content_hash":    target.ContentHash,
-					"message":         target.Message,
-					"alert_key":       compiled.AlertKey,
-					"alert_tag":       compiled.AlertTag,
-					"alert_condition": compiled.AlertCondition,
-					"alert_threshold": compiled.AlertThreshold,
-					"updated_at":      time.Now(),
-				}
-				if target.AuthoredByUserID != nil {
-					updates["created_by_user_id"] = *target.AuthoredByUserID
-				}
-				return tx.Model(&store.CronWatch{}).
-					Where("name = ?", name).
-					Updates(updates).Error
-			})
-		}(); err != nil {
-			fmt.Fprintf(stderr, "wit checkout: %v\n", err)
-			return 1
 		}
-		hash = v.ContentHash
+		hash = target.ContentHash
 	}
 	short := hash
 	if len(hash) >= 7 {
@@ -486,6 +433,25 @@ func (w *WitFuncs) runCheckout(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "checked out /%s/%s @ %s  (now HEAD)\n", kind, name, short)
 	return 0
+}
+
+// writeMount saves content at path through the same mounts a `vi` or `>`
+// write goes through, so permission, language-classification, tier and
+// lowering checks all apply. The permission bits come from the acting
+// user's org_permissions row (absent row = read-only).
+func (w *WitFuncs) writeMount(path, content string) error {
+	cfg := mounts.Config{
+		Store:  w.Store,
+		OrgID:  w.OrgID,
+		Tier:   w.Store.TierForOrg(w.OrgID),
+		UserID: w.UserID,
+	}
+	if perm, err := w.Store.GetOrgPermission(w.OrgID, w.UserID); err == nil {
+		cfg.CanManageFunctions = perm.CanManageFunctions
+		cfg.CanManageWatches = perm.CanManageWatches
+		cfg.CanManageEtc = perm.CanManageEtc
+	}
+	return mounts.New(cfg).WriteFile(path, []byte(content))
 }
 
 // amend -----------------------------------------------------------
