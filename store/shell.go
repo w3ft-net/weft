@@ -126,8 +126,11 @@ func (s *Store) SaveShellFunction(orgID OrgID, userID, name, source, language st
 			return err
 		}
 
+		// Unscoped: a soft-deleted row still owns the (org, name) unique
+		// slot, so saving over a deleted name revives it in place and its
+		// history continues.
 		var fn ShellFunction
-		result := tx.Where("name = ?", name).First(&fn)
+		result := tx.Unscoped().Where("name = ?", name).First(&fn)
 		if result.Error == gorm.ErrRecordNotFound {
 			row := &ShellFunction{
 				OrgID: orgID, Name: name,
@@ -143,15 +146,17 @@ func (s *Store) SaveShellFunction(orgID OrgID, userID, name, source, language st
 		// so HEAD's updated_at doesn't drift and history isn't
 		// polluted. The DB-level trigger guard would also prevent the
 		// history INSERT, but skipping here saves the roundtrip.
-		if fn.ContentHash == hash {
+		if fn.ContentHash == hash && !fn.DeletedAt.Valid {
 			return nil
 		}
 		// Existing rows keep their original creator on overwrite —
 		// only source / language / hash change. Editing isn't authoring.
-		return tx.Model(&fn).Updates(map[string]any{
+		// A deleted row is revived (deleted_at cleared) by the same write.
+		return tx.Unscoped().Model(&fn).Updates(map[string]any{
 			"source":       source,
 			"language":     language,
 			"content_hash": hash,
+			"deleted_at":   nil,
 		}).Error
 	})
 }
@@ -431,8 +436,9 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err
 		}
+		// Unscoped: see SaveShellFunction — saving a deleted name revives it.
 		var w CronWatch
-		result := tx.Where("name = ?", name).First(&w)
+		result := tx.Unscoped().Where("name = ?", name).First(&w)
 		if result.Error == gorm.ErrRecordNotFound {
 			row := &CronWatch{
 				OrgID:          orgID,
@@ -453,11 +459,12 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 			return tx.Create(row).Error
 		}
 		// No-op save: skip the UPDATE. See SaveShellFunction for why.
-		if w.ContentHash == hash {
+		if w.ContentHash == hash && !w.DeletedAt.Valid {
 			return nil
 		}
 		// Existing watches keep their original creator on overwrite.
-		return tx.Model(&w).Updates(map[string]any{
+		updates := map[string]any{
+			"deleted_at":      nil,
 			"schedule":        schedule,
 			"pipeline":        pipeline,
 			"content_hash":    hash,
@@ -466,7 +473,11 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 			"alert_condition": compiled.AlertCondition,
 			"alert_threshold": compiled.AlertThreshold,
 			"lowered_plan":    loweredPlan,
-		}).Error
+		}
+		if w.DeletedAt.Valid {
+			updates["enabled"] = true // a revived watch starts enabled, like a new one
+		}
+		return tx.Unscoped().Model(&w).Updates(updates).Error
 	}); err != nil {
 		return err
 	}
