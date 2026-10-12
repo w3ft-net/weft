@@ -114,6 +114,9 @@ critical:
 or `{name: "...", severity: "..."}` (`critical`/`error`/`warning`/`info`).
 **Webhook** — bare URL strings, or `{url: "...", headers: {...}}`.
 POSTs a JSON payload with `v`, `watch`, `alias`, `ts_unix`, `body`.
+Header values are credentials: `cat /etc/notify.yaml` shows them as
+`"<redacted>"`. Leave a `"<redacted>"` in place to keep the stored value, or
+write a new one to replace it.
 **Email** — bare addresses, or `{address: "..."}`. Sends a plain-text
 email with the cron name as subject (requires SMTP configuration).
 

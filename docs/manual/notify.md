@@ -62,6 +62,14 @@ Webhook URLs and email addresses carry no account-level credential —
 they're written straight into `notify.yaml` per alias, so there's
 nothing to connect first:
 
+Webhook **header values** are the exception: an `Authorization` token
+or a signing secret is a credential, so `cat /etc/notify.yaml` (and
+`git log -p /etc/notify.yaml`) shows each one as `"<redacted>"`. Edit
+the file as usual: leave `"<redacted>"` where a value should stay as
+it is, or write a real value to replace it. A `"<redacted>"` on a
+webhook, header or alias that has nothing stored is refused rather
+than saved as a literal.
+
 ```
 pages:
   webhook:
