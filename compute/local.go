@@ -377,7 +377,12 @@ func (j *LocalComputeJob) consume() {
 		return
 	}
 
-	pipeline := strings.Join(j.stages, " | ")
+	// pipefail: warp reports a pipeline's status as its last stage's, so
+	// without it `awk '<bad>' | wc -l` exits 0 from wc and the awk error
+	// is dropped (the user sees 0 instead of the syntax error). Stages
+	// that fail without writing to stderr (grep with no match) still
+	// aren't errors: the exit check below also needs stderr output.
+	pipeline := "set -o pipefail; " + strings.Join(j.stages, " | ")
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
 
