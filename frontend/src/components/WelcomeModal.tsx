@@ -31,7 +31,7 @@ export default function WelcomeModal() {
       console.error('advance welcome:', e)
     }
     if (hasLoom) {
-      switchOrg('loom') // reloads the page; tour overlay takes over
+      switchOrg('loom', '/downloads') // the tour's first page; its overlay takes over
     }
   }
 

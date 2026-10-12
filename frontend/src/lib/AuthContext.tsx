@@ -19,7 +19,7 @@ interface AuthContextValue {
   // every cached query (dashboards, watches, sources) is re-fetched
   // against the new active customer. A pure refetch without reload
   // would leave stale data on screens the user already opened.
-  switchOrg: (orgName: string) => void
+  switchOrg: (orgName: string, path?: string) => void
   // refreshUser re-fetches /api/auth/me without reloading the page.
   // Used by TourOverlay to pick up onboarding step changes the
   // shell-side hook drove (advancing through lessons) so the banner
@@ -83,12 +83,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }
 
-  function switchOrg(orgName: string): void {
+  function switchOrg(orgName: string, path?: string): void {
     localStorage.setItem(ORG_STORAGE_KEY, orgName)
     // Hard reload — every page in the app caches data against the
     // previously active org; refetching just /api/auth/me would leave
     // stale dashboards / watches / sources visible.
-    window.location.reload()
+    if (path) window.location.assign(path)
+    else window.location.reload()
   }
 
   async function refreshUser(): Promise<void> {
