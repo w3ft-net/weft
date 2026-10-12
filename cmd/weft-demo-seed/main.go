@@ -842,7 +842,7 @@ oncall:
   email:
     - "oncall@loom.test"
 `
-	if err := s.SaveNotifyAliases(custID, notifyYAML); err != nil {
+	if err := s.SaveNotifyAliases(custID, user1.ID, notifyYAML); err != nil {
 		return fmt.Errorf("notify.yaml: %w", err)
 	}
 

@@ -1,6 +1,6 @@
 ---
 id: manual-git
-title: git — version history for /bin and /cron.d
+title: git — version history for /bin, /cron.d and /etc
 web:
   section: git
   category: customize
@@ -9,10 +9,11 @@ web:
 
 ## Version history with `git`
 
-Every save to `/bin/<name>` or `/cron.d/<name>` is captured in a
-short, browseable history. If you fat-finger an edit, push a
-script that breaks an alert at 2am, or just want to see what your
-cron looked like last week, the `git` command has you covered.
+Every save to a script in `/bin`, a cron in `/cron.d`, a dashboard
+in `/etc/dashboards` or `/etc/notify.yaml` is captured in a short,
+browseable history. If you fat-finger an edit, push a script that
+breaks an alert at 2am, or just want to see what your cron or
+dashboard looked like last week, the `git` command has you covered.
 
 It is a **subset of git**. Everything it accepts behaves and prints
 the way git does, so what you already know works: `git log`,
@@ -44,15 +45,18 @@ staging area: a write *is* the commit, which is why there is no
 |-----------------------|----------|
 | `/bin/<name>`         | ✓ — saves to scripts produce commits |
 | `/cron.d/<name>`      | ✓ — saves to crons produce commits |
-| `/etc/...`            | ✗ |
+| `/etc/dashboards/<name>.yaml` | ✓ — saves to dashboards produce commits |
+| `/etc/notify.yaml`    | ✓ — saves to the alert aliases produce commits |
+| `/etc/passwd`, `/etc/usage` | ✗ — generated, not stored |
 | `/log/...`            | ✗ |
 | `/tmp/...`            | ✗ |
 
-The repository root is `/`, and tracked paths are `bin/<name>` and
-`cron.d/<name>`. Write a path any way git accepts it: `/bin/scan`,
+The repository root is `/`, and tracked paths are `bin/<name>`,
+`cron.d/<name>`, `etc/dashboards/<name>.yaml` and `etc/notify.yaml`.
+Write a path any way git accepts it: `/bin/scan`,
 `bin/scan`, or just `scan` after `cd /bin`. A path outside `/bin`
 and `/cron.d` is refused: `fatal: '/tmp/x' is outside the
-repository (only /bin and /cron.d are tracked)`.
+repository (only /bin, /cron.d, /etc/dashboards and /etc/notify.yaml are tracked)`.
 
 ## Revisions
 
@@ -192,8 +196,8 @@ do what you expect. `--color=always` or `--color=never` overrides.
 
 ## Commit messages at save time
 
-Right after a successful save (`:w` in vi, or any other write to
-`/bin/<name>` or `/cron.d/<name>`), the shell drops you into a
+Right after a successful save in vi of a file git tracks (a script,
+cron, dashboard or `notify.yaml`), the shell drops you into a
 follow-up vi buffer pre-filled with a comment-prefixed prompt:
 
 ```
@@ -225,7 +229,9 @@ read-only — the same access as `cat /bin/foo` or `cat /cron.d/foo`.
 
 `git restore`, `checkout -- <path>`, `revert` and `commit --amend`
 are writes. They need the same group as editing the file does:
-`binmgr` for `/bin`, `cronmgr` for `/cron.d`.
+`binmgr` for `/bin`, `cronmgr` for `/cron.d`, `configmgr` for `/etc`.
+Restoring an old dashboard still validates it: if it refers to a cron
+that has since been deleted, the restore is refused.
 
 ## What `git` here does NOT do
 
@@ -233,8 +239,11 @@ are writes. They need the same group as editing the file does:
   `reset`, `clean` don't exist; every write is already a commit.
 - **No branches, merges or rebases.** One linear history.
 - **No remotes.** `clone`, `fetch`, `pull`, `push` are refused.
-- **No history for `/etc` or `/tmp`.** Notify config and dashboards
-  are shared state with their own editing flow; `/tmp` is
-  intentionally ephemeral.
+- **No history for `/tmp`, `/etc/passwd` or `/etc/usage`.** `/tmp` is
+  intentionally ephemeral; the other two are generated (from group
+  membership and metering), so there is nothing stored to roll back.
+  Change the team with `adduser` / `deluser`.
+- **Slack setup is not in `/etc/notify.yaml`.** Only the alias file
+  is versioned; connecting Slack doesn't create a commit.
 - **Patterns are RE2, not POSIX.** `--author` and `--grep` use Go
   regular expressions, so `+`, `?` and `|` are operators.

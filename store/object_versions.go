@@ -6,11 +6,11 @@ import "time"
 // flat row so a caller can assemble an org-wide history in one pass. It
 // covers both live rows (IsHead) and history rows.
 type ObjectVersion struct {
-	Kind      string // "bin" or "cron.d"
+	Kind      string // "bin", "cron.d", "etc/dashboards" (name is "<dashboard>.yaml") or "etc" (only notify.yaml)
 	ObjectID  uint64 // shell_functions.id / cron_watches.id; stable across renames
 	Name      string // the object's name at the time of this version
 	VersionID int64  // unique per content change; stable when HEAD moves to history
-	Source    string // bin: the script source
+	Source    string // bin: the script source; etc: the file content
 	Language  string // bin: "bash" or "lua"
 	Schedule  string // cron
 	Pipeline  string // cron
@@ -55,6 +55,29 @@ func (s *Store) ListObjectVersions(orgID OrgID) ([]ObjectVersion, error) {
 		SELECT 'cron.d', w.id, w.name, w.version_id, '', '', w.schedule, w.pipeline, w.message,
 		       w.authored_at, w.authored_by_user_id, true, w.deleted_at, false
 		  FROM cron_watches w WHERE w.org_id = @org
+		UNION ALL
+		SELECT 'etc/dashboards', h.dashboard_id, h.name || '.yaml', h.version_id, h.yaml_body, '', '', '', h.message,
+		       h.authored_at, h.authored_by_user_id, false, NULL::timestamptz,
+		       (h.predecessor_id IS NULL AND d.origin_version_id IS DISTINCT FROM h.version_id)
+		  FROM dashboard_history h JOIN dashboards d ON d.id = h.dashboard_id
+		 WHERE h.org_id = @org
+		UNION ALL
+		SELECT 'etc/dashboards', d.id, d.name || '.yaml', d.version_id, d.yaml_body, '', '', '', d.message,
+		       d.authored_at, d.authored_by_user_id, true, d.deleted_at, false
+		  FROM dashboards d WHERE d.org_id = @org
+		UNION ALL
+		-- The first row of a notify config can be created empty (Slack setup
+		-- makes it); that is no version of the file.
+		SELECT 'etc', h.notify_config_id, 'notify.yaml', h.version_id, h.aliases_yaml, '', '', '', h.message,
+		       h.authored_at, h.authored_by_user_id, false, NULL::timestamptz,
+		       (h.predecessor_id IS NULL AND n.origin_version_id IS DISTINCT FROM h.version_id)
+		  FROM notify_config_history h JOIN notify_configs n ON n.id = h.notify_config_id
+		 WHERE h.org_id = @org AND NOT (h.aliases_yaml = '' AND h.version_id = n.origin_version_id)
+		UNION ALL
+		SELECT 'etc', n.id, 'notify.yaml', n.version_id, n.aliases_yaml, '', '', '', n.message,
+		       n.authored_at, n.authored_by_user_id, true, n.deleted_at, false
+		  FROM notify_configs n
+		 WHERE n.org_id = @org AND NOT (n.aliases_yaml = '' AND n.version_id = n.origin_version_id)
 		ORDER BY authored_at, kind, object_id, version_id`,
 		map[string]any{"org": orgID}).Scan(&out).Error
 	return out, err

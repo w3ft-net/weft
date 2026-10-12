@@ -136,7 +136,7 @@ func (m *EtcMount) WriteFile(rel string, data []byte) error {
 		if _, err := store.ParseNotifyAliases(content); err != nil {
 			return fmt.Errorf("/etc/notify.yaml: %w", err)
 		}
-		return m.cfg.Store.SaveNotifyAliases(m.cfg.OrgID, content)
+		return m.cfg.Store.SaveNotifyAliases(m.cfg.OrgID, m.cfg.UserID, content)
 	default:
 		if dashName, ok := dashboardName(rel); ok {
 			body := string(data)
@@ -164,6 +164,21 @@ func (m *EtcMount) Remove(rel string) error {
 		return m.cfg.Store.DeleteDashboard(m.cfg.OrgID, dashName)
 	}
 	return fmt.Errorf("/etc/%s: operation not permitted", rel)
+}
+
+// AmendVersionMessage records a commit message for the versioned /etc files
+// (notify.yaml and the dashboards).
+func (m *EtcMount) AmendVersionMessage(rel, message string) error {
+	if !m.cfg.CanManageEtc {
+		return denyWrite("/etc", "configmgr")
+	}
+	if rel == "notify.yaml" {
+		return m.cfg.Store.AmendNotifyAliasesMessage(m.cfg.OrgID, m.cfg.UserID, message)
+	}
+	if dashName, ok := dashboardName(rel); ok {
+		return m.cfg.Store.AmendDashboardMessage(m.cfg.OrgID, m.cfg.UserID, dashName, message)
+	}
+	return fmt.Errorf("/etc/%s: not a versioned file", rel)
 }
 
 // --- passwd ---

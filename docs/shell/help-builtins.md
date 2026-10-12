@@ -56,7 +56,7 @@ web:
 
 ## Version history (git)
 
-`git` is a subset of git over `/bin` and `/cron.d`; HEAD is the org's latest change.
+`git` is a subset of git over `/bin`, `/cron.d` and `/etc`; HEAD is the org's latest change.
 
 - `git log [-p] [--oneline] [-- <path>]` — list versions; `-p` includes diffs
 - `git show <rev>[:<path>]` — a commit, or a file's content at that revision
@@ -67,7 +67,7 @@ web:
 - `git commit --amend -m MSG` — reword the latest commit
 
 Revisions: `HEAD`, `HEAD~N`, `<a>..<b>`, or a hash prefix (≥4 hex chars).
-Tracked under `/bin` and `/cron.d` only; last 5 past versions retained.
+Tracked: `/bin`, `/cron.d`, `/etc/dashboards` and `/etc/notify.yaml`; last 5 past versions retained.
 Other git commands are refused as unsupported.
 
 ## Sharing

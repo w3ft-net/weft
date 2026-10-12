@@ -824,16 +824,22 @@ func (s *Store) SaveSlackConfig(orgID OrgID, webhook, botToken, teamName string)
 
 // SaveNotifyAliases writes the raw /etc/notify.yaml YAML for a customer.
 // Callers must validate the YAML before invoking this.
-func (s *Store) SaveNotifyAliases(orgID OrgID, aliasesYAML string) error {
-	var nc NotifyConfig
-	result := s.scoped(orgID).First(&nc)
-	if result.Error == gorm.ErrRecordNotFound {
-		return s.scoped(orgID).Create(&NotifyConfig{
-			OrgID:       orgID,
-			AliasesYAML: aliasesYAML,
-		}).Error
-	}
-	return s.scoped(orgID).Model(&nc).Update("aliases_yaml", aliasesYAML).Error
+func (s *Store) SaveNotifyAliases(orgID OrgID, userID, aliasesYAML string) error {
+	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
+		// The history trigger records the acting user as the version's author.
+		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
+			return err
+		}
+		var nc NotifyConfig
+		result := tx.First(&nc)
+		if result.Error == gorm.ErrRecordNotFound {
+			return tx.Create(&NotifyConfig{
+				OrgID:       orgID,
+				AliasesYAML: aliasesYAML,
+			}).Error
+		}
+		return tx.Model(&nc).Update("aliases_yaml", aliasesYAML).Error
+	})
 }
 
 // ── PagerDuty integrations ─────────────────────────────

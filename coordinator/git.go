@@ -13,10 +13,10 @@ import (
 )
 
 // gitUsage is what bare `git` and `git --help` print.
-const gitUsage = "usage: git <command> [<args>]\n\nweft supports a subset of git over /bin and /cron.d:\n  log show diff status blame rev-parse\n  restore checkout -- <path>  revert  commit --amend"
+const gitUsage = "usage: git <command> [<args>]\n\nweft supports a subset of git over /bin, /cron.d and /etc:\n  log show diff status blame rev-parse\n  restore checkout -- <path>  revert  commit --amend"
 
 // RegisterGitCommand registers `git` as a bash command: a strict subset of
-// git over the org's /bin and /cron.d history (see witrepo). Anything git has
+// git over the org's /bin, /cron.d and /etc history (see witrepo). Anything git has
 // that the subset lacks is refused by name, so a missing feature reads as
 // ours and a typo reads as the user's.
 //

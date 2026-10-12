@@ -171,3 +171,36 @@ func contains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// The commit-message popup records through AmendVersionMessage, so /etc's
+// versioned files must accept it.
+func TestEtc_AmendVersionMessage(t *testing.T) {
+	db := testStore(t)
+	cust, err := db.FindOrCreateOrg("etc-amend-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser("test-owner", ownerPerms()))
+	seedDashboardWatch(t, sfs, "error-rate-hourly")
+	if err := sfs.WriteFile("/etc/dashboards/prod.yaml", []byte(sampleDashboardYAML)); err != nil {
+		t.Fatal(err)
+	}
+	if err := sfs.WriteFile("/etc/notify.yaml", []byte("ops:\n  email:\n    - \"ops@loom.test\"\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sfs.AmendVersionMessage("/etc/dashboards/prod.yaml", "first dashboard"); err != nil {
+		t.Fatalf("dashboard: %v", err)
+	}
+	if err := sfs.AmendVersionMessage("/etc/notify.yaml", "first aliases"); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	var got []string
+	db.DB().Raw("SELECT message FROM dashboards WHERE org_id = ? UNION ALL SELECT message FROM notify_configs WHERE org_id = ?", cust.ID, cust.ID).Scan(&got)
+	if strings.Join(got, "|") != "first dashboard|first aliases" {
+		t.Errorf("messages = %v", got)
+	}
+	if err := sfs.AmendVersionMessage("/etc/passwd", "nope"); err == nil {
+		t.Error("/etc/passwd is not versioned")
+	}
+}

@@ -61,7 +61,7 @@ const builtins = {
 <li><code>wc &lt;files&gt;</code> — <code>-l</code> lines, <code>-w</code> words, <code>-c</code> bytes, <code>-m</code> chars, <code>-L</code> longest line</li>
 </ul>
 <h2 id="version-history-git">Version history (git)</h2>
-<p><code>git</code> is a subset of git over <code>/bin</code> and <code>/cron.d</code>; HEAD is the org's latest change.</p>
+<p><code>git</code> is a subset of git over <code>/bin</code>, <code>/cron.d</code> and <code>/etc</code>; HEAD is the org's latest change.</p>
 <ul>
 <li><code>git log [-p] [--oneline] [-- &lt;path&gt;]</code> — list versions; <code>-p</code> includes diffs</li>
 <li><code>git show &lt;rev&gt;[:&lt;path&gt;]</code> — a commit, or a file's content at that revision</li>
@@ -72,7 +72,7 @@ const builtins = {
 <li><code>git commit --amend -m MSG</code> — reword the latest commit</li>
 </ul>
 <p>Revisions: <code>HEAD</code>, <code>HEAD~N</code>, <code>&lt;a&gt;..&lt;b&gt;</code>, or a hash prefix (≥4 hex chars).
-Tracked under <code>/bin</code> and <code>/cron.d</code> only; last 5 past versions retained.
+Tracked: <code>/bin</code>, <code>/cron.d</code>, <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code>; last 5 past versions retained.
 Other git commands are refused as unsupported.</p>
 <h2 id="sharing">Sharing</h2>
 <ul>

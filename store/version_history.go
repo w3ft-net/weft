@@ -41,3 +41,14 @@ func amendMessage(q *gorm.DB, authorID, message string) error {
 	}
 	return nil
 }
+
+// AmendDashboardMessage and AmendNotifyAliasesMessage are the /etc
+// counterparts of AmendShellFunctionMessage.
+func (s *Store) AmendDashboardMessage(orgID OrgID, authorID, name, message string) error {
+	q := s.scoped(orgID).Model(&Dashboard{}).Where("name = ?", name)
+	return amendMessage(q, authorID, message)
+}
+
+func (s *Store) AmendNotifyAliasesMessage(orgID OrgID, authorID, message string) error {
+	return amendMessage(s.scoped(orgID).Model(&NotifyConfig{}), authorID, message)
+}

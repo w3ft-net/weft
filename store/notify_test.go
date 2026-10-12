@@ -76,7 +76,7 @@ func TestDisconnectSlack(t *testing.T) {
 	cust, _ := db.FindOrCreateOrg("slack-disconnect-test")
 
 	db.SaveSlackConfig(cust.ID, "https://hooks.slack/X", "xoxb-x", "X Team")
-	db.SaveNotifyAliases(cust.ID, "page: oncall\n")
+	db.SaveNotifyAliases(cust.ID, "", "page: oncall\n")
 
 	if err := db.scoped(cust.ID).Model(&NotifyConfig{}).Updates(map[string]any{
 		"slack_webhook":   "",

@@ -1349,7 +1349,7 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		RegisterWeftPredicates(interp, wf)
 		interp.LuaExtensions = []luapkg.Extension{wf.LuaExtension()}
 
-		// `git` over /bin and /cron.d history — a strict subset of git
+		// `git` over /bin, /cron.d and /etc history — a strict subset of git
 		// backed by the live and history rows (see witrepo). Same scope
 		// as the weft.* helpers; the config carries the acting user.
 		RegisterGitCommand(interp, witrepo.Config{

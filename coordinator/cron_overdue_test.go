@@ -292,7 +292,7 @@ func TestOverduePageIsDeliveredThroughTheSystemAlias(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&got)
 	}))
 	defer srv.Close()
-	if err := e.db.SaveNotifyAliases(e.org, "system:\n  webhook:\n    - "+srv.URL+"\n"); err != nil {
+	if err := e.db.SaveNotifyAliases(e.org, "", "system:\n  webhook:\n    - "+srv.URL+"\n"); err != nil {
 		t.Fatal(err)
 	}
 

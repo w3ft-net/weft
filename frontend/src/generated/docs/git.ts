@@ -3,7 +3,7 @@
 const git = {
   id: "manual-git",
   section: "git",
-  title: "git — version history for /bin and /cron.d",
+  title: "git — version history for /bin, /cron.d and /etc",
   category: "customize",
   order: 65,
   headings: [
@@ -28,10 +28,11 @@ const git = {
     { level: 2, id: "what-git-here-does-not-do", text: "What git here does NOT do" },
   ],
   html: `<h2 id="version-history-with-git">Version history with <code>git</code></h2>
-<p>Every save to <code>/bin/&lt;name&gt;</code> or <code>/cron.d/&lt;name&gt;</code> is captured in a
-short, browseable history. If you fat-finger an edit, push a
-script that breaks an alert at 2am, or just want to see what your
-cron looked like last week, the <code>git</code> command has you covered.</p>
+<p>Every save to a script in <code>/bin</code>, a cron in <code>/cron.d</code>, a dashboard
+in <code>/etc/dashboards</code> or <code>/etc/notify.yaml</code> is captured in a short,
+browseable history. If you fat-finger an edit, push a script that
+breaks an alert at 2am, or just want to see what your cron or
+dashboard looked like last week, the <code>git</code> command has you covered.</p>
 <p>It is a <strong>subset of git</strong>. Everything it accepts behaves and prints
 the way git does, so what you already know works: <code>git log</code>,
 <code>git show</code>, <code>git diff</code>, <code>git blame</code>, <code>git restore</code>. Everything it
@@ -53,13 +54,16 @@ staging area: a write <em>is</em> the commit, which is why there is no
 |-----------------------|----------|
 | <code>/bin/&lt;name&gt;</code>         | ✓ — saves to scripts produce commits |
 | <code>/cron.d/&lt;name&gt;</code>      | ✓ — saves to crons produce commits |
-| <code>/etc/...</code>            | ✗ |
+| <code>/etc/dashboards/&lt;name&gt;.yaml</code> | ✓ — saves to dashboards produce commits |
+| <code>/etc/notify.yaml</code>    | ✓ — saves to the alert aliases produce commits |
+| <code>/etc/passwd</code>, <code>/etc/usage</code> | ✗ — generated, not stored |
 | <code>/log/...</code>            | ✗ |
 | <code>/tmp/...</code>            | ✗ |</p>
-<p>The repository root is <code>/</code>, and tracked paths are <code>bin/&lt;name&gt;</code> and
-<code>cron.d/&lt;name&gt;</code>. Write a path any way git accepts it: <code>/bin/scan</code>,
+<p>The repository root is <code>/</code>, and tracked paths are <code>bin/&lt;name&gt;</code>,
+<code>cron.d/&lt;name&gt;</code>, <code>etc/dashboards/&lt;name&gt;.yaml</code> and <code>etc/notify.yaml</code>.
+Write a path any way git accepts it: <code>/bin/scan</code>,
 <code>bin/scan</code>, or just <code>scan</code> after <code>cd /bin</code>. A path outside <code>/bin</code>
-and <code>/cron.d</code> is refused: <code>fatal: '/tmp/x' is outside the repository (only /bin and /cron.d are tracked)</code>.</p>
+and <code>/cron.d</code> is refused: <code>fatal: '/tmp/x' is outside the repository (only /bin, /cron.d, /etc/dashboards and /etc/notify.yaml are tracked)</code>.</p>
 <h2 id="revisions">Revisions</h2>
 <p><code>HEAD</code> is the org's <strong>latest change</strong>, not one file's — use a path
 to narrow to a file (<code>git log -- /bin/scan</code>). Revisions work as in
@@ -156,8 +160,8 @@ headed into a pipe or a redirect is plain text, so
 <code>git log -p | grep foo</code> and <code>git show HEAD:bin/scan &gt; /tmp/scan</code>
 do what you expect. <code>--color=always</code> or <code>--color=never</code> overrides.</p>
 <h2 id="commit-messages-at-save-time">Commit messages at save time</h2>
-<p>Right after a successful save (<code>:w</code> in vi, or any other write to
-<code>/bin/&lt;name&gt;</code> or <code>/cron.d/&lt;name&gt;</code>), the shell drops you into a
+<p>Right after a successful save in vi of a file git tracks (a script,
+cron, dashboard or <code>notify.yaml</code>), the shell drops you into a
 follow-up vi buffer pre-filled with a comment-prefixed prompt:</p>
 <pre><code># Commit message for /bin/scan.
 # One or more lines; the first line is the subject shown in \`git log\`.
@@ -181,16 +185,21 @@ save.</p>
 read-only — the same access as <code>cat /bin/foo</code> or <code>cat /cron.d/foo</code>.</p>
 <p><code>git restore</code>, <code>checkout -- &lt;path&gt;</code>, <code>revert</code> and <code>commit --amend</code>
 are writes. They need the same group as editing the file does:
-<code>binmgr</code> for <code>/bin</code>, <code>cronmgr</code> for <code>/cron.d</code>.</p>
+<code>binmgr</code> for <code>/bin</code>, <code>cronmgr</code> for <code>/cron.d</code>, <code>configmgr</code> for <code>/etc</code>.
+Restoring an old dashboard still validates it: if it refers to a cron
+that has since been deleted, the restore is refused.</p>
 <h2 id="what-git-here-does-not-do">What <code>git</code> here does NOT do</h2>
 <ul>
 <li><strong>No working tree, no staging.</strong> <code>add</code>, <code>rm</code>, <code>mv</code>, <code>stash</code>,
 <code>reset</code>, <code>clean</code> don't exist; every write is already a commit.</li>
 <li><strong>No branches, merges or rebases.</strong> One linear history.</li>
 <li><strong>No remotes.</strong> <code>clone</code>, <code>fetch</code>, <code>pull</code>, <code>push</code> are refused.</li>
-<li><strong>No history for <code>/etc</code> or <code>/tmp</code>.</strong> Notify config and dashboards
-are shared state with their own editing flow; <code>/tmp</code> is
-intentionally ephemeral.</li>
+<li><strong>No history for <code>/tmp</code>, <code>/etc/passwd</code> or <code>/etc/usage</code>.</strong> <code>/tmp</code> is
+intentionally ephemeral; the other two are generated (from group
+membership and metering), so there is nothing stored to roll back.
+Change the team with <code>adduser</code> / <code>deluser</code>.</li>
+<li><strong>Slack setup is not in <code>/etc/notify.yaml</code>.</strong> Only the alias file
+is versioned; connecting Slack doesn't create a commit.</li>
 <li><strong>Patterns are RE2, not POSIX.</strong> <code>--author</code> and <code>--grep</code> use Go
 regular expressions, so <code>+</code>, <code>?</code> and <code>|</code> are operators.</li>
 </ul>

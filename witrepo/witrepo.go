@@ -1,12 +1,12 @@
-// Package witrepo presents an org's /bin scripts and /cron.d entries as a
-// git repository, so the `git` command (warp's gitcore) can read and write
-// their history.
+// Package witrepo presents an org's /bin scripts, /cron.d entries,
+// /etc/dashboards and /etc/notify.yaml as a git repository, so the `git`
+// command (warp's gitcore) can read and write their history.
 //
 // Nothing here is a git object database. Each script and cron has a live row
 // plus a short history table (the newest five replaced versions), and this
 // package builds from those rows one linear branch, `main`: one commit per
 // saved version, ordered by when it was written, each touching one path
-// (bin/<name> or cron.d/<name>). Writes are not staged: every write goes
+// (bin/<name>, cron.d/<name>, etc/dashboards/<name>.yaml or etc/notify.yaml). Writes are not staged: every write goes
 // through the same mounts a `vi` or `>` write does, so permissions, language
 // classification, tier limits and plan lowering all apply, and the write *is*
 // the commit.
@@ -37,7 +37,7 @@ type Config struct {
 }
 
 // Repo implements gitcore.Repository, gitcore.AutoCommitter and
-// gitcore.PathResolver over an org's /bin and /cron.d history.
+// gitcore.PathResolver over an org's /bin, /cron.d and /etc history.
 type Repo struct {
 	cfg   Config
 	built *history // nil until first read; dropped by writes
@@ -91,6 +91,9 @@ func commitID(kind string, objectID uint64, versionID int64, tombstone bool) git
 func versionContent(v store.ObjectVersion) string {
 	if v.Kind == "cron.d" {
 		return mounts.SerializeCron(&store.CronWatch{Schedule: v.Schedule, Pipeline: v.Pipeline, Enabled: true})
+	}
+	if v.Kind == "etc" || v.Kind == "etc/dashboards" {
+		return v.Source
 	}
 	if v.Language == "lua" {
 		return "#!/usr/bin/env lua\n" + v.Source
@@ -290,9 +293,10 @@ func (r *Repo) Tree(id gitcore.ObjectID) (map[string]string, error) {
 	return t, nil
 }
 
-// ResolvePath maps a typed path onto a tracked path: "/bin/foo" and
-// "/cron.d/foo" as written, anything else relative to the shell's current
-// directory. Paths outside /bin and /cron.d are not in the repository.
+// ResolvePath maps a typed path onto a tracked path: absolute paths as
+// written, anything else relative to the shell's current directory. Paths
+// outside /bin, /cron.d, /etc/dashboards and /etc/notify.yaml are not in the
+// repository (the rest of /etc is generated or not versioned).
 func (r *Repo) ResolvePath(arg string) (string, error) {
 	abs := arg
 	if !strings.HasPrefix(arg, "/") {
@@ -306,20 +310,41 @@ func (r *Repo) ResolvePath(arg string) (string, error) {
 	switch {
 	case abs == "/":
 		return ".", nil // the whole repository
-	case abs == "/bin" || abs == "/cron.d" || strings.HasPrefix(abs, "/bin/") || strings.HasPrefix(abs, "/cron.d/"):
+	case abs == "/bin" || abs == "/cron.d" || abs == "/etc" || abs == "/etc/dashboards" || abs == "/etc/notify.yaml" ||
+		strings.HasPrefix(abs, "/bin/") || strings.HasPrefix(abs, "/cron.d/") || strings.HasPrefix(abs, "/etc/dashboards/"):
 		return strings.TrimPrefix(abs, "/"), nil
 	}
-	return "", fmt.Errorf("fatal: '%s' is outside the repository (only /bin and /cron.d are tracked)", arg)
+	return "", fmt.Errorf("fatal: '%s' is outside the repository (only /bin, /cron.d, /etc/dashboards and /etc/notify.yaml are tracked)", arg)
 }
 
-// splitTracked splits "bin/foo" into ("bin", "foo").
+// splitTracked splits "bin/foo" into ("bin", "foo"), and likewise
+// "etc/dashboards/x.yaml" and "etc/notify.yaml".
 func splitTracked(p string) (kind, name string, err error) {
-	for _, k := range []string{"bin", "cron.d"} {
+	if p == "etc/notify.yaml" {
+		return "etc", "notify.yaml", nil
+	}
+	for _, k := range []string{"bin", "cron.d", "etc/dashboards"} {
 		if rest, ok := strings.CutPrefix(p, k+"/"); ok && rest != "" && !strings.Contains(rest, "/") {
 			return k, rest, nil
 		}
 	}
-	return "", "", fmt.Errorf("fatal: '%s' is not a file in /bin or /cron.d", p)
+	return "", "", fmt.Errorf("fatal: '%s' is not a tracked file", p)
+}
+
+// amendMessage sets the commit message on the current version of a tracked
+// file, only if authorID wrote it (see store.AmendShellFunctionMessage).
+func (r *Repo) amendMessage(kind, name, authorID, message string) error {
+	st, org := r.cfg.Store, r.cfg.OrgID
+	switch kind {
+	case "bin":
+		return st.AmendShellFunctionMessage(org, authorID, name, message)
+	case "cron.d":
+		return st.AmendCronWatchMessage(org, authorID, name, message)
+	case "etc/dashboards":
+		return st.AmendDashboardMessage(org, authorID, strings.TrimSuffix(name, ".yaml"), message)
+	default:
+		return st.AmendNotifyAliasesMessage(org, authorID, message)
+	}
 }
 
 // mountFS builds the mounts the acting user's writes go through, with the
@@ -373,12 +398,7 @@ func (r *Repo) WriteFile(p, content, message string) (gitcore.ObjectID, error) {
 		return "", err
 	}
 	if message != "" {
-		if kind == "bin" {
-			err = r.cfg.Store.AmendShellFunctionMessage(r.cfg.OrgID, r.cfg.UserID, name, message)
-		} else {
-			err = r.cfg.Store.AmendCronWatchMessage(r.cfg.OrgID, r.cfg.UserID, name, message)
-		}
-		if err != nil {
+		if err := r.amendMessage(kind, name, r.cfg.UserID, message); err != nil {
 			return "", err
 		}
 		r.built = nil
@@ -420,17 +440,15 @@ func (r *Repo) Reword(id gitcore.ObjectID, message string) error {
 		return fmt.Errorf("cannot reword %s/%s: someone else wrote that version", m.kind, m.name)
 	}
 	perm, err := r.cfg.Store.GetOrgPermission(r.cfg.OrgID, r.cfg.UserID)
-	if m.kind == "bin" {
-		if err != nil || !perm.CanManageFunctions {
-			return fmt.Errorf("/bin: permission denied (need the binmgr group — ask an owner for `adduser <you> binmgr`)")
-		}
-		err = r.cfg.Store.AmendShellFunctionMessage(r.cfg.OrgID, r.cfg.UserID, m.name, message)
-	} else {
-		if err != nil || !perm.CanManageWatches {
-			return fmt.Errorf("/cron.d: permission denied (need the cronmgr group — ask an owner for `adduser <you> cronmgr`)")
-		}
-		err = r.cfg.Store.AmendCronWatchMessage(r.cfg.OrgID, r.cfg.UserID, m.name, message)
+	switch {
+	case m.kind == "bin" && (err != nil || !perm.CanManageFunctions):
+		return fmt.Errorf("/bin: permission denied (need the binmgr group — ask an owner for `adduser <you> binmgr`)")
+	case m.kind == "cron.d" && (err != nil || !perm.CanManageWatches):
+		return fmt.Errorf("/cron.d: permission denied (need the cronmgr group — ask an owner for `adduser <you> cronmgr`)")
+	case strings.HasPrefix(m.kind, "etc") && (err != nil || !perm.CanManageEtc):
+		return fmt.Errorf("/etc: permission denied (need the configmgr group — ask an owner for `adduser <you> configmgr`)")
 	}
+	err = r.amendMessage(m.kind, m.name, r.cfg.UserID, message)
 	r.built = nil
 	return err
 }

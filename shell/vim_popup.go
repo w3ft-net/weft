@@ -29,8 +29,8 @@ type MessageAmender interface {
 // with any other embedder hooks before SetVimHooks.
 //
 // Behavior contract (unchanged from the warp-resident version):
-//   - :wq on /bin/<name> or /cron.d/<name> swaps the editor for a
-//     follow-up commit-message buffer.
+//   - :wq on a versioned path (see isVersionedPath) swaps the editor for
+//     a follow-up commit-message buffer.
 //   - :wq in the popup records the (comment-stripped) message via
 //     MessageAmender if the FS implements it; empty messages no-op.
 //   - :q! in the popup skips the recording.
@@ -90,13 +90,18 @@ func installVimPopupHooks(core *shellcore.ShellCore) shellcore.VimHooks {
 }
 
 // isVersionedPath reports whether a save on path triggers the
-// post-save commit-message popup. /bin/<name> and /cron.d/<name>
+// post-save commit-message popup: the versioned files, which are
+// /bin/<name>, /cron.d/<name>, /etc/dashboards/<name> and /etc/notify.yaml
 // — entries with a name component, not the bare directories.
 func isVersionedPath(path string) bool {
 	switch {
 	case strings.HasPrefix(path, "/bin/") && len(path) > len("/bin/"):
 		return true
 	case strings.HasPrefix(path, "/cron.d/") && len(path) > len("/cron.d/"):
+		return true
+	case strings.HasPrefix(path, "/etc/dashboards/") && len(path) > len("/etc/dashboards/"):
+		return true
+	case path == "/etc/notify.yaml":
 		return true
 	}
 	return false

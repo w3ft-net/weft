@@ -35,7 +35,7 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 		t.Fatalf("get customer: %v", err)
 	}
 
-	err = db.SaveNotifyAliases(custID, "foo:\n  slack:\n    - \"#oncall\"\n")
+	err = db.SaveNotifyAliases(custID, "", "foo:\n  slack:\n    - \"#oncall\"\n")
 	if err != nil {
 		t.Fatalf("save notify aliases: %v", err)
 	}

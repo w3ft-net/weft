@@ -253,7 +253,7 @@ func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.store.SaveNotifyAliases(custID, req.AliasesYAML); err != nil {
+	if err := s.store.SaveNotifyAliases(custID, session.UserID, req.AliasesYAML); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

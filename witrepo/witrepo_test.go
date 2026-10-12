@@ -50,7 +50,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	f := &fixture{db: tx, org: org.ID, alice: mk("alice-wr@example.test", "Alice"), bob: mk("bob-wr@example.test", "Bob")}
 	if err := tx.DB().WithContext(store.WithOrg(t.Context(), org.ID)).Create(&store.OrgPermission{
-		OrgID: org.ID, UserID: f.alice.ID, CanManageFunctions: true, CanManageWatches: true,
+		OrgID: org.ID, UserID: f.alice.ID, CanManageFunctions: true, CanManageWatches: true, CanManageEtc: true,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

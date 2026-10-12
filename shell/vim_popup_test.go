@@ -293,3 +293,20 @@ func TestVimPopup_MixedBlockingAndWarning_StillBlocks(t *testing.T) {
 		t.Fatal("OnSave: want a blocking error, got nil")
 	}
 }
+
+func TestIsVersionedPath(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/bin/scan":                 true,
+		"/cron.d/errs":              true,
+		"/etc/dashboards/prod.yaml": true,
+		"/etc/notify.yaml":          true,
+		"/bin/":                     false,
+		"/etc/dashboards/":          false,
+		"/etc/passwd":               false,
+		"/tmp/x":                    false,
+	} {
+		if got := isVersionedPath(p); got != want {
+			t.Errorf("isVersionedPath(%q) = %v, want %v", p, got, want)
+		}
+	}
+}

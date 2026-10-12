@@ -164,6 +164,14 @@ func (f *ShellFS) AmendVersionMessage(path, message string) error {
 		return f.store.AmendShellFunctionMessage(f.custID, f.cfg.UserID, name, message)
 	case "cron.d":
 		return f.store.AmendCronWatchMessage(f.custID, f.cfg.UserID, name, message)
+	case "etc":
+		if name == "notify.yaml" {
+			return f.store.AmendNotifyAliasesMessage(f.custID, f.cfg.UserID, message)
+		}
+		if dash, ok := strings.CutPrefix(name, "dashboards/"); ok && strings.HasSuffix(dash, ".yaml") {
+			return f.store.AmendDashboardMessage(f.custID, f.cfg.UserID, strings.TrimSuffix(dash, ".yaml"), message)
+		}
+		return fmt.Errorf("amend: %s: not a versioned file", path)
 	default:
 		return fmt.Errorf("amend: %s: not a versioned namespace", path)
 	}
