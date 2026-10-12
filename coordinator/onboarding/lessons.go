@@ -194,18 +194,6 @@ var lessons = []*Lesson{
 		Prompt: "Look at this, it's a Lua file! Weft will respect the shebang like we have here, or a .lua extension.\n\nJust like git, weft's vim is an illusion, so not everything here is going to work, but it's a pretty decent subset.\n\nNow that we're here, make a few edits to the file and try to save. You'll see that you haven't been granted full permissions in the Loom org so your write access is restricted. Then you can `:q!` to quit.",
 	},
 	{
-		// Step ID is historical ("team-yaml"); the lesson now teaches the
-		// read-only /etc/passwd roster + group model that replaced it.
-		Step:   "shell-team-yaml",
-		Action: "cat /etc/passwd",
-		Prompt: "`/etc/passwd` is a read-only roster for whatever org you have active. /bin, /cron.d, and /etc all have corresponding org-level edit perms (`binmgr`/`cronmgr`/`configmgr`). Read perms for logs -- see how you have `loom` perms? -- and ability to mint tokens like `loom+tokens` are by namespace. Org owners manage privs either with the weft CLI or the Members page of the web dashboard.",
-	},
-	{
-		Step:   "shell-usage",
-		Action: "cat /etc/usage",
-		Prompt: "`/etc/usage` shows you weft's tally of bytes ingested per stream.",
-	},
-	{
 		Step:   "shell-tmp",
 		Action: "echo hello > /tmp/note",
 		Prompt: "If you are working through an issue where it's easier to stage output from some one-liners and run `comm` or `join` on those files, dump them to /tmp. But beware -- because scratch files tend to abide by gas laws and fill the size of the container, we automatically delete files that haven't been written to for 48 hrs.",
@@ -213,7 +201,7 @@ var lessons = []*Lesson{
 	{
 		Step:   "shell-clipboard",
 		Action: "clipboard /bin/scan",
-		Prompt: "`clipboard` makes a short link that captures the script path, your current range, and any args, and sticks it on your system clipboard. Useful for a teammate that won't jump into a tmux with you.",
+		Prompt: "`clipboard` builds a deep link that captures the script path, your current range, and any args, and sticks it on your system clipboard. Useful for a teammate that won't jump into a tmux with you.",
 	},
 	{
 		Step:   "shell-weftfunc",
@@ -241,6 +229,18 @@ var lessons = []*Lesson{
 		Step:   "shell-dashboard",
 		Action: "dashboard prod",
 		Prompt: "Just like with `chart`, the `dashboard` builtin works in the terminal, but will rely on more modern rendering tools when in the browser.",
+	},
+	{
+		// Step ID is historical ("team-yaml"); the lesson now teaches the
+		// read-only /etc/passwd roster + group model that replaced it.
+		Step:   "shell-team-yaml",
+		Action: "cat /etc/passwd",
+		Prompt: "`/etc/passwd` is a read-only roster for whatever org you have active. /bin, /cron.d, and /etc all have corresponding org-level edit perms (`binmgr`/`cronmgr`/`configmgr`). Read perms for logs -- see how you have `loom` perms? -- and ability to mint tokens like `loom+tokens` are by namespace. Org owners manage privs either with the weft CLI or the Members page of the web dashboard.",
+	},
+	{
+		Step:   "shell-usage",
+		Action: "cat /etc/usage",
+		Prompt: "`/etc/usage` shows you weft's tally of bytes ingested per stream.",
 	},
 }
 
