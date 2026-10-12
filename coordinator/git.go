@@ -12,6 +12,9 @@ import (
 	"github.com/graybeardcorp/weft/witrepo"
 )
 
+// gitUsage is what bare `git` and `git --help` print.
+const gitUsage = "usage: git <command> [<args>]\n\nweft supports a subset of git over /bin and /cron.d:\n  log show diff status blame rev-parse\n  restore checkout -- <path>  revert  commit --amend"
+
 // RegisterGitCommand registers `git` as a bash command: a strict subset of
 // git over the org's /bin and /cron.d history (see witrepo). Anything git has
 // that the subset lacks is refused by name, so a missing feature reads as
@@ -23,8 +26,13 @@ import (
 func RegisterGitCommand(interp *bash.Interpreter, cfg witrepo.Config) {
 	interp.RegisterCommand("git", func(args []string, _ io.Reader, stdout, stderr io.Writer) int {
 		if len(args) == 0 {
-			fmt.Fprintln(stderr, "usage: git <command> [<args>]\n\nweft supports a subset of git over /bin and /cron.d:\n  log show diff status restore checkout revert commit rev-parse blame")
+			fmt.Fprintln(stderr, gitUsage)
 			return 1
+		}
+		// The unknown-command error tells people to run `git --help`.
+		if len(args) == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "help") {
+			fmt.Fprintln(stdout, gitUsage)
+			return 0
 		}
 		env := gitcore.Env{
 			Product:    "weft",

@@ -65,6 +65,13 @@ func TestGitCommand_EndToEnd(t *testing.T) {
 		t.Errorf("after restore: %q", fn.Source)
 	}
 
+	// The unknown-command error points at `git --help`, so that must work.
+	for _, line := range []string{"git --help", "git -h", "git help"} {
+		if out := gitRun(t, c, org, alice.ID, line); !strings.Contains(out, "weft supports a subset of git") {
+			t.Errorf("%s: %q", line, out)
+		}
+	}
+
 	// Unsupported and unknown commands are refused, with exit status.
 	for line, want := range map[string]string{
 		"git rebase -i HEAD~2": "is a git command, but weft doesn't support it",

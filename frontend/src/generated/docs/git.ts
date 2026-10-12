@@ -36,6 +36,7 @@ cron looked like last week, the <code>git</code> command has you covered.</p>
 the way git does, so what you already know works: <code>git log</code>,
 <code>git show</code>, <code>git diff</code>, <code>git blame</code>, <code>git restore</code>. Everything it
 doesn't implement is refused by name:</p>
+<p><code>git --help</code> lists what is supported.</p>
 <pre><code>weft&gt; git rebase -i HEAD~3
 git: 'rebase' is a git command, but weft doesn't support it
 </code></pre>
@@ -58,7 +59,7 @@ staging area: a write <em>is</em> the commit, which is why there is no
 <p>The repository root is <code>/</code>, and tracked paths are <code>bin/&lt;name&gt;</code> and
 <code>cron.d/&lt;name&gt;</code>. Write a path any way git accepts it: <code>/bin/scan</code>,
 <code>bin/scan</code>, or just <code>scan</code> after <code>cd /bin</code>. A path outside <code>/bin</code>
-and <code>/cron.d</code> is refused: <code>fatal: '/tmp/x' is outside the repository</code>.</p>
+and <code>/cron.d</code> is refused: <code>fatal: '/tmp/x' is outside the repository (only /bin and /cron.d are tracked)</code>.</p>
 <h2 id="revisions">Revisions</h2>
 <p><code>HEAD</code> is the org's <strong>latest change</strong>, not one file's — use a path
 to narrow to a file (<code>git log -- /bin/scan</code>). Revisions work as in
@@ -129,8 +130,7 @@ a4fb0c2f (Alice 2026-04-25 09:42:01 +0000 2) | awk 'LEVEL == &quot;ERROR&quot;'
 <pre><code>weft&gt; git restore --source=HEAD~3 /bin/scan
 weft&gt; git checkout HEAD~3 -- /bin/scan        # same thing, older spelling
 </code></pre>
-<p>This writes the old content as a <strong>new commit</strong> — history is never
-rewritten — through the same path as <code>vi</code>: your permissions, the
+<p>This writes the old content as a <strong>new commit</strong> (<code>Restore bin/scan from 0174c77</code>) — history is never rewritten — through the same path as <code>vi</code>: your permissions, the
 Lua/bash classification, and (for crons) your plan's schedule
 limits all apply. It also brings back a script that was deleted,
 if its history is still there. <code>git checkout &lt;rev&gt;</code> without <code>--</code>
@@ -173,8 +173,9 @@ that's <code>git commit --amend -m</code>.</p>
 <h2 id="deleting-and-bringing-back">Deleting and bringing back</h2>
 <p>Deleting a script or cron shows up as a <code>Delete bin/&lt;name&gt;</code>
 commit, and <code>git restore --source=&lt;rev&gt; &lt;path&gt;</code> brings it back
-with its history intact. Saving over a deleted name does the same
-thing, in place.</p>
+with its history intact. Saving a new file over a deleted name does
+the same thing: the deletion stays in the log, followed by the new
+save.</p>
 <h2 id="permissions">Permissions</h2>
 <p><code>git log</code>, <code>show</code>, <code>diff</code>, <code>status</code>, <code>blame</code> and <code>rev-parse</code> are
 read-only — the same access as <code>cat /bin/foo</code> or <code>cat /cron.d/foo</code>.</p>

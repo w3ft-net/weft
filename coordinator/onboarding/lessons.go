@@ -186,7 +186,7 @@ var lessons = []*Lesson{
 		// `wit` command, which `git` replaced. Kept so recorded progress holds.
 		Step:   "shell-wit",
 		Action: "git log -p -- /bin/scan",
-		Prompt: "Bin scripts and cron entries have version history, and you read it with `git` — a subset of git that works on /bin and /cron.d, so what you know already works. History tracking is automatic and you're prompted for a commit message in vim whenever you create or modify a file. `-p` shows the diff inline for each version, and `-- /bin/scan` limits the log to one script (without it you get the whole org's changes).",
+		Prompt: "Bin scripts and cron entries have version history, and you read it with `git` — a subset of git that works on /bin and /cron.d, so what you know already works. History tracking is automatic and you're prompted for a commit message in vim whenever you create or modify a file. `-p` shows the diff inline for each version, and `-- /bin/scan` limits the log to one script (without it you get the whole org's changes).\n\nA few more to try: `git show HEAD~1:bin/scan` prints an older version, `git blame /bin/scan` shows who wrote each line, and `git restore --source=HEAD~1 /bin/scan` brings an old version back as a new commit (if you have write access). `git --help` lists what's supported; anything else real git can do is refused by name.",
 	},
 	{
 		Step:   "shell-bin-lua",

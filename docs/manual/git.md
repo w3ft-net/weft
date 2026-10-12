@@ -19,6 +19,8 @@ the way git does, so what you already know works: `git log`,
 `git show`, `git diff`, `git blame`, `git restore`. Everything it
 doesn't implement is refused by name:
 
+`git --help` lists what is supported.
+
 ```
 weft> git rebase -i HEAD~3
 git: 'rebase' is a git command, but weft doesn't support it
@@ -50,7 +52,7 @@ The repository root is `/`, and tracked paths are `bin/<name>` and
 `cron.d/<name>`. Write a path any way git accepts it: `/bin/scan`,
 `bin/scan`, or just `scan` after `cd /bin`. A path outside `/bin`
 and `/cron.d` is refused: `fatal: '/tmp/x' is outside the
-repository`.
+repository (only /bin and /cron.d are tracked)`.
 
 ## Revisions
 
@@ -151,8 +153,8 @@ weft> git restore --source=HEAD~3 /bin/scan
 weft> git checkout HEAD~3 -- /bin/scan        # same thing, older spelling
 ```
 
-This writes the old content as a **new commit** — history is never
-rewritten — through the same path as `vi`: your permissions, the
+This writes the old content as a **new commit** (`Restore bin/scan
+from 0174c77`) — history is never rewritten — through the same path as `vi`: your permissions, the
 Lua/bash classification, and (for crons) your plan's schedule
 limits all apply. It also brings back a script that was deleted,
 if its history is still there. `git checkout <rev>` without `--`
@@ -212,8 +214,9 @@ that's `git commit --amend -m`.
 
 Deleting a script or cron shows up as a `Delete bin/<name>`
 commit, and `git restore --source=<rev> <path>` brings it back
-with its history intact. Saving over a deleted name does the same
-thing, in place.
+with its history intact. Saving a new file over a deleted name does
+the same thing: the deletion stays in the log, followed by the new
+save.
 
 ## Permissions
 
