@@ -286,7 +286,7 @@ func TestAmendShellFunctionMessage_HEAD_DoesNotCapture(t *testing.T) {
 	db.SaveShellFunction(cust.ID, user.ID, "scan", "echo v2", "bash")
 	before := historyCount(t, db, cust.ID, "scan")
 
-	if err := db.AmendShellFunctionMessage(cust.ID, "scan", "first message"); err != nil {
+	if err := db.AmendShellFunctionMessage(cust.ID, user.ID, "scan", "first message"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -298,5 +298,26 @@ func TestAmendShellFunctionMessage_HEAD_DoesNotCapture(t *testing.T) {
 	v, _ := db.GetShellFunction(cust.ID, "scan")
 	if v.Message != "first message" {
 		t.Errorf("after amend: HEAD message = %q, want %q", v.Message, "first message")
+	}
+}
+
+func TestAmendShellFunctionMessage_RefusesAnotherAuthorsVersion(t *testing.T) {
+	db := testOpen(t)
+	cust, _ := db.FindOrCreateOrg("vh-amend-other")
+	alice, _ := db.CreateUser("alice-amend-other@example.test")
+	bob, _ := db.CreateUser("bob-amend-other@example.test")
+
+	db.SaveShellFunction(cust.ID, alice.ID, "scan", "echo v1", "bash")
+	// Bob's save lands after Alice's; Alice's popup then tries to amend.
+	db.SaveShellFunction(cust.ID, bob.ID, "scan", "echo v2", "bash")
+
+	if err := db.AmendShellFunctionMessage(cust.ID, alice.ID, "scan", "mine"); err == nil {
+		t.Fatal("alice amended bob's version")
+	}
+	if err := db.AmendShellFunctionMessage(cust.ID, bob.ID, "scan", "bob's"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := db.GetShellFunction(cust.ID, "scan"); v.Message != "bob's" {
+		t.Errorf("message = %q", v.Message)
 	}
 }

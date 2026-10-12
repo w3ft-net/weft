@@ -100,7 +100,7 @@ func (m *BinMount) AmendVersionMessage(rel, message string) error {
 	if !m.cfg.CanManageFunctions {
 		return denyWrite("/bin", "binmgr")
 	}
-	return m.cfg.Store.AmendShellFunctionMessage(m.cfg.OrgID, rel, message)
+	return m.cfg.Store.AmendShellFunctionMessage(m.cfg.OrgID, m.cfg.UserID, rel, message)
 }
 
 // --- helpers ---

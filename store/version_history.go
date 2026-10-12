@@ -3,6 +3,9 @@ package store
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+
+	"gorm.io/gorm"
 )
 
 // computeShellFunctionHash returns the canonical content hash for a
@@ -16,9 +19,25 @@ func computeShellFunctionHash(source string) string {
 
 // AmendShellFunctionMessage sets the commit message on a script's current
 // version. It is a plain update of the live row, so it does not capture
-// history.
-func (s *Store) AmendShellFunctionMessage(orgID OrgID, name, message string) error {
-	return s.scoped(orgID).Model(&ShellFunction{}).
-		Where("name = ?", name).
-		Update("message", message).Error
+// history. A non-empty authorID restricts it to a version that user wrote,
+// so a teammate's save that landed after yours is never reworded by you.
+func (s *Store) AmendShellFunctionMessage(orgID OrgID, authorID, name, message string) error {
+	q := s.scoped(orgID).Model(&ShellFunction{}).Where("name = ?", name)
+	return amendMessage(q, authorID, message)
+}
+
+// amendMessage applies a message update to the live row q selects. With an
+// authorID it only matches a version that user wrote, and reports a miss.
+func amendMessage(q *gorm.DB, authorID, message string) error {
+	if authorID != "" {
+		q = q.Where("authored_by_user_id = ?", authorID)
+	}
+	res := q.Update("message", message)
+	if res.Error != nil {
+		return res.Error
+	}
+	if authorID != "" && res.RowsAffected == 0 {
+		return errors.New("the current version was written by someone else")
+	}
+	return nil
 }

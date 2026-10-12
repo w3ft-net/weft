@@ -157,7 +157,7 @@ func TestAmendCronWatchMessage_HEAD_DoesNotCapture(t *testing.T) {
 	db.SaveCronWatch(cust.ID, user.ID, "errors", "every 1m", "echo v2", nil)
 	before := cronHistoryCount(t, db, cust.ID, "errors")
 
-	if err := db.AmendCronWatchMessage(cust.ID, "errors", "tighten window"); err != nil {
+	if err := db.AmendCronWatchMessage(cust.ID, user.ID, "errors", "tighten window"); err != nil {
 		t.Fatal(err)
 	}
 	if got := cronHistoryCount(t, db, cust.ID, "errors"); got != before {
@@ -166,5 +166,22 @@ func TestAmendCronWatchMessage_HEAD_DoesNotCapture(t *testing.T) {
 	v, _ := db.GetCronWatch(cust.ID, "errors")
 	if v.Message != "tighten window" {
 		t.Errorf("message: got %q, want %q", v.Message, "tighten window")
+	}
+}
+
+func TestAmendCronWatchMessage_RefusesAnotherAuthorsVersion(t *testing.T) {
+	db := testOpen(t)
+	cust, _ := db.FindOrCreateOrg("cvh-amend-other")
+	alice, _ := db.CreateUser("alice-cron-amend@example.test")
+	bob, _ := db.CreateUser("bob-cron-amend@example.test")
+
+	db.SaveCronWatch(cust.ID, alice.ID, "errors", "every 1m", "echo 1", nil)
+	db.SaveCronWatch(cust.ID, bob.ID, "errors", "every 1m", "echo 2", nil)
+
+	if err := db.AmendCronWatchMessage(cust.ID, alice.ID, "errors", "mine"); err == nil {
+		t.Fatal("alice amended bob's version")
+	}
+	if err := db.AmendCronWatchMessage(cust.ID, bob.ID, "errors", "bob's"); err != nil {
+		t.Fatal(err)
 	}
 }
