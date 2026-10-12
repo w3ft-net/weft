@@ -110,14 +110,35 @@ func (r *Repo) load() (*history, error) {
 	var events []event
 	var userIDs []string
 	seenUser := map[string]bool{}
+	// nextAt[v] is when the same object's next version was written, so a
+	// deletion followed by a re-save can be kept between the two.
+	type objKey struct {
+		kind string
+		id   uint64
+	}
+	var nextAt = map[int64]time.Time{}
+	lastOf := map[objKey]store.ObjectVersion{}
+	byVersion := append([]store.ObjectVersion(nil), versions...)
+	sort.Slice(byVersion, func(i, j int) bool { return byVersion[i].VersionID < byVersion[j].VersionID })
+	for _, v := range byVersion {
+		k := objKey{v.Kind, v.ObjectID}
+		if prev, ok := lastOf[k]; ok {
+			nextAt[prev.VersionID] = v.AuthoredAt
+		}
+		lastOf[k] = v
+	}
 	for _, v := range versions {
 		events = append(events, event{v: v, at: v.AuthoredAt})
 		if v.DeletedAt != nil {
 			// deleted_at is stamped by the app clock and authored_at by the
-			// database's; never let a deletion sort before its own version.
+			// database's; never let a deletion sort before its own version
+			// or after the version that revived the name.
 			at := *v.DeletedAt
 			if at.Before(v.AuthoredAt) {
 				at = v.AuthoredAt
+			}
+			if next, ok := nextAt[v.VersionID]; ok && at.After(next) {
+				at = next
 			}
 			events = append(events, event{v: v, at: at, tombstone: true})
 		}
@@ -154,10 +175,6 @@ func (r *Repo) load() (*history, error) {
 		meta:  map[gitcore.ObjectID]commitMeta{},
 	}
 	tree := map[string]string{}
-	type objKey struct {
-		kind string
-		id   uint64
-	}
 	prevName := map[objKey]string{}
 	var parent gitcore.ObjectID
 	for _, e := range events {

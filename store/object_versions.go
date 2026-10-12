@@ -19,7 +19,9 @@ type ObjectVersion struct {
 	AuthoredAt time.Time
 	AuthoredBy *string
 	IsHead     bool
-	// DeletedAt is set on a HEAD row whose object has been deleted.
+	// DeletedAt is when this version was deleted: set on a HEAD row whose
+	// object is deleted now, and on a history row whose object was deleted
+	// and then saved again.
 	DeletedAt *time.Time
 	// Truncated marks the oldest retained version of an object whose
 	// earlier versions were trimmed by the 5-version history cap.
@@ -35,7 +37,7 @@ func (s *Store) ListObjectVersions(orgID OrgID) ([]ObjectVersion, error) {
 		SELECT 'bin' AS kind, h.function_id AS object_id, h.name, h.version_id,
 		       h.source, h.language, '' AS schedule, '' AS pipeline, h.message,
 		       h.authored_at, h.authored_by_user_id AS authored_by, false AS is_head,
-		       NULL::timestamptz AS deleted_at,
+		       h.deleted_at,
 		       (h.predecessor_id IS NULL AND f.origin_version_id IS DISTINCT FROM h.version_id) AS truncated
 		  FROM shell_function_history h JOIN shell_functions f ON f.id = h.function_id
 		 WHERE h.org_id = @org
@@ -45,7 +47,7 @@ func (s *Store) ListObjectVersions(orgID OrgID) ([]ObjectVersion, error) {
 		  FROM shell_functions f WHERE f.org_id = @org
 		UNION ALL
 		SELECT 'cron.d', h.watch_id, h.name, h.version_id, '', '', h.schedule, h.pipeline, h.message,
-		       h.authored_at, h.authored_by_user_id, false, NULL::timestamptz,
+		       h.authored_at, h.authored_by_user_id, false, h.deleted_at,
 		       (h.predecessor_id IS NULL AND w.origin_version_id IS DISTINCT FROM h.version_id)
 		  FROM cron_watch_history h JOIN cron_watches w ON w.id = h.watch_id
 		 WHERE h.org_id = @org

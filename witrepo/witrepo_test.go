@@ -381,3 +381,69 @@ func lowered(t *testing.T, f *fixture, name string) string {
 	b, _ := json.Marshal(m)
 	return string(b)
 }
+
+// Deleting a name and saving it again must leave the deletion in the log,
+// whether the new content differs or is identical to what was deleted.
+func TestHistory_DeletionSurvivesReSavingTheName(t *testing.T) {
+	for _, tc := range []struct{ name, again string }{
+		{"different content", "echo 3"},
+		{"identical content", "echo 2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.saveBin(t, f.alice, "scan", "echo 1")
+			f.saveBin(t, f.alice, "scan", "echo 2")
+			if err := f.db.DeleteShellFunction(f.org, "scan"); err != nil {
+				t.Fatal(err)
+			}
+			f.saveBin(t, f.alice, "scan", tc.again)
+
+			r := f.repo(f.alice, "/")
+			got := oldestFirst(subjects(git(t, r, "log", "--oneline", "--no-decorate")))
+			want := []string{"Create bin/scan", "Update bin/scan", "Delete bin/scan", "Update bin/scan"}
+			if strings.Join(got, "|") != strings.Join(want, "|") {
+				t.Errorf("log = %v, want %v", got, want)
+			}
+			tree, err := r.Tree(headOf(t, r))
+			if err != nil || tree["bin/scan"] == "" {
+				t.Errorf("HEAD tree lacks the re-created file: %v %v", tree, err)
+			}
+		})
+	}
+}
+
+func TestHistory_DeletingTwiceLogsBothDeletions(t *testing.T) {
+	f := newFixture(t)
+	f.saveBin(t, f.alice, "scan", "echo 1")
+	f.db.DeleteShellFunction(f.org, "scan")
+	f.saveBin(t, f.alice, "scan", "echo 2")
+	f.db.DeleteShellFunction(f.org, "scan")
+
+	got := oldestFirst(subjects(git(t, f.repo(f.alice, "/"), "log", "--oneline", "--no-decorate")))
+	want := []string{"Create bin/scan", "Delete bin/scan", "Update bin/scan", "Delete bin/scan"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("log = %v, want %v", got, want)
+	}
+}
+
+func TestHistory_CronDeletionSurvivesReSavingTheName(t *testing.T) {
+	f := newFixture(t)
+	f.saveCron(t, f.alice, "errs", "tail /log/app/web/app.log | grep ERROR")
+	if err := f.db.DeleteCronWatch(f.org, "errs"); err != nil {
+		t.Fatal(err)
+	}
+	f.saveCron(t, f.alice, "errs", "tail /log/app/web/app.log | grep WARN")
+
+	got := oldestFirst(subjects(git(t, f.repo(f.alice, "/"), "log", "--oneline", "--no-decorate")))
+	want := []string{"Create cron.d/errs", "Delete cron.d/errs", "Update cron.d/errs"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("log = %v, want %v", got, want)
+	}
+}
+
+func oldestFirst(s []string) []string {
+	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
+		s[i], s[j] = s[j], s[i]
+	}
+	return s
+}
