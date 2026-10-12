@@ -968,20 +968,16 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'ERROR') ORDER BY ts DESC LIMIT 5) AS t ORDER BY ts ASC`,
 			wantCompute: nil,
 		},
-		// head as source then awk meta-var equality — limit-safe.
-		// The user's intent is "first 50 rows where LEVEL=ERROR";
-		// pushing the predicate shard-side delivers that without
-		// shipping the full 50-row window through compute. The
-		// cross-shard saturation hazard the doc warned about applies
-		// to *inclusive* filters (negation, `grep -v`); equality is
-		// selective. See TestPushdown_LimitSafePushdown for the full
-		// matrix and TestPushdown_LimitBeforeFilter_DoesNotMerge for
-		// the hazard cases that still go to compute.
+		// head as source then awk meta-var equality: the line count
+		// freezes the LIMIT, so the filter runs in compute on the first
+		// 50 rows ("the first 50 rows, then keep LEVEL=ERROR"), and the
+		// shard SQL is only the limit scan with the meta-var columns
+		// compute needs. See TestPushdown_HardLimitBlocksPredicatePushdown.
 		{
 			name:        "head source then awk filter",
 			pipeline:    `head -50 vimgym.log | awk 'LEVEL == "ERROR"'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' ORDER BY ts ASC LIMIT 50`,
-			wantCompute: nil,
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? ORDER BY ts ASC LIMIT 50`,
+			wantCompute: []string{`awk 'LEVEL == "ERROR"'`},
 		},
 		// -n flag in mid-pipeline position
 		{

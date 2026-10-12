@@ -95,14 +95,6 @@ type pushdownResult struct {
 	pushed    bool   // true if at least a predicate was extracted
 	predicate string // SQL WHERE fragment (may be "" even if pushed, e.g. head/tail)
 	compute   string // non-empty if the stage was partially pushed, leaving a compute remainder
-
-	// limitSafe is set by stage-specific pushdown helpers when the
-	// extracted predicate is safe to apply shard-side even after a
-	// LIMIT has been frozen by an upstream head/tail. Today only awk
-	// field/meta-var equality opts in; see
-	// docs/plans/cross-shard-post-limit-filter.md for the conservative
-	// default and the carve-out reasoning.
-	limitSafe bool
 }
 
 // ErrNotPlannable is the typed sentinel Plan returns when a pipeline
@@ -253,38 +245,19 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 			continue
 		}
 
-		// Once a head/tail (or awk NR-window) bounds the source, every
-		// later stage must operate on the *globally* merged top-N
-		// stream. Pushing a filter shard-side after the LIMIT freezes
-		// would let cross-shard merge inflate the post-filter set —
-		// e.g. `tail -n 2000 | grep -v ERROR | wc -l` would saturate
-		// at 2000 again because each shard returned its own ≤2000
-		// non-ERROR rows. Compute already enforces the global cap
-		// before stages run; route the post-limit stages there.
-		// Pre-limit filters (filter | tail) are unaffected — the
-		// freeze is set by the LIMIT pushdown itself, not by entering
-		// the loop. See docs/plans/cross-shard-post-limit-filter.md.
-		//
-		// Carve-out: a stage that pushes a *limit-safe* predicate
-		// (today: awk field/meta-var equality with a literal RHS)
-		// gets through the gate. The user's intent on
-		// `tail | awk '$N == "foo"'` is "recent rows where field N
-		// matches" — pushing the predicate shard-side gives that
-		// directly. Saturation hazards live in negation / inclusive
-		// filters, not in value equality. The action remainder, when
-		// present (filter + projection), is appended to compute
-		// strings just like a non-frozen partial pushdown.
+		// Once a head/tail line count (or awk NR-window) bounds the
+		// source, every later stage runs in compute on the globally
+		// merged stream — no later predicate is pushed into shard SQL,
+		// selective or not. `tail -n N | filter` means "the last N rows,
+		// then filter", so `tail -n 500 | awk 'LEVEL == "ERROR"' | wc -l`
+		// counts errors among 500 rows instead of returning the last 500
+		// errors (which can never fall below 500 and breaks alert
+		// recipes). A head/tail stage after the freeze lands here too,
+		// so it can't overwrite the LIMIT. Pre-limit filters
+		// (filter | tail) are unaffected: the freeze is set by the LIMIT
+		// pushdown itself, not by entering the loop. See
+		// docs/completed/cross-shard-post-limit-filter.md.
 		if sql.limitFrozen {
-			r := tryPushdown(stage, sql)
-			if r.pushed && r.limitSafe {
-				if r.predicate != "" {
-					sql.addPredicate(r.predicate)
-				}
-				if r.compute != "" {
-					computeStrings = append(computeStrings, r.compute)
-				}
-				continue
-			}
 			pushing = false
 			computeStages = append(computeStages, stage)
 			continue
@@ -553,7 +526,6 @@ func tryPushdown(stage stageInfo, sql *Query) pushdownResult {
 			pushed:    true,
 			predicate: pd.predicate,
 			compute:   pd.compute,
-			limitSafe: pd.limitSafe,
 		}
 
 	case "jq":
@@ -571,14 +543,9 @@ func tryPushdown(stage stageInfo, sql *Query) pushdownResult {
 		if pred == "" {
 			return pushdownResult{}
 		}
-		// grep with -v is inverted/inclusive — not limit-safe (the
-		// cross-shard saturation hazard the doc warned about). Plain
-		// grep / grep -i is selective — limit-safe.
-		_, _, invert := parseGrepArgs(stage.args)
 		return pushdownResult{
 			pushed:    true,
 			predicate: pred,
-			limitSafe: !invert,
 		}
 
 	case "sed":
@@ -586,29 +553,17 @@ func tryPushdown(stage stageInfo, sql *Query) pushdownResult {
 		if pred == "" {
 			return pushdownResult{}
 		}
-		// `sed -n '/pat/p'` is positive selection; limit-safe.
 		return pushdownResult{
 			pushed:    true,
 			predicate: pred,
-			limitSafe: true,
 		}
 
 	case "head":
-		// A head/tail after an already-frozen LIMIT acts on the merged,
-		// limited stream: leave the SQL alone and run it in compute.
-		// Overwriting the LIMIT would turn `head -n 3 | tail -n 1` into
-		// "the newest row" instead of "the third".
-		if sql.limitFrozen {
-			return pushdownResult{}
-		}
 		n := parseLineCount(stage.args)
 		sql.setOrderLimit("ts ASC", n)
 		return pushdownResult{pushed: true}
 
 	case "tail":
-		if sql.limitFrozen {
-			return pushdownResult{}
-		}
 		n := parseLineCount(stage.args)
 		sql.setOrderLimit("ts DESC", n)
 		return pushdownResult{pushed: true}

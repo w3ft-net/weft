@@ -7,6 +7,18 @@ globally merged top-N stream). Option B — pushing post-limit predicates back
 into shard SQL via a two-pass time-bound — is **deferred** until a workload
 actually wants the wire savings.
 
+## Amendment (2026-10-12): no carve-out
+
+Commit `a1842de` added a "limit-safe" carve-out: selective filters (awk field/meta-var
+equality, positive regex, plain `grep`, `sed -n '/p/p'`) were pushed into the shard SQL
+even after a head/tail froze the LIMIT, on the reasoning that `tail | awk '$N == "foo"'`
+means "recent rows where N matches". That reading silently changes the pipeline: `tail -n
+500 | awk 'LEVEL == "ERROR"' | wc -l` returned the last 500 *matching* rows, always 500
+once a window had that many errors, so an `alert above 50` on it always fired. The
+carve-out is removed; the rule is Option A as written below with no exceptions, so a line
+count means "these N rows, then the rest of the pipeline". Selective post-limit filters
+that want the wire savings belong to Option B.
+
 ## Why it exists
 
 Pipelines that put a `head -n N` or `tail -n N` *before* a filter

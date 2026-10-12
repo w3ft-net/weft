@@ -85,6 +85,19 @@ The coordinator maintains a registry of active shards and their time windows. Gi
 
 For `head -N` and `tail -N`, the coordinator can limit how many shards it queries and push LIMIT down to the shard level.
 
+### A line count ends predicate pushdown
+
+Pipeline order is meaning. A filter *before* a `head -N` / `tail -N` is pushed into
+the shard SQL ahead of the LIMIT (`grep ERROR | tail -n 100` is the last 100 matching
+rows). A filter *after* it is never pushed, selective or not: the shards return only
+the LIMIT scan, the coordinator merges to the global top N, and every later stage runs
+in compute on those N rows (`tail -n 500 | awk 'LEVEL == "ERROR"' | wc -l` is the number
+of errors among the last 500 rows, so it can never exceed 500). The same holds for an awk
+`NR` window. This is a correctness rule, not an optimization gap: pushing the filter would
+turn "filter the last N" into "the last N that match". Cron pipelines are bounded by their
+time range, so they should not use `-n` at all; a line count can silently truncate the
+window. See `completed/cross-shard-post-limit-filter.md`.
+
 ## Shard ↔ coordinator protocol
 
 gRPC streaming. The shard service exposes:

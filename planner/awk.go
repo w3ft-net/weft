@@ -15,18 +15,6 @@ type awkPushdown struct {
 	offset     int    // from NR range, 0 = none
 	compute    string // non-empty if the stage partially pushes down, leaving a compute remainder
 	nrSentinel bool   // true if this is an intermediate NR bound, not a final result
-
-	// limitSafe is true when the predicate is a pure field/meta-var
-	// equality (or AND-chain of such), with literal RHS. The
-	// cross-shard-post-limit-filter doc routes post-LIMIT predicates
-	// to compute by default to avoid the saturation hazard, but
-	// equality on a field is the user's "give me recent rows where
-	// $N matches this value" intent — they want the predicate
-	// shard-side regardless of LIMIT order. Negation, inequality,
-	// regex match, OR-chains, and comparisons (<, >) do NOT set this
-	// flag; they take the conservative route through compute when
-	// LIMIT is frozen.
-	limitSafe bool
 }
 
 // AwkMetaVars maps weft meta-variable names to SQL column names. These
@@ -131,7 +119,6 @@ func tryAwkPushdown(program string) *awkPushdown {
 		// equivalent (DuckDB's own `~` is whole-string SIMILAR TO semantics).
 		pd = &awkPushdown{
 			predicate: fmt.Sprintf("regexp_matches(raw, '%s')", escapeSQLString(pat.Pattern)),
-			limitSafe: true,
 		}
 	}
 	if pd == nil || pd.nrSentinel {
@@ -265,12 +252,10 @@ func extractAwkExpr(expr awk.Expr) *awkPushdown {
 // wrapping a RegexLit rather than a dedicated RegexPattern, so this is the path
 // that fires for the common bare-filter case (and for a /re/ sub-expression
 // inside an && / || chain). It mirrors the positive `$0 ~ /re/` MatchExpr case:
-// regexp_matches(raw, 'pat') is DuckDB's substring/find form, and a positive
-// match narrows the result set so it is limit-safe.
+// regexp_matches(raw, 'pat') is DuckDB's substring/find form.
 func extractAwkRegexLit(e *awk.RegexLit) *awkPushdown {
 	return &awkPushdown{
 		predicate: fmt.Sprintf("regexp_matches(raw, '%s')", escapeSQLString(e.Pattern)),
-		limitSafe: true,
 	}
 }
 
@@ -313,10 +298,8 @@ func extractAwkLogical(e *awk.BinaryExpr, sqlOp string) *awkPushdown {
 			predicate: fmt.Sprintf("(%s OR %s)", lp, rp),
 		}
 	}
-	// AND of two limit-safe halves stays limit-safe.
 	return &awkPushdown{
 		predicate: fmt.Sprintf("%s AND %s", left.predicate, right.predicate),
-		limitSafe: left.limitSafe && right.limitSafe,
 	}
 }
 
@@ -374,23 +357,8 @@ func extractAwkComparison(e *awk.BinaryExpr) *awkPushdown {
 		sqlRight = fmt.Sprintf("CAST(%s AS DOUBLE)", sqlRight)
 	}
 
-	// Equality (==) on a field-or-meta-var with a literal RHS is the
-	// canonical limit-safe shape: the predicate narrows to specific
-	// values, which is what `tail | awk '$N == "foo"'` users want.
-	// Other operators (!=, <, >, etc.) are not flagged — the
-	// inverted/range cases hit the cross-shard saturation hazard.
-	limitSafe := false
-	if e.Op == "==" {
-		left := leftType == "field" || leftType == "meta"
-		right := rightType == "string" || rightType == "number"
-		if (left && right) || ((rightType == "field" || rightType == "meta") && (leftType == "string" || leftType == "number")) {
-			limitSafe = true
-		}
-	}
-
 	return &awkPushdown{
 		predicate: fmt.Sprintf("%s %s %s", sqlLeft, op, sqlRight),
-		limitSafe: limitSafe,
 	}
 }
 
@@ -479,10 +447,8 @@ func extractAwkMatch(e *awk.MatchExpr) *awkPushdown {
 	// is whole-string match (SIMILAR TO semantics), which silently
 	// returns no rows for typical user patterns.
 	predicate := fmt.Sprintf("regexp_matches(raw, '%s')", pattern)
-	limitSafe := true
 	if e.Negated {
 		predicate = "NOT " + predicate
-		limitSafe = false
 	}
 
 	// Check if matching against $0 (the whole line).
@@ -490,7 +456,6 @@ func extractAwkMatch(e *awk.MatchExpr) *awkPushdown {
 		if nl, ok := fe.Index.(*awk.NumberLit); ok && nl.Value == 0 {
 			return &awkPushdown{
 				predicate: predicate,
-				limitSafe: limitSafe,
 			}
 		}
 	}

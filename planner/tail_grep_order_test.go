@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,43 +100,62 @@ func TestPlanCustomer_BoundsPerShardLimit(t *testing.T) {
 	}
 }
 
-// TestPushdown_LimitSafePushdown is the counterpart to
-// TestPushdown_LimitBeforeFilter_DoesNotMerge: selective filters
-// (field equality, positive regex, plain grep) MUST push past the
-// LIMIT freeze. The user's intent on `tail | awk '$N == "foo"'` is
-// "recent rows where field N matches"; making them go through compute
-// would force every shard to ship its full LIMIT-N window across the
-// wire only for compute to throw most of it away.
-func TestPushdown_LimitSafePushdown(t *testing.T) {
+// TestPushdown_HardLimitBlocksPredicatePushdown pins the rule: once a
+// head/tail line count has frozen the LIMIT, no later predicate is
+// pushed into shard SQL, selective or not. `tail -n N | filter` means
+// "the last N rows, then filter" — not "the last N rows that match" —
+// so `tail -n 500 | awk 'LEVEL == "ERROR"' | wc -l` counts errors among
+// 500 rows and can never exceed 500. The shard SQL carries only the
+// LIMIT scan; every later stage runs in compute on the merged stream.
+func TestPushdown_HardLimitBlocksPredicatePushdown(t *testing.T) {
 	tests := []struct {
 		name        string
 		pipeline    string
-		wantSQL     string
+		wantLimit   string // fragment the SQL must carry
+		notInSQL    string // predicate that must NOT have been pushed
 		wantCompute []string
 	}{
 		{
 			name:        "tail then awk meta-var equality",
 			pipeline:    `cat vimgym.log | tail -n 100 | awk 'LEVEL == "ERROR"'`,
-			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`,
-			wantCompute: nil,
+			wantLimit:   "ORDER BY ts DESC LIMIT 100",
+			notInSQL:    "level = 'ERROR'",
+			wantCompute: []string{`awk 'LEVEL == "ERROR"'`},
 		},
 		{
 			name:        "tail then awk positional equality",
 			pipeline:    `cat vimgym.log | tail -n 100 | awk '$3 == "foo"'`,
-			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? AND list_extract(fields, 3) = 'foo' ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`,
-			wantCompute: nil,
+			wantLimit:   "ORDER BY ts DESC LIMIT 100",
+			notInSQL:    "list_extract",
+			wantCompute: []string{`awk '$3 == "foo"'`},
 		},
 		{
-			name:        "tail then plain grep (positive)",
+			name:        "tail then plain grep",
 			pipeline:    `cat vimgym.log | tail -n 2000 | grep ERROR | wc -l`,
-			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'ERROR') ORDER BY ts DESC LIMIT 2000) AS t ORDER BY ts ASC`,
-			wantCompute: []string{"wc -l"},
+			wantLimit:   "ORDER BY ts DESC LIMIT 2000",
+			notInSQL:    "regexp_matches",
+			wantCompute: []string{"grep ERROR", "wc -l"},
 		},
 		{
 			name:        "head then awk regex",
 			pipeline:    `cat vimgym.log | head -n 100 | awk '$0 ~ /^ERROR/'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, '^ERROR') ORDER BY ts ASC LIMIT 100`,
-			wantCompute: nil,
+			wantLimit:   "ORDER BY ts ASC LIMIT 100",
+			notInSQL:    "regexp_matches",
+			wantCompute: []string{`awk '$0 ~ /^ERROR/'`},
+		},
+		{
+			name:        "head source then awk equality",
+			pipeline:    `head -50 vimgym.log | awk 'LEVEL == "ERROR"'`,
+			wantLimit:   "ORDER BY ts ASC LIMIT 50",
+			notInSQL:    "level = 'ERROR'",
+			wantCompute: []string{`awk 'LEVEL == "ERROR"'`},
+		},
+		{
+			name:        "tail then sed selection",
+			pipeline:    `cat vimgym.log | tail -n 100 | sed -n '/ERROR/p'`,
+			wantLimit:   "ORDER BY ts DESC LIMIT 100",
+			notInSQL:    "regexp_matches",
+			wantCompute: []string{`sed -n '/ERROR/p'`},
 		},
 	}
 
@@ -145,20 +165,33 @@ func TestPushdown_LimitSafePushdown(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
-			if plan.ShardSQL != tt.wantSQL {
-				t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, tt.wantSQL)
+			if !strings.Contains(plan.ShardSQL, tt.wantLimit) {
+				t.Errorf("ShardSQL lost the limit scan %q:\n%s", tt.wantLimit, plan.ShardSQL)
+			}
+			if strings.Contains(plan.ShardSQL, tt.notInSQL) {
+				t.Errorf("predicate %q was pushed past the hard limit:\n%s", tt.notInSQL, plan.ShardSQL)
 			}
 			if len(plan.ComputeStages) != len(tt.wantCompute) {
-				t.Fatalf("ComputeStages: got %d stages %v, want %d %v",
-					len(plan.ComputeStages), plan.ComputeStages,
-					len(tt.wantCompute), tt.wantCompute)
+				t.Fatalf("ComputeStages: got %v, want %v", plan.ComputeStages, tt.wantCompute)
 			}
 			for i := range tt.wantCompute {
 				if plan.ComputeStages[i] != tt.wantCompute[i] {
-					t.Errorf("ComputeStages[%d]: got %q, want %q",
-						i, plan.ComputeStages[i], tt.wantCompute[i])
+					t.Errorf("ComputeStages[%d]: got %q, want %q", i, plan.ComputeStages[i], tt.wantCompute[i])
 				}
 			}
 		})
+	}
+}
+
+// A filter BEFORE the line count still pushes: `grep ERROR | tail -n N`
+// asks for the last N matching rows, which is exactly the SQL
+// `WHERE ... ORDER BY ts DESC LIMIT N`.
+func TestPushdown_PreLimitFilterStillPushes(t *testing.T) {
+	plan, err := Plan(`cat vimgym.log | grep ERROR | tail -n 100`, 0, "", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan.ShardSQL, "regexp_matches(raw, 'ERROR')") || !strings.Contains(plan.ShardSQL, "LIMIT 100") {
+		t.Errorf("pre-limit grep should push into the SQL ahead of the LIMIT:\n%s", plan.ShardSQL)
 	}
 }
