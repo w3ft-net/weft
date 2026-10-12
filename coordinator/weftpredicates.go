@@ -197,12 +197,17 @@ func predicateAbsent(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writ
 			}
 			absent, err := wf.Absent(args[0], window)
 			if err != nil {
-				return 1 // couldn't read history: can't tell, don't fire
+				// Can't tell, so don't fire — but say why: a switch that
+				// quietly never fires because its window is over the cap
+				// looks exactly like a healthy one.
+				fmt.Fprintf(stderr, "weft::is_absent: %v\n", err)
+				return 1
 			}
 			return boolExit(absent)
 		}
 		absent, err := wf.Absent(args[0], 0)
 		if err != nil {
+			fmt.Fprintf(stderr, "weft::is_absent: %v\n", err)
 			return 1
 		}
 		return boolExit(absent)

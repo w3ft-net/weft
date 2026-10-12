@@ -99,7 +99,7 @@ fire when there is no data.
 |---|---|---|
 | `weft::is_above <w> <thr> [<dur> [--average]]` | `weft.is_above(w, thr, [dur, [avg]])` | latest > thr (or min over dur > thr, or avg > thr with `--average`) |
 | `weft::is_below <w> <thr> [<dur> [--average]]` | `weft.is_below(w, thr, [dur, [avg]])` | latest < thr (or max over dur < thr, or avg < thr with `--average`) |
-| `weft::is_absent <w> [<dur>]` | `weft.is_absent(w, [dur])` | the cron has no result: it doesn't exist, has never run, or its latest output is empty (with `dur`: no result landed in the last `dur`). A bad `dur` or an unreadable history doesn't fire |
+| `weft::is_absent <w> [<dur>]` | `weft.is_absent(w, [dur])` | the cron has no result: it doesn't exist, has never run, or its latest output is empty (with `dur`: no result landed in the last `dur`). A bad or over-cap `dur` (more than 24h, `1d`) or an unreadable history doesn't fire; the bash form says why on stderr |
 | `weft::has_changed <w>` | `weft.has_changed(w)` | latest ≠ previous tick |
 | `weft::is_rising <w> [<pct>] [<dur>]` | `weft.is_rising(w, [pct], [dur])` | (latest − baseline)/baseline ≥ pct% (baseline = prev tick, or window avg if dur given) |
 | `weft::is_falling <w> [<pct>] [<dur>]` | `weft.is_falling(w, [pct], [dur])` | (baseline − latest)/baseline ≥ pct% |
