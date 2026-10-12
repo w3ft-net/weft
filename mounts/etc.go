@@ -282,3 +282,13 @@ func lastSegment(p string) string {
 	}
 	return p
 }
+
+// FileLanguage implements shellcore.LangMount: the YAML files under /etc
+// (notify.yaml and the dashboards) highlight as YAML; passwd and usage
+// are plain text.
+func (m *EtcMount) FileLanguage(rel string) string {
+	if strings.HasSuffix(rel, ".yaml") {
+		return "yaml"
+	}
+	return ""
+}

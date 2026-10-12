@@ -177,3 +177,7 @@ func ParseCron(content string) (schedule, pipeline string, err error) {
 	}
 	return
 }
+
+// FileLanguage implements shellcore.LangMount: a cron entry is a comment
+// header over a bash pipeline.
+func (m *CronMount) FileLanguage(rel string) string { return "bash" }
