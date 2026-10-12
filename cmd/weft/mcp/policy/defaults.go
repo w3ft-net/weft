@@ -43,6 +43,7 @@ func DefaultReadPolicy() Policy {
 			// `weft::latest coord-heartbeat-age | alert above 90`) and
 			// as one-shot reads via weft.run.
 			"weft::latest":     {},
+			"weft::previous":   {},
 			"weft::avg":        {},
 			"weft::max":        {},
 			"weft::min":        {},

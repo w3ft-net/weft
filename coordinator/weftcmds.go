@@ -8,7 +8,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/bash"
 )
 
-// RegisterWeftCommands registers weft::latest, weft::avg, weft::max,
+// RegisterWeftCommands registers weft::latest, weft::previous, weft::avg, weft::max,
 // weft::min, weft::sum, weft::stddev, weft::first, weft::count,
 // weft::percentile, weft::delta, weft::slope, weft::rate as bash
 // commands on the interpreter. Composite funcs (delta, slope, rate)
@@ -19,19 +19,26 @@ import (
 // Bash uses :: as the namespace separator; Lua reaches the same set
 // via the `weft.*` table (`weft.latest(...)` etc.).
 func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
-	interp.RegisterCommand("weft::latest", func(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
-		if len(args) < 1 {
-			fmt.Fprintln(stderr, "usage: weft::latest <cron-name>")
-			return 1
-		}
-		val, err := wf.Latest(args[0])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		fmt.Fprintln(stdout, val)
-		return 0
-	})
+	// latest and previous are point reads: one cron name, no window.
+	for name, read := range map[string]func(string) (string, error){
+		"weft::latest":   wf.Latest,
+		"weft::previous": wf.Previous,
+	} {
+		name, read := name, read
+		interp.RegisterCommand(name, func(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+			if len(args) < 1 {
+				fmt.Fprintf(stderr, "usage: %s <cron-name>\n", name)
+				return 1
+			}
+			val, err := read(args[0])
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			fmt.Fprintln(stdout, val)
+			return 0
+		})
+	}
 
 	register := func(name, typeDoc string, call func(name, dur string) (float64, error)) {
 		interp.RegisterCommandMeta(name, bash.ExternalCmd{
