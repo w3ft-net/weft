@@ -39,9 +39,12 @@ that carry one:
   surfaces as `SERVICE` in queries.
 - **`<env>`** — present only for tokens minted with `--env`. It
   slots in immediately after the namespace, so an env-bearing path
-  has four segments and an env-less one has three. Segment count
-  alone disambiguates the two; a reader token spanning several envs
-  never has to guess.
+  has four segments and an env-less one has three. A four-segment
+  path reads exactly one env. A three-segment path reads that
+  service across every env, the env-less stream included, and
+  `ls /log/<namespace>/<service>` lists the kinds any of them
+  carry — so a reader token spanning several envs never has to
+  guess.
 - **`<kind>`** — the stream: `main` for ordinary application logs
   (the default a producer ships unless it says otherwise), plus
   `heartbeats`, `metrics`, and `runtime` for services that emit

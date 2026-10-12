@@ -3,6 +3,7 @@ package mounts
 import (
 	"fmt"
 	"io/fs"
+	"sort"
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
@@ -56,6 +57,14 @@ func (m *LogMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 		seen[name] = true
 		entries = append(entries, &vfsDirEntry{name: name, dir: more})
 	}
+	if !found {
+		if kinds := m.mergedKinds(rel); len(kinds) > 0 {
+			for _, k := range kinds {
+				entries = append(entries, &vfsDirEntry{name: k + ".log"})
+			}
+			return entries, nil
+		}
+	}
 	if !found && !m.isNamespace(rel) {
 		return nil, fs.ErrNotExist
 	}
@@ -67,7 +76,7 @@ func (m *LogMount) ReadFile(rel string) ([]byte, error) {
 		return nil, fs.ErrNotExist
 	}
 	app := strings.TrimSuffix(rel, ".log")
-	if m.hasLogService(app) {
+	if m.hasLogService(app) || m.hasMergedKind(app) {
 		ns := namespaceFromApp(app)
 		if !m.canReadNamespace(ns) {
 			return nil, fmt.Errorf("/log/%s: permission denied", rel)
@@ -84,7 +93,7 @@ func (m *LogMount) Stat(rel string) (fs.FileInfo, error) {
 	nsName := strings.SplitN(rel, "/", 2)[0]
 
 	if !strings.HasSuffix(rel, ".log") {
-		if m.isNamespace(rel) || m.hasLogDir(rel) {
+		if m.isNamespace(rel) || m.hasLogDir(rel) || len(m.mergedKinds(rel)) > 0 {
 			if !m.canReadNamespace(nsName) {
 				return nil, fmt.Errorf("/log/%s: permission denied", rel)
 			}
@@ -92,7 +101,7 @@ func (m *LogMount) Stat(rel string) (fs.FileInfo, error) {
 		}
 	} else {
 		app := strings.TrimSuffix(rel, ".log")
-		if m.hasLogService(app) {
+		if m.hasLogService(app) || m.hasMergedKind(app) {
 			ns := namespaceFromApp(app)
 			if !m.canReadNamespace(ns) {
 				return nil, fmt.Errorf("/log/%s: permission denied", rel)
@@ -182,6 +191,47 @@ func (m *LogMount) logNamespaces() []string {
 func (m *LogMount) isNamespace(name string) bool {
 	for _, ns := range m.logNamespaces() {
 		if ns == name {
+			return true
+		}
+	}
+	return false
+}
+
+// mergedKinds backs the 3-segment form /log/<ns>/<svc>: when rel is
+// "<ns>/<svc>", names no real directory (no env-less service of that name),
+// and some env carries <svc> as "<ns>/<env>/<svc>/<kind>", it returns the
+// sorted union of those kinds. That is the view cat has always read
+// /log/<ns>/<svc>/<kind>.log through, which spans every env; ls, cd and stat
+// now agree with it. A real env-less service of the same name wins.
+func (m *LogMount) mergedKinds(rel string) []string {
+	parts := strings.Split(rel, "/")
+	if len(parts) != 2 || m.hasLogDir(rel) {
+		return nil
+	}
+	ns, svc := parts[0], parts[1]
+	seen := map[string]bool{}
+	var kinds []string
+	for _, a := range m.cfg.LogServices {
+		p := strings.Split(a, "/")
+		if len(p) != 4 || p[0] != ns || p[2] != svc || seen[p[3]] {
+			continue
+		}
+		seen[p[3]] = true
+		kinds = append(kinds, p[3])
+	}
+	sort.Strings(kinds)
+	return kinds
+}
+
+// hasMergedKind reports whether app is "<ns>/<svc>/<kind>" for a kind that
+// mergedKinds lists.
+func (m *LogMount) hasMergedKind(app string) bool {
+	parts := strings.Split(app, "/")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, k := range m.mergedKinds(parts[0] + "/" + parts[1]) {
+		if k == parts[2] {
 			return true
 		}
 	}
