@@ -201,35 +201,35 @@ var lessons = []*Lesson{
 		Prompt: "`/etc/passwd` is a read-only roster for whatever org you have active. /bin, /cron.d, and /etc all have corresponding org-level edit perms (`binmgr`/`cronmgr`/`configmgr`). Read perms for logs -- see how you have `loom` perms? -- and ability to mint tokens like `loom+tokens` are by namespace. Org owners manage privs either with the weft CLI or the Members page of the web dashboard.",
 	},
 	{
-		Step:   "shell-clipboard",
-		Action: "clipboard /bin/scan",
-		Prompt: "When a /bin/ script is worth showing to a teammate, `clipboard` makes a short link (like `w3ft.net/s/k3Fz9aQ2xB`) that captures the script path, your current range, and any args, and pushes it onto your system clipboard. Anyone signed in to the same org can open it to land in the shell with the invocation pre-filled. More in `man clipboard`.",
-	},
-	{
-		Step:   "shell-weftfunc",
-		Action: "weft::avg error-rate 1h",
-		Prompt: "Once you have some scripts running in cron.d, there are some convenience functions for aggregations namespaced under `weft::<fn>` in bash (or `weft.<fn>(...)` in lua). Most take a duration (`weft::latest` does not); there's also a parallel family of predicates like `weft::is_above` and `weft::is_outlier`. These compose naturally into alerts, e.g. `weft::avg error-rate 1m | alert above 100`. Full reference: `man weft`.",
-	},
-	{
-		Step:   "shell-history",
-		Action: "history",
-		Prompt: "Everything you've typed this session is right here — handy for re-finding a query or copying one into a cron later.",
+		Step:   "shell-usage",
+		Action: "cat /etc/usage",
+		Prompt: "`/etc/usage` shows you weft's tally of bytes ingested per stream.",
 	},
 	{
 		Step:   "shell-tmp",
 		Action: "echo hello > /tmp/note",
-		Prompt: "If you are working through an issue where it's easier to stage output from some one-liners and run `comm` or `join` on those files, dump them to /tmp. Because scratch files tend to abide by gas laws and fill the size of the container, we automatically delete files that haven't been written to for 48 hrs.",
+		Prompt: "If you are working through an issue where it's easier to stage output from some one-liners and run `comm` or `join` on those files, dump them to /tmp. But beware -- because scratch files tend to abide by gas laws and fill the size of the container, we automatically delete files that haven't been written to for 48 hrs.",
+	},
+	{
+		Step:   "shell-clipboard",
+		Action: "clipboard /bin/scan",
+		Prompt: "`clipboard` makes a short link that captures the script path, your current range, and any args, and sticks it on your system clipboard. Useful for a teammate that won't jump into a tmux with you.",
+	},
+	{
+		Step:   "shell-weftfunc",
+		Action: "weft::avg error-rate 1h",
+		Prompt: "Sooooo you have some scripts running in cron.d. Weft has some convenience functions for aggregation, namespaced under `weft::<fn>` in bash (or `weft.<fn>(...)` in lua). Most take a duration. There's also a parallel family of predicates like `weft::is_above` and `weft::is_outlier`. These compose naturally into alerts, e.g. `weft::avg error-rate 1m | alert above 100`. Full reference: `man weft`.",
 	},
 	{
 		Step:            "shell-chart",
 		Action:          "chart error-rate",
-		Prompt:          "`chart` is another weft-specific builtin. It'll open a modal in the browser. The CLI will render right in the terminal with as much fidelity as it can. Press Esc to close the chart and the tour continues.",
+		Prompt:          "`chart` is another weft-specific builtin. It'll open a modal in the browser. The CLI will render right in the terminal, though not quite as pretty. Close the chart when you're done to keep on the tour.",
 		ClosesWithModal: true,
 	},
 	{
 		Step:            "shell-chart-pipe",
 		Action:          "cat main.log | grep ERROR | chart -x 1 --bucket 5m",
-		Prompt:          "`chart` doesn't need a saved cron behind it — pipe any pipeline straight into it and chart it directly, bucketed however you want. We use `cat` here rather than `tail` so the chart sees everything in your current range, not just the last few lines. `-x 1` tells it to bucket by the timestamp in column 1; with no `-y`, it counts rows per bucket. Press Esc to close the chart when you're done.",
+		Prompt:          "`chart` doesn't need a saved cron behind it — pipe any pipeline straight into it and chart it directly, bucketed however you want. `-x 1` tells it to bucket by the timestamp in column 1; with no `-y`, it counts rows per bucket.",
 		ClosesWithModal: true,
 	},
 	{
@@ -241,11 +241,6 @@ var lessons = []*Lesson{
 		Step:   "shell-dashboard",
 		Action: "dashboard prod",
 		Prompt: "Just like with `chart`, the `dashboard` builtin works in the terminal, but will rely on more modern rendering tools when in the browser.",
-	},
-	{
-		Step:   "shell-usage",
-		Action: "cat /etc/usage",
-		Prompt: "Last one: `cat /etc/usage` — weft's tally of bytes ingested per stream, and what you'd be billed at the current tier. When you run this, the tour wraps up and we'll drop you back into your own org.",
 	},
 }
 

@@ -25,7 +25,7 @@ func TestCheckPipeline(t *testing.T) {
 		{"shell-bin-lua", "vim /bin/severity", true},
 		{"shell-wit", "git log -p -- /bin/scan", true},
 		{"shell-weftfunc", "weft::avg error-rate 1h", true},
-		{"shell-history", "history", true},
+		{"shell-usage", "cat /etc/usage", true},
 		{"shell-tmp", "echo hello > /tmp/note", true},
 		{"shell-chart-pipe", "cat main.log | grep ERROR | chart -x 1 --bucket 5m", true},
 		{"shell-dashboard-yaml", "cat /etc/dashboards/prod.yaml", true},
@@ -125,9 +125,9 @@ func TestAdvancesOnExit(t *testing.T) {
 		exit int
 		want bool
 	}{
-		{"shell-history", 0, true},
-		{"shell-history", 1, false},
-		{"shell-history", 130, false}, // interrupting an ordinary command is not completing it
+		{"shell-usage", 0, true},
+		{"shell-usage", 1, false},
+		{"shell-usage", 130, false}, // interrupting an ordinary command is not completing it
 		{"shell-tail-f", 0, true},
 		{"shell-tail-f", 130, true}, // stopping the live tail IS the lesson
 		{"shell-tail-f", 1, false},
@@ -189,10 +189,10 @@ func TestCompletesOn(t *testing.T) {
 		{"shell-trace", TriggerExec, true},
 		{"shell-trace", TriggerBrowserDone, false},
 		{"shell-trace", TriggerModalFetch, false},
-		{"shell-history", TriggerExec, true},
-		{"shell-history", TriggerBrowserDone, true},
-		{"shell-history", TriggerModalFetch, true},
-		{"shell-history", TriggerModalClosed, false},
+		{"shell-usage", TriggerExec, true},
+		{"shell-usage", TriggerBrowserDone, true},
+		{"shell-usage", TriggerModalFetch, true},
+		{"shell-usage", TriggerModalClosed, false},
 		{"no-such-step", TriggerExec, false},
 	}
 	for _, c := range cases {
