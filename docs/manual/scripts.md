@@ -69,10 +69,11 @@ local avg = weft.avg(name, "1h")
 print(string.format("%s averaged %.2f over the last hour", name, avg))
 ```
 
-Weft supplies you with Lua 5.1, including the standard `table`, `string`, and
-`math` libraries, plus a restricted `os` (`os.clock`, `os.time`,
-`os.difftime`). `dofile`, `loadfile`, `load`, and `require` are
-disabled, and scripts time out after 30 seconds.
+Weft supplies you with Lua 5.1, including the standard `table`, `string`,
+`math`, and `coroutine` libraries, plus a restricted `os` (`os.clock`,
+`os.date`, `os.time`, `os.difftime`). `dofile`, `loadfile`, `load`,
+`loadstring`, and `require` are disabled, and scripts time out after 30
+seconds.
 
 On top of the standard library, weft adds:
 
