@@ -110,71 +110,71 @@ var traceIDPipelinePattern = regexp.MustCompile(`^trace [0-9a-f]{32}$`)
 var lessons = []*Lesson{
 	{
 		Step:   "shell-ls",
-		Prompt: "Now we are into the meat of weft -- the shell. A lot will be familiar, and a few things are particular to weft. Let's get started. Hit enter to see what is kicking about in the weft shell.",
+		Prompt: "Now we are into the heart of weft -- the shell. In short, it's the subset of bash we find most useful for working with logs, made to work with distributed cloud storage. Plus a few special builtin commands. Hit enter to start looking around.",
 		Action: "ls /log",
 	},
 	{
 		Step:   "shell-ls-loom",
-		Prompt: "`loom` here is our sole defined namespace. If you had additional namespaces, they would be sibling directories. Now run `tree` to see everything under /log/loom.",
+		Prompt: "`loom` here is the only namespace the org has set up. If you had additional namespaces, they would be sibling directories. Run `tree` to see everything under /log/loom.",
 		Action: "tree /log/loom",
 	},
 	{
 		Step:   "shell-range",
-		Prompt: "Log paths are /log/<namespace>/<service>/<kind>.log. <kind> is the stream: `main` for regular logs, plus `heartbeats`, `metrics`, and `runtime` if the service ships telemetry. If you label an access token with an environment, the env slots in right after the namespace: /log/<namespace>/<env>/<service>/<kind>.log. Loom's tokens are env-bearing, which is why you'll see /log/loom/prod/api/main.log.\n\nNow have a look at your PS1. See that `[1d]`? That's indicating the time range of log lines that will be returned when you hit one of your aggregate log files. Try changing it: you can run `range 1h..` to set it to the past hour.",
+		Prompt: "Log paths take the format `/log/<namespace>/(<env>/)?<service>/<kind>.log`. The env is optionally embedded in your tokens. The `service` and `kind` segment is either set explicitly in your weftd config or assigned automatically for other producer types. In this case, `main.log` is stdout on our hosts, and `metrics.log`, are telemetry coming from the weft SDK.\n\nNow have a look at your PS1. See that `[1d]`? That's indicating the time range of log lines that will be returned when you hit one of your aggregate log files. Try changing it: you can run `range 1h..` to set it to the past hour.",
 		Action: "range 1h..",
 	},
 	{
 		Step:   "shell-tail",
 		Action: "tail /log/loom/prod/api/main.log",
-		Prompt: "Now tail some logs to see live API request lines flowing in. (Loom Inc might be a fake company but they have real servers.)",
+		Prompt: "Now tail some logs to see live API request lines flowing in. What's cooking on those Loom servers?",
 	},
 	{
 		Step:                 "shell-tail-f",
 		CompletesOnInterrupt: true,
 		Action:               "tail -f /log/loom/prod/api/main.log",
-		Prompt:               "`tail` on its own is a snapshot. Add `-f` and it keeps streaming as new lines arrive, same as any Unix tail. Watch a few lines come in, then stop whenever you're ready to move on.",
+		Prompt:               "`tail` is nice but half the reason we built weft was because we missed a good old fashioned `tail -f`. Try following the logs -- it's pretty fast! Ctrl-C when you're ready to move on.",
 	},
 	{
 		Step:   "shell-cd",
 		Action: "cd /log/loom/prod/api",
-		Prompt: "This is a virtual filesystem, and it has a working directory like any shell. `cd` into a service's directory and you can drop the long prefix — `tail main.log` instead of the full `/log/loom/prod/api/main.log` path.",
+		Prompt: "Normal shell directory commands apply here. `cd` into a service's directory to type less (e.g. `tail main.log` instead of the full path).",
 	},
 	{
 		Step:   "shell-grep-awk",
 		Action: "tail main.log | grep ERROR | awk '{print HOST, $1, $5}'",
-		Prompt: "So obviously we have support for awk and grep, but the more material point is `HOST` in the awk program. Weft augments normal field variables in awk and jq with a number of meta-variables to help you isolate exactly where those log lines were produced. More info in the manual.",
+		Prompt: "So obviously we have support for awk and grep, but the more material point is `HOST` in the awk program. Weft augments normal field variables in awk and jq with a metavariables to help you isolate exactly where those log lines were produced. More info in the manual.",
 	},
 	{
 		Step:   "shell-trace-find",
 		Action: "tail main.log | grep ' checkout ' | awk '{print TRACE_ID}'",
-		Prompt: "Loom's checkout flow hops from the API to an edge payment gateway to a background fulfillment worker — one user-facing request, three separate services. Each hop is tagged with the same trace_id. Copy one of the IDs printed above; you'll use it in the next step.",
+		Prompt: "Once such metavariable that you can supply is trace ids, and Loom has them configured. Their checkout flow runs from API to an edge payment gateway to a background fulfillment worker. Each hop is tagged with the same trace_id. Let's dump some to stdout.",
 	},
 	{
 		Step:            "shell-trace",
 		Action:          "trace <paste the id you copied>",
 		ActionPattern:   traceIDPipelinePattern,
 		ClosesWithModal: true,
-		Prompt:          "Now run `trace` on the ID you copied — but edit it in first, don't just re-run the line above verbatim. You'll get every line from every service that touched that one request, ordered by time, each tagged with which service produced it. Press Esc to close the trace view when you're done and the tour continues.",
+		Prompt:          "Let's run the `trace` command! Grab a trace id from the previous output and use it as the first argument to `trace`. Press Esc to close the trace view when you're done.",
 	},
 	{
 		Step:   "shell-alert",
 		Action: "tail main.log | grep ERROR | wc -l | alert above 0",
-		Prompt: "Weft contains a special builtin called alert. For now, this is just going to log to stderr, but you can get all sorts of alerting targets on a cron (more info shortly). The api/prod stream emits errors at ~8% so this fires every time.",
+		Prompt: "Here's another special builtin: `alert`. For now, this is just going to log to stderr, but you can get all sorts of alerting targets on a cron (more info shortly). The api/prod stream emits errors at ~8% so this fires every time.",
 	},
 	{
 		Step:   "shell-notify",
-		Prompt: "/etc/notify.yaml maps alert aliases to where they go (webhooks, email, Slack, PagerDuty). There is no GUI where you can configure this. Like nearly everything in weft, you do it in the shell.",
+		Prompt: "When you aren't just playing around in the shell and you want alerts to go somewhere real, you create a mapping in `/etc/notify.yaml`. You can use the top level keys as aliased arguments to `alert` so you can have different behaviors for different alerts. ",
 		Action: "cat /etc/notify.yaml",
 	},
 	{
 		Step:   "shell-cron",
 		Action: "ls -l /cron.d/",
-		Prompt: "When you want to monitor the output of a one-liner, you just stick a file in /cron.d/. `cat` one of the examples here. Each cron maintains timeseries data that can be aggregated and charted — `ls -l` shows a sparkline of each cron's recent values right in the listing.",
+		Prompt: "When you want to monitor the output of a one-liner, you just stick a file in /cron.d/. Loom has a couple examples for you.",
 	},
 	{
 		Step:   "shell-schedule",
 		Action: "cat /cron.d/error-rate",
-		Prompt: "Crons are just bash scripts with a leading comment that contains a schedule either in OG cron format or 'every n<interval>'.",
+		Prompt: "Crons are just scripts (usually bash) with a leading comment that contains a schedule either in OG cron format or 'every n<interval>'. This one just runs every minute, looking for >10% bursts of error log lines.",
 	},
 	{
 		Step:   "shell-bin-bash",
@@ -186,7 +186,7 @@ var lessons = []*Lesson{
 		// `wit` command, which `git` replaced. Kept so recorded progress holds.
 		Step:   "shell-wit",
 		Action: "git log -p -- /bin/scan",
-		Prompt: "Bin scripts and cron entries have version history, and you read it with `git` — a subset of git that works on /bin, /cron.d and /etc, so what you know already works. History tracking is automatic and you're prompted for a commit message in vim whenever you create or modify a file. `-p` shows the diff inline for each version, and `-- /bin/scan` limits the log to one script (without it you get the whole org's changes).\n\nA few more to try: `git show HEAD~1:bin/scan` prints an older version, `git blame /bin/scan` shows who wrote each line, and `git restore --source=HEAD~1 /bin/scan` brings an old version back as a new commit (if you have write access). Dashboards and `/etc/notify.yaml` are tracked too. `git --help` lists what's supported; anything else real git can do is refused by name.",
+		Prompt: "Bin scripts, cron entries, and /etc have version history, which you can access using git commands (a faked, limited subset just to accommodate your muscle memory). `git blame` also supported. Run `git --help` if you want to see everything available.",
 	},
 	{
 		Step:   "shell-bin-lua",
