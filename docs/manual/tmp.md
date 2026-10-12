@@ -116,10 +116,11 @@ analysis kit is available for comparing and combining them:
 | `paste a b`        | Column-merge two files line-by-line (default delimiter: tab)              |
 | `wc -l a`          | Lines / words / bytes / characters / longest-line — combines flags freely |
 
-`cp` and `mv` are restricted to /tmp on both sides — copying scratch
-text into `/bin` would route around weft's script validation. If
-that's actually what you want, `cat /tmp/x > /bin/y` does it through
-the normal save path.
+`cp` and `mv` work only inside /tmp, on both sides. /bin, /cron.d and
+/etc each have their own save path (permissions and validation), so
+copying or moving into or out of them is refused. To put a file there,
+use `cat /tmp/x > /bin/y`; to copy one out for editing, use
+`cat /bin/y > /tmp/x`.
 
 ### Listing with `ls -l`
 
