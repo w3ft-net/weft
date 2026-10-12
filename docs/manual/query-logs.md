@@ -29,15 +29,25 @@ cat myapp.log | grep "connection refused"
 tail -n 100 myapp.log
 ```
 
-The weft query planner analyzes your full pipeline and pushes
-predicates down into SQL — you write familiar shell commands, weft
-makes them fast.
+weft analyzes your full pipeline and uses your filters to narrow what
+it reads — you write familiar shell commands, weft makes them fast.
+
+A hard line count (`head -n N`, `tail -n N`) ends that narrowing for
+the filters after it. `tail -n 500 | awk 'LEVEL == "ERROR"' | wc -l`
+counts the errors among the last 500 rows (at most 500), while
+`grep ERROR | tail -n 5` filters first and gives the last 5 matches.
+Don't use `-n` in a cron: crons read a time range, and a line count can
+silently truncate it.
 
 Globs are allowed only to pick log kinds inside one service:
 `cat /log/myco/prod/api/*.log`. A glob that would read across services
 or namespaces — `cat *.log`, `cat /log/myco/prod/*.log`,
 `/log/myco/*/api/main.log` — is refused with an error. To read
 everything in a namespace, use `cat <namespace>.log`.
+
+`cat /log/myco/api/main.log` (three segments) reads that service across
+every env, and `ls /log/myco/api` lists its kinds;
+`cat /log/myco/prod/api/main.log` (four segments) reads one env.
 
 ## Meta-variables
 
@@ -63,7 +73,7 @@ but is slower.
 | `K8S_NAMESPACE` | `._k8s_namespace` | `k8s_namespace` | k8s mode only: pod's k8s namespace |
 | `POD` | `._pod` | `pod` | k8s mode only: pod name |
 | `CONTAINER` | `._container` | `container` | k8s mode only: container name |
-| `NODE` | `._node` | `node` | stable workload identity (e.g. shard ID) — file-sourced via the agent's `dimensions:` config; never auto-derived |
+| `NODE` | `._node` | `node` | stable workload identity (e.g. a workload ID) — file-sourced via the agent's `dimensions:` config; never auto-derived |
 
 A few examples:
 
@@ -75,7 +85,7 @@ cat /log/myco/prod/api/main.log | awk 'LEVEL == "ERROR" && DEPLOYMENT == "api-ea
 cat /log/myco/prod/api/main.log | jq 'select(._level == "ERROR" and ._deployment == "api-east")'
 
 # Per-host memory metrics
-tail /log/weft/shard/metrics.log | jq 'select(._host == "shard-3" and .type == "memory") | .pct'
+tail /log/myco/prod/api/metrics.log | jq 'select(._host == "web-3" and .type == "memory") | .pct'
 
 # Region-scoped grep
 cat /log/myco/prod/api/main.log | awk 'REGION == "us-east-2"' | grep "timeout"
@@ -169,10 +179,9 @@ section for storage limits and the full set of operations.
 
 ## Plan retention and the archive
 
-Your plan determines how far back queries can read — Trial keeps a
-day, Bolt keeps a year. The **Account** page shows your current cap;
-runs older than that are filtered out of every query, even if the
-underlying rows are still on disk.
+Your plan determines how far back queries can read. See the
+**Account** page for your plan's limits; data older than that is
+filtered out of every query, even if it is still stored.
 
 Older data is archived and queried transparently. A `range 180d..`
 query reads recent and archived data in one pass — there is no

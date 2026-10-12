@@ -19,13 +19,17 @@ into Logplex for you. The drain endpoint consumes that stream as-is.
 
 ### 1. Mint a token
 
-Each token is scoped to a single namespace and (optionally) a single env.
+Each token is scoped to one existing namespace (create the namespace
+first) and, optionally, a single env.
 From the dashboard, **Namespaces → your namespace → Create token**, or from
 the CLI:
 
 ```
 weft token create --namespace myco --env prod --label heroku
-issued: wft_a1b2c3d4e5f6...
+Token created: wft_a1b2c3d4e5f6...
+Label: heroku
+Env:   prod (stamped on every row from this token)
+Store this token in your weftd config. It cannot be retrieved again.
 ```
 
 Copy the token immediately — it's only shown once. One token can carry
@@ -47,36 +51,37 @@ Heroku starts delivering within a few seconds. Confirm the rows are
 landing:
 
 ```
-weft> ls /log/myco/myapp
+weft> ls /log/myco/prod/myapp
 heroku-postgres.log
 platform.log
 router.log
 web.log
 worker.log
 
-weft> tail /log/myco/myapp/web.log
+weft> tail /log/myco/prod/myapp/web.log
 ```
 
 ### How dynos and procs map to pseudofiles
 
-Each `(appname, procid)` pair from Heroku becomes its own weft sub-app.
+Each `(appname, procid)` pair from Heroku becomes its own weft service.
 (See **Namespaces** for how every producer chooses its service name.)
 The dyno number (`.1`, `.2`) is dropped from the app name and stamped on
 `instance` instead, so cross-dyno aggregation stays cheap and a single
 `tail /log/.../web.log` covers every web dyno at once.
 
-| Heroku source           | weft pseudofile                                   |
+| Heroku source           | weft pseudofile                                        |
 |---|---|
-| `myapp web.1`, `web.2`  | `/log/<ns>/myapp/web.log`         (`instance=web.1`, etc.) |
-| `myapp worker.1`        | `/log/<ns>/myapp/worker.log`                       |
-| `myapp router`          | `/log/<ns>/myapp/router.log`                       |
-| `myapp heroku-postgres` | `/log/<ns>/myapp/heroku-postgres.log`              |
-| Platform events (deploys, restarts, scales) | `/log/<ns>/myapp/platform.log` |
+| `myapp web.1`, `web.2`  | `/log/<ns>/<env>/myapp/web.log`   (`instance=web.1`, etc.) |
+| `myapp worker.1`        | `/log/<ns>/<env>/myapp/worker.log`                     |
+| `myapp router`          | `/log/<ns>/<env>/myapp/router.log`                     |
+| `myapp heroku-postgres` | `/log/<ns>/<env>/myapp/heroku-postgres.log`            |
+| Platform events (deploys, restarts, scales) | `/log/<ns>/<env>/myapp/platform.log` |
 
-If your token has an env bound, the path picks up that segment:
-`/log/myco/prod/myapp/web.log`. See **Namespaces** for the layout rules.
+The `<env>` segment is there because the token in step 1 was minted with
+`--env prod`. A token minted without `--env` gives the shorter form,
+`/log/<ns>/myapp/web.log`. See **Namespaces** for the layout rules.
 
-### Metric lines auto-route to `/metrics`
+### Metric lines auto-route to `metrics.log`
 
 Heroku's `runtime-heroku-metrics` labs feature (and most add-ons) emit
 l2met-shaped lines like:
@@ -85,7 +90,7 @@ l2met-shaped lines like:
 source=web.1 sample#memory_total=512.00MB sample#memory_rss=487.21MB sample#load_avg_1m=0.42
 ```
 
-Weft detects these and rewrites them to `<appname>/metrics`, with the
+Weft detects these and rewrites them to `<appname>/metrics.log`, with the
 key/value pairs lifted into payload JSON (numeric where the value is
 numeric; trailing units like `MB` are preserved on a sibling
 `<key>_unit` field). The original line still flows through the dyno's
@@ -97,21 +102,21 @@ working.
 heroku labs:enable "runtime-heroku-metrics" -a myapp
 
 # Query it like any other JSON log source
-weft> tail /log/myco/myapp/metrics.log | jq 'select(.memory_total > 400)'
+weft> tail /log/myco/prod/myapp/metrics.log | jq 'select(.memory_total > 400)'
 ```
 
 ### Troubleshooting
 
 - **No rows appearing** — run `heroku drains -a myapp` and check the
   `Last error` column. A `401` means the token in the URL is wrong or
-  has been revoked; reissue it from **Tokens** and re-add the drain. A
-  `4xx parse error` means the drain URL is malformed — most often a
-  trailing slash or a missing `/api/ingest/heroku/` prefix.
-- **Rows land but `app` looks wrong** — Heroku reuses `appname=heroku`
+  has been revoked; revoke it and mint a new one (see **Tokens**), then
+  re-add the drain. A `404` means the drain URL is malformed — most
+  often a trailing slash or a missing `/api/ingest/heroku/` prefix.
+- **Rows land under the wrong service** — Heroku reuses `appname=heroku`
   for platform-emitted events (deploys, scales, restarts). Weft maps
-  those to `<your-app>/platform`. Anything else where `app` looks
+  those to `<your-app>/platform`. Anything else that looks
   unexpected is usually an add-on whose procid weft hasn't seen before;
-  it'll show up under `/log/<ns>/<your-app>/<procid>.log` automatically.
+  it'll show up under `/log/<ns>/<env>/<your-app>/<procid>.log` automatically.
 - **Drains showing intermittent 429s** — the default cap is 1000
   events/sec per token. Heroku's drain protocol retries on 5xx and 429
   with backoff, so transient bursts are absorbed; if you're sustained

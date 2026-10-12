@@ -26,15 +26,15 @@ Minting a token **for Render** (rather than a plain namespace token) also
 reveals the endpoint hostname you'll paste into Render's log-stream config.
 
 From the dashboard: **Namespaces → your namespace → Create token**, choose
-**Render** in the **For** dropdown, and click **Create token**. Both the
-token and the endpoint stay visible in that namespace's token table
-afterward, so you can find the endpoint again later without re-minting.
+**Render** in the **For** dropdown, and click **Create token**. The token is shown only once, so copy it now. The endpoint is the same
+for every Render token, so you can always look it up again later.
 
 From the CLI:
 
 ```
 weft token create --namespace myco --label render --for render
 Token created: wft_a1b2c3d4e5f6...
+Label: render
 For:   render
 Endpoint: render.syslog.w3ft.net:6514
 Paste this token and endpoint into that platform's log-stream config.
@@ -47,7 +47,7 @@ Copy the token immediately — it's only shown once.
 In the Render dashboard, open your service and go to **Settings → Log
 Streams**, add a stream, and configure a generic/custom syslog destination:
 
-- **Endpoint** — the `<producer>.syslog.w3ft.net:6514` string from step 1
+- **Endpoint** — the `render.syslog.w3ft.net:6514` string from step 1
 - **Token** — the `wft_...` token from step 1
 
 Render only recognizes a short list of named providers (Datadog, Loggly,
@@ -61,8 +61,8 @@ Render starts streaming within a few seconds. Confirm rows are landing:
 
 ```
 weft> ls /log/myco/myservice
-web.log
 cron.log
+web.log
 
 weft> tail /log/myco/myservice/web.log
 ```
@@ -71,7 +71,7 @@ weft> tail /log/myco/myservice/web.log
 
 Render's service slug becomes the weft service name (see **Namespaces**
 for how every producer chooses its service name); the process type
-(`web`, `cron`, and an undocumented `bld` for build-step output) becomes
+(`web`, `cron`, and `bld` for build-step output) becomes
 `kind`; the trailing instance id is stamped on `instance` for per-instance
 filtering without splitting the pseudofile:
 
@@ -81,7 +81,8 @@ filtering without splitting the pseudofile:
 | `myservice` cron job `cron-stqq5`    | `/log/<ns>/myservice/cron.log`                   |
 | `myservice` build output `bld-...`   | `/log/<ns>/myservice/bld.log`                    |
 
-If your token has an env bound, the path picks up that segment:
+The tokens in step 1 carry no env, so the paths above have no env
+segment. If your token has an env bound, the path picks up that segment:
 `/log/myco/prod/myservice/web.log`. See **Namespaces** for the layout rules.
 
 ### Rate limits
@@ -96,8 +97,8 @@ sustained rate.
 
 - **No rows appearing** — check the log stream's status in Render's
   dashboard; a failing status there usually means the token or endpoint
-  string was mistyped. Reissue the token from **Tokens** if you're unsure
-  it's still valid.
+  string was mistyped. Revoke and recreate the token from **Tokens** if you're
+  unsure it's still valid.
 - **Rows land under an unexpected service name** — weft trusts Render's
   service slug as-is. If two Render services legitimately share a name
   (separate Render teams sharing one weft namespace), mint separate tokens

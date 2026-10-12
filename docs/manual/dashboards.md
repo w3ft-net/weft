@@ -22,6 +22,8 @@ the shell:
 vi /etc/dashboards/prod.yaml
 ```
 
+Writing under `/etc` requires the `configmgr` group.
+
 Each customer can have any number of dashboards, distinguished by name.
 
 ## YAML grammar
@@ -32,27 +34,30 @@ sections:
   - title: Errors
     tiles:
       - kind: sparkline
-        watch: error-rate-hourly
+        cron: error-rate-hourly
         size: md
 
       - kind: table
-        watch: top-errors-hourly
+        cron: top-errors-hourly
         columns: [host, count]
         size: lg
 
   - title: Capacity
     tiles:
       - kind: counter
-        watch: pending-jobs
+        cron: pending-jobs
         format: "%d jobs"
         threshold: { warn: 100, crit: 500 }
         size: sm
 
       - kind: gauge
-        watch: cpu-usage
+        cron: cpu-usage
         threshold: { warn: 70, crit: 90, max: 100 }
         size: md
 ```
+
+Each tile's `cron:` key names a cron. Create the crons first; a dashboard that references a cron that
+doesn't exist is rejected.
 
 Top-level fields:
 
@@ -68,17 +73,18 @@ Top-level fields:
 
 | Kind        | Body                                                       | Required fields           |
 |-------------|------------------------------------------------------------|---------------------------|
-| `sparkline` | Time-series glyph from the cron's recent results.          | `watch`                   |
-| `counter`   | Latest numeric value.                                      | `watch`                   |
-| `gauge`     | Bar from 0 to `threshold.max` (default 100).               | `watch`                   |
-| `table`     | Multi-row stdout parsed as whitespace-split columns.       | `watch`, `columns`        |
+| `sparkline` | Time-series glyph from the cron's recent results.          | `cron`                    |
+| `counter`   | Latest numeric value.                                      | `cron`                    |
+| `gauge`     | Bar from 0 to `threshold.max` (default 100).               | `cron`                    |
+| `table`     | Multi-row stdout parsed as whitespace-split columns.       | `cron`, `columns`         |
 
 Tile fields:
 
 | Field        | Applies to                | Notes                                                        |
 |--------------|---------------------------|--------------------------------------------------------------|
 | `kind`       | all                       | One of `sparkline`, `counter`, `gauge`, `table`.             |
-| `watch`      | all                       | Name of an existing cron (must exist when the file is saved). |
+| `cron`       | all                       | Name of an existing cron (must exist when the file is saved). |
+| `title`      | all                       | Optional label for the tile.                                 |
 | `size`       | all                       | `sm`, `md`, or `lg`. Default `md`. Hint, not pixel size.     |
 | `format`     | counter                   | Optional `%d` / `%.2f` format applied to the value.          |
 | `threshold`  | counter, gauge, sparkline | `warn`, `crit`, `max` numeric cutoffs.                       |
@@ -87,8 +93,8 @@ Tile fields:
 
 ### Multi-line sparklines (`tag:`)
 
-A sparkline normally plots one scalar per cron run (the watch's last
-whitespace field). When a watch's stdout is instead multiple JSON rows
+A sparkline normally plots one scalar per cron run (the cron's last
+whitespace field). When a cron's stdout is instead multiple JSON rows
 per run — one per tagged entity, e.g. one row per instance — set `tag:`
 (which field identifies the row) and `y:` (which field to plot) to draw
 one line per distinct tag value instead of collapsing the run into a
@@ -96,7 +102,7 @@ single number:
 
 ```yaml
 - kind: sparkline
-  watch: coordinator-mem-pct
+  cron: coordinator-mem-pct
   tag: .coordinator_id
   y: .mem_pct
   size: lg
@@ -136,9 +142,9 @@ If you don't need sections, use a flat top-level `tiles:` list:
 title: Quick view
 tiles:
   - kind: counter
-    watch: pending-jobs
+    cron: pending-jobs
   - kind: sparkline
-    watch: error-rate
+    cron: error-rate
 ```
 
 ## Layout
@@ -158,7 +164,7 @@ in YAML is the order on screen.
 
 ## Navigation
 
-Tile headers link to the cron's detail page (`/watch/<name>`) so
+Tile headers link to the cron's detail page (`/cron/<name>`) so
 clicking a tile takes you to its full history with zoom, range
 selection, and per-tag legend.
 

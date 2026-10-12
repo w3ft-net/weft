@@ -7,7 +7,7 @@ web:
   order: 54
 ---
 
-## Notifications
+## Define a notification alias
 
 When an `alert` fires in a cron, `--notify=<alias>` dispatches to a
 destination defined in `/etc/notify.yaml`. The alias is just a name;
@@ -38,7 +38,7 @@ either surface does the same thing).
 ```
 # PagerDuty — paste an integration (routing) key, give it a name.
 # The name is what notify.yaml references under `pagerduty:`.
-weft integration pagerduty add ops-daytime --key R0UTING_KEY_FROM_PD
+weft integration pagerduty add ops-daytime --key YOUR_ROUTING_KEY
 weft integration pagerduty rm  ops-daytime
 
 # Slack — authorize a workspace. Slack uses OAuth, so this opens a
@@ -56,7 +56,7 @@ with `weft integration pagerduty add`. Slack channels are named
 directly in `notify.yaml` (`"#alerts"`) once the workspace is
 connected.
 
-## Webhook and email need no setup
+## Webhook and email need no account connection
 
 Webhook URLs and email addresses carry no account-level credential —
 they're written straight into `notify.yaml` per alias, so there's
@@ -85,6 +85,8 @@ Email delivery requires SMTP to be configured for your deployment.
 ```
 echo "test fire" | alert --notify=ops
 ```
+
+This sends to every target in the `ops` alias.
 
 Interactive runs dispatch immediately and don't open an incident
 (incidents are a cron concept).

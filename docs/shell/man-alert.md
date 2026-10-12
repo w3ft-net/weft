@@ -19,6 +19,8 @@ alert — evaluate conditions and dispatch notifications
 <pipeline> | alert [<condition>] [--notify=<alias>]
                    [-k <field>] [-t|--tag <field>]
                    [--duration <dur>] [--average] [--msg <text>]
+
+<pipeline> | alert (--if-zero <v> | --if-nonzero <v>) [--notify=<alias>]
 ```
 
 ## DESCRIPTION
@@ -28,10 +30,15 @@ If the condition is met, writes an alert message to stderr and,
 when `--notify` is supplied, dispatches the alias from `/etc/notify.yaml`
 to its Slack, PagerDuty, webhook, and/or email targets.
 
-If no condition is given, the default is "any": the alert fires
-whenever stdin is non-empty.
+If no condition is given and `--notify` is supplied, the default is
+"any": the alert fires whenever stdin is non-empty. A bare `alert` with
+neither is a usage error; write `alert any` for a dry run.
 
-Always passes stdin through to stdout unchanged (tee behavior).
+When the condition is not met, stdin is passed through to stdout
+unchanged. When it is met, the alert message is written instead.
+
+`alert` must be the last stage of its pipeline, and the last (or only)
+command of a script.
 
 In a cron (`/cron.d/`), incidents are deduplicated on
 (cron, condition). Subsequent ticks during an open incident
@@ -71,7 +78,7 @@ A single alert may not mix the two forms across `-k` and `-t`.
 
 ## CONDITIONS
 
-- `any` — fires whenever stdin is non-empty (default)
+- `any` — fires whenever stdin is non-empty (the default when `--notify` is given)
 - `above <N>` — current value is greater than N
 - `below <N>` — current value is less than N
 - `eq <N>` — current value equals N
@@ -85,22 +92,28 @@ A single alert may not mix the two forms across `-k` and `-t`.
 
 A cron that needs to fire on the state of more than one cron composes
 predicate builtins (`weft::is_above`, `weft::is_absent`, etc. — see
-`man weft`) with bash `&&` `||` `!` or Lua `and` `or` `not`, then
-hands the resulting exit code to alert via `--if-zero "$?"`:
+`man weft-funcs`) with bash `&&` `||` `!` inside a subshell. Ending the
+subshell with `echo` makes it print something only when the whole
+condition holds, and alert's default `any` condition fires on that:
 
 ```
 # /cron.d/deploy-danger
-weft::is_above error-rate 50 && weft::is_absent canary-ping
-alert --if-zero "$?" --notify=critical
+# schedule: every 1m
+(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical
 ```
+
+To combine conditions on the logs themselves, count each in one pass
+over the cron's time range and alert on the result (see "Alerting
+strategies").
 
 `--if-zero <value>` fires when the value is "0" (the convention bash uses
 for *success*, matching the right-hand interpretation of `&&` chains).
 `--if-nonzero <value>` is the inverse. The two are mutually exclusive
 with the stdin condition keywords above.
 
-See `docs/manual/alerting-strategies.md` for the full pattern catalogue
-(single-cron scalar, multi-row per-tag, composite, aggregated-value).
+See the **Alerting strategies** manual page (`man alerting-strategies`) for the full pattern
+catalogue (single-cron scalar, multi-row per-tag, composite,
+aggregated-value).
 
 ## OPTIONS
 
@@ -108,29 +121,45 @@ See `docs/manual/alerting-strategies.md` for the full pattern catalogue
 - `--if-zero <value>` / `--if-nonzero <value>` — fire based on a literal exit-code value (typically `"$?"` from the prior compound). Mutually exclusive with stdin condition keywords.
 - `-k <field>` — multi-row mode: each line of stdin is one row, and `<field>` selects the numeric value. `<field>` is either a 1-indexed whitespace column (e.g. `2`) or a `.`-prefixed JSON path against the line parsed as JSON (e.g. `.req.latency_ms`).
 - `-t <field>`, `--tag <field>` — multi-row mode: `<field>` names this row for per-tag incident dedup and per-tag notifications. Same field grammar as `-k`. Must agree with `-k` on positional vs JSON-path. Required when the pipeline can produce more than one row per tick.
-- `--duration <dur>` — time window for sustained conditions. For above/below: condition must hold for ALL runs in the window. For rising/falling: compares against the window average. For absent: no non-empty output in the window. Examples: 5m, 1h, 30s.
-- `--average` — for above/below with `--duration`: compare against the rolling average over the window instead of requiring every individual run to match.
+- `--duration <dur>` — time window for sustained conditions. For above/below: condition must hold for ALL runs in the window. For rising/falling: compares against the window average. For absent: no non-empty output in the window. Units are s, m and h only: 5m, 1h, 30s (`1d` is rejected).
+- `--average` — for above/below with `--duration`: compare against the rolling average over the window instead of requiring every individual run to match. It has no effect without `--duration`.
 - `--msg <text>` — override the default alert message.
 
 ## EXAMPLES
 
 ```
-tail -n 500 myapp.log | awk 'LEVEL == "ERROR"' | alert --notify=ops
-check_errors | alert above 50 --notify=critical
+# Fire if the range holds any ERROR line.
+cat /log/myco/prod/api/main.log | grep ERROR | alert --notify=ops
+
+# Fire when the range holds more than 50 errors.
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 50 --notify=critical
+
+# check_errors stands for a script of yours in /bin that prints one number.
 check_errors | alert above 50 --duration 5m --average --notify=ops
 check_errors | alert rising 100% --notify=critical
-cat /log/myco/canary/main.log | tail -1 | alert absent --duration 10m --notify=ops
+
+# Fire when the range holds no canary line at all.
+cat /log/myco/prod/canary/main.log | alert absent --notify=ops
+
 echo "integration test" | alert --notify=ops
 
 # Multi-row positional: alert per host whose disk use is above 80%.
-tail /log/weft/shard/main.log | jq -r 'select(.type=="disk") | "\(.host) \(.pct)"' \
+cat /log/myco/prod/api/metrics.log \
+    | jq -r 'select(.type=="disk") | "\(.host) \(.pct)"' \
     | alert above 80 -k 2 -t 1 --notify=ops
 
 # Multi-row JSON path: same idea, no `jq -r` re-formatting required.
-tail /log/weft/shard/main.log | jq 'select(.type=="disk")' \
+# `jq -c` keeps each row on one line.
+cat /log/myco/prod/api/metrics.log | jq -c 'select(.type=="disk")' \
     | alert above 80 -k .pct -t .host --notify=ops
 ```
 
+In a cron, count over the cron's own time range and don't limit rows with
+`head -n` or `tail -n`; a row limit can silently truncate the window. At the
+prompt, `tail -n 500 | awk 'LEVEL == "ERROR"' | wc -l` counts errors among
+the last 500 rows only, whereas `grep ERROR | tail -n 5` is the last five
+matches.
+
 ## SEE ALSO
 
-`help`, `help alerts`, `vi`, `cat`
+`help`, `help alerts`, `help cron`, `man weft-funcs`, `man range`, `vi`, `cat`

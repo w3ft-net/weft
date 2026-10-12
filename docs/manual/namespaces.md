@@ -12,12 +12,14 @@ web:
 Namespaces group related log sources. A typical setup has one namespace per
 environment (e.g. `production`, `staging`) or per team.
 
-Go to **Namespaces** in the sidebar and click **Create namespace**. Choose a
-short, lowercase name — it becomes part of token identifiers and CLI scoping.
+Go to **Namespaces** in the sidebar and click **new**. Choose a
+short, lowercase name — it is used to scope tokens, sources, and log paths.
+A name can't contain a comma, whitespace, `/`, `+`, `*`, `?` or `[`, and
+can't start with `-`.
 
 ```
-# From the shell
-namespace create production
+# From your terminal
+weft namespace create --name production
 ```
 
 ## Log path layout
@@ -43,8 +45,7 @@ that carry one:
   path reads exactly one env. A three-segment path reads that
   service across every env, the env-less stream included, and
   `ls /log/<namespace>/<service>` lists the kinds any of them
-  carry — so a reader token spanning several envs never has to
-  guess.
+  carry.
 - **`<kind>`** — the stream: `main` for ordinary application logs
   (the default a producer ships unless it says otherwise), plus
   `heartbeats`, `metrics`, and `runtime` for services that emit
@@ -61,7 +62,11 @@ Each producer decides the service name; weft never rewrites it.
 | Render | The Render service slug | The process type (`web`, `cron`, `bld`, ...) |
 | CloudWatch | The service you registered for the log group with `weft source add --service`. Events from unregistered log groups are dropped. | `main` |
 
-A namespace can hold env-less and env-bearing streams side by side
-as different tokens reauth over time. Env, region, deployment,
+A namespace can hold both env-less and env-bearing streams,
+depending on how each token was minted. To read across services, use
+`cat <namespace>.log`; a glob such as `cat /log/<namespace>/*/<service>/main.log`
+or `cat /log/<namespace>/<env>/*.log` is refused, because globs may
+only pick kinds inside one service (`/log/<namespace>/<env>/<service>/*.log`).
+Env, region, deployment,
 host, and pod are query-time dimensions (`awk 'ENV == "prod"'`),
 not extra path segments — see **Meta-variables** for the full set.

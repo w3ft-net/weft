@@ -51,10 +51,12 @@ sources:
     prefix_fields: [ts, level, service]
     prefix_separator: " "
     json_field: payload
-    version_file: /opt/myapp/VERSION   # optional; weftd watches the
-                                       # file and stamps the latest
-                                       # contents as VERSION on
-                                       # every row from this source
+    version:                           # optional
+      file: /opt/myapp/VERSION         # weftd watches the file and
+                                       # stamps the latest contents as
+                                       # VERSION on every row from this
+                                       # source (or use `env:` to read
+                                       # a variable once at startup)
 
   - service: nginx
     path: /var/log/nginx/access.log
@@ -87,7 +89,7 @@ chain — so a secret injector can provide the token without templating
 the YAML. It's the only setting with an environment source; everything
 structural lives in the file.
 
-The `deployment`, `region`, and per-source `version_file` values
+The `deployment`, `region`, and per-source `version` values
 become first-class query dimensions — see the **Meta-variables**
 section in **Query your logs** for the full list and how they
 appear in awk and jq.
@@ -306,23 +308,35 @@ Service names are restricted to `[a-zA-Z0-9._-]`, 1–128 chars.
 Liveness is judged by **recency**: a service that's alive keeps
 emitting rows; one that stops is *absent*. Since each beat is emitted
 at the source when the process is healthy, there's no server-computed
-`age_s` — you ask "have we seen a beat lately?" instead, which a watch
-expresses directly:
+`age_s` — you ask "have we seen a beat lately?" instead, which a cron
+expresses directly. First a cron whose result is the beats in its window
+(it is empty when none arrived):
 
 ```
-# Alert when billing hasn't beaten in the last 90s (cron runs each minute)
-weft::is_absent billing-beat 90s && alert ...
-
-# ...where billing-beat is a watch like:
-cat /log/myns/billing/heartbeats.log | tail -1
+# /cron.d/billing-beat
+# schedule: */1 * * * *
+cat /log/myns/billing/heartbeats.log
 ```
+
+Then a cron that alerts when `billing-beat` has produced no result in the
+last 90s:
+
+```
+# /cron.d/billing-down
+# schedule: */1 * * * *
+weft::is_absent billing-beat 90s
+alert --if-zero "$?" --notify=ops
+```
+
+Don't add `-n` or `head`/`tail` counts to the first cron: crons are
+bound to their time range, and a line count can silently truncate it.
 
 #### Go SDK
 
 `github.com/w3ft-net/weft-go` is the typed front door for the
 records socket above — events, heartbeats, and a runtime-stats
 collector that periodically emits Go heap, GC pause, goroutine, and
-FD-count telemetry. Three-line setup in `main()`:
+FD-count telemetry. Setup in `main()`:
 
 ```
 import "github.com/w3ft-net/weft-go"

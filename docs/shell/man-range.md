@@ -58,7 +58,8 @@ Server-local timezone unless the literal carries one.
 
 Distance back from "now". Re-anchored against the server's clock
 on every query, so a long-lived shell pane never queries against
-a stale window.
+a stale window. Units are `m` (minutes), `h` (hours) and `d` (days);
+seconds, weeks and combined forms such as `1h30m` are not accepted.
 
 ```
 30m                     30 minutes ago
@@ -84,7 +85,8 @@ range 7d..              last 7 days
 range 1h..10m           from 1 hour ago to 10 minutes ago
 range yesterday..today  all of yesterday
 range yesterday..       yesterday to now
-range 04-01..05-14      current-year date span (Apr 1 → May 14)
+range 04-01..05-14      current-year span, Apr 1 00:00 up to
+                        (not including) May 14 00:00
 range 05-14..           from May 14 midnight to now
 range 05-14T09..05-14T17
                         business hours on May 14 (current year)

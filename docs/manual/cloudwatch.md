@@ -40,7 +40,7 @@ weft source add \
 ```
 
 This only records the mapping — nothing is ingesting yet. The source
-shows up as pending:
+shows up as pending in `weft source list` (or run `weft source pending`):
 
 ```
 weft source list
@@ -62,7 +62,8 @@ aws cloudformation create-stack \
   --capabilities CAPABILITY_IAM
 ```
 
-`WeftToken` is a namespace-scoped agent token (`weft token create`); it
+`WeftToken` is a namespace token (`weft token create --namespace myco`,
+for a namespace that already exists); it
 authenticates Firehose's deliveries to weft the same way any other push
 source authenticates. `LogGroupNames` is a comma-separated list — one
 stack can subscribe several log groups in the same account/region.
@@ -93,6 +94,10 @@ manage. The source starts ingesting as soon as you approve it.
 cat /log/myco/my-app/main.log | head
 ```
 
+That 3-segment path reads the service across every env. If the token you
+deployed carries an env, the rows live under
+`/log/myco/<env>/my-app/main.log`; see **Namespaces**.
+
 ### Troubleshooting
 
 - **No rows appearing** — check the Firehose delivery stream's own
@@ -107,5 +112,5 @@ cat /log/myco/my-app/main.log | head
   `weft source schema <namespace>/<service>` shows accumulation progress.
 - **Rows appearing but fields look wrong** — your schema's
   `timestamp_format` is off. Check against Go's reference time
-  (`Mon Jan 2 15:04:05 MST 2006`), then `weft source resample` to pull a
-  fresh sample and re-run the wizard.
+  (`Mon Jan 2 15:04:05 MST 2006`), then `weft source resample <namespace>/<service>` to
+  collect a fresh sample, then re-run the wizard once it completes.

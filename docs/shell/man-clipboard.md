@@ -25,10 +25,11 @@ clipboard /bin/<name> --range=<spec> -- <script-args>...
 ## DESCRIPTION
 
 `clipboard` records the current shell's view of a `/bin/` script and
-pushes a short link to it (`https://w3ft.net/s/k3Fz9aQ2xB`) onto the
+pushes a short link to it (`https://w3ft.net/s/k3Fz9aQ2xB`; the host depends on your deployment) onto the
 system clipboard. A teammate who opens the link — signed in to the
 same org — lands in the web shell with the script invocation
-pre-filled, ready to run with a single Enter. Anyone outside the org
+pre-filled, ready to run with a single Enter. The script must already
+exist under `/bin`. Anyone outside the org
 gets "that link doesn't exist".
 
 Weft stores, behind the short name:
@@ -41,8 +42,7 @@ Sharing the same script, range and args again gives the same link.
 
 The recipient sees the script invocation in their prompt, edits if
 they want, and hits Enter. Nothing executes automatically. Scripts
-resolve at HEAD on the recipient's side — there is no version
-pinning today.
+resolve to the latest version when the recipient runs them.
 
 ## RANGE
 
@@ -53,9 +53,15 @@ the same syntax as the `range` command — `2h..`, `1d..`,
 
 ## SCRIPT ARGS
 
-Everything after a `--` separator becomes the script's argument
-vector, joined with spaces. Whitespace and shell quoting from the original invocation are not
-preserved beyond simple space-separation.
+Everything after a `--` separator becomes the script's arguments,
+joined with spaces. Whitespace and shell quoting from the original
+invocation are not preserved beyond simple space-separation.
+
+## ERRORS
+
+`clipboard` fails with `no such script /bin/<name>` if the script does
+not exist, `first argument must be a /bin/<name> path` for any other
+first argument, and `invalid range` for a bad `--range`.
 
 ## CLIPBOARD MECHANISM
 
@@ -90,4 +96,4 @@ clipboard /bin/check --range=yesterday..today -- prod
 
 ## SEE ALSO
 
-range, git, vi, cat
+range, git

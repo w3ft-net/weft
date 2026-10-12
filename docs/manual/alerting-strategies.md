@@ -8,11 +8,27 @@ web:
 ---
 
 This page is the catalogue of *shapes* an alert can take in weft —
-single-cron scalar alerts, multi-row per-tag alerts, and composite
-alerts that fire on the combined state of several crons. The
-`alert` builtin's grammar lives in `man alert`; the `weft::*` family
-that backs predicates and aggregates lives in **Weft functions**.
-This page is about which shape fits which monitoring problem.
+single-cron scalar alerts, multi-row per-tag alerts, composite
+alerts that fire on several conditions at once, and
+aggregated-value alerts over a window. The `alert` builtin's grammar
+lives in `man alert`; the `weft::*` family that backs predicates and
+aggregates lives in **Weft functions**. This page is about which
+shape fits which monitoring problem.
+
+A cron run reads only the logs from its own schedule interval: a
+`*/5` cron sees the last five minutes. So the recipes here count with
+plain `grep ... | wc -l` and never limit rows with `head -n` or
+`tail -n`. A line count caps the rows read, so on a busy interval it silently
+truncates the window and the cron undercounts. (At the prompt, `tail -n 500
+| awk 'LEVEL=="ERROR"' | wc -l` counts errors among the last 500 rows
+only, and `grep ERROR | tail -n 5` is the last five matches.) To try a
+recipe interactively, set the window with `range` (see `man range`) and
+run the pipeline without its `alert` stage, or with `alert` as the last
+stage to see whether it fires.
+
+Every example sends its alert to an alias with `--notify=<alias>`.
+Aliases (`ops`, `critical` and so on) are defined in
+`/etc/notify.yaml`; see **Notifications**.
 
 ## The four shapes
 
@@ -24,7 +40,7 @@ each tick produces one numeric value that the alert evaluates.
 ```
 # /cron.d/error-rate
 # schedule: every 1m
-tail -n 500 /log/myco/api/main.log | grep ERROR | wc -l | alert above 50 --notify=ops
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 50 --notify=ops
 ```
 
 Use this when "is the metric above a known threshold?" answers
@@ -40,8 +56,8 @@ independently against its tag.
 ```
 # /cron.d/disk-per-host
 # schedule: every 1m
-tail /log/weft/shard/main.log \
-  | jq -r 'select(.type=="disk") | "\(._host) \(.pct)"' \
+cat /log/myco/prod/api/metrics.log \
+  | jq -r 'select(.type=="disk") | "\(.host) \(.pct)"' \
   | alert above 80 -k 2 -t 1 --notify=ops
 ```
 
@@ -51,73 +67,96 @@ independently — you get one PagerDuty incident per affected host,
 not one giant incident for "anything's disk is over 80%."
 
 `-k` and `-t` also accept JSON paths, which skips the `jq -r`
-reformatting:
+reformatting. Use `jq -c` so each row stays on one line; plain `jq`
+pretty-prints one object across many lines, and each line is then
+read as a row of its own:
 
 ```
-tail /log/weft/shard/main.log \
-  | jq 'select(.type=="disk")' \
-  | alert above 80 -k .pct -t ._host --notify=ops
+cat /log/myco/prod/api/metrics.log \
+  | jq -c 'select(.type=="disk")' \
+  | alert above 80 -k .pct -t .host --notify=ops
 ```
 
 A single alert may not mix the two forms — both `-k` and `-t` must
 be positional, or both must be `.`-prefixed paths.
 
-The same shape works with any indexed dimension as the tag — swap
-`._host` for `._deployment`, `._pod`, `._region`, or any
-combination (`"\(._region) \(._host) \(.pct)"` for region-prefixed
-host names).
+The same shape works with any field of the row as the tag — swap
+`.host` for `.deployment` or `.path`. The tag is one token, so to
+combine fields use the positional form and join them without a
+space: `"\(.deployment)/\(.host) \(.pct)"` gives tags like
+`api/web-1`.
 
-### 3. Composite (state across multiple crons)
+### 3. Composite (more than one condition)
 
-When the alert depends on more than one cron — "page me when error-
-rate is high **and** the canary stopped pinging" — compose
-predicates with bash `&&` `||` `!` or Lua `and` `or` `not`, then
-hand the resulting exit code to `alert` via `--if-zero "$?"`:
+When the alert depends on more than one thing — "page me when errors
+are high **and** the canary stopped pinging" — there are two ways to
+combine conditions. Both end in a single pipeline whose last stage is
+`alert`, because `alert` works only as the last (or only) command of a
+script.
 
-```bash
+**Over the cron's time range.** Read every source the condition
+needs, tally each leg in one `awk` pass, and print `1` when the whole
+condition holds and `0` otherwise. This is the natural fit when the
+legs are visible in the logs themselves:
+
+```
 # /cron.d/deploy-danger
 # schedule: every 1m
-weft::is_above error-rate 50 && weft::is_absent canary-ping
-alert --if-zero "$?" --notify=critical
+cat /log/myco/prod/api/main.log /log/myco/prod/canary/main.log \
+  | awk 'LEVEL=="ERROR"{e++} SERVICE=="canary"{c++}
+         END{print (e>50 && c+0==0) ? 1 : 0}' \
+  | alert above 0 --notify=critical
 ```
 
-`weft::is_above error-rate 50 && weft::is_absent canary-ping` exits
-0 when both predicates fire (the bash convention for *success*);
-`"$?"` expands to that exit code; `alert --if-zero "$?"` fires when
-the expanded value is `"0"`.
+`e` counts errors and `c` counts canary lines in the cron's interval;
+`c+0==0` is true when no canary line arrived at all. `&&` is AND,
+`||` is OR and `!` is NOT inside the `awk` expression:
+`print (e>50 || p>0) ? 1 : 0` fires when either leg is high, and
+`print (e>50 && !m) ? 1 : 0` fires only when the `m` leg is zero (say,
+a maintenance marker).
+
+**Across crons' history.** When the legs are the stored results of other
+crons, compose the `weft::*` predicates with bash `&&` `||` `!` in a
+subshell, end it with an `echo`, and pipe that into `alert`. The
+subshell prints `fire` only when the whole condition holds, and
+`alert`'s default `any` condition fires on any output:
+
+```
+# /cron.d/deploy-danger
+# schedule: every 1m
+(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical
+```
+
+`weft::is_above error-rate 50 && weft::is_absent canary-ping` succeeds
+(exit 0, the bash convention for *success*) when both predicates fire,
+so the `echo` runs. `weft::is_absent` fires when the named cron has no
+result: it doesn't exist, has never run, or its latest output is
+empty (with a window, such as `weft::is_absent canary-ping 10m`: no result
+landed in it). (A bad window, one over the 24h cap, or a history that can't
+be read doesn't fire; in a bash predicate the reason is printed on
+stderr.)
 
 `||` (OR) and `!` (NOT) work the same way:
 
-```bash
-weft::is_above error-rate 50 || weft::is_above payment-fail 0
-alert --if-zero "$?" --notify=critical
+```
+(weft::is_above error-rate 50 || weft::is_above payment-fail 0 && echo fire) | alert --notify=critical
 
-! weft::is_absent maintenance-flag && weft::is_above error-rate 50
-alert --if-zero "$?" --notify=critical   # fires only outside maintenance
+(! weft::is_absent maintenance-flag && weft::is_above error-rate 50 && echo fire) | alert --notify=critical   # fires only outside maintenance
 ```
 
-The Lua surface mirrors the bash predicates one-for-one. Boolean
-composition uses native `and` `or` `not`; emit `1` or `0` and pipe
-to `alert above 0`:
-
-```lua
--- /cron.d/deploy-danger
--- schedule: every 1m
-
-if weft.is_above("error-rate", 50) and weft.is_absent("canary-ping") then
-  print(1)
-else
-  print(0)
-end
-```
-
-Pipe the cron's stdout through `| alert above 0 --notify=critical`,
-or wrap with the bash `--if-zero` form. Lua wins when the chain
-has more than two clauses, when the predicate uses computed values,
+Lua mirrors the bash predicates one-for-one, with native `and` `or`
+`not`. Lua lives in a `/bin/` script (crons are bash), which prints `1`
+or `0` and which the cron pipes into `alert above 0`. Lua wins when the
+chain has more than two clauses, when the predicate uses computed values,
 or when you want a meaningful debug print:
 
 ```lua
-local rate = tonumber(weft.latest("error-rate")) or 0
+#!/usr/bin/env lua
+-- /bin/deploy_danger
+local rate = 0
+if not weft.is_absent("error-rate") then
+  rate = tonumber(weft.latest("error-rate")) or 0
+end
 local canary_dead = weft.is_absent("canary-ping")
 local in_maintenance = not weft.is_absent("maintenance-flag")
 
@@ -128,6 +167,12 @@ if rate > 50 and canary_dead and not in_maintenance then
 else
   print(0)
 end
+```
+
+```
+# /cron.d/deploy-danger
+# schedule: every 1m
+deploy_danger | alert above 0 --notify=critical
 ```
 
 ### 4. Aggregated-value (windowed) alerts
@@ -145,9 +190,8 @@ echo $(weft::avg error-rate 1h) | alert above 50 --notify=ops
 Or compose with the stdin comparators when chaining into a
 composite:
 
-```bash
-weft::avg error-rate 5m | weft::is_gt 50 && weft::is_absent canary-ping
-alert --if-zero "$?" --notify=critical
+```
+(weft::avg error-rate 5m | weft::is_gt 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical
 ```
 
 The aggregates' window caps (24h for `avg`/`min`/`max`/etc., 14d for
@@ -167,6 +211,17 @@ longer-horizon series.
 | Value is unusual for *this cron's recent history* | `weft::is_outlier` |
 | Value is unusual for *this cron at this time of day/week* | `weft::is_seasonal` |
 
+The functions take different arguments:
+
+- `weft::is_rising <cron> [<pct>] [<window>]`, and `weft::is_falling`
+  likewise. `<pct>` is a bare number: `50`, not `50%`.
+- `weft::is_outlier <cron> <n_stddev> <window>`
+- `weft::is_seasonal <cron> <n_stddev> <period> <window>`
+
+Windows and periods are Go durations plus `d` (24 hours) and `w` (7
+days), and they combine: `30m`, `1h`, `1d`, `1w`, `1d12h`. See **Weft
+functions** for the caps on each function.
+
 Use `is_outlier` when "what's normal" doesn't depend on the clock —
 host memory, queue depth, error rate of a steady-state service. Use
 `is_seasonal` when traffic has weekly/daily cycles — a Tuesday-2pm
@@ -175,12 +230,16 @@ nightly batch job.
 
 ## The absent-vs-zero gotcha
 
-`weft::latest` of a missing cron returns the empty string;
-`tonumber("")` in Lua returns `nil`; arithmetic against `nil`
-errors. Always guard:
+A cron with no usable value is not the same as a value of zero. In
+bash, `weft::latest` of a cron that doesn't exist is an error, not an
+empty string; in Lua, `tonumber("")` returns `nil` and arithmetic against
+`nil` errors. Always check for absence and guard the conversion:
 
 ```lua
-local v = tonumber(weft.latest("foo")) or 0   -- treat absent as zero
+local v = 0   -- treat absent as zero
+if not weft.is_absent("foo") then
+  v = tonumber(weft.latest("foo")) or 0
+end
 ```
 
 In bash, predicate builtins handle this for you — `weft::is_above
@@ -189,8 +248,8 @@ missing 50` exits 1 (no fire), it doesn't crash.
 If you actually want to distinguish absent from zero, use
 `weft::is_absent` explicitly in the chain:
 
-```bash
-weft::is_absent error-rate    # fires when there's no recent error-rate result
+```
+weft::is_absent error-rate    # exit 0 (fires) when error-rate has no result, or doesn't exist
 # ...whereas...
 weft::is_above error-rate 0   # fires only when there IS a result AND it's > 0
 ```
@@ -203,11 +262,10 @@ any pair simultaneously trips. The existing `alert --duration <dur>`
 flag handles this: it requires the trigger to hold for the entire
 window before firing. Once the composite output is a scalar (1 or 0
 piped through alert), `--duration` works the same as for any other
-alert.
+alert. (`--duration` takes `s`, `m` and `h`; `1d` is rejected.)
 
-```bash
-weft::is_above error-rate 50 && weft::is_absent canary-ping
-alert --if-zero "$?" --duration 5m --notify=critical
+```
+(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo 1 || echo 0) | alert above 0 --duration 5m --notify=critical
 ```
 
 Five minutes of sustained composite-true before the page.
@@ -227,9 +285,10 @@ incident opens.
   read state, not stdin. Pipe values through `weft::is_gt` /
   `weft::is_lt` for stdin-driven comparisons.
 - **Don't compose state-mutating commands in the chain.** Keep the
-  predicate composition side-effect-free. `weft::is_above ... &&
-  curl https://my-deploy-bot/...` works but couples alerting to
-  unrelated I/O and makes failure modes harder to reason about.
+  predicate composition side-effect-free: join `weft::*` predicates
+  with `&&`, `||` and `!`, and nothing else. Hanging an unrelated
+  command off the chain couples alerting to unrelated I/O and makes
+  failure modes harder to reason about.
 - **Don't reuse a single-row alert for multi-row data.** Multiple
   rows on stdin without `-k`/`-t` collapse into one scalar, which
   the alert will reject as non-numeric. Either reduce upstream with
@@ -241,4 +300,4 @@ incident opens.
   predicates, and stdin comparators.
 - **Crons** — scheduled pipelines and incident lifecycle.
 - `man alert` — the alert builtin's full grammar.
-- `docs/manual/notify.md` — alias and destination configuration.
+- **Notifications** — alias and destination configuration.

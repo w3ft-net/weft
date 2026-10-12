@@ -11,7 +11,7 @@ web:
 
 Anything you can type at the shell prompt can be saved as a named script under
 `/bin/`. Scripts are available from every shell session and every cron
-belonging to your account.  Create scripts with vim or with `cat - > myscript`.
+belonging to your account.  Create scripts with `vi` or with `cat - > myscript`.
 Writing the file will validate the script for syntax errors and some
 weft-specific semantics.
 
@@ -28,9 +28,12 @@ cat /log/$1 | grep ERROR | wc -l
 Invoke it like any other command:
 
 ```
-count_errors api.log              # → number of ERROR lines in api.log
-count_errors disk.log | wc -l     # scripts compose into pipelines
+count_errors myco/prod/api/main.log      # number of ERROR lines in that source
+count_errors myco/prod/api/main.log | sort -n   # scripts compose into pipelines
 ```
+
+A script, bash or Lua, can also sit at a later stage of a pipeline,
+after a log read: `tail -n 500 /log/myco/prod/api/main.log | myscript`.
 
 We recommend keeping your scripts small and pipelined where possible -- weft optimizes these cases well -- but you can write more sophisticated scripts where needed. 
 
@@ -93,7 +96,7 @@ script can act as a pipeline stage:
 
 ```
 #!/usr/bin/env lua
--- /bin/extract_ids
+-- /bin/extract_ids (for a source whose lines are JSON objects)
 for line in lines() do
   local obj = json.decode(line)
   if obj.user_id then print(obj.user_id) end
@@ -101,7 +104,7 @@ end
 ```
 
 ```
-cat api.log | extract_ids | sort -u | wc -l
+cat /log/myco/prod/api/events.log | extract_ids | sort -u | wc -l
 ```
 
 Weft cannot optimize Lua scripts in the same way it can coreutils pipelines. If
@@ -113,10 +116,10 @@ performance.
 `vi /bin/<name>` opens the script for editing. After `:w`, the
 shell drops you into a follow-up buffer asking for an optional
 commit message — `:wq` to record, `:q!` to skip. See **git** for
-the full version-control workflow, including `git log`,
+the full version-control workflow, including `git log -- /bin/<name>`,
 `git show`, `git diff`, `git restore`, and `git commit --amend`.
 
 The five most recent past versions are kept; older saves are
-discarded. Watch this if you iterate quickly — there's no
+discarded. Keep this in mind if you iterate quickly — there's no
 recycle bin past the cap.
 

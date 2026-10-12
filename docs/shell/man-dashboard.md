@@ -29,7 +29,8 @@ move focus between tiles; Enter zooms the focused tile to full
 screen; Esc exits zoom or the view.
 
 Dashboards are YAML files under `/etc/dashboards/`. Create one
-with `vi /etc/dashboards/<name>.yaml`.
+with `vi /etc/dashboards/<name>.yaml`; writing under `/etc` needs the
+`configmgr` group.
 
 ## YAML GRAMMAR
 
@@ -39,23 +40,26 @@ sections:
   - title: Errors
     tiles:
       - kind: sparkline
-        watch: error-rate
+        cron: error-rate
         size: md
       - kind: counter
-        watch: pending-jobs
+        cron: pending-jobs
         threshold: { warn: 100, crit: 500 }
         format: "%d jobs"
         size: sm
       - kind: table
-        watch: top-errors
+        cron: top-errors
         columns: [host, count]
         size: lg
   - title: Capacity
     tiles:
       - kind: gauge
-        watch: disk-pct
+        cron: disk-pct
         threshold: { warn: 80, crit: 95, max: 100 }
 ```
+
+Each `cron:` must name a cron that already exists (`ls /cron.d`); the
+names above are examples.
 
 A flat `tiles:` list (no `sections:`) is shorthand for one untitled
 section. You cannot mix `sections:` and top-level `tiles:`.
@@ -74,11 +78,16 @@ section. You cannot mix `sections:` and top-level `tiles:`.
 ## TILE KEYS
 
 - `kind` — one of `sparkline`, `counter`, `gauge`, `table`.
-- `watch` — name of an existing cron (must exist when saved).
+- `cron` — required; name of an existing cron (must exist when saved).
+  Dashboards saved before this key was renamed from `watch` are
+  converted for you; writing `watch:` now is an error that names `cron:`.
+- `title` — optional label for the tile.
 - `size` — `sm`, `md`, or `lg`. Default `md`. A layout hint, not a pixel size.
 - `format` — (counter only) printf-style format, e.g. `"%d jobs"`, `"%.1f%%"`.
-- `threshold` — (counter, gauge, sparkline) `warn`, `crit`, and `max` cutoffs.
-- `columns` — (table only) header labels; rows are whitespace-split from the cron stdout.
+- `threshold` — (counter, gauge, sparkline) `warn` and `crit` cutoffs; gauge also takes `max`.
+- `columns` — (table only, required) header labels; rows are whitespace-split from the cron stdout.
+- `tag`, `y` — (sparkline only, set together) for a cron that prints JSON rows: `tag`
+  names the field that says which line a row belongs to, `y` the field to plot.
 
 ## THRESHOLD KEYS
 
@@ -89,8 +98,8 @@ section. You cannot mix `sections:` and top-level `tiles:`.
 ## EXAMPLES
 
 ```
-dashboard ops               open the "ops" dashboard
-vi /etc/dashboards/ops.yaml edit it
+dashboard ops               open the "ops" dashboard (create it first)
+vi /etc/dashboards/ops.yaml create or edit it
 ```
 
 ## SEE ALSO

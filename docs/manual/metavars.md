@@ -9,11 +9,10 @@ web:
 
 # Meta-variables
 
-Meta-variables expose row-level dimensions as fast-path filters in
-awk and jq pipelines. Where a payload field would resolve through
-`json_extract`, a meta-variable maps directly to a real column on the
-shard — order-of-magnitude faster, and the row-group min/max
-statistics stay useful.
+Meta-variables expose row-level dimensions as fast filters in awk and
+jq pipelines. Filtering on a meta-variable is much faster than filtering
+on a field inside the row's JSON payload, because weft can skip data
+that can't match.
 
 ## Reserved set
 
@@ -22,7 +21,7 @@ statistics stay useful.
 | `NAMESPACE`                | `._namespace`            | `namespace`      | the `<namespace>` path segment / agent token's namespace  |
 | `SERVICE`                  | `._service`              | `service`        | source declaration, log filename, or HTTP ingest payload  |
 | `KIND`                     | `._kind`                 | `kind`           | the stream kind (`main`, `heartbeats`, `metrics`, `runtime`) |
-| `HOST` *(alias `INSTANCE`)* | `._host` *(alias `._instance`)* | `instance`       | weftd `os.Hostname()`                                     |
+| `HOST` *(alias `INSTANCE`)* | `._host` *(alias `._instance`)* | `instance`       | the agent's hostname                                      |
 | `LEVEL`                    | `._level`                | `level`          | schema-extracted from the row                             |
 | `TS`                       | `._ts`                   | `ts`             | schema-extracted from the row                             |
 | `DEPLOYMENT`               | `._deployment`           | `deployment`     | weftd `deployment:` config (or k8s/ASG)                   |
@@ -30,14 +29,13 @@ statistics stay useful.
 | `VERSION`                  | `._version`              | `version`        | weftd `version.file:` (live) or `version.env:` (snapshot) |
 | `REGION`                   | `._region`               | `region`         | cloud metadata probe at agent startup                     |
 | `CLUSTER`                  | `._cluster`              | `cluster`        | weftd k8s mode                                            |
-| `K8S_NAMESPACE`            | `._k8s_namespace`        | `k8s_namespace`  | weftd k8s mode (parsed from `/var/log/pods/…`)            |
+| `K8S_NAMESPACE`            | `._k8s_namespace`        | `k8s_namespace`  | weftd k8s mode                                            |
 | `POD`                      | `._pod`                  | `pod`            | weftd k8s mode                                            |
 | `CONTAINER`                | `._container`            | `container`      | weftd k8s mode                                            |
 | `NODE`                     | `._node`                 | `node`           | weftd `dimensions.node:` (file-sourced)                   |
 
-A row that wasn't tagged with a given dimension stamps `NULL` —
-queries on `ENV == "prod"` neither include nor exclude such rows;
-they simply don't match the predicate.
+A row that wasn't tagged with a given dimension carries an empty
+string. `ENV == "prod"` does not match it, but `ENV != "prod"` does.
 
 ### Naming convention
 
@@ -83,87 +81,83 @@ distinguishes the env-less form from the env-bearing one.
 Tokens minted with `weft token create --namespace foo --env prod`
 produce rows that resolve to the 4-segment path; tokens without
 `--env` produce rows at the 3-segment path. A namespace can hold both
-layouts side by side as different tokens reauth over time — segment
-count alone disambiguates them, so a reader token spanning several
-envs never has to guess.
+layouts side by side, depending on how each token was minted.
 
 ```
-weft> ls /log/myco
-prod/                  ← env-bearing token
-staging/               ← env-bearing token
-api/                   ← env-less token
+ls /log/myco
 ```
 
-`cat /log/myco/api/main.log` reads the env-less stream; `cat
-/log/myco/prod/api/main.log` reads the env-prod stream. To read
-several envs at once, read the namespace and filter on `ENV`:
-`cat myco.log | awk 'ENV == "prod"'`. A glob in a directory segment,
-such as `/log/myco/*/api/main.log`, is not allowed. No backfill, no
-synthetic placeholder env.
+lists the env directories (`prod/`, `staging/`) next to any env-less
+service directories (`api/`).
+
+`cat /log/myco/prod/api/main.log` reads one env. The three-segment
+`cat /log/myco/api/main.log` reads that service across every env,
+including the env-less stream, and `ls /log/myco/api` lists the kinds
+it carries. To read a whole namespace, use `cat myco.log` and filter
+on `ENV`: `cat myco.log | awk 'ENV == "prod"'`. A glob that would
+read across services or envs, such as `/log/myco/*/api/main.log`,
+`/log/myco/prod/*.log` or `cat *.log`, is refused with an error;
+globs are allowed only to pick kinds inside one service
+(`/log/myco/prod/api/*.log`). No backfill, no synthetic placeholder
+env.
 
 Region is intentionally **not** part of the path layout — it's a
 query-time filter (`awk 'REGION == "us-east-2"'`) only. Same for
 deployment, host, cluster, pod: those are query-time dimensions, not
 filesystem axes.
 
-## Pushdown
+## Speed
 
-Each reserved meta-variable rewrites to a direct column predicate:
+Filtering on a reserved meta-variable is the fast path, whether you use
+awk (`awk 'ENV == "prod"'`, `awk 'POD ~ "api-7f9b"'`) or jq
+(`jq 'select(._level == "ERROR")'`). A filter on any other field, such
+as `jq 'select(.feature_flag == "abc")'`, still works but reads and
+parses every row in the time range. Mixing both in one pipeline is fine:
+the meta-variable filters narrow the data first and the rest runs on
+what remains.
 
-```
-awk 'ENV == "prod"'                  → WHERE env = 'prod'
-jq 'select(._env == "prod")'          → WHERE env = 'prod'
-awk 'POD ~ "api-7f9b"'               → WHERE pod LIKE 'api-7f9b%'
-jq 'select(._level == "ERROR")'       → WHERE level = 'ERROR'
-```
-
-For non-reserved fields, the existing JSON-extract pushdown still
-applies — slower than a column predicate, but still pushdown:
-
-```
-jq 'select(.feature_flag == "abc")'
-  → WHERE json_extract_string(payload, '$.feature_flag') = 'abc'
-```
-
-A pipeline mixing both becomes a single `WHERE` with the column
-predicate (fast) AND the JSON-extract predicate (slower); DuckDB
-plans it as one stage.
+A hard line count (`head -n N` or `tail -n N`) stops later filters from
+narrowing the read: `tail -n 500 | awk 'LEVEL == "ERROR"' | wc -l`
+counts the errors among the last 500 rows, while
+`awk 'LEVEL == "ERROR"' | tail -n 5` gives the last 5 errors.
 
 ## Recipes
 
 ### Per-host average over a window
 
-A cron in `/cron.d` with `HOST` carrying the dimension makes
-"avg memory pct by host over 1h" a one-liner:
+A cron in `/cron.d` that emits the host next to each value makes
+"avg memory pct by host" a one-liner. A cron reads its own time range,
+so don't use `-n` here: a line count can silently truncate the window.
 
 ```
 # /cron.d/memory-per-host
-# schedule: every 1m
-tail -n 200 /log/myco/api/metrics.log \
+# schedule: */1 * * * *
+cat /log/myco/prod/api/metrics.log \
   | jq -r 'select(._level == "INFO" and .type == "memory") | "\(._host) \(.pct)"'
 ```
 
-Each tick emits one row per host. Multi-row alerts (`alert above 80
--k 2 -t 1`) page per host independently because `HOST` is a real
-column the alert grouping understands.
+Each tick emits one `<host> <pct>` row per memory sample. Multi-row
+alerts (`alert above 80 -k 2 -t 1`) page per host independently
+because `-t 1` tags each row by its first field (the host).
 
 ### Filter by env across deployments
 
 ```
 cat myco.log \
-  | jq 'select(._env == "prod" and ._level == "ERROR" and ._deployment == "api")' \
+  | awk 'ENV == "prod" && LEVEL == "ERROR" && DEPLOYMENT == "api"' \
   | head -50
 ```
 
-The column predicates narrow to env=prod and deployment=api; the resulting shard query is two indexable WHERE
-clauses, no JSON parsing.
+The `ENV` and `DEPLOYMENT` filters are fast-path filters, so weft
+narrows to env=prod and deployment=api without parsing each row's
+JSON. For JSON log streams the same filter reads
+`jq 'select(._env == "prod" and ._deployment == "api")'`.
 
 ### Compare a single deployment across regions
 
 ```
-cat /log/myco/api/main.log \
-  | jq 'select(._deployment == "api")' \
-  | jq -r '"\(._region) \(._level)"' \
+cat /log/myco/prod/api/main.log \
+  | awk 'DEPLOYMENT == "api" {print REGION, LEVEL}' \
   | sort | uniq -c
 ```
 

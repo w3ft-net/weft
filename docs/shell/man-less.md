@@ -26,8 +26,8 @@ inside the shell — no subprocess, no TTY hand-off, and it works
 the same way in the web shell as it does in the native CLI.
 
 When a pipeline ends with `| less` the query runs to completion,
-the result is loaded into the pager, and the shell enters
-ModeLess until you press q.
+the result is loaded into the pager, and the shell shows
+the pager until you press q.
 
 Help and man pages auto-page when their output would overflow
 the viewport — press q to return to the prompt.

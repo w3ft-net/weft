@@ -17,27 +17,35 @@ with `ls`, remove with `rm`.
 
 ```
 # Save a filtered result set
-cat api.log | awk 'LEVEL == "ERROR"' > /tmp/errs
+cat /log/myco/api/main.log | awk 'LEVEL == "ERROR"' > /tmp/errs
 
 # Take a look
 wc -l /tmp/errs
 grep timeout /tmp/errs | sort | uniq -c | sort -rn | head
 
-# Keep adding to it later
-tail -n 200 api.log | awk '$STATUS >= 500' >> /tmp/errs
+# Keep adding to it later (5xx responses among the last 200 rows)
+tail -n 200 /log/myco/api/main.log | awk '$6 ~ /status=5/' >> /tmp/errs
 
 # Organise an incident
 mkdir /tmp/incident-2026-04-22
-cat api.log | grep 'req_id=abc123' > /tmp/incident-2026-04-22/trace
+cat /log/myco/api/main.log | grep 'req_id=abc123' > /tmp/incident-2026-04-22/trace
 vi /tmp/incident-2026-04-22/notes
 ls -l /tmp/incident-2026-04-22
 
 # Compare two result sets
 cp /tmp/errs /tmp/errs.bak
-tail -n 1000 api.log | awk 'LEVEL == "ERROR"' > /tmp/errs
+tail -n 1000 /log/myco/api/main.log | awk 'LEVEL == "ERROR"' > /tmp/errs   # errors among the last 1000 rows
 diff /tmp/errs.bak /tmp/errs           # what's new in the most recent slice
-comm /tmp/errs.bak /tmp/errs           # three-column shared/unique view
-join orders.csv prices.csv             # relate two result sets by key
+
+# comm and join need sorted input
+sort /tmp/errs.bak > /tmp/errs.bak.sorted
+sort /tmp/errs > /tmp/errs.sorted
+comm /tmp/errs.bak.sorted /tmp/errs.sorted   # three-column shared/unique view
+
+# Relate two saved files by their first column
+printf 'api 3\nweb 1\n' > /tmp/errs-by-service
+printf 'api oncall-a\nweb oncall-b\n' > /tmp/owners
+join /tmp/errs-by-service /tmp/owners        # api 3 oncall-a, web 1 oncall-b
 
 # Rename, keep alive
 mv /tmp/errs /tmp/incident-errs
@@ -49,8 +57,8 @@ rm -rf /tmp/incident-2026-04-22
 
 ### Files expire after 48 hours
 
-Despite the shell rules, /tmp is durable storage — your files survive
-logouts and are visible from every session. But every file is deleted
+/tmp is durable storage — your files survive logouts and are visible
+from every session. But every file is deleted
 48 hours after it was last edited. Any of `>`, `>>`, `cp`, `mv`, or
 `touch` resets the clock; the mtime shown in `ls -l` is the source of
 truth.
@@ -62,40 +70,37 @@ and you want to keep your scratch around past the original 48h.
 Treat /tmp the way you'd treat a shared whiteboard in an operations
 room: great for the investigation you're running right now, not where
 you keep anything you'll need next week. For long-term storage of a
-pipeline's output, save the pipeline itself as a cron (see the
-**Crons** section) — cron results are retained for the full history
-your plan covers.
+pipeline's output, save the pipeline itself as a cron (see
+**Crons**) — cron results are retained for the full history your
+plan covers.
 
 ### Storage limits
 
-| Plan    | /tmp space | Per-file limit |
-|---------|-----------:|---------------:|
-| Trial   |     500 KB |         512 KB |
-| Swatch  |      10 MB |         512 KB |
-| Yard    |     100 MB |         512 KB |
-| Bolt    |       1 GB |         512 KB |
-
-The per-file limit applies on every plan — /tmp is for filtered result
+/tmp has a total allowance and a per-file cap, both set by your plan;
+see the Account page for your plan's limits. /tmp is for filtered result
 sets and notes, not for parking raw log data. Writes that would exceed
-either your total allowance or the per-file cap fail with a clear
-error; the partial output is not written.
+either limit fail with an error; the partial output is not written.
 
-Check your current usage from the shell:
+Check what you're using from the shell. `ls -lh` shows each file's
+size:
 
 ```
-cat /etc/usage
+ls -lh /tmp
 ```
+
+`cat /etc/usage` reports your log-ingest quota, not /tmp space.
 
 ### What /tmp is not
 
 - **Not executable.** Files in /tmp are never treated as scripts.
   `vi /tmp/foo` is a text editor opening a text file; typing `foo` at
-  the prompt afterwards does nothing. Scripts live in `/bin` — see the
-  **Custom scripts** section.
+  the prompt afterwards does nothing. Scripts live in `/bin` — see
+  **Custom scripts**.
 - **Not a source for `tail -f`.** Follow-mode is a streaming query
   against live logs. You can redirect the output of a finished query
-  into /tmp, but `tail -f /log/myco/api/main.log > /tmp/stream` is not supported
-  in this release.
+  into /tmp, but `tail -f /log/myco/api/main.log > /tmp/stream` is
+  refused with an error, because a follow never finishes and the file
+  would hold only a truncated read. Drop `-f` to save a finished query.
 - **Not shared across accounts.** /tmp is per-customer. Every member
   of your account sees the same /tmp; users from other accounts never
   see any of it.
@@ -114,7 +119,7 @@ analysis kit is available for comparing and combining them:
 | `comm a b`         | Three-column merge of two sorted files: only-in-A, only-in-B, in-both    |
 | `join a b`         | Relational join on a key column (default: whitespace, column 1 each side) |
 | `paste a b`        | Column-merge two files line-by-line (default delimiter: tab)              |
-| `wc -l a`          | Lines / words / bytes / characters / longest-line — combines flags freely |
+| `wc a`             | Lines, words and bytes; `-l -w -c -m -L` pick columns and combine freely  |
 
 `cp` and `mv` work only inside /tmp, on both sides. /bin, /cron.d and
 /etc each have their own save path (permissions and validation), so
@@ -131,9 +136,9 @@ window a file has left:
 
 ```
 weft> ls -lh /tmp
--rw-r--r--  2.1K  2026-04-24 09:42  errs
-drwxr-xr-x     -  2026-04-22 17:03  incident-2026-04-22/
--rw-r--r--   312  2026-04-24 10:15  scratch
+-rw-r--r--  Alice Chen  2.1K  2026-04-24 09:42  errs
+drwxr-xr-x  Alice Chen     -  2026-04-22 17:03  incident-2026-04-22/
+-rw-r--r--  Alice Chen   312  2026-04-24 10:15  scratch
 ```
 
 The same flags work anywhere in the filesystem — `ls -l /bin` shows

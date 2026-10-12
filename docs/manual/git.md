@@ -18,7 +18,9 @@ dashboard looked like last week, the `git` command has you covered.
 It is a **subset of git**. Everything it accepts behaves and prints
 the way git does, so what you already know works: `git log`,
 `git show`, `git diff`, `git blame`, `git restore`. Everything it
-doesn't implement is refused by name:
+doesn't implement is refused by name, and flags it doesn't implement
+are refused with `fatal: unrecognized argument` (the flags are listed
+under `git log`):
 
 `git --help` lists what is supported.
 
@@ -54,8 +56,8 @@ staging area: a write *is* the commit, which is why there is no
 The repository root is `/`, and tracked paths are `bin/<name>`,
 `cron.d/<name>`, `etc/dashboards/<name>.yaml` and `etc/notify.yaml`.
 Write a path any way git accepts it: `/bin/scan`,
-`bin/scan`, or just `scan` after `cd /bin`. A path outside `/bin`
-and `/cron.d` is refused: `fatal: '/tmp/x' is outside the
+`bin/scan`, or just `scan` after `cd /bin` (after `<rev>:` use the
+repo-relative form, `bin/scan`). A path outside the tracked set is refused: `fatal: '/tmp/x' is outside the
 repository (only /bin, /cron.d, /etc/dashboards and /etc/notify.yaml are tracked)`.
 
 ## Revisions
@@ -142,11 +144,12 @@ Who last changed each line of a script or cron:
 
 ```
 weft> git blame /bin/scan
-^1e8a02c (Bob   2026-04-22 17:33:12 +0000 1) cat /log/myco/api/main.log
-a4fb0c2f (Alice 2026-04-25 09:42:01 +0000 2) | awk 'LEVEL == "ERROR"'
+^1e8a02c (Eli Bergstrom 2026-04-22 17:33:12 +0000 1) cat /log/myco/api/main.log
+a4fb0c2f (Dana Okafor 2026-04-25 09:42:01 +0000 2) | awk 'LEVEL == "ERROR"'
 ```
 
-A `^` marks a line that predates what the five-version cap kept.
+A `^` marks a line that comes from the oldest version still kept (the
+file's first version, or the edge of the cap).
 
 ### `git restore`, `git checkout <rev> -- <path>`
 
@@ -236,7 +239,8 @@ that has since been deleted, the restore is refused.
 ## What `git` here does NOT do
 
 - **No working tree, no staging.** `add`, `rm`, `mv`, `stash`,
-  `reset`, `clean` don't exist; every write is already a commit.
+  `reset`, `clean` are refused (`is a git command, but weft doesn't
+  support it`); every write is already a commit.
 - **No branches, merges or rebases.** One linear history.
 - **No remotes.** `clone`, `fetch`, `pull`, `push` are refused.
 - **No history for `/tmp`, `/etc/passwd` or `/etc/usage`.** `/tmp` is

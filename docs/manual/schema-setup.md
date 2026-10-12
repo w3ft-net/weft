@@ -22,8 +22,9 @@ Two fields come from parsing each log line per the source's schema:
 - `TS` — timestamp
 - `LEVEL` — log level (ERROR, WARN, INFO, DEBUG)
 
-Other indexed fields (`SERVICE`, `HOST`, `DEPLOYMENT`, `ENV`, `VERSION`,
-`REGION`, and the four k8s-mode dimensions) are stamped by weftd, the
-agent token, or cloud metadata rather than parsed from the line — see
-the **Meta-variables** section in **Query your logs** for the full
-table and how each is sourced.
+Other fields (`SERVICE`, `HOST`, `DEPLOYMENT`, `ENV`, `VERSION`,
+`REGION` (empty when not configured), `CLUSTER`, `K8S_NAMESPACE`, `POD`,
+`CONTAINER` (k8s mode), and `NODE`) are stamped by weftd, the agent
+token, or cloud metadata rather than parsed from the line — see
+**Meta-variables** (`man metavars`) for the full table and how each is
+sourced.

@@ -15,26 +15,28 @@ read-only table you `cat` like any other file:
 ```
 $ cat /etc/passwd
 USER             ROLE     STATUS    GROUPS
-alice@acme.com   owner    active    (all — implicit)
+alice@acme.com   admin    active    binmgr  cronmgr  configmgr  nsmgr  payments  payments+tokens
 bob@acme.com     member   active    binmgr  cronmgr  payments  payments+tokens
 carol@acme.com   member   invited   —
 ```
 
 You never edit this file — the team is managed with `adduser` and
-`deluser` (owner-only), or from the dashboard's Members tab. Both write
-the same underlying data.
+`deluser` (admin-only), or from the dashboard's Members tab. Both write
+the same underlying data. (The admin is sometimes called the org owner;
+the role is `admin` everywhere you see it.)
 
 ## Permissions are group membership
 
 Every permission is a group. There are exactly two families:
 
-**Manager groups** gate the three org-wide directories:
+**Manager groups** gate the org-wide directories and namespace management:
 
 | Group | Grants |
 |---|---|
 | `binmgr` | edit `/bin` (functions) |
 | `cronmgr` | edit `/cron.d` (crons) |
 | `configmgr` | edit `/etc` (notify.yaml, dashboards) |
+| `nsmgr` | create and manage namespaces |
 
 **Namespace groups** gate log access, one per namespace:
 
@@ -47,7 +49,7 @@ Read and produce are independent — a member can have either or both.
 The `+tokens` facet uses `+` rather than `:` so it can never collide
 with a real namespace name.
 
-Owners have implicit full access and never appear in a group.
+Admins hold their groups like everyone else; they appear in the roster with the groups they have.
 
 ## Inviting and removing people
 
@@ -55,6 +57,10 @@ Owners have implicit full access and never appear in a group.
 adduser dana@acme.com          # invite — sends an invite email
 deluser dana@acme.com          # remove from the org entirely
 ```
+
+The first argument must be an email address. `adduser --help` prints
+usage and changes nothing; an unknown flag, a first argument that isn't
+an email, or extra arguments is a usage error.
 
 `adduser <email>` with no group sends an invite link. The person joins
 when they accept it (or the next time they sign in with that email).
@@ -73,13 +79,16 @@ groups dana@acme.com                   # what dana can do
 id dana@acme.com                       # role + groups
 ```
 
+`groups` and `id` with no argument describe you. For an email that
+isn't on the team they print `no such member: <email>`.
+
 Group grants apply only once a member has accepted their invite — there
 is no staging. If you `adduser` someone to a group before they're on the
 team, they get invited then and there (the email goes out), and you
 re-run the command after they accept. An already-invited member who
 hasn't accepted yet gets a clear error, not a silent no-op.
 
-`adduser`/`deluser` are owner-only; `groups` and `id` are readable by
+`adduser`/`deluser` are admin-only; `groups` and `id` are readable by
 any member.
 
 See `man passwd` in the shell for the quick reference.

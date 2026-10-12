@@ -33,21 +33,23 @@ member with their role, status, and groups:
 
 ```
 USER             ROLE     STATUS    GROUPS
-alice@acme.com   owner    active    (all — implicit)
+alice@acme.com   admin    active    binmgr  cronmgr  configmgr  nsmgr  payments  payments+tokens
 bob@acme.com     member   active    binmgr  cronmgr  payments  payments+tokens
 carol@acme.com   member   invited   —
 ```
 
 The file is read-only; mutate the team with `adduser` and `deluser`
-(owner-only), or from the dashboard's Members tab. Owners have implicit
-full access and never appear in a group.
+(admin-only), or from the dashboard's Members tab. An admin (sometimes
+called the org owner) holds groups like any other member and is listed
+with them.
 
 ## GROUPS
 
-A group is one of three things:
+A group is one of these:
 
 - **`binmgr` / `cronmgr` / `configmgr`** — edit access to `/bin`,
   `/cron.d`, and `/etc` respectively.
+- **`nsmgr`** — create and manage namespaces.
 - **`<namespace>`** — read (query) the logs under `/log/<namespace>`.
 - **`<namespace>+tokens`** — mint producer tokens for that namespace.
   Independent of read: a member can have one, the other, or both.
@@ -67,9 +69,16 @@ namespace name, so it can never collide with a real namespace.
 - **`deluser <email> <group>`** — revoke a group membership.
 - **`deluser <email>`** — remove a member from the org entirely.
 - **`groups [<email>]`** — list a member's groups (yours if omitted).
-- **`id [<email>]`** — show a member's role and groups.
+  Prints `<email>: group group ...`; an email not on the team gives
+  `no such member: <email>`.
+- **`id [<email>]`** — show a member's role and groups, as
+  `uid=<email> role=<role> groups=a,b`.
 
-`adduser`/`deluser` are owner-only. Group grants apply only once the
+Every command takes `--help` (prints usage, changes nothing). An unknown
+flag, a first argument that isn't an email address, or extra arguments
+is a usage error.
+
+`adduser`/`deluser` are admin-only. Group grants apply only once the
 member has accepted their invite; there is no staging.
 
 ## EXAMPLES

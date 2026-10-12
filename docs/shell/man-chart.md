@@ -35,7 +35,8 @@ returns; `--follow` enters a live-redraw mode that refreshes every
 
 **Pipe form** — `<pipeline> | chart [...]` renders the upstream
 output once and returns to the prompt. The chart stage is the
-terminal of the pipeline (no further commands after it). Useful for
+terminal of the pipeline (no further commands after it; piping
+its output onward is an error). Useful for
 sketching a chart without first committing the pipeline to a saved
 cron. `--follow` is not supported in pipe form.
 
@@ -46,7 +47,9 @@ of data, period.
 
 In cron form, the data point for each result is the **last
 whitespace-separated field** of the cron's stdout — matching the
-multi-row alert convention (`alert -k <N>`). In pipe form, `-x` and
+multi-row alert convention (`alert -k <N>`). The cron's output must
+end in a number on each line; a cron that emits JSON rows cannot be
+charted. In pipe form, `-x` and
 `-y` pick fields explicitly; without them, x is the row sequence
 and y is the last whitespace field of each line.
 
@@ -95,20 +98,23 @@ chart error-rate -t bar                 vertical bars by timestamp
 chart error-rate --follow               live; press q to exit
 
 # Pipe form: a quick distribution by host
-cat /log/myco/api/main.log | jq '{path, latency}' \
-  | chart -x .path -y .latency -a sum
+cat /log/myco/prod/api/metrics.log | jq -c '{host, pct}' \
+  | chart -x .host -y .pct -a avg
 
 # Pipe form: time-bucketed p95 over the current range
-cat /log/myco/api/main.log \
-  | chart -x .ts -y .latency_ms --bucket 1m -a p95
+cat /log/myco/prod/api/metrics.log \
+  | jq -c 'select(.type=="memory")' \
+  | chart -x .ts -y .pct --bucket 1m -a p95
 
 # Pipe form: just plot a stream of numbers from jq
-cat /log/myco/api/main.log | jq '.cpu_pct' | chart
+cat /log/myco/prod/api/metrics.log | jq 'select(.type=="memory") | .pct' | chart
 
 # Pipe form: one line per instance
-cat /log/myco/coordinator/runtime_stats.log \
-  | jq 'select(.metric=="mem_pct")' \
-  | chart -x .ts -y .value --tag .coordinator_id --bucket 1m -a avg
+cat /log/myco/prod/api/metrics.log \
+  | jq -c 'select(.type=="memory")' \
+  | chart -x .ts -y .pct --tag .host --bucket 1m -a avg
+
+# --tag needs one JSON object per line, so use jq -c
 ```
 
 ## RELATED
