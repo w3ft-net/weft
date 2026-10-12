@@ -212,7 +212,10 @@ func (m *LogMount) canReadNamespace(ns string) bool {
 	if m.cfg.IsOwner || m.cfg.UserID == "" {
 		return true
 	}
-	nsObj, err := m.cfg.Store.FindOrCreateNamespace(m.cfg.OrgID, ns)
+	// Look up, never create: asking whether a member can read /log/<ns>
+	// must not leave a namespace behind for every name they probe. A
+	// namespace that doesn't exist is simply not readable.
+	nsObj, err := m.cfg.Store.GetNamespace(m.cfg.OrgID, ns)
 	if err != nil {
 		return false
 	}

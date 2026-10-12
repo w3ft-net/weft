@@ -2297,7 +2297,7 @@ func (s *Server) handleSetNamespacePermission(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	ns, err := s.store.FindOrCreateNamespace(custID, nsName)
+	ns, err := s.store.GetNamespace(custID, nsName)
 	if err != nil {
 		http.Error(w, "namespace not found", http.StatusNotFound)
 		return
