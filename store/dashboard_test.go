@@ -177,12 +177,11 @@ tiles:
 	}
 }
 
-// The tile key is `cron:` (it was `watch:`). The old key is refused with an
-// error that names the new one, rather than the generic "not a valid key".
-func TestParseDashboardYAML_WatchKeyWasRenamed(t *testing.T) {
+// The tile key is `cron:`. A `watch:` key gets an error that names `cron:`.
+func TestParseDashboardYAML_WatchKeyNamesCron(t *testing.T) {
 	_, err := ParseDashboardYAML("tiles:\n  - kind: counter\n    watch: errs\n")
-	if err == nil || !strings.Contains(err.Error(), "renamed 'cron'") {
-		t.Fatalf("old watch: key: err = %v, want a rename hint", err)
+	if err == nil || !strings.Contains(err.Error(), "saw 'watch', expected 'cron'") {
+		t.Fatalf("watch: key: err = %v, want \"saw 'watch', expected 'cron'\"", err)
 	}
 	spec, err := ParseDashboardYAML("tiles:\n  - kind: counter\n    cron: errs\n")
 	if err != nil {

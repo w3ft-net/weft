@@ -207,7 +207,7 @@ func friendlyYAMLError(err error) error {
 	typeName = strings.TrimSpace(typeName)
 
 	if typeName == "DashboardTile" && field == "watch" {
-		return fmt.Errorf("'watch' was renamed 'cron': write `cron: <name>` — run `man dashboard` for the YAML grammar")
+		return fmt.Errorf("saw 'watch', expected 'cron': write `cron: <name>` — run `man dashboard` for the YAML grammar")
 	}
 	valid := knownKeys[typeName]
 	if len(valid) == 0 {
