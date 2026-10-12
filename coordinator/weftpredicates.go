@@ -195,20 +195,17 @@ func predicateAbsent(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writ
 			if !ok {
 				return 2
 			}
-			n, err := wf.Count(args[0], window)
+			absent, err := wf.Absent(args[0], window)
 			if err != nil {
-				// Count errors mean we couldn't read history — treat
-				// as "absent unknown" → false, mirroring how `alert
-				// absent` skips when it can't read.
-				return 1
+				return 1 // couldn't read history: can't tell, don't fire
 			}
-			return boolExit(n == 0)
+			return boolExit(absent)
 		}
-		s, err := wf.Latest(args[0])
+		absent, err := wf.Absent(args[0], 0)
 		if err != nil {
-			return boolExit(true) // no result row → absent
+			return 1
 		}
-		return boolExit(s == "")
+		return boolExit(absent)
 	}
 }
 

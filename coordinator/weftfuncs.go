@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	luapkg "github.com/graybeardcorp/warp/pkg/lua"
 	"github.com/graybeardcorp/weft/store"
 	lua "github.com/yuin/gopher-lua"
+	"gorm.io/gorm"
 )
 
 // maxAggDuration is the cap for true aggregates (avg, max, min, sum,
@@ -57,6 +59,34 @@ func (w *WeftFuncs) Latest(watchName string) (string, error) {
 		return "", fmt.Errorf("weft::latest: watch %q: %w", watchName, err)
 	}
 	return strings.TrimSpace(r.Stdout), nil
+}
+
+// Absent reports whether watchName has no result: within the last window
+// when window > 0, otherwise at all (no result, or an empty latest one). A
+// cron that doesn't exist and one that has never run are both absent, so a
+// typo'd or deleted canary fires its dead-man's switch loudly instead of
+// staying silent. An error means history couldn't be read (or the window is
+// invalid or over the cap): that is "can't tell", never "absent", so a bad
+// argument or a database hiccup can't page anyone.
+func (w *WeftFuncs) Absent(watchName string, window time.Duration) (bool, error) {
+	if window > 0 {
+		n, err := w.Count(watchName, window)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return n == 0, nil
+	}
+	s, err := w.Latest(watchName)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return s == "", nil
 }
 
 // Previous returns the trimmed stdout of the second-most-recent
@@ -415,6 +445,7 @@ type weftQueryFuncs interface {
 	Stddev(name string, dur time.Duration) (float64, error)
 	First(name string, dur time.Duration) (float64, error)
 	Count(name string, dur time.Duration) (float64, error)
+	Absent(name string, window time.Duration) (bool, error)
 	Percentile(name string, dur time.Duration, p float64) (float64, error)
 	Delta(name string, dur time.Duration) (float64, error)
 	Slope(name string, dur time.Duration) (float64, error)
@@ -632,20 +663,12 @@ func registerWeftLuaPredicates(L *lua.LState, mod *lua.LTable, w weftQueryFuncs)
 				L.Push(lua.LFalse)
 				return 1
 			}
-			n, err := w.Count(name, dur)
-			if err != nil {
-				L.Push(lua.LFalse)
-				return 1
-			}
-			L.Push(lua.LBool(n == 0))
+			absent, err := w.Absent(name, dur)
+			L.Push(lua.LBool(err == nil && absent))
 			return 1
 		}
-		s, err := w.Latest(name)
-		if err != nil {
-			L.Push(lua.LTrue)
-			return 1
-		}
-		L.Push(lua.LBool(s == ""))
+		absent, err := w.Absent(name, 0)
+		L.Push(lua.LBool(err == nil && absent))
 		return 1
 	}))
 

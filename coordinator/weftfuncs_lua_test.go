@@ -96,6 +96,12 @@ func (m *mockWeftFuncs) First(name string, _ time.Duration) (float64, error) {
 func (m *mockWeftFuncs) Count(name string, _ time.Duration) (float64, error) {
 	return float64(len(m.values(name))), nil
 }
+func (m *mockWeftFuncs) Absent(name string, window time.Duration) (bool, error) {
+	if window > 0 {
+		return len(m.values(name)) == 0, nil
+	}
+	return m.latestVal[name] == "", nil
+}
 func (m *mockWeftFuncs) Percentile(name string, _ time.Duration, p float64) (float64, error) {
 	vals := append([]float64(nil), m.values(name)...)
 	if len(vals) == 0 {

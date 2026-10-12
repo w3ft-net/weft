@@ -91,13 +91,14 @@ In Lua the return is a plain bool, composable with `and` `or` `not`.
 On absent data, non-numeric values, or cold-history conditions,
 predicates return **false** rather than erroring — "we can't say
 yes, so it doesn't fire" matches how the `alert` builtin behaves
-on the same conditions.
+on the same conditions. The exception is `is_absent`, which exists to
+fire when there is no data.
 
 | Bash | Lua | Fires when |
 |---|---|---|
 | `weft::is_above <w> <thr> [<dur> [--average]]` | `weft.is_above(w, thr, [dur, [avg]])` | latest > thr (or min over dur > thr, or avg > thr with `--average`) |
 | `weft::is_below <w> <thr> [<dur> [--average]]` | `weft.is_below(w, thr, [dur, [avg]])` | latest < thr (or max over dur < thr, or avg < thr with `--average`) |
-| `weft::is_absent <w> [<dur>]` | `weft.is_absent(w, [dur])` | latest is empty (or no result landed in dur) |
+| `weft::is_absent <w> [<dur>]` | `weft.is_absent(w, [dur])` | the cron has no result: it doesn't exist, has never run, or its latest output is empty (with `dur`: no result landed in the last `dur`). A bad `dur` or an unreadable history doesn't fire |
 | `weft::has_changed <w>` | `weft.has_changed(w)` | latest ≠ previous tick |
 | `weft::is_rising <w> [<pct>] [<dur>]` | `weft.is_rising(w, [pct], [dur])` | (latest − baseline)/baseline ≥ pct% (baseline = prev tick, or window avg if dur given) |
 | `weft::is_falling <w> [<pct>] [<dur>]` | `weft.is_falling(w, [pct], [dur])` | (baseline − latest)/baseline ≥ pct% |
