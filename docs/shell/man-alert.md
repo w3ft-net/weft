@@ -40,6 +40,12 @@ unchanged. When it is met, the alert message is written instead.
 `alert` must be the last stage of its pipeline, and the last (or only)
 command of a script.
 
+If the pipeline ahead of `alert` fails (an unknown source, a bad stage),
+the alert is not evaluated: the shell shows the error, and a cron run is
+recorded with status `error` and opens no incident. Empty output from a
+pipeline that ran fine (a `grep` with no match) is still empty input, and
+`absent` fires on it.
+
 In a cron (`/cron.d/`), incidents are deduplicated on
 (cron, condition). Subsequent ticks during an open incident
 update it but don't re-page. When the condition clears, the

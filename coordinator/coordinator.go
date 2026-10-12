@@ -976,6 +976,13 @@ func (c *Coordinator) execute(ctx context.Context, pipeline string, tr TimeRange
 	if drainErr != nil {
 		return nil, drainErr
 	}
+	// Stderr from the pipeline ahead of the alert means it failed (an
+	// unknown source, a bad stage), and its empty stdout is not data:
+	// `alert absent` would page on a broken query. Don't evaluate; the
+	// error reaches the caller, and a cron run records status "error".
+	if drained.Stderr != "" {
+		return nil, fmt.Errorf("alert not evaluated, upstream failed: %s", strings.TrimSpace(drained.Stderr))
+	}
 	if alertCtx == nil {
 		alertCtx = &AlertContext{
 			Store:       c.Store,
