@@ -760,6 +760,24 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The tour's last step asks the user to pick their own org in the
+	// selector. Choosing one is the graduation: remove Loom here, on the
+	// first request scoped elsewhere, rather than trusting the browser.
+	if user.OnboardingStep == "graduate" && session.ActiveCustomerName != LoomCustomerSlug {
+		if advanced, err := s.store.AdvanceOnboardingStep(user.ID, "graduate", "done"); err != nil {
+			log.Printf("onboarding: graduate %s on org switch: %v", user.ID, err)
+		} else if advanced {
+			if err := s.graduateOnboarding(user.ID); err != nil {
+				log.Printf("onboarding: graduate %s: %v", user.ID, err)
+			}
+			// graduateOnboarding pins the home org; the user chose this one.
+			_ = s.store.UpdateUserLastActiveOrg(user.ID, session.ActiveOrgID)
+			if fresh, err := s.store.GetUserByID(user.ID); err == nil {
+				user = fresh
+			}
+		}
+	}
+
 	json.NewEncoder(w).Encode(s.userResponse(user, session.ActiveOrgID, session.ActiveCustomerName))
 }
 

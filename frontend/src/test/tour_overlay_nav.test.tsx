@@ -82,14 +82,12 @@ describe('TourOverlay: panel steps and the final step', () => {
     expect(screen.queryByTestId('tour-overlay-start-button')).toBeNull()
   })
 
-  it('the graduate step waits for a click before leaving the tour', async () => {
+  it('the graduate step highlights the org selector and has no exit button of its own', () => {
     authStep.current = 'graduate'
-    const removeItem = vi.fn()
-    vi.stubGlobal('localStorage', { removeItem })
     render(<MemoryRouter initialEntries={['/shell']}><TourOverlay /></MemoryRouter>)
+    expect(document.body.dataset.tourHighlight).toBe('sidebar-org-select')
+    expect(screen.getByTestId('tour-overlay-copy').textContent).toContain('org selector')
+    expect(screen.queryByTestId('tour-overlay-finish-button')).toBeNull()
     expect(advanceOnboarding).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByTestId('tour-overlay-finish-button'))
-    await waitFor(() => expect(advanceOnboarding).toHaveBeenCalledWith('graduate'))
-    await waitFor(() => expect(loc.assign).toHaveBeenCalledWith('/dashboards'))
   })
 })

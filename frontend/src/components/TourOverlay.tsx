@@ -45,10 +45,10 @@ interface PanelStep {
 
 // GRADUATE_STEP follows the last shell lesson. Finishing the lesson
 // must not eject the user mid-shell, so the tour parks here until they
-// choose to leave.
+// pick another org.
 const GRADUATE_STEP = 'graduate'
 const GRADUATE_COPY =
-  "That's a wrap! When you finish the tour, you'll leave Loom and land in your own org, where you can set up your first namespace. Feel free to poke around Loom's logs and setup before you blaze your own trail."
+  "That's a wrap! Pick your own org in the highlighted org selector to leave Loom and set up your first namespace. Feel free to poke around Loom's logs and setup before you blaze your own trail."
 
 const PANEL_STEPS: PanelStep[] = [
   {
@@ -124,12 +124,14 @@ export default function TourOverlay() {
       delete document.body.dataset.tourHighlight
       return
     }
-    if (isShell && SHELL_HIGHLIGHT_TARGETS[step]) {
+    if (isGraduate) {
+      document.body.dataset.tourHighlight = 'sidebar-org-select'
+    } else if (isShell && SHELL_HIGHLIGHT_TARGETS[step]) {
       document.body.dataset.tourHighlight = SHELL_HIGHLIGHT_TARGETS[step]
     } else {
       delete document.body.dataset.tourHighlight
     }
-  }, [step, dismissed, inLoom, isShell])
+  }, [step, dismissed, inLoom, isShell, isGraduate])
 
   if (!step || dismissed || !inLoom) return null
   if (!panel && !isShell && !isGraduate) return null
@@ -170,22 +172,10 @@ export default function TourOverlay() {
       }
     }
   } else if (isGraduate) {
+    // No button: choosing an org in the highlighted selector is the exit,
+    // and the server removes Loom when it sees the switch.
     copy = GRADUATE_COPY
     progress = 'tour: done'
-    primaryAction = {
-      label: 'finish the tour',
-      testId: 'tour-overlay-finish-button',
-      onClick: () => {
-        advanceOnboarding(step)
-          .then(() => {
-            // Graduation revoked Loom; drop the stored org so /me
-            // doesn't 403, and land on the home org.
-            localStorage.removeItem('weft_org')
-            window.location.assign('/dashboards')
-          })
-          .catch(e => console.error('graduate:', e))
-      },
-    }
   } else {
     // Shell phase. Copy comes from the server; the user advances by
     // running the lesson's Action verbatim (we pre-inject it into the
