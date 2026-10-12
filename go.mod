@@ -21,7 +21,7 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
 	github.com/graybeardcorp/saaskit v0.3.3
-	github.com/graybeardcorp/warp v0.2.45
+	github.com/graybeardcorp/warp v0.2.46
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/leodido/go-syslog/v4 v4.6.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
