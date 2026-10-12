@@ -447,3 +447,19 @@ func oldestFirst(s []string) []string {
 	}
 	return s
 }
+
+// A commit message belongs to the version it was written for; the next save
+// must not inherit it.
+func TestHistory_MessageDoesNotCarryToTheNextSave(t *testing.T) {
+	f := newFixture(t)
+	r := f.repo(f.alice, "/")
+	f.saveBin(t, f.alice, "scan", "echo 1")
+	git(t, r, "commit", "--amend", "-m", "first version")
+	f.saveBin(t, f.alice, "scan", "echo 2")
+
+	got := oldestFirst(subjects(git(t, f.repo(f.alice, "/"), "log", "--oneline", "--no-decorate")))
+	want := []string{"first version", "Update bin/scan"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("log = %v, want %v", got, want)
+	}
+}
