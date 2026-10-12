@@ -14,85 +14,102 @@ const connectRender = {
     { level: 3, id: "troubleshooting", text: "Troubleshooting" },
   ],
   html: `<p>If your app runs on <a href="https://render.com">Render</a>, weft accepts logs directly
-from Render's built-in <strong>Log Streams</strong> feature — no agent, no AWS account, no
-schema file. Render's only off-platform log path is syslog over TLS, not
-HTTP, so instead of a drain URL (like Heroku) you point Render at a
-hostname:port and it opens a long-lived TLS connection.</p>
-<p>You don't run weftd on Render. Render services can't sidecar a long-lived
-agent process, and Render already aggregates every service's output into its
-own Log Streams pipeline — the same one Datadog, Better Stack, and other
-observability vendors plug into.</p>
+from Render's built-in <strong>Log Streams</strong> feature. It needs no agent, no AWS
+account and no schema file. Render's off-platform log path is syslog over TLS,
+so you point Render at a hostname:port and it opens a long-lived TLS
+connection.</p>
+<p>weftd is not part of a Render setup. Render services cannot run a sidecar
+agent, and Render aggregates every service's output into its own Log Streams
+pipeline, the same one Datadog, Better Stack, and other observability vendors
+use.</p>
 <h3 id="1-mint-a-render-scoped-token">1. Mint a Render-scoped token</h3>
-<p>Minting a token <strong>for Render</strong> (rather than a plain namespace token) also
-reveals the endpoint hostname you'll paste into Render's log-stream config.</p>
+<p>Minting a token <strong>for Render</strong> also reveals the endpoint hostname you'll paste
+into Render's log-stream config.</p>
 <p>From the dashboard: <strong>Namespaces → your namespace → Create token</strong>, choose
-<strong>Render</strong> in the <strong>For</strong> dropdown, and click <strong>Create token</strong>. Both the
-token and the endpoint stay visible in that namespace's token table
-afterward, so you can find the endpoint again later without re-minting.</p>
+<strong>Render</strong> in the <strong>For</strong> dropdown, and click <strong>Create token</strong>. The token is
+shown only once, so copy it now. The endpoint is the same for every Render
+token, so you can look it up again later.</p>
 <p>From the CLI:</p>
 <pre><code>weft token create --namespace myco --label render --for render
 Token created: wft_a1b2c3d4e5f6...
+Label: render
 For:   render
 Endpoint: render.syslog.w3ft.net:6514
 Paste this token and endpoint into that platform's log-stream config.
 </code></pre>
-<p>Copy the token immediately — it's only shown once.</p>
+<p>Copy the token immediately. It is shown only once.</p>
 <h3 id="2-add-the-log-stream-in-render">2. Add the log stream in Render</h3>
 <p>In the Render dashboard, open your service and go to <strong>Settings → Log
 Streams</strong>, add a stream, and configure a generic/custom syslog destination:</p>
 <ul>
-<li><strong>Endpoint</strong> — the <code>&lt;producer&gt;.syslog.w3ft.net:6514</code> string from step 1</li>
+<li><strong>Endpoint</strong> — the <code>render.syslog.w3ft.net:6514</code> string from step 1</li>
 <li><strong>Token</strong> — the <code>wft_...</code> token from step 1</li>
 </ul>
-<p>Render only recognizes a short list of named providers (Datadog, Loggly,
-Better Stack, …) by matching the endpoint hostname; anything else — including
-weft's endpoint — falls back to Render's generic syslog behavior: plain TLS
+<p>Render recognizes a short list of named providers (Datadog, Loggly,
+Better Stack, …) by matching the endpoint hostname. Any other endpoint,
+including weft's, uses Render's generic syslog behavior: plain TLS
 syslog with the token prepended as a literal string before every line.
-That's expected — it's the same mechanism Render uses for New Relic, and
-it's why the token travels inside the TLS session instead of in a header.</p>
-<p>Render starts streaming within a few seconds. Confirm rows are landing:</p>
+Render uses the same mechanism for New Relic. The token travels inside the TLS
+session.</p>
+<p>Render starts streaming within a few seconds. To confirm rows are landing:</p>
 <pre><code>weft&gt; ls /log/myco/myservice
-web.log
 cron.log
+web.log
 
 weft&gt; tail /log/myco/myservice/web.log
 </code></pre>
 <h3 id="how-render-services-map-to-pseudofiles">How Render services map to pseudofiles</h3>
 <p>Render's service slug becomes the weft service name (see <strong>Namespaces</strong>
 for how every producer chooses its service name); the process type
-(<code>web</code>, <code>cron</code>, and an undocumented <code>bld</code> for build-step output) becomes
+(<code>web</code>, <code>cron</code>, and <code>bld</code> for build-step output) becomes
 <code>kind</code>; the trailing instance id is stamped on <code>instance</code> for per-instance
-filtering without splitting the pseudofile:</p>
-<p>| Render source                       | weft pseudofile                                  |
-|---|---|
-| <code>myservice</code> web instance <code>web-9nk6q</code> | <code>/log/&lt;ns&gt;/myservice/web.log</code> (<code>instance=9nk6q</code>) |
-| <code>myservice</code> cron job <code>cron-stqq5</code>    | <code>/log/&lt;ns&gt;/myservice/cron.log</code>                   |
-| <code>myservice</code> build output <code>bld-...</code>   | <code>/log/&lt;ns&gt;/myservice/bld.log</code>                    |</p>
-<p>If your token has an env bound, the path picks up that segment:
+filtering within one pseudofile:</p>
+<table>
+<thead>
+<tr>
+<th>Render source</th>
+<th>weft pseudofile</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>myservice</code> web instance <code>web-9nk6q</code></td>
+<td><code>/log/&lt;ns&gt;/myservice/web.log</code> (<code>instance=9nk6q</code>)</td>
+</tr>
+<tr>
+<td><code>myservice</code> cron job <code>cron-stqq5</code></td>
+<td><code>/log/&lt;ns&gt;/myservice/cron.log</code></td>
+</tr>
+<tr>
+<td><code>myservice</code> build output <code>bld-...</code></td>
+<td><code>/log/&lt;ns&gt;/myservice/bld.log</code></td>
+</tr>
+</tbody>
+</table>
+<p>The tokens in step 1 carry no env, so the paths above have no env
+segment. If your token has an env bound, the path picks up that segment:
 <code>/log/myco/prod/myservice/web.log</code>. See <strong>Namespaces</strong> for the layout rules.</p>
 <h3 id="rate-limits">Rate limits</h3>
-<p>Ingest is capped per token, not per connection — a service that reconnects
-doesn't reset its budget. The default sustained rate is well above any real
-Render service's log volume; if you're sustained above it, rows are delayed
-(never dropped) until the budget refills. Contact us if you need a higher
-sustained rate.</p>
+<p>Ingest is capped per token. A service that reconnects keeps the same budget.
+Above the default sustained rate, rows are delayed (never dropped) until the
+budget refills. Contact us if you need a higher sustained rate.</p>
 <h3 id="troubleshooting">Troubleshooting</h3>
 <ul>
 <li><strong>No rows appearing</strong> — check the log stream's status in Render's
 dashboard; a failing status there usually means the token or endpoint
-string was mistyped. Reissue the token from <strong>Tokens</strong> if you're unsure
-it's still valid.</li>
-<li><strong>Rows land under an unexpected service name</strong> — weft trusts Render's
-service slug as-is. If two Render services legitimately share a name
-(separate Render teams sharing one weft namespace), mint separate tokens
-in separate namespaces to keep them apart.</li>
-<li><strong>Build logs (<code>bld</code>) missing</strong> — build output only streams while a build is
-actually running; trigger a deploy to see it.</li>
-<li><strong>Don't want to paste a bearer token into Render's UI directly</strong> — run
-<a href="https://vector.dev">Vector</a> yourself (as a Render private service, or on
-your own host) to receive the syslog stream and re-forward it to weft's
-HTTP ingest endpoint instead, keeping the weft token off Render's servers
-entirely. Ask us for the Vector config.</li>
+string was mistyped. Revoke and recreate the token from <strong>Tokens</strong> if you're
+unsure it's still valid.</li>
+<li><strong>Rows land under an unexpected service name</strong> — weft uses Render's
+service slug as-is. If two Render services share a name (separate Render
+teams sharing one weft namespace), mint separate tokens in separate
+namespaces to keep them apart.</li>
+<li><strong>Build logs (<code>bld</code>) missing</strong> — build output streams while a build is
+running. Trigger a deploy to see it.</li>
+<li><strong>To keep the bearer token out of Render's UI</strong> — run
+<a href="https://vector.dev">Vector</a> (as a Render private service, or on your own
+host) to receive the syslog stream and re-forward it to weft's HTTP ingest
+endpoint. The weft token then stays off Render's servers. Ask us for the
+Vector config.</li>
 </ul>
 `,
 } as const;

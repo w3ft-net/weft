@@ -9,9 +9,9 @@ const sharing = {
   headings: [
     { level: 2, id: "sharing-a-script-with-a-teammate", text: "Sharing a script with a teammate" },
     { level: 2, id: "what-the-link-encodes", text: "What the link encodes" },
-    { level: 2, id: "why-this-and-not-copy-paste", text: "Why this and not copy-paste" },
+    { level: 2, id: "why-share-a-script-link", text: "Why share a script link" },
     { level: 2, id: "examples", text: "Examples" },
-    { level: 2, id: "whats-not-shared", text: "What's not shared" },
+    { level: 2, id: "access", text: "Access" },
   ],
   html: `<h2 id="sharing-a-script-with-a-teammate">Sharing a script with a teammate</h2>
 <p>When a <code>/bin/</code> script is worth showing to someone else — a runbook
@@ -21,40 +21,37 @@ your system clipboard.</p>
 <pre><code>clipboard /bin/error-rate
 copied: https://w3ft.net/s/k3Fz9aQ2xB
 </code></pre>
+<p>The script must already exist in <code>/bin/</code>, and the link's host depends on
+your deployment.</p>
 <p>Paste the URL anywhere — Slack, an incident timeline, a runbook —
 and a signed-in teammate who clicks it lands in the web shell with
 the script invocation pre-filled. They review, hit Enter, and see
 the same output you saw.</p>
 <h2 id="what-the-link-encodes">What the link encodes</h2>
-<p>The URL is just a short name. Weft stores three things behind it,
+<p>The URL is a short name. Weft stores three things behind it,
 and sharing the same script, range and args again gives the same link:</p>
 <ul>
 <li><strong>the script path</strong>, always <code>/bin/&lt;name&gt;</code>.</li>
 <li><strong>the time window.</strong> Defaults to your shell's current range (the
 one <code>range</code> shows). Override with <code>--range=&lt;spec&gt;</code>.</li>
 <li><strong>the args</strong>, anything you typed after <code>--</code> at the <code>clipboard</code>
-invocation. Joined with spaces — there is no preservation of
-original shell quoting.</li>
+invocation. Put <code>--range</code> before <code>--</code>; anything after <code>--</code> is passed to
+the script as-is. Args are joined with spaces; original shell quoting is
+not preserved.</li>
 </ul>
-<p>The recipient lands at the script's HEAD version. Pinning to a
-specific past version isn't supported today; if a teammate needs to
+<p>A link always opens the script's current version. If a teammate needs to
 see how the script behaved before someone edited it, they pair the
 link with <code>git log -- /bin/&lt;name&gt;</code> to read the history.</p>
-<h2 id="why-this-and-not-copy-paste">Why this and not copy-paste</h2>
-<p>Pasting a pipeline directly into Slack loses the time window, often
-breaks single-quote rich content like <code>awk</code> and <code>jq</code> programs, and
-makes parameterised scripts hard to share. A <code>/bin/</code> script with a
-deep link sidesteps all three: the script body lives in your org's
-<code>/bin/</code>, version-tracked by <code>git</code>, with the link carrying only the
-runtime context (range + args), kept behind a short link.</p>
-<p>If the thing you want to share isn't a <code>/bin/</code> script yet, save it
-first:</p>
+<h2 id="why-share-a-script-link">Why share a script link</h2>
+<p>A <code>/bin/</code> script with a deep link keeps the time window, keeps quoted
+<code>awk</code> and <code>jq</code> programs intact, and handles parameterised scripts. The script
+body lives in your org's <code>/bin/</code>, version-tracked by <code>git</code>, and the link
+carries the runtime context (range + args).</p>
+<p>To share a pipeline that is not yet a <code>/bin/</code> script, save it first:</p>
 <pre><code>cat - &gt; /bin/check-foo
 # paste the pipeline, then ctrl-d
 clipboard /bin/check-foo
 </code></pre>
-<p>A few seconds of friction to name the artifact pays back every time
-it gets re-used.</p>
 <h2 id="examples">Examples</h2>
 <pre><code>clipboard /bin/error-rate
                         current range, no args
@@ -69,13 +66,12 @@ clipboard /bin/check --range=yesterday..today -- prod
                         yesterday's window, one positional arg
 </code></pre>
 <p>See <code>man clipboard</code> for the full command reference.</p>
-<h2 id="whats-not-shared">What's not shared</h2>
-<p>The link does not grant access, and it only opens for members of
-your org — anyone else, signed in or not, gets &quot;that link doesn't
-exist&quot;. The recipient still has to be signed in to the same org and have the namespace permissions they'd
-normally need to run the script. Pasting a link into a public
-channel is safe in the sense that it leaks no log data — only the
-script invocation an authorized teammate could already construct.</p>
+<h2 id="access">Access</h2>
+<p>The link grants no access. It opens for signed-in members of
+your org; anyone else gets &quot;that link doesn't exist&quot;. Recipients also
+need the namespace permissions required to run the script. A link pasted
+into a public channel leaks no log data. It carries only a script invocation
+an authorized teammate could already construct.</p>
 `,
 } as const;
 

@@ -9,6 +9,8 @@ import (
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	east "github.com/yuin/goldmark/extension/ast"
 	gmtext "github.com/yuin/goldmark/text"
 )
 
@@ -25,8 +27,7 @@ const (
 // that the in-shell `less` pager renders. The document's H1 is skipped
 // (the title is already in the help index / banner).
 func renderShell(body []byte, banner string) string {
-	parser := goldmark.DefaultParser()
-	root := parser.Parse(gmtext.NewReader(body))
+	root := goldmark.New(goldmark.WithExtensions(extension.Table)).Parser().Parse(gmtext.NewReader(body))
 
 	r := shellRenderer{src: body}
 	if banner != "" {
@@ -85,6 +86,8 @@ func (r *shellRenderer) renderBlock(n ast.Node) {
 		r.renderList(n)
 	case *ast.Blockquote:
 		r.renderBlockquote(n)
+	case *east.Table:
+		r.renderTable(n)
 	case *ast.ThematicBreak:
 		r.buf.WriteString("\n")
 	default:
@@ -272,7 +275,11 @@ func walkInline(n ast.Node, src []byte, b *strings.Builder) {
 			walkInline(c, src, b)
 		}
 	case *ast.Link:
-		txt := collectText(node, src)
+		var label strings.Builder
+		for c := node.FirstChild(); c != nil; c = c.NextSibling() {
+			walkInline(c, src, &label)
+		}
+		txt := label.String()
 		dest := string(node.Destination)
 		if txt == "" || txt == dest {
 			b.WriteString(dest)
@@ -333,4 +340,127 @@ func writeShell(path string, docs []*doc) error {
 	buf.WriteString("}\n")
 
 	return os.WriteFile(path, buf.Bytes(), 0o644)
+}
+
+// tableWidth is the column budget a rendered table must fit inside:
+// an 80-column terminal less the two-space page margin.
+const tableWidth = 78
+
+// renderTable lays a GFM table out as aligned columns: dim header, a
+// dashed rule, then the rows. When the natural width overflows the
+// terminal the widest column is shrunk and its cells word-wrapped.
+func (r *shellRenderer) renderTable(t *east.Table) {
+	var rows [][]string
+	headerRows := 0
+	for row := t.FirstChild(); row != nil; row = row.NextSibling() {
+		var cells []string
+		for c := row.FirstChild(); c != nil; c = c.NextSibling() {
+			cells = append(cells, strings.Join(strings.Fields(collectText(c, r.src)), " "))
+		}
+		if _, ok := row.(*east.TableHeader); ok {
+			headerRows = len(rows) + 1
+		}
+		rows = append(rows, cells)
+	}
+	cols := 0
+	for _, row := range rows {
+		cols = max(cols, len(row))
+	}
+	if cols == 0 {
+		return
+	}
+	widths := make([]int, cols)
+	for _, row := range rows {
+		for i, c := range row {
+			widths[i] = max(widths[i], len(c))
+		}
+	}
+	const gap = 2
+	budget := tableWidth - r.indent - gap*(cols-1)
+	for sum(widths) > budget {
+		w := 0
+		for i := range widths {
+			if widths[i] > widths[w] {
+				w = i
+			}
+		}
+		if widths[w] <= 8 {
+			break
+		}
+		widths[w]--
+	}
+
+	pad := strings.Repeat(" ", r.indent+2)
+	emit := func(row []string, dim bool) {
+		wrapped := make([][]string, cols)
+		height := 1
+		for i := range wrapped {
+			cell := ""
+			if i < len(row) {
+				cell = row[i]
+			}
+			wrapped[i] = wrapWords(cell, widths[i])
+			height = max(height, len(wrapped[i]))
+		}
+		for l := 0; l < height; l++ {
+			var line strings.Builder
+			for i := range wrapped {
+				part := ""
+				if l < len(wrapped[i]) {
+					part = wrapped[i][l]
+				}
+				if i < cols-1 {
+					part += strings.Repeat(" ", max(widths[i]-len(part), 0)+gap)
+				}
+				line.WriteString(part)
+			}
+			r.buf.WriteString(pad)
+			if dim {
+				r.buf.WriteString(ansiDim)
+			}
+			r.buf.WriteString(strings.TrimRight(line.String(), " "))
+			if dim {
+				r.buf.WriteString(ansiReset)
+			}
+			r.buf.WriteString("\n")
+		}
+	}
+	for i, row := range rows {
+		emit(row, i < headerRows)
+		if i == headerRows-1 {
+			rule := make([]string, cols)
+			for c := range rule {
+				rule[c] = strings.Repeat("-", widths[c])
+			}
+			emit(rule, true)
+		}
+	}
+	r.buf.WriteString("\n")
+}
+
+func sum(xs []int) int {
+	n := 0
+	for _, x := range xs {
+		n += x
+	}
+	return n
+}
+
+// wrapWords greedily wraps s to width columns; a single word longer
+// than width is left whole rather than split.
+func wrapWords(s string, width int) []string {
+	var lines []string
+	cur := ""
+	for _, w := range strings.Fields(s) {
+		switch {
+		case cur == "":
+			cur = w
+		case len(cur)+1+len(w) <= width:
+			cur += " " + w
+		default:
+			lines = append(lines, cur)
+			cur = w
+		}
+	}
+	return append(lines, cur)
 }

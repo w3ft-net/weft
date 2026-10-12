@@ -17,8 +17,8 @@ const weftFuncs = {
     { level: 2, id: "stdin-comparators", text: "Stdin comparators" },
     { level: 2, id: "see-also", text: "See also" },
   ],
-  html: `<p>The <code>weft::*</code> family is the surface for reading and reasoning about
-your own cron history from inside a pipeline. There are three
+  html: `<p>The <code>weft::*</code> family reads and reasons about your own cron history
+from inside a pipeline. There are three
 shapes:</p>
 <ul>
 <li><strong>Value funcs</strong> return the most recent value, an aggregate over a
@@ -28,48 +28,140 @@ window, or an anchor like the slope between two endpoints.</li>
 multiple crons.</li>
 <li><strong>Stdin comparators</strong> turn a piped value into a boolean.</li>
 </ul>
-<p>The same set is exposed in two host languages:</p>
-<p>| Surface | Syntax | Example |
-|---|---|---|
-| Bash builtin | <code>weft::name args</code> | <code>weft::avg error-rate 1h</code> |
-| Lua function | <code>weft.name(args)</code> | <code>weft.avg(&quot;error-rate&quot;, &quot;1h&quot;)</code> |</p>
+<p>The same set is available in two host languages:</p>
+<table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>Syntax</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bash builtin</td>
+<td><code>weft::name args</code></td>
+<td><code>weft::avg error-rate 1h</code></td>
+</tr>
+<tr>
+<td>Lua function</td>
+<td><code>weft.name(args)</code></td>
+<td><code>weft.avg(&quot;error-rate&quot;, &quot;1h&quot;)</code></td>
+</tr>
+</tbody>
+</table>
 <p>Bash uses <code>::</code> as the namespace separator; Lua uses <code>.</code> for table
-access. The argument shapes are otherwise identical, and the same Go
-implementation backs both — there's no drift to worry about.</p>
+access. The arguments are the same in both.</p>
 <p>For composing predicates into composite alerts, see
 <strong>Alerting strategies</strong>.</p>
 <h2 id="value-functions">Value functions</h2>
 <p>Each takes a cron name, returns a value, and (with the exception of
-<code>weft::latest</code> and <code>weft::previous</code>) a duration window. Durations use
-Go syntax: <code>30s</code>, <code>5m</code>, <code>1h</code>, <code>6h</code>, <code>24h</code>.</p>
-<p>| Bash | Lua | Returns | Notes |
-|---|---|---|---|
-| <code>weft::latest &lt;w&gt;</code> | <code>weft.latest(w)</code> | string | Trimmed stdout of the most recent run |
-| <code>weft::previous &lt;w&gt;</code> | <code>weft.previous(w)</code> | string | Stdout of the second-most-recent run (<code>&quot;&quot;</code> if &lt;2 exist) |
-| <code>weft::avg &lt;w&gt; &lt;dur&gt;</code> | <code>weft.avg(w, dur)</code> | number | Mean of numeric results in window |
-| <code>weft::min &lt;w&gt; &lt;dur&gt;</code> | <code>weft.min(w, dur)</code> | number | Smallest numeric result in window |
-| <code>weft::max &lt;w&gt; &lt;dur&gt;</code> | <code>weft.max(w, dur)</code> | number | Largest numeric result in window |
-| <code>weft::sum &lt;w&gt; &lt;dur&gt;</code> | <code>weft.sum(w, dur)</code> | number | Sum of numeric results in window |
-| <code>weft::stddev &lt;w&gt; &lt;dur&gt;</code> | <code>weft.stddev(w, dur)</code> | number | Population stddev; needs ≥2 results |
-| <code>weft::count &lt;w&gt; &lt;dur&gt;</code> | <code>weft.count(w, dur)</code> | number | Count of runs in window (numeric or not) |
-| <code>weft::percentile &lt;w&gt; &lt;dur&gt; &lt;p&gt;</code> | <code>weft.percentile(w, dur, p)</code> | number | Linearly-interpolated p-th percentile, p ∈ [0,100] |
-| <code>weft::first &lt;w&gt; &lt;dur&gt;</code> | <code>weft.first(w, dur)</code> | number | Oldest numeric value still in window |
-| <code>weft::delta &lt;w&gt; &lt;dur&gt;</code> | <code>weft.delta(w, dur)</code> | number | <code>latest − first</code> over window |
-| <code>weft::slope &lt;w&gt; &lt;dur&gt;</code> | <code>weft.slope(w, dur)</code> | number | <code>delta / window_seconds</code> |
-| <code>weft::rate &lt;w&gt; &lt;dur&gt;</code> | <code>weft.rate(w, dur)</code> | number | <code>sum / window_seconds</code> |</p>
+<code>weft::latest</code> and <code>weft::previous</code>) a duration window. Durations are a
+number and a unit: <code>30s</code>, <code>5m</code>, <code>1h</code>, <code>6h</code>, plus <code>d</code> for a day (24
+hours) and <code>w</code> for a week (7 days). Units combine: <code>1d12h</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Bash</th>
+<th>Lua</th>
+<th>Returns</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>weft::latest &lt;cron&gt;</code></td>
+<td><code>weft.latest(cron)</code></td>
+<td>string</td>
+<td>Trimmed stdout of the most recent run</td>
+</tr>
+<tr>
+<td><code>weft::previous &lt;cron&gt;</code></td>
+<td><code>weft.previous(cron)</code></td>
+<td>string</td>
+<td>Stdout of the second-most-recent run (<code>&quot;&quot;</code> if fewer than 2 exist)</td>
+</tr>
+<tr>
+<td><code>weft::avg &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.avg(cron, dur)</code></td>
+<td>number</td>
+<td>Mean of numeric results in window</td>
+</tr>
+<tr>
+<td><code>weft::min &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.min(cron, dur)</code></td>
+<td>number</td>
+<td>Smallest numeric result in window</td>
+</tr>
+<tr>
+<td><code>weft::max &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.max(cron, dur)</code></td>
+<td>number</td>
+<td>Largest numeric result in window</td>
+</tr>
+<tr>
+<td><code>weft::sum &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.sum(cron, dur)</code></td>
+<td>number</td>
+<td>Sum of numeric results in window</td>
+</tr>
+<tr>
+<td><code>weft::stddev &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.stddev(cron, dur)</code></td>
+<td>number</td>
+<td>Population stddev; needs ≥2 results</td>
+</tr>
+<tr>
+<td><code>weft::count &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.count(cron, dur)</code></td>
+<td>number</td>
+<td>Count of results (rows) in window, numeric or not</td>
+</tr>
+<tr>
+<td><code>weft::percentile &lt;cron&gt; &lt;dur&gt; &lt;p&gt;</code></td>
+<td><code>weft.percentile(cron, dur, p)</code></td>
+<td>number</td>
+<td>Linearly-interpolated p-th percentile, p ∈ [0,100]</td>
+</tr>
+<tr>
+<td><code>weft::first &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.first(cron, dur)</code></td>
+<td>number</td>
+<td>Oldest numeric value still in window</td>
+</tr>
+<tr>
+<td><code>weft::delta &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.delta(cron, dur)</code></td>
+<td>number</td>
+<td><code>latest − first</code> over window</td>
+</tr>
+<tr>
+<td><code>weft::slope &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.slope(cron, dur)</code></td>
+<td>number</td>
+<td><code>delta / window_seconds</code></td>
+</tr>
+<tr>
+<td><code>weft::rate &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.rate(cron, dur)</code></td>
+<td>number</td>
+<td><code>sum / window_seconds</code></td>
+</tr>
+</tbody>
+</table>
 <h3 id="caps">Caps</h3>
-<p>The window caps encode compute-cost shape, not arbitrary policy:</p>
+<p>The window caps follow compute cost:</p>
 <ul>
 <li><strong>Aggregates</strong> (<code>avg</code>, <code>min</code>, <code>max</code>, <code>sum</code>, <code>stddev</code>, <code>count</code>,
-<code>percentile</code>, <code>rate</code>) cap at <strong>24h</strong>. They touch every result in
+<code>percentile</code>, <code>rate</code>) cap at <strong>24h</strong> (<code>1d</code>). They touch every result in
 the window.</li>
 <li><strong>Endpoint funcs</strong> (<code>first</code>, <code>delta</code>, <code>slope</code>) cap at <strong>14d</strong>. They
-read O(1) anchor rows — the oldest in-window plus the latest — so
-a longer window is cheap.</li>
+read only the oldest result in the window and the latest, so a
+longer window is cheap.</li>
 <li><strong><code>latest</code> / <code>previous</code></strong> are point reads — no window.</li>
 </ul>
 <h3 id="numeric-parsing">Numeric parsing</h3>
-<p>Aggregates parse each run's stdout as a float and silently skip
+<p>Aggregates parse each run's stdout as a float and skip
 rows that don't parse. They error when nothing in the window is
 numeric (and <code>weft::stddev</code> also errors when fewer than 2 numeric
 samples exist).</p>
@@ -77,48 +169,102 @@ samples exist).</p>
 including non-numeric strings. Cast in Lua with <code>tonumber(...)</code>.</p>
 <h3 id="retention">Retention</h3>
 <p>The aggregates read whatever history your plan's retention covers;
-older runs are invisible to the helpers even if they're still on
-disk.</p>
+older runs are not visible to the helpers.</p>
 <h2 id="predicates">Predicates</h2>
 <p>Predicates return a boolean. In bash that's an exit code (0 = fire,
 non-zero = no fire), letting you compose with native <code>&amp;&amp;</code> <code>||</code> <code>!</code>.
 In Lua the return is a plain bool, composable with <code>and</code> <code>or</code> <code>not</code>.</p>
 <p>On absent data, non-numeric values, or cold-history conditions,
-predicates return <strong>false</strong> rather than erroring — &quot;we can't say
-yes, so it doesn't fire&quot; matches how the <code>alert</code> builtin behaves
-on the same conditions.</p>
-<p>| Bash | Lua | Fires when |
-|---|---|---|
-| <code>weft::is_above &lt;w&gt; &lt;thr&gt; [&lt;dur&gt; [--average]]</code> | <code>weft.is_above(w, thr, [dur, [avg]])</code> | latest &gt; thr (or min over dur &gt; thr, or avg &gt; thr with <code>--average</code>) |
-| <code>weft::is_below &lt;w&gt; &lt;thr&gt; [&lt;dur&gt; [--average]]</code> | <code>weft.is_below(w, thr, [dur, [avg]])</code> | latest &lt; thr (or max over dur &lt; thr, or avg &lt; thr with <code>--average</code>) |
-| <code>weft::is_absent &lt;w&gt; [&lt;dur&gt;]</code> | <code>weft.is_absent(w, [dur])</code> | latest is empty (or no result landed in dur) |
-| <code>weft::has_changed &lt;w&gt;</code> | <code>weft.has_changed(w)</code> | latest ≠ previous tick |
-| <code>weft::is_rising &lt;w&gt; [&lt;pct&gt;] [&lt;dur&gt;]</code> | <code>weft.is_rising(w, [pct], [dur])</code> | (latest − baseline)/baseline ≥ pct% (baseline = prev tick, or window avg if dur given) |
-| <code>weft::is_falling &lt;w&gt; [&lt;pct&gt;] [&lt;dur&gt;]</code> | <code>weft.is_falling(w, [pct], [dur])</code> | (baseline − latest)/baseline ≥ pct% |
-| <code>weft::is_outlier &lt;w&gt; &lt;n&gt; &lt;dur&gt; [--above\\|--below]</code> | <code>weft.is_outlier(w, n, dur, [dir])</code> | |latest − avg| &gt; n·stddev over dur |
-| <code>weft::is_seasonal &lt;w&gt; &lt;n&gt; &lt;period&gt; &lt;dur&gt;</code> | <code>weft.is_seasonal(w, n, period, dur)</code> | |latest − same-time-of-period avg| &gt; n·stddev |</p>
+predicates return <strong>false</strong>: when the answer is unknown, the predicate
+does not fire. The <code>alert</code> builtin behaves the same way on these
+conditions. <code>is_absent</code> fires when there is no data.</p>
+<table>
+<thead>
+<tr>
+<th>Bash</th>
+<th>Lua</th>
+<th>Fires when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>weft::is_above &lt;cron&gt; &lt;thr&gt; [&lt;dur&gt; [--average]]</code></td>
+<td><code>weft.is_above(cron, thr, [dur, [avg]])</code></td>
+<td>latest &gt; thr (or min over dur &gt; thr, or avg &gt; thr with <code>--average</code>)</td>
+</tr>
+<tr>
+<td><code>weft::is_below &lt;cron&gt; &lt;thr&gt; [&lt;dur&gt; [--average]]</code></td>
+<td><code>weft.is_below(cron, thr, [dur, [avg]])</code></td>
+<td>latest &lt; thr (or max over dur &lt; thr, or avg &lt; thr with <code>--average</code>)</td>
+</tr>
+<tr>
+<td><code>weft::is_absent &lt;cron&gt; [&lt;dur&gt;]</code></td>
+<td><code>weft.is_absent(cron, [dur])</code></td>
+<td>the cron has no result: it doesn't exist, has never run, or its latest output is empty (with <code>dur</code>: no result landed in the last <code>dur</code>). A bad or over-cap <code>dur</code> (more than 24h, <code>1d</code>) or an unreadable history doesn't fire; the bash form says why on stderr</td>
+</tr>
+<tr>
+<td><code>weft::has_changed &lt;cron&gt;</code></td>
+<td><code>weft.has_changed(cron)</code></td>
+<td>latest ≠ previous tick</td>
+</tr>
+<tr>
+<td><code>weft::is_rising &lt;cron&gt; [&lt;pct&gt; [&lt;dur&gt;]]</code></td>
+<td><code>weft.is_rising(cron, [pct, [dur]])</code></td>
+<td>(latest − baseline)/baseline ≥ pct% (baseline = prev tick, or window avg if dur given)</td>
+</tr>
+<tr>
+<td><code>weft::is_falling &lt;cron&gt; [&lt;pct&gt; [&lt;dur&gt;]]</code></td>
+<td><code>weft.is_falling(cron, [pct, [dur]])</code></td>
+<td>(baseline − latest)/baseline ≥ pct%</td>
+</tr>
+<tr>
+<td><code>weft::is_outlier &lt;cron&gt; &lt;n&gt; &lt;dur&gt; [--above|--below]</code></td>
+<td><code>weft.is_outlier(cron, n, dur, [dir])</code></td>
+<td>|latest − avg| &gt; n·stddev over dur</td>
+</tr>
+<tr>
+<td><code>weft::is_seasonal &lt;cron&gt; &lt;n&gt; &lt;period&gt; &lt;dur&gt;</code></td>
+<td><code>weft.is_seasonal(cron, n, period, dur)</code></td>
+<td>|latest − same-time-of-period avg| &gt; n·stddev</td>
+</tr>
+</tbody>
+</table>
 <h3 id="anomaly-guards">Anomaly guards</h3>
 <p><code>is_outlier</code> and <code>is_seasonal</code> both gate against zero-stddev histories:
 if the historical stddev drops below <code>0.01 · |avg|</code>, the predicate
-returns false rather than firing on any tiny departure. <code>is_seasonal</code>
+returns false. <code>is_seasonal</code>
 additionally requires at least 4 same-time samples.</p>
 <h3 id="seasonal-alignment">Seasonal alignment</h3>
 <p>For <code>is_seasonal</code>, the <code>period</code> is the recurring interval and
-<code>window</code> is how far back to sample. With <code>period=1d window=4w</code>, the
+<code>window</code> is how far back to sample. With <code>period=1d window=4d</code>, the
 predicate compares the latest value to the four values captured at
 this same hour on each of the last four days. With <code>period=1w window=8w</code>, it compares to the same hour of the same weekday over
 the last eight weeks. Period alignment uses UTC.</p>
 <h2 id="stdin-comparators">Stdin comparators</h2>
-<p>For windowed <em>value</em> comparisons — taking an aggregate's stdout and
-checking it against a threshold — pipe through one of:</p>
-<p>| Bash | Fires when |
-|---|---|
-| <code>weft::is_gt &lt;thr&gt;</code> | stdin parses as float &gt; thr |
-| <code>weft::is_lt &lt;thr&gt;</code> | stdin parses as float &lt; thr |</p>
+<p>To compare an aggregate's stdout with a threshold, pipe it through
+one of:</p>
+<table>
+<thead>
+<tr>
+<th>Bash</th>
+<th>Fires when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>weft::is_gt &lt;thr&gt;</code></td>
+<td>stdin parses as float &gt; thr</td>
+</tr>
+<tr>
+<td><code>weft::is_lt &lt;thr&gt;</code></td>
+<td>stdin parses as float &lt; thr</td>
+</tr>
+</tbody>
+</table>
 <pre><code>weft::avg error-rate 5m | weft::is_gt 50
 </code></pre>
-<p>In Lua you'd just write <code>weft.avg(&quot;error-rate&quot;, &quot;5m&quot;) &gt; 50</code> — the
-native <code>&gt;</code> / <code>&lt;</code> operators do the same job, no helper needed.</p>
+<p>In Lua, use the native <code>&gt;</code> and <code>&lt;</code> operators:
+<code>weft.avg(&quot;error-rate&quot;, &quot;5m&quot;) &gt; 50</code>.</p>
 <h2 id="see-also">See also</h2>
 <ul>
 <li><strong>Crons</strong> — how cron results get persisted and which <code>weft::*</code>

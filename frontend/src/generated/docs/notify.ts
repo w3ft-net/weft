@@ -7,12 +7,14 @@ const notify = {
   category: "alert-visualize",
   order: 54,
   headings: [
+    { level: 2, id: "define-a-notification-alias", text: "Define a notification alias" },
     { level: 2, id: "connecting-slack-and-pagerduty", text: "Connecting Slack and PagerDuty" },
-    { level: 2, id: "webhook-and-email-need-no-setup", text: "Webhook and email need no setup" },
+    { level: 2, id: "webhook-and-email-need-no-account-connection", text: "Webhook and email need no account connection" },
     { level: 2, id: "testing-an-alias", text: "Testing an alias" },
   ],
-  html: `<p>When an <code>alert</code> fires in a cron, <code>--notify=&lt;alias&gt;</code> dispatches to a
-destination defined in <code>/etc/notify.yaml</code>. The alias is just a name;
+  html: `<h2 id="define-a-notification-alias">Define a notification alias</h2>
+<p>When an <code>alert</code> fires in a cron, <code>--notify=&lt;alias&gt;</code> dispatches to a
+destination defined in <code>/etc/notify.yaml</code>. The alias is a name;
 it fans out to one or more targets across four service types — Slack,
 PagerDuty, webhook, and email.</p>
 <pre><code># /etc/notify.yaml
@@ -27,12 +29,12 @@ ops:
 <p>Edit it with <code>vi /etc/notify.yaml</code>. See <code>help alerts</code> for the full
 grammar (severities, webhook headers, per-target mappings).</p>
 <h2 id="connecting-slack-and-pagerduty">Connecting Slack and PagerDuty</h2>
-<p><code>notify.yaml</code> only <em>names</em> destinations — the credentials behind them
-live with your account. Connect them from the terminal with <code>weft integration</code> (or under <strong>Account → Integrations</strong> in the browser;
-either surface does the same thing).</p>
+<p><code>notify.yaml</code> names destinations — the credentials behind them
+live with your account. Connect them from the terminal with <code>weft integration</code> or under <strong>Account → Integrations</strong> in the browser;
+both do the same thing.</p>
 <pre><code># PagerDuty — paste an integration (routing) key, give it a name.
 # The name is what notify.yaml references under \`pagerduty:\`.
-weft integration pagerduty add ops-daytime --key R0UTING_KEY_FROM_PD
+weft integration pagerduty add ops-daytime --key YOUR_ROUTING_KEY
 weft integration pagerduty rm  ops-daytime
 
 # Slack — authorize a workspace. Slack uses OAuth, so this opens a
@@ -48,10 +50,15 @@ weft integration list
 with <code>weft integration pagerduty add</code>. Slack channels are named
 directly in <code>notify.yaml</code> (<code>&quot;#alerts&quot;</code>) once the workspace is
 connected.</p>
-<h2 id="webhook-and-email-need-no-setup">Webhook and email need no setup</h2>
-<p>Webhook URLs and email addresses carry no account-level credential —
-they're written straight into <code>notify.yaml</code> per alias, so there's
-nothing to connect first:</p>
+<h2 id="webhook-and-email-need-no-account-connection">Webhook and email need no account connection</h2>
+<p>Webhook URLs and email addresses carry no account-level credential.
+They are written into <code>notify.yaml</code> per alias:</p>
+<p>Webhook <strong>header values</strong> are the exception: an <code>Authorization</code> token
+or a signing secret is a credential, so <code>cat /etc/notify.yaml</code> (and
+<code>git log -p /etc/notify.yaml</code>) shows each one as <code>&quot;&lt;redacted&gt;&quot;</code>. To edit,
+leave <code>&quot;&lt;redacted&gt;&quot;</code> where a value should stay unchanged, or write a real
+value to replace it. A <code>&quot;&lt;redacted&gt;&quot;</code> on a webhook, header or alias that
+has nothing stored is refused.</p>
 <pre><code>pages:
   webhook:
     - &quot;https://hooks.example.com/weft&quot;
@@ -62,8 +69,9 @@ nothing to connect first:</p>
 <h2 id="testing-an-alias">Testing an alias</h2>
 <pre><code>echo &quot;test fire&quot; | alert --notify=ops
 </code></pre>
-<p>Interactive runs dispatch immediately and don't open an incident
-(incidents are a cron concept).</p>
+<p>This sends to every target in the <code>ops</code> alias.</p>
+<p>Interactive runs dispatch immediately and open no incident
+(incidents belong to crons).</p>
 `,
 } as const;
 

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 var (
@@ -43,6 +44,8 @@ func main() {
 			log.Fatalf("%s: doc %q has neither shell: nor web: frontmatter", d.path, d.ID)
 		}
 	}
+
+	all = withManualShellPages(all)
 
 	if err := writeShell(*shellOut, all); err != nil {
 		log.Fatalf("write shell: %v", err)
@@ -91,4 +94,63 @@ func splitCSV(s string) []string {
 		out = append(out, cur)
 	}
 	return out
+}
+
+// withManualShellPages gives every web-only manual topic a shell page
+// reachable as `man <section>`, and adds a `man` index listing them.
+// Hand-written shell pages (docs/shell) keep their own topics; a
+// manual topic whose `man <section>` collides with one is skipped.
+func withManualShellPages(all []*doc) []*doc {
+	taken := map[string]bool{"man": true}
+	for _, d := range all {
+		if d.Shell != nil {
+			for _, t := range d.Shell.Topics {
+				taken[t] = true
+			}
+		}
+	}
+	var index strings.Builder
+	index.WriteString("## Manual topics\n\nType `man <topic>`. The same pages are in the web manual.\n\n")
+	byTopic := append([]*doc(nil), all...)
+	sort.Slice(byTopic, func(i, j int) bool { return webSection(byTopic[i]) < webSection(byTopic[j]) })
+	for _, d := range byTopic {
+		if d.Shell != nil || d.Web == nil {
+			continue
+		}
+		topic := "man " + d.Web.Section
+		if taken[topic] {
+			continue
+		}
+		d.Shell = &shellConfig{
+			Const:  "Manual" + camel(d.Web.Section),
+			Topics: []string{topic},
+			Banner: strings.ToUpper(d.Web.Section) + "(1)",
+		}
+		fmt.Fprintf(&index, "- `%s` — %s\n", topic, d.Title)
+	}
+	index.WriteString("\nSee also `help` for shell commands and `man alert`, `man range` and friends.\n")
+	return append(all, &doc{
+		ID:    "man-index",
+		Title: "man",
+		Shell: &shellConfig{Const: "ManIndex", Topics: []string{"man"}, Banner: "MAN(1)"},
+		body:  []byte(index.String()),
+	})
+}
+
+// camel turns a kebab-case slug into CamelCase for a Go identifier.
+func camel(slug string) string {
+	var b strings.Builder
+	for _, part := range strings.Split(slug, "-") {
+		if part != "" {
+			b.WriteString(strings.ToUpper(part[:1]) + part[1:])
+		}
+	}
+	return b.String()
+}
+
+func webSection(d *doc) string {
+	if d.Web == nil {
+		return ""
+	}
+	return d.Web.Section
 }

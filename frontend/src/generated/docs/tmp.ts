@@ -9,37 +9,44 @@ const tmp = {
   headings: [
     { level: 3, id: "files-expire-after-48-hours", text: "Files expire after 48 hours" },
     { level: 3, id: "storage-limits", text: "Storage limits" },
-    { level: 3, id: "what-tmp-is-not", text: "What /tmp is not" },
+    { level: 3, id: "limits", text: "Limits" },
     { level: 3, id: "working-on-saved-results", text: "Working on saved results" },
     { level: 3, id: "listing-with-ls--l", text: "Listing with ls -l" },
   ],
   html: `<p>Every weft account has a scratch area at <code>/tmp</code>. Use it to save the output
 of a pipeline, take notes during an incident, or hold a filtered result
-set long enough to slice it a few different ways. It behaves the way a
-Unix <code>/tmp</code> does: write with <code>&gt;</code>, append with <code>&gt;&gt;</code>, edit with <code>vi</code>, list
-with <code>ls</code>, remove with <code>rm</code>.</p>
+set long enough to slice it a few different ways. Write with <code>&gt;</code>, append
+with <code>&gt;&gt;</code>, edit with <code>vi</code>, list with <code>ls</code>, remove with <code>rm</code>.</p>
 <pre><code># Save a filtered result set
-cat api.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
+cat /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
 
 # Take a look
 wc -l /tmp/errs
 grep timeout /tmp/errs | sort | uniq -c | sort -rn | head
 
-# Keep adding to it later
-tail -n 200 api.log | awk '$STATUS &gt;= 500' &gt;&gt; /tmp/errs
+# Keep adding to it later (5xx responses among the last 200 rows)
+tail -n 200 /log/myco/api/main.log | awk '$6 ~ /status=5/' &gt;&gt; /tmp/errs
 
 # Organise an incident
 mkdir /tmp/incident-2026-04-22
-cat api.log | grep 'req_id=abc123' &gt; /tmp/incident-2026-04-22/trace
+cat /log/myco/api/main.log | grep 'req_id=abc123' &gt; /tmp/incident-2026-04-22/trace
 vi /tmp/incident-2026-04-22/notes
 ls -l /tmp/incident-2026-04-22
 
 # Compare two result sets
 cp /tmp/errs /tmp/errs.bak
-tail -n 1000 api.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
+tail -n 1000 /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs   # errors among the last 1000 rows
 diff /tmp/errs.bak /tmp/errs           # what's new in the most recent slice
-comm /tmp/errs.bak /tmp/errs           # three-column shared/unique view
-join orders.csv prices.csv             # relate two result sets by key
+
+# comm and join need sorted input
+sort /tmp/errs.bak &gt; /tmp/errs.bak.sorted
+sort /tmp/errs &gt; /tmp/errs.sorted
+comm /tmp/errs.bak.sorted /tmp/errs.sorted   # three-column shared/unique view
+
+# Relate two saved files by their first column
+printf 'api 3\\nweb 1\\n' &gt; /tmp/errs-by-service
+printf 'api oncall-a\\nweb oncall-b\\n' &gt; /tmp/owners
+join /tmp/errs-by-service /tmp/owners        # api 3 oncall-a, web 1 oncall-b
 
 # Rename, keep alive
 mv /tmp/errs /tmp/incident-errs
@@ -49,74 +56,100 @@ touch /tmp/incident-errs               # reset the 48h clock
 rm -rf /tmp/incident-2026-04-22
 </code></pre>
 <h3 id="files-expire-after-48-hours">Files expire after 48 hours</h3>
-<p>Despite the shell rules, /tmp is durable storage — your files survive
-logouts and are visible from every session. But every file is deleted
+<p>/tmp is durable storage — your files survive logouts and are visible
+from every session. Every file is deleted
 48 hours after it was last edited. Any of <code>&gt;</code>, <code>&gt;&gt;</code>, <code>cp</code>, <code>mv</code>, or
 <code>touch</code> resets the clock; the mtime shown in <code>ls -l</code> is the source of
 truth.</p>
-<p><code>touch /tmp/foo</code> is the explicit way to extend a file's life without
-otherwise changing it — useful when an investigation is running long
-and you want to keep your scratch around past the original 48h.</p>
-<p>Treat /tmp the way you'd treat a shared whiteboard in an operations
-room: great for the investigation you're running right now, not where
-you keep anything you'll need next week. For long-term storage of a
-pipeline's output, save the pipeline itself as a cron (see the
-<strong>Crons</strong> section) — cron results are retained for the full history
+<p><code>touch /tmp/foo</code> extends a file's life and leaves its content
+unchanged. Use it when an investigation runs long and you want to keep
+your scratch past the original 48h.</p>
+<p>/tmp holds the data for the investigation you are running now. For
+long-term storage of a pipeline's output, save the pipeline itself as a
+cron (see <strong>Crons</strong>). Cron results are retained for the full history
 your plan covers.</p>
 <h3 id="storage-limits">Storage limits</h3>
-<p>| Plan    | /tmp space | Per-file limit |
-|---------|-----------:|---------------:|
-| Trial   |     500 KB |         512 KB |
-| Swatch  |      10 MB |         512 KB |
-| Yard    |     100 MB |         512 KB |
-| Bolt    |       1 GB |         512 KB |</p>
-<p>The per-file limit applies on every plan — /tmp is for filtered result
-sets and notes, not for parking raw log data. Writes that would exceed
-either your total allowance or the per-file cap fail with a clear
-error; the partial output is not written.</p>
-<p>Check your current usage from the shell:</p>
-<pre><code>cat /etc/usage
+<p>/tmp has a total allowance and a per-file cap, both set by your plan;
+see the Account page for your plan's limits. Use /tmp for filtered result
+sets and notes. Writes that would exceed
+either limit fail with an error; the partial output is not written.</p>
+<p>Check what you're using from the shell. <code>ls -lh</code> shows each file's
+size:</p>
+<pre><code>ls -lh /tmp
 </code></pre>
-<h3 id="what-tmp-is-not">What /tmp is not</h3>
+<p><code>cat /etc/usage</code> reports your log-ingest quota.</p>
+<h3 id="limits">Limits</h3>
 <ul>
-<li><strong>Not executable.</strong> Files in /tmp are never treated as scripts.
-<code>vi /tmp/foo</code> is a text editor opening a text file; typing <code>foo</code> at
-the prompt afterwards does nothing. Scripts live in <code>/bin</code> — see the
-<strong>Custom scripts</strong> section.</li>
-<li><strong>Not a source for <code>tail -f</code>.</strong> Follow-mode is a streaming query
-against live logs. You can redirect the output of a finished query
-into /tmp, but <code>tail -f /log/myco/api/main.log &gt; /tmp/stream</code> is not supported
-in this release.</li>
-<li><strong>Not shared across accounts.</strong> /tmp is per-customer. Every member
-of your account sees the same /tmp; users from other accounts never
-see any of it.</li>
+<li><strong>Scripts.</strong> Files in /tmp are never treated as scripts.
+<code>vi /tmp/foo</code> opens a text file; typing <code>foo</code> at the prompt
+afterwards does nothing. Scripts live in <code>/bin</code> — see
+<strong>Custom scripts</strong>.</li>
+<li><strong>Follow mode.</strong> Redirect the output of a finished query into /tmp.
+<code>tail -f /log/myco/api/main.log &gt; /tmp/stream</code> is refused with an
+error, because a follow never finishes and the file would hold only
+a truncated read. Drop <code>-f</code> to save a finished query.</li>
+<li><strong>Sharing.</strong> /tmp is per-customer. Every member of your account
+sees the same /tmp; users from other accounts see none of it.</li>
 </ul>
 <h3 id="working-on-saved-results">Working on saved results</h3>
 <p>Once you have a couple of saved result sets, the standard Unix
 analysis kit is available for comparing and combining them:</p>
-<p>| Command            | What it does                                                              |
-|--------------------|--------------------------------------------------------------------------|
-| <code>cp a b</code>           | Duplicate a file                                                          |
-| <code>mv a b</code>           | Rename a file                                                             |
-| <code>touch a</code>          | Reset the 48h clock without otherwise changing the file                   |
-| <code>diff a b</code>         | Show line-level differences between two files                             |
-| <code>comm a b</code>         | Three-column merge of two sorted files: only-in-A, only-in-B, in-both    |
-| <code>join a b</code>         | Relational join on a key column (default: whitespace, column 1 each side) |
-| <code>paste a b</code>        | Column-merge two files line-by-line (default delimiter: tab)              |
-| <code>wc -l a</code>          | Lines / words / bytes / characters / longest-line — combines flags freely |</p>
-<p><code>cp</code> and <code>mv</code> are restricted to /tmp on both sides — copying scratch
-text into <code>/bin</code> would route around weft's script validation. If
-that's actually what you want, <code>cat /tmp/x &gt; /bin/y</code> does it through
-the normal save path.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cp a b</code></td>
+<td>Duplicate a file</td>
+</tr>
+<tr>
+<td><code>mv a b</code></td>
+<td>Rename a file</td>
+</tr>
+<tr>
+<td><code>touch a</code></td>
+<td>Reset the 48h clock without otherwise changing the file</td>
+</tr>
+<tr>
+<td><code>diff a b</code></td>
+<td>Show line-level differences between two files</td>
+</tr>
+<tr>
+<td><code>comm a b</code></td>
+<td>Three-column merge of two sorted files: only-in-A, only-in-B, in-both</td>
+</tr>
+<tr>
+<td><code>join a b</code></td>
+<td>Relational join on a key column (default: whitespace, column 1 each side)</td>
+</tr>
+<tr>
+<td><code>paste a b</code></td>
+<td>Column-merge two files line-by-line (default delimiter: tab)</td>
+</tr>
+<tr>
+<td><code>wc a</code></td>
+<td>Lines, words and bytes; <code>-l -w -c -m -L</code> pick columns and combine freely</td>
+</tr>
+</tbody>
+</table>
+<p><code>cp</code> and <code>mv</code> work only inside /tmp, on both sides. /bin, /cron.d and
+/etc each have their own save path (permissions and validation), so
+copying or moving into or out of them is refused. To put a file there,
+use <code>cat /tmp/x &gt; /bin/y</code>; to copy one out for editing, use
+<code>cat /bin/y &gt; /tmp/x</code>.</p>
 <h3 id="listing-with-ls--l">Listing with <code>ls -l</code></h3>
 <p><code>ls</code> accepts the usual flags — <code>-l</code> for long format, <code>-a</code> to include
 dotfiles, <code>-h</code> for human-readable sizes. Long format shows size and
 last-modified time, which is how you can tell how much of your 48h
 window a file has left:</p>
 <pre><code>weft&gt; ls -lh /tmp
--rw-r--r--  2.1K  2026-04-24 09:42  errs
-drwxr-xr-x     -  2026-04-22 17:03  incident-2026-04-22/
--rw-r--r--   312  2026-04-24 10:15  scratch
+-rw-r--r--  Alice Chen  2.1K  2026-04-24 09:42  errs
+drwxr-xr-x  Alice Chen     -  2026-04-22 17:03  incident-2026-04-22/
+-rw-r--r--  Alice Chen   312  2026-04-24 10:15  scratch
 </code></pre>
 <p>The same flags work anywhere in the filesystem — <code>ls -l /bin</code> shows
 when you last edited each of your scripts, <code>ls -l /cron.d</code> shows when

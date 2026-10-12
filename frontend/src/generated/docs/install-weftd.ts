@@ -10,12 +10,12 @@ const installWeftd = {
     { level: 3, id: "service-names", text: "Service names" },
     { level: 3, id: "token", text: "Token" },
     { level: 3, id: "file-sourced-dimensions", text: "File-sourced dimensions" },
-    { level: 3, id: "schema-types", text: "Schema types" },
+    { level: 3, id: "how-lines-are-parsed", text: "How lines are parsed" },
     { level: 3, id: "resuming-after-a-restart", text: "Resuming after a restart" },
     { level: 3, id: "system-metrics-optional", text: "System metrics (optional)" },
     { level: 3, id: "app-api-emit-events-and-heartbeats-from-your-services", text: "App API: emit events and heartbeats from your services" },
   ],
-  html: `<p>weftd is a lightweight Go binary that tails log files and ships structured
+  html: `<p>weftd is a Go binary that tails log files and ships structured
 lines to weft over gRPC. Download it from the <strong>Downloads</strong> page.</p>
 <pre><code># Download and install
 curl -fsSL https://w3ft.net/install.sh | sh
@@ -27,7 +27,7 @@ sudo dpkg -i weftd_*.deb
 <pre><code># /etc/weftd/config.yaml
 
 endpoint: ingest.w3ft.net:9020 # optional; defaults to this. Override
-                              # only for local/dockerized testing
+                              # for local/dockerized testing
 token: wft_a1b2c3d4e5f6...
 deployment: api               # optional; the fleet/scaling-unit
                               # this agent belongs to (k8s Deployment,
@@ -48,41 +48,38 @@ dimensions:                   # optional: column values sourced from
 sources:
   - service: myapp
     path: /var/log/myapp/*.log
-    schema: prefix_json
-    prefix_fields: [ts, level, service]
-    prefix_separator: &quot; &quot;
-    json_field: payload
-    version_file: /opt/myapp/VERSION   # optional; weftd watches the
-                                       # file and stamps the latest
-                                       # contents as VERSION on
-                                       # every row from this source
+    version:                           # optional
+      file: /opt/myapp/VERSION         # weftd watches the file and
+                                       # stamps the latest contents as
+                                       # VERSION on every row from this
+                                       # source (or use \`env:\` to read
+                                       # a variable once at startup)
 
   - service: nginx
     path: /var/log/nginx/access.log
-    schema: json
 </code></pre>
-<p>This file is the single source of truth — the package never
+<p>This file is the single source of truth; the package never
 generates or overwrites it. Start from <code>/etc/weftd/config.yaml.example</code>.
-Repeated source fields can be DRYed with standard YAML anchors and
-merge keys (<code>&amp;name</code> / <code>&lt;&lt;: *name</code>); weftd ignores an <code>x-anchors:</code>
-holder block, so it's a convenient place to declare them.</p>
+Repeated source fields can be shared with standard YAML anchors and
+merge keys (<code>&amp;name</code> / <code>&lt;&lt;: *name</code>). weftd ignores an <code>x-anchors:</code>
+block, which is the place to declare them.</p>
 <h3 id="service-names">Service names</h3>
 <p>Each source's <code>service:</code> sets the <code>&lt;service&gt;</code> segment of its
 pseudofile path. It is optional: for a systemd source (<code>unit:</code>) weftd
 uses the unit name without <code>.service</code>, and for a file source (<code>path:</code>)
 it uses the file's name without its extension, so
 <code>/var/log/myapp/api.log</code> becomes <code>api</code>. Set <code>service:</code> explicitly when
-several files should share one service, or when the derived name isn't
-the one you want. This is separate from the top-level <code>services:</code> list
-above, which only controls how host metrics fan out.</p>
+several files should share one service, or when you want a name other
+than the derived one. The top-level <code>services:</code> list above controls how
+host metrics fan out.</p>
 <h3 id="token">Token</h3>
 <p>Put <code>token:</code> in the config file, <strong>or</strong> supply it via the
 <code>WEFTD_TOKEN</code> environment variable (e.g. in <code>/etc/default/weftd</code>).
-The environment wins over the file value — an AWS-shaped credential
-chain — so a secret injector can provide the token without templating
-the YAML. It's the only setting with an environment source; everything
-structural lives in the file.</p>
-<p>The <code>deployment</code>, <code>region</code>, and per-source <code>version_file</code> values
+The environment value takes precedence over the file value, so a secret
+injector can provide the token without templating the YAML. It is the
+only setting with an environment source; all other settings live in the
+file.</p>
+<p>The <code>deployment</code>, <code>region</code>, and per-source <code>version</code> values
 become first-class query dimensions — see the <strong>Meta-variables</strong>
 section in <strong>Query your logs</strong> for the full list and how they
 appear in awk and jq.</p>
@@ -94,17 +91,24 @@ wins over auto-derived sources (e.g. <code>dimensions.region</code> overrides
 the cloud-metadata probe). Allowed columns: <code>deployment</code>,
 <code>version</code>, <code>region</code>, <code>cluster</code>, <code>node</code>. Other columns are
 populated by other mechanisms (token-bound env, schema-extracted
-fields, k8s log-path metadata) and refusing to override them
-keeps those guarantees intact.</p>
-<p>The JSON-path syntax is a minimal subset of jq — bare field
+fields, k8s log-path metadata) and cannot be overridden.</p>
+<p>The JSON-path syntax is a minimal subset of jq: field
 access (<code>.foo</code>), nested fields (<code>.foo.bar</code>), and array indices
 (<code>.items[0].name</code>). For richer extraction, pre-process the file
 with your own tooling and point weftd at the result.</p>
-<h3 id="schema-types">Schema types</h3>
+<h3 id="how-lines-are-parsed">How lines are parsed</h3>
+<p>weftd ships each line as it reads it. A source takes
+<code>service</code>, <code>kind</code>, <code>path</code> (or <code>unit</code>), <code>version</code> and <code>metrics</code>.
+The source's schema, which lives on the weft server, defines how a line
+is split into fields (<code>TS</code>, <code>LEVEL</code> and the rest). weft detects it from
+the first batch and asks you to confirm it (see <strong>Check schema setup</strong>),
+or you set it with <code>weft source add</code> / <code>weft source configure</code>. The
+formats are:</p>
 <ul>
-<li><code>json</code> — pure JSON lines, no prefix</li>
-<li><code>prefix_json</code> — fixed-width prefix fields followed by a JSON payload</li>
-<li><code>raw</code> — unstructured text, no parsing</li>
+<li><code>text</code> — whitespace-delimited fields</li>
+<li><code>json</code> — each line is a JSON object</li>
+<li><code>prefix_json</code> — a few whitespace-delimited fields, then a JSON object
+that starts at a given field number</li>
 </ul>
 <pre><code># Start weftd
 sudo systemctl enable --now weftd
@@ -115,12 +119,12 @@ journalctl -u weftd -f
 </code></pre>
 <h3 id="resuming-after-a-restart">Resuming after a restart</h3>
 <p>weftd remembers how far it has delivered each tailed file, so a restart
-(an upgrade, a reboot, a crash) picks up where it left off instead of
-skipping whatever was written in the meantime. The saved position means
-&quot;the coordinator acknowledged everything up to here&quot;, not &quot;weftd read up to
-here&quot;, so lines that were in flight when weftd stopped are sent again rather
-than lost. Delivery is at-least-once: after an unclean stop you may see a few
-seconds of lines twice, never a gap.</p>
+(an upgrade, a reboot, a crash) picks up where it left off and
+reads whatever was written in the meantime. The saved position means
+&quot;the coordinator acknowledged everything up to here&quot;, so lines that were
+in flight when weftd stopped are sent again. Delivery is at-least-once:
+after an unclean stop you may see a few seconds of lines twice, with no
+gap.</p>
 <p>State is kept in <code>/var/lib/weftd/checkpoints/</code>. The <code>.deb</code> unit creates it
 (<code>StateDirectory=weftd</code>). Everything is optional:</p>
 <pre><code class="language-yaml">checkpoint:
@@ -131,36 +135,61 @@ seconds of lines twice, never a gap.</p>
   max_resume_bytes: 256MiB          # per-file cap on backlog replayed after downtime
 </code></pre>
 <p>What weftd does for each file when it starts:</p>
-<p>| Situation | Starts at |
-|---|---|
-| First start with checkpointing (no state yet) | the end of the file |
-| File has no saved position (appeared while weftd was down) | the beginning |
-| File matches its saved position | the saved position |
-| File is shorter than the saved position (truncated) | the beginning |
-| File was replaced while weftd was down (rotated) | the beginning; the old file's unread tail is not recovered |
-| More than <code>max_resume_bytes</code> behind | the newest <code>max_resume_bytes</code>, from a line boundary |</p>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Starts at</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>First start with checkpointing (no state yet)</td>
+<td>the end of the file</td>
+</tr>
+<tr>
+<td>File has no saved position (appeared while weftd was down)</td>
+<td>the beginning</td>
+</tr>
+<tr>
+<td>File matches its saved position</td>
+<td>the saved position</td>
+</tr>
+<tr>
+<td>File is shorter than the saved position (truncated)</td>
+<td>the beginning</td>
+</tr>
+<tr>
+<td>File was replaced while weftd was down (rotated)</td>
+<td>the beginning; the old file's unread tail is not recovered</td>
+</tr>
+<tr>
+<td>More than <code>max_resume_bytes</code> behind</td>
+<td>the newest <code>max_resume_bytes</code>, from a line boundary</td>
+</tr>
+</tbody>
+</table>
 <p>A file is matched by device, inode and a hash of its first kilobyte, so a
 reused inode is not mistaken for the same file. Files created while weftd is
 running are read from their first line. Every skip or replay is logged, and
 summarized once a minute as a <code>checkpoint stats</code> line per file.</p>
 <p>Notes:</p>
 <ul>
-<li><strong>The first restart onto a version with checkpointing still loses lines in
+<li><strong>The first restart onto a version with checkpointing loses lines in
 flight</strong>, because the old binary does the shutdown. The guarantee starts
 from the second restart.</li>
 <li><strong>Containers:</strong> the state directory must survive the pod. On Kubernetes,
-mount <code>/var/lib/weftd</code> from a <code>hostPath</code>; an <code>emptyDir</code> or the container
-filesystem is wiped on every reschedule, which is exactly when you need it.</li>
+mount <code>/var/lib/weftd</code> from a <code>hostPath</code>. An <code>emptyDir</code> or the container
+filesystem is wiped on every reschedule.</li>
 <li><strong>Two weftd on one host</strong> cannot share a state directory. The second one
 logs that the directory is locked and runs without checkpointing.</li>
-<li>A damaged <code>state.json</code> is moved to <code>state.json.corrupt</code> and weftd carries
-on as if freshly installed; it never refuses to start.</li>
+<li>A damaged <code>state.json</code> is moved to <code>state.json.corrupt</code> and weftd starts
+as if freshly installed.</li>
 </ul>
 <h3 id="system-metrics-optional">System metrics (optional)</h3>
 <p>weftd can also ship host metrics alongside log lines. Opt in by
-attaching a <code>metrics:</code> block to any source in the config — the block
-is independent of what that source tails, it just rides along on the
-same agent process.</p>
+attaching a <code>metrics:</code> block to any source in the config. The block
+runs in the same agent process whatever the source tails.</p>
 <pre><code># /etc/weftd/config.yaml
 endpoint: ingest.w3ft.net:9020
 token: wft_a1b2c3d4e5f6...
@@ -187,13 +216,36 @@ on a host that runs both) get byte-identical rows under each path,
 filterable by the <code>host</code> field when the ASG scales out.</p>
 <p>Each tick emits one row per metric type, with one extra row per
 mount (disk) and per interface (network):</p>
-<p>| <code>type</code> | Fields |
-|---|---|
-| <code>cpu</code> | <code>user</code>, <code>system</code>, <code>idle</code>, <code>iowait</code> (percent), <code>cores</code> |
-| <code>memory</code> | <code>total_mb</code>, <code>used_mb</code>, <code>available_mb</code>, <code>swap_used_mb</code>, <code>pct</code> |
-| <code>disk</code> | <code>path</code>, <code>total_gb</code>, <code>used_gb</code>, <code>pct</code> — one row per <code>/dev/*</code> mount |
-| <code>load</code> | <code>load1</code>, <code>load5</code>, <code>load15</code> |
-| <code>network</code> | <code>iface</code>, <code>rx_bytes_sec</code>, <code>tx_bytes_sec</code> — one row per non-loopback interface |</p>
+<table>
+<thead>
+<tr>
+<th><code>type</code></th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cpu</code></td>
+<td><code>user</code>, <code>system</code>, <code>idle</code>, <code>iowait</code> (percent), <code>cores</code></td>
+</tr>
+<tr>
+<td><code>memory</code></td>
+<td><code>total_mb</code>, <code>used_mb</code>, <code>available_mb</code>, <code>swap_used_mb</code>, <code>pct</code></td>
+</tr>
+<tr>
+<td><code>disk</code></td>
+<td><code>path</code>, <code>total_gb</code>, <code>used_gb</code>, <code>pct</code> — one row per <code>/dev/*</code> mount</td>
+</tr>
+<tr>
+<td><code>load</code></td>
+<td><code>load1</code>, <code>load5</code>, <code>load15</code></td>
+</tr>
+<tr>
+<td><code>network</code></td>
+<td><code>iface</code>, <code>rx_bytes_sec</code>, <code>tx_bytes_sec</code> — one row per non-loopback interface</td>
+</tr>
+</tbody>
+</table>
 <p>Every row additionally carries <code>ts</code>, <code>host</code>, and <code>deployment</code>. <code>cpu</code>
 and <code>network</code> need two samples to compute a delta, so the first tick
 after startup is silent for those two.</p>
@@ -214,18 +266,17 @@ tail -n 1000 /log/myns/api/metrics.log \\
 <code>/proc/meminfo</code>, <code>/proc/mounts</code>, <code>/proc/loadavg</code>, and
 <code>/proc/net/dev</code>). On other kernels the block is ignored.</p>
 <h3 id="app-api-emit-events-and-heartbeats-from-your-services">App API: emit events and heartbeats from your services</h3>
-<p>Beyond tailing files, weftd exposes a local records socket that
-running applications can write to directly. It binds to a Unix
-socket by default, so process-local apps can ship to weft without
-a token, network call, or extra dependency — events, heartbeats,
-and runtime stats all ride this one channel. There is a typed Go
-SDK at <a href="https://github.com/w3ft-net/weft-go">https://github.com/w3ft-net/weft-go</a> for callers that
-prefer not to wire up the socket by hand.</p>
+<p>weftd exposes a local records socket that running applications can
+write to directly. It binds to a Unix socket by default, so
+process-local apps ship to weft with no token, network call, or extra
+dependency. Events, heartbeats, and runtime stats all use this one
+channel. A typed Go SDK is available at
+<a href="https://github.com/w3ft-net/weft-go">https://github.com/w3ft-net/weft-go</a>.</p>
 <h4 id="records-socket">Records socket</h4>
 <p>Add a <code>socket:</code> line to <code>config.yaml</code> and weftd will accept
 newline-delimited frames in the format <code>&lt;app&gt;:&lt;line&gt;\\n</code>. Each
 line is forwarded to the same ingest path file tailers use,
-stamped with whichever <code>&lt;app&gt;</code> prefix you write before the colon.</p>
+stamped with the <code>&lt;app&gt;</code> prefix you write before the colon.</p>
 <pre><code># /etc/weftd/config.yaml
 socket: /var/run/weftd.sock
 </code></pre>
@@ -242,10 +293,9 @@ c.Send(&quot;billing&quot;, map[string]any{&quot;event&quot;: &quot;signup&quot;
 <p>The SDK looks for the socket at <code>/var/run/weftd.sock</code> by default;
 override with <code>WEFT_SOCKET</code> or <code>weft.WithSocket(...)</code>.</p>
 <h4 id="heartbeats">Heartbeats</h4>
-<p>A heartbeat is just a record. The Go SDK's <code>Heartbeat</code> loop emits one
+<p>A heartbeat is a record. The Go SDK's <code>Heartbeat</code> loop emits one
 to app <code>&lt;service&gt;/heartbeats</code> every interval over the <strong>records socket
-above</strong> — there is no separate heartbeat socket or weftd listener.
-Each beat lands at <code>/log/&lt;namespace&gt;/&lt;service&gt;/heartbeats.log</code>:</p>
+above</strong>. Each beat lands at <code>/log/&lt;namespace&gt;/&lt;service&gt;/heartbeats.log</code>:</p>
 <pre><code class="language-json">{&quot;type&quot;:&quot;heartbeat&quot;,&quot;service&quot;:&quot;my-service&quot;,&quot;ts&quot;:&quot;2026-06-11T14:55:36.4Z&quot;}
 </code></pre>
 <pre><code># From Go via the SDK — one line in main()
@@ -256,22 +306,29 @@ echo 'my-service/heartbeats:{&quot;type&quot;:&quot;heartbeat&quot;,&quot;servic
   | nc -U /var/run/weftd.sock
 </code></pre>
 <p>Service names are restricted to <code>[a-zA-Z0-9._-]</code>, 1–128 chars.</p>
-<p>Liveness is judged by <strong>recency</strong>: a service that's alive keeps
-emitting rows; one that stops is <em>absent</em>. Since each beat is emitted
-at the source when the process is healthy, there's no server-computed
-<code>age_s</code> — you ask &quot;have we seen a beat lately?&quot; instead, which a watch
-expresses directly:</p>
-<pre><code># Alert when billing hasn't beaten in the last 90s (cron runs each minute)
-weft::is_absent billing-beat 90s &amp;&amp; alert ...
-
-# ...where billing-beat is a watch like:
-cat /log/myns/billing/heartbeats.log | tail -1
+<p>Liveness is judged by <strong>recency</strong>: a live service keeps emitting rows;
+one that stops is <em>absent</em>. Each beat is emitted at the source when the
+process is healthy, so the question is &quot;have we seen a beat lately?&quot;,
+which a cron expresses directly. First a cron whose result is the beats in its window
+(it is empty when none arrived):</p>
+<pre><code># /cron.d/billing-beat
+# schedule: */1 * * * *
+cat /log/myns/billing/heartbeats.log
 </code></pre>
+<p>Then a cron that alerts when <code>billing-beat</code> has produced no result in the
+last 90s:</p>
+<pre><code># /cron.d/billing-down
+# schedule: */1 * * * *
+weft::is_absent billing-beat 90s
+alert --if-zero &quot;$?&quot; --notify=ops
+</code></pre>
+<p>Leave <code>-n</code> and <code>head</code>/<code>tail</code> counts off the first cron: crons are
+bound to their time range, and a line count can truncate it.</p>
 <h4 id="go-sdk">Go SDK</h4>
-<p><code>github.com/w3ft-net/weft-go</code> is the typed front door for the
-records socket above — events, heartbeats, and a runtime-stats
-collector that periodically emits Go heap, GC pause, goroutine, and
-FD-count telemetry. Three-line setup in <code>main()</code>:</p>
+<p><code>github.com/w3ft-net/weft-go</code> is the typed client for the
+records socket above. It sends events and heartbeats, and includes a
+runtime-stats collector that periodically emits Go heap, GC pause,
+goroutine, and FD-count telemetry. Setup in <code>main()</code>:</p>
 <pre><code>import &quot;github.com/w3ft-net/weft-go&quot;
 
 c, _ := weft.New()

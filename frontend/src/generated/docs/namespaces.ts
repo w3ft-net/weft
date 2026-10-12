@@ -14,10 +14,12 @@ const namespaces = {
   html: `<h2 id="create-a-namespace">Create a namespace</h2>
 <p>Namespaces group related log sources. A typical setup has one namespace per
 environment (e.g. <code>production</code>, <code>staging</code>) or per team.</p>
-<p>Go to <strong>Namespaces</strong> in the sidebar and click <strong>Create namespace</strong>. Choose a
-short, lowercase name — it becomes part of token identifiers and CLI scoping.</p>
-<pre><code># From the shell
-namespace create production
+<p>Go to <strong>Namespaces</strong> in the sidebar and click <strong>new</strong>. Choose a
+short, lowercase name — it is used to scope tokens, sources, and log paths.
+A name can't contain a comma, whitespace, <code>/</code>, <code>+</code>, <code>*</code>, <code>?</code> or <code>[</code>, and
+can't start with <code>-</code>.</p>
+<pre><code># From your terminal
+weft namespace create --name production
 </code></pre>
 <h2 id="log-path-layout">Log path layout</h2>
 <p>Every log stream is addressed by a pseudofile path under <code>/log/</code>.
@@ -28,33 +30,64 @@ that carry one:</p>
 /log/&lt;namespace&gt;/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log    env-bearing token
 </code></pre>
 <ul>
-<li><strong><code>&lt;namespace&gt;</code></strong> — the grouping you created above. A single
+<li><strong><code>&lt;namespace&gt;</code></strong> — the grouping you created above.
 <code>/log/&lt;namespace&gt;.log</code> is a namespace-wide wildcard (every
 service and kind under it).</li>
 <li><strong><code>&lt;service&gt;</code></strong> — the source name a producer reports for itself;
 surfaces as <code>SERVICE</code> in queries.</li>
 <li><strong><code>&lt;env&gt;</code></strong> — present only for tokens minted with <code>--env</code>. It
 slots in immediately after the namespace, so an env-bearing path
-has four segments and an env-less one has three. Segment count
-alone disambiguates the two; a reader token spanning several envs
-never has to guess.</li>
+has four segments and an env-less one has three. A four-segment
+path reads exactly one env. A three-segment path reads that
+service across every env, the env-less stream included, and
+<code>ls /log/&lt;namespace&gt;/&lt;service&gt;</code> lists the kinds any of them
+carry.</li>
 <li><strong><code>&lt;kind&gt;</code></strong> — the stream: <code>main</code> for ordinary application logs
 (the default a producer ships unless it says otherwise), plus
 <code>heartbeats</code>, <code>metrics</code>, and <code>runtime</code> for services that emit
 telemetry. It is always present.</li>
 </ul>
 <h3 id="where-the-service-name-comes-from">Where the service name comes from</h3>
-<p>Each producer decides the service name; weft never rewrites it.</p>
-<p>| Producer | <code>&lt;service&gt;</code> | <code>&lt;kind&gt;</code> |
-|---|---|---|
-| weftd | The source's <code>service:</code> setting. If omitted: the systemd <code>unit:</code> name without <code>.service</code>, else the log file's name without its extension. | <code>main</code> unless the source sets a kind |
-| Heroku | The Heroku app name | The dyno process type (<code>web</code>, <code>worker</code>, ...); platform events go to <code>platform</code> |
-| Render | The Render service slug | The process type (<code>web</code>, <code>cron</code>, <code>bld</code>, ...) |
-| CloudWatch | The service you registered for the log group with <code>weft source add --service</code>. Events from unregistered log groups are dropped. | <code>main</code> |</p>
-<p>A namespace can hold env-less and env-bearing streams side by side
-as different tokens reauth over time. Env, region, deployment,
-host, and pod are query-time dimensions (<code>awk 'ENV == &quot;prod&quot;'</code>),
-not extra path segments — see <strong>Meta-variables</strong> for the full set.</p>
+<p>Each producer decides the service name, and weft uses it as reported.</p>
+<table>
+<thead>
+<tr>
+<th>Producer</th>
+<th><code>&lt;service&gt;</code></th>
+<th><code>&lt;kind&gt;</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>weftd</td>
+<td>The source's <code>service:</code> setting. If omitted: the systemd <code>unit:</code> name without <code>.service</code>, else the log file's name without its extension.</td>
+<td><code>main</code> unless the source sets a kind</td>
+</tr>
+<tr>
+<td>Heroku</td>
+<td>The Heroku app name</td>
+<td>The dyno process type (<code>web</code>, <code>worker</code>, ...); platform events go to <code>platform</code></td>
+</tr>
+<tr>
+<td>Render</td>
+<td>The Render service slug</td>
+<td>The process type (<code>web</code>, <code>cron</code>, <code>bld</code>, ...)</td>
+</tr>
+<tr>
+<td>CloudWatch</td>
+<td>The service you registered for the log group with <code>weft source add --service</code>. Events from unregistered log groups are dropped.</td>
+<td><code>main</code></td>
+</tr>
+</tbody>
+</table>
+<p>A namespace can hold both env-less and env-bearing streams,
+depending on how each token was minted. To read across services, use
+<code>cat &lt;namespace&gt;.log</code>; a glob such as <code>cat /log/&lt;namespace&gt;/*/&lt;service&gt;/main.log</code>
+or <code>cat /log/&lt;namespace&gt;/&lt;env&gt;/*.log</code> is refused, because globs may
+only pick kinds inside one service (<code>/log/&lt;namespace&gt;/&lt;env&gt;/&lt;service&gt;/*.log</code>).
+Env, region, deployment,
+host, and pod are query-time dimensions (<code>awk 'ENV == &quot;prod&quot;'</code>).
+See <strong>Meta-variables</strong> for the full set.</p>
 `,
 } as const;
 

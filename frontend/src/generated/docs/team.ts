@@ -17,34 +17,72 @@ const team = {
 read-only table you <code>cat</code> like any other file:</p>
 <pre><code>$ cat /etc/passwd
 USER             ROLE     STATUS    GROUPS
-alice@acme.com   owner    active    (all — implicit)
+alice@acme.com   admin    active    binmgr  cronmgr  configmgr  nsmgr  payments  payments+tokens
 bob@acme.com     member   active    binmgr  cronmgr  payments  payments+tokens
 carol@acme.com   member   invited   —
 </code></pre>
-<p>You never edit this file — the team is managed with <code>adduser</code> and
-<code>deluser</code> (owner-only), or from the dashboard's Members tab. Both write
-the same underlying data.</p>
+<p>The file is read-only. Manage the team with <code>adduser</code> and
+<code>deluser</code> (admin-only), or from the dashboard's Members tab. Both write
+the same underlying data. The admin is sometimes called the org owner;
+the role is <code>admin</code> everywhere it appears.</p>
 <h2 id="permissions-are-group-membership">Permissions are group membership</h2>
-<p>Every permission is a group. There are exactly two families:</p>
-<p><strong>Manager groups</strong> gate the three org-wide directories:</p>
-<p>| Group | Grants |
-|---|---|
-| <code>binmgr</code> | edit <code>/bin</code> (functions) |
-| <code>cronmgr</code> | edit <code>/cron.d</code> (crons) |
-| <code>configmgr</code> | edit <code>/etc</code> (notify.yaml, dashboards) |</p>
+<p>Every permission is a group. There are two families:</p>
+<p><strong>Manager groups</strong> gate the org-wide directories and namespace management:</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Grants</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>binmgr</code></td>
+<td>edit <code>/bin</code> (functions)</td>
+</tr>
+<tr>
+<td><code>cronmgr</code></td>
+<td>edit <code>/cron.d</code> (crons)</td>
+</tr>
+<tr>
+<td><code>configmgr</code></td>
+<td>edit <code>/etc</code> (notify.yaml, dashboards)</td>
+</tr>
+<tr>
+<td><code>nsmgr</code></td>
+<td>create and manage namespaces</td>
+</tr>
+</tbody>
+</table>
 <p><strong>Namespace groups</strong> gate log access, one per namespace:</p>
-<p>| Group | Grants |
-|---|---|
-| <code>&lt;namespace&gt;</code> | read (query) <code>/log/&lt;namespace&gt;</code> |
-| <code>&lt;namespace&gt;+tokens</code> | mint producer tokens for that namespace |</p>
-<p>Read and produce are independent — a member can have either or both.
-The <code>+tokens</code> facet uses <code>+</code> rather than <code>:</code> so it can never collide
-with a real namespace name.</p>
-<p>Owners have implicit full access and never appear in a group.</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Grants</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;namespace&gt;</code></td>
+<td>read (query) <code>/log/&lt;namespace&gt;</code></td>
+</tr>
+<tr>
+<td><code>&lt;namespace&gt;+tokens</code></td>
+<td>mint producer tokens for that namespace</td>
+</tr>
+</tbody>
+</table>
+<p>Read and produce are independent. A member can have either or both.
+The <code>+tokens</code> facet uses <code>+</code>, which cannot appear in a namespace name.</p>
+<p>Admins hold groups as other members do, and the roster lists the groups they have.</p>
 <h2 id="inviting-and-removing-people">Inviting and removing people</h2>
 <pre><code>adduser dana@acme.com          # invite — sends an invite email
 deluser dana@acme.com          # remove from the org entirely
 </code></pre>
+<p>The first argument must be an email address. <code>adduser --help</code> prints
+usage and changes nothing. An unknown flag, a first argument that is not
+an email, or extra arguments is a usage error.</p>
 <p><code>adduser &lt;email&gt;</code> with no group sends an invite link. The person joins
 when they accept it (or the next time they sign in with that email).</p>
 <h2 id="granting-and-revoking">Granting and revoking</h2>
@@ -57,12 +95,13 @@ deluser dana@acme.com payments         # revoke read
 groups dana@acme.com                   # what dana can do
 id dana@acme.com                       # role + groups
 </code></pre>
-<p>Group grants apply only once a member has accepted their invite — there
-is no staging. If you <code>adduser</code> someone to a group before they're on the
-team, they get invited then and there (the email goes out), and you
-re-run the command after they accept. An already-invited member who
-hasn't accepted yet gets a clear error, not a silent no-op.</p>
-<p><code>adduser</code>/<code>deluser</code> are owner-only; <code>groups</code> and <code>id</code> are readable by
+<p><code>groups</code> and <code>id</code> with no argument describe you. For an email that
+is not on the team they print <code>no such member: &lt;email&gt;</code>.</p>
+<p>Group grants apply after a member has accepted their invite. If you <code>adduser</code>
+someone to a group before they are on the team, they are invited at that point
+(the email goes out), and you re-run the command after they accept. An
+already-invited member who has not accepted yet gets an error.</p>
+<p><code>adduser</code>/<code>deluser</code> are admin-only; <code>groups</code> and <code>id</code> are readable by
 any member.</p>
 <p>See <code>man passwd</code> in the shell for the quick reference.</p>
 `,

@@ -10,27 +10,40 @@ const alertingStrategies = {
     { level: 2, id: "the-four-shapes", text: "The four shapes" },
     { level: 3, id: "1-single-cron-scalar", text: "1. Single-cron scalar" },
     { level: 3, id: "2-multi-row-per-tag", text: "2. Multi-row per-tag" },
-    { level: 3, id: "3-composite-state-across-multiple-crons", text: "3. Composite (state across multiple crons)" },
+    { level: 3, id: "3-composite-more-than-one-condition", text: "3. Composite (more than one condition)" },
     { level: 3, id: "4-aggregated-value-windowed-alerts", text: "4. Aggregated-value (windowed) alerts" },
-    { level: 2, id: "trend--anomaly-vs-threshold", text: "Trend / anomaly vs threshold" },
-    { level: 2, id: "the-absent-vs-zero-gotcha", text: "The absent-vs-zero gotcha" },
+    { level: 2, id: "trend-anomaly-and-threshold-conditions", text: "Trend, anomaly and threshold conditions" },
+    { level: 2, id: "absent-and-zero-values", text: "Absent and zero values" },
     { level: 2, id: "debouncing-flaps", text: "Debouncing flaps" },
     { level: 2, id: "anti-patterns", text: "Anti-patterns" },
     { level: 2, id: "see-also", text: "See also" },
   ],
   html: `<p>This page is the catalogue of <em>shapes</em> an alert can take in weft —
-single-cron scalar alerts, multi-row per-tag alerts, and composite
-alerts that fire on the combined state of several crons. The
-<code>alert</code> builtin's grammar lives in <code>man alert</code>; the <code>weft::*</code> family
-that backs predicates and aggregates lives in <strong>Weft functions</strong>.
-This page is about which shape fits which monitoring problem.</p>
+single-cron scalar alerts, multi-row per-tag alerts, composite
+alerts that fire on several conditions at once, and
+aggregated-value alerts over a window. The <code>alert</code> builtin's grammar
+lives in <code>man alert</code>; the <code>weft::*</code> family that backs predicates and
+aggregates lives in <strong>Weft functions</strong>. This page is about which
+shape fits which monitoring problem.</p>
+<p>A cron run reads only the logs from its own schedule interval: a
+<code>*/5</code> cron sees the last five minutes. The recipes here count with
+<code>grep ... | wc -l</code> and do not limit rows with <code>head -n</code> or
+<code>tail -n</code>: a line count caps the rows read, so on a busy interval it
+truncates the window and the cron undercounts. (At the prompt, <code>tail -n 500 | awk 'LEVEL==&quot;ERROR&quot;' | wc -l</code> counts errors among the last 500 rows
+only, and <code>grep ERROR | tail -n 5</code> is the last five matches.) To try a
+recipe interactively, set the window with <code>range</code> (see <code>man range</code>) and
+run the pipeline without its <code>alert</code> stage, or with <code>alert</code> as the last
+stage to see whether it fires.</p>
+<p>Every example sends its alert to an alias with <code>--notify=&lt;alias&gt;</code>.
+Aliases (<code>ops</code>, <code>critical</code> and so on) are defined in
+<code>/etc/notify.yaml</code>; see <strong>Notifications</strong>.</p>
 <h2 id="the-four-shapes">The four shapes</h2>
 <h3 id="1-single-cron-scalar">1. Single-cron scalar</h3>
 <p>The most common form. The cron's pipeline ends in <code>| alert &lt;cond&gt;</code>;
 each tick produces one numeric value that the alert evaluates.</p>
 <pre><code># /cron.d/error-rate
 # schedule: every 1m
-tail -n 500 /log/myco/api/main.log | grep ERROR | wc -l | alert above 50 --notify=ops
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 50 --notify=ops
 </code></pre>
 <p>Use this when &quot;is the metric above a known threshold?&quot; answers
 your question and the metric is one number.</p>
@@ -41,64 +54,83 @@ your question and the metric is one number.</p>
 independently against its tag.</p>
 <pre><code># /cron.d/disk-per-host
 # schedule: every 1m
-tail /log/weft/shard/main.log \\
-  | jq -r 'select(.type==&quot;disk&quot;) | &quot;\\(._host) \\(.pct)&quot;' \\
+cat /log/myco/prod/api/metrics.log \\
+  | jq -r 'select(.type==&quot;disk&quot;) | &quot;\\(.host) \\(.pct)&quot;' \\
   | alert above 80 -k 2 -t 1 --notify=ops
 </code></pre>
 <p><code>-k 2</code> says &quot;field 2 holds the numeric value&quot;; <code>-t 1</code> says &quot;field
 1 names this row&quot; (the host). Each host opens and closes incidents
-independently — you get one PagerDuty incident per affected host,
-not one giant incident for &quot;anything's disk is over 80%.&quot;</p>
+independently, giving one PagerDuty incident per affected host.</p>
 <p><code>-k</code> and <code>-t</code> also accept JSON paths, which skips the <code>jq -r</code>
-reformatting:</p>
-<pre><code>tail /log/weft/shard/main.log \\
-  | jq 'select(.type==&quot;disk&quot;)' \\
-  | alert above 80 -k .pct -t ._host --notify=ops
+reformatting. Use <code>jq -c</code> so each row stays on one line; multi-line
+<code>jq</code> output is read one line per row:</p>
+<pre><code>cat /log/myco/prod/api/metrics.log \\
+  | jq -c 'select(.type==&quot;disk&quot;)' \\
+  | alert above 80 -k .pct -t .host --notify=ops
 </code></pre>
 <p>A single alert may not mix the two forms — both <code>-k</code> and <code>-t</code> must
 be positional, or both must be <code>.</code>-prefixed paths.</p>
-<p>The same shape works with any indexed dimension as the tag — swap
-<code>._host</code> for <code>._deployment</code>, <code>._pod</code>, <code>._region</code>, or any
-combination (<code>&quot;\\(._region) \\(._host) \\(.pct)&quot;</code> for region-prefixed
-host names).</p>
-<h3 id="3-composite-state-across-multiple-crons">3. Composite (state across multiple crons)</h3>
-<p>When the alert depends on more than one cron — &quot;page me when error-
-rate is high <strong>and</strong> the canary stopped pinging&quot; — compose
-predicates with bash <code>&amp;&amp;</code> <code>||</code> <code>!</code> or Lua <code>and</code> <code>or</code> <code>not</code>, then
-hand the resulting exit code to <code>alert</code> via <code>--if-zero &quot;$?&quot;</code>:</p>
-<pre><code class="language-bash"># /cron.d/deploy-danger
+<p>The same shape works with any field of the row as the tag — swap
+<code>.host</code> for <code>.deployment</code> or <code>.path</code>. The tag is one token, so to
+combine fields use the positional form and join them without a
+space: <code>&quot;\\(.deployment)/\\(.host) \\(.pct)&quot;</code> gives tags like
+<code>api/web-1</code>.</p>
+<h3 id="3-composite-more-than-one-condition">3. Composite (more than one condition)</h3>
+<p>When the alert depends on more than one thing — &quot;page me when errors
+are high <strong>and</strong> the canary stopped pinging&quot; — there are two ways to
+combine conditions. Both end in a single pipeline whose last stage is
+<code>alert</code>, because <code>alert</code> works only as the last (or only) command of a
+script.</p>
+<p><strong>Over the cron's time range.</strong> Read every source the condition
+needs, tally each leg in one <code>awk</code> pass, and print <code>1</code> when the whole
+condition holds and <code>0</code> otherwise. Use this when the legs are visible
+in the logs themselves:</p>
+<pre><code># /cron.d/deploy-danger
 # schedule: every 1m
-weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping
-alert --if-zero &quot;$?&quot; --notify=critical
+cat /log/myco/prod/api/main.log /log/myco/prod/canary/main.log \\
+  | awk 'LEVEL==&quot;ERROR&quot;{e++} SERVICE==&quot;canary&quot;{c++}
+         END{print (e&gt;50 &amp;&amp; c+0==0) ? 1 : 0}' \\
+  | alert above 0 --notify=critical
 </code></pre>
-<p><code>weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping</code> exits
-0 when both predicates fire (the bash convention for <em>success</em>);
-<code>&quot;$?&quot;</code> expands to that exit code; <code>alert --if-zero &quot;$?&quot;</code> fires when
-the expanded value is <code>&quot;0&quot;</code>.</p>
+<p><code>e</code> counts errors and <code>c</code> counts canary lines in the cron's interval;
+<code>c+0==0</code> is true when no canary line arrived at all. <code>&amp;&amp;</code> is AND,
+<code>||</code> is OR and <code>!</code> is NOT inside the <code>awk</code> expression:
+<code>print (e&gt;50 || p&gt;0) ? 1 : 0</code> fires when either leg is high, and
+<code>print (e&gt;50 &amp;&amp; !m) ? 1 : 0</code> fires only when the <code>m</code> leg is zero (say,
+a maintenance marker).</p>
+<p><strong>Across crons' history.</strong> When the legs are the stored results of other
+crons, compose the <code>weft::*</code> predicates with bash <code>&amp;&amp;</code> <code>||</code> <code>!</code> in a
+subshell, end it with an <code>echo</code>, and pipe that into <code>alert</code>. The
+subshell prints <code>fire</code> only when the whole condition holds, and
+<code>alert</code>'s default <code>any</code> condition fires on any output:</p>
+<pre><code># /cron.d/deploy-danger
+# schedule: every 1m
+(weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping &amp;&amp; echo fire) | alert --notify=critical
+</code></pre>
+<p><code>weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping</code> succeeds
+(exit 0, the bash convention for <em>success</em>) when both predicates fire,
+so the <code>echo</code> runs. <code>weft::is_absent</code> fires when the named cron has no
+result: it doesn't exist, has never run, or its latest output is
+empty (with a window, such as <code>weft::is_absent canary-ping 10m</code>: no result
+landed in it). (A bad window, one over the 24h cap, or a history that can't
+be read doesn't fire; in a bash predicate the reason is printed on
+stderr.)</p>
 <p><code>||</code> (OR) and <code>!</code> (NOT) work the same way:</p>
-<pre><code class="language-bash">weft::is_above error-rate 50 || weft::is_above payment-fail 0
-alert --if-zero &quot;$?&quot; --notify=critical
+<pre><code>(weft::is_above error-rate 50 || weft::is_above payment-fail 0 &amp;&amp; echo fire) | alert --notify=critical
 
-! weft::is_absent maintenance-flag &amp;&amp; weft::is_above error-rate 50
-alert --if-zero &quot;$?&quot; --notify=critical   # fires only outside maintenance
+(! weft::is_absent maintenance-flag &amp;&amp; weft::is_above error-rate 50 &amp;&amp; echo fire) | alert --notify=critical   # fires only outside maintenance
 </code></pre>
-<p>The Lua surface mirrors the bash predicates one-for-one. Boolean
-composition uses native <code>and</code> <code>or</code> <code>not</code>; emit <code>1</code> or <code>0</code> and pipe
-to <code>alert above 0</code>:</p>
-<pre><code class="language-lua">-- /cron.d/deploy-danger
--- schedule: every 1m
-
-if weft.is_above(&quot;error-rate&quot;, 50) and weft.is_absent(&quot;canary-ping&quot;) then
-  print(1)
-else
-  print(0)
-end
-</code></pre>
-<p>Pipe the cron's stdout through <code>| alert above 0 --notify=critical</code>,
-or wrap with the bash <code>--if-zero</code> form. Lua wins when the chain
-has more than two clauses, when the predicate uses computed values,
+<p>Lua mirrors the bash predicates one-for-one, with native <code>and</code> <code>or</code>
+<code>not</code>. Lua lives in a <code>/bin/</code> script (crons are bash), which prints <code>1</code>
+or <code>0</code> and which the cron pipes into <code>alert above 0</code>. Use Lua when the
+chain has more than two clauses, when the predicate uses computed values,
 or when you want a meaningful debug print:</p>
-<pre><code class="language-lua">local rate = tonumber(weft.latest(&quot;error-rate&quot;)) or 0
+<pre><code class="language-lua">#!/usr/bin/env lua
+-- /bin/deploy_danger
+local rate = 0
+if not weft.is_absent(&quot;error-rate&quot;) then
+  rate = tonumber(weft.latest(&quot;error-rate&quot;)) or 0
+end
 local canary_dead = weft.is_absent(&quot;canary-ping&quot;)
 local in_maintenance = not weft.is_absent(&quot;maintenance-flag&quot;)
 
@@ -110,61 +142,102 @@ else
   print(0)
 end
 </code></pre>
+<pre><code># /cron.d/deploy-danger
+# schedule: every 1m
+deploy_danger | alert above 0 --notify=critical
+</code></pre>
 <h3 id="4-aggregated-value-windowed-alerts">4. Aggregated-value (windowed) alerts</h3>
-<p>When the question is &quot;what does the value look like over a window&quot;
-rather than &quot;what is it right now,&quot; use a <code>weft::*</code> aggregate in
-the cron body and alert against its stdout:</p>
+<p>When the question is &quot;what does the value look like over a window,&quot;
+use a <code>weft::*</code> aggregate in the cron body and alert against its
+stdout:</p>
 <pre><code># /cron.d/error-rate-hourly
 # schedule: every 5m
 echo $(weft::avg error-rate 1h) | alert above 50 --notify=ops
 </code></pre>
 <p>Or compose with the stdin comparators when chaining into a
 composite:</p>
-<pre><code class="language-bash">weft::avg error-rate 5m | weft::is_gt 50 &amp;&amp; weft::is_absent canary-ping
-alert --if-zero &quot;$?&quot; --notify=critical
+<pre><code>(weft::avg error-rate 5m | weft::is_gt 50 &amp;&amp; weft::is_absent canary-ping &amp;&amp; echo fire) | alert --notify=critical
 </code></pre>
 <p>The aggregates' window caps (24h for <code>avg</code>/<code>min</code>/<code>max</code>/etc., 14d for
 endpoint funcs) limit how far back the rolling window can reach.
 For longer-horizon comparisons, write a cron that itself runs an
 aggregate every 5 minutes — its stored history then <em>is</em> the
 longer-horizon series.</p>
-<h2 id="trend--anomaly-vs-threshold">Trend / anomaly vs threshold</h2>
-<p>| Want to fire when... | Use |
-|---|---|
-| Value crosses a known threshold | <code>alert above</code> / <code>alert below</code> (or <code>weft::is_above</code> / <code>weft::is_below</code> in a composite) |
-| Value differs from the previous tick at all | <code>weft::has_changed</code> |
-| No result came in | <code>weft::is_absent</code> |
-| Value rose/fell by N% vs recent baseline | <code>alert rising</code> / <code>alert falling</code> (or <code>weft::is_rising</code> / <code>weft::is_falling</code>) |
-| Value is unusual for <em>this cron's recent history</em> | <code>weft::is_outlier</code> |
-| Value is unusual for <em>this cron at this time of day/week</em> | <code>weft::is_seasonal</code> |</p>
+<h2 id="trend-anomaly-and-threshold-conditions">Trend, anomaly and threshold conditions</h2>
+<table>
+<thead>
+<tr>
+<th>Want to fire when...</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Value crosses a known threshold</td>
+<td><code>alert above</code> / <code>alert below</code> (or <code>weft::is_above</code> / <code>weft::is_below</code> in a composite)</td>
+</tr>
+<tr>
+<td>Value differs from the previous tick at all</td>
+<td><code>weft::has_changed</code></td>
+</tr>
+<tr>
+<td>No result came in</td>
+<td><code>weft::is_absent</code></td>
+</tr>
+<tr>
+<td>Value rose/fell by N% vs recent baseline</td>
+<td><code>alert rising</code> / <code>alert falling</code> (or <code>weft::is_rising</code> / <code>weft::is_falling</code>)</td>
+</tr>
+<tr>
+<td>Value is unusual for <em>this cron's recent history</em></td>
+<td><code>weft::is_outlier</code></td>
+</tr>
+<tr>
+<td>Value is unusual for <em>this cron at this time of day/week</em></td>
+<td><code>weft::is_seasonal</code></td>
+</tr>
+</tbody>
+</table>
+<p>The functions take different arguments:</p>
+<ul>
+<li><code>weft::is_rising &lt;cron&gt; [&lt;pct&gt;] [&lt;window&gt;]</code>, and <code>weft::is_falling</code>
+likewise. <code>&lt;pct&gt;</code> is a bare number such as <code>50</code>; it takes no <code>%</code> suffix.</li>
+<li><code>weft::is_outlier &lt;cron&gt; &lt;n_stddev&gt; &lt;window&gt;</code></li>
+<li><code>weft::is_seasonal &lt;cron&gt; &lt;n_stddev&gt; &lt;period&gt; &lt;window&gt;</code></li>
+</ul>
+<p>Windows and periods are Go durations plus <code>d</code> (24 hours) and <code>w</code> (7
+days), and they combine: <code>30m</code>, <code>1h</code>, <code>1d</code>, <code>1w</code>, <code>1d12h</code>. See <strong>Weft
+functions</strong> for the caps on each function.</p>
 <p>Use <code>is_outlier</code> when &quot;what's normal&quot; doesn't depend on the clock —
 host memory, queue depth, error rate of a steady-state service. Use
 <code>is_seasonal</code> when traffic has weekly/daily cycles — a Tuesday-2pm
 threshold under-pages on Saturday at 3am and over-pages at the
 nightly batch job.</p>
-<h2 id="the-absent-vs-zero-gotcha">The absent-vs-zero gotcha</h2>
-<p><code>weft::latest</code> of a missing cron returns the empty string;
-<code>tonumber(&quot;&quot;)</code> in Lua returns <code>nil</code>; arithmetic against <code>nil</code>
-errors. Always guard:</p>
-<pre><code class="language-lua">local v = tonumber(weft.latest(&quot;foo&quot;)) or 0   -- treat absent as zero
+<h2 id="absent-and-zero-values">Absent and zero values</h2>
+<p>A cron with no usable value and a value of zero are different cases. In
+bash, <code>weft::latest</code> of a cron that doesn't exist is an error; in Lua, <code>tonumber(&quot;&quot;)</code> returns <code>nil</code> and arithmetic against
+<code>nil</code> errors. Always check for absence and guard the conversion:</p>
+<pre><code class="language-lua">local v = 0   -- treat absent as zero
+if not weft.is_absent(&quot;foo&quot;) then
+  v = tonumber(weft.latest(&quot;foo&quot;)) or 0
+end
 </code></pre>
-<p>In bash, predicate builtins handle this for you — <code>weft::is_above missing 50</code> exits 1 (no fire), it doesn't crash.</p>
-<p>If you actually want to distinguish absent from zero, use
+<p>In bash, predicate builtins handle this for you — <code>weft::is_above missing 50</code> exits 1 (no fire).</p>
+<p>To distinguish absent from zero, use
 <code>weft::is_absent</code> explicitly in the chain:</p>
-<pre><code class="language-bash">weft::is_absent error-rate    # fires when there's no recent error-rate result
+<pre><code>weft::is_absent error-rate    # exit 0 (fires) when error-rate has no result, or doesn't exist
 # ...whereas...
 weft::is_above error-rate 0   # fires only when there IS a result AND it's &gt; 0
 </code></pre>
 <h2 id="debouncing-flaps">Debouncing flaps</h2>
 <p>Composite conditions tend to flap — each leg individually crosses
 back and forth across its threshold, and the composite pops whenever
-any pair simultaneously trips. The existing <code>alert --duration &lt;dur&gt;</code>
+any pair simultaneously trips. The <code>alert --duration &lt;dur&gt;</code>
 flag handles this: it requires the trigger to hold for the entire
 window before firing. Once the composite output is a scalar (1 or 0
 piped through alert), <code>--duration</code> works the same as for any other
-alert.</p>
-<pre><code class="language-bash">weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping
-alert --if-zero &quot;$?&quot; --duration 5m --notify=critical
+alert. (<code>--duration</code> takes <code>s</code>, <code>m</code> and <code>h</code>; <code>1d</code> is rejected.)</p>
+<pre><code>(weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping &amp;&amp; echo 1 || echo 0) | alert above 0 --duration 5m --notify=critical
 </code></pre>
 <p>Five minutes of sustained composite-true before the page.</p>
 <p>The same applies to multi-row alerts — <code>--duration</code> is per-tag, so
@@ -174,15 +247,17 @@ incident opens.</p>
 <h2 id="anti-patterns">Anti-patterns</h2>
 <ul>
 <li><strong>Don't fan out alerts from inside the chain.</strong> A predicate
-builtin is a <em>test</em>, not a side-effect. If you want one cron to
-page multiple aliases, write multiple <code>/cron.d/</code> entries or use
+builtin is a test and has no side effects. To page multiple
+aliases from one cron, write multiple <code>/cron.d/</code> entries or use
 one <code>notify.yaml</code> alias that fans out to multiple destinations.</li>
 <li><strong>Don't put <code>weft::*</code> predicates on the right side of <code>|</code>.</strong> They
-read state, not stdin. Pipe values through <code>weft::is_gt</code> /
-<code>weft::is_lt</code> for stdin-driven comparisons.</li>
+read stored state. For stdin-driven comparisons, pipe values
+through <code>weft::is_gt</code> / <code>weft::is_lt</code>.</li>
 <li><strong>Don't compose state-mutating commands in the chain.</strong> Keep the
-predicate composition side-effect-free. <code>weft::is_above ... &amp;&amp; curl https://my-deploy-bot/...</code> works but couples alerting to
-unrelated I/O and makes failure modes harder to reason about.</li>
+predicate composition side-effect-free: join <code>weft::*</code> predicates
+with <code>&amp;&amp;</code>, <code>||</code> and <code>!</code>, and nothing else. Hanging an unrelated
+command off the chain couples alerting to unrelated I/O and makes
+failure modes harder to reason about.</li>
 <li><strong>Don't reuse a single-row alert for multi-row data.</strong> Multiple
 rows on stdin without <code>-k</code>/<code>-t</code> collapse into one scalar, which
 the alert will reject as non-numeric. Either reduce upstream with
@@ -194,7 +269,7 @@ the alert will reject as non-numeric. Either reduce upstream with
 predicates, and stdin comparators.</li>
 <li><strong>Crons</strong> — scheduled pipelines and incident lifecycle.</li>
 <li><code>man alert</code> — the alert builtin's full grammar.</li>
-<li><code>docs/manual/notify.md</code> — alias and destination configuration.</li>
+<li><strong>Notifications</strong> — alias and destination configuration.</li>
 </ul>
 `,
 } as const;

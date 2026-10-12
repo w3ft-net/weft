@@ -10,59 +10,139 @@ const metavars = {
     { level: 2, id: "reserved-set", text: "Reserved set" },
     { level: 3, id: "naming-convention", text: "Naming convention" },
     { level: 2, id: "path-layout", text: "Path layout" },
-    { level: 2, id: "pushdown", text: "Pushdown" },
+    { level: 2, id: "speed", text: "Speed" },
     { level: 2, id: "recipes", text: "Recipes" },
     { level: 3, id: "per-host-average-over-a-window", text: "Per-host average over a window" },
     { level: 3, id: "filter-by-env-across-deployments", text: "Filter by env across deployments" },
     { level: 3, id: "compare-a-single-deployment-across-regions", text: "Compare a single deployment across regions" },
   ],
   html: `<h1 id="meta-variables">Meta-variables</h1>
-<p>Meta-variables expose row-level dimensions as fast-path filters in
-awk and jq pipelines. Where a payload field would resolve through
-<code>json_extract</code>, a meta-variable maps directly to a real column on the
-shard — order-of-magnitude faster, and the row-group min/max
-statistics stay useful.</p>
+<p>Meta-variables expose row-level dimensions as fast filters in awk and
+jq pipelines. Filtering on a meta-variable is much faster than filtering
+on a field inside the row's JSON payload, because weft can skip data
+that can't match.</p>
 <h2 id="reserved-set">Reserved set</h2>
-<p>| awk                        | jq                       | Column           | Source                                                    |
-|----------------------------|--------------------------|------------------|-----------------------------------------------------------|
-| <code>NAMESPACE</code>                | <code>._namespace</code>            | <code>namespace</code>      | the <code>&lt;namespace&gt;</code> path segment / agent token's namespace  |
-| <code>SERVICE</code>                  | <code>._service</code>              | <code>service</code>        | source declaration, log filename, or HTTP ingest payload  |
-| <code>KIND</code>                     | <code>._kind</code>                 | <code>kind</code>           | the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>) |
-| <code>HOST</code> <em>(alias <code>INSTANCE</code>)</em> | <code>._host</code> <em>(alias <code>._instance</code>)</em> | <code>instance</code>       | weftd <code>os.Hostname()</code>                                     |
-| <code>LEVEL</code>                    | <code>._level</code>                | <code>level</code>          | schema-extracted from the row                             |
-| <code>TS</code>                       | <code>._ts</code>                   | <code>ts</code>             | schema-extracted from the row                             |
-| <code>DEPLOYMENT</code>               | <code>._deployment</code>           | <code>deployment</code>     | weftd <code>deployment:</code> config (or k8s/ASG)                   |
-| <code>ENV</code>                      | <code>._env</code>                  | <code>env</code>            | bound to the agent token at mint time                     |
-| <code>VERSION</code>                  | <code>._version</code>              | <code>version</code>        | weftd <code>version.file:</code> (live) or <code>version.env:</code> (snapshot) |
-| <code>REGION</code>                   | <code>._region</code>               | <code>region</code>         | cloud metadata probe at agent startup                     |
-| <code>CLUSTER</code>                  | <code>._cluster</code>              | <code>cluster</code>        | weftd k8s mode                                            |
-| <code>K8S_NAMESPACE</code>            | <code>._k8s_namespace</code>        | <code>k8s_namespace</code>  | weftd k8s mode (parsed from <code>/var/log/pods/…</code>)            |
-| <code>POD</code>                      | <code>._pod</code>                  | <code>pod</code>            | weftd k8s mode                                            |
-| <code>CONTAINER</code>                | <code>._container</code>            | <code>container</code>      | weftd k8s mode                                            |
-| <code>NODE</code>                     | <code>._node</code>                 | <code>node</code>           | weftd <code>dimensions.node:</code> (file-sourced)                   |</p>
-<p>A row that wasn't tagged with a given dimension stamps <code>NULL</code> —
-queries on <code>ENV == &quot;prod&quot;</code> neither include nor exclude such rows;
-they simply don't match the predicate.</p>
+<table>
+<thead>
+<tr>
+<th>awk</th>
+<th>jq</th>
+<th>Column</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NAMESPACE</code></td>
+<td><code>._namespace</code></td>
+<td><code>namespace</code></td>
+<td>the <code>&lt;namespace&gt;</code> path segment / agent token's namespace</td>
+</tr>
+<tr>
+<td><code>SERVICE</code></td>
+<td><code>._service</code></td>
+<td><code>service</code></td>
+<td>source declaration, log filename, or HTTP ingest payload</td>
+</tr>
+<tr>
+<td><code>KIND</code></td>
+<td><code>._kind</code></td>
+<td><code>kind</code></td>
+<td>the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>)</td>
+</tr>
+<tr>
+<td><code>HOST</code> <em>(alias <code>INSTANCE</code>)</em></td>
+<td><code>._host</code> <em>(alias <code>._instance</code>)</em></td>
+<td><code>instance</code></td>
+<td>the agent's hostname</td>
+</tr>
+<tr>
+<td><code>LEVEL</code></td>
+<td><code>._level</code></td>
+<td><code>level</code></td>
+<td>schema-extracted from the row</td>
+</tr>
+<tr>
+<td><code>TS</code></td>
+<td><code>._ts</code></td>
+<td><code>ts</code></td>
+<td>schema-extracted from the row</td>
+</tr>
+<tr>
+<td><code>DEPLOYMENT</code></td>
+<td><code>._deployment</code></td>
+<td><code>deployment</code></td>
+<td>weftd <code>deployment:</code> config (or k8s/ASG)</td>
+</tr>
+<tr>
+<td><code>ENV</code></td>
+<td><code>._env</code></td>
+<td><code>env</code></td>
+<td>bound to the agent token at mint time</td>
+</tr>
+<tr>
+<td><code>VERSION</code></td>
+<td><code>._version</code></td>
+<td><code>version</code></td>
+<td>weftd <code>version.file:</code> (live) or <code>version.env:</code> (snapshot)</td>
+</tr>
+<tr>
+<td><code>REGION</code></td>
+<td><code>._region</code></td>
+<td><code>region</code></td>
+<td>cloud metadata probe at agent startup</td>
+</tr>
+<tr>
+<td><code>CLUSTER</code></td>
+<td><code>._cluster</code></td>
+<td><code>cluster</code></td>
+<td>weftd k8s mode</td>
+</tr>
+<tr>
+<td><code>K8S_NAMESPACE</code></td>
+<td><code>._k8s_namespace</code></td>
+<td><code>k8s_namespace</code></td>
+<td>weftd k8s mode</td>
+</tr>
+<tr>
+<td><code>POD</code></td>
+<td><code>._pod</code></td>
+<td><code>pod</code></td>
+<td>weftd k8s mode</td>
+</tr>
+<tr>
+<td><code>CONTAINER</code></td>
+<td><code>._container</code></td>
+<td><code>container</code></td>
+<td>weftd k8s mode</td>
+</tr>
+<tr>
+<td><code>NODE</code></td>
+<td><code>._node</code></td>
+<td><code>node</code></td>
+<td>weftd <code>dimensions.node:</code> (file-sourced)</td>
+</tr>
+</tbody>
+</table>
+<p>A row without a given dimension carries an empty string. <code>ENV == &quot;prod&quot;</code> does not match it, but <code>ENV != &quot;prod&quot;</code> does.</p>
 <h3 id="naming-convention">Naming convention</h3>
 <p>awk meta-variables are all-caps short flat names — <code>ENV</code>, <code>POD</code>,
-<code>DEPLOYMENT</code> — matching the pre-existing <code>LEVEL</code> / <code>SERVICE</code> /
-<code>INSTANCE</code> shape. The source coordinates split into three columns —
-<code>NAMESPACE</code>, <code>SERVICE</code>, <code>KIND</code> — each addressed directly rather
-than rolled into one conflated value.</p>
-<p>Bare, not <code>$</code>-prefixed: <code>$NAME</code> in real awk is field-by-variable-index
-syntax (<code>$n</code> where <code>n</code> is <code>NAME</code>'s value), unrelated to a named
-variable's own value — it can't carry a string like <code>&quot;web-1&quot;</code>. A bare
-<code>HOST</code> is an ordinary awk global, exactly like awk's own built-in
-<code>NR</code>/<code>NF</code>/<code>FILENAME</code>.</p>
+<code>DEPLOYMENT</code>, <code>LEVEL</code>, <code>SERVICE</code>, <code>INSTANCE</code>. The source coordinates
+are three columns — <code>NAMESPACE</code>, <code>SERVICE</code>, <code>KIND</code> — each addressed
+directly.</p>
+<p>Meta-variables are written bare, without a <code>$</code> prefix: <code>$NAME</code> in awk is
+field-by-variable-index syntax (<code>$n</code> where <code>n</code> is <code>NAME</code>'s value) and
+cannot carry a string like <code>&quot;web-1&quot;</code>. A bare <code>HOST</code> is an ordinary awk
+global, like awk's built-in <code>NR</code>/<code>NF</code>/<code>FILENAME</code>.</p>
 <p>jq meta-variables use leading-underscore lowercase — <code>._env</code>,
-<code>._pod</code>. The underscore disambiguates from real JSON payload keys:
+<code>._pod</code>. The underscore separates the columns from JSON payload keys:
 <code>.pod</code> is whatever the producer wrote into the row body; <code>._pod</code> is
 the column. Real JSONL sometimes carries <code>Pod</code> / <code>PoD</code> / <code>POD</code> keys,
-so the underscore is more reliable than relying on case alone.</p>
-<p><code>NAMESPACE</code> is weft's own logical token-grouping — the
-<code>&lt;namespace&gt;</code> segment in the path (<code>/log/&lt;namespace&gt;/...</code>). The
-Kubernetes namespace, a distinct dimension, takes the verbose
-<code>K8S_NAMESPACE</code> (<code>._k8s_namespace</code>) so the two never collide.</p>
+so the underscore marks the column reliably in any case.</p>
+<p><code>NAMESPACE</code> is weft's logical token grouping — the <code>&lt;namespace&gt;</code>
+segment in the path (<code>/log/&lt;namespace&gt;/...</code>). The Kubernetes
+namespace is a distinct dimension named <code>K8S_NAMESPACE</code>
+(<code>._k8s_namespace</code>).</p>
 <h2 id="path-layout">Path layout</h2>
 <p>The pseudofile path encodes the namespace, service, and stream
 kind, plus the env when the producing token carries one:</p>
@@ -77,58 +157,59 @@ distinguishes the env-less form from the env-bearing one.</p>
 <p>Tokens minted with <code>weft token create --namespace foo --env prod</code>
 produce rows that resolve to the 4-segment path; tokens without
 <code>--env</code> produce rows at the 3-segment path. A namespace can hold both
-layouts side by side as different tokens reauth over time — segment
-count alone disambiguates them, so a reader token spanning several
-envs never has to guess.</p>
-<pre><code>weft&gt; ls /log/myco
-prod/                  ← env-bearing token
-staging/               ← env-bearing token
-api/                   ← env-less token
+layouts side by side, depending on how each token was minted.</p>
+<pre><code>ls /log/myco
 </code></pre>
-<p><code>cat /log/myco/api/main.log</code> reads the env-less stream; <code>cat /log/myco/prod/api/main.log</code> reads the env-prod stream; <code>cat /log/myco/*/api/main.log</code> matches across every env that has one. No
-backfill, no synthetic placeholder env.</p>
-<p>Region is intentionally <strong>not</strong> part of the path layout — it's a
-query-time filter (<code>awk 'REGION == &quot;us-east-2&quot;'</code>) only. Same for
-deployment, host, cluster, pod: those are query-time dimensions, not
-filesystem axes.</p>
-<h2 id="pushdown">Pushdown</h2>
-<p>Each reserved meta-variable rewrites to a direct column predicate:</p>
-<pre><code>awk 'ENV == &quot;prod&quot;'                  → WHERE env = 'prod'
-jq 'select(._env == &quot;prod&quot;)'          → WHERE env = 'prod'
-awk 'POD ~ &quot;api-7f9b&quot;'               → WHERE pod LIKE 'api-7f9b%'
-jq 'select(._level == &quot;ERROR&quot;)'       → WHERE level = 'ERROR'
-</code></pre>
-<p>For non-reserved fields, the existing JSON-extract pushdown still
-applies — slower than a column predicate, but still pushdown:</p>
-<pre><code>jq 'select(.feature_flag == &quot;abc&quot;)'
-  → WHERE json_extract_string(payload, '$.feature_flag') = 'abc'
-</code></pre>
-<p>A pipeline mixing both becomes a single <code>WHERE</code> with the column
-predicate (fast) AND the JSON-extract predicate (slower); DuckDB
-plans it as one stage.</p>
+<p>lists the env directories (<code>prod/</code>, <code>staging/</code>) next to any env-less
+service directories (<code>api/</code>).</p>
+<p><code>cat /log/myco/prod/api/main.log</code> reads one env. The three-segment
+<code>cat /log/myco/api/main.log</code> reads that service across every env,
+including the env-less stream, and <code>ls /log/myco/api</code> lists the kinds
+it carries. To read a whole namespace, use <code>cat myco.log</code> and filter
+on <code>ENV</code>: <code>cat myco.log | awk 'ENV == &quot;prod&quot;'</code>. A glob that would
+read across services or envs, such as <code>/log/myco/*/api/main.log</code>,
+<code>/log/myco/prod/*.log</code> or <code>cat *.log</code>, is refused with an error;
+globs are allowed only to pick kinds inside one service
+(<code>/log/myco/prod/api/*.log</code>).</p>
+<p>Region is a query-time filter (<code>awk 'REGION == &quot;us-east-2&quot;'</code>) and is
+absent from the path layout. Deployment, host, cluster and pod are also
+query-time dimensions.</p>
+<h2 id="speed">Speed</h2>
+<p>Filtering on a reserved meta-variable is the fast path, in awk
+(<code>awk 'ENV == &quot;prod&quot;'</code>, <code>awk 'POD ~ &quot;api-7f9b&quot;'</code>) and in jq
+(<code>jq 'select(._level == &quot;ERROR&quot;)'</code>). A filter on any other field, such
+as <code>jq 'select(.feature_flag == &quot;abc&quot;)'</code>, reads and parses every row in
+the time range. One pipeline can mix both: the meta-variable filters
+narrow the data first and the rest runs on what remains.</p>
+<p>A hard line count (<code>head -n N</code> or <code>tail -n N</code>) stops later filters from
+narrowing the read: <code>tail -n 500 | awk 'LEVEL == &quot;ERROR&quot;' | wc -l</code>
+counts the errors among the last 500 rows, while
+<code>awk 'LEVEL == &quot;ERROR&quot;' | tail -n 5</code> gives the last 5 errors.</p>
 <h2 id="recipes">Recipes</h2>
 <h3 id="per-host-average-over-a-window">Per-host average over a window</h3>
-<p>A cron in <code>/cron.d</code> with <code>HOST</code> carrying the dimension makes
-&quot;avg memory pct by host over 1h&quot; a one-liner:</p>
+<p>A cron in <code>/cron.d</code> that emits the host next to each value produces
+&quot;avg memory pct by host&quot;. A cron reads its own time range,
+so omit <code>-n</code> here: a line count can silently truncate the window.</p>
 <pre><code># /cron.d/memory-per-host
-# schedule: every 1m
-tail -n 200 /log/myco/api/metrics.log \\
+# schedule: */1 * * * *
+cat /log/myco/prod/api/metrics.log \\
   | jq -r 'select(._level == &quot;INFO&quot; and .type == &quot;memory&quot;) | &quot;\\(._host) \\(.pct)&quot;'
 </code></pre>
-<p>Each tick emits one row per host. Multi-row alerts (<code>alert above 80 -k 2 -t 1</code>) page per host independently because <code>HOST</code> is a real
-column the alert grouping understands.</p>
+<p>Each tick emits one <code>&lt;host&gt; &lt;pct&gt;</code> row per memory sample. Multi-row
+alerts (<code>alert above 80 -k 2 -t 1</code>) page per host independently
+because <code>-t 1</code> tags each row by its first field (the host).</p>
 <h3 id="filter-by-env-across-deployments">Filter by env across deployments</h3>
-<pre><code>cat /log/myco/prod/*/main.log \\
-  | jq 'select(._level == &quot;ERROR&quot; and ._deployment == &quot;api&quot;)' \\
+<pre><code>cat myco.log \\
+  | awk 'ENV == &quot;prod&quot; &amp;&amp; LEVEL == &quot;ERROR&quot; &amp;&amp; DEPLOYMENT == &quot;api&quot;' \\
   | head -50
 </code></pre>
-<p>The path narrows to env=prod; the column predicate further narrows
-to deployment=api; the resulting shard query is two indexable WHERE
-clauses, no JSON parsing.</p>
+<p>The <code>ENV</code> and <code>DEPLOYMENT</code> filters are fast-path filters, so weft
+narrows to env=prod and deployment=api without parsing each row's
+JSON. For JSON log streams the same filter reads
+<code>jq 'select(._env == &quot;prod&quot; and ._deployment == &quot;api&quot;)'</code>.</p>
 <h3 id="compare-a-single-deployment-across-regions">Compare a single deployment across regions</h3>
-<pre><code>cat /log/myco/api/main.log \\
-  | jq 'select(._deployment == &quot;api&quot;)' \\
-  | jq -r '&quot;\\(._region) \\(._level)&quot;' \\
+<pre><code>cat /log/myco/prod/api/main.log \\
+  | awk 'DEPLOYMENT == &quot;api&quot; {print REGION, LEVEL}' \\
   | sort | uniq -c
 </code></pre>
 <p><code>REGION</code> is populated from cloud metadata at agent startup; the

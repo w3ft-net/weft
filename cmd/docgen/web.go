@@ -10,6 +10,7 @@ import (
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/renderer/html"
 	gmtext "github.com/yuin/goldmark/text"
@@ -74,6 +75,7 @@ type headingEntry struct {
 // returns the rendered HTML alongside the heading list.
 func renderTopic(body []byte, title string) (string, []headingEntry, error) {
 	md := goldmark.New(
+		goldmark.WithExtensions(extension.Table),
 		goldmark.WithParserOptions(parser.WithAutoHeadingID()),
 		goldmark.WithRendererOptions(html.WithXHTML()),
 	)

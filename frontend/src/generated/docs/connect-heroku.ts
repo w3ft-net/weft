@@ -10,90 +10,117 @@ const connectHeroku = {
     { level: 3, id: "1-mint-a-token", text: "1. Mint a token" },
     { level: 3, id: "2-add-the-drain", text: "2. Add the drain" },
     { level: 3, id: "how-dynos-and-procs-map-to-pseudofiles", text: "How dynos and procs map to pseudofiles" },
-    { level: 3, id: "metric-lines-auto-route-to-metrics", text: "Metric lines auto-route to /metrics" },
+    { level: 3, id: "metric-lines-auto-route-to-metricslog", text: "Metric lines auto-route to metrics.log" },
     { level: 3, id: "troubleshooting", text: "Troubleshooting" },
   ],
   html: `<p>If your app runs on Heroku, weft accepts logs directly from Heroku's HTTPS
-log-drain protocol — no agent, no AWS account, no schema file. You mint a
-token, point a drain at weft, and dynos start flowing within seconds.</p>
-<p>You don't run weftd on Heroku. Dynos are ephemeral and can't sidecar a
-long-lived agent, and Heroku already aggregates every dyno's stdout/stderr
-into Logplex for you. The drain endpoint consumes that stream as-is.</p>
+log-drain protocol. It needs no agent, no AWS account and no schema file. You
+mint a token, point a drain at weft, and dynos start flowing within seconds.</p>
+<p>weftd is not part of a Heroku setup. Dynos are ephemeral and cannot run a
+sidecar agent, and Heroku aggregates every dyno's stdout/stderr into
+Logplex. The drain endpoint consumes that stream.</p>
 <h3 id="1-mint-a-token">1. Mint a token</h3>
-<p>Each token is scoped to a single namespace and (optionally) a single env.
+<p>Each token is scoped to one existing namespace (create the namespace
+first) and, optionally, a single env.
 From the dashboard, <strong>Namespaces → your namespace → Create token</strong>, or from
 the CLI:</p>
 <pre><code>weft token create --namespace myco --env prod --label heroku
-issued: wft_a1b2c3d4e5f6...
+Token created: wft_a1b2c3d4e5f6...
+Label: heroku
+Env:   prod (stamped on every row from this token)
+Store this token in your weftd config. It cannot be retrieved again.
 </code></pre>
-<p>Copy the token immediately — it's only shown once. One token can carry
-many Heroku apps; separate envs need separate tokens because env is bound
-at mint time.</p>
+<p>Copy the token immediately. It is shown only once. One token can carry
+many Heroku apps. Env is bound at mint time, so each env needs its own token.</p>
 <h3 id="2-add-the-drain">2. Add the drain</h3>
 <p>For each Heroku app you want to ingest, run <code>heroku drains:add</code> with the
-token embedded in the URL path. Heroku's drain protocol doesn't support
-<code>Authorization</code> headers, so the token rides in the URL.</p>
+token embedded in the URL path. Heroku's drain protocol has no
+<code>Authorization</code> header, so the token goes in the URL.</p>
 <pre><code>heroku drains:add &quot;https://api.w3ft.net/api/ingest/heroku/wft_a1b2c3d4e5f6...&quot; -a myapp
 heroku drains:add &quot;https://api.w3ft.net/api/ingest/heroku/wft_a1b2c3d4e5f6...&quot; -a sister-app
 </code></pre>
-<p>Heroku starts delivering within a few seconds. Confirm the rows are
+<p>Heroku starts delivering within a few seconds. To confirm the rows are
 landing:</p>
-<pre><code>weft&gt; ls /log/myco/myapp
+<pre><code>weft&gt; ls /log/myco/prod/myapp
 heroku-postgres.log
 platform.log
 router.log
 web.log
 worker.log
 
-weft&gt; tail /log/myco/myapp/web.log
+weft&gt; tail /log/myco/prod/myapp/web.log
 </code></pre>
 <h3 id="how-dynos-and-procs-map-to-pseudofiles">How dynos and procs map to pseudofiles</h3>
-<p>Each <code>(appname, procid)</code> pair from Heroku becomes its own weft sub-app.
+<p>The Heroku app name is the weft service, and the process type from the
+procid (<code>web</code>, <code>worker</code>, <code>router</code>) is the log kind.
 (See <strong>Namespaces</strong> for how every producer chooses its service name.)
-The dyno number (<code>.1</code>, <code>.2</code>) is dropped from the app name and stamped on
-<code>instance</code> instead, so cross-dyno aggregation stays cheap and a single
-<code>tail /log/.../web.log</code> covers every web dyno at once.</p>
-<p>| Heroku source           | weft pseudofile                                   |
-|---|---|
-| <code>myapp web.1</code>, <code>web.2</code>  | <code>/log/&lt;ns&gt;/myapp/web.log</code>         (<code>instance=web.1</code>, etc.) |
-| <code>myapp worker.1</code>        | <code>/log/&lt;ns&gt;/myapp/worker.log</code>                       |
-| <code>myapp router</code>          | <code>/log/&lt;ns&gt;/myapp/router.log</code>                       |
-| <code>myapp heroku-postgres</code> | <code>/log/&lt;ns&gt;/myapp/heroku-postgres.log</code>              |
-| Platform events (deploys, restarts, scales) | <code>/log/&lt;ns&gt;/myapp/platform.log</code> |</p>
-<p>If your token has an env bound, the path picks up that segment:
-<code>/log/myco/prod/myapp/web.log</code>. See <strong>Namespaces</strong> for the layout rules.</p>
-<h3 id="metric-lines-auto-route-to-metrics">Metric lines auto-route to <code>/metrics</code></h3>
+The full procid (<code>web.1</code>, <code>web.2</code>) is stamped on <code>instance</code>, so cross-dyno
+aggregation stays cheap and a single <code>tail /log/.../web.log</code> covers every web
+dyno at once.</p>
+<table>
+<thead>
+<tr>
+<th>Heroku source</th>
+<th>weft pseudofile</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>myapp web.1</code>, <code>web.2</code></td>
+<td><code>/log/&lt;ns&gt;/&lt;env&gt;/myapp/web.log</code>   (<code>instance=web.1</code>, etc.)</td>
+</tr>
+<tr>
+<td><code>myapp worker.1</code></td>
+<td><code>/log/&lt;ns&gt;/&lt;env&gt;/myapp/worker.log</code></td>
+</tr>
+<tr>
+<td><code>myapp router</code></td>
+<td><code>/log/&lt;ns&gt;/&lt;env&gt;/myapp/router.log</code></td>
+</tr>
+<tr>
+<td><code>myapp heroku-postgres</code></td>
+<td><code>/log/&lt;ns&gt;/&lt;env&gt;/myapp/heroku-postgres.log</code></td>
+</tr>
+<tr>
+<td>Platform events (deploys, restarts, scales)</td>
+<td><code>/log/&lt;ns&gt;/&lt;env&gt;/myapp/platform.log</code></td>
+</tr>
+</tbody>
+</table>
+<p>The <code>&lt;env&gt;</code> segment is present because the token in step 1 was minted with
+<code>--env prod</code>. A token minted without <code>--env</code> gives the shorter form,
+<code>/log/&lt;ns&gt;/myapp/web.log</code>. See <strong>Namespaces</strong> for the layout rules.</p>
+<h3 id="metric-lines-auto-route-to-metricslog">Metric lines auto-route to <code>metrics.log</code></h3>
 <p>Heroku's <code>runtime-heroku-metrics</code> labs feature (and most add-ons) emit
 l2met-shaped lines like:</p>
 <pre><code>source=web.1 sample#memory_total=512.00MB sample#memory_rss=487.21MB sample#load_avg_1m=0.42
 </code></pre>
-<p>Weft detects these and rewrites them to <code>&lt;appname&gt;/metrics</code>, with the
+<p>Weft detects these and routes them to <code>&lt;appname&gt;/metrics.log</code>, with the
 key/value pairs lifted into payload JSON (numeric where the value is
-numeric; trailing units like <code>MB</code> are preserved on a sibling
-<code>&lt;key&gt;_unit</code> field). The original line still flows through the dyno's
-pseudofile too, so a literal <code>grep memory_total /log/.../web.log</code> keeps
-working.</p>
+numeric; trailing units like <code>MB</code> are kept on a sibling
+<code>&lt;key&gt;_unit</code> field). The original line also flows through the dyno's
+pseudofile, so <code>grep memory_total /log/.../web.log</code> matches it.</p>
 <pre><code># Enable the metric stream on a Heroku app (one-time)
 heroku labs:enable &quot;runtime-heroku-metrics&quot; -a myapp
 
 # Query it like any other JSON log source
-weft&gt; tail /log/myco/myapp/metrics.log | jq 'select(.memory_total &gt; 400)'
+weft&gt; tail /log/myco/prod/myapp/metrics.log | jq 'select(.memory_total &gt; 400)'
 </code></pre>
 <h3 id="troubleshooting">Troubleshooting</h3>
 <ul>
 <li><strong>No rows appearing</strong> — run <code>heroku drains -a myapp</code> and check the
 <code>Last error</code> column. A <code>401</code> means the token in the URL is wrong or
-has been revoked; reissue it from <strong>Tokens</strong> and re-add the drain. A
-<code>4xx parse error</code> means the drain URL is malformed — most often a
-trailing slash or a missing <code>/api/ingest/heroku/</code> prefix.</li>
-<li><strong>Rows land but <code>app</code> looks wrong</strong> — Heroku reuses <code>appname=heroku</code>
+has been revoked; revoke it and mint a new one (see <strong>Tokens</strong>), then
+re-add the drain. A <code>404</code> means the drain URL is malformed — most
+often a trailing slash or a missing <code>/api/ingest/heroku/</code> prefix.</li>
+<li><strong>Rows land under the wrong service</strong> — Heroku uses <code>appname=heroku</code>
 for platform-emitted events (deploys, scales, restarts). Weft maps
-those to <code>&lt;your-app&gt;/platform</code>. Anything else where <code>app</code> looks
-unexpected is usually an add-on whose procid weft hasn't seen before;
-it'll show up under <code>/log/&lt;ns&gt;/&lt;your-app&gt;/&lt;procid&gt;.log</code> automatically.</li>
+those to <code>&lt;your-app&gt;/platform</code>. Other unexpected rows usually come from an
+add-on with a new procid; they appear under
+<code>/log/&lt;ns&gt;/&lt;env&gt;/&lt;your-app&gt;/&lt;procid&gt;.log</code> automatically.</li>
 <li><strong>Drains showing intermittent 429s</strong> — the default cap is 1000
 events/sec per token. Heroku's drain protocol retries on 5xx and 429
-with backoff, so transient bursts are absorbed; if you're sustained
+with backoff, so transient bursts are absorbed. For sustained rates
 above the cap, split into more tokens or talk to us about a higher
 limit.</li>
 </ul>

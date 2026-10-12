@@ -25,48 +25,76 @@ const git = {
     { level: 2, id: "commit-messages-at-save-time", text: "Commit messages at save time" },
     { level: 2, id: "deleting-and-bringing-back", text: "Deleting and bringing back" },
     { level: 2, id: "permissions", text: "Permissions" },
-    { level: 2, id: "what-git-here-does-not-do", text: "What git here does NOT do" },
+    { level: 2, id: "unsupported-commands", text: "Unsupported commands" },
   ],
   html: `<h2 id="version-history-with-git">Version history with <code>git</code></h2>
 <p>Every save to a script in <code>/bin</code>, a cron in <code>/cron.d</code>, a dashboard
 in <code>/etc/dashboards</code> or <code>/etc/notify.yaml</code> is captured in a short,
-browseable history. If you fat-finger an edit, push a script that
-breaks an alert at 2am, or just want to see what your cron or
-dashboard looked like last week, the <code>git</code> command has you covered.</p>
-<p>It is a <strong>subset of git</strong>. Everything it accepts behaves and prints
-the way git does, so what you already know works: <code>git log</code>,
-<code>git show</code>, <code>git diff</code>, <code>git blame</code>, <code>git restore</code>. Everything it
-doesn't implement is refused by name:</p>
-<p><code>git --help</code> lists what is supported.</p>
+browseable history. The <code>git</code> command shows earlier versions and
+restores them.</p>
+<p><code>git</code> is a <strong>subset of git</strong>. Supported commands behave and print
+the way git does: <code>git log</code>, <code>git show</code>, <code>git diff</code>, <code>git blame</code>,
+<code>git restore</code>. <code>git --help</code> lists what is supported. Unsupported
+commands are refused by name, and unsupported flags are refused with
+<code>fatal: unrecognized argument</code> (the supported flags are listed under
+<code>git log</code>):</p>
 <pre><code>weft&gt; git rebase -i HEAD~3
 git: 'rebase' is a git command, but weft doesn't support it
 </code></pre>
-<p>while a typo reads as a typo:</p>
+<p>A misspelled command reads as a typo:</p>
 <pre><code>weft&gt; git rebsae
 git: 'rebsae' is not a git command. See 'git --help'.
 </code></pre>
 <p>There is one branch, <code>main</code>. Every save is a commit on it, in the
 order the saves happened, across your whole org. There is no
-staging area: a write <em>is</em> the commit, which is why there is no
-<code>git add</code>, no merging, no rebasing, no remotes.</p>
+staging area: a write is the commit. <code>git add</code>, merging, rebasing and
+remotes do not exist.</p>
 <h2 id="whats-tracked">What's tracked</h2>
-<p>| Path                  | Tracked? |
-|-----------------------|----------|
-| <code>/bin/&lt;name&gt;</code>         | ✓ — saves to scripts produce commits |
-| <code>/cron.d/&lt;name&gt;</code>      | ✓ — saves to crons produce commits |
-| <code>/etc/dashboards/&lt;name&gt;.yaml</code> | ✓ — saves to dashboards produce commits |
-| <code>/etc/notify.yaml</code>    | ✓ — saves to the alert aliases produce commits |
-| <code>/etc/passwd</code>, <code>/etc/usage</code> | ✗ — generated, not stored |
-| <code>/log/...</code>            | ✗ |
-| <code>/tmp/...</code>            | ✗ |</p>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Tracked?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/bin/&lt;name&gt;</code></td>
+<td>✓ — saves to scripts produce commits</td>
+</tr>
+<tr>
+<td><code>/cron.d/&lt;name&gt;</code></td>
+<td>✓ — saves to crons produce commits</td>
+</tr>
+<tr>
+<td><code>/etc/dashboards/&lt;name&gt;.yaml</code></td>
+<td>✓ — saves to dashboards produce commits</td>
+</tr>
+<tr>
+<td><code>/etc/notify.yaml</code></td>
+<td>✓ — saves to the alert aliases produce commits</td>
+</tr>
+<tr>
+<td><code>/etc/passwd</code>, <code>/etc/usage</code></td>
+<td>✗ — generated</td>
+</tr>
+<tr>
+<td><code>/log/...</code></td>
+<td>✗</td>
+</tr>
+<tr>
+<td><code>/tmp/...</code></td>
+<td>✗</td>
+</tr>
+</tbody>
+</table>
 <p>The repository root is <code>/</code>, and tracked paths are <code>bin/&lt;name&gt;</code>,
 <code>cron.d/&lt;name&gt;</code>, <code>etc/dashboards/&lt;name&gt;.yaml</code> and <code>etc/notify.yaml</code>.
 Write a path any way git accepts it: <code>/bin/scan</code>,
-<code>bin/scan</code>, or just <code>scan</code> after <code>cd /bin</code>. A path outside <code>/bin</code>
-and <code>/cron.d</code> is refused: <code>fatal: '/tmp/x' is outside the repository (only /bin, /cron.d, /etc/dashboards and /etc/notify.yaml are tracked)</code>.</p>
+<code>bin/scan</code>, or <code>scan</code> after <code>cd /bin</code> (after <code>&lt;rev&gt;:</code> use the
+repo-relative form, <code>bin/scan</code>). A path outside the tracked set is refused: <code>fatal: '/tmp/x' is outside the repository (only /bin, /cron.d, /etc/dashboards and /etc/notify.yaml are tracked)</code>.</p>
 <h2 id="revisions">Revisions</h2>
-<p><code>HEAD</code> is the org's <strong>latest change</strong>, not one file's — use a path
-to narrow to a file (<code>git log -- /bin/scan</code>). Revisions work as in
+<p><code>HEAD</code> is the org's <strong>latest change</strong>. Use a path to narrow to a file (<code>git log -- /bin/scan</code>). Revisions work as in
 git:</p>
 <ul>
 <li><code>HEAD</code>, <code>@</code>, and the short hash <code>git log</code> prints (4 or more
@@ -79,13 +107,12 @@ error.)</li>
 </ul>
 <h2 id="the-five-version-cap">The five-version cap</h2>
 <p>We keep each file's <strong>latest six</strong> versions (the live one plus the
-five before it). Older versions are gone — there's no recycle bin.</p>
+five before it). Older versions are deleted.</p>
 <p>The oldest version still kept for a file is shown the way a
 shallow clone shows its edge: <code>git log</code> marks it <code>grafted</code>, its
 patch shows the file as newly added, <code>git blame</code> prefixes its
 lines with <code>^</code>, and revisions older than that don't resolve
-(<code>fatal: bad revision</code>). Unlike a real shallow clone, the cutoff is
-per file rather than one depth for the whole repository.</p>
+(<code>fatal: bad revision</code>). The cutoff is per file.</p>
 <h2 id="commands">Commands</h2>
 <h3 id="git-log"><code>git log</code></h3>
 <pre><code>weft&gt; git log --oneline
@@ -102,8 +129,8 @@ the text), <code>--since=</code>/<code>--until=</code> (<code>&quot;2 days ago&q
 <code>&lt;a&gt;..&lt;b&gt;</code>. Anything else is refused:
 <code>fatal: unrecognized argument: --bogus</code>.</p>
 <p>A save with no message gets a generated one — <code>Create bin/scan</code>,
-<code>Update bin/scan</code>, <code>Delete bin/scan</code> — because git has no empty
-messages.</p>
+<code>Update bin/scan</code>, <code>Delete bin/scan</code> — because git requires a
+message.</p>
 <h3 id="git-show"><code>git show</code></h3>
 <pre><code>weft&gt; git show HEAD~2:bin/scan
 cat /log/myco/api/main.log | grep ERROR | wc -l
@@ -117,18 +144,18 @@ cron file.</p>
 </code></pre>
 <p><code>git diff &lt;a&gt; &lt;b&gt;</code> and <code>git diff &lt;a&gt;..&lt;b&gt;</code> compare two revisions,
 optionally limited to paths after <code>--</code>. Plain <code>git diff</code> prints
-nothing: there is no working copy to differ from — the live file
-<em>is</em> HEAD.</p>
+nothing because the live file is HEAD.</p>
 <h3 id="git-status"><code>git status</code></h3>
 <p>Always <code>On branch main</code> / <code>nothing to commit, working tree clean</code>,
-for the same reason.</p>
+because the live file is HEAD.</p>
 <h3 id="git-blame-path"><code>git blame &lt;path&gt;</code></h3>
 <p>Who last changed each line of a script or cron:</p>
 <pre><code>weft&gt; git blame /bin/scan
-^1e8a02c (Bob   2026-04-22 17:33:12 +0000 1) cat /log/myco/api/main.log
-a4fb0c2f (Alice 2026-04-25 09:42:01 +0000 2) | awk 'LEVEL == &quot;ERROR&quot;'
+^1e8a02c (Eli Bergstrom 2026-04-22 17:33:12 +0000 1) cat /log/myco/api/main.log
+a4fb0c2f (Dana Okafor 2026-04-25 09:42:01 +0000 2) | awk 'LEVEL == &quot;ERROR&quot;'
 </code></pre>
-<p>A <code>^</code> marks a line that predates what the five-version cap kept.</p>
+<p>A <code>^</code> marks a line that comes from the oldest version still kept (the
+file's first version, or the edge of the cap).</p>
 <h3 id="git-restore-git-checkout-rev----path"><code>git restore</code>, <code>git checkout &lt;rev&gt; -- &lt;path&gt;</code></h3>
 <p>Make an older version current again:</p>
 <pre><code>weft&gt; git restore --source=HEAD~3 /bin/scan
@@ -138,7 +165,7 @@ weft&gt; git checkout HEAD~3 -- /bin/scan        # same thing, older spelling
 Lua/bash classification, and (for crons) your plan's schedule
 limits all apply. It also brings back a script that was deleted,
 if its history is still there. <code>git checkout &lt;rev&gt;</code> without <code>--</code>
-would move HEAD, which has no meaning here, and is refused.</p>
+is refused.</p>
 <h3 id="git-revert-rev"><code>git revert &lt;rev&gt;</code></h3>
 <p>Undo one commit with a new commit. If the file changed again since
 that commit, git's conflict is reported and nothing is written:</p>
@@ -149,8 +176,7 @@ hint: bin/scan has changed since that commit, so the revert would conflict; noth
 <p>Rewords the latest commit. You can reword only a file's current
 version, only one you wrote yourself, and only with permission to
 edit that file — so you can't reword a teammate's save that landed
-after yours. A plain <code>git commit</code> finds nothing to commit, as in
-git on a clean tree.</p>
+after yours. A plain <code>git commit</code> reports nothing to commit.</p>
 <h3 id="git-rev-parse"><code>git rev-parse</code></h3>
 <p><code>git rev-parse HEAD</code>, <code>--short</code>, <code>--abbrev-ref HEAD</code>, <code>--verify</code>
 — handy inside <code>/bin</code> scripts.</p>
@@ -158,7 +184,7 @@ git on a clean tree.</p>
 <p>Output that goes straight to your terminal is coloured. Output
 headed into a pipe or a redirect is plain text, so
 <code>git log -p | grep foo</code> and <code>git show HEAD:bin/scan &gt; /tmp/scan</code>
-do what you expect. <code>--color=always</code> or <code>--color=never</code> overrides.</p>
+work as in a shell. <code>--color=always</code> or <code>--color=never</code> overrides.</p>
 <h2 id="commit-messages-at-save-time">Commit messages at save time</h2>
 <p>Right after a successful save in vi of a file git tracks (a script,
 cron, dashboard or <code>notify.yaml</code>), the shell drops you into a
@@ -172,8 +198,7 @@ follow-up vi buffer pre-filled with a comment-prefixed prompt:</p>
 <p>Type a message, <code>:wq</code> records it. <code>:q!</code> skips it. Either way you
 end up back at the shell prompt. Comment lines (<code>#</code>-prefixed) and
 blank lines are stripped; an entirely-comment buffer records no
-message. If you skipped the popup and want to add one later,
-that's <code>git commit --amend -m</code>.</p>
+message. To add one later, use <code>git commit --amend -m</code>.</p>
 <h2 id="deleting-and-bringing-back">Deleting and bringing back</h2>
 <p>Deleting a script or cron shows up as a <code>Delete bin/&lt;name&gt;</code>
 commit, and <code>git restore --source=&lt;rev&gt; &lt;path&gt;</code> brings it back
@@ -188,19 +213,18 @@ are writes. They need the same group as editing the file does:
 <code>binmgr</code> for <code>/bin</code>, <code>cronmgr</code> for <code>/cron.d</code>, <code>configmgr</code> for <code>/etc</code>.
 Restoring an old dashboard still validates it: if it refers to a cron
 that has since been deleted, the restore is refused.</p>
-<h2 id="what-git-here-does-not-do">What <code>git</code> here does NOT do</h2>
+<h2 id="unsupported-commands">Unsupported commands</h2>
 <ul>
-<li><strong>No working tree, no staging.</strong> <code>add</code>, <code>rm</code>, <code>mv</code>, <code>stash</code>,
-<code>reset</code>, <code>clean</code> don't exist; every write is already a commit.</li>
-<li><strong>No branches, merges or rebases.</strong> One linear history.</li>
-<li><strong>No remotes.</strong> <code>clone</code>, <code>fetch</code>, <code>pull</code>, <code>push</code> are refused.</li>
-<li><strong>No history for <code>/tmp</code>, <code>/etc/passwd</code> or <code>/etc/usage</code>.</strong> <code>/tmp</code> is
-intentionally ephemeral; the other two are generated (from group
-membership and metering), so there is nothing stored to roll back.
-Change the team with <code>adduser</code> / <code>deluser</code>.</li>
-<li><strong>Slack setup is not in <code>/etc/notify.yaml</code>.</strong> Only the alias file
-is versioned; connecting Slack doesn't create a commit.</li>
-<li><strong>Patterns are RE2, not POSIX.</strong> <code>--author</code> and <code>--grep</code> use Go
+<li><strong>Working tree and staging.</strong> <code>add</code>, <code>rm</code>, <code>mv</code>, <code>stash</code>,
+<code>reset</code>, <code>clean</code> are refused (<code>is a git command, but weft doesn't support it</code>); every write is already a commit.</li>
+<li><strong>Branches, merges and rebases.</strong> History is one linear sequence; these are refused.</li>
+<li><strong>Remotes.</strong> <code>clone</code>, <code>fetch</code>, <code>pull</code>, <code>push</code> are refused.</li>
+<li><strong><code>/tmp</code>, <code>/etc/passwd</code> and <code>/etc/usage</code>.</strong> These keep no history.
+<code>/tmp</code> is ephemeral; the other two are generated from group
+membership and metering. Change the team with <code>adduser</code> / <code>deluser</code>.</li>
+<li><strong>Slack setup.</strong> Only the alias file <code>/etc/notify.yaml</code> is versioned;
+connecting Slack creates no commit.</li>
+<li><strong>Patterns are RE2.</strong> <code>--author</code> and <code>--grep</code> use Go
 regular expressions, so <code>+</code>, <code>?</code> and <code>|</code> are operators.</li>
 </ul>
 `,

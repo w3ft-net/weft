@@ -13,16 +13,16 @@ const builtins = {
     { level: 2, id: "working-on-saved-results", text: "Working on saved results" },
     { level: 2, id: "version-history-git", text: "Version history (git)" },
     { level: 2, id: "sharing", text: "Sharing" },
-    { level: 2, id: "team-owners", text: "Team (owners)" },
+    { level: 2, id: "team-admins", text: "Team (admins)" },
     { level: 2, id: "alerting", text: "Alerting" },
     { level: 2, id: "shell", text: "Shell" },
   ],
   html: `<h2 id="querying-logs">Querying logs</h2>
 <ul>
-<li><code>cat /log/&lt;app&gt;.log</code> — stream all lines for an app</li>
-<li><code>head /log/&lt;app&gt;.log</code> — first N lines (oldest)</li>
-<li><code>tail /log/&lt;app&gt;.log</code> — last N lines; <code>tail -f</code> follows</li>
-<li><code>ls /log</code> — list available apps (browse the namespace tree)</li>
+<li><code>cat /log/&lt;ns&gt;/&lt;env&gt;/&lt;svc&gt;/main.log</code> — stream all lines for a service (<code>/log/&lt;ns&gt;/&lt;svc&gt;/&lt;kind&gt;.log</code> reads it across every env)</li>
+<li><code>head /log/&lt;ns&gt;/&lt;env&gt;/&lt;svc&gt;/main.log</code> — first N lines (oldest)</li>
+<li><code>tail /log/&lt;ns&gt;/&lt;env&gt;/&lt;svc&gt;/main.log</code> — last N lines; <code>tail -f</code> follows</li>
+<li><code>ls /log</code> — browse the namespace tree; <code>ls /log/&lt;ns&gt;/&lt;svc&gt;</code> lists a service's kinds</li>
 </ul>
 <h2 id="text-pipeline">Text pipeline</h2>
 <ul>
@@ -42,12 +42,12 @@ const builtins = {
 <ul>
 <li><code>ls [-l] [-a] [-h] [path]</code> — list <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>, <code>/log</code>, <code>/tmp</code>; <code>ls -l /cron.d/</code> adds a sparkline</li>
 <li><code>cat /bin/&lt;fn&gt;</code> — view a saved function</li>
-<li><code>cat /cron.d/&lt;watch&gt;</code> — view a watch definition</li>
-<li><code>chart &lt;cron&gt;</code> / <code>... | chart [-x ... -y ...]</code> — render a saved cron or a pipeline as an in-terminal chart (<code>man chart</code>)</li>
+<li><code>cat /cron.d/&lt;name&gt;</code> — view a cron definition</li>
+<li><code>chart &lt;cron&gt;</code> / <code>... | chart [-x COL|.path] [-y COL|.path]</code> — render a saved cron or a pipeline as an in-terminal chart (<code>man chart</code>)</li>
 <li><code>&gt;</code> / <code>&gt;&gt;</code> — redirect pipeline output into <code>/tmp</code></li>
-<li><code>mkdir /tmp/&lt;dir&gt;</code> — organise scratch files into folders</li>
-<li><code>cp &lt;src&gt; &lt;dst&gt;</code> / <code>mv &lt;src&gt; &lt;dst&gt;</code> — duplicate / rename (within <code>/tmp</code>)</li>
-<li><code>touch &lt;path&gt;</code> — create empty / reset the 48h clock on a <code>/tmp</code> file</li>
+<li><code>mkdir /tmp/&lt;dir&gt;</code> — group scratch files into folders</li>
+<li><code>cp &lt;src&gt; &lt;dst&gt;</code> / <code>mv &lt;src&gt; &lt;dst&gt;</code> — duplicate / rename (both sides must be inside <code>/tmp</code>; <code>cat &lt;src&gt; &gt; &lt;dst&gt;</code> writes elsewhere)</li>
+<li><code>touch &lt;path&gt;</code> — create empty / reset the 48h clock on a <code>/tmp</code> file (<code>&gt;</code>, <code>&gt;&gt;</code>, <code>cp</code> and <code>mv</code> reset it too)</li>
 <li><code>rm &lt;path&gt;</code> / <code>rm -rf &lt;dir&gt;</code> — delete a file or directory</li>
 <li><code>vi &lt;path&gt;</code> — edit (vim keys)</li>
 <li><code>cd &lt;path&gt;</code> — change the virtual cwd</li>
@@ -56,15 +56,15 @@ const builtins = {
 <ul>
 <li><code>diff &lt;a&gt; &lt;b&gt;</code> — line-level differences between two files</li>
 <li><code>comm &lt;a&gt; &lt;b&gt;</code> — sorted-set merge: only-in-a, only-in-b, in-both</li>
-<li><code>join &lt;a&gt; &lt;b&gt;</code> — relational join on a key column (<code>-t</code> / <code>-1</code> / <code>-2</code>)</li>
+<li><code>join &lt;a&gt; &lt;b&gt;</code> — relational join on a key column (<code>-t</code> / <code>-1</code> / <code>-2</code>, with a space before the value: <code>-t ,</code>)</li>
 <li><code>paste &lt;a&gt; &lt;b&gt; [...]</code> — column-merge files line-by-line (<code>-d</code>)</li>
 <li><code>wc &lt;files&gt;</code> — <code>-l</code> lines, <code>-w</code> words, <code>-c</code> bytes, <code>-m</code> chars, <code>-L</code> longest line</li>
 </ul>
 <h2 id="version-history-git">Version history (git)</h2>
-<p><code>git</code> is a subset of git over <code>/bin</code>, <code>/cron.d</code> and <code>/etc</code>; HEAD is the org's latest change.</p>
+<p><code>git</code> is a subset of git over <code>/bin</code>, <code>/cron.d</code>, <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code>; HEAD is the org's latest change.</p>
 <ul>
 <li><code>git log [-p] [--oneline] [-- &lt;path&gt;]</code> — list versions; <code>-p</code> includes diffs</li>
-<li><code>git show &lt;rev&gt;[:&lt;path&gt;]</code> — a commit, or a file's content at that revision</li>
+<li><code>git show &lt;rev&gt;[:&lt;path&gt;]</code> — a commit, or a file's content at that revision (path without a leading slash: <code>git show HEAD:bin/&lt;name&gt;</code>)</li>
 <li><code>git diff &lt;a&gt; &lt;b&gt; [-- &lt;path&gt;]</code> — unified diff between two revisions</li>
 <li><code>git blame &lt;path&gt;</code> — who last changed each line</li>
 <li><code>git restore --source=&lt;rev&gt; &lt;path&gt;</code> — make a past version current (a new commit)</li>
@@ -73,30 +73,30 @@ const builtins = {
 </ul>
 <p>Revisions: <code>HEAD</code>, <code>HEAD~N</code>, <code>&lt;a&gt;..&lt;b&gt;</code>, or a hash prefix (≥4 hex chars).
 Tracked: <code>/bin</code>, <code>/cron.d</code>, <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code>; last 5 past versions retained.
-Other git commands are refused as unsupported.</p>
+<code>git status</code> works; other git commands are refused as unsupported.</p>
 <h2 id="sharing">Sharing</h2>
 <ul>
 <li><code>clipboard /bin/&lt;name&gt;</code> — copy a short link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (<code>man clipboard</code>)</li>
 </ul>
-<h2 id="team-owners">Team (owners)</h2>
+<h2 id="team-admins">Team (admins)</h2>
 <ul>
 <li><code>cat /etc/passwd</code> — the team roster: each member's role, status, and groups (read-only)</li>
 <li><code>adduser &lt;email&gt;</code> — invite someone to the org (sends an invite email)</li>
-<li><code>adduser &lt;email&gt; &lt;group&gt;</code> — add a member to a group; <code>deluser</code> to remove</li>
+<li><code>adduser &lt;email&gt; &lt;group&gt;</code> — add a member to a group; <code>deluser &lt;email&gt; &lt;group&gt;</code> removes them from it</li>
 <li><code>deluser &lt;email&gt;</code> — remove a member from the org</li>
 <li><code>groups &lt;email&gt;</code> / <code>id &lt;email&gt;</code> — show a member's groups</li>
 </ul>
 <p>Groups are the permission model: <code>binmgr</code> / <code>cronmgr</code> / <code>configmgr</code>
-(edit <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>), a namespace name (read its logs), or
-<code>&lt;ns&gt;+tokens</code> (mint producer tokens for it). Owners have implicit full
-access. See <code>man passwd</code>.</p>
+(edit <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>), <code>nsmgr</code> (create and manage namespaces),
+a namespace name (read its logs), or <code>&lt;ns&gt;+tokens</code> (mint producer tokens
+for it). Admins have implicit full access. See <code>man passwd</code>.</p>
 <h2 id="alerting">Alerting</h2>
 <ul>
-<li><code>&lt;pipeline&gt; | alert &lt;condition&gt;</code> — see <code>help alerts</code> or <code>man alert</code></li>
+<li><code>&lt;pipeline&gt; | alert above &lt;N&gt; --notify=&lt;alias&gt;</code> — fire a notification when the pipeline's final number exceeds N; <code>alert</code> must be the last command of a script. See <code>help alerts</code> or <code>man alert</code></li>
 </ul>
 <h2 id="shell">Shell</h2>
 <ul>
-<li><code>range</code> — show or set the query window</li>
+<li><code>range [&lt;start&gt;..&lt;end&gt;]</code> — show or set the query window, e.g. <code>range 2h..</code></li>
 <li><code>which &lt;name&gt;</code> — show where a command lives</li>
 <li><code>type &lt;name&gt;</code> — identify a command</li>
 <li><code>history</code> — past commands</li>

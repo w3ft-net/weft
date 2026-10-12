@@ -17,22 +17,24 @@ const scripts = {
   html: `<h2 id="custom-scripts-in-bin">Custom scripts in /bin</h2>
 <p>Anything you can type at the shell prompt can be saved as a named script under
 <code>/bin/</code>. Scripts are available from every shell session and every cron
-belonging to your account.  Create scripts with vim or with <code>cat - &gt; myscript</code>.
-Writing the file will validate the script for syntax errors and some
+belonging to your account. Create scripts with <code>vi</code> or with <code>cat - &gt; myscript</code>.
+Writing the file validates the script for syntax errors and some
 weft-specific semantics.</p>
 <h3 id="writing-a-script">Writing a script</h3>
-<p>The script body is just a pipeline. Positional parameters (<code>$1</code>, <code>$2</code>,
+<p>The script body is a pipeline. Positional parameters (<code>$1</code>, <code>$2</code>,
 …) bind to the arguments the caller passes at invocation.</p>
 <pre><code># /bin/count_errors
 cat /log/$1 | grep ERROR | wc -l
 </code></pre>
 <p>Invoke it like any other command:</p>
-<pre><code>count_errors api.log              # → number of ERROR lines in api.log
-count_errors disk.log | wc -l     # scripts compose into pipelines
+<pre><code>count_errors myco/prod/api/main.log      # number of ERROR lines in that source
+count_errors myco/prod/api/main.log | sort -n   # scripts compose into pipelines
 </code></pre>
-<p>We recommend keeping your scripts small and pipelined where possible -- weft optimizes these cases well -- but you can write more sophisticated scripts where needed.</p>
+<p>A script, bash or Lua, can also sit at a later stage of a pipeline,
+after a log read: <code>tail -n 500 /log/myco/prod/api/main.log | myscript</code>.</p>
+<p>Small, pipelined scripts are optimized well by weft. Larger scripts are supported.</p>
 <h2 id="language-support">Language support</h2>
-<p>The weft shell supports a generous subset of <strong>bash</strong> and <strong>Lua</strong>.
+<p>The weft shell supports a subset of <strong>bash</strong> and <strong>Lua</strong>.
 Scripts default to bash; declare Lua with a shebang on the first
 line.</p>
 <h3 id="bash">Bash</h3>
@@ -51,52 +53,82 @@ arithmetic expansion (<code>$(( ... ))</code>)</li>
 <code>cat</code>, <code>echo</code>, <code>less</code></li>
 </ul>
 <h3 id="lua">Lua</h3>
-<p>You might reach for Lua if you need arithmetic, string
-manipulation, JSON assembly, etc.</p>
+<p>Lua suits arithmetic, string manipulation and JSON assembly.</p>
 <pre><code>#!/usr/bin/env lua
 -- /bin/report
 local name = arg[1]
 local avg = weft.avg(name, &quot;1h&quot;)
 print(string.format(&quot;%s averaged %.2f over the last hour&quot;, name, avg))
 </code></pre>
-<p>Weft supplies you with Lua 5.1, including the standard <code>table</code>, <code>string</code>, and
-<code>math</code> libraries, plus a restricted <code>os</code> (<code>os.clock</code>, <code>os.time</code>,
-<code>os.difftime</code>). <code>dofile</code>, <code>loadfile</code>, <code>load</code>, and <code>require</code> are
-disabled, and scripts time out after 30 seconds.</p>
+<p>Weft provides Lua 5.1, including the standard <code>table</code>, <code>string</code>,
+<code>math</code>, and <code>coroutine</code> libraries, plus a restricted <code>os</code> (<code>os.clock</code>,
+<code>os.date</code>, <code>os.time</code>, <code>os.difftime</code>). <code>dofile</code>, <code>loadfile</code>, <code>load</code>,
+<code>loadstring</code>, and <code>require</code> are disabled, and scripts time out after 30
+seconds.</p>
 <p>On top of the standard library, weft adds:</p>
-<p>| Global | Purpose |
-|---|---|
-| <code>arg</code> | Positional arguments — <code>arg[1]</code>, <code>arg[2]</code>, … |
-| <code>print(...)</code> | Write to stdout (tab-separated args, newline) |
-| <code>eprint(...)</code> | Same shape, writes to stderr |
-| <code>io.write(...)</code> | Stdout without trailing newline |
-| <code>io.read(&quot;*l&quot; \\| &quot;*a&quot; \\| &quot;*n&quot;)</code> | Read a line, all of stdin, or a number |
-| <code>lines()</code> | Iterator over stdin lines — <code>for line in lines() do ... end</code> |
-| <code>json.encode(v)</code> / <code>json.decode(s)</code> | JSON ↔ Lua table |
-| <code>weft.*</code> | Cron aggregates and predicates — see <strong>Weft functions</strong> |</p>
+<table>
+<thead>
+<tr>
+<th>Global</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>arg</code></td>
+<td>Positional arguments — <code>arg[1]</code>, <code>arg[2]</code>, …</td>
+</tr>
+<tr>
+<td><code>print(...)</code></td>
+<td>Write to stdout (tab-separated args, newline)</td>
+</tr>
+<tr>
+<td><code>eprint(...)</code></td>
+<td>Same shape, writes to stderr</td>
+</tr>
+<tr>
+<td><code>io.write(...)</code></td>
+<td>Stdout without trailing newline</td>
+</tr>
+<tr>
+<td><code>io.read(&quot;*l&quot; | &quot;*a&quot; | &quot;*n&quot;)</code></td>
+<td>Read a line, all of stdin, or a number</td>
+</tr>
+<tr>
+<td><code>lines()</code></td>
+<td>Iterator over stdin lines — <code>for line in lines() do ... end</code></td>
+</tr>
+<tr>
+<td><code>json.encode(v)</code> / <code>json.decode(s)</code></td>
+<td>JSON ↔ Lua table</td>
+</tr>
+<tr>
+<td><code>weft.*</code></td>
+<td>Cron aggregates and predicates — see <strong>Weft functions</strong></td>
+</tr>
+</tbody>
+</table>
 <p>Because Lua can read stdin with <code>lines()</code> or <code>io.read(&quot;*l&quot;)</code>, a Lua
 script can act as a pipeline stage:</p>
 <pre><code>#!/usr/bin/env lua
--- /bin/extract_ids
+-- /bin/extract_ids (for a source whose lines are JSON objects)
 for line in lines() do
   local obj = json.decode(line)
   if obj.user_id then print(obj.user_id) end
 end
 </code></pre>
-<pre><code>cat api.log | extract_ids | sort -u | wc -l
+<pre><code>cat /log/myco/prod/api/events.log | extract_ids | sort -u | wc -l
 </code></pre>
-<p>Weft cannot optimize Lua scripts in the same way it can coreutils pipelines. If
-you need Lua, keep it at the end of a pipeline wherever you can for best
-performance.</p>
+<p>Weft optimizes coreutils pipelines more than Lua scripts. For best
+performance, put Lua at the end of a pipeline.</p>
 <h2 id="editing-a-script-with-vi">Editing a script with <code>vi</code></h2>
 <p><code>vi /bin/&lt;name&gt;</code> opens the script for editing. After <code>:w</code>, the
 shell drops you into a follow-up buffer asking for an optional
 commit message — <code>:wq</code> to record, <code>:q!</code> to skip. See <strong>git</strong> for
-the full version-control workflow, including <code>git log</code>,
+the full version-control workflow, including <code>git log -- /bin/&lt;name&gt;</code>,
 <code>git show</code>, <code>git diff</code>, <code>git restore</code>, and <code>git commit --amend</code>.</p>
 <p>The five most recent past versions are kept; older saves are
-discarded. Watch this if you iterate quickly — there's no
-recycle bin past the cap.</p>
+discarded. Versions past the cap cannot be recovered.</p>
 `,
 } as const;
 

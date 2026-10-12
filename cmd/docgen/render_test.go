@@ -72,3 +72,35 @@ func TestManPagesHaveBanner(t *testing.T) {
 		}
 	}
 }
+
+// TestManualTablesRenderAsHTMLTables guards the web renderer against
+// losing the GFM table extension: without it pipe tables come out as
+// literal "| a | b |" paragraphs in the browser.
+func TestManualTablesRenderAsHTMLTables(t *testing.T) {
+	body := []byte("## Things\n\n| Name | Meaning |\n|------|---------|\n| a | first |\n| b | second |\n")
+	html, _, err := renderTopic(body, "unrelated")
+	if err != nil {
+		t.Fatalf("renderTopic: %v", err)
+	}
+	for _, want := range []string{"<table>", "<th>Name</th>", "<td>first</td>"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("rendered HTML missing %q:\n%s", want, html)
+		}
+	}
+}
+
+// TestShellRendersLinksAndTables covers the constructs the web-only
+// manual topics bring into the shell renderer: inline links (which once
+// recursed forever) and GFM tables (which rendered as raw pipes).
+func TestShellRendersLinksAndTables(t *testing.T) {
+	body := []byte("See [the docs](https://example.com/x) now.\n\n| Name | Meaning |\n|------|---------|\n| a | first |\n| bb | second |\n")
+	out := renderShell(body, "")
+	for _, want := range []string{"the docs (https://example.com/x)", "Name", "a     first", "bb    second"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("shell output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "|") {
+		t.Errorf("shell output still has raw pipes:\n%s", out)
+	}
+}

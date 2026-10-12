@@ -19,19 +19,27 @@ vi /cron.d/error-count
 
 # Cron file format: a '# schedule:' directive plus a pipeline.
 # schedule: */5 * * * *
-tail -n 500 myapp.log | awk 'LEVEL == &quot;ERROR&quot;' | wc -l | alert above 0 --notify=ops
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 0 --notify=ops
 </code></pre>
+<p>The schedule is either a five-field expression (<code>*/5 * * * *</code>) or
+<code>every &lt;duration&gt;</code> (<code># schedule: every 5m</code>). Each run reads the
+logs from its own schedule interval: a <code>*/5</code> cron sees the last five
+minutes, so the pipeline above counts that interval's errors with no
+row limit. A cron must not use <code>head -n</code> or <code>tail -n</code>: a line count caps
+the rows read, and on a busy interval it silently cuts the window short, so
+the cron undercounts. To try a cron's pipeline at the
+prompt first, set the window with <code>range</code> (see <code>man range</code>).</p>
 <p>The pipeline's stdout is captured as the cron result — numeric
 values are graphed on the dashboard as sparklines. Alerts are
 dispatched by the <code>alert</code> stage (see <strong>Alerting strategies</strong> for
 the catalogue of alert shapes, plus <code>man alert</code> for the builtin's
-grammar); there is no separate cron-level notify field.</p>
+grammar).</p>
 <p>View and manage crons from the <strong>Dashboard</strong>.</p>
 <h3 id="accessing-past-results">Accessing past results</h3>
 <p>Every cron run is stored. The <code>weft::*</code> family pulls summaries out
 of that history (aggregates like <code>weft::avg</code>, point reads like
 <code>weft::latest</code>) and a parallel predicate family (<code>weft::is_above</code>
-etc.) returns booleans for use in composite alerts. They're
+etc.) exits 0 (fire) or 1 (don't fire) for use in composite alerts. They're
 available at the shell prompt, inside <code>/bin/</code> scripts, and as
 pipeline stages in other crons:</p>
 <pre><code># Interactively, at the prompt
@@ -39,10 +47,13 @@ weft::latest error-rate
 
 # Chained through a pipeline
 echo $(weft::avg error-rate 1h) | alert above 50 --notify=ops
-
-# From a Lua /bin/ script — return type is a number, no string parsing
-#   local rate = weft.avg(&quot;error-rate&quot;, &quot;1h&quot;)
 </code></pre>
+<p>From a Lua <code>/bin/</code> script the return type is a number:</p>
+<pre><code class="language-lua">local rate = weft.avg(&quot;error-rate&quot;, &quot;1h&quot;)
+</code></pre>
+<p>Windows are Go durations plus <code>d</code> (a day) and <code>w</code> (a week), and they
+combine: <code>30m</code>, <code>1h</code>, <code>1d</code>, <code>1h30m</code>. Aggregates reach back at most 24
+hours (<code>1d</code>).</p>
 <p>The full reference (value funcs, predicates, stdin comparators,
 caps, numeric-parsing rules) is in <strong>Weft functions</strong>. Patterns
 that combine these into alerts of various shapes — multi-row
@@ -53,9 +64,10 @@ plan — see the <strong>Account</strong> page for your current caps, or run
 <h3 id="cron-version-history">Cron version history</h3>
 <p>Every save to <code>/cron.d/&lt;name&gt;</code> is captured. After <code>:w</code>, the shell
 prompts for an optional commit message; <code>git log -- /cron.d/&lt;name&gt;</code>
-lists past versions, <code>git restore --source=HEAD~2 /cron.d/&lt;name&gt;</code>
-rolls back. Five most recent past versions are kept. See <strong>git</strong> for
-the full surface.</p>
+lists past versions, and <code>git restore --source=HEAD~2 /cron.d/&lt;name&gt;</code>
+makes an old version current again by saving it as a new version. The
+live version plus the five before it are kept. See <strong>git</strong> for the full
+surface.</p>
 `,
 } as const;
 

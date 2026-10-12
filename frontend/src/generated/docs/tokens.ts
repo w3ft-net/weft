@@ -11,32 +11,37 @@ const tokens = {
     { level: 3, id: "binding-env-to-a-token", text: "Binding env to a token" },
   ],
   html: `<h2 id="create-a-token">Create a token</h2>
-<p>Tokens authenticate weftd agents. Each token is scoped to a single namespace.
-Go to <strong>Namespaces</strong>, select your namespace, and click <strong>Create token</strong>.</p>
-<p>Copy the token immediately — it's only shown once. It looks like
-<code>wft_a1b2c3d4e5f6...</code></p>
+<p>Tokens authenticate weftd agents. Each token is scoped to exactly one
+namespace, and that namespace must already exist; naming a missing one
+fails with <code>namespace X not found — create it first</code>. Namespace names
+containing a comma, whitespace, <code>/</code>, <code>+</code>, <code>*</code>, <code>?</code> or <code>[</code>, or starting
+with <code>-</code>, are invalid, so <code>--namespace a,b</code> is rejected.
+Go to <strong>Namespaces</strong>, select your namespace, and click <strong>new token</strong>.</p>
+<p>Copy the token immediately; it is shown once. It looks like
+<code>wft_a1b2c3d4e5f6...</code>. If you lose it, revoke it and create a new one:
+<code>weft token list</code> shows your tokens and <code>weft token revoke --id ID</code>
+revokes one.</p>
 <pre><code># Store the token in your weftd config
 token: wft_a1b2c3d4e5f6...
 </code></pre>
 <h3 id="binding-env-to-a-token">Binding env to a token</h3>
 <p>When creating a token you can optionally bind a deployment environment
 (<code>prod</code>, <code>staging</code>, <code>qa</code>, …). Every row from an agent using that token
-gets the env value stamped on the row before it reaches a shard — the
-agent has no say in it, which means a leaked production token can't
-secretly write rows tagged as staging.</p>
+gets the env value stamped on the row before it is stored. The agent
+cannot change it, so a token bound to <code>prod</code> always writes rows tagged
+<code>prod</code>.</p>
 <p>The token-create form has an Env field; from the CLI:</p>
 <pre><code>weft token create --namespace myco --label api-prod --env prod
 </code></pre>
-<p>Every row picks up the bound env at ingest time, so any query the
-token authenticates implicitly filters to that env — no path
-contortions required. Plain apps land at the three-segment layout
-(<code>/log/myco/api/main.log</code>); telemetry streams reuse that shape with
-the kind segment swapped (<code>/log/myco/api/metrics.log</code>,
-<code>/log/myco/api/heartbeats.log</code>, <code>/log/myco/api/runtime.log</code>); a
-token spanning multiple envs disambiguates with the four-segment
-form (<code>/log/myco/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>). The <code>&lt;kind&gt;</code> segment
-is always present and defaults to <code>main</code>. See <strong>Query your logs</strong> for how <code>ENV</code>
-surfaces in awk and jq.</p>
+<p>Rows from an env-bound token land at the four-segment path
+<code>/log/myco/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>, for example
+<code>/log/myco/prod/api/main.log</code>. A token with no env lands at the
+three-segment path <code>/log/myco/&lt;service&gt;/&lt;kind&gt;.log</code>. Reading the
+three-segment path <code>/log/myco/api/main.log</code> covers that service across
+every env. The <code>&lt;kind&gt;</code> segment is always present and defaults to
+<code>main</code>; telemetry streams use other kinds (<code>metrics.log</code>, and
+<code>heartbeats.log</code> or <code>runtime.log</code> when the agent emits them). See <strong>Query your logs</strong> for
+how <code>ENV</code> surfaces in awk and jq.</p>
 `,
 } as const;
 
