@@ -172,6 +172,9 @@ type Coordinator struct {
 	// may run. Zero = use the package-level default (scriptExecutionTimeout).
 	// Tests override to shorten the wait.
 	ScriptExecutionTimeout time.Duration
+	// ShareURLBase is the absolute base URL `clipboard` short links are
+	// built on. Empty = https://w3ft.net.
+	ShareURLBase string
 
 	// loweredCache memoizes the decoded planner.LoweredPlan per watch
 	// so the hot fire path skips the JSON unmarshal that otherwise
@@ -232,6 +235,10 @@ type CoordinatorConfig struct {
 	// ScriptExecutionTimeout overrides the package-level default for
 	// runLocal. Zero leaves the default in place.
 	ScriptExecutionTimeout time.Duration
+
+	// ShareURLBase is the base URL `clipboard` short links are built on
+	// ("" = https://w3ft.net).
+	ShareURLBase string
 }
 
 // SeenServices tracks distinct (app, env) tuples observed during
@@ -353,6 +360,7 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		Errors:                 cfg.Errors,
 		Notifier:               cfg.Notifier,
 		ScriptExecutionTimeout: cfg.ScriptExecutionTimeout,
+		ShareURLBase:           cfg.ShareURLBase,
 	}
 	if cfg.Tail != nil {
 		c.TailFanout = NewTailFanout(cfg.Tail, cfg.RedisAddr, cfg.RedisTLS)
@@ -1356,6 +1364,8 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 			Store: c.Store, OrgID: custID, UserID: userID,
 			Cwd: interp.DirStack().Cwd,
 		})
+
+		RegisterClipboardCommand(interp, c.Store, custID, userID, c.ShareURLBase, tr.Start, tr.End)
 
 		rewriteQueryPipelines(ctx, ast, c, tr, customer, custID, userID, alertCtx)
 		interp.BinScriptTransform = func(_ string, script *bash.Script) {

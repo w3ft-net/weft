@@ -11,7 +11,7 @@ shell:
 
 ## NAME
 
-clipboard — copy a shareable deep link to a /bin script
+clipboard — copy a short, shareable link to a /bin script
 
 ## SYNOPSIS
 
@@ -24,17 +24,20 @@ clipboard /bin/<name> --range=<spec> -- <script-args>...
 
 ## DESCRIPTION
 
-`clipboard` builds a URL that reproduces the current shell's view of
-a `/bin/` script and pushes it onto the system clipboard. A teammate
-who opens the URL — signed in to the same org — lands in the web
-shell with the script invocation pre-filled, ready to run with a
-single Enter.
+`clipboard` records the current shell's view of a `/bin/` script and
+pushes a short link to it (`https://w3ft.net/s/k3Fz9aQ2xB`) onto the
+system clipboard. A teammate who opens the link — signed in to the
+same org — lands in the web shell with the script invocation
+pre-filled, ready to run with a single Enter. Anyone outside the org
+gets "that link doesn't exist".
 
-The URL encodes:
+Weft stores, behind the short name:
 
-- the script path (`bin=/bin/<name>`),
-- the time range used for log queries (`range=<spec>`),
-- any positional or flag args you typed after `--` (`args=...`).
+- the script path (`/bin/<name>`),
+- the time range used for log queries,
+- any positional or flag args you typed after `--`.
+
+Sharing the same script, range and args again gives the same link.
 
 The recipient sees the script invocation in their prompt, edits if
 they want, and hits Enter. Nothing executes automatically. Scripts
@@ -51,17 +54,16 @@ the same syntax as the `range` command — `2h..`, `1d..`,
 ## SCRIPT ARGS
 
 Everything after a `--` separator becomes the script's argument
-vector, joined with spaces and round-tripped through URL encoding.
-Whitespace and shell quoting from the original invocation are not
+vector, joined with spaces. Whitespace and shell quoting from the original invocation are not
 preserved beyond simple space-separation.
 
 ## CLIPBOARD MECHANISM
 
-The command emits an OSC-52 escape sequence containing the URL.
+The command emits an OSC-52 escape sequence containing the link.
 Modern terminal emulators (iTerm2, kitty, WezTerm, xterm with
 `OSC52` enabled, the weft web shell) intercept it and write to the
 system clipboard. Terminals without OSC-52 support ignore the
-sequence — in either case the URL is also printed to the screen so
+sequence — in either case the link is also printed to the screen so
 you can select and copy it manually.
 
 Over SSH, OSC-52 still works: the escape sequence travels with the

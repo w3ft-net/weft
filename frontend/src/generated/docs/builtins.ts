@@ -76,7 +76,7 @@ Tracked: <code>/bin</code>, <code>/cron.d</code>, <code>/etc/dashboards</code> a
 Other git commands are refused as unsupported.</p>
 <h2 id="sharing">Sharing</h2>
 <ul>
-<li><code>clipboard /bin/&lt;name&gt;</code> — copy a deep link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (<code>man clipboard</code>)</li>
+<li><code>clipboard /bin/&lt;name&gt;</code> — copy a short link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (<code>man clipboard</code>)</li>
 </ul>
 <h2 id="team-owners">Team (owners)</h2>
 <ul>

@@ -32,6 +32,9 @@ export default function App() {
       <Route path="/shell" element={
         <ProtectedRoute><Shell /></ProtectedRoute>
       } />
+      <Route path="/s/:slug" element={
+        <ProtectedRoute><Shell /></ProtectedRoute>
+      } />
       <Route path="/panes" element={
         <ProtectedRoute><Panes /></ProtectedRoute>
       } />

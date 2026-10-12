@@ -21,7 +21,7 @@ shell:
 
 - `man alert` — alert grammar and options
 - `man chart` — render a cron or pipeline as an in-terminal chart
-- `man clipboard` — share a /bin script via deep link
+- `man clipboard` — share a /bin script via a short link
 - `man dashboard` — dashboard YAML grammar and tile kinds
 - `man range` — set the query time window
 - `man less` — the in-shell pager

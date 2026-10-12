@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useSearchParams, useNavigate, useParams } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
 import {
   getFunctions, deleteFunction, type ShellFunction,
   getWatches, deleteWatch, type CronWatch,
-  listSources,
+  listSources, getSharedLink,
 } from '../lib/api'
 import { initShellWasm, type ShellBridge, type ChartOpenSpec, type TraceOpenSpec } from '../wasm/bridge'
 import ShellChartModal from '../components/ShellChartModal'
@@ -27,6 +27,7 @@ const CRON_STATUS_TAG: Record<string, string> = {
 export default function Shell() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  const { slug } = useParams()
   const { user } = useAuth()
   const termContainerRef = useRef<HTMLDivElement>(null)
   const bridgeRef = useRef<ShellBridge | null>(null)
@@ -37,6 +38,7 @@ export default function Shell() {
   const [wasmReady, setWasmReady] = useState(false)
   const [chartSpec, setChartSpec] = useState<ChartOpenSpec | null>(null)
   const [traceSpec, setTraceSpec] = useState<TraceOpenSpec | null>(null)
+  const [linkError, setLinkError] = useState('')
 
   useEffect(() => {
     getFunctions().then(setFunctions).catch(() => {})
@@ -99,16 +101,17 @@ export default function Shell() {
         bridge.setInput(decodeURIComponent(q))
       }
 
-      // Pre-fill from a `clipboard`-shared deep link:
-      //   ?bin=/bin/<name>&range=<spec>&args=<scriptArgs>
-      // We don't auto-run — user reviews and hits Enter.
-      const bin = searchParams.get('bin')
-      if (bin) {
-        const rng = searchParams.get('range') || ''
-        const scriptArgs = searchParams.get('args') || ''
-        const cmd = scriptArgs ? `${bin} ${scriptArgs}` : bin
-        const line = rng ? `range ${rng}; ${cmd}` : cmd
-        bridge.setInput(line)
+      // Pre-fill from a `clipboard` short link (/s/<slug>). We don't
+      // auto-run — user reviews and hits Enter.
+      if (slug) {
+        try {
+          const link = await getSharedLink(slug)
+          if (disposed) return
+          const cmd = link.args ? `${link.bin} ${link.args}` : link.bin
+          bridge.setInput(link.range ? `range ${link.range}; ${cmd}` : cmd)
+        } catch {
+          if (!disposed) setLinkError("That link doesn't exist, or it belongs to another org.")
+        }
       }
     }
 
@@ -233,6 +236,10 @@ export default function Shell() {
               </button>
             </div>
           </div>
+
+          {linkError && (
+            <div className="shell-link-error" role="alert" data-testid="shell-link-error">{linkError}</div>
+          )}
 
           {/* xterm.js terminal container */}
           <div

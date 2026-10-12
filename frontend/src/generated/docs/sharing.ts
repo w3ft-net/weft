@@ -19,19 +19,20 @@ link, a teammate investigating the same incident — <code>clipboard</code> buil
 a deep link that reproduces what you're looking at and copies it to
 your system clipboard.</p>
 <pre><code>clipboard /bin/error-rate
-copied: https://w3ft.net/shell?bin=%2Fbin%2Ferror-rate&amp;range=2026-05-12T08%3A00%3A00Z..2026-05-12T16%3A00%3A00Z
+copied: https://w3ft.net/s/k3Fz9aQ2xB
 </code></pre>
 <p>Paste the URL anywhere — Slack, an incident timeline, a runbook —
 and a signed-in teammate who clicks it lands in the web shell with
 the script invocation pre-filled. They review, hit Enter, and see
 the same output you saw.</p>
 <h2 id="what-the-link-encodes">What the link encodes</h2>
-<p>Three things travel in the URL:</p>
+<p>The URL is just a short name. Weft stores three things behind it,
+and sharing the same script, range and args again gives the same link:</p>
 <ul>
-<li><strong><code>bin=</code></strong> the script path, always <code>/bin/&lt;name&gt;</code>.</li>
-<li><strong><code>range=</code></strong> the time window. Defaults to your shell's current
-range (the one <code>range</code> shows). Override with <code>--range=&lt;spec&gt;</code>.</li>
-<li><strong><code>args=</code></strong> anything you typed after <code>--</code> at the <code>clipboard</code>
+<li><strong>the script path</strong>, always <code>/bin/&lt;name&gt;</code>.</li>
+<li><strong>the time window.</strong> Defaults to your shell's current range (the
+one <code>range</code> shows). Override with <code>--range=&lt;spec&gt;</code>.</li>
+<li><strong>the args</strong>, anything you typed after <code>--</code> at the <code>clipboard</code>
 invocation. Joined with spaces — there is no preservation of
 original shell quoting.</li>
 </ul>
@@ -45,7 +46,7 @@ breaks single-quote rich content like <code>awk</code> and <code>jq</code> progr
 makes parameterised scripts hard to share. A <code>/bin/</code> script with a
 deep link sidesteps all three: the script body lives in your org's
 <code>/bin/</code>, version-tracked by <code>git</code>, with the link carrying only the
-runtime context (range + args).</p>
+runtime context (range + args), kept behind a short link.</p>
 <p>If the thing you want to share isn't a <code>/bin/</code> script yet, save it
 first:</p>
 <pre><code>cat - &gt; /bin/check-foo
@@ -69,8 +70,9 @@ clipboard /bin/check --range=yesterday..today -- prod
 </code></pre>
 <p>See <code>man clipboard</code> for the full command reference.</p>
 <h2 id="whats-not-shared">What's not shared</h2>
-<p>The link does not grant access. The recipient still has to be
-signed in to the same org and have the namespace permissions they'd
+<p>The link does not grant access, and it only opens for members of
+your org — anyone else, signed in or not, gets &quot;that link doesn't
+exist&quot;. The recipient still has to be signed in to the same org and have the namespace permissions they'd
 normally need to run the script. Pasting a link into a public
 channel is safe in the sense that it leaks no log data — only the
 script invocation an authorized teammate could already construct.</p>

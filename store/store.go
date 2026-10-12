@@ -151,6 +151,7 @@ func Connect(dsn string) (*Store, error) {
 		&Subscription{},
 		&AgentToken{},
 		&Namespace{},
+		&SharedLink{},
 	)
 	// One-time backfill of (alert_condition, alert_threshold) for
 	// watches that predate migration 027 (the columns were added

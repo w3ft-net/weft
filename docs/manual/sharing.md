@@ -16,7 +16,7 @@ your system clipboard.
 
 ```
 clipboard /bin/error-rate
-copied: https://w3ft.net/shell?bin=%2Fbin%2Ferror-rate&range=2026-05-12T08%3A00%3A00Z..2026-05-12T16%3A00%3A00Z
+copied: https://w3ft.net/s/k3Fz9aQ2xB
 ```
 
 Paste the URL anywhere — Slack, an incident timeline, a runbook —
@@ -26,12 +26,13 @@ the same output you saw.
 
 ## What the link encodes
 
-Three things travel in the URL:
+The URL is just a short name. Weft stores three things behind it,
+and sharing the same script, range and args again gives the same link:
 
-- **`bin=`** the script path, always `/bin/<name>`.
-- **`range=`** the time window. Defaults to your shell's current
-  range (the one `range` shows). Override with `--range=<spec>`.
-- **`args=`** anything you typed after `--` at the `clipboard`
+- **the script path**, always `/bin/<name>`.
+- **the time window.** Defaults to your shell's current range (the
+  one `range` shows). Override with `--range=<spec>`.
+- **the args**, anything you typed after `--` at the `clipboard`
   invocation. Joined with spaces — there is no preservation of
   original shell quoting.
 
@@ -47,7 +48,7 @@ breaks single-quote rich content like `awk` and `jq` programs, and
 makes parameterised scripts hard to share. A `/bin/` script with a
 deep link sidesteps all three: the script body lives in your org's
 `/bin/`, version-tracked by `git`, with the link carrying only the
-runtime context (range + args).
+runtime context (range + args), kept behind a short link.
 
 If the thing you want to share isn't a `/bin/` script yet, save it
 first:
@@ -81,8 +82,9 @@ See `man clipboard` for the full command reference.
 
 ## What's not shared
 
-The link does not grant access. The recipient still has to be
-signed in to the same org and have the namespace permissions they'd
+The link does not grant access, and it only opens for members of
+your org — anyone else, signed in or not, gets "that link doesn't
+exist". The recipient still has to be signed in to the same org and have the namespace permissions they'd
 normally need to run the script. Pasting a link into a public
 channel is safe in the sense that it leaks no log data — only the
 script invocation an authorized teammate could already construct.

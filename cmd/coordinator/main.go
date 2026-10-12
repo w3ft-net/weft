@@ -114,6 +114,7 @@ func main() {
 	redisAddr := flag.String("redis-addr", "", "Redis address for cross-coordinator tail -f fan-out (host:port); empty disables cross-coordinator fan-out, tail stays local to this process")
 	redisTLS := flag.Bool("redis-tls", false, "use TLS for the Redis connection (required for ElastiCache in-transit encryption)")
 	awsRegion := flag.String("region", "us-east-2", "AWS region for shard EC2 launches + volume management")
+	shareURLBase := flag.String("share-url-base", "https://w3ft.net", "origin `clipboard` short links are built on")
 	customer := flag.String("customer", "", "fallback customer for dev/docker (queries pass customer per-request)")
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)")
 	queryLogPath := flag.String("query-log", "/var/log/weft/queries.log", "path for the query-audit log; falls back to stderr if unwritable")
@@ -202,6 +203,7 @@ func main() {
 		LambdaFunctionURL: os.Getenv("LAMBDA_FUNCTION_URL"),
 		RedisAddr:         *redisAddr,
 		RedisTLS:          *redisTLS,
+		ShareURLBase:      *shareURLBase,
 	})
 
 	drainCtx, drainCancel := context.WithCancel(context.Background())

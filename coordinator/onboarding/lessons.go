@@ -151,7 +151,7 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:            "shell-trace",
-		Action:          "trace <paste the id you copied>",
+		Action:          "trace $REPLACE_ME",
 		ActionPattern:   traceIDPipelinePattern,
 		ClosesWithModal: true,
 		Prompt:          "Let's run the `trace` command! Grab a trace id from the previous output and use it as the first argument to `trace`. Press Esc to close the trace view when you're done.",
@@ -191,19 +191,19 @@ var lessons = []*Lesson{
 	{
 		Step:   "shell-bin-lua",
 		Action: "vim /bin/severity",
-		Prompt: "Without a shebang, weft assumes your extensionless scripts are bash. You don't need the shebang for lua if you add the extension.\n\nNow that we're in vim, make a few edits to the file and try to save. You'll see that you haven't been granted full permissions in the Loom org so your write access is restricted. Then you can `:q!` to quit.",
+		Prompt: "Look at this, it's a Lua file! Weft will respect the shebang like we have here, or a .lua extension.\n\nJust like git, weft's vim is an illusion, so not everything here is going to work, but it's a pretty decent subset.\n\nNow that we're here, make a few edits to the file and try to save. You'll see that you haven't been granted full permissions in the Loom org so your write access is restricted. Then you can `:q!` to quit.",
 	},
 	{
 		// Step ID is historical ("team-yaml"); the lesson now teaches the
 		// read-only /etc/passwd roster + group model that replaced it.
 		Step:   "shell-team-yaml",
 		Action: "cat /etc/passwd",
-		Prompt: "The reason that save failed: permissions are group membership, and you're not in the right group. /etc/passwd is the org's read-only roster — one row per member with their groups. Owners show `(all — implicit)`. The groups are `binmgr`/`cronmgr`/`configmgr` (edit /bin, /cron.d, /etc), a namespace name (read its logs), and `<ns>+tokens` (mint producer tokens for it). Owners manage membership with `adduser <email> <group>` and `deluser <email> <group>` — and `adduser <email>` on its own invites someone new. The Members tab in the dashboard manages the same groups through a checkbox grid.",
+		Prompt: "`/etc/passwd` is a read-only roster for whatever org you have active. /bin, /cron.d, and /etc all have corresponding org-level edit perms (`binmgr`/`cronmgr`/`configmgr`). Read perms for logs -- see how you have `loom` perms? -- and ability to mint tokens like `loom+tokens` are by namespace. Org owners manage privs either with the weft CLI or the Members page of the web dashboard.",
 	},
 	{
 		Step:   "shell-clipboard",
 		Action: "clipboard /bin/scan",
-		Prompt: "When a /bin/ script is worth showing to a teammate, `clipboard` builds a deep link that captures the script path, your current range, and any args, and pushes it onto your system clipboard. Anyone signed in to the same org can paste the URL into a browser to land in the shell with the invocation pre-filled. More in `man clipboard`.",
+		Prompt: "When a /bin/ script is worth showing to a teammate, `clipboard` makes a short link (like `w3ft.net/s/k3Fz9aQ2xB`) that captures the script path, your current range, and any args, and pushes it onto your system clipboard. Anyone signed in to the same org can open it to land in the shell with the invocation pre-filled. More in `man clipboard`.",
 	},
 	{
 		Step:   "shell-weftfunc",

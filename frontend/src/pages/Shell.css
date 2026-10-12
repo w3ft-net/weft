@@ -211,3 +211,11 @@
   color: var(--bg-deep);
   outline: none;
 }
+
+.shell-link-error {
+  padding: 8px 12px;
+  background: var(--bg-deep);
+  border-bottom: 1px solid var(--border, #444);
+  color: var(--err, #e5534b);
+  font-size: 13px;
+}

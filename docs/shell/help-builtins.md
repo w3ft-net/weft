@@ -72,7 +72,7 @@ Other git commands are refused as unsupported.
 
 ## Sharing
 
-- `clipboard /bin/<name>` — copy a deep link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (`man clipboard`)
+- `clipboard /bin/<name>` — copy a short link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (`man clipboard`)
 
 ## Team (owners)
 

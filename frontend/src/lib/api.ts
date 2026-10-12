@@ -858,6 +858,18 @@ export async function listDashboards(): Promise<DashboardListItem[]> {
   return resp.dashboards || []
 }
 
+export interface SharedLink {
+  bin: string
+  range: string
+  args: string
+}
+
+// What a `clipboard` short link (/s/<slug>) points at; 404s for anyone
+// outside the org that made it.
+export function getSharedLink(slug: string): Promise<SharedLink> {
+  return apiFetch(`/api/shared-links/${encodeURIComponent(slug)}`)
+}
+
 export function getDashboard(name: string): Promise<DashboardResponse> {
   return apiFetch(`/api/dashboards/${encodeURIComponent(name)}`)
 }
