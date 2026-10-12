@@ -71,3 +71,34 @@ func TestGlobInChainedSource_CrossSourceIsDisallowed(t *testing.T) {
 		}
 	}
 }
+
+// `tail -f ... > /tmp/x` is refused on the real execution path. The
+// rewriter lifts redirects off the query pipeline before it is planned,
+// so the planner never sees them; the check has to live where they are
+// lifted. Without it the follow ran as a finite read and left a
+// truncated file behind, with exit 0.
+func TestFollowWithStdoutRedirect_IsRefused(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	const customer = "weftfuncs-test"
+	if _, err := db.FindOrCreateNamespace(custID, "acme"); err != nil {
+		t.Fatalf("FindOrCreateNamespace: %v", err)
+	}
+	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+
+	for _, line := range []string{
+		`tail -f /log/acme/prod/api/main.log > /tmp/stream`,
+		`tail -f /log/acme/prod/api/main.log | grep ERROR >> /tmp/stream`,
+	} {
+		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, customer, "", nil)
+		got := ""
+		if err != nil {
+			got = err.Error()
+		} else {
+			d := drainExec(t, res)
+			got = d.Stderr
+		}
+		if !strings.Contains(got, "tail -f") || !strings.Contains(got, "can't be redirected") {
+			t.Errorf("%q: want a refusal naming tail -f, got %q", line, got)
+		}
+	}
+}

@@ -103,6 +103,12 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 				Redirects: liftedRedirects,
 				Run: func(interp *bash.Interpreter, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 					src := bash.UnparsePipelineExpanded(&snap, interp.ExpandWord)
+					// The redirects were lifted off the pipeline above, so the
+					// planner never sees them: refuse `tail -f ... > file` here.
+					if r, ok := stdoutRedirect(liftedRedirects); ok && planner.SourceFollows(src, interp.DirStack().Cwd()) {
+						fmt.Fprintf(stderr, "query: %v\n", planner.FollowRedirectError(interp.ExpandWord(r.Target)))
+						return 1
+					}
 					// runQuery is only callable from this callback in
 					// the unified-dispatch model — Execute always hands
 					// the pipeline to warp+rewriter, and the rewriter
@@ -146,6 +152,17 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 		// held alive only through the snapshot captured above.
 		return false
 	})
+}
+
+// stdoutRedirect returns the first redirect that sends stdout to a
+// file (`>`, `>>`, `&>`); `2>` and fd duplication don't count.
+func stdoutRedirect(rs []bash.Redirect) (bash.Redirect, bool) {
+	for _, r := range rs {
+		if (r.Op == ">" || r.Op == ">>" || r.Op == "&>") && r.Fd != 2 {
+			return r, true
+		}
+	}
+	return bash.Redirect{}, false
 }
 
 // isStdinRedirect reports whether the redirect operator reads input

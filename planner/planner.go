@@ -145,7 +145,7 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 	}
 
 	if info.source.follow && redirTarget != "" {
-		return nil, fmt.Errorf("plan: tail -f can't be redirected to %s: follow never finishes, so the file would hold a truncated read; drop -f to save a finished query", redirTarget)
+		return nil, fmt.Errorf("plan: %w", FollowRedirectError(redirTarget))
 	}
 
 	sql := newSQLBuilder()
@@ -463,6 +463,20 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 		RedirectTarget:   redirTarget,
 		RedirectAppend:   redirAppend,
 	}, nil
+}
+
+// FollowRedirectError is the refusal for `tail -f ... > target`: follow
+// never finishes, so the target would hold a truncated finite read. Shared
+// by Plan and the coordinator's redirect-lifting rewriter so the wording
+// lives in one place.
+func FollowRedirectError(target string) error {
+	return fmt.Errorf("tail -f can't be redirected to %s: follow never finishes, so the file would hold a truncated read; drop -f to save a finished query", target)
+}
+
+// SourceFollows reports whether pipeline's source command is `tail -f`.
+func SourceFollows(pipeline, cwd string) bool {
+	info, err := parsePipeline(pipeline, cwd)
+	return err == nil && info.source.follow
 }
 
 func firstOrEmpty(s []string) string {
