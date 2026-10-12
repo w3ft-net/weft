@@ -437,10 +437,9 @@ func extractAwkMatch(e *awk.MatchExpr) *awkPushdown {
 	}
 	pattern := escapeSQLString(regex.Pattern)
 
-	// `$0 ~ /pat/` is a positive regex match (limit-safe — narrows
-	// to matching rows). `$0 !~ /pat/` is inverted (inclusive — not
-	// limit-safe; falls back to compute when the source has a
-	// frozen LIMIT, per the cross-shard saturation hazard).
+	// `$0 ~ /pat/` is a positive regex match; `$0 !~ /pat/` negates it.
+	// A non-literal pattern (`$0 ~ "pat"`, a variable) returned nil
+	// above and runs in compute, which evaluates it as a dynamic regex.
 	//
 	// regexp_matches(raw, 'pat') is DuckDB's substring/find form —
 	// the equivalent of PostgreSQL's `~`. DuckDB's own `~` operator

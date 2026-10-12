@@ -195,3 +195,26 @@ func TestPushdown_PreLimitFilterStillPushes(t *testing.T) {
 		t.Errorf("pre-limit grep should push into the SQL ahead of the LIMIT:\n%s", plan.ShardSQL)
 	}
 }
+
+// A dynamic regex (`~ "str"`, a variable) is not pushed into SQL: only a
+// /regex/ literal is. It must survive as a compute stage verbatim for
+// warp's awk to evaluate; dropping or mis-pushing it would silently match
+// everything or nothing.
+func TestPushdown_DynamicRegexStaysInCompute(t *testing.T) {
+	for _, stage := range []string{
+		`awk '$0 ~ "ERROR"'`,
+		`awk 'SERVICE ~ "api"'`,
+		`awk '$0 !~ "ERR" "OR"'`,
+	} {
+		plan, err := Plan(`cat vimgym.log | `+stage, 0, "", time.Time{}, time.Time{})
+		if err != nil {
+			t.Fatalf("Plan(%s): %v", stage, err)
+		}
+		if strings.Contains(plan.ShardSQL, "regexp_matches") {
+			t.Errorf("%s: dynamic pattern was pushed into SQL:\n%s", stage, plan.ShardSQL)
+		}
+		if len(plan.ComputeStages) != 1 || plan.ComputeStages[0] != stage {
+			t.Errorf("%s: ComputeStages = %v, want the stage verbatim", stage, plan.ComputeStages)
+		}
+	}
+}
