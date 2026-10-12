@@ -80,25 +80,25 @@ func builtinHarness(t *testing.T) (setStep func(string), stepNow func() string, 
 func TestShellBuiltin_ExitCodeGatesLessonAdvance(t *testing.T) {
 	setStep, stepNow, report := builtinHarness(t)
 
-	setStep("shell-history")
+	setStep("shell-usage")
 
-	if code := report(map[string]any{"pipeline": "history", "exit_code": 1}); code != 204 {
+	if code := report(map[string]any{"pipeline": "cat /etc/usage", "exit_code": 1}); code != 204 {
 		t.Errorf("failed command: status %d, want 204", code)
 	}
-	if got := stepNow(); got != "shell-history" {
+	if got := stepNow(); got != "shell-usage" {
 		t.Fatalf("a failed command advanced the lesson to %q", got)
 	}
 
-	if code := report(map[string]any{"pipeline": "history", "exit_code": 0}); code != 200 {
+	if code := report(map[string]any{"pipeline": "cat /etc/usage", "exit_code": 0}); code != 200 {
 		t.Errorf("clean command: status %d, want 200", code)
 	}
-	if got := stepNow(); got == "shell-history" {
-		t.Errorf("a clean `history` did not advance the lesson")
+	if got := stepNow(); got == "shell-usage" {
+		t.Errorf("a clean `cat /etc/usage` did not advance the lesson")
 	}
 
 	// No exit_code at all keeps the pre-existing behavior (older clients).
-	setStep("shell-history")
-	if code := report(map[string]any{"pipeline": "history"}); code != 200 {
+	setStep("shell-usage")
+	if code := report(map[string]any{"pipeline": "cat /etc/usage"}); code != 200 {
 		t.Errorf("legacy report without exit_code: status %d, want 200", code)
 	}
 
@@ -112,11 +112,11 @@ func TestShellBuiltin_ExitCodeGatesLessonAdvance(t *testing.T) {
 		t.Errorf("stopping the live tail did not complete the tail -f lesson")
 	}
 
-	setStep("shell-history")
-	if code := report(map[string]any{"pipeline": "history", "exit_code": 130}); code != 204 {
-		t.Errorf("interrupted history: status %d, want 204", code)
+	setStep("shell-usage")
+	if code := report(map[string]any{"pipeline": "cat /etc/usage", "exit_code": 130}); code != 204 {
+		t.Errorf("interrupted cat: status %d, want 204", code)
 	}
-	if got := stepNow(); got != "shell-history" {
+	if got := stepNow(); got != "shell-usage" {
 		t.Fatalf("an interrupted command advanced the lesson to %q", got)
 	}
 }
@@ -153,11 +153,11 @@ func TestShellBuiltin_TraceLessonAdvancesOnModalClose(t *testing.T) {
 // A modal-closed report never advances a lesson that isn't about a modal.
 func TestShellBuiltin_ModalCloseDoesNotAdvanceOtherLessons(t *testing.T) {
 	setStep, stepNow, report := builtinHarness(t)
-	setStep("shell-history")
-	if code := report(map[string]any{"pipeline": "history", "exit_code": 0, "event": "modal_closed"}); code != 204 {
+	setStep("shell-usage")
+	if code := report(map[string]any{"pipeline": "cat /etc/usage", "exit_code": 0, "event": "modal_closed"}); code != 204 {
 		t.Errorf("status %d, want 204", code)
 	}
-	if got := stepNow(); got != "shell-history" {
+	if got := stepNow(); got != "shell-usage" {
 		t.Fatalf("modal_closed advanced a non-modal lesson to %q", got)
 	}
 }

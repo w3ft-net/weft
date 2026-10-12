@@ -28,9 +28,10 @@ function renderInlineBackticks(text: string): ReactNode[] {
   })
 }
 
-// PanelStep describes one step of the panel-tour stage. Each step
-// targets a specific sidebar item; the user advances by clicking the
-// highlighted item (which navigates AND auto-advances) or by hitting Next.
+// PanelStep describes one step of the panel-tour stage. The copy
+// describes the page at `route`, so the overlay only shows it once the
+// user is on that page; elsewhere it offers a button that goes there.
+// Next advances the step and lands on the following page.
 //
 // The shell-* steps live in a separate map below — their copy comes
 // from the server (onboarding_prompt), so the frontend only needs the
@@ -38,29 +39,36 @@ function renderInlineBackticks(text: string): ReactNode[] {
 interface PanelStep {
   step: string
   route: string
-  testId: string         // sidebar item's data-testid for visual targeting
+  label: string          // what the page is called, for "show me the …"
   copy: string
 }
+
+// GRADUATE_STEP follows the last shell lesson. Finishing the lesson
+// must not eject the user mid-shell, so the tour parks here until they
+// choose to leave.
+const GRADUATE_STEP = 'graduate'
+const GRADUATE_COPY =
+  "That's the tour. You've got the shell, the pseudofiles, bins, crons, dashboards and git history of your own org's config. When you finish, you'll leave Loom and land in your own org, where you can set up your first namespace. You can come back to the shell any time before then."
 
 const PANEL_STEPS: PanelStep[] = [
   {
     step: 'downloads',
     route: '/downloads',
-    testId: 'sidebar-downloads-link',
+    label: 'downloads',
     copy:
       "You'll want to grab the weft CLI, and — if you have deployments where you run it — weftd, our logging agent — to start shipping those log lines.",
   },
   {
     step: 'namespaces',
     route: '/namespaces',
-    testId: 'sidebar-namespaces-link',
+    label: 'namespaces',
     copy:
       "Namespaces are containers for log integrations, whether via weftd, CloudWatch, or Heroku. You can slice up your log producers however you want, but we tend to think of namespaces as an application, and then the environments and services in that application get assigned tokens within that namespace. You can create namespaces here in the browser or using the weft cli. Note that Loom Inc has only one namespace (loom). We'll see that again in a bit",
   },
   {
     step: 'dashboards',
     route: '/dashboards',
-    testId: 'sidebar-dashboards-link',
+    label: 'dashboards',
     copy:
       "Dashboards can be viewed here in the browser or in the terminal. Dashboards are defined in YAML and are built on top of timeseries data you create with crons operating on your logs or metrics data from weftd — all of which happens in the weft shell.",
   },
@@ -90,40 +98,16 @@ export default function TourOverlay() {
   const inLoom = user?.customer === 'loom'
   const isShell = !!step && step.startsWith('shell-')
   const panel = step ? PANEL_STEPS.find(s => s.step === step) : null
-
-  // Panel-tour auto-advance: navigating to the highlighted route
-  // bumps the step server-side; AuthContext picks up the new step
-  // on the next refresh.
-  useEffect(() => {
-    if (!step || dismissed || !inLoom) return
-    if (!panel) return
-    if (location.pathname === panel.route) {
-      advanceOnboarding(step)
-        .then(() => refreshUser())
-        .catch(e => console.error('panel-tour advance:', e))
-    }
-  }, [step, dismissed, inLoom, location.pathname, panel, refreshUser])
+  const isGraduate = step === GRADUATE_STEP
 
   // Shell-tour advancement: listen for the tour-advance DOM event
   // fired by the SSE parser when the server advances the step, AND
   // by notifyBuiltinExecuted when a browser-side builtin (ls, cat
   // /etc/…) finishes — those never round-trip through SSE, so the
   // event from network.ts is the only signal we get for them.
-  //
-  // step==='done' is the graduation transition. The server has
-  // already revoked Loom membership and pinned the home org as
-  // last_active, so the next /me with X-Active-Org=loom would 403.
-  // Drop the stored org and hard-navigate to /dashboards so the
-  // user lands on the (new) home org with the success banner.
   useEffect(() => {
     if (!isShell || dismissed || !inLoom) return
-    const onAdvance = (e: Event) => {
-      const detail = (e as CustomEvent<{ step?: string }>).detail
-      if (detail?.step === 'done') {
-        localStorage.removeItem('weft_org')
-        window.location.href = '/dashboards'
-        return
-      }
+    const onAdvance = () => {
       refreshUser().catch(() => {})
     }
     window.addEventListener('tour-advance', onAdvance)
@@ -140,17 +124,15 @@ export default function TourOverlay() {
       delete document.body.dataset.tourHighlight
       return
     }
-    if (panel) {
-      document.body.dataset.tourHighlight = panel.testId
-    } else if (isShell && SHELL_HIGHLIGHT_TARGETS[step]) {
+    if (isShell && SHELL_HIGHLIGHT_TARGETS[step]) {
       document.body.dataset.tourHighlight = SHELL_HIGHLIGHT_TARGETS[step]
     } else {
       delete document.body.dataset.tourHighlight
     }
-  }, [step, dismissed, inLoom, panel, isShell])
+  }, [step, dismissed, inLoom, isShell])
 
   if (!step || dismissed || !inLoom) return null
-  if (!panel && !isShell) return null
+  if (!panel && !isShell && !isGraduate) return null
 
   // Build the current copy + actions.
   let copy: string
@@ -158,24 +140,48 @@ export default function TourOverlay() {
   let primaryAction: { label: string; testId: string; onClick: () => void } | null = null
 
   if (panel) {
-    copy = panel.copy
     const idx = PANEL_STEPS.findIndex(s => s.step === step)
     progress = `tour ${idx + 1}/${PANEL_STEPS.length}`
-    const isLastPanel = idx === PANEL_STEPS.length - 1
+    if (location.pathname !== panel.route) {
+      copy = `Click “show me ${panel.label}” to get started.`
+      primaryAction = {
+        label: `show me ${panel.label}`,
+        testId: 'tour-overlay-start-button',
+        onClick: () => navigate(panel.route),
+      }
+    } else {
+      copy = panel.copy
+      const isLastPanel = idx === PANEL_STEPS.length - 1
+      primaryAction = {
+        label: isLastPanel ? 'drop into the shell' : 'next',
+        testId: isLastPanel ? 'tour-overlay-shell-button' : 'tour-overlay-next-button',
+        onClick: () => {
+          advanceOnboarding(step)
+            .then(() => {
+              // Hard navigation: every cached query is re-issued after
+              // the step changes. Each step lands on the next page the
+              // tour describes; the last hands off to the shell.
+              window.location.assign(isLastPanel ? '/shell' : PANEL_STEPS[idx + 1].route)
+            })
+            .catch(e => console.error('panel-tour next:', e))
+        },
+      }
+    }
+  } else if (isGraduate) {
+    copy = GRADUATE_COPY
+    progress = 'tour: done'
     primaryAction = {
-      label: isLastPanel ? 'drop into the shell' : 'next',
-      testId: isLastPanel ? 'tour-overlay-shell-button' : 'tour-overlay-next-button',
+      label: 'finish the tour',
+      testId: 'tour-overlay-finish-button',
       onClick: () => {
         advanceOnboarding(step)
           .then(() => {
-            // Hard navigation either way: every cached query gets
-            // re-issued after the step changes. The last panel step
-            // hands off to the shell, so it lands there; earlier
-            // steps stay on the current page.
-            if (isLastPanel) window.location.assign('/shell')
-            else window.location.reload()
+            // Graduation revoked Loom; drop the stored org so /me
+            // doesn't 403, and land on the home org.
+            localStorage.removeItem('weft_org')
+            window.location.assign('/dashboards')
           })
-          .catch(e => console.error('panel-tour next:', e))
+          .catch(e => console.error('graduate:', e))
       },
     }
   } else {

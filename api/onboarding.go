@@ -41,10 +41,12 @@ var onboardingSequence = buildOnboardingSequence()
 func buildOnboardingSequence() []string {
 	prefix := []string{"welcome", "downloads", "namespaces", "dashboards"}
 	shell := onboarding.Steps()
-	out := make([]string, 0, len(prefix)+len(shell)+1)
+	out := make([]string, 0, len(prefix)+len(shell)+2)
 	out = append(out, prefix...)
 	out = append(out, shell...)
-	out = append(out, "done")
+	// "graduate" parks the user after the last lesson until they click
+	// out of the tour; "done" is what that click advances to.
+	out = append(out, "graduate", "done")
 	return out
 }
 

@@ -85,9 +85,6 @@
 /* Highlight for the element the tour is pointing at. body's
    data-tour-highlight attribute names a data-testid; the matching nav
    link / shell tab gets an amber outline and a blinking marker. */
-body[data-tour-highlight="sidebar-dashboards-link"] [data-testid="sidebar-dashboards-link"],
-body[data-tour-highlight="sidebar-namespaces-link"] [data-testid="sidebar-namespaces-link"],
-body[data-tour-highlight="sidebar-downloads-link"] [data-testid="sidebar-downloads-link"],
 body[data-tour-highlight="shell-functions-toggle-button"] [data-testid="shell-functions-toggle-button"],
 body[data-tour-highlight="shell-watches-toggle-button"] [data-testid="shell-watches-toggle-button"],
 body[data-tour-highlight="shell-tmp-toggle-button"] [data-testid="shell-tmp-toggle-button"],
@@ -97,9 +94,6 @@ body[data-tour-highlight="shell-etc-toggle-button"] [data-testid="shell-etc-togg
   color: var(--amber);
 }
 
-body[data-tour-highlight="sidebar-dashboards-link"] [data-testid="sidebar-dashboards-link"]::after,
-body[data-tour-highlight="sidebar-namespaces-link"] [data-testid="sidebar-namespaces-link"]::after,
-body[data-tour-highlight="sidebar-downloads-link"] [data-testid="sidebar-downloads-link"]::after,
 body[data-tour-highlight="shell-functions-toggle-button"] [data-testid="shell-functions-toggle-button"]::after,
 body[data-tour-highlight="shell-watches-toggle-button"] [data-testid="shell-watches-toggle-button"]::after,
 body[data-tour-highlight="shell-tmp-toggle-button"] [data-testid="shell-tmp-toggle-button"]::after,
