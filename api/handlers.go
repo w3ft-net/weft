@@ -36,6 +36,7 @@ import (
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
+	"gorm.io/gorm"
 )
 
 // unverifiedSweepInterval is how often the cleanup goroutine deletes
@@ -1399,8 +1400,19 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate that the namespace exists.
-	nsObj, err := s.store.FindOrCreateNamespace(custID, req.Namespace)
+	// A token is scoped to one existing namespace. Looking it up (never
+	// creating it) means a typo or a comma-separated list can't silently
+	// mint a token for a brand-new namespace; coordinator CreateToken
+	// (gRPC) holds the same rule.
+	nsObj, err := s.store.GetNamespace(custID, req.Namespace)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if verr := store.ValidateNamespaceName(req.Namespace); verr != nil {
+			http.Error(w, fmt.Sprintf("a token is scoped to one namespace: %v", verr), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fmt.Sprintf("namespace %q not found — create it first", req.Namespace), http.StatusNotFound)
+		return
+	}
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -2246,6 +2258,11 @@ func (s *Server) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+
+	if err := store.ValidateNamespaceName(req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
