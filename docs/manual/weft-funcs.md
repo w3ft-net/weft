@@ -35,8 +35,9 @@ For composing predicates into composite alerts, see
 ## Value functions
 
 Each takes a cron name, returns a value, and (with the exception of
-`weft::latest` and `weft::previous`) a duration window. Durations use
-Go syntax: `30s`, `5m`, `1h`, `6h`, `24h`.
+`weft::latest` and `weft::previous`) a duration window. Durations are a
+number and a unit: `30s`, `5m`, `1h`, `6h`, plus `d` for a day (24
+hours) and `w` for a week (7 days). Units combine: `1d12h`.
 
 | Bash | Lua | Returns | Notes |
 |---|---|---|---|
@@ -59,7 +60,7 @@ Go syntax: `30s`, `5m`, `1h`, `6h`, `24h`.
 The window caps encode compute-cost shape, not arbitrary policy:
 
 - **Aggregates** (`avg`, `min`, `max`, `sum`, `stddev`, `count`,
-  `percentile`, `rate`) cap at **24h**. They touch every result in
+  `percentile`, `rate`) cap at **24h** (`1d`). They touch every result in
   the window.
 - **Endpoint funcs** (`first`, `delta`, `slope`) cap at **14d**. They
   read O(1) anchor rows — the oldest in-window plus the latest — so

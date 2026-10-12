@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,29 @@ const maxAggDuration = 24 * time.Hour
 // result still in the window plus the latest. They can safely span
 // a longer window, useful for trend / fill-prediction queries.
 const maxEndpointDuration = 14 * 24 * time.Hour
+
+// dayWeekUnit matches a number followed by the d (day) or w (week) unit.
+var dayWeekUnit = regexp.MustCompile(`(\d+(?:\.\d+)?)([dw])`)
+
+// parseDuration is time.ParseDuration plus the day (d, 24h) and week (w,
+// 7d) units, which the docs and `range` use and Go's parser rejects. Units
+// combine as in Go ("1d12h", "1w2d"). A day is a fixed 24 hours: windows
+// are elapsed time, not calendar time, so DST doesn't stretch them.
+func parseDuration(s string) (time.Duration, error) {
+	expanded := dayWeekUnit.ReplaceAllStringFunc(s, func(m string) string {
+		n, _ := strconv.ParseFloat(m[:len(m)-1], 64)
+		hours := n * 24
+		if m[len(m)-1] == 'w' {
+			hours = n * 24 * 7
+		}
+		return strconv.FormatFloat(hours, 'f', -1, 64) + "h"
+	})
+	d, err := time.ParseDuration(expanded)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q", s)
+	}
+	return d, nil
+}
 
 // WeftFuncs provides cron result query functions for /bin/ scripts.
 // Both bash (ExternalCmdFunc) and Lua (weft.* table) use this.
@@ -401,11 +425,11 @@ func (w *WeftFuncs) numericResultsCap(watchName string, dur time.Duration, maxDu
 	return vals, nil
 }
 
-// ParseAggDuration parses a duration string (30m, 1h, 6h, 24h) for aggregates.
+// ParseAggDuration parses a duration string (30m, 1h, 6h, 24h, 1d) for aggregates.
 func ParseAggDuration(s string) (time.Duration, error) {
-	d, err := time.ParseDuration(s)
+	d, err := parseDuration(s)
 	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q (use e.g., 30m, 1h, 6h)", s)
+		return 0, fmt.Errorf("invalid duration %q (use e.g., 30m, 1h, 6h, 1d)", s)
 	}
 	if d > maxAggDuration {
 		return 0, fmt.Errorf("duration %s exceeds maximum of %s", d, maxAggDuration)
@@ -419,9 +443,9 @@ func ParseAggDuration(s string) (time.Duration, error) {
 // ParseEndpointDuration parses a duration string for endpoint funcs
 // (first, delta, slope), allowing windows up to maxEndpointDuration.
 func ParseEndpointDuration(s string) (time.Duration, error) {
-	d, err := time.ParseDuration(s)
+	d, err := parseDuration(s)
 	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q (use e.g., 1h, 24h, 7d-equivalent in hours)", s)
+		return 0, fmt.Errorf("invalid duration %q (use e.g., 1h, 24h, 7d, 2w)", s)
 	}
 	if d > maxEndpointDuration {
 		return 0, fmt.Errorf("duration %s exceeds maximum of %s", d, maxEndpointDuration)
@@ -497,7 +521,7 @@ func buildWeftLuaExtension(w weftQueryFuncs) luapkg.Extension {
 			mod.RawSetString(fn.name, L.NewFunction(func(L *lua.LState) int {
 				name := L.CheckString(1)
 				durStr := L.CheckString(2)
-				dur, err := time.ParseDuration(durStr)
+				dur, err := parseDuration(durStr)
 				if err != nil {
 					L.Push(lua.LNil)
 					L.Push(lua.LString("invalid duration: " + durStr))
@@ -523,7 +547,7 @@ func buildWeftLuaExtension(w weftQueryFuncs) luapkg.Extension {
 			name := L.CheckString(1)
 			durStr := L.CheckString(2)
 			p := float64(L.CheckNumber(3))
-			dur, err := time.ParseDuration(durStr)
+			dur, err := parseDuration(durStr)
 			if err != nil {
 				L.Push(lua.LNil)
 				L.Push(lua.LString("invalid duration: " + durStr))
@@ -822,7 +846,7 @@ func evalTrendLua(L *lua.LState, w weftQueryFuncs, rising bool) bool {
 
 func optLuaDuration(L *lua.LState, idx int) (time.Duration, bool) {
 	s := L.CheckString(idx)
-	d, err := time.ParseDuration(s)
+	d, err := parseDuration(s)
 	if err != nil || d <= 0 {
 		return 0, false
 	}

@@ -88,7 +88,7 @@ func parseFloatArg(arg, label string, stderr io.Writer) (float64, bool) {
 }
 
 func parseDurArg(arg, label string, stderr io.Writer) (time.Duration, bool) {
-	d, err := time.ParseDuration(arg)
+	d, err := parseDuration(arg)
 	if err != nil || d <= 0 {
 		fmt.Fprintf(stderr, "weft predicate: invalid %s %q\n", label, arg)
 		return 0, false
