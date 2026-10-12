@@ -30,7 +30,7 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 	}
 	t.Cleanup(func() { ds.Close() })
 
-	base := time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC)
+	base := nsBase
 
 	var rows []*pb.LogRow
 
@@ -98,9 +98,14 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 	return c
 }
 
+// nsBase is a recent hour. The coordinator clamps query windows to the
+// tier's retention relative to now, so fixed dates in these tests would
+// age out of the window (a fixed 2026-04-15 failed once it was 180 days old).
+var nsBase = time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+
 var nsRange = TimeRange{
-	Start: time.Date(2026, 4, 15, 9, 0, 0, 0, time.UTC),
-	End:   time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC),
+	Start: nsBase.Add(-time.Hour),
+	End:   nsBase.Add(time.Hour),
 }
 
 // TestNamespaceQuery_All verifies that querying the namespace pseudofile
