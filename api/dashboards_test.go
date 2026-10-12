@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/store"
@@ -137,5 +138,74 @@ func TestDashboards_List_Empty(t *testing.T) {
 	}
 	if len(resp.Dashboards) != 0 {
 		t.Errorf("expected 0 dashboards, got %d", len(resp.Dashboards))
+	}
+}
+
+// The server formats counter and gauge text once (store.FormatTileDisplay);
+// the web client renders tile.display verbatim and never formats numbers.
+func TestDashboards_Get_TileDisplay(t *testing.T) {
+	srv, s := testServer(t)
+	handler := srv.Handler()
+
+	cust, _ := s.FindOrCreateOrg(fmt.Sprintf("dashdisp-%d", os.Getpid()))
+	user, _ := s.CreateUser(fmt.Sprintf("dashdisp-%d@example.com", os.Getpid()))
+	dashTeamMember(s, cust, user, "disp")
+	jwt, _ := auth.Generate(user, "test-secret")
+
+	seed := func(name string, v *float64) {
+		if err := s.SaveCronWatch(cust.ID, user.ID, name, "every 5m", "echo 1", nil); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+		if v == nil {
+			return
+		}
+		cw, err := s.GetCronWatch(cust.ID, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SaveCronResults([]store.CronResult{{CronWatchID: cw.ID, RanAt: time.Now(), Value: v}}); err != nil {
+			t.Fatalf("seed result %s: %v", name, err)
+		}
+	}
+	f := func(v float64) *float64 { return &v }
+	seed("lat", f(41.6))
+	seed("plain", f(3.5))
+	seed("load", f(50))
+	seed("empty", nil)
+
+	yaml := `tiles:
+  - {kind: counter, cron: lat, format: "%d ms"}
+  - {kind: counter, cron: plain}
+  - {kind: gauge, cron: load, threshold: {max: 200}}
+  - {kind: counter, cron: empty}
+  - {kind: sparkline, cron: plain}
+`
+	if err := s.SaveDashboard(cust.ID, user.ID, "disp", yaml); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", "/api/dashboards/disp", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("get: %d %s", w.Code, w.Body.String())
+	}
+	var resp dashboardGetResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	tiles := resp.Spec.Sections[0].Tiles
+	want := []*store.TileDisplay{
+		{Num: "42", After: " ms"},
+		{Num: "3.50"},
+		{Num: "50", After: "/200"},
+		{Num: "—"},
+		nil,
+	}
+	for i, wd := range want {
+		got := tiles[i].Display
+		if (wd == nil) != (got == nil) || (wd != nil && *wd != *got) {
+			t.Errorf("tile %d display = %+v, want %+v", i, got, wd)
+		}
 	}
 }

@@ -815,11 +815,19 @@ export interface DashboardThreshold {
   max?: number
 }
 
+// Server-formatted counter/gauge text; clients show it verbatim.
+export interface DashboardTileDisplay {
+  before?: string
+  num: string
+  after?: string
+}
+
 export interface DashboardTile {
   kind: DashboardTileKind
   cron: string
   size?: DashboardTileSize
   format?: string
+  display?: DashboardTileDisplay
   threshold?: DashboardThreshold
   columns?: string[]
 }

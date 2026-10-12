@@ -3,6 +3,9 @@ package store
 import (
 	"errors"
 	"fmt"
+	"math"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -58,6 +61,9 @@ type DashboardTile struct {
 	Columns   []string         `yaml:"columns,omitempty" json:"columns,omitempty"`
 	Tag       string           `yaml:"tag,omitempty" json:"tag,omitempty"`
 	Y         string           `yaml:"y,omitempty" json:"y,omitempty"`
+
+	// Display is filled by the API when serving a dashboard; never read from YAML.
+	Display *TileDisplay `yaml:"-" json:"display,omitempty"`
 }
 
 // DashboardThresh is the optional warn/crit cutoff for counter and gauge tiles.
@@ -88,6 +94,88 @@ var (
 		"lg": true,
 	}
 )
+
+// tileFormatToken matches the pieces of a counter `format:` string: the
+// literal-percent escape %% and the two value verbs, %d (rounded integer)
+// and %.Nf (N decimals). Any other % is invalid.
+var tileFormatToken = regexp.MustCompile(`%%|%d|%\.\d+f`)
+
+// ValidateTileFormat reports whether f is a usable counter format: literal
+// text plus exactly one value verb (%d or %.Nf), with %% for a literal %.
+func ValidateTileFormat(f string) error {
+	verbs := 0
+	for _, m := range tileFormatToken.FindAllString(f, -1) {
+		if m != "%%" {
+			verbs++
+		}
+	}
+	if verbs != 1 || strings.Contains(tileFormatToken.ReplaceAllString(f, ""), "%") {
+		return fmt.Errorf("`format:` must contain exactly one %%d or %%.Nf (e.g. \"%%d ms\", \"%%.2f%%%%\"), got %q", f)
+	}
+	return nil
+}
+
+// TileDisplay is the server-formatted text of a counter or gauge tile:
+// Num is the headline number, Before/After the literal text around it
+// (a counter's format, a gauge's "/max"). Every client — the terminal
+// renderer and the web UI — shows these strings verbatim; none formats
+// numbers itself, so there is exactly one formatter.
+type TileDisplay struct {
+	Before string `json:"before,omitempty"`
+	Num    string `json:"num"`
+	After  string `json:"after,omitempty"`
+}
+
+// FormatNumber is the default number text: an integer when v is whole,
+// else two decimals.
+func FormatNumber(v float64) string {
+	if v == float64(int64(v)) {
+		return strconv.FormatInt(int64(v), 10)
+	}
+	return strconv.FormatFloat(v, 'f', 2, 64)
+}
+
+// FormatTileDisplay formats the latest value v (nil: no data) for a
+// counter or gauge tile and returns nil for every other kind. The
+// tile's format must already have passed ValidateTileFormat.
+func FormatTileDisplay(t DashboardTile, v *float64) *TileDisplay {
+	switch t.Kind {
+	case "counter":
+		if v == nil {
+			return &TileDisplay{Num: "—"}
+		}
+		if t.Format == "" {
+			return &TileDisplay{Num: FormatNumber(*v)}
+		}
+		var before, after strings.Builder
+		cur, num, last := &before, "", 0
+		for _, loc := range tileFormatToken.FindAllStringIndex(t.Format, -1) {
+			cur.WriteString(t.Format[last:loc[0]])
+			last = loc[1]
+			switch tok := t.Format[loc[0]:loc[1]]; tok {
+			case "%%":
+				cur.WriteString("%")
+			case "%d":
+				num, cur = fmt.Sprintf("%d", int64(math.Round(*v))), &after
+			default:
+				num, cur = fmt.Sprintf(tok, *v), &after
+			}
+		}
+		cur.WriteString(t.Format[last:])
+		return &TileDisplay{Before: before.String(), Num: num, After: after.String()}
+	case "gauge":
+		max := 100.0
+		if t.Threshold != nil && t.Threshold.Max != nil {
+			max = *t.Threshold.Max
+		}
+		num := "—"
+		if v != nil {
+			num = FormatNumber(*v)
+		}
+		return &TileDisplay{Num: num, After: "/" + FormatNumber(max)}
+	}
+	return nil
+}
 
 // knownKeys lists the valid YAML keys at each nesting level so
 // friendlyYAMLError can suggest what the user probably meant.
@@ -190,6 +278,23 @@ func validateSpec(spec *DashboardSpec) error {
 			}
 			if tile.Kind == "table" && len(tile.Columns) == 0 {
 				return fmt.Errorf("%s: table tile requires `columns:`", where)
+			}
+			if tile.Format != "" {
+				if tile.Kind != "counter" {
+					return fmt.Errorf("%s: `format:` is only supported on counter tiles", where)
+				}
+				if err := ValidateTileFormat(tile.Format); err != nil {
+					return fmt.Errorf("%s: %w", where, err)
+				}
+			}
+			if tile.Threshold != nil && tile.Kind == "table" {
+				return fmt.Errorf("%s: `threshold:` is only supported on counter, gauge, sparkline tiles", where)
+			}
+			if tile.Threshold != nil && tile.Threshold.Max != nil && tile.Kind != "gauge" {
+				return fmt.Errorf("%s: `threshold.max:` is only supported on gauge tiles", where)
+			}
+			if len(tile.Columns) > 0 && tile.Kind != "table" {
+				return fmt.Errorf("%s: `columns:` is only supported on table tiles", where)
 			}
 			if tile.Tag != "" || tile.Y != "" {
 				if tile.Kind != "sparkline" {

@@ -7,7 +7,6 @@ package dashboard
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
@@ -332,10 +331,8 @@ func renderCounter(t store.DashboardTile, series WatchSeries, w int) []string {
 		return renderMissing(t, w)
 	}
 	v := series.Values[0]
-	text := formatNumber(v)
-	if t.Format != "" {
-		text = fmt.Sprintf(t.Format, v)
-	}
+	d := store.FormatTileDisplay(t, &v)
+	text := d.Before + d.Num + d.After
 	color := thresholdColor(t.Threshold, v)
 	lines := bigNumber(text)
 	var out []string
@@ -371,7 +368,8 @@ func renderGauge(t store.DashboardTile, series WatchSeries, w int) string {
 	if pct > 1 {
 		pct = 1
 	}
-	suffix := fmt.Sprintf(" %s/%s", formatNumber(v), formatNumber(max))
+	d := store.FormatTileDisplay(t, &v)
+	suffix := " " + d.Num + d.After
 	barW := w - 2 - len(suffix) - 2 // -2 for []
 	if barW < 4 {
 		barW = 4
@@ -529,13 +527,6 @@ func colorize(color int, s string) string {
 		return s
 	}
 	return fmt.Sprintf("\x1b[38;5;%dm%s\x1b[0m", color, s)
-}
-
-func formatNumber(v float64) string {
-	if v == float64(int64(v)) {
-		return strconv.FormatInt(int64(v), 10)
-	}
-	return strconv.FormatFloat(v, 'f', 2, 64)
 }
 
 func sectionHeading(title string, w int) string {

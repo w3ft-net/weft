@@ -122,6 +122,23 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Format counter/gauge text here, once; clients render tile.display.
+	for si := range spec.Sections {
+		tiles := spec.Sections[si].Tiles
+		for ti := range tiles {
+			var latest *float64
+			if wp := watches[tiles[ti].Watch]; wp != nil {
+				for _, r := range wp.Results {
+					if r.Value != nil {
+						latest = r.Value
+						break
+					}
+				}
+			}
+			tiles[ti].Display = store.FormatTileDisplay(tiles[ti], latest)
+		}
+	}
+
 	resp := dashboardGetResponse{
 		Name:      d.Name,
 		UpdatedAt: d.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),

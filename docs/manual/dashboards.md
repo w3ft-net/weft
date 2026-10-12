@@ -86,10 +86,13 @@ Tile fields:
 | `cron`       | all                       | Name of an existing cron (must exist when the file is saved). |
 | `title`      | all                       | Optional label for the tile.                                 |
 | `size`       | all                       | `sm`, `md`, or `lg`. Default `md`. Hint, not pixel size.     |
-| `format`     | counter                   | Optional `%d` / `%.2f` format applied to the value.          |
+| `format`     | counter                   | Optional. Text with exactly one `%d` (rounded integer) or `%.2f` (any decimals, `%.Nf`); `%%` is a literal `%`. E.g. `"%d ms"`, `"%.1f%%"`. |
 | `threshold`  | counter, gauge, sparkline | `warn`, `crit`, `max` numeric cutoffs.                       |
 | `columns`    | table                     | Header labels; columns parse as whitespace-split fields.     |
 | `tag`, `y`   | sparkline                 | Multi-line mode — see below. Must be set together.           |
+
+A field on a kind it doesn't apply to is rejected when the file is saved
+(`format` on a gauge, `columns` on a counter, `threshold` on a table).
 
 ### Multi-line sparklines (`tag:`)
 

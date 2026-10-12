@@ -255,10 +255,9 @@ function CounterTile({ tile, payload }: {
 }) {
   const latest = latestValue(payload)
   const tone = thresholdTone(tile.threshold, latest)
-  // A format like "%d lines/5m" renders as a big number with the rest of
-  // the string as a dim unit. A format with no placeholder is treated as
-  // a bare unit suffix.
-  const { num, before, after } = splitFormat(tile.format, latest)
+  // The server formats the text (tile.display); a format like "%d lines/5m"
+  // arrives as num "42" and after " lines/5m", shown as a dim unit.
+  const { num, before = '', after = '' } = tile.display ?? { num: '—' }
   return (
     <div className={`dashboards-counter dashboards-tone-${tone}`} data-testid={`counter-${tile.cron}`}>
       {before && <span className="dashboards-counter-unit">{before}</span>}
@@ -292,9 +291,9 @@ function GaugeTile({ tile, payload }: {
       </div>
       <div className="dashboards-gauge-value">
         <span className={`dashboards-gauge-num dashboards-gauge-${tone}`}>
-          {latest === null ? '—' : formatNum(latest)}
+          {tile.display?.num ?? '—'}
         </span>
-        <span className="dashboards-counter-unit">/{formatNum(max)}</span>
+        <span className="dashboards-counter-unit">{tile.display?.after}</span>
         <span className="dashboards-gauge-pct">{Math.round(pct * 100)}%</span>
       </div>
     </div>
@@ -384,18 +383,6 @@ function isNumericCol(rows: string[][], ci: number): boolean {
   return rows.length > 0 && rows.every(r => r[ci] === undefined || /^-?[\d.,]+%?$/.test(r[ci]))
 }
 
-function splitFormat(fmt: string | undefined, v: number | null): { num: string; before: string; after: string } {
-  if (v === null) return { num: '—', before: '', after: '' }
-  if (!fmt) return { num: formatNum(v), before: '', after: '' }
-  const m = fmt.match(/%(\.\d+)?[dfis]/)
-  if (!m || m.index === undefined) return { num: formatNum(v), before: '', after: ` ${fmt.trim()}` }
-  return {
-    num: formatString(m[0], v),
-    before: fmt.slice(0, m.index),
-    after: fmt.slice(m.index + m[0].length),
-  }
-}
-
 // relTime renders a timestamp as a short "3m ago" the way top/k9s show age.
 function relTime(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime()
@@ -426,22 +413,3 @@ function thresholdTone(
   return 'normal'
 }
 
-function formatNum(v: number): string {
-  if (!Number.isFinite(v)) return '—'
-  if (Number.isInteger(v)) return v.toString()
-  return v.toFixed(2)
-}
-
-// formatString applies a printf-like %d / %f / %s to a single number value.
-// Keeps the implementation tiny — just enough for tile.format strings.
-function formatString(fmt: string, v: number): string {
-  return fmt.replace(/%(\.\d+)?[dfis]/g, m => {
-    if (m.includes('d') || m.includes('i')) return Math.round(v).toString()
-    if (m.includes('f')) {
-      const match = m.match(/\.(\d+)/)
-      const digits = match ? Number(match[1]) : 2
-      return v.toFixed(digits)
-    }
-    return v.toString()
-  })
-}
