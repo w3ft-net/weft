@@ -3,6 +3,7 @@ package planner
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExpandSourceGlobs(t *testing.T) {
@@ -79,5 +80,19 @@ func TestExpandSourceGlobs_NoMatchIsAnError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no pseudofiles match") {
 		t.Errorf("error message should mention 'no pseudofiles match': %v", err)
+	}
+}
+
+// A glob that reaches the planner unexpanded must be refused, not
+// planned: `*` would become the literal kind '*' and match nothing.
+func TestPlan_UnexpandedGlobIsRefused(t *testing.T) {
+	for _, p := range []string{
+		`tail -n 1 /log/acme/prod/api/*.log`,
+		`cat /log/acme/prod/api/m?in.log`,
+	} {
+		_, err := Plan(p, 0, "", time.Time{}, time.Time{})
+		if err == nil || !strings.Contains(err.Error(), "glob") {
+			t.Errorf("Plan(%q) = %v, want a glob error", p, err)
+		}
 	}
 }

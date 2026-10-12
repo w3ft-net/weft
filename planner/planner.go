@@ -144,6 +144,10 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
+	if info.source.follow && redirTarget != "" {
+		return nil, fmt.Errorf("plan: tail -f can't be redirected to %s: follow never finishes, so the file would hold a truncated read; drop -f to save a finished query", redirTarget)
+	}
+
 	sql := newSQLBuilder()
 	// Customer + time bounds first so they sit at the head of the
 	// WHERE clause regardless of subsequent app/source/stage pushdowns.
@@ -576,11 +580,21 @@ func tryPushdown(stage stageInfo, sql *Query) pushdownResult {
 		}
 
 	case "head":
+		// A head/tail after an already-frozen LIMIT acts on the merged,
+		// limited stream: leave the SQL alone and run it in compute.
+		// Overwriting the LIMIT would turn `head -n 3 | tail -n 1` into
+		// "the newest row" instead of "the third".
+		if sql.limitFrozen {
+			return pushdownResult{}
+		}
 		n := parseLineCount(stage.args)
 		sql.setOrderLimit("ts ASC", n)
 		return pushdownResult{pushed: true}
 
 	case "tail":
+		if sql.limitFrozen {
+			return pushdownResult{}
+		}
 		n := parseLineCount(stage.args)
 		sql.setOrderLimit("ts DESC", n)
 		return pushdownResult{pushed: true}

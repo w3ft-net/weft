@@ -953,13 +953,7 @@ func (r watchBinResolver) Source(name string) (string, string, bool) {
 // fire), runAlertStage post-processes, and a buffered ExecuteResult
 // is returned.
 func (c *Coordinator) execute(ctx context.Context, pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
-	// cwd (index 0 of the courier's stack) lets preflight resolve relative
-	// glob patterns against the client's directory before fan-out.
-	cwd := ""
-	if len(dirStack) > 0 {
-		cwd = dirStack[0]
-	}
-	custID, expanded, err := c.preflight(pipeline, customer, cwd)
+	custID, expanded, err := c.preflight(pipeline, customer)
 	if err != nil {
 		return nil, err
 	}
@@ -1024,6 +1018,25 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 	// retention because the SQL would have no lower-bound predicate.
 	tr = c.clampTimeRange(tr, custID)
 
+	// Expand source-arg globs (`cat /log/<ns>/<env>/*.log`) to a
+	// concrete multi-arg form the planner can union. Fan-out is scoped
+	// to apps observed in this customer's ingest stream (SeenServices),
+	// which includes weftd metrics streams that have no configured
+	// log_groups row; the namespace allowlist downstream still vets the
+	// result. Done here, not in preflight, so a source command that
+	// isn't the line's first (`cd X && tail *.log`, a /bin body) expands
+	// too. The SeenServices guard supports tests that build a
+	// Coordinator without NewCoordinator.
+	if custID != 0 && c.SeenServices != nil {
+		if apps := c.SeenServices.Names(int64(custID)); len(apps) > 0 {
+			expanded, err := planner.ExpandSourceGlobs(pipeline, cwd, apps)
+			if err != nil {
+				return nil, fmt.Errorf("expand glob: %w", err)
+			}
+			pipeline = expanded
+		}
+	}
+
 	plan, err := planner.Plan(pipeline, int64(custID), cwd, tr.Start, tr.End)
 	if err != nil {
 		// The rewriter only substitutes pipelines whose first command
@@ -1061,14 +1074,11 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 	return queryResultToExecuteResult(qr), nil
 }
 
-// preflight resolves the customer name to an ID, pre-expands /bin
-// bash invocations (so the planner can see their body), and expands
-// source-arg globs against SeenServices. Shared by runQuery and
-// executeLocal so non-log pipelines that fall through Execute pay
-// the expansion cost twice — acceptable since the steps are
-// idempotent and the DB hits are cache-friendly. ExecuteForWatch
-// hits preflight once via runQuery on the happy path.
-func (c *Coordinator) preflight(pipeline, customer, cwd string) (store.OrgID, string, error) {
+// preflight resolves the customer name to an ID and pre-expands /bin
+// bash invocations so the planner can see their body. Source-arg globs
+// are expanded later, per query pipeline, in runQuery: this sees only
+// the line's first command, which for `cd X && tail *.log` is the cd.
+func (c *Coordinator) preflight(pipeline, customer string) (store.OrgID, string, error) {
 	custID, err := c.resolveCustomerID(customer)
 	if err != nil {
 		return 0, "", err
@@ -1091,24 +1101,6 @@ func (c *Coordinator) preflight(pipeline, customer, cwd string) (store.OrgID, st
 			return 0, "", fmt.Errorf("expand /bin: %w", err)
 		}
 		pipeline = expanded
-
-		// Expand source-arg globs (`cat /log/<ns>/<env>/*.log`) to a
-		// concrete multi-arg form the planner can union. Fan-out is
-		// scoped to apps observed in this customer's ingest stream
-		// (SeenServices) — that includes weftd metrics streams that
-		// don't have a configured log_groups row. The per-customer
-		// namespace allowlist downstream still vets the result.
-		// SeenServices guard supports tests that build Coordinator
-		// without going through NewCoordinator.
-		if c.SeenServices != nil {
-			if apps := c.SeenServices.Names(int64(custID)); len(apps) > 0 {
-				expanded, err := planner.ExpandSourceGlobs(pipeline, cwd, apps)
-				if err != nil {
-					return 0, "", fmt.Errorf("expand glob: %w", err)
-				}
-				pipeline = expanded
-			}
-		}
 	}
 
 	return custID, pipeline, nil

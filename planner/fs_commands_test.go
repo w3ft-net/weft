@@ -36,3 +36,18 @@ func TestPlan_ContentReaderWithLogPath_StillRejected(t *testing.T) {
 		t.Fatalf("err = %v, want the 'must start with cat, head, or tail' rejection", err)
 	}
 }
+
+// `tail -f > /tmp/x` has no sensible meaning: follow never finishes, so
+// the redirect would receive a truncated finite read. It's refused rather
+// than silently writing a partial file.
+func TestPlan_FollowWithFSRedirectIsRefused(t *testing.T) {
+	for _, p := range []string{
+		`tail -f /log/acme/prod/api/main.log > /tmp/stream`,
+		`tail -f /log/acme/prod/api/main.log | grep ERROR >> /tmp/stream`,
+	} {
+		_, err := Plan(p, 0, "", time.Time{}, time.Time{})
+		if err == nil || !strings.Contains(err.Error(), "tail -f") {
+			t.Errorf("Plan(%q) = %v, want an error naming tail -f", p, err)
+		}
+	}
+}

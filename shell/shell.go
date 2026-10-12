@@ -470,7 +470,7 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 		return nil
 	}
 
-	// FS builtins: ls, cat for /bin /cron.d /etc /log paths.
+	// FS builtins answered client-side.
 	if s.FS != nil {
 		if handled, output := s.execFSBuiltin(line); handled {
 			if output != "" {
@@ -659,8 +659,10 @@ func queryResultLines(r *QueryResult) []string {
 	return out
 }
 
-// execFSBuiltin handles ls, cat, stat for FS paths in non-interactive mode.
-// Returns (handled, output).
+// execFSBuiltin handles the FS-backed builtins the one-shot path answers
+// client-side. ls and cat are not among them: they ship to the server like
+// any other line, whose interpreter parses the whole line (pipes, several
+// paths, flags, files as well as directories). Returns (handled, output).
 func (s *Shell) execFSBuiltin(line string) (bool, string) {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
@@ -670,53 +672,6 @@ func (s *Shell) execFSBuiltin(line string) (bool, string) {
 	args := parts[1:]
 
 	switch cmd {
-	case "ls":
-		path := "/"
-		if len(args) > 0 {
-			path = args[0]
-		}
-		if s.FS == nil {
-			return false, ""
-		}
-		// Only handle FS paths.
-		if path != "/" && !strings.HasPrefix(path, "/log") && !strings.HasPrefix(path, "/bin") &&
-			!strings.HasPrefix(path, "/cron.d") && !strings.HasPrefix(path, "/etc") &&
-			!strings.HasPrefix(path, "log") && !strings.HasPrefix(path, "bin") &&
-			!strings.HasPrefix(path, "cron.d") && !strings.HasPrefix(path, "etc") {
-			return false, ""
-		}
-		entries, err := s.FS.ReadDir(path)
-		if err != nil {
-			return true, fmt.Sprintf("ls: %v\n", err)
-		}
-		var sb strings.Builder
-		for _, e := range entries {
-			sb.WriteString(e.Name())
-			if e.IsDir() {
-				sb.WriteByte('/')
-			}
-			sb.WriteByte('\n')
-		}
-		return true, sb.String()
-
-	case "cat":
-		if len(args) == 0 {
-			return false, ""
-		}
-		path := args[0]
-		if !strings.HasPrefix(path, "/") {
-			path = "/" + path
-		}
-		// Only handle FS paths (not /log/*.log which goes to the query pipeline).
-		if strings.HasPrefix(path, "/bin/") || strings.HasPrefix(path, "/cron.d/") || strings.HasPrefix(path, "/etc/") {
-			data, err := s.FS.ReadFile(path)
-			if err != nil {
-				return true, fmt.Sprintf("cat: %v\n", err)
-			}
-			return true, string(data)
-		}
-		return false, ""
-
 	case "chart":
 		// Non-interactive chart: render a single frame and return.
 		// `--follow` is meaningless here (no terminal to redraw into),

@@ -313,6 +313,9 @@ func extractServicesEnv(files []string, cmd string) (sourceFields, error) {
 	seenKind := map[string]struct{}{}
 	var sf sourceFields
 	for i, f := range files {
+		if containsGlobMeta(f) {
+			return sourceFields{}, fmt.Errorf("%s: %q still contains a glob pattern; globs expand only in a bare cat/head/tail source argument", cmd, f)
+		}
 		ns, env, svc, kind := parsePseudofilePath(f)
 		if ns != "" && svc != "" && kind == "" {
 			return sourceFields{}, fmt.Errorf("%s: %q is missing a kind segment; the canonical form is /log/%s/%s/<kind>.log (e.g. main, heartbeats, metrics)", cmd, f, ns, svc)
