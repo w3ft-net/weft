@@ -12,15 +12,15 @@ sections:
   - title: Errors
     tiles:
       - kind: sparkline
-        watch: error-rate-hourly
+        cron: error-rate-hourly
         size: md
       - kind: table
-        watch: top-errors-hourly
+        cron: top-errors-hourly
         columns: [host, count]
   - title: Capacity
     tiles:
       - kind: counter
-        watch: pending-jobs
+        cron: pending-jobs
         size: sm
 `
 	spec, err := ParseDashboardYAML(body)
@@ -49,9 +49,9 @@ func TestParseDashboardYAML_FlatTilesShorthand(t *testing.T) {
 title: Quick
 tiles:
   - kind: counter
-    watch: pending-jobs
+    cron: pending-jobs
   - kind: sparkline
-    watch: error-rate
+    cron: error-rate
 `
 	spec, err := ParseDashboardYAML(body)
 	if err != nil {
@@ -76,19 +76,19 @@ func TestParseDashboardYAML_Errors(t *testing.T) {
 	}{
 		{"empty", "", "empty"},
 		{"no tiles", "title: foo\n", "no tiles"},
-		{"unknown kind", "tiles:\n  - kind: pizza\n    watch: foo\n", "unknown kind"},
-		{"missing watch", "tiles:\n  - kind: sparkline\n", "missing `watch:`"},
-		{"missing kind", "tiles:\n  - watch: foo\n", "missing `kind:`"},
-		{"bad size", "tiles:\n  - kind: sparkline\n    watch: foo\n    size: huge\n", "unknown size"},
-		{"table no columns", "tiles:\n  - kind: table\n    watch: foo\n", "table tile requires `columns:`"},
-		{"sections + flat tiles", "tiles:\n  - kind: counter\n    watch: foo\nsections:\n  - tiles:\n      - kind: counter\n        watch: bar\n", "cannot mix"},
+		{"unknown kind", "tiles:\n  - kind: pizza\n    cron: foo\n", "unknown kind"},
+		{"missing watch", "tiles:\n  - kind: sparkline\n", "missing `cron:`"},
+		{"missing kind", "tiles:\n  - cron: foo\n", "missing `kind:`"},
+		{"bad size", "tiles:\n  - kind: sparkline\n    cron: foo\n    size: huge\n", "unknown size"},
+		{"table no columns", "tiles:\n  - kind: table\n    cron: foo\n", "table tile requires `columns:`"},
+		{"sections + flat tiles", "tiles:\n  - kind: counter\n    cron: foo\nsections:\n  - tiles:\n      - kind: counter\n        cron: bar\n", "cannot mix"},
 		{"empty section", "sections:\n  - title: foo\n    tiles: []\n", "no tiles"},
-		{"unknown field at top", "title: x\nfoo: bar\ntiles:\n  - kind: counter\n    watch: a\n", "not a valid key"},
-		{"unknown field in section", "sections:\n  - heading: Ops\n    tiles:\n      - kind: counter\n        watch: a\n", "'heading' is not a valid key"},
-		{"unknown field in tile", "tiles:\n  - kind: counter\n    watch: a\n    color: red\n", "'color' is not a valid key"},
-		{"tag on non-sparkline", "tiles:\n  - kind: counter\n    watch: a\n    tag: .host\n    y: .v\n", "only supported on sparkline"},
-		{"tag without y", "tiles:\n  - kind: sparkline\n    watch: a\n    tag: .host\n", "must be set together"},
-		{"y without tag", "tiles:\n  - kind: sparkline\n    watch: a\n    y: .v\n", "must be set together"},
+		{"unknown field at top", "title: x\nfoo: bar\ntiles:\n  - kind: counter\n    cron: a\n", "not a valid key"},
+		{"unknown field in section", "sections:\n  - heading: Ops\n    tiles:\n      - kind: counter\n        cron: a\n", "'heading' is not a valid key"},
+		{"unknown field in tile", "tiles:\n  - kind: counter\n    cron: a\n    color: red\n", "'color' is not a valid key"},
+		{"tag on non-sparkline", "tiles:\n  - kind: counter\n    cron: a\n    tag: .host\n    y: .v\n", "only supported on sparkline"},
+		{"tag without y", "tiles:\n  - kind: sparkline\n    cron: a\n    tag: .host\n", "must be set together"},
+		{"y without tag", "tiles:\n  - kind: sparkline\n    cron: a\n    y: .v\n", "must be set together"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -107,7 +107,7 @@ func TestParseDashboardYAML_TaggedSparkline(t *testing.T) {
 	body := `
 tiles:
   - kind: sparkline
-    watch: coordinator-mem-pct
+    cron: coordinator-mem-pct
     tag: .coordinator_id
     y: .mem_pct
     size: lg
@@ -129,7 +129,7 @@ func TestParseDashboardYAML_DefaultsApplied(t *testing.T) {
 	body := `
 tiles:
   - kind: sparkline
-    watch: foo
+    cron: foo
 `
 	spec, err := ParseDashboardYAML(body)
 	if err != nil {
@@ -138,5 +138,24 @@ tiles:
 	tile := spec.Sections[0].Tiles[0]
 	if tile.Size != "" {
 		t.Errorf("size should be empty (renderer applies default), got %q", tile.Size)
+	}
+}
+
+// The tile key is `cron:` (it was `watch:`). The old key is refused with an
+// error that names the new one, rather than the generic "not a valid key".
+func TestParseDashboardYAML_WatchKeyWasRenamed(t *testing.T) {
+	_, err := ParseDashboardYAML("tiles:\n  - kind: counter\n    watch: errs\n")
+	if err == nil || !strings.Contains(err.Error(), "renamed 'cron'") {
+		t.Fatalf("old watch: key: err = %v, want a rename hint", err)
+	}
+	spec, err := ParseDashboardYAML("tiles:\n  - kind: counter\n    cron: errs\n")
+	if err != nil {
+		t.Fatalf("cron: key: %v", err)
+	}
+	if got := spec.Sections[0].Tiles[0].Watch; got != "errs" {
+		t.Errorf("tile cron = %q, want errs", got)
+	}
+	if _, err := ParseDashboardYAML("tiles:\n  - kind: counter\n"); err == nil || !strings.Contains(err.Error(), "missing `cron:`") {
+		t.Errorf("missing key: err = %v", err)
 	}
 }

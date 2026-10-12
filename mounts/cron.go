@@ -79,16 +79,16 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 
 	maxWatches := store.WatchLimit(m.cfg.Tier)
 	if maxWatches == 0 {
-		return fmt.Errorf("watches are not available on the trial plan")
+		return fmt.Errorf("crons are not available on the trial plan")
 	}
 
 	if _, err := m.cfg.Store.GetCronWatch(m.cfg.OrgID, rel); err != nil {
 		count, err := m.cfg.Store.CountCronWatches(m.cfg.OrgID)
 		if err != nil {
-			return fmt.Errorf("failed to check watch count: %w", err)
+			return fmt.Errorf("failed to check cron count: %w", err)
 		}
 		if count >= maxWatches {
-			return fmt.Errorf("watch limit reached (%d watches on %s plan)", maxWatches, m.cfg.Tier)
+			return fmt.Errorf("cron limit reached (%d crons on %s plan)", maxWatches, m.cfg.Tier)
 		}
 	}
 

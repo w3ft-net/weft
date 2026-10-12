@@ -34,7 +34,7 @@ func registerCronsList(server *mcp.Server, cfg Config) {
 
 // cronsListHandler composes the already-wired ListWatches (names) and
 // GetCron (per-cron schedule+pipeline body) hooks. It deliberately
-// adds no new Config surface or backend call: the same /api/watches
+// adds no new Config surface or backend call: the same /api/crons
 // endpoints that back cron_propose's diff already expose everything.
 func cronsListHandler(cfg Config) *mcp.CallToolResult {
 	if cfg.ListWatches == nil || cfg.GetCron == nil {

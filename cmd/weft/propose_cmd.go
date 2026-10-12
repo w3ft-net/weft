@@ -207,7 +207,7 @@ func runProposeClear() {
 }
 
 // applyProposal commits one proposal to the backend. Crons land
-// at /api/watches under the hood — "watch" is the legacy storage
+// at /api/crons under the hood — "watch" is the legacy storage
 // name for the same concept, scheduled for renaming separately.
 func applyProposal(b *shell.HTTPBackend, p proposals.Proposal) error {
 	switch p.Kind {

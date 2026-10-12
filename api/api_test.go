@@ -199,7 +199,7 @@ func TestWatchCreate_TierFromDB_NotJWT(t *testing.T) {
 	// Use the stale JWT to create a watch. Should succeed because the
 	// handler reads tier from the live DB (now bolt = 50 watches).
 	body := []byte(`{"schedule":"*/5 * * * *","pipeline":"echo 1"}`)
-	req := httptest.NewRequest("PUT", "/api/watches/test-watch", bytes.NewReader(body))
+	req := httptest.NewRequest("PUT", "/api/crons/test-watch", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -255,7 +255,7 @@ func TestSaveWatch_SyntaxErrorSurfacesRealMessage(t *testing.T) {
 	jwt := setupWatchOwner(t, s, "syntax-err-watch")
 
 	body := []byte(`{"schedule":"*/5 * * * *","pipeline":"cat |"}`)
-	req := httptest.NewRequest("PUT", "/api/watches/broken", bytes.NewReader(body))
+	req := httptest.NewRequest("PUT", "/api/crons/broken", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -283,7 +283,7 @@ func TestSaveWatch_TruncationWarning(t *testing.T) {
 	jwt := setupWatchOwner(t, s, "truncation-warn-watch")
 
 	body := []byte(`{"schedule":"*/5 * * * *","pipeline":"tail -n 1000 /log/x/y/main.log | grep -c \"boom\""}`)
-	req := httptest.NewRequest("PUT", "/api/watches/risky", bytes.NewReader(body))
+	req := httptest.NewRequest("PUT", "/api/crons/risky", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

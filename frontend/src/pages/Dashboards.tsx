@@ -152,7 +152,7 @@ function DashboardView({ name, list }: { name: string; list: DashboardListItem[]
               <Tile
                 key={ti}
                 tile={tile}
-                payload={data.watches[tile.watch] ?? null}
+                payload={data.crons[tile.cron] ?? null}
               />
             ))}
           </div>
@@ -200,24 +200,24 @@ function Tile({ tile, payload }: {
 }) {
   const size = tile.size ?? 'md'
   const className = `tui-pane dashboards-tile dashboards-tile-${size}`
-  const lastRun = payload?.watch.LastRunAt
-  const failed = !!payload?.watch.LastStatus && payload.watch.LastStatus !== 'ok'
+  const lastRun = payload?.cron.LastRunAt
+  const failed = !!payload?.cron.LastStatus && payload.cron.LastStatus !== 'ok'
   return (
     <div
       className={className}
-      data-testid={`dashboards-tile-${tile.watch}`}
+      data-testid={`dashboards-tile-${tile.cron}`}
     >
       <div className="tui-pane-head">
         <Link
-          to={`/watch/${encodeURIComponent(tile.watch)}`}
+          to={`/cron/${encodeURIComponent(tile.cron)}`}
           className="tui-pane-title dashboards-tile-header"
-          data-testid={`dashboards-tile-${tile.watch}-link`}
+          data-testid={`dashboards-tile-${tile.cron}-link`}
         >
-          <span className="dashboards-tile-watch">{tile.watch}</span>
+          <span className="dashboards-tile-watch">{tile.cron}</span>
         </Link>
         {payload && (
           <span className={`tui-pane-actions dashboards-tile-meta${failed ? ' dashboards-tone-crit' : ''}`}>
-            {failed ? payload.watch.LastStatus : lastRun ? relTime(lastRun) : 'pending'}
+            {failed ? payload.cron.LastStatus : lastRun ? relTime(lastRun) : 'pending'}
           </span>
         )}
       </div>
@@ -260,7 +260,7 @@ function CounterTile({ tile, payload }: {
   // a bare unit suffix.
   const { num, before, after } = splitFormat(tile.format, latest)
   return (
-    <div className={`dashboards-counter dashboards-tone-${tone}`} data-testid={`counter-${tile.watch}`}>
+    <div className={`dashboards-counter dashboards-tone-${tone}`} data-testid={`counter-${tile.cron}`}>
       {before && <span className="dashboards-counter-unit">{before}</span>}
       <span className="dashboards-counter-num">{num}</span>
       {after && <span className="dashboards-counter-unit">{after}</span>}
@@ -279,7 +279,7 @@ function GaugeTile({ tile, payload }: {
   const tone = thresholdTone(tile.threshold, latest)
   const pct = latest === null || max <= 0 ? 0 : Math.max(0, Math.min(1, latest / max))
   return (
-    <div className="dashboards-gauge" data-testid={`gauge-${tile.watch}`}>
+    <div className="dashboards-gauge" data-testid={`gauge-${tile.cron}`}>
       <div className="dashboards-gauge-bar" role="meter" aria-valuenow={latest ?? undefined} aria-valuemin={0} aria-valuemax={max}>
         <span className="dashboards-gauge-bracket">[</span>
         <span className="dashboards-gauge-track">
@@ -325,7 +325,7 @@ function SparklineTile({ tile, payload }: {
   const tone = latest !== null ? thresholdTone(tile.threshold, parseFloat(latest)) : 'normal'
 
   return (
-    <div className="dashboards-sparkline-wrap" data-testid={`sparkline-${tile.watch}`}>
+    <div className="dashboards-sparkline-wrap" data-testid={`sparkline-${tile.cron}`}>
       {!tagged && latest !== null && (
         <div className={`dashboards-sparkline-latest dashboards-tone-${tone}`}>
           {latest}
@@ -334,8 +334,8 @@ function SparklineTile({ tile, payload }: {
       <Sparkline
         series={series}
         bands={bands}
-        threshold={payload.watch.AlertThreshold}
-        condition={payload.watch.AlertCondition}
+        threshold={payload.cron.AlertThreshold}
+        condition={payload.cron.AlertCondition}
         height={80}
         showTimeAxis
       />
@@ -361,7 +361,7 @@ function TableTile({ tile, payload }: {
   if (rows.length === 0) return <NoData />
 
   return (
-    <table className="tui-table dashboards-table" data-testid={`table-${tile.watch}`}>
+    <table className="tui-table dashboards-table" data-testid={`table-${tile.cron}`}>
       <thead>
         <tr>{cols.map((c, ci) => <th key={c} className={isNumericCol(rows, ci) ? 'dashboards-num' : undefined}>{c}</th>)}</tr>
       </thead>

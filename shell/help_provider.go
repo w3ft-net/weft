@@ -61,7 +61,7 @@ func helpCron(limits TierLimitsProvider) string {
 
 // renderTierLimits formats the watch-cap / min-interval table for
 // every tier the provider knows about. Tiers with 0 watches are
-// rendered as "no watches" rather than "0 watches, 0s".
+// rendered as "no crons" rather than "0 crons, 0s".
 func renderTierLimits(p TierLimitsProvider) string {
 	tiers := append([]string(nil), p.Tiers()...)
 	sort.Strings(tiers)
@@ -77,10 +77,10 @@ func renderTierLimits(p TierLimitsProvider) string {
 		r := row{name: t}
 		switch {
 		case cap <= 0:
-			r.limit = "no watches"
+			r.limit = "no crons"
 			r.interval = "—"
 		default:
-			r.limit = fmt.Sprintf("%d watch%s", cap, plural(cap))
+			r.limit = fmt.Sprintf("%d cron%s", cap, plural(cap))
 			if min > 0 {
 				r.interval = fmt.Sprintf("min %s interval", formatShortDur(min))
 			} else {

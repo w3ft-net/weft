@@ -85,7 +85,7 @@ export default function SidebarNav() {
 
   // Watch detail pages are reached from dashboard tiles, so they report
   // as the dashboards window.
-  const path = location.pathname.startsWith('/watch/') ? '/dashboards' : location.pathname
+  const path = location.pathname.startsWith('/cron/') ? '/dashboards' : location.pathname
   const current = items.find(i => path.startsWith(i.to))
 
   function handleLogout() {

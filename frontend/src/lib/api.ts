@@ -161,14 +161,14 @@ export function deleteFunction(name: string): Promise<void> {
 
 // Watches (/cron.d/)
 export interface WatchesResponse {
-  watches: CronWatch[]
+  crons: CronWatch[]
   count: number
   limit: number
   min_interval: string
 }
 
 export function getWatches(): Promise<WatchesResponse> {
-  return apiFetch('/api/watches')
+  return apiFetch('/api/crons')
 }
 
 // SaveWatchResult.warnings carries non-blocking, save-time messages
@@ -181,22 +181,22 @@ export interface SaveWatchResult {
 }
 
 export function saveWatch(name: string, schedule: string, pipeline: string): Promise<SaveWatchResult> {
-  return apiFetch(`/api/watches/${encodeURIComponent(name)}`, {
+  return apiFetch(`/api/crons/${encodeURIComponent(name)}`, {
     method: 'PUT',
     body: JSON.stringify({ schedule, pipeline }),
   })
 }
 
 export function deleteWatch(name: string): Promise<void> {
-  return apiFetch(`/api/watches/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  return apiFetch(`/api/crons/${encodeURIComponent(name)}`, { method: 'DELETE' })
 }
 
 export function getWatch(name: string): Promise<CronWatch> {
-  return apiFetch(`/api/watches/${encodeURIComponent(name)}`)
+  return apiFetch(`/api/crons/${encodeURIComponent(name)}`)
 }
 
 export function getWatchResults(name: string): Promise<CronResult[]> {
-  return apiFetch(`/api/watches/${encodeURIComponent(name)}/results`)
+  return apiFetch(`/api/crons/${encodeURIComponent(name)}/results`)
 }
 
 export type ChartRange = '1h' | '6h' | '24h' | '7d' | '30d' | '90d' | '1y'
@@ -233,7 +233,7 @@ export interface ChartResponse {
 }
 
 export function getWatchChart(name: string, range: ChartRange): Promise<ChartResponse> {
-  return apiFetch(`/api/watches/${encodeURIComponent(name)}/chart?range=${range}`)
+  return apiFetch(`/api/crons/${encodeURIComponent(name)}/chart?range=${range}`)
 }
 
 // resendVerification re-sends the signup verification email to the
@@ -817,7 +817,7 @@ export interface DashboardThreshold {
 
 export interface DashboardTile {
   kind: DashboardTileKind
-  watch: string
+  cron: string
   size?: DashboardTileSize
   format?: string
   threshold?: DashboardThreshold
@@ -835,7 +835,7 @@ export interface DashboardSpec {
 }
 
 export interface DashboardWatchPayload {
-  watch: CronWatch
+  cron: CronWatch
   results: CronResult[]
 }
 
@@ -850,7 +850,7 @@ export interface DashboardResponse {
   name: string
   updated_at?: string
   spec: DashboardSpec
-  watches: Record<string, DashboardWatchPayload | null>
+  crons: Record<string, DashboardWatchPayload | null>
 }
 
 export async function listDashboards(): Promise<DashboardListItem[]> {

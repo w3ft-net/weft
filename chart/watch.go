@@ -27,7 +27,7 @@ func RenderOneShot(wr WatchResultsProvider, name, kind string, limit, w, h int) 
 	}
 	pts, _ := watchResultsToPoints(results)
 	if len(pts) == 0 {
-		return "", fmt.Sprintf("no numeric results for watch %q", name)
+		return "", fmt.Sprintf("no numeric results for cron %q", name)
 	}
 	title := fmt.Sprintf("%s  (last %d)", name, len(pts))
 

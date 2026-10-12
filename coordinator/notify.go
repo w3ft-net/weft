@@ -219,9 +219,9 @@ func (n *Notifier) sendPagerDuty(orgID store.OrgID, watchName string, target sto
 			Summary:  summary,
 			Source:   "weft",
 			Severity: target.Severity,
-			Class:    "watch",
+			Class:    "cron",
 			Details: map[string]any{
-				"watch":  watchName,
+				"cron":   watchName,
 				"stderr": truncate(stderr, 4000),
 			},
 		},
@@ -248,9 +248,10 @@ func (n *Notifier) sendPagerDuty(orgID store.OrgID, watchName string, target sto
 // ── Webhook ──────────────────────────────────────────
 
 // webhookPayload is the versioned JSON shape sent to generic webhook targets.
+// v2 renamed `watch` to `cron`.
 type webhookPayload struct {
 	V      int    `json:"v"`
-	Watch  string `json:"watch"`
+	Watch  string `json:"cron"`
 	Alias  string `json:"alias"`
 	TsUnix int64  `json:"ts_unix"`
 	Body   string `json:"body"`
@@ -258,7 +259,7 @@ type webhookPayload struct {
 
 func (n *Notifier) sendWebhook(aliasName, watchName string, target store.WebhookTarget, body string) error {
 	payload, _ := json.Marshal(webhookPayload{
-		V:      1,
+		V:      2,
 		Watch:  watchName,
 		Alias:  aliasName,
 		TsUnix: time.Now().Unix(),

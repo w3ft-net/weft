@@ -59,7 +59,7 @@ Pipelines pass the same allowlist as weft.run plus the alert pipe stage. Returns
 
 The body is the dashboard YAML — top-level title plus a list of sections (each with a heading and tiles), or a flat top-level tiles: shorthand. Tiles have a kind (sparkline | counter | gauge | table), a watch reference, an optional size hint (sm | md | lg), and kind-specific fields like format, threshold, or columns.
 
-The body is parsed against weft's dashboard YAML grammar and every tile's watch: reference is checked against the existing cron watches. Returns proposal id + unified diff.`
+The body is parsed against weft's dashboard YAML grammar and every tile's cron: reference is checked against the existing crons. Returns proposal id + unified diff.`
 
 	proposalDeleteDescription = `Stage the deletion of an existing script, cron, or dashboard.
 
@@ -183,7 +183,7 @@ func dashboardProposeHandler(cfg Config, a DashboardProposeArgs) *mcp.CallToolRe
 	if cfg.ListWatches != nil {
 		names, err := cfg.ListWatches()
 		if err != nil {
-			return errorResult(fmt.Sprintf("list watches: %v", err))
+			return errorResult(fmt.Sprintf("list crons: %v", err))
 		}
 		known := make(map[string]bool, len(names))
 		for _, n := range names {
@@ -203,7 +203,7 @@ func dashboardProposeHandler(cfg Config, a DashboardProposeArgs) *mcp.CallToolRe
 			}
 		}
 		if len(missing) > 0 {
-			return errorResult(fmt.Sprintf("dashboard references unknown watches: %s", strings.Join(missing, ", ")))
+			return errorResult(fmt.Sprintf("dashboard references unknown crons: %s", strings.Join(missing, ", ")))
 		}
 	}
 	current, err := getCurrent(cfg.GetDashboard, a.Name)

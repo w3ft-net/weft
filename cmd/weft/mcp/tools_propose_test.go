@@ -368,10 +368,10 @@ sections:
   - title: Errors
     tiles:
       - kind: sparkline
-        watch: err-rate
+        cron: err-rate
         size: md
       - kind: counter
-        watch: pending
+        cron: pending
 `
 	res := callTool(t, s, "weft.dashboard_propose", map[string]any{
 		"name": "prod",
@@ -402,7 +402,7 @@ func TestDashboardPropose_BadYAMLRejected(t *testing.T) {
 
 	res := callTool(t, s, "weft.dashboard_propose", map[string]any{
 		"name": "broken",
-		"body": "tiles:\n  - kind: pizza\n    watch: foo\n",
+		"body": "tiles:\n  - kind: pizza\n    cron: foo\n",
 	})
 	if !res.IsError {
 		t.Fatalf("expected IsError for unknown kind")
@@ -425,7 +425,7 @@ func TestDashboardPropose_UnknownWatchRejected(t *testing.T) {
 
 	body := `tiles:
   - kind: counter
-    watch: ghost
+    cron: ghost
 `
 	res := callTool(t, s, "weft.dashboard_propose", map[string]any{
 		"name": "broken",
@@ -447,23 +447,23 @@ func TestDashboardPropose_DiffAgainstCurrent(t *testing.T) {
 	(&proposeBackend{
 		watches: []string{"a", "b"},
 		dashboards: map[string]string{
-			"prod": "tiles:\n  - kind: counter\n    watch: a\n",
+			"prod": "tiles:\n  - kind: counter\n    cron: a\n",
 		},
 	}).wire(&cfg)
 	s := testSession(t, cfg)
 
 	res := callTool(t, s, "weft.dashboard_propose", map[string]any{
 		"name": "prod",
-		"body": "tiles:\n  - kind: counter\n    watch: b\n",
+		"body": "tiles:\n  - kind: counter\n    cron: b\n",
 	})
 	if res.IsError {
 		t.Fatalf("unexpected IsError; %q", textContent(res))
 	}
 	got := textContent(res)
-	if !strings.Contains(got, "-    watch: a") {
+	if !strings.Contains(got, "-    cron: a") {
 		t.Errorf("expected removed line in diff; got %q", got)
 	}
-	if !strings.Contains(got, "+    watch: b") {
+	if !strings.Contains(got, "+    cron: b") {
 		t.Errorf("expected added line in diff; got %q", got)
 	}
 }
@@ -474,7 +474,7 @@ func TestProposalDelete_Dashboard(t *testing.T) {
 	store, _ := proposals.New(t.TempDir())
 	cfg := Config{Run: neverRunFn(t), Proposals: store}
 	(&proposeBackend{
-		dashboards: map[string]string{"old": "title: Old\ntiles:\n  - kind: counter\n    watch: x\n"},
+		dashboards: map[string]string{"old": "title: Old\ntiles:\n  - kind: counter\n    cron: x\n"},
 	}).wire(&cfg)
 	s := testSession(t, cfg)
 

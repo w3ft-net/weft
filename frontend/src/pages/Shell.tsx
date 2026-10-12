@@ -43,7 +43,7 @@ export default function Shell() {
   useEffect(() => {
     getFunctions().then(setFunctions).catch(() => {})
     getWatches().then(resp => {
-      setWatches(resp.watches || [])
+      setWatches(resp.crons || [])
       setWatchLimits({ count: resp.count, limit: resp.limit, min_interval: resp.min_interval })
     }).catch(() => {})
   }, [])

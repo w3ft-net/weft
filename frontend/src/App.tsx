@@ -56,7 +56,7 @@ export default function App() {
       <Route path="/manual/:slug" element={
         <ProtectedRoute><ManualTopic /></ProtectedRoute>
       } />
-      <Route path="/watch/:name" element={
+      <Route path="/cron/:name" element={
         <ProtectedRoute><Watch /></ProtectedRoute>
       } />
       <Route path="/dashboards" element={

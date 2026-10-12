@@ -98,11 +98,11 @@ function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
               tabIndex={0}
               className={`watch-tile watch-tile-clickable${hasError ? ' watch-tile-errored' : ''}`}
               data-testid={`dashboard-watch-card-${watch.Name}`}
-              onClick={() => navigate(`/watch/${encodeURIComponent(watch.Name)}`)}
+              onClick={() => navigate(`/cron/${encodeURIComponent(watch.Name)}`)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
-                  navigate(`/watch/${encodeURIComponent(watch.Name)}`)
+                  navigate(`/cron/${encodeURIComponent(watch.Name)}`)
                 }
               }}
             >
@@ -388,7 +388,7 @@ export default function Dashboard() {
       .then(async (resp) => {
         setWatchMeta({ count: resp.count, limit: resp.limit, min_interval: resp.min_interval })
         const withResults = await Promise.all(
-          (resp.watches || []).map(async (w) => {
+          (resp.crons || []).map(async (w) => {
             const results = await getWatchResults(w.Name).catch(() => [] as CronResult[])
             return { watch: w, results: results || [] }
           })

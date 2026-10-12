@@ -52,7 +52,7 @@ export interface ShellIdentity {
 // `plot` (... | chart) is populated.
 export interface ChartOpenSpec {
   pipeline?: string // the typed line that opened the chart
-  watch?: string
+  cron?: string
   plot?: ChartPlot
   kind?: string
   title?: string
@@ -331,7 +331,7 @@ function fsRemove(path: string): { error?: string } {
 
 function fsGetWatchResults(name: string, limit: number): { results?: { stdout: string; ran_at: string }[]; error?: string } {
   const xhr = new XMLHttpRequest()
-  xhr.open('GET', `${API_BASE}/api/watches/${encodeURIComponent(name)}/results`, false)
+  xhr.open('GET', `${API_BASE}/api/crons/${encodeURIComponent(name)}/results`, false)
   for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v)
   try { xhr.send() } catch { return { error: 'network error' } }
   if (xhr.status >= 400) return { error: xhr.responseText || `HTTP ${xhr.status}` }

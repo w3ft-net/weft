@@ -45,12 +45,12 @@ type DashboardSection struct {
 // instance) instead of a single scalar. Tag is the JSON path that
 // identifies which entity a row belongs to; Y is the JSON path to the
 // value to plot. Each row's run timestamp (not a per-row field) is the
-// x value, since a dashboard tile's history comes from the watch's
-// cron run history, not a live pipeline. The tile then renders one
-// line per distinct Tag value instead of one line for the whole watch.
+// x value, since a dashboard tile's history comes from the cron's
+// run history, not a live pipeline. The tile then renders one
+// line per distinct Tag value instead of one line for the whole cron.
 type DashboardTile struct {
 	Kind      string           `yaml:"kind" json:"kind"`
-	Watch     string           `yaml:"watch" json:"watch"`
+	Watch     string           `yaml:"cron" json:"cron"`
 	Title     string           `yaml:"title,omitempty" json:"title,omitempty"`
 	Size      string           `yaml:"size,omitempty" json:"size,omitempty"`
 	Format    string           `yaml:"format,omitempty" json:"format,omitempty"`
@@ -94,7 +94,7 @@ var (
 var knownKeys = map[string][]string{
 	"dashboardYAMLRaw": {"title", "sections", "tiles"},
 	"DashboardSection": {"title", "tiles"},
-	"DashboardTile":    {"kind", "watch", "title", "size", "format", "threshold", "columns", "tag", "y"},
+	"DashboardTile":    {"kind", "cron", "title", "size", "format", "threshold", "columns", "tag", "y"},
 	"DashboardThresh":  {"warn", "crit", "max"},
 }
 
@@ -118,6 +118,9 @@ func friendlyYAMLError(err error) error {
 	}
 	typeName = strings.TrimSpace(typeName)
 
+	if typeName == "DashboardTile" && field == "watch" {
+		return fmt.Errorf("'watch' was renamed 'cron': write `cron: <name>` — run `man dashboard` for the YAML grammar")
+	}
 	valid := knownKeys[typeName]
 	if len(valid) == 0 {
 		return fmt.Errorf("'%s' is not a valid key — run `man dashboard` for the YAML grammar", field)
@@ -180,7 +183,7 @@ func validateSpec(spec *DashboardSpec) error {
 				return fmt.Errorf("%s: unknown kind %q (valid: sparkline, counter, gauge, table)", where, tile.Kind)
 			}
 			if tile.Watch == "" {
-				return fmt.Errorf("%s: missing `watch:`", where)
+				return fmt.Errorf("%s: missing `cron:`", where)
 			}
 			if tile.Size != "" && !validTileSizes[tile.Size] {
 				return fmt.Errorf("%s: unknown size %q (valid: sm, md, lg)", where, tile.Size)
@@ -218,9 +221,9 @@ func (s *Store) ValidateDashboardWatchRefs(orgID OrgID, spec *DashboardSpec) err
 			seen[tile.Watch] = true
 			if _, err := s.GetCronWatch(orgID, tile.Watch); err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return fmt.Errorf("watch %q does not exist", tile.Watch)
+					return fmt.Errorf("cron %q does not exist", tile.Watch)
 				}
-				return fmt.Errorf("watch %q: %w", tile.Watch, err)
+				return fmt.Errorf("cron %q: %w", tile.Watch, err)
 			}
 		}
 	}

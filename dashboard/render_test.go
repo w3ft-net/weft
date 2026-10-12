@@ -41,9 +41,9 @@ sections:
   - title: Errors
     tiles:
       - kind: counter
-        watch: a
+        cron: a
       - kind: counter
-        watch: b
+        cron: b
 `)
 	results := map[string]WatchSeries{
 		"a": {Values: []float64{42}},
@@ -77,10 +77,10 @@ func TestRender_MultiColumnWide(t *testing.T) {
 sections:
   - tiles:
       - kind: counter
-        watch: a
+        cron: a
         size: sm
       - kind: counter
-        watch: b
+        cron: b
         size: sm
 `)
 	results := map[string]WatchSeries{
@@ -108,7 +108,7 @@ func TestRender_Sparkline(t *testing.T) {
 	spec := mustParse(t, `
 tiles:
   - kind: sparkline
-    watch: traffic
+    cron: traffic
 `)
 	results := map[string]WatchSeries{
 		"traffic": {Values: []float64{1, 5, 3, 8, 2, 7, 4}},
@@ -134,7 +134,7 @@ func TestRender_SparklineTagged(t *testing.T) {
 	spec := mustParse(t, `
 tiles:
   - kind: sparkline
-    watch: coordinator-mem-pct
+    cron: coordinator-mem-pct
     tag: .coordinator_id
     y: .mem_pct
     size: lg
@@ -170,7 +170,7 @@ func TestRender_SparklineTaggedMissingData(t *testing.T) {
 	spec := mustParse(t, `
 tiles:
   - kind: sparkline
-    watch: ghost
+    cron: ghost
     tag: .coordinator_id
     y: .mem_pct
 `)
@@ -184,7 +184,7 @@ func TestRender_Table(t *testing.T) {
 	spec := mustParse(t, `
 tiles:
   - kind: table
-    watch: top
+    cron: top
     columns: [host, count]
 `)
 	results := map[string]WatchSeries{
@@ -202,7 +202,7 @@ func TestRender_MissingWatchPlaceholder(t *testing.T) {
 	spec := mustParse(t, `
 tiles:
   - kind: counter
-    watch: ghost
+    cron: ghost
 `)
 	out := Render(spec, map[string]WatchSeries{}, 80)
 	if !strings.Contains(out, "<no data>") {
@@ -213,7 +213,7 @@ tiles:
 func TestRender_GaugeWithThreshold(t *testing.T) {
 	body := `tiles:
   - kind: gauge
-    watch: cpu
+    cron: cpu
     threshold: { warn: 70, crit: 90, max: 100 }
 `
 	spec := mustParse(t, body)
@@ -234,7 +234,7 @@ func TestRender_SparklineTimeAxis(t *testing.T) {
 	spec := mustParse(t, `
 tiles:
   - kind: sparkline
-    watch: mem
+    cron: mem
 `)
 	base := 1746550800.0 // 2025-05-06 17:00:00 UTC
 	results := map[string]WatchSeries{
@@ -259,11 +259,11 @@ sections:
   - title: Errors
     tiles:
       - kind: counter
-        watch: a
+        cron: a
   - title: Capacity
     tiles:
       - kind: counter
-        watch: b
+        cron: b
 `)
 	out := Render(spec, map[string]WatchSeries{
 		"a": {Values: []float64{1}},

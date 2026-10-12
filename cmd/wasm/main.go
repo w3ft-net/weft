@@ -130,7 +130,7 @@ func buildShell(cb js.Value, apps []string, mfs *shellcore.MountFS) *shell.Shell
 		Chart: func(r shell.ChartRequest) {
 			spec := map[string]any{
 				"pipeline": r.Pipeline,
-				"watch":    r.Watch,
+				"cron":     r.Watch,
 				"kind":     r.Kind,
 				"title":    r.Title,
 				"limit":    r.Limit,

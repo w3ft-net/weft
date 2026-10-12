@@ -11,7 +11,7 @@ import './ShellChartModal.css'
 // bridge module.
 export interface ChartSpec {
   pipeline?: string // the typed line that opened the chart
-  watch?: string
+  cron?: string
   plot?: ChartPlot
   kind?: string
   title?: string
@@ -25,24 +25,24 @@ interface Props {
 
 // ShellChartModal is the React-side render target for both
 // `chart <name>` and `... | chart` typed at the browser shell. The
-// watch form re-fetches results from /api/watches/<name>/results
+// watch form re-fetches results from /api/crons/<name>/results
 // (matching the dashboard tile flow) so the modal stays live;
 // the pipe form draws the plot the shell computed from its pipeline.
 export default function ShellChartModal({ spec, onClose }: Props) {
-  const isWatch = !!spec.watch
-  const title = spec.title || spec.watch || 'chart'
+  const isWatch = !!spec.cron
+  const title = spec.title || spec.cron || 'chart'
 
   const [results, setResults] = useState<CronResult[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!isWatch || !spec.watch) return
+    if (!isWatch || !spec.cron) return
     let cancelled = false
-    getWatchResults(spec.watch)
+    getWatchResults(spec.cron)
       .then(r => { if (!cancelled) setResults(r) })
       .catch(e => { if (!cancelled) setError(String(e)) })
     return () => { cancelled = true }
-  }, [spec.watch, isWatch])
+  }, [spec.cron, isWatch])
 
   // The tour completes a chart lesson when this modal goes away, but only
   // once it showed something (a cron chart still loading or failed did not
@@ -78,13 +78,13 @@ export default function ShellChartModal({ spec, onClose }: Props) {
       >
         <header className="shell-chart-modal-header">
           <h2 className="shell-chart-modal-title">{title}</h2>
-          {isWatch && spec.watch && (
+          {isWatch && spec.cron && (
             <Link
-              to={`/watch/${encodeURIComponent(spec.watch)}`}
+              to={`/cron/${encodeURIComponent(spec.cron)}`}
               className="shell-chart-modal-link"
               data-testid="shell-chart-modal-watch-link"
             >
-              open watch
+              open cron
             </Link>
           )}
           <button

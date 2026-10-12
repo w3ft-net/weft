@@ -37,7 +37,7 @@ sections:
   - title: Errors
     tiles:
       - kind: sparkline
-        watch: error-rate-hourly
+        cron: error-rate-hourly
         size: md
 `
 	if err := s.SaveDashboard(cust.ID, user.ID, "prod", dashYAML); err != nil {

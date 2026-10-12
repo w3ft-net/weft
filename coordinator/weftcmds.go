@@ -21,7 +21,7 @@ import (
 func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 	interp.RegisterCommand("weft::latest", func(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 		if len(args) < 1 {
-			fmt.Fprintln(stderr, "usage: weft::latest <watch-name>")
+			fmt.Fprintln(stderr, "usage: weft::latest <cron-name>")
 			return 1
 		}
 		val, err := wf.Latest(args[0])
@@ -39,7 +39,7 @@ func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 			TypeDoc:  typeDoc,
 			Run: func(args []string, _ io.Reader, stdout io.Writer, stderr io.Writer) int {
 				if len(args) < 2 {
-					fmt.Fprintf(stderr, "usage: %s <watch-name> <duration>\n", name)
+					fmt.Fprintf(stderr, "usage: %s <cron-name> <duration>\n", name)
 					return 1
 				}
 				val, err := call(args[0], args[1])
@@ -98,7 +98,7 @@ func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 			return wf.First(name, d)
 		})
 	register("weft::count",
-		"weft::count <name> <dur>: number of times the watch ran in the window",
+		"weft::count <name> <dur>: number of times the cron ran in the window",
 		func(name, dur string) (float64, error) {
 			d, err := ParseAggDuration(dur)
 			if err != nil {
@@ -140,7 +140,7 @@ func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 		TypeDoc:  "weft::percentile <name> <dur> <p>: linearly interpolated p-th percentile of numeric stdout in window (p in 0..100)",
 		Run: func(args []string, _ io.Reader, stdout io.Writer, stderr io.Writer) int {
 			if len(args) < 3 {
-				fmt.Fprintln(stderr, "usage: weft::percentile <watch-name> <duration> <p>")
+				fmt.Fprintln(stderr, "usage: weft::percentile <cron-name> <duration> <p>")
 				return 1
 			}
 			d, err := ParseAggDuration(args[1])

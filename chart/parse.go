@@ -51,13 +51,13 @@ func ParseWatchCmd(args []string) (WatchArgs, string) {
 			return out, fmt.Sprintf("chart: unknown flag %q", a)
 		default:
 			if out.Name != "" {
-				return out, fmt.Sprintf("chart: unexpected argument %q (only one watch name allowed)", a)
+				return out, fmt.Sprintf("chart: unexpected argument %q (only one cron name allowed)", a)
 			}
 			out.Name = a
 		}
 	}
 	if out.Name == "" {
-		return out, "usage: chart <watch> [-t TYPE] [-n LIMIT] [-i INTERVAL] [-f]"
+		return out, "usage: chart <cron> [-t TYPE] [-n LIMIT] [-i INTERVAL] [-f]"
 	}
 	// Strip /cron.d/ prefix so the user can `chart /cron.d/foo` or `chart foo`.
 	out.Name = strings.TrimPrefix(out.Name, "/cron.d/")

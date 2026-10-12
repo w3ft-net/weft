@@ -247,7 +247,7 @@ func chartRequestBuiltin(emit func(ChartRequest)) shellcore.BuiltinFunc {
 			return true
 		}
 		if parsed.Follow {
-			c.AppendScrollback(shellcore.ErrorText("chart: --follow is not supported in the browser; open the watch page instead") + "\n")
+			c.AppendScrollback(shellcore.ErrorText("chart: --follow is not supported in the browser; open the cron page instead") + "\n")
 			return true
 		}
 		emit(ChartRequest{
@@ -678,7 +678,7 @@ func (s *Shell) execFSBuiltin(line string) (bool, string) {
 		// so we ignore the flag and just paint the latest frame.
 		wr, ok := s.FS.(chart.WatchResultsProvider)
 		if !ok {
-			return true, "chart: watch results not supported in this backend\n"
+			return true, "chart: cron results not supported in this backend\n"
 		}
 		// Parse a minimal subset of flags: the watch name, -t, -n.
 		var name, kind string
@@ -709,7 +709,7 @@ func (s *Shell) execFSBuiltin(line string) (bool, string) {
 			}
 		}
 		if name == "" {
-			return true, "usage: chart <watch> [-t TYPE] [-n LIMIT]\n"
+			return true, "usage: chart <cron> [-t TYPE] [-n LIMIT]\n"
 		}
 		name = strings.TrimPrefix(name, "/cron.d/")
 		name = strings.TrimPrefix(name, "cron.d/")

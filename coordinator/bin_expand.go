@@ -58,7 +58,7 @@ func rejectBinInFollow(pipeline string, fs bash.FS) error {
 				"plan: `/bin/%s` can't run under `tail -f` — /bin/ scripts "+
 					"(bash or lua) may contain aggregating stages or opaque "+
 					"logic that doesn't fit a live-streaming pipeline. Invoke "+
-					"it from a cron watch, or inline the specific commands "+
+					"it from a cron, or inline the specific commands "+
 					"you need into the follow pipeline directly",
 				name)
 		}

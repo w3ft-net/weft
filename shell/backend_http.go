@@ -77,11 +77,11 @@ func (b *HTTPBackend) DeleteFunction(name string) error {
 }
 
 func (b *HTTPBackend) ListWatches() ([]string, error) {
-	return b.apiListNames("/api/watches", "watches")
+	return b.apiListNames("/api/crons", "crons")
 }
 
 func (b *HTTPBackend) GetWatch(name string) (*WatchData, error) {
-	data, err := b.apiGet("/api/watches/" + name)
+	data, err := b.apiGet("/api/crons/" + name)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +91,7 @@ func (b *HTTPBackend) GetWatch(name string) (*WatchData, error) {
 		Enabled  bool   `json:"Enabled"`
 	}
 	if err := json.Unmarshal(data, &w); err != nil {
-		return nil, fmt.Errorf("parse watch: %w", err)
+		return nil, fmt.Errorf("parse cron: %w", err)
 	}
 	return &WatchData{
 		Schedule: w.Schedule,
@@ -107,7 +107,7 @@ func (b *HTTPBackend) GetWatch(name string) (*WatchData, error) {
 // rejection. Generic: this relays whatever the "warnings" field of
 // the PUT response carries, without knowing what produced it.
 func (b *HTTPBackend) SaveWatch(name string, w *WatchData) error {
-	body, err := b.apiPutBody("/api/watches/"+name, map[string]string{
+	body, err := b.apiPutBody("/api/crons/"+name, map[string]string{
 		"schedule": w.Schedule,
 		"pipeline": w.Pipeline,
 	})
@@ -131,7 +131,7 @@ func (b *HTTPBackend) SaveWatch(name string, w *WatchData) error {
 }
 
 func (b *HTTPBackend) DeleteWatch(name string) error {
-	return b.apiDelete("/api/watches/" + name)
+	return b.apiDelete("/api/crons/" + name)
 }
 
 func (b *HTTPBackend) GetNotifyConfig() (string, error) {
@@ -205,7 +205,7 @@ func (b *HTTPBackend) DeleteDashboard(name string) error {
 // sparkline / last-run values inside the interactive UI. limit is the
 // server-side max; a limit of 0 tells the api to apply its default.
 func (b *HTTPBackend) GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error) {
-	url := "/api/watches/" + name + "/results"
+	url := "/api/crons/" + name + "/results"
 	if limit > 0 {
 		url += "?limit=" + strconv.Itoa(limit)
 	}

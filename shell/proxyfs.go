@@ -56,7 +56,7 @@ func (p *ProxyFS) setAuth(req *http.Request) {
 
 // GetWatchResults satisfies chart.WatchResultsProvider.
 func (p *ProxyFS) GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error) {
-	u := fmt.Sprintf("%s/api/watches/%s/results", p.baseURL, url.PathEscape(name))
+	u := fmt.Sprintf("%s/api/crons/%s/results", p.baseURL, url.PathEscape(name))
 	req, _ := http.NewRequest("GET", u, nil)
 	p.setAuth(req)
 

@@ -200,7 +200,7 @@ func TestHTTPBackend_GetWatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWatch: %v", err)
 	}
-	if rec.path != "/api/watches/error-count" {
+	if rec.path != "/api/crons/error-count" {
 		t.Errorf("path = %q", rec.path)
 	}
 	if w.Schedule != "*/5 * * * *" || !w.Enabled {

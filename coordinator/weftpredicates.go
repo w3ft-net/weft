@@ -24,42 +24,42 @@ import (
 func RegisterWeftPredicates(interp *bash.Interpreter, wf *WeftFuncs) {
 	interp.RegisterCommandMeta("weft::is_above", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_above <watch> <threshold> [<window> [--average]]: exit 0 if the watch's value is above the threshold",
+		TypeDoc:  "weft::is_above <cron> <threshold> [<window> [--average]]: exit 0 if the cron's value is above the threshold",
 		Run:      predicateAbove(wf),
 	})
 	interp.RegisterCommandMeta("weft::is_below", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_below <watch> <threshold> [<window> [--average]]: exit 0 if the watch's value is below the threshold",
+		TypeDoc:  "weft::is_below <cron> <threshold> [<window> [--average]]: exit 0 if the cron's value is below the threshold",
 		Run:      predicateBelow(wf),
 	})
 	interp.RegisterCommandMeta("weft::is_absent", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_absent <watch> [<window>]: exit 0 if the watch has no recent result (within <window> if given, else latest is empty)",
+		TypeDoc:  "weft::is_absent <cron> [<window>]: exit 0 if the cron has no recent result (within <window> if given, else latest is empty)",
 		Run:      predicateAbsent(wf),
 	})
 	interp.RegisterCommandMeta("weft::has_changed", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::has_changed <watch>: exit 0 if the watch's latest output differs from the previous tick",
+		TypeDoc:  "weft::has_changed <cron>: exit 0 if the cron's latest output differs from the previous tick",
 		Run:      predicateChanged(wf),
 	})
 	interp.RegisterCommandMeta("weft::is_rising", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_rising <watch> [<pct>] [<window>]: exit 0 if the watch rose by at least pct% (default 0) vs baseline (prev tick by default; avg over window if given)",
+		TypeDoc:  "weft::is_rising <cron> [<pct>] [<window>]: exit 0 if the cron rose by at least pct% (default 0) vs baseline (prev tick by default; avg over window if given)",
 		Run:      predicateRising(wf),
 	})
 	interp.RegisterCommandMeta("weft::is_falling", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_falling <watch> [<pct>] [<window>]: exit 0 if the watch fell by at least pct% (default 0) vs baseline (prev tick by default; avg over window if given)",
+		TypeDoc:  "weft::is_falling <cron> [<pct>] [<window>]: exit 0 if the cron fell by at least pct% (default 0) vs baseline (prev tick by default; avg over window if given)",
 		Run:      predicateFalling(wf),
 	})
 	interp.RegisterCommandMeta("weft::is_outlier", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_outlier <watch> <n_stddev> <window> [--above|--below]: exit 0 if |latest - avg(window)| > n_stddev * stddev(window). --above/--below restricts to one direction.",
+		TypeDoc:  "weft::is_outlier <cron> <n_stddev> <window> [--above|--below]: exit 0 if |latest - avg(window)| > n_stddev * stddev(window). --above/--below restricts to one direction.",
 		Run:      predicateOutlier(wf),
 	})
 	interp.RegisterCommandMeta("weft::is_seasonal", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_seasonal <watch> <n_stddev> <period> <window>: exit 0 if latest is n_stddev away from same-time-of-period mean over window (e.g. period=1d window=4w compares to same hour over last 4 days)",
+		TypeDoc:  "weft::is_seasonal <cron> <n_stddev> <period> <window>: exit 0 if latest is n_stddev away from same-time-of-period mean over window (e.g. period=1d window=4w compares to same hour over last 4 days)",
 		Run:      predicateSeasonal(wf),
 	})
 
@@ -96,7 +96,7 @@ func parseDurArg(arg, label string, stderr io.Writer) (time.Duration, bool) {
 	return d, true
 }
 
-// latestFloat parses the watch's latest stdout as a float. Returns
+// latestFloat parses the cron's latest stdout as a float. Returns
 // (value, true) on success, (0, false) on absent / non-numeric — the
 // predicates treat both as "condition can't fire."
 func latestFloat(wf *WeftFuncs, watch string) (float64, bool) {
@@ -114,7 +114,7 @@ func latestFloat(wf *WeftFuncs, watch string) (float64, bool) {
 func predicateAbove(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writer) int {
 	return func(args []string, _ io.Reader, _ io.Writer, stderr io.Writer) int {
 		if len(args) < 2 {
-			return predicateUsage(stderr, "usage: weft::is_above <watch> <threshold> [<window> [--average]]")
+			return predicateUsage(stderr, "usage: weft::is_above <cron> <threshold> [<window> [--average]]")
 		}
 		threshold, ok := parseFloatArg(args[1], "threshold", stderr)
 		if !ok {
@@ -152,7 +152,7 @@ func predicateAbove(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Write
 func predicateBelow(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writer) int {
 	return func(args []string, _ io.Reader, _ io.Writer, stderr io.Writer) int {
 		if len(args) < 2 {
-			return predicateUsage(stderr, "usage: weft::is_below <watch> <threshold> [<window> [--average]]")
+			return predicateUsage(stderr, "usage: weft::is_below <cron> <threshold> [<window> [--average]]")
 		}
 		threshold, ok := parseFloatArg(args[1], "threshold", stderr)
 		if !ok {
@@ -188,7 +188,7 @@ func predicateBelow(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Write
 func predicateAbsent(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writer) int {
 	return func(args []string, _ io.Reader, _ io.Writer, stderr io.Writer) int {
 		if len(args) < 1 {
-			return predicateUsage(stderr, "usage: weft::is_absent <watch> [<window>]")
+			return predicateUsage(stderr, "usage: weft::is_absent <cron> [<window>]")
 		}
 		if len(args) >= 2 {
 			window, ok := parseDurArg(args[1], "window", stderr)
@@ -217,7 +217,7 @@ func predicateAbsent(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writ
 func predicateChanged(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writer) int {
 	return func(args []string, _ io.Reader, _ io.Writer, stderr io.Writer) int {
 		if len(args) < 1 {
-			return predicateUsage(stderr, "usage: weft::has_changed <watch>")
+			return predicateUsage(stderr, "usage: weft::has_changed <cron>")
 		}
 		latest, err := wf.Latest(args[0])
 		if err != nil {
@@ -236,7 +236,7 @@ func predicateChanged(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Wri
 func predicateRising(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writer) int {
 	return func(args []string, _ io.Reader, _ io.Writer, stderr io.Writer) int {
 		if len(args) < 1 {
-			return predicateUsage(stderr, "usage: weft::is_rising <watch> [<pct>] [<window>]")
+			return predicateUsage(stderr, "usage: weft::is_rising <cron> [<pct>] [<window>]")
 		}
 		return evalTrend(wf, args, true, stderr)
 	}
@@ -245,7 +245,7 @@ func predicateRising(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writ
 func predicateFalling(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writer) int {
 	return func(args []string, _ io.Reader, _ io.Writer, stderr io.Writer) int {
 		if len(args) < 1 {
-			return predicateUsage(stderr, "usage: weft::is_falling <watch> [<pct>] [<window>]")
+			return predicateUsage(stderr, "usage: weft::is_falling <cron> [<pct>] [<window>]")
 		}
 		return evalTrend(wf, args, false, stderr)
 	}
@@ -305,7 +305,7 @@ func evalTrend(wf *WeftFuncs, args []string, rising bool, stderr io.Writer) int 
 func predicateOutlier(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writer) int {
 	return func(args []string, _ io.Reader, _ io.Writer, stderr io.Writer) int {
 		if len(args) < 3 {
-			return predicateUsage(stderr, "usage: weft::is_outlier <watch> <n_stddev> <window> [--above|--below]")
+			return predicateUsage(stderr, "usage: weft::is_outlier <cron> <n_stddev> <window> [--above|--below]")
 		}
 		nSigma, ok := parseFloatArg(args[1], "n_stddev", stderr)
 		if !ok {
@@ -361,7 +361,7 @@ func predicateOutlier(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Wri
 func predicateSeasonal(wf *WeftFuncs) func([]string, io.Reader, io.Writer, io.Writer) int {
 	return func(args []string, _ io.Reader, _ io.Writer, stderr io.Writer) int {
 		if len(args) < 4 {
-			return predicateUsage(stderr, "usage: weft::is_seasonal <watch> <n_stddev> <period> <window>")
+			return predicateUsage(stderr, "usage: weft::is_seasonal <cron> <n_stddev> <period> <window>")
 		}
 		nSigma, ok := parseFloatArg(args[1], "n_stddev", stderr)
 		if !ok {

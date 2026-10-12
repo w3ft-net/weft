@@ -80,7 +80,7 @@ func (w *WeftFuncs) Latest(watchName string) (string, error) {
 		return &result, nil
 	}(w.OrgID, watchName)
 	if err != nil {
-		return "", fmt.Errorf("weft::latest: watch %q: %w", watchName, err)
+		return "", fmt.Errorf("weft::latest: cron %q: %w", watchName, err)
 	}
 	return strings.TrimSpace(r.Stdout), nil
 }
@@ -120,11 +120,11 @@ func (w *WeftFuncs) Absent(watchName string, window time.Duration) (bool, error)
 func (w *WeftFuncs) Previous(watchName string) (string, error) {
 	cw, err := w.Store.GetCronWatch(w.OrgID, watchName)
 	if err != nil {
-		return "", fmt.Errorf("weft::previous: watch %q: %w", watchName, err)
+		return "", fmt.Errorf("weft::previous: cron %q: %w", watchName, err)
 	}
 	results, err := w.Store.ListCronResults(cw.ID, 2, "")
 	if err != nil {
-		return "", fmt.Errorf("weft::previous: watch %q: %w", watchName, err)
+		return "", fmt.Errorf("weft::previous: cron %q: %w", watchName, err)
 	}
 	if len(results) < 2 {
 		return "", nil
@@ -247,7 +247,7 @@ func (w *WeftFuncs) Count(watchName string, dur time.Duration) (float64, error) 
 	since := time.Now().Add(-dur)
 	results, err := w.Store.QueryCronResults(w.OrgID, watchName, since)
 	if err != nil {
-		return 0, fmt.Errorf("weft::count: watch %q: %w", watchName, err)
+		return 0, fmt.Errorf("weft::count: cron %q: %w", watchName, err)
 	}
 	return float64(len(results)), nil
 }
@@ -391,7 +391,7 @@ func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration
 		return avg, stddev, samples, nil
 	}(w.OrgID, watchName, period, window)
 	if err != nil {
-		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: watch %q: %w", watchName, err)
+		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: cron %q: %w", watchName, err)
 	}
 	return SeasonalStatsResult{Avg: avg, Stddev: stddev, Samples: samples}, nil
 }
@@ -413,7 +413,7 @@ func (w *WeftFuncs) numericResultsCap(watchName string, dur time.Duration, maxDu
 	since := time.Now().Add(-dur)
 	results, err := w.Store.QueryCronResults(w.OrgID, watchName, since)
 	if err != nil {
-		return nil, fmt.Errorf("watch %q: %w", watchName, err)
+		return nil, fmt.Errorf("cron %q: %w", watchName, err)
 	}
 	var vals []float64
 	for _, r := range results {

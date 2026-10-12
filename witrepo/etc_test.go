@@ -7,7 +7,7 @@ import (
 )
 
 func dash(title string) string {
-	return fmt.Sprintf("title: %s\nsections:\n  - tiles:\n      - kind: counter\n        watch: errs\n", title)
+	return fmt.Sprintf("title: %s\nsections:\n  - tiles:\n      - kind: counter\n        cron: errs\n", title)
 }
 
 func (f *fixture) saveDash(t *testing.T, name, body string) {

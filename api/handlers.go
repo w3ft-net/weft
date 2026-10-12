@@ -294,12 +294,12 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/functions/{name}", s.handleGetFunction)
 	auth.Handle("PUT /api/functions/{name}", BodyCap(cfg.FunctionBodyMax, protected(s.handleSaveFunction)))
 	auth.Handle("DELETE /api/functions/{name}", protected(s.handleDeleteFunction))
-	auth.HandleFunc("GET /api/watches", s.handleListWatches)
-	auth.HandleFunc("GET /api/watches/{name}", s.handleGetWatch)
-	auth.Handle("PUT /api/watches/{name}", BodyCap(cfg.WatchBodyMax, protected(s.handleSaveWatch)))
-	auth.Handle("DELETE /api/watches/{name}", protected(s.handleDeleteWatch))
-	auth.HandleFunc("GET /api/watches/{name}/results", s.handleWatchResults)
-	auth.HandleFunc("GET /api/watches/{name}/chart", s.handleWatchChart)
+	auth.HandleFunc("GET /api/crons", s.handleListWatches)
+	auth.HandleFunc("GET /api/crons/{name}", s.handleGetWatch)
+	auth.Handle("PUT /api/crons/{name}", BodyCap(cfg.WatchBodyMax, protected(s.handleSaveWatch)))
+	auth.Handle("DELETE /api/crons/{name}", protected(s.handleDeleteWatch))
+	auth.HandleFunc("GET /api/crons/{name}/results", s.handleWatchResults)
+	auth.HandleFunc("GET /api/crons/{name}/chart", s.handleWatchChart)
 	auth.HandleFunc("GET /api/shared-links/{slug}", s.handleGetSharedLink)
 	auth.HandleFunc("GET /api/dashboards", s.handleListDashboards)
 	auth.HandleFunc("GET /api/dashboards/{name}", s.handleGetDashboard)
@@ -402,8 +402,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/shell/builtin", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/functions", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/functions/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
-	mux.Handle("/api/watches", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
-	mux.Handle("/api/watches/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
+	mux.Handle("/api/crons", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
+	mux.Handle("/api/crons/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/shared-links/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/dashboards", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/dashboards/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
@@ -1657,7 +1657,7 @@ func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
 	}
 	count, _ := s.store.CountCronWatches(custID)
 	json.NewEncoder(w).Encode(map[string]any{
-		"watches":      watches,
+		"crons":        watches,
 		"count":        count,
 		"limit":        store.WatchLimit(tier),
 		"min_interval": store.MinWatchInterval(tier).String(),
@@ -1707,7 +1707,7 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 	tier := session.Tier
 	maxWatches := store.WatchLimit(tier)
 	if maxWatches == 0 {
-		http.Error(w, "watches are not available on the trial plan", http.StatusForbidden)
+		http.Error(w, "crons are not available on the trial plan", http.StatusForbidden)
 		return
 	}
 
@@ -1720,7 +1720,7 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if count >= maxWatches {
-			http.Error(w, fmt.Sprintf("watch limit reached (%d watches on %s plan)", maxWatches, tier), http.StatusForbidden)
+			http.Error(w, fmt.Sprintf("cron limit reached (%d crons on %s plan)", maxWatches, tier), http.StatusForbidden)
 			return
 		}
 	}

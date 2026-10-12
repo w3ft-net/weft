@@ -730,7 +730,7 @@ func (c *Coordinator) ExecuteForWatch(ctx context.Context, pipeline string, tr T
 	// opportunistically re-lower + write back so the next fire is hot.
 	cust, err := c.Store.GetOrgByID(watch.OrgID)
 	if err != nil {
-		return nil, fmt.Errorf("watch %d: resolve org %s: %w", watch.ID, watch.OrgID, err)
+		return nil, fmt.Errorf("cron %d: resolve org %s: %w", watch.ID, watch.OrgID, err)
 	}
 	// Refresh runs synchronously rather than via a goroutine. Two
 	// reasons: (1) it shares the same DB connection as the rest of

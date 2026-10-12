@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/graybeardcorp/weft/store"
@@ -34,11 +35,11 @@ func TestSendWebhook(t *testing.T) {
 		t.Fatalf("sendWebhook: %v", err)
 	}
 
-	if received.V != 1 {
-		t.Errorf("want v=1, got %d", received.V)
+	if received.V != 2 {
+		t.Errorf("want v=2, got %d", received.V)
 	}
 	if received.Watch != "error-rate" {
-		t.Errorf("want watch=error-rate, got %q", received.Watch)
+		t.Errorf("want cron=error-rate, got %q", received.Watch)
 	}
 	if received.Alias != "ops" {
 		t.Errorf("want alias=ops, got %q", received.Alias)
@@ -75,5 +76,18 @@ func TestSendEmailNoConfig(t *testing.T) {
 	err := n.sendEmail("error-rate", target, "test body")
 	if err == nil {
 		t.Fatal("expected error when no email config")
+	}
+}
+
+// v2 of the webhook payload names the cron `cron` (v1 called it `watch`).
+// The wire key is what consumers read, so pin the JSON itself.
+func TestWebhookPayload_CronKeyAndVersion(t *testing.T) {
+	b, err := json.Marshal(webhookPayload{V: 2, Watch: "error-rate", Alias: "ops"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if !strings.Contains(got, `"cron":"error-rate"`) || strings.Contains(got, `"watch"`) || !strings.Contains(got, `"v":2`) {
+		t.Errorf("payload = %s, want v=2 with a cron key and no watch key", got)
 	}
 }

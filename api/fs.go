@@ -121,7 +121,7 @@ func (s *Server) handleWriteFS(w http.ResponseWriter, r *http.Request) {
 	// happened. This generic multi-path editor endpoint has no field
 	// to carry warning text today (204 has no body), so it drops the
 	// message rather than reporting a successful write as a failed
-	// one; the dedicated /api/watches endpoint is where a cron save's
+	// one; the dedicated /api/crons endpoint is where a cron save's
 	// warnings actually reach the user.
 	blocking, _ := store.Split(fs.WriteFile(req.Path, []byte(req.Content)))
 	if len(blocking) > 0 {

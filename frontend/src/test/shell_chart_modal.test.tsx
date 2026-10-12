@@ -142,7 +142,7 @@ describe('ShellChartModal tour report', () => {
 
   it('reports a cron chart once its results loaded, not before', async () => {
     getWatchResults.mockResolvedValueOnce([])
-    const spec = { watch: 'error-rate', pipeline: 'chart error-rate' }
+    const spec = { cron: 'error-rate', pipeline: 'chart error-rate' }
     const early = render(
       <MemoryRouter>
         <ShellChartModal spec={spec} onClose={() => {}} />
@@ -167,7 +167,7 @@ describe('ShellChartModal tour report', () => {
     getWatchResults.mockRejectedValueOnce(new Error('boom'))
     const view = render(
       <MemoryRouter>
-        <ShellChartModal spec={{ watch: 'error-rate', pipeline: 'chart error-rate' }} onClose={() => {}} />
+        <ShellChartModal spec={{ cron: 'error-rate', pipeline: 'chart error-rate' }} onClose={() => {}} />
       </MemoryRouter>,
     )
     await act(async () => {})

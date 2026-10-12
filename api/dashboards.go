@@ -13,7 +13,7 @@ import (
 // results so a dashboard render needs no follow-up requests. Mirrors
 // the shape that handleWatchResults returns for the single-watch view.
 type dashboardWatchPayload struct {
-	Watch   *store.CronWatch   `json:"watch"`
+	Watch   *store.CronWatch   `json:"cron"`
 	Results []store.CronResult `json:"results"`
 }
 
@@ -26,7 +26,7 @@ type dashboardGetResponse struct {
 	Name      string                            `json:"name"`
 	UpdatedAt string                            `json:"updated_at,omitempty"`
 	Spec      *store.DashboardSpec              `json:"spec"`
-	Watches   map[string]*dashboardWatchPayload `json:"watches"`
+	Watches   map[string]*dashboardWatchPayload `json:"crons"`
 	YAMLBody  string                            `json:"yaml_body"`
 }
 

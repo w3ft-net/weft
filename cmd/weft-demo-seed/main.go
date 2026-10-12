@@ -801,11 +801,11 @@ sections:
   - title: Errors
     tiles:
       - kind: sparkline
-        watch: error-rate
+        cron: error-rate
         title: Error count (5m)
         size: lg
       - kind: counter
-        watch: error-rate
+        cron: error-rate
         title: Current errors
         size: sm
         threshold:
@@ -814,7 +814,7 @@ sections:
   - title: Memory
     tiles:
       - kind: gauge
-        watch: mem-pressure
+        cron: mem-pressure
         title: Memory pressure
         size: md
         threshold:
