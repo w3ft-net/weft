@@ -95,9 +95,11 @@ api/                   ← env-less token
 ```
 
 `cat /log/myco/api/main.log` reads the env-less stream; `cat
-/log/myco/prod/api/main.log` reads the env-prod stream; `cat
-/log/myco/*/api/main.log` matches across every env that has one. No
-backfill, no synthetic placeholder env.
+/log/myco/prod/api/main.log` reads the env-prod stream. To read
+several envs at once, read the namespace and filter on `ENV`:
+`cat myco.log | awk 'ENV == "prod"'`. A glob in a directory segment,
+such as `/log/myco/*/api/main.log`, is not allowed. No backfill, no
+synthetic placeholder env.
 
 Region is intentionally **not** part of the path layout — it's a
 query-time filter (`awk 'REGION == "us-east-2"'`) only. Same for
@@ -148,13 +150,12 @@ column the alert grouping understands.
 ### Filter by env across deployments
 
 ```
-cat /log/myco/prod/*/main.log \
-  | jq 'select(._level == "ERROR" and ._deployment == "api")' \
+cat myco.log \
+  | jq 'select(._env == "prod" and ._level == "ERROR" and ._deployment == "api")' \
   | head -50
 ```
 
-The path narrows to env=prod; the column predicate further narrows
-to deployment=api; the resulting shard query is two indexable WHERE
+The column predicates narrow to env=prod and deployment=api; the resulting shard query is two indexable WHERE
 clauses, no JSON parsing.
 
 ### Compare a single deployment across regions

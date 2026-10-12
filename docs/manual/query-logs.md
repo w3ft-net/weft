@@ -16,14 +16,14 @@ pseudofiles — use standard Unix pipeline idioms:
 # Tail logs in real time
 tail -f myapp.log
 
-# Search for errors in the last hour
+# Search for errors in the default range (the last day; narrow it with `range 1h..`)
 cat myapp.log | awk 'LEVEL == "ERROR"'
 
 # Count requests by status code
 cat nginx.log | jq '.status' | sort | uniq -c | sort -rn
 
-# Grep across all sources
-cat *.log | grep "connection refused"
+# Grep every source in a namespace
+cat myapp.log | grep "connection refused"
 
 # Most recent N lines (cheap)
 tail -n 100 myapp.log
@@ -33,14 +33,19 @@ The weft query planner analyzes your full pipeline and pushes
 predicates down into SQL — you write familiar shell commands, weft
 makes them fast.
 
+Globs are allowed only to pick log kinds inside one service:
+`cat /log/myco/prod/api/*.log`. A glob that would read across services
+or namespaces — `cat *.log`, `cat /log/myco/prod/*.log`,
+`/log/myco/*/api/main.log` — is refused with an error. To read
+everything in a namespace, use `cat <namespace>.log`.
+
 ## Meta-variables
 
 Each row weft stores has a fixed set of indexed columns alongside
 its raw text and JSON payload. Filtering on these columns is the
-fastest path through the planner — predicates rewrite to direct
-SQL `WHERE` clauses with row-group statistics pruning. Anything
-not in the table below still works in awk/jq, but goes through the
-slower JSON-extract path.
+fastest path through the planner, because weft can skip data that
+can't match. Anything not in the table below still works in awk/jq,
+but is slower.
 
 | awk | jq | Column | Source |
 |---|---|---|---|
@@ -100,11 +105,9 @@ and is still queryable — just slower:
 cat /log/myco/prod/api/main.log | jq 'select(.feature_flag == "abc")'
 ```
 
-The planner pushes that to `WHERE json_extract_string(payload,
-'$.feature_flag') = 'abc'`, which works correctly but can't use
-row-group statistics for skip-ahead — every row in the time range
-is read and parsed. For dimensions you query constantly, prefer
-the indexed columns.
+That works correctly, but weft can't skip ahead — every row in the
+time range is read and parsed. For dimensions you query constantly,
+prefer the indexed columns.
 
 ## Per-tag values over time
 
@@ -119,12 +122,10 @@ In short: write a cron whose body emits one line per tag (e.g.
 `alert above N -k 2 -t 1 --notify=ops`. Each host opens and closes
 incidents independently against its tag.
 
-Window aggregates over the cron's history (`weft::avg`,
-`weft::max`, etc.) currently summarize the entire run's stdout as
-one number, so the per-tag *aggregated history* is a follow-up.
-For now the recipe gives you per-bucket per-tag values; for the
-rolling average across buckets, point a second cron at it via
-`weft::latest`.
+Window aggregates (`weft::avg`, `weft::max`, etc.) summarize the
+whole run's stdout as one number. The recipe gives you per-bucket,
+per-tag values; for a rolling average across buckets, point a second
+cron at it via `weft::latest`.
 
 ## Charting a query
 
@@ -151,7 +152,7 @@ row sequence and y is the last whitespace field of each line — so
 something like `wc -l | chart` plots a single value, and a
 multi-line stream of bare numbers from `jq` plots one point per
 line. See `man chart` for the full flag surface (aggregation,
-bucketing, chart kind, title).
+bucketing, `--type`, title).
 
 ## Saving a result set
 
@@ -173,9 +174,8 @@ day, Bolt keeps a year. The **Account** page shows your current cap;
 runs older than that are filtered out of every query, even if the
 underlying rows are still on disk.
 
-Recent data lives on hot DuckDB shards; older data is exported to
-Parquet on S3 and queried transparently. A `range 6m..` query
-stitches hot and archived shards in one pass — there is no
+Older data is archived and queried transparently. A `range 180d..`
+query reads recent and archived data in one pass — there is no
 separate "search archived logs" step, and no special syntax for
 the older portion. The only user-visible effect is a small extra
 latency on the cold side.

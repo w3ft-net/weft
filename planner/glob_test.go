@@ -6,62 +6,54 @@ import (
 	"time"
 )
 
+// Globs match kinds inside one service directory, nothing wider.
+// Apps come from coordinator.SeenServices as "<ns>/<env>/<svc>/<kind>"
+// (env-less: "<ns>/<svc>/<kind>"); see encodeName.
+var globApps = []string{
+	"acme/prod/api/main",
+	"acme/prod/api/metrics",
+	"acme/prod/edge/main",
+	"acme/sand/api/main",
+	"weft/shard/main",
+}
+
 func TestExpandSourceGlobs(t *testing.T) {
-	// Apps come from coordinator.SeenServices, where env-bearing entries
-	// are encoded as "<ns>/<env>/<deployment>" (env-less ones stay
-	// "<ns>/<deployment>") — see encodeName in
-	// coordinator/coordinator.go. Both shapes appear in the same list.
-	apps := []string{
-		"acme/prod/api",
-		"acme/prod/api_metrics",
-		"acme/prod/edge",
-		"acme/prod/edge_metrics",
-		"acme/prod/worker",
-		"acme/prod/worker_metrics",
-		"acme/sand/api",
-		"acme/sand/edge",
-		"weft/coordinator",
-		"weft/shard",
-	}
 	tests := []struct {
 		name     string
 		pipeline string
+		cwd      string
 		want     string
 	}{
 		{
 			name:     "no glob passes through",
-			pipeline: `cat /log/acme/prod/api.log | wc -l`,
-			want:     `cat /log/acme/prod/api.log | wc -l`,
+			pipeline: `cat /log/acme/prod/api/main.log | wc -l`,
+			want:     `cat /log/acme/prod/api/main.log | wc -l`,
 		},
 		{
-			name:     "star expands within env subdir",
-			pipeline: `cat /log/acme/prod/*.log`,
-			want:     `cat /log/acme/prod/api.log /log/acme/prod/api_metrics.log /log/acme/prod/edge.log /log/acme/prod/edge_metrics.log /log/acme/prod/worker.log /log/acme/prod/worker_metrics.log`,
+			name:     "star expands to the service's kinds",
+			pipeline: `cat /log/acme/prod/api/*.log`,
+			want:     `cat /log/acme/prod/api/main.log /log/acme/prod/api/metrics.log`,
 		},
 		{
-			name:     "suffix glob filters by name",
-			pipeline: `cat /log/acme/prod/*_metrics.log`,
-			want:     `cat /log/acme/prod/api_metrics.log /log/acme/prod/edge_metrics.log /log/acme/prod/worker_metrics.log`,
+			name:     "prefix glob filters kinds",
+			pipeline: `tail -n 5 /log/acme/prod/api/me*.log | grep x`,
+			want:     `tail -n 5 /log/acme/prod/api/metrics.log | grep x`,
 		},
 		{
-			name:     "single ? wildcard",
-			pipeline: `cat /log/weft/?hard.log`,
-			want:     `cat /log/weft/shard.log`,
+			name:     "single ? wildcard, env-less service",
+			pipeline: `head -5 /log/weft/shard/?ain.log`,
+			want:     `head -5 /log/weft/shard/main.log`,
 		},
 		{
-			name:     "preserves downstream stages",
-			pipeline: `cat /log/acme/prod/*.log | grep ERROR | wc -l`,
-			want:     `cat /log/acme/prod/api.log /log/acme/prod/api_metrics.log /log/acme/prod/edge.log /log/acme/prod/edge_metrics.log /log/acme/prod/worker.log /log/acme/prod/worker_metrics.log | grep ERROR | wc -l`,
-		},
-		{
-			name:     "head respects globs too",
-			pipeline: `head -5 /log/acme/prod/*_metrics.log`,
-			want:     `head -5 /log/acme/prod/api_metrics.log /log/acme/prod/edge_metrics.log /log/acme/prod/worker_metrics.log`,
+			name:     "relative glob inside a service directory",
+			pipeline: `cat *.log | grep x`,
+			cwd:      `/log/acme/prod/api`,
+			want:     `cat /log/acme/prod/api/main.log /log/acme/prod/api/metrics.log | grep x`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ExpandSourceGlobs(tt.pipeline, "", apps)
+			got, err := ExpandSourceGlobs(tt.pipeline, tt.cwd, globApps)
 			if err != nil {
 				t.Fatalf("ExpandSourceGlobs: %v", err)
 			}
@@ -72,9 +64,37 @@ func TestExpandSourceGlobs(t *testing.T) {
 	}
 }
 
-func TestExpandSourceGlobs_NoMatchIsAnError(t *testing.T) {
-	apps := []string{"acme/prod/api"}
-	_, err := ExpandSourceGlobs(`cat /log/acme/prod/*_metrics.log`, "", apps)
+// A glob that would read across services or namespaces is refused with
+// an error that says so and names the alternatives, never expanded and
+// never reported as a vague "no match".
+func TestExpandSourceGlobs_CrossSourceIsDisallowed(t *testing.T) {
+	tests := []struct{ name, pipeline, cwd string }{
+		{"bare from home", `cat *.log | grep x`, ""},
+		{"bare from slash", `cat *.log | grep x`, "/"},
+		{"bare from a namespace dir", `cat *.log | grep x`, "/log/acme"},
+		{"bare from an env dir", `cat *.log | grep x`, "/log/acme/prod"},
+		{"absolute env dir", `cat /log/acme/prod/*.log`, ""},
+		{"absolute namespace dir", `tail /log/acme/*.log`, ""},
+		{"wildcard service segment", `cat /log/acme/prod/*/main.log`, ""},
+		{"wildcard env segment", `cat /log/acme/*/api/main.log`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ExpandSourceGlobs(tt.pipeline, tt.cwd, globApps)
+			if err == nil {
+				t.Fatal("expected the cross-source glob to be refused")
+			}
+			for _, want := range []string{"not allowed", "across", "<ns>.log"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error should mention %q: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+func TestExpandSourceGlobs_NoMatchInServiceIsAnError(t *testing.T) {
+	_, err := ExpandSourceGlobs(`cat /log/acme/prod/api/*_audit.log`, "", globApps)
 	if err == nil {
 		t.Fatal("expected error when glob matches nothing")
 	}

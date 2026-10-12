@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -14,12 +15,13 @@ import (
 // pseudofiles they match. Returns the unchanged input when no glob
 // metacharacters are present in any source arg.
 //
-// Globs operate on the *file segment* of the path: `/log/<ns>/<env>/`
-// (or `/log/<ns>/`) is preserved as the directory prefix; the trailing
-// `*.log` (or similar) is matched against the available apps' file
-// names within that directory. So `cat /log/acme/prod/*.log` with apps
-// {"acme/api", "acme/worker"} becomes
-// `cat /log/acme/prod/api.log /log/acme/prod/worker.log`.
+// Globs operate on the *kind segment* of the path inside one service
+// directory: `cat /log/acme/prod/api/*.log` becomes
+// `cat /log/acme/prod/api/main.log /log/acme/prod/api/metrics.log`.
+// A glob that would read across services or namespaces (`cat *.log`
+// from /, `cat /log/acme/prod/*.log`, `/log/acme/*/api/main.log`) is
+// refused with an error that says so; `cat <ns>.log` is the way to
+// read a whole namespace.
 //
 // Glob with no matches is an error (mirroring bash's `failglob`
 // behavior — silently dropping it would surface as an empty result
@@ -67,6 +69,9 @@ func ExpandSourceGlobs(pipeline, cwd string, apps []string) (string, error) {
 			continue
 		}
 		matches, err := matchPseudofileGlob(resolveSourcePath(arg, cwd), apps)
+		if errors.Is(err, errCrossSourceGlob) {
+			return "", fmt.Errorf("%s: the glob %q is not allowed: it would read across sources. Glob the kinds inside one service (/log/<ns>/<env>/<svc>/*.log), or read a whole namespace with `%s <ns>.log`", name, arg, name)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -102,55 +107,53 @@ func containsGlobMeta(s string) bool {
 	return strings.ContainsAny(s, "*?[")
 }
 
+// errCrossSourceGlob marks a glob that would read across services or
+// namespaces. ExpandSourceGlobs turns it into the user-facing refusal.
+var errCrossSourceGlob = errors.New("cross-source glob")
+
 // matchPseudofileGlob enumerates the pseudofile paths from `apps`
-// that match `pattern`.
-//
-// Pattern shapes:
-//   - /log/<ns>/<env>/<glob>.log — globs apps within (ns, env).
-//   - /log/<ns>/<glob>.log       — globs apps directly under <ns>.
+// that match `pattern`. A glob matches kinds inside one service
+// directory, e.g. /log/<ns>/<env>/<svc>/*.log or /log/<ns>/<svc>/*.log.
+// Anything wider (a glob in a directory segment, or a directory that
+// holds services rather than kinds) returns errCrossSourceGlob.
 //
 // Apps come from coordinator.SeenServices in the encoded form
-// "<ns>/<env>/<deployment>" for env-bearing rows or "<ns>/<deployment>"
+// "<ns>/<env>/<svc>/<kind>" for env-bearing rows or "<ns>/<svc>/<kind>"
 // for env-less rows (see encodeName in coordinator/coordinator.go).
-// The matcher treats the full dir-after-/log/ as a prefix and strips
-// it from candidate apps; the remainder is what gets matched against
-// the glob's basename.
+// A service directory is the app name without its kind segment.
 func matchPseudofileGlob(pattern string, apps []string) ([]string, error) {
 	dir := path.Dir(pattern)
 	base := path.Base(pattern)
 
-	if !strings.HasPrefix(dir, "/log") {
-		return nil, fmt.Errorf("glob: unsupported directory %q (only /log paths support globs)", dir)
+	if !strings.HasPrefix(dir, "/log/") || containsGlobMeta(dir) {
+		return nil, errCrossSourceGlob
 	}
-	rel := strings.TrimPrefix(dir, "/log")
-	rel = strings.TrimPrefix(rel, "/")
-	prefix := ""
-	if rel != "" {
-		prefix = rel + "/"
-	}
+	rel := strings.TrimPrefix(dir, "/log/")
 
+	isServiceDir := false
 	var matches []string
 	seen := map[string]bool{}
 	for _, app := range apps {
-		if prefix != "" && !strings.HasPrefix(app, prefix) {
+		if path.Dir(app) != rel {
 			continue
 		}
-		rest := strings.TrimPrefix(app, prefix)
-		if strings.Contains(rest, "/") {
-			continue // nested deeper than the glob's directory
-		}
-		ok, err := path.Match(base, rest+".log")
+		isServiceDir = true
+		kind := path.Base(app)
+		ok, err := path.Match(base, kind+".log")
 		if err != nil {
 			return nil, fmt.Errorf("glob: %w", err)
 		}
 		if !ok {
 			continue
 		}
-		full := dir + "/" + rest + ".log"
+		full := dir + "/" + kind + ".log"
 		if !seen[full] {
 			seen[full] = true
 			matches = append(matches, full)
 		}
+	}
+	if !isServiceDir {
+		return nil, errCrossSourceGlob
 	}
 	sort.Strings(matches)
 	return matches, nil
