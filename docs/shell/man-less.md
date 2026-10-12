@@ -21,9 +21,8 @@ less — page through output one screen at a time
 
 ## DESCRIPTION
 
-An in-process pager for weft. Unlike the system `less(1)` it runs
-inside the shell — no subprocess, no TTY hand-off, and it works
-the same way in the web shell as it does in the native CLI.
+An in-process pager for weft. It runs inside the shell and behaves
+the same in the web shell and the native CLI.
 
 When a pipeline ends with `| less` the query runs to completion,
 the result is loaded into the pager, and the shell shows

@@ -39,8 +39,8 @@ web:
 - `cat /cron.d/<name>` — view a cron definition
 - `chart <cron>` / `... | chart [-x COL|.path] [-y COL|.path]` — render a saved cron or a pipeline as an in-terminal chart (`man chart`)
 - `>` / `>>` — redirect pipeline output into `/tmp`
-- `mkdir /tmp/<dir>` — organise scratch files into folders
-- `cp <src> <dst>` / `mv <src> <dst>` — duplicate / rename (both sides must be inside `/tmp`; to write elsewhere use `cat <src> > <dst>`)
+- `mkdir /tmp/<dir>` — group scratch files into folders
+- `cp <src> <dst>` / `mv <src> <dst>` — duplicate / rename (both sides must be inside `/tmp`; `cat <src> > <dst>` writes elsewhere)
 - `touch <path>` — create empty / reset the 48h clock on a `/tmp` file (`>`, `>>`, `cp` and `mv` reset it too)
 - `rm <path>` / `rm -rf <dir>` — delete a file or directory
 - `vi <path>` — edit (vim keys)

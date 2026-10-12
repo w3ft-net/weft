@@ -20,14 +20,14 @@ bob@acme.com     member   active    binmgr  cronmgr  payments  payments+tokens
 carol@acme.com   member   invited   —
 ```
 
-You never edit this file — the team is managed with `adduser` and
+The file is read-only. Manage the team with `adduser` and
 `deluser` (admin-only), or from the dashboard's Members tab. Both write
-the same underlying data. (The admin is sometimes called the org owner;
-the role is `admin` everywhere you see it.)
+the same underlying data. The admin is sometimes called the org owner;
+the role is `admin` everywhere it appears.
 
 ## Permissions are group membership
 
-Every permission is a group. There are exactly two families:
+Every permission is a group. There are two families:
 
 **Manager groups** gate the org-wide directories and namespace management:
 
@@ -45,11 +45,10 @@ Every permission is a group. There are exactly two families:
 | `<namespace>` | read (query) `/log/<namespace>` |
 | `<namespace>+tokens` | mint producer tokens for that namespace |
 
-Read and produce are independent — a member can have either or both.
-The `+tokens` facet uses `+` rather than `:` so it can never collide
-with a real namespace name.
+Read and produce are independent. A member can have either or both.
+The `+tokens` facet uses `+`, which cannot appear in a namespace name.
 
-Admins hold their groups like everyone else; they appear in the roster with the groups they have.
+Admins hold groups as other members do, and the roster lists the groups they have.
 
 ## Inviting and removing people
 
@@ -59,7 +58,7 @@ deluser dana@acme.com          # remove from the org entirely
 ```
 
 The first argument must be an email address. `adduser --help` prints
-usage and changes nothing; an unknown flag, a first argument that isn't
+usage and changes nothing. An unknown flag, a first argument that is not
 an email, or extra arguments is a usage error.
 
 `adduser <email>` with no group sends an invite link. The person joins
@@ -80,13 +79,12 @@ id dana@acme.com                       # role + groups
 ```
 
 `groups` and `id` with no argument describe you. For an email that
-isn't on the team they print `no such member: <email>`.
+is not on the team they print `no such member: <email>`.
 
-Group grants apply only once a member has accepted their invite — there
-is no staging. If you `adduser` someone to a group before they're on the
-team, they get invited then and there (the email goes out), and you
-re-run the command after they accept. An already-invited member who
-hasn't accepted yet gets a clear error, not a silent no-op.
+Group grants apply after a member has accepted their invite. If you `adduser`
+someone to a group before they are on the team, they are invited at that point
+(the email goes out), and you re-run the command after they accept. An
+already-invited member who has not accepted yet gets an error.
 
 `adduser`/`deluser` are admin-only; `groups` and `id` are readable by
 any member.

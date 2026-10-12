@@ -83,18 +83,16 @@ endpoint: weft.example.com:443
 token: wft_agent_abc123...
 
 sources:
-  - app: vimgym
+  - service: vimgym
     path: /var/log/vimgym/*.log
-    schema: prefix_json
-    prefix_fields: [ts, level, service]
-    prefix_separator: " "
-    json_field: payload
 
-  - app: callbox
+  - service: callbox
     path: /var/log/callbox/app.log
-    schema: json
-    # pure JSON lines, no prefix
 ```
+
+Parsing is not configured here: weftd ships raw lines and the source's
+schema (`text`, `json` or `prefix_json`) lives on the server, set by
+detection plus confirmation or by `weft source configure`.
 
 Terraform example:
 

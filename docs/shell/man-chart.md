@@ -35,22 +35,20 @@ returns; `--follow` enters a live-redraw mode that refreshes every
 
 **Pipe form** — `<pipeline> | chart [...]` renders the upstream
 output once and returns to the prompt. The chart stage is the
-terminal of the pipeline (no further commands after it; piping
-its output onward is an error). Useful for
-sketching a chart without first committing the pipeline to a saved
-cron. `--follow` is not supported in pipe form.
+last stage of the pipeline; piping its output onward is an error.
+Use it to sketch a chart before saving the pipeline as a cron.
+`--follow` is not supported in pipe form.
 
-Charts always self-fit the terminal — they're never paged through
-`less`. A resize re-fits in cron `--follow` mode on the next tick.
-There is no zoom or scroll: the chart shows the configured window
-of data, period.
+Charts fit the terminal and are never paged through `less`. A resize
+re-fits in cron `--follow` mode on the next tick. There is no zoom or
+scroll; the chart shows the configured window of data.
 
 In cron form, the data point for each result is the **last
-whitespace-separated field** of the cron's stdout — matching the
-multi-row alert convention (`alert -k <N>`). The cron's output must
+whitespace-separated field** of the cron's stdout, the same
+convention as multi-row alert (`alert -k <N>`). The cron's output must
 end in a number on each line; a cron that emits JSON rows cannot be
 charted. In pipe form, `-x` and
-`-y` pick fields explicitly; without them, x is the row sequence
+`-y` pick fields explicitly; when omitted, x is the row sequence
 and y is the last whitespace field of each line.
 
 ## OPTIONS (cron form)
@@ -76,7 +74,7 @@ and y is the last whitespace field of each line.
   One of `count`, `sum`, `avg`, `min`, `max`, `p50`, `p95`,
   `identity`. Default `identity`, or `count` when `--bucket` is set.
 - `--tag <field>` — split output into one line per distinct value of
-  `<field>` instead of a single line — e.g. one line per host, one per
+  `<field>` — e.g. one line per host, one per
   coordinator instance. Same field grammar as `-x`/`-y`; all three
   must agree on positional vs JSON-path. Only valid with `-t line`
   (the default when `--tag` is set). Each line gets its own color and
@@ -106,7 +104,7 @@ cat /log/myco/prod/api/metrics.log \
   | jq -c 'select(.type=="memory")' \
   | chart -x .ts -y .pct --bucket 1m -a p95
 
-# Pipe form: just plot a stream of numbers from jq
+# Pipe form: plot a stream of numbers from jq
 cat /log/myco/prod/api/metrics.log | jq 'select(.type=="memory") | .pct' | chart
 
 # Pipe form: one line per instance
@@ -114,7 +112,7 @@ cat /log/myco/prod/api/metrics.log \
   | jq -c 'select(.type=="memory")' \
   | chart -x .ts -y .pct --tag .host --bucket 1m -a avg
 
-# --tag needs one JSON object per line, so use jq -c
+# --tag requires one JSON object per line, so use jq -c
 ```
 
 ## RELATED

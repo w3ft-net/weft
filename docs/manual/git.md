@@ -11,25 +11,22 @@ web:
 
 Every save to a script in `/bin`, a cron in `/cron.d`, a dashboard
 in `/etc/dashboards` or `/etc/notify.yaml` is captured in a short,
-browseable history. If you fat-finger an edit, push a script that
-breaks an alert at 2am, or just want to see what your cron or
-dashboard looked like last week, the `git` command has you covered.
+browseable history. The `git` command shows earlier versions and
+restores them.
 
-It is a **subset of git**. Everything it accepts behaves and prints
-the way git does, so what you already know works: `git log`,
-`git show`, `git diff`, `git blame`, `git restore`. Everything it
-doesn't implement is refused by name, and flags it doesn't implement
-are refused with `fatal: unrecognized argument` (the flags are listed
-under `git log`):
-
-`git --help` lists what is supported.
+`git` is a **subset of git**. Supported commands behave and print
+the way git does: `git log`, `git show`, `git diff`, `git blame`,
+`git restore`. `git --help` lists what is supported. Unsupported
+commands are refused by name, and unsupported flags are refused with
+`fatal: unrecognized argument` (the supported flags are listed under
+`git log`):
 
 ```
 weft> git rebase -i HEAD~3
 git: 'rebase' is a git command, but weft doesn't support it
 ```
 
-while a typo reads as a typo:
+A misspelled command reads as a typo:
 
 ```
 weft> git rebsae
@@ -38,8 +35,8 @@ git: 'rebsae' is not a git command. See 'git --help'.
 
 There is one branch, `main`. Every save is a commit on it, in the
 order the saves happened, across your whole org. There is no
-staging area: a write *is* the commit, which is why there is no
-`git add`, no merging, no rebasing, no remotes.
+staging area: a write is the commit. `git add`, merging, rebasing and
+remotes do not exist.
 
 ## What's tracked
 
@@ -49,21 +46,20 @@ staging area: a write *is* the commit, which is why there is no
 | `/cron.d/<name>`      | ✓ — saves to crons produce commits |
 | `/etc/dashboards/<name>.yaml` | ✓ — saves to dashboards produce commits |
 | `/etc/notify.yaml`    | ✓ — saves to the alert aliases produce commits |
-| `/etc/passwd`, `/etc/usage` | ✗ — generated, not stored |
+| `/etc/passwd`, `/etc/usage` | ✗ — generated |
 | `/log/...`            | ✗ |
 | `/tmp/...`            | ✗ |
 
 The repository root is `/`, and tracked paths are `bin/<name>`,
 `cron.d/<name>`, `etc/dashboards/<name>.yaml` and `etc/notify.yaml`.
 Write a path any way git accepts it: `/bin/scan`,
-`bin/scan`, or just `scan` after `cd /bin` (after `<rev>:` use the
+`bin/scan`, or `scan` after `cd /bin` (after `<rev>:` use the
 repo-relative form, `bin/scan`). A path outside the tracked set is refused: `fatal: '/tmp/x' is outside the
 repository (only /bin, /cron.d, /etc/dashboards and /etc/notify.yaml are tracked)`.
 
 ## Revisions
 
-`HEAD` is the org's **latest change**, not one file's — use a path
-to narrow to a file (`git log -- /bin/scan`). Revisions work as in
+`HEAD` is the org's **latest change**. Use a path to narrow to a file (`git log -- /bin/scan`). Revisions work as in
 git:
 
 - `HEAD`, `@`, and the short hash `git log` prints (4 or more
@@ -77,14 +73,13 @@ git:
 ## The five-version cap
 
 We keep each file's **latest six** versions (the live one plus the
-five before it). Older versions are gone — there's no recycle bin.
+five before it). Older versions are deleted.
 
 The oldest version still kept for a file is shown the way a
 shallow clone shows its edge: `git log` marks it `grafted`, its
 patch shows the file as newly added, `git blame` prefixes its
 lines with `^`, and revisions older than that don't resolve
-(`fatal: bad revision`). Unlike a real shallow clone, the cutoff is
-per file rather than one depth for the whole repository.
+(`fatal: bad revision`). The cutoff is per file.
 
 ## Commands
 
@@ -107,8 +102,8 @@ the text), `--since=`/`--until=` (`"2 days ago"`, `2026-10-01`),
 `fatal: unrecognized argument: --bogus`.
 
 A save with no message gets a generated one — `Create bin/scan`,
-`Update bin/scan`, `Delete bin/scan` — because git has no empty
-messages.
+`Update bin/scan`, `Delete bin/scan` — because git requires a
+message.
 
 ### `git show`
 
@@ -130,13 +125,12 @@ weft> git diff HEAD~2 HEAD -- /bin/scan
 
 `git diff <a> <b>` and `git diff <a>..<b>` compare two revisions,
 optionally limited to paths after `--`. Plain `git diff` prints
-nothing: there is no working copy to differ from — the live file
-*is* HEAD.
+nothing because the live file is HEAD.
 
 ### `git status`
 
 Always `On branch main` / `nothing to commit, working tree clean`,
-for the same reason.
+because the live file is HEAD.
 
 ### `git blame <path>`
 
@@ -165,7 +159,7 @@ from 0174c77`) — history is never rewritten — through the same path as `vi`:
 Lua/bash classification, and (for crons) your plan's schedule
 limits all apply. It also brings back a script that was deleted,
 if its history is still there. `git checkout <rev>` without `--`
-would move HEAD, which has no meaning here, and is refused.
+is refused.
 
 ### `git revert <rev>`
 
@@ -182,8 +176,7 @@ hint: bin/scan has changed since that commit, so the revert would conflict; noth
 Rewords the latest commit. You can reword only a file's current
 version, only one you wrote yourself, and only with permission to
 edit that file — so you can't reword a teammate's save that landed
-after yours. A plain `git commit` finds nothing to commit, as in
-git on a clean tree.
+after yours. A plain `git commit` reports nothing to commit.
 
 ### `git rev-parse`
 
@@ -195,7 +188,7 @@ git on a clean tree.
 Output that goes straight to your terminal is coloured. Output
 headed into a pipe or a redirect is plain text, so
 `git log -p | grep foo` and `git show HEAD:bin/scan > /tmp/scan`
-do what you expect. `--color=always` or `--color=never` overrides.
+work as in a shell. `--color=always` or `--color=never` overrides.
 
 ## Commit messages at save time
 
@@ -214,8 +207,7 @@ follow-up vi buffer pre-filled with a comment-prefixed prompt:
 Type a message, `:wq` records it. `:q!` skips it. Either way you
 end up back at the shell prompt. Comment lines (`#`-prefixed) and
 blank lines are stripped; an entirely-comment buffer records no
-message. If you skipped the popup and want to add one later,
-that's `git commit --amend -m`.
+message. To add one later, use `git commit --amend -m`.
 
 ## Deleting and bringing back
 
@@ -236,18 +228,17 @@ are writes. They need the same group as editing the file does:
 Restoring an old dashboard still validates it: if it refers to a cron
 that has since been deleted, the restore is refused.
 
-## What `git` here does NOT do
+## Unsupported commands
 
-- **No working tree, no staging.** `add`, `rm`, `mv`, `stash`,
+- **Working tree and staging.** `add`, `rm`, `mv`, `stash`,
   `reset`, `clean` are refused (`is a git command, but weft doesn't
   support it`); every write is already a commit.
-- **No branches, merges or rebases.** One linear history.
-- **No remotes.** `clone`, `fetch`, `pull`, `push` are refused.
-- **No history for `/tmp`, `/etc/passwd` or `/etc/usage`.** `/tmp` is
-  intentionally ephemeral; the other two are generated (from group
-  membership and metering), so there is nothing stored to roll back.
-  Change the team with `adduser` / `deluser`.
-- **Slack setup is not in `/etc/notify.yaml`.** Only the alias file
-  is versioned; connecting Slack doesn't create a commit.
-- **Patterns are RE2, not POSIX.** `--author` and `--grep` use Go
+- **Branches, merges and rebases.** History is one linear sequence; these are refused.
+- **Remotes.** `clone`, `fetch`, `pull`, `push` are refused.
+- **`/tmp`, `/etc/passwd` and `/etc/usage`.** These keep no history.
+  `/tmp` is ephemeral; the other two are generated from group
+  membership and metering. Change the team with `adduser` / `deluser`.
+- **Slack setup.** Only the alias file `/etc/notify.yaml` is versioned;
+  connecting Slack creates no commit.
+- **Patterns are RE2.** `--author` and `--grep` use Go
   regular expressions, so `+`, `?` and `|` are operators.

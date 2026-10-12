@@ -79,10 +79,9 @@ section. You cannot mix `sections:` and top-level `tiles:`.
 
 - `kind` — one of `sparkline`, `counter`, `gauge`, `table`.
 - `cron` — required; name of an existing cron (must exist when saved).
-  Dashboards saved before this key was renamed from `watch` are
-  converted for you; writing `watch:` now is an error that names `cron:`.
+  A tile that uses `watch:` is an error that names `cron:`.
 - `title` — optional label for the tile.
-- `size` — `sm`, `md`, or `lg`. Default `md`. A layout hint, not a pixel size.
+- `size` — `sm`, `md`, or `lg`. Default `md`. A layout hint.
 - `format` — (counter only) printf-style format, e.g. `"%d jobs"`, `"%.1f%%"`.
 - `threshold` — (counter, gauge, sparkline) `warn` and `crit` cutoffs; gauge also takes `max`.
 - `columns` — (table only, required) header labels; rows are whitespace-split from the cron stdout.

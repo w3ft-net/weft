@@ -38,8 +38,8 @@ bob@acme.com     member   active    binmgr  cronmgr  payments  payments+tokens
 carol@acme.com   member   invited   —
 ```
 
-The file is read-only; mutate the team with `adduser` and `deluser`
-(admin-only), or from the dashboard's Members tab. An admin (sometimes
+Change the team with `adduser` and `deluser` (admin-only), or from
+the dashboard's Members tab. An admin (sometimes
 called the org owner) holds groups like any other member and is listed
 with them.
 
@@ -54,8 +54,8 @@ A group is one of these:
 - **`<namespace>+tokens`** — mint producer tokens for that namespace.
   Independent of read: a member can have one, the other, or both.
 
-The `+tokens` facet uses `+` (not `:`) because `+` is illegal in a
-namespace name, so it can never collide with a real namespace.
+The `+tokens` facet uses `+` because `+` is illegal in a namespace
+name, so it can never collide with a real namespace.
 
 ## COMMANDS
 
@@ -63,9 +63,9 @@ namespace name, so it can never collide with a real namespace.
   email; they join when they accept (or next sign in).
 - **`adduser <email> <group>`** — add a member to a group. If the email
   isn't on the team yet, they're invited now (the email goes out) and
-  the grant doesn't apply until they accept — re-run the command once
-  they've joined. If they were invited but haven't accepted, you get a
-  clear error rather than a silent no-op.
+  the grant applies after they accept, so re-run the command once
+  they've joined. If they were invited but haven't accepted, the
+  command returns an error.
 - **`deluser <email> <group>`** — revoke a group membership.
 - **`deluser <email>`** — remove a member from the org entirely.
 - **`groups [<email>]`** — list a member's groups (yours if omitted).
@@ -78,8 +78,8 @@ Every command takes `--help` (prints usage, changes nothing). An unknown
 flag, a first argument that isn't an email address, or extra arguments
 is a usage error.
 
-`adduser`/`deluser` are admin-only. Group grants apply only once the
-member has accepted their invite; there is no staging.
+`adduser`/`deluser` are admin-only. Group grants apply once the
+member has accepted their invite.
 
 ## EXAMPLES
 

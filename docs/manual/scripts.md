@@ -11,13 +11,13 @@ web:
 
 Anything you can type at the shell prompt can be saved as a named script under
 `/bin/`. Scripts are available from every shell session and every cron
-belonging to your account.  Create scripts with `vi` or with `cat - > myscript`.
-Writing the file will validate the script for syntax errors and some
+belonging to your account. Create scripts with `vi` or with `cat - > myscript`.
+Writing the file validates the script for syntax errors and some
 weft-specific semantics.
 
 ### Writing a script
 
-The script body is just a pipeline. Positional parameters (`$1`, `$2`,
+The script body is a pipeline. Positional parameters (`$1`, `$2`,
 …) bind to the arguments the caller passes at invocation.
 
 ```
@@ -35,13 +35,13 @@ count_errors myco/prod/api/main.log | sort -n   # scripts compose into pipelines
 A script, bash or Lua, can also sit at a later stage of a pipeline,
 after a log read: `tail -n 500 /log/myco/prod/api/main.log | myscript`.
 
-We recommend keeping your scripts small and pipelined where possible -- weft optimizes these cases well -- but you can write more sophisticated scripts where needed. 
+Small, pipelined scripts are optimized well by weft. Larger scripts are supported.
 
 ## Language support
 
-The weft shell supports a generous subset of **bash** and **Lua**.
+The weft shell supports a subset of **bash** and **Lua**.
 Scripts default to bash; declare Lua with a shebang on the first
-line. 
+line.
 
 ### Bash
 
@@ -61,8 +61,7 @@ Effectively the full bash grammar is available:
 
 ### Lua
 
-You might reach for Lua if you need arithmetic, string
-manipulation, JSON assembly, etc. 
+Lua suits arithmetic, string manipulation and JSON assembly.
 
 ```
 #!/usr/bin/env lua
@@ -72,7 +71,7 @@ local avg = weft.avg(name, "1h")
 print(string.format("%s averaged %.2f over the last hour", name, avg))
 ```
 
-Weft supplies you with Lua 5.1, including the standard `table`, `string`,
+Weft provides Lua 5.1, including the standard `table`, `string`,
 `math`, and `coroutine` libraries, plus a restricted `os` (`os.clock`,
 `os.date`, `os.time`, `os.difftime`). `dofile`, `loadfile`, `load`,
 `loadstring`, and `require` are disabled, and scripts time out after 30
@@ -107,9 +106,8 @@ end
 cat /log/myco/prod/api/events.log | extract_ids | sort -u | wc -l
 ```
 
-Weft cannot optimize Lua scripts in the same way it can coreutils pipelines. If
-you need Lua, keep it at the end of a pipeline wherever you can for best
-performance. 
+Weft optimizes coreutils pipelines more than Lua scripts. For best
+performance, put Lua at the end of a pipeline.
 
 ## Editing a script with `vi`
 
@@ -120,6 +118,5 @@ the full version-control workflow, including `git log -- /bin/<name>`,
 `git show`, `git diff`, `git restore`, and `git commit --amend`.
 
 The five most recent past versions are kept; older saves are
-discarded. Keep this in mind if you iterate quickly — there's no
-recycle bin past the cap.
+discarded. Versions past the cap cannot be recovered.
 

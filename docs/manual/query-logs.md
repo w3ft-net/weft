@@ -29,15 +29,15 @@ cat myapp.log | grep "connection refused"
 tail -n 100 myapp.log
 ```
 
-weft analyzes your full pipeline and uses your filters to narrow what
-it reads — you write familiar shell commands, weft makes them fast.
+weft analyzes the full pipeline and uses its filters to narrow what it
+reads.
 
 A hard line count (`head -n N`, `tail -n N`) ends that narrowing for
 the filters after it. `tail -n 500 | awk 'LEVEL == "ERROR"' | wc -l`
 counts the errors among the last 500 rows (at most 500), while
 `grep ERROR | tail -n 5` filters first and gives the last 5 matches.
-Don't use `-n` in a cron: crons read a time range, and a line count can
-silently truncate it.
+Crons read a time range, and a line count can silently truncate it, so
+omit `-n` in a cron.
 
 Globs are allowed only to pick log kinds inside one service:
 `cat /log/myco/prod/api/*.log`. A glob that would read across services
@@ -67,7 +67,7 @@ but is slower.
 | `TS` | `._ts` | `ts` | row timestamp |
 | `DEPLOYMENT` | `._deployment` | `deployment` | weftd config `deployment:` value (k8s Deployment, AWS ASG, etc.) |
 | `ENV` | `._env` | `env` | bound to the agent token at mint time (`weft token create --env prod`) |
-| `VERSION` | `._version` | `version` | per-source `version_file` watched by the agent |
+| `VERSION` | `._version` | `version` | weftd `version.file:` (live) or `version.env:` (snapshot) |
 | `REGION` | `._region` | `region` | detected from cloud metadata at agent startup |
 | `CLUSTER` | `._cluster` | `cluster` | k8s mode only: cluster name from the DaemonSet config |
 | `K8S_NAMESPACE` | `._k8s_namespace` | `k8s_namespace` | k8s mode only: pod's k8s namespace |
@@ -108,22 +108,21 @@ team's vocabulary.
 
 ### Custom fields fall through to JSON-extract
 
-Anything not in the table above lives in your row's JSON payload
-and is still queryable — just slower:
+Anything not in the table above lives in the row's JSON payload
+and is queryable at lower speed:
 
 ```
 cat /log/myco/prod/api/main.log | jq 'select(.feature_flag == "abc")'
 ```
 
-That works correctly, but weft can't skip ahead — every row in the
-time range is read and parsed. For dimensions you query constantly,
-prefer the indexed columns.
+weft reads and parses every row in the time range for this filter. For
+dimensions you query constantly, use the indexed columns.
 
 ## Per-tag values over time
 
-Indexed dimensions + a frequent cron + the multi-row alert form
-together give you "value by host (or service / region / pod) over
-time" without any new infrastructure. The full recipe — including
+Indexed dimensions, a frequent cron and the multi-row alert form
+together produce "value by host (or service / region / pod) over
+time". The full recipe — including
 per-tag incident dedup with `-k`/`-t` and per-tag debouncing — is
 in **Alerting strategies**.
 
@@ -133,15 +132,15 @@ In short: write a cron whose body emits one line per tag (e.g.
 incidents independently against its tag.
 
 Window aggregates (`weft::avg`, `weft::max`, etc.) summarize the
-whole run's stdout as one number. The recipe gives you per-bucket,
+whole run's stdout as one number. The recipe produces per-bucket,
 per-tag values; for a rolling average across buckets, point a second
 cron at it via `weft::latest`.
 
 ## Charting a query
 
 Pipe any pipeline into `chart` to render the result as a chart in
-the terminal — no need to first commit it to a saved cron. The
-chart is the terminal stage of the pipeline (no commands after it).
+the terminal. The chart is the terminal stage of the pipeline; no
+commands follow it.
 
 ```
 # Time-bucketed p95 latency over the current range
@@ -166,8 +165,8 @@ bucketing, `--type`, title).
 
 ## Saving a result set
 
-Redirect a pipeline into `/tmp` to hold onto the output and slice it
-a few different ways without re-running the whole query:
+Redirect a pipeline into `/tmp` to keep the output and query it
+several ways:
 
 ```
 cat api.log | awk 'LEVEL == "ERROR"' > /tmp/errs
@@ -184,10 +183,9 @@ Your plan determines how far back queries can read. See the
 filtered out of every query, even if it is still stored.
 
 Older data is archived and queried transparently. A `range 180d..`
-query reads recent and archived data in one pass — there is no
-separate "search archived logs" step, and no special syntax for
-the older portion. The only user-visible effect is a small extra
-latency on the cold side.
+query reads recent and archived data in one pass with the
+same syntax. The only user-visible effect is a small extra latency
+on the cold side.
 
 See `help builtins` in the shell for the full command list, and
 `man range` for time-window syntax.

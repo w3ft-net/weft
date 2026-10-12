@@ -22,19 +22,19 @@ cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 0 --notify=op
 ```
 
 The schedule is either a five-field expression (`*/5 * * * *`) or
-`every <duration>` (`# schedule: every 5m`). Each run reads only the
+`every <duration>` (`# schedule: every 5m`). Each run reads the
 logs from its own schedule interval: a `*/5` cron sees the last five
 minutes, so the pipeline above counts that interval's errors with no
-row limit. Don't put `head -n` or `tail -n` in a cron. A line count caps
+row limit. A cron must not use `head -n` or `tail -n`: a line count caps
 the rows read, and on a busy interval it silently cuts the window short, so
-the cron undercounts without telling you. To try a cron's pipeline at the
+the cron undercounts. To try a cron's pipeline at the
 prompt first, set the window with `range` (see `man range`).
 
 The pipeline's stdout is captured as the cron result — numeric
 values are graphed on the dashboard as sparklines. Alerts are
 dispatched by the `alert` stage (see **Alerting strategies** for
 the catalogue of alert shapes, plus `man alert` for the builtin's
-grammar); there is no separate cron-level notify field.
+grammar).
 
 View and manage crons from the **Dashboard**.
 
@@ -55,8 +55,7 @@ weft::latest error-rate
 echo $(weft::avg error-rate 1h) | alert above 50 --notify=ops
 ```
 
-From a Lua `/bin/` script the return type is a number, with no string
-parsing:
+From a Lua `/bin/` script the return type is a number:
 
 ```lua
 local rate = weft.avg("error-rate", "1h")

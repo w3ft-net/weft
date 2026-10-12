@@ -28,8 +28,7 @@ With no arguments, range displays the current query time window.
 With a `<start>..<end>` argument, range sets the time window used
 by all subsequent queries. If `<end>` is omitted, it defaults to
 now. Relative specs are re-resolved against the server's clock on
-every query — `range 1d..` always means "the last 24 hours", not
-"the 24 hours ending when you typed the command".
+every query — `range 1d..` always means "the last 24 hours".
 
 Each side of the range can be:
 
@@ -38,8 +37,8 @@ Each side of the range can be:
 A calendar date or instant. Missing components default to the
 start of the period: an omitted time means `00:00:00`, an omitted
 day means the 1st, an omitted month means January. An omitted
-year defaults to the *current* year — there is no roll-forward,
-so `01-15` in March means current-year January, not next.
+year defaults to the current year, so `01-15` in March means
+current-year January.
 Server-local timezone unless the literal carries one.
 
 ```
@@ -57,8 +56,8 @@ Server-local timezone unless the literal carries one.
 ### RELATIVE DURATION
 
 Distance back from "now". Re-anchored against the server's clock
-on every query, so a long-lived shell pane never queries against
-a stale window. Units are `m` (minutes), `h` (hours) and `d` (days);
+on every query, so a long-lived shell pane always queries a current
+window. Units are `m` (minutes), `h` (hours) and `d` (days);
 seconds, weeks and combined forms such as `1h30m` are not accepted.
 
 ```
@@ -86,7 +85,7 @@ range 1h..10m           from 1 hour ago to 10 minutes ago
 range yesterday..today  all of yesterday
 range yesterday..       yesterday to now
 range 04-01..05-14      current-year span, Apr 1 00:00 up to
-                        (not including) May 14 00:00
+                        (excluding) May 14 00:00
 range 05-14..           from May 14 midnight to now
 range 05-14T09..05-14T17
                         business hours on May 14 (current year)

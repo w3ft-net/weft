@@ -34,7 +34,7 @@ that carry one:
 /log/<namespace>/<env>/<service>/<kind>.log    env-bearing token
 ```
 
-- **`<namespace>`** — the grouping you created above. A single
+- **`<namespace>`** — the grouping you created above.
   `/log/<namespace>.log` is a namespace-wide wildcard (every
   service and kind under it).
 - **`<service>`** — the source name a producer reports for itself;
@@ -53,7 +53,7 @@ that carry one:
 
 ### Where the service name comes from
 
-Each producer decides the service name; weft never rewrites it.
+Each producer decides the service name, and weft uses it as reported.
 
 | Producer | `<service>` | `<kind>` |
 |---|---|---|
@@ -68,5 +68,5 @@ depending on how each token was minted. To read across services, use
 or `cat /log/<namespace>/<env>/*.log` is refused, because globs may
 only pick kinds inside one service (`/log/<namespace>/<env>/<service>/*.log`).
 Env, region, deployment,
-host, and pod are query-time dimensions (`awk 'ENV == "prod"'`),
-not extra path segments — see **Meta-variables** for the full set.
+host, and pod are query-time dimensions (`awk 'ENV == "prod"'`).
+See **Meta-variables** for the full set.

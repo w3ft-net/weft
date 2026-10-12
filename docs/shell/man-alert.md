@@ -30,25 +30,24 @@ If the condition is met, writes an alert message to stderr and,
 when `--notify` is supplied, dispatches the alias from `/etc/notify.yaml`
 to its Slack, PagerDuty, webhook, and/or email targets.
 
-If no condition is given and `--notify` is supplied, the default is
-"any": the alert fires whenever stdin is non-empty. A bare `alert` with
-neither is a usage error; write `alert any` for a dry run.
+If no condition is given, the default is "any": the alert fires whenever
+stdin is non-empty. `alert` alone is a dry run that writes to stderr.
 
 When the condition is not met, stdin is passed through to stdout
-unchanged. When it is met, the alert message is written instead.
+unchanged. When it is met, the alert message goes to stderr.
 
 `alert` must be the last stage of its pipeline, and the last (or only)
 command of a script.
 
 If the pipeline ahead of `alert` fails (an unknown source, a bad stage),
-the alert is not evaluated: the shell shows the error, and a cron run is
-recorded with status `error` and opens no incident. Empty output from a
-pipeline that ran fine (a `grep` with no match) is still empty input, and
-`absent` fires on it.
+the alert is not evaluated. The shell shows the error, and a cron run is
+recorded with status `error` and opens no incident. A pipeline that runs
+fine and prints nothing (a `grep` with no match) gives `alert` empty input,
+and `absent` fires on it.
 
 In a cron (`/cron.d/`), incidents are deduplicated on
-(cron, condition). Subsequent ticks during an open incident
-update it but don't re-page. When the condition clears, the
+(cron, condition). Later ticks during an open incident
+update it and send no new page. When the condition clears, the
 incident closes.
 
 From the interactive shell, alert is the supported way to
@@ -58,8 +57,7 @@ test an alias end-to-end:
 echo "hello" | alert --notify=ops
 ```
 
-Without `--notify`, alert only writes to stderr — that is the
-dry-run mode.
+Without `--notify`, alert writes to stderr (dry-run mode).
 
 ## MULTI-ROW MODE
 
@@ -69,7 +67,7 @@ and `-k <field>` picks the value field. With `-t <field>` (a.k.a.
 `--tag`), another field names the row; each distinct tag opens
 and closes incidents, and dispatches notifications, independently.
 Use `-t` whenever the pipeline can produce more than one row per
-tick — otherwise multiple rows collapse into the same incident.
+tick; rows without a tag share one incident.
 
 `<field>` is one of:
 
@@ -123,12 +121,12 @@ aggregated-value).
 
 ## OPTIONS
 
-- `--notify=<alias>` — dispatch to the named alias in `/etc/notify.yaml`. Without `--notify`, alert only writes to stderr.
+- `--notify=<alias>` — dispatch to the named alias in `/etc/notify.yaml`. Without `--notify`, alert writes to stderr.
 - `--if-zero <value>` / `--if-nonzero <value>` — fire based on a literal exit-code value (typically `"$?"` from the prior compound). Mutually exclusive with stdin condition keywords.
 - `-k <field>` — multi-row mode: each line of stdin is one row, and `<field>` selects the numeric value. `<field>` is either a 1-indexed whitespace column (e.g. `2`) or a `.`-prefixed JSON path against the line parsed as JSON (e.g. `.req.latency_ms`).
 - `-t <field>`, `--tag <field>` — multi-row mode: `<field>` names this row for per-tag incident dedup and per-tag notifications. Same field grammar as `-k`. Must agree with `-k` on positional vs JSON-path. Required when the pipeline can produce more than one row per tick.
 - `--duration <dur>` — time window for sustained conditions. For above/below: condition must hold for ALL runs in the window. For rising/falling: compares against the window average. For absent: no non-empty output in the window. Units are s, m and h only: 5m, 1h, 30s (`1d` is rejected).
-- `--average` — for above/below with `--duration`: compare against the rolling average over the window instead of requiring every individual run to match. It has no effect without `--duration`.
+- `--average` — for above/below with `--duration`: compare the rolling average over the window against the threshold. It has no effect without `--duration`.
 - `--msg <text>` — override the default alert message.
 
 ## EXAMPLES
@@ -154,16 +152,16 @@ cat /log/myco/prod/api/metrics.log \
     | jq -r 'select(.type=="disk") | "\(.host) \(.pct)"' \
     | alert above 80 -k 2 -t 1 --notify=ops
 
-# Multi-row JSON path: same idea, no `jq -r` re-formatting required.
+# Multi-row JSON path: same idea with JSON rows.
 # `jq -c` keeps each row on one line.
 cat /log/myco/prod/api/metrics.log | jq -c 'select(.type=="disk")' \
     | alert above 80 -k .pct -t .host --notify=ops
 ```
 
-In a cron, count over the cron's own time range and don't limit rows with
-`head -n` or `tail -n`; a row limit can silently truncate the window. At the
+In a cron, count over the cron's own time range. A row limit with
+`head -n` or `tail -n` can silently truncate the window. At the
 prompt, `tail -n 500 | awk 'LEVEL == "ERROR"' | wc -l` counts errors among
-the last 500 rows only, whereas `grep ERROR | tail -n 5` is the last five
+the last 500 rows, and `grep ERROR | tail -n 5` returns the last five
 matches.
 
 ## SEE ALSO

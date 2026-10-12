@@ -9,7 +9,7 @@ web:
 
 ## Install weftd
 
-weftd is a lightweight Go binary that tails log files and ships structured
+weftd is a Go binary that tails log files and ships structured
 lines to weft over gRPC. Download it from the **Downloads** page.
 
 ```
@@ -26,7 +26,7 @@ Configure your log sources in `/etc/weftd/config.yaml`:
 # /etc/weftd/config.yaml
 
 endpoint: ingest.w3ft.net:9020 # optional; defaults to this. Override
-                              # only for local/dockerized testing
+                              # for local/dockerized testing
 token: wft_a1b2c3d4e5f6...
 deployment: api               # optional; the fleet/scaling-unit
                               # this agent belongs to (k8s Deployment,
@@ -47,10 +47,6 @@ dimensions:                   # optional: column values sourced from
 sources:
   - service: myapp
     path: /var/log/myapp/*.log
-    schema: prefix_json
-    prefix_fields: [ts, level, service]
-    prefix_separator: " "
-    json_field: payload
     version:                           # optional
       file: /opt/myapp/VERSION         # weftd watches the file and
                                        # stamps the latest contents as
@@ -60,14 +56,13 @@ sources:
 
   - service: nginx
     path: /var/log/nginx/access.log
-    schema: json
 ```
 
-This file is the single source of truth — the package never
+This file is the single source of truth; the package never
 generates or overwrites it. Start from `/etc/weftd/config.yaml.example`.
-Repeated source fields can be DRYed with standard YAML anchors and
-merge keys (`&name` / `<<: *name`); weftd ignores an `x-anchors:`
-holder block, so it's a convenient place to declare them.
+Repeated source fields can be shared with standard YAML anchors and
+merge keys (`&name` / `<<: *name`). weftd ignores an `x-anchors:`
+block, which is the place to declare them.
 
 ### Service names
 
@@ -76,18 +71,18 @@ pseudofile path. It is optional: for a systemd source (`unit:`) weftd
 uses the unit name without `.service`, and for a file source (`path:`)
 it uses the file's name without its extension, so
 `/var/log/myapp/api.log` becomes `api`. Set `service:` explicitly when
-several files should share one service, or when the derived name isn't
-the one you want. This is separate from the top-level `services:` list
-above, which only controls how host metrics fan out.
+several files should share one service, or when you want a name other
+than the derived one. The top-level `services:` list above controls how
+host metrics fan out.
 
 ### Token
 
 Put `token:` in the config file, **or** supply it via the
 `WEFTD_TOKEN` environment variable (e.g. in `/etc/default/weftd`).
-The environment wins over the file value — an AWS-shaped credential
-chain — so a secret injector can provide the token without templating
-the YAML. It's the only setting with an environment source; everything
-structural lives in the file.
+The environment value takes precedence over the file value, so a secret
+injector can provide the token without templating the YAML. It is the
+only setting with an environment source; all other settings live in the
+file.
 
 The `deployment`, `region`, and per-source `version` values
 become first-class query dimensions — see the **Meta-variables**
@@ -103,19 +98,27 @@ wins over auto-derived sources (e.g. `dimensions.region` overrides
 the cloud-metadata probe). Allowed columns: `deployment`,
 `version`, `region`, `cluster`, `node`. Other columns are
 populated by other mechanisms (token-bound env, schema-extracted
-fields, k8s log-path metadata) and refusing to override them
-keeps those guarantees intact.
+fields, k8s log-path metadata) and cannot be overridden.
 
-The JSON-path syntax is a minimal subset of jq — bare field
+The JSON-path syntax is a minimal subset of jq: field
 access (`.foo`), nested fields (`.foo.bar`), and array indices
 (`.items[0].name`). For richer extraction, pre-process the file
 with your own tooling and point weftd at the result.
 
-### Schema types
+### How lines are parsed
 
-- `json` — pure JSON lines, no prefix
-- `prefix_json` — fixed-width prefix fields followed by a JSON payload
-- `raw` — unstructured text, no parsing
+weftd ships each line as it reads it. A source takes
+`service`, `kind`, `path` (or `unit`), `version` and `metrics`.
+The source's schema, which lives on the weft server, defines how a line
+is split into fields (`TS`, `LEVEL` and the rest). weft detects it from
+the first batch and asks you to confirm it (see **Check schema setup**),
+or you set it with `weft source add` / `weft source configure`. The
+formats are:
+
+- `text` — whitespace-delimited fields
+- `json` — each line is a JSON object
+- `prefix_json` — a few whitespace-delimited fields, then a JSON object
+  that starts at a given field number
 
 ```
 # Start weftd
@@ -129,12 +132,12 @@ journalctl -u weftd -f
 ### Resuming after a restart
 
 weftd remembers how far it has delivered each tailed file, so a restart
-(an upgrade, a reboot, a crash) picks up where it left off instead of
-skipping whatever was written in the meantime. The saved position means
-"the coordinator acknowledged everything up to here", not "weftd read up to
-here", so lines that were in flight when weftd stopped are sent again rather
-than lost. Delivery is at-least-once: after an unclean stop you may see a few
-seconds of lines twice, never a gap.
+(an upgrade, a reboot, a crash) picks up where it left off and
+reads whatever was written in the meantime. The saved position means
+"the coordinator acknowledged everything up to here", so lines that were
+in flight when weftd stopped are sent again. Delivery is at-least-once:
+after an unclean stop you may see a few seconds of lines twice, with no
+gap.
 
 State is kept in `/var/lib/weftd/checkpoints/`. The `.deb` unit creates it
 (`StateDirectory=weftd`). Everything is optional:
@@ -166,23 +169,22 @@ summarized once a minute as a `checkpoint stats` line per file.
 
 Notes:
 
-- **The first restart onto a version with checkpointing still loses lines in
+- **The first restart onto a version with checkpointing loses lines in
   flight**, because the old binary does the shutdown. The guarantee starts
   from the second restart.
 - **Containers:** the state directory must survive the pod. On Kubernetes,
-  mount `/var/lib/weftd` from a `hostPath`; an `emptyDir` or the container
-  filesystem is wiped on every reschedule, which is exactly when you need it.
+  mount `/var/lib/weftd` from a `hostPath`. An `emptyDir` or the container
+  filesystem is wiped on every reschedule.
 - **Two weftd on one host** cannot share a state directory. The second one
   logs that the directory is locked and runs without checkpointing.
-- A damaged `state.json` is moved to `state.json.corrupt` and weftd carries
-  on as if freshly installed; it never refuses to start.
+- A damaged `state.json` is moved to `state.json.corrupt` and weftd starts
+  as if freshly installed.
 
 ### System metrics (optional)
 
 weftd can also ship host metrics alongside log lines. Opt in by
-attaching a `metrics:` block to any source in the config — the block
-is independent of what that source tails, it just rides along on the
-same agent process.
+attaching a `metrics:` block to any source in the config. The block
+runs in the same agent process whatever the source tails.
 
 ```
 # /etc/weftd/config.yaml
@@ -248,20 +250,19 @@ Metrics only run on Linux (the collectors read `/proc/stat`,
 
 ### App API: emit events and heartbeats from your services
 
-Beyond tailing files, weftd exposes a local records socket that
-running applications can write to directly. It binds to a Unix
-socket by default, so process-local apps can ship to weft without
-a token, network call, or extra dependency — events, heartbeats,
-and runtime stats all ride this one channel. There is a typed Go
-SDK at <https://github.com/w3ft-net/weft-go> for callers that
-prefer not to wire up the socket by hand.
+weftd exposes a local records socket that running applications can
+write to directly. It binds to a Unix socket by default, so
+process-local apps ship to weft with no token, network call, or extra
+dependency. Events, heartbeats, and runtime stats all use this one
+channel. A typed Go SDK is available at
+<https://github.com/w3ft-net/weft-go>.
 
 #### Records socket
 
 Add a `socket:` line to `config.yaml` and weftd will accept
 newline-delimited frames in the format `<app>:<line>\n`. Each
 line is forwarded to the same ingest path file tailers use,
-stamped with whichever `<app>` prefix you write before the colon.
+stamped with the `<app>` prefix you write before the colon.
 
 ```
 # /etc/weftd/config.yaml
@@ -285,10 +286,9 @@ override with `WEFT_SOCKET` or `weft.WithSocket(...)`.
 
 #### Heartbeats
 
-A heartbeat is just a record. The Go SDK's `Heartbeat` loop emits one
+A heartbeat is a record. The Go SDK's `Heartbeat` loop emits one
 to app `<service>/heartbeats` every interval over the **records socket
-above** — there is no separate heartbeat socket or weftd listener.
-Each beat lands at `/log/<namespace>/<service>/heartbeats.log`:
+above**. Each beat lands at `/log/<namespace>/<service>/heartbeats.log`:
 
 ```json
 {"type":"heartbeat","service":"my-service","ts":"2026-06-11T14:55:36.4Z"}
@@ -305,11 +305,10 @@ echo 'my-service/heartbeats:{"type":"heartbeat","service":"my-service"}' \
 
 Service names are restricted to `[a-zA-Z0-9._-]`, 1–128 chars.
 
-Liveness is judged by **recency**: a service that's alive keeps
-emitting rows; one that stops is *absent*. Since each beat is emitted
-at the source when the process is healthy, there's no server-computed
-`age_s` — you ask "have we seen a beat lately?" instead, which a cron
-expresses directly. First a cron whose result is the beats in its window
+Liveness is judged by **recency**: a live service keeps emitting rows;
+one that stops is *absent*. Each beat is emitted at the source when the
+process is healthy, so the question is "have we seen a beat lately?",
+which a cron expresses directly. First a cron whose result is the beats in its window
 (it is empty when none arrived):
 
 ```
@@ -328,15 +327,15 @@ weft::is_absent billing-beat 90s
 alert --if-zero "$?" --notify=ops
 ```
 
-Don't add `-n` or `head`/`tail` counts to the first cron: crons are
-bound to their time range, and a line count can silently truncate it.
+Leave `-n` and `head`/`tail` counts off the first cron: crons are
+bound to their time range, and a line count can truncate it.
 
 #### Go SDK
 
-`github.com/w3ft-net/weft-go` is the typed front door for the
-records socket above — events, heartbeats, and a runtime-stats
-collector that periodically emits Go heap, GC pause, goroutine, and
-FD-count telemetry. Setup in `main()`:
+`github.com/w3ft-net/weft-go` is the typed client for the
+records socket above. It sends events and heartbeats, and includes a
+runtime-stats collector that periodically emits Go heap, GC pause,
+goroutine, and FD-count telemetry. Setup in `main()`:
 
 ```
 import "github.com/w3ft-net/weft-go"

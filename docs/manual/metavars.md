@@ -34,33 +34,30 @@ that can't match.
 | `CONTAINER`                | `._container`            | `container`      | weftd k8s mode                                            |
 | `NODE`                     | `._node`                 | `node`           | weftd `dimensions.node:` (file-sourced)                   |
 
-A row that wasn't tagged with a given dimension carries an empty
-string. `ENV == "prod"` does not match it, but `ENV != "prod"` does.
+A row without a given dimension carries an empty string. `ENV == "prod"` does not match it, but `ENV != "prod"` does.
 
 ### Naming convention
 
 awk meta-variables are all-caps short flat names — `ENV`, `POD`,
-`DEPLOYMENT` — matching the pre-existing `LEVEL` / `SERVICE` /
-`INSTANCE` shape. The source coordinates split into three columns —
-`NAMESPACE`, `SERVICE`, `KIND` — each addressed directly rather
-than rolled into one conflated value.
+`DEPLOYMENT`, `LEVEL`, `SERVICE`, `INSTANCE`. The source coordinates
+are three columns — `NAMESPACE`, `SERVICE`, `KIND` — each addressed
+directly.
 
-Bare, not `$`-prefixed: `$NAME` in real awk is field-by-variable-index
-syntax (`$n` where `n` is `NAME`'s value), unrelated to a named
-variable's own value — it can't carry a string like `"web-1"`. A bare
-`HOST` is an ordinary awk global, exactly like awk's own built-in
-`NR`/`NF`/`FILENAME`.
+Meta-variables are written bare, without a `$` prefix: `$NAME` in awk is
+field-by-variable-index syntax (`$n` where `n` is `NAME`'s value) and
+cannot carry a string like `"web-1"`. A bare `HOST` is an ordinary awk
+global, like awk's built-in `NR`/`NF`/`FILENAME`.
 
 jq meta-variables use leading-underscore lowercase — `._env`,
-`._pod`. The underscore disambiguates from real JSON payload keys:
+`._pod`. The underscore separates the columns from JSON payload keys:
 `.pod` is whatever the producer wrote into the row body; `._pod` is
 the column. Real JSONL sometimes carries `Pod` / `PoD` / `POD` keys,
-so the underscore is more reliable than relying on case alone.
+so the underscore marks the column reliably in any case.
 
-`NAMESPACE` is weft's own logical token-grouping — the
-`<namespace>` segment in the path (`/log/<namespace>/...`). The
-Kubernetes namespace, a distinct dimension, takes the verbose
-`K8S_NAMESPACE` (`._k8s_namespace`) so the two never collide.
+`NAMESPACE` is weft's logical token grouping — the `<namespace>`
+segment in the path (`/log/<namespace>/...`). The Kubernetes
+namespace is a distinct dimension named `K8S_NAMESPACE`
+(`._k8s_namespace`).
 
 ## Path layout
 
@@ -98,23 +95,20 @@ on `ENV`: `cat myco.log | awk 'ENV == "prod"'`. A glob that would
 read across services or envs, such as `/log/myco/*/api/main.log`,
 `/log/myco/prod/*.log` or `cat *.log`, is refused with an error;
 globs are allowed only to pick kinds inside one service
-(`/log/myco/prod/api/*.log`). No backfill, no synthetic placeholder
-env.
+(`/log/myco/prod/api/*.log`).
 
-Region is intentionally **not** part of the path layout — it's a
-query-time filter (`awk 'REGION == "us-east-2"'`) only. Same for
-deployment, host, cluster, pod: those are query-time dimensions, not
-filesystem axes.
+Region is a query-time filter (`awk 'REGION == "us-east-2"'`) and is
+absent from the path layout. Deployment, host, cluster and pod are also
+query-time dimensions.
 
 ## Speed
 
-Filtering on a reserved meta-variable is the fast path, whether you use
-awk (`awk 'ENV == "prod"'`, `awk 'POD ~ "api-7f9b"'`) or jq
+Filtering on a reserved meta-variable is the fast path, in awk
+(`awk 'ENV == "prod"'`, `awk 'POD ~ "api-7f9b"'`) and in jq
 (`jq 'select(._level == "ERROR")'`). A filter on any other field, such
-as `jq 'select(.feature_flag == "abc")'`, still works but reads and
-parses every row in the time range. Mixing both in one pipeline is fine:
-the meta-variable filters narrow the data first and the rest runs on
-what remains.
+as `jq 'select(.feature_flag == "abc")'`, reads and parses every row in
+the time range. One pipeline can mix both: the meta-variable filters
+narrow the data first and the rest runs on what remains.
 
 A hard line count (`head -n N` or `tail -n N`) stops later filters from
 narrowing the read: `tail -n 500 | awk 'LEVEL == "ERROR"' | wc -l`
@@ -125,9 +119,9 @@ counts the errors among the last 500 rows, while
 
 ### Per-host average over a window
 
-A cron in `/cron.d` that emits the host next to each value makes
-"avg memory pct by host" a one-liner. A cron reads its own time range,
-so don't use `-n` here: a line count can silently truncate the window.
+A cron in `/cron.d` that emits the host next to each value produces
+"avg memory pct by host". A cron reads its own time range,
+so omit `-n` here: a line count can silently truncate the window.
 
 ```
 # /cron.d/memory-per-host

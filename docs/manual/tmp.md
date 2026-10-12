@@ -11,9 +11,8 @@ web:
 
 Every weft account has a scratch area at `/tmp`. Use it to save the output
 of a pipeline, take notes during an incident, or hold a filtered result
-set long enough to slice it a few different ways. It behaves the way a
-Unix `/tmp` does: write with `>`, append with `>>`, edit with `vi`, list
-with `ls`, remove with `rm`.
+set long enough to slice it a few different ways. Write with `>`, append
+with `>>`, edit with `vi`, list with `ls`, remove with `rm`.
 
 ```
 # Save a filtered result set
@@ -58,27 +57,25 @@ rm -rf /tmp/incident-2026-04-22
 ### Files expire after 48 hours
 
 /tmp is durable storage — your files survive logouts and are visible
-from every session. But every file is deleted
+from every session. Every file is deleted
 48 hours after it was last edited. Any of `>`, `>>`, `cp`, `mv`, or
 `touch` resets the clock; the mtime shown in `ls -l` is the source of
 truth.
 
-`touch /tmp/foo` is the explicit way to extend a file's life without
-otherwise changing it — useful when an investigation is running long
-and you want to keep your scratch around past the original 48h.
+`touch /tmp/foo` extends a file's life and leaves its content
+unchanged. Use it when an investigation runs long and you want to keep
+your scratch past the original 48h.
 
-Treat /tmp the way you'd treat a shared whiteboard in an operations
-room: great for the investigation you're running right now, not where
-you keep anything you'll need next week. For long-term storage of a
-pipeline's output, save the pipeline itself as a cron (see
-**Crons**) — cron results are retained for the full history your
-plan covers.
+/tmp holds the data for the investigation you are running now. For
+long-term storage of a pipeline's output, save the pipeline itself as a
+cron (see **Crons**). Cron results are retained for the full history
+your plan covers.
 
 ### Storage limits
 
 /tmp has a total allowance and a per-file cap, both set by your plan;
-see the Account page for your plan's limits. /tmp is for filtered result
-sets and notes, not for parking raw log data. Writes that would exceed
+see the Account page for your plan's limits. Use /tmp for filtered result
+sets and notes. Writes that would exceed
 either limit fail with an error; the partial output is not written.
 
 Check what you're using from the shell. `ls -lh` shows each file's
@@ -88,22 +85,20 @@ size:
 ls -lh /tmp
 ```
 
-`cat /etc/usage` reports your log-ingest quota, not /tmp space.
+`cat /etc/usage` reports your log-ingest quota.
 
-### What /tmp is not
+### Limits
 
-- **Not executable.** Files in /tmp are never treated as scripts.
-  `vi /tmp/foo` is a text editor opening a text file; typing `foo` at
-  the prompt afterwards does nothing. Scripts live in `/bin` — see
+- **Scripts.** Files in /tmp are never treated as scripts.
+  `vi /tmp/foo` opens a text file; typing `foo` at the prompt
+  afterwards does nothing. Scripts live in `/bin` — see
   **Custom scripts**.
-- **Not a source for `tail -f`.** Follow-mode is a streaming query
-  against live logs. You can redirect the output of a finished query
-  into /tmp, but `tail -f /log/myco/api/main.log > /tmp/stream` is
-  refused with an error, because a follow never finishes and the file
-  would hold only a truncated read. Drop `-f` to save a finished query.
-- **Not shared across accounts.** /tmp is per-customer. Every member
-  of your account sees the same /tmp; users from other accounts never
-  see any of it.
+- **Follow mode.** Redirect the output of a finished query into /tmp.
+  `tail -f /log/myco/api/main.log > /tmp/stream` is refused with an
+  error, because a follow never finishes and the file would hold only
+  a truncated read. Drop `-f` to save a finished query.
+- **Sharing.** /tmp is per-customer. Every member of your account
+  sees the same /tmp; users from other accounts see none of it.
 
 ### Working on saved results
 

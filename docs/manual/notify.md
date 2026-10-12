@@ -10,7 +10,7 @@ web:
 ## Define a notification alias
 
 When an `alert` fires in a cron, `--notify=<alias>` dispatches to a
-destination defined in `/etc/notify.yaml`. The alias is just a name;
+destination defined in `/etc/notify.yaml`. The alias is a name;
 it fans out to one or more targets across four service types — Slack,
 PagerDuty, webhook, and email.
 
@@ -30,10 +30,10 @@ grammar (severities, webhook headers, per-target mappings).
 
 ## Connecting Slack and PagerDuty
 
-`notify.yaml` only *names* destinations — the credentials behind them
+`notify.yaml` names destinations — the credentials behind them
 live with your account. Connect them from the terminal with `weft
-integration` (or under **Account → Integrations** in the browser;
-either surface does the same thing).
+integration` or under **Account → Integrations** in the browser;
+both do the same thing.
 
 ```
 # PagerDuty — paste an integration (routing) key, give it a name.
@@ -58,17 +58,15 @@ connected.
 
 ## Webhook and email need no account connection
 
-Webhook URLs and email addresses carry no account-level credential —
-they're written straight into `notify.yaml` per alias, so there's
-nothing to connect first:
+Webhook URLs and email addresses carry no account-level credential.
+They are written into `notify.yaml` per alias:
 
 Webhook **header values** are the exception: an `Authorization` token
 or a signing secret is a credential, so `cat /etc/notify.yaml` (and
-`git log -p /etc/notify.yaml`) shows each one as `"<redacted>"`. Edit
-the file as usual: leave `"<redacted>"` where a value should stay as
-it is, or write a real value to replace it. A `"<redacted>"` on a
-webhook, header or alias that has nothing stored is refused rather
-than saved as a literal.
+`git log -p /etc/notify.yaml`) shows each one as `"<redacted>"`. To edit,
+leave `"<redacted>"` where a value should stay unchanged, or write a real
+value to replace it. A `"<redacted>"` on a webhook, header or alias that
+has nothing stored is refused.
 
 ```
 pages:
@@ -88,5 +86,5 @@ echo "test fire" | alert --notify=ops
 
 This sends to every target in the `ops` alias.
 
-Interactive runs dispatch immediately and don't open an incident
-(incidents are a cron concept).
+Interactive runs dispatch immediately and open no incident
+(incidents belong to crons).

@@ -29,7 +29,7 @@ the same output you saw.
 
 ## What the link encodes
 
-The URL is just a short name. Weft stores three things behind it,
+The URL is a short name. Weft stores three things behind it,
 and sharing the same script, range and args again gives the same link:
 
 - **the script path**, always `/bin/<name>`.
@@ -37,33 +37,27 @@ and sharing the same script, range and args again gives the same link:
   one `range` shows). Override with `--range=<spec>`.
 - **the args**, anything you typed after `--` at the `clipboard`
   invocation. Put `--range` before `--`; anything after `--` is passed to
-  the script as-is. Joined with spaces — there is no preservation of
-  original shell quoting.
+  the script as-is. Args are joined with spaces; original shell quoting is
+  not preserved.
 
 A link always opens the script's current version. If a teammate needs to
 see how the script behaved before someone edited it, they pair the
 link with `git log -- /bin/<name>` to read the history.
 
-## Why this and not copy-paste
+## Why share a script link
 
-Pasting a pipeline directly into Slack loses the time window, often
-breaks single-quote rich content like `awk` and `jq` programs, and
-makes parameterised scripts hard to share. A `/bin/` script with a
-deep link sidesteps all three: the script body lives in your org's
-`/bin/`, version-tracked by `git`, with the link carrying only the
-runtime context (range + args).
+A `/bin/` script with a deep link keeps the time window, keeps quoted
+`awk` and `jq` programs intact, and handles parameterised scripts. The script
+body lives in your org's `/bin/`, version-tracked by `git`, and the link
+carries the runtime context (range + args).
 
-If the thing you want to share isn't a `/bin/` script yet, save it
-first:
+To share a pipeline that is not yet a `/bin/` script, save it first:
 
 ```
 cat - > /bin/check-foo
 # paste the pipeline, then ctrl-d
 clipboard /bin/check-foo
 ```
-
-A few seconds of friction to name the artifact pays back every time
-it gets re-used.
 
 ## Examples
 
@@ -83,11 +77,10 @@ clipboard /bin/check --range=yesterday..today -- prod
 
 See `man clipboard` for the full command reference.
 
-## What's not shared
+## Access
 
-The link does not grant access. It only opens for signed-in members of
+The link grants no access. It opens for signed-in members of
 your org; anyone else gets "that link doesn't exist". Recipients also
-need the namespace permissions required to run the script. Pasting a
-link into a public channel is safe in the sense that it leaks no log
-data — only the script invocation an authorized teammate could already
-construct.
+need the namespace permissions required to run the script. A link pasted
+into a public channel leaks no log data. It carries only a script invocation
+an authorized teammate could already construct.

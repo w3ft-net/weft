@@ -16,9 +16,9 @@ aggregates lives in **Weft functions**. This page is about which
 shape fits which monitoring problem.
 
 A cron run reads only the logs from its own schedule interval: a
-`*/5` cron sees the last five minutes. So the recipes here count with
-plain `grep ... | wc -l` and never limit rows with `head -n` or
-`tail -n`. A line count caps the rows read, so on a busy interval it silently
+`*/5` cron sees the last five minutes. The recipes here count with
+`grep ... | wc -l` and do not limit rows with `head -n` or
+`tail -n`: a line count caps the rows read, so on a busy interval it
 truncates the window and the cron undercounts. (At the prompt, `tail -n 500
 | awk 'LEVEL=="ERROR"' | wc -l` counts errors among the last 500 rows
 only, and `grep ERROR | tail -n 5` is the last five matches.) To try a
@@ -63,13 +63,11 @@ cat /log/myco/prod/api/metrics.log \
 
 `-k 2` says "field 2 holds the numeric value"; `-t 1` says "field
 1 names this row" (the host). Each host opens and closes incidents
-independently — you get one PagerDuty incident per affected host,
-not one giant incident for "anything's disk is over 80%."
+independently, giving one PagerDuty incident per affected host.
 
 `-k` and `-t` also accept JSON paths, which skips the `jq -r`
-reformatting. Use `jq -c` so each row stays on one line; plain `jq`
-pretty-prints one object across many lines, and each line is then
-read as a row of its own:
+reformatting. Use `jq -c` so each row stays on one line; multi-line
+`jq` output is read one line per row:
 
 ```
 cat /log/myco/prod/api/metrics.log \
@@ -96,8 +94,8 @@ script.
 
 **Over the cron's time range.** Read every source the condition
 needs, tally each leg in one `awk` pass, and print `1` when the whole
-condition holds and `0` otherwise. This is the natural fit when the
-legs are visible in the logs themselves:
+condition holds and `0` otherwise. Use this when the legs are visible
+in the logs themselves:
 
 ```
 # /cron.d/deploy-danger
@@ -146,7 +144,7 @@ stderr.)
 
 Lua mirrors the bash predicates one-for-one, with native `and` `or`
 `not`. Lua lives in a `/bin/` script (crons are bash), which prints `1`
-or `0` and which the cron pipes into `alert above 0`. Lua wins when the
+or `0` and which the cron pipes into `alert above 0`. Use Lua when the
 chain has more than two clauses, when the predicate uses computed values,
 or when you want a meaningful debug print:
 
@@ -177,9 +175,9 @@ deploy_danger | alert above 0 --notify=critical
 
 ### 4. Aggregated-value (windowed) alerts
 
-When the question is "what does the value look like over a window"
-rather than "what is it right now," use a `weft::*` aggregate in
-the cron body and alert against its stdout:
+When the question is "what does the value look like over a window,"
+use a `weft::*` aggregate in the cron body and alert against its
+stdout:
 
 ```
 # /cron.d/error-rate-hourly
@@ -200,7 +198,7 @@ For longer-horizon comparisons, write a cron that itself runs an
 aggregate every 5 minutes — its stored history then *is* the
 longer-horizon series.
 
-## Trend / anomaly vs threshold
+## Trend, anomaly and threshold conditions
 
 | Want to fire when... | Use |
 |---|---|
@@ -214,7 +212,7 @@ longer-horizon series.
 The functions take different arguments:
 
 - `weft::is_rising <cron> [<pct>] [<window>]`, and `weft::is_falling`
-  likewise. `<pct>` is a bare number: `50`, not `50%`.
+  likewise. `<pct>` is a bare number such as `50`; it takes no `%` suffix.
 - `weft::is_outlier <cron> <n_stddev> <window>`
 - `weft::is_seasonal <cron> <n_stddev> <period> <window>`
 
@@ -228,11 +226,10 @@ host memory, queue depth, error rate of a steady-state service. Use
 threshold under-pages on Saturday at 3am and over-pages at the
 nightly batch job.
 
-## The absent-vs-zero gotcha
+## Absent and zero values
 
-A cron with no usable value is not the same as a value of zero. In
-bash, `weft::latest` of a cron that doesn't exist is an error, not an
-empty string; in Lua, `tonumber("")` returns `nil` and arithmetic against
+A cron with no usable value and a value of zero are different cases. In
+bash, `weft::latest` of a cron that doesn't exist is an error; in Lua, `tonumber("")` returns `nil` and arithmetic against
 `nil` errors. Always check for absence and guard the conversion:
 
 ```lua
@@ -243,9 +240,9 @@ end
 ```
 
 In bash, predicate builtins handle this for you — `weft::is_above
-missing 50` exits 1 (no fire), it doesn't crash.
+missing 50` exits 1 (no fire).
 
-If you actually want to distinguish absent from zero, use
+To distinguish absent from zero, use
 `weft::is_absent` explicitly in the chain:
 
 ```
@@ -258,7 +255,7 @@ weft::is_above error-rate 0   # fires only when there IS a result AND it's > 0
 
 Composite conditions tend to flap — each leg individually crosses
 back and forth across its threshold, and the composite pops whenever
-any pair simultaneously trips. The existing `alert --duration <dur>`
+any pair simultaneously trips. The `alert --duration <dur>`
 flag handles this: it requires the trigger to hold for the entire
 window before firing. Once the composite output is a scalar (1 or 0
 piped through alert), `--duration` works the same as for any other
@@ -278,12 +275,12 @@ incident opens.
 ## Anti-patterns
 
 - **Don't fan out alerts from inside the chain.** A predicate
-  builtin is a *test*, not a side-effect. If you want one cron to
-  page multiple aliases, write multiple `/cron.d/` entries or use
+  builtin is a test and has no side effects. To page multiple
+  aliases from one cron, write multiple `/cron.d/` entries or use
   one `notify.yaml` alias that fans out to multiple destinations.
 - **Don't put `weft::*` predicates on the right side of `|`.** They
-  read state, not stdin. Pipe values through `weft::is_gt` /
-  `weft::is_lt` for stdin-driven comparisons.
+  read stored state. For stdin-driven comparisons, pipe values
+  through `weft::is_gt` / `weft::is_lt`.
 - **Don't compose state-mutating commands in the chain.** Keep the
   predicate composition side-effect-free: join `weft::*` predicates
   with `&&`, `||` and `!`, and nothing else. Hanging an unrelated

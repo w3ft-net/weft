@@ -14,17 +14,17 @@ web:
 ## Alerts
 
 An alert evaluates a value from stdin against a condition.
-When the condition holds, `alert` writes to stderr — in a
-cron, that stderr is what drives incidents and notifications.
+When the condition holds, `alert` writes the alert message to stderr — in a
+cron, that stderr drives incidents and notifications.
 When the condition does not hold, stdin passes through to stdout
-unchanged; when it holds, the alert message is written instead.
+unchanged.
 `alert` must be the last stage of a pipeline, and the last (or only)
 command of a script.
 
 If the pipeline ahead of `alert` fails (an unknown source, a bad stage),
 the alert is not evaluated: the shell shows the error, and a cron run is
 recorded with status `error` and opens no incident. Empty output from a
-pipeline that ran fine (a `grep` with no match) is still empty input, and
+pipeline that ran (a `grep` with no match) counts as empty input, and
 `absent` fires on it.
 
 ## Conditions (summary)
@@ -36,9 +36,8 @@ pipeline that ran fine (a `grep` with no match) is still empty input, and
 - `absent` — no input received in the window
 - `rising <N>%` — increase over baseline
 - `falling <N>%` — decrease over baseline
-- `any` — fires when stdin is non-empty. With `--notify=<alias>` and no
-  condition, `any` is the default; a bare `alert` is a usage error, so
-  write `alert any` for a dry run.
+- `any` — fires when stdin is non-empty. It is the default when no
+  condition is given.
 
 See `man alert` for grammar, `--duration`, `--average`, `--msg`.
 
@@ -75,7 +74,7 @@ returns true/false. See **Alerting strategies** for the full
 catalogue plus seasonal/outlier guidance and **Weft functions** for the
 per-function reference.
 
-## Single-row vs multi-row
+## Single-row and multi-row
 
 By default alert treats stdin as one scalar per tick. With
 `-k <field>`, each non-blank line is one row and `<field>` is
@@ -139,7 +138,7 @@ critical:
 **PagerDuty** — integration names (severity defaults to `error`),
 or `{name: "...", severity: "..."}` (`critical`/`error`/`warning`/`info`).
 **Webhook** — bare URL strings, or `{url: "...", headers: {...}}`.
-POSTs a JSON payload with `v` (currently 2), `cron` (the cron name), `alias`, `ts_unix`, `body`.
+POSTs a JSON payload with `v` (value 2), `cron` (the cron name), `alias`, `ts_unix`, `body`.
 Header values are credentials: `cat /etc/notify.yaml` shows them as
 `"<redacted>"`. Leave a `"<redacted>"` in place to keep the stored value, or
 write a new one to replace it.
@@ -147,8 +146,8 @@ write a new one to replace it.
 email with the cron name as subject (requires SMTP configuration).
 
 Slack and PagerDuty credentials are configured with `weft integration`
-(or under Account → Integrations in the browser); notify.yaml only
-names destinations:
+(or under Account → Integrations in the browser); notify.yaml names
+destinations:
 
 ```
 weft integration slack connect
@@ -157,8 +156,7 @@ weft integration list
 ```
 
 The PagerDuty integration name must match one you've registered there.
-Webhook and email destinations need no account-level credentials — URLs
-and addresses are per-alias.
+Webhook and email destinations take their URLs and addresses per alias.
 
 ## Testing an alias
 
@@ -166,5 +164,5 @@ and addresses are per-alias.
 echo "test fire" | alert --notify=ops
 ```
 
-Interactive runs dispatch immediately; they don't open an incident
-(incidents are a cron concept).
+Interactive runs dispatch immediately and open no incident
+(incidents belong to crons).

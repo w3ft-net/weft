@@ -28,10 +28,9 @@ cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 50 --notify=o
 
 `# schedule:` takes `every <duration>` or a five-field expression such
 as `*/5 * * * *`. Notification targets come from the `alert` stage's
-`--notify=<alias>`, not from a header line. Each run reads only the
-logs from its own schedule interval, so count with no row limit: don't
-use `head -n` or `tail -n` in a cron, because they can silently cut the
-interval short.
+`--notify=<alias>`. Each run reads only the logs from its own
+schedule interval, so count with no row limit. Do not use `head -n` or
+`tail -n` in a cron: they can cut the interval short.
 
 ## Accessing past results
 
@@ -39,9 +38,8 @@ interval short.
 `weft::stddev`, and the rest of the `weft::*` family read a cron's
 history; pass the cron's name, e.g. `weft::latest error-rate`. Windows
 are durations like `30m`, `1h` or `1d` (aggregates reach back 24 hours).
-There's also a parallel family of predicates
-(`weft::is_above`, `weft::is_outlier`, etc.) that return exit codes
-for composing alerts. Full reference: `man weft-funcs`.
+The predicates (`weft::is_above`, `weft::is_outlier`, etc.) return
+exit codes for composing alerts. Full reference: `man weft-funcs`.
 
 ```
 echo $(weft::avg error-rate 1h) | alert above 50 --notify=ops

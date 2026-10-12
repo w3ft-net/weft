@@ -10,9 +10,8 @@ web:
 ## What dashboards are
 
 A dashboard is a named view that arranges existing crons into tiles.
-Each tile reads from a cron — there are no pipelines, no template
-variables, and no time-range pickers. The cron's schedule and history
-define what the tile shows; the dashboard just composes them into a
+Each tile reads from a cron. The cron's schedule and history
+define what the tile shows; the dashboard arranges the tiles into a
 layout.
 
 Dashboards live as YAML files under `/etc/dashboards/`. Create one from
@@ -56,8 +55,7 @@ sections:
         size: md
 ```
 
-Each tile's `cron:` key names a cron. Create the crons first; a dashboard that references a cron that
-doesn't exist is rejected.
+Each tile's `cron:` key names a cron. Create the crons first; a dashboard that references an unknown cron is rejected.
 
 Top-level fields:
 
@@ -67,7 +65,7 @@ Top-level fields:
 | `sections` | yes\*    | List of grouped tile sections.                  |
 | `tiles`    | yes\*    | Shorthand: a flat tile list = one untitled section. |
 
-\* Use either `sections:` or top-level `tiles:`, not both.
+\* Use one of `sections:` or top-level `tiles:`.
 
 ## Tile kinds
 
@@ -85,23 +83,22 @@ Tile fields:
 | `kind`       | all                       | One of `sparkline`, `counter`, `gauge`, `table`.             |
 | `cron`       | all                       | Name of an existing cron (must exist when the file is saved). |
 | `title`      | all                       | Optional label for the tile.                                 |
-| `size`       | all                       | `sm`, `md`, or `lg`. Default `md`. Hint, not pixel size.     |
+| `size`       | all                       | `sm`, `md`, or `lg`. Default `md`. Layout hint.              |
 | `format`     | counter                   | Optional. Text with exactly one `%d` (rounded integer) or `%.2f` (any decimals, `%.Nf`); `%%` is a literal `%`. E.g. `"%d ms"`, `"%.1f%%"`. |
-| `threshold`  | counter, gauge, sparkline | `warn`, `crit`, `max` numeric cutoffs.                       |
+| `threshold`  | counter, gauge, sparkline | `warn`, `crit` numeric cutoffs; `max` (gauge) sets full scale. |
 | `columns`    | table                     | Header labels; columns parse as whitespace-split fields.     |
 | `tag`, `y`   | sparkline                 | Multi-line mode — see below. Must be set together.           |
 
-A field on a kind it doesn't apply to is rejected when the file is saved
+A field on a kind it does not apply to is rejected when the file is saved
 (`format` on a gauge, `columns` on a counter, `threshold` on a table).
 
 ### Multi-line sparklines (`tag:`)
 
-A sparkline normally plots one scalar per cron run (the cron's last
-whitespace field). When a cron's stdout is instead multiple JSON rows
+A sparkline plots one scalar per cron run (the cron's last
+whitespace field). When a cron's stdout is multiple JSON rows
 per run — one per tagged entity, e.g. one row per instance — set `tag:`
 (which field identifies the row) and `y:` (which field to plot) to draw
-one line per distinct tag value instead of collapsing the run into a
-single number:
+one line per distinct tag value:
 
 ```yaml
 - kind: sparkline
@@ -111,12 +108,11 @@ single number:
   size: lg
 ```
 
-Each row's x value is its run's timestamp (cron run history, not a
-live pipeline — there's no per-row timestamp to bucket against). Lines
+Each row's x value is its run's timestamp from the cron run history. Lines
 get a legend and a distinct color per tag; `tag:`/`y:` are rejected on
 any kind other than `sparkline`.
 
-The `size:` field is a hint, not a pixel measurement. Each renderer
+The `size:` field is a layout hint. Each renderer
 (browser / terminal) maps the hint onto its own viewport. On a wide
 browser an `lg` tile spans the full row; on a narrow terminal it falls
 back to single-column.
@@ -135,11 +131,10 @@ below `crit`) render in yellow. `gauge` additionally uses
 
 ## Sections
 
-Each section gets its own heading + grid. Sections are how you split a
-dashboard into "Errors" / "Capacity" / "Throughput" rather than dumping
-every tile into one strip.
+Each section gets its own heading and grid. Sections split a
+dashboard into groups such as "Errors", "Capacity" and "Throughput".
 
-If you don't need sections, use a flat top-level `tiles:` list:
+For a dashboard without sections, use a flat top-level `tiles:` list:
 
 ```yaml
 title: Quick view
@@ -152,7 +147,7 @@ tiles:
 
 ## Layout
 
-Dashboards describe *intent*, not pixel-perfect layouts. The renderer
+Dashboards describe layout intent. The renderer
 flows tiles row-major and chooses how many fit per row based on the
 viewport and each tile's `size:` hint.
 
@@ -162,7 +157,7 @@ viewport and each tile's `size:` hint.
 - **Terminal**: greedy row packing using kind-specific minimum widths.
   Below ~60 columns the layout collapses to one tile per row.
 
-There is no drag-and-drop and no per-tile pixel positioning. The order
+Tiles are placed by size hint and YAML order. The order
 in YAML is the order on screen.
 
 ## Navigation
@@ -198,5 +193,5 @@ as scripts and crons:
 | `weft.proposal_delete`  | Stage a delete with `kind: dashboard, name: <n>`.        |
 | `weft.proposals_apply`  | Commit one or more staged proposals after human review.  |
 
-Cron references are checked against the live cron list — the model
-can't stage a dashboard pointing at a cron that doesn't exist yet.
+Cron references are checked against the live cron list; a dashboard
+that names an unknown cron cannot be staged.

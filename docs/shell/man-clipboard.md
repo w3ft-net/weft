@@ -40,9 +40,9 @@ Weft stores, behind the short name:
 
 Sharing the same script, range and args again gives the same link.
 
-The recipient sees the script invocation in their prompt, edits if
-they want, and hits Enter. Nothing executes automatically. Scripts
-resolve to the latest version when the recipient runs them.
+The recipient sees the script invocation in their prompt, can edit
+it, and presses Enter to run it. Scripts resolve to the latest
+version when the recipient runs them.
 
 ## RANGE
 
@@ -54,8 +54,8 @@ the same syntax as the `range` command — `2h..`, `1d..`,
 ## SCRIPT ARGS
 
 Everything after a `--` separator becomes the script's arguments,
-joined with spaces. Whitespace and shell quoting from the original
-invocation are not preserved beyond simple space-separation.
+joined with single spaces. Other whitespace and shell quoting from
+the original invocation are not preserved.
 
 ## ERRORS
 
@@ -69,10 +69,10 @@ The command emits an OSC-52 escape sequence containing the link.
 Modern terminal emulators (iTerm2, kitty, WezTerm, xterm with
 `OSC52` enabled, the weft web shell) intercept it and write to the
 system clipboard. Terminals without OSC-52 support ignore the
-sequence — in either case the link is also printed to the screen so
-you can select and copy it manually.
+sequence. The link is also printed to the screen so you can select
+and copy it manually.
 
-Over SSH, OSC-52 still works: the escape sequence travels with the
+Over SSH, OSC-52 works: the escape sequence travels with the
 rest of the terminal output and the *local* terminal performs the
 clipboard write.
 
