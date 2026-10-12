@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -259,6 +260,25 @@ func chartRequestBuiltin(emit func(ChartRequest)) shellcore.BuiltinFunc {
 	}
 }
 
+// stderrLineMarker opens a line of upstream stderr: the browser's exec path
+// merges a pipeline's stderr into its lines as red text (network.ts).
+const stderrLineMarker = "\x1b[91m"
+
+var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// splitDiagnostics separates a pipeline's data rows from the stderr lines
+// merged among them, returning the diagnostics as plain text.
+func splitDiagnostics(lines []string) (rows, diagnostics []string) {
+	for _, l := range lines {
+		if strings.HasPrefix(l, stderrLineMarker) {
+			diagnostics = append(diagnostics, ansiSeq.ReplaceAllString(l, ""))
+			continue
+		}
+		rows = append(rows, l)
+	}
+	return rows, diagnostics
+}
+
 // chartRequestPipe returns a PipeStageRenderFunc that hands the
 // upstream pipeline snapshot to the embedder callback and writes a
 // terse placeholder to scrollback (so the user sees that something
@@ -269,6 +289,13 @@ func chartRequestPipe(emit func(ChartRequest)) shellcore.PipeStageRenderFunc {
 		if !ok {
 			return "", "chart: internal error: parsed args not PipeArgs"
 		}
+		rows, diagnostics := splitDiagnostics(lines)
+		if len(rows) == 0 && len(diagnostics) > 0 {
+			// The upstream pipeline failed; its error is the news, not a
+			// row to parse.
+			return "", "chart: " + strings.Join(diagnostics, "; ")
+		}
+		lines = rows
 		plot, errMsg := chart.PlotFromStream(lines, args)
 		if errMsg != "" {
 			return "", "chart: " + errMsg

@@ -219,3 +219,36 @@ func TestConfigureCore_ChartRequestsCarryTheTypedLine(t *testing.T) {
 		t.Errorf("pipe form Pipeline = %q", got[1].Pipeline)
 	}
 }
+
+// The browser merges a pipeline's stderr into its lines as red text. A
+// failed query's "query: <error>" must be reported as the error — not
+// parsed as a data row ("cannot parse ... as a timestamp").
+func TestChartPipe_StderrIsNotData(t *testing.T) {
+	const red, reset = "\x1b[91m", "\x1b[0m"
+	parsed, _ := chart.ParsePipeArgs([]string{"-x", "1", "--bucket", "5m"})
+	args := parsed.(chart.PipeArgs)
+	core := shellcore.NewShellCore(nil, 80, 24, func([]byte) {}, func(shellcore.Action) {})
+
+	var got []ChartRequest
+	render := chartRequestPipe(func(r ChartRequest) { got = append(got, r) })
+
+	_, errMsg := render(core, []string{red + "query: no such file: main.log" + reset}, args)
+	if !strings.Contains(errMsg, "query: no such file: main.log") || strings.Contains(errMsg, "cannot parse") {
+		t.Errorf("errMsg = %q", errMsg)
+	}
+	if strings.Contains(errMsg, "\x1b[") {
+		t.Errorf("error should be plain text: %q", errMsg)
+	}
+	if len(got) != 0 {
+		t.Error("a failed query must not open a chart")
+	}
+
+	// A diagnostic alongside real rows doesn't poison the chart.
+	rows := []string{"2026-10-12T04:00:00Z a", red + "alert: something" + reset, "2026-10-12T04:01:00Z b"}
+	if _, errMsg := render(core, rows, args); errMsg != "" {
+		t.Errorf("rows with a diagnostic: %q", errMsg)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected a chart for the real rows, got %d", len(got))
+	}
+}
