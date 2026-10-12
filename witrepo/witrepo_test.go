@@ -1,6 +1,7 @@
 package witrepo
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -332,4 +333,51 @@ func TestEmptyOrg(t *testing.T) {
 	if msg := gitErr(t, r, "log"); !strings.Contains(msg, "does not have any commits yet") {
 		t.Errorf("got %q", msg)
 	}
+}
+
+// A restored cron must be re-lowered like any other save: the stored plan
+// has to describe the restored pipeline, not the one it replaced.
+func TestWrites_RestoredCronIsRelowered(t *testing.T) {
+	f := newFixture(t)
+	r := f.repo(f.alice, "/cron.d")
+	// Seed through the mounts so the first version carries a lowered plan.
+	if err := r.mountFS().WriteFile("/cron.d/errs", []byte("# schedule: */10 * * * *\ntail /log/app/web/app.log | grep ERROR\n")); err != nil {
+		t.Fatal(err)
+	}
+	first := lowered(t, f, "errs")
+	if first == "" {
+		t.Skip("pipeline did not lower; pick a lowerable shape")
+	}
+	if err := r.mountFS().WriteFile("/cron.d/errs", []byte("# schedule: */10 * * * *\ntail /log/app/web/app.log | grep WARN\n")); err != nil {
+		t.Fatal(err)
+	}
+	if lowered(t, f, "errs") == first {
+		t.Fatal("edit did not change the lowered plan")
+	}
+
+	git(t, r, "restore", "--source=HEAD~1", "errs")
+
+	w, _ := f.db.GetCronWatch(f.org, "errs")
+	if !strings.Contains(w.Pipeline, "ERROR") {
+		t.Fatalf("pipeline after restore = %q", w.Pipeline)
+	}
+	if got := lowered(t, f, "errs"); got != first {
+		t.Errorf("lowered plan after restore does not match the restored pipeline:\n got %s\nwant %s", got, first)
+	}
+}
+
+func lowered(t *testing.T, f *fixture, name string) string {
+	t.Helper()
+	w, err := f.db.GetCronWatch(f.org, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// compiled_at changes on every lowering; the rest is the plan.
+	var m map[string]any
+	if err := json.Unmarshal(w.LoweredPlan, &m); err != nil {
+		return string(w.LoweredPlan)
+	}
+	delete(m, "compiled_at")
+	b, _ := json.Marshal(m)
+	return string(b)
 }
