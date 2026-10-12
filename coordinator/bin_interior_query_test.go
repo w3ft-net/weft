@@ -28,7 +28,16 @@ import (
 func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, store.OrgID) {
 	t.Helper()
 	db, custID := testStoreAndCustomer(t)
+	return newInteriorQueryFixtureOn(t, db, custID)
+}
 
+// newInteriorQueryFixtureOn is newInteriorQueryFixture over a caller-chosen
+// store. Tests whose pipelines hit the database from several goroutines at
+// once (the stages of a pipeline run concurrently) need a pooled store: a
+// transaction-scoped one is a single connection and fails with "driver: bad
+// connection" under concurrent use.
+func newInteriorQueryFixtureOn(t *testing.T, db *store.Store, custID store.OrgID) (*Coordinator, *store.Store, string, store.OrgID) {
+	t.Helper()
 	cust, err := db.GetOrgByID(custID)
 	if err != nil {
 		t.Fatalf("get customer: %v", err)

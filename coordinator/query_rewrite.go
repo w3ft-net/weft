@@ -8,6 +8,7 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/weft/planner"
+	"github.com/graybeardcorp/weft/shellfs"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -33,16 +34,31 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 	if script == nil {
 		return
 	}
+	// /bin is resolved through the tenant's shell filesystem. Absent for
+	// tests that build a Coordinator without a store.
+	var binFS bash.FS
+	if custID != 0 && c != nil && c.Store != nil {
+		binFS = shellfs.New(c.Store, custID, nil)
+	}
 	bash.Walk(script, func(n bash.Node) bool {
 		pipe, ok := n.(*bash.Pipeline)
 		if !ok || !isQueryShape(pipe) {
 			return true
 		}
+		// The query ends at the first stage that names a /bin script:
+		// compute's stateless worker has no /bin, so shipping the script
+		// word there fails with "command not found". Stages from the
+		// script on stay as ordinary commands after the callback, and warp
+		// resolves them against /bin exactly as it does for
+		// `echo x | script`.
+		k := firstBinStage(pipe, binFS)
+		rest := append([]bash.Command(nil), pipe.Commands[k:]...)
 		// Snapshot the original pipeline before we mutate it. The
 		// callback's rendering uses the snapshot — the live AST node
 		// has had its Commands replaced and no longer carries the
 		// source-command stages.
 		snap := *pipe
+		snap.Commands = append([]bash.Command(nil), pipe.Commands[:k]...)
 		// Lift redirects off the displaced commands onto the
 		// substituted callback. Bash semantics put pipeline-output
 		// redirects on the LAST command (`cat | grep > out` redirects
@@ -61,19 +77,22 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 		// solely on the CallbackCommand.
 		var liftedRedirects []bash.Redirect
 		switch n := len(snap.Commands); {
-		case n == 1:
+		case n == 1 && len(rest) == 0:
 			// Single-stage pipeline: every redirect on the lone
 			// SimpleCommand becomes a CallbackCommand redirect.
 			if sc, ok := snap.Commands[0].(*bash.SimpleCommand); ok {
 				liftedRedirects = append(liftedRedirects, sc.Redirects...)
 				sc.Redirects = nil
 			}
-		case n > 1:
+		case n >= 1:
 			// Multi-stage: stdin redirects belong to the FIRST
 			// command, stdout/stderr/append redirects to the LAST
 			// (bash's pipeline-output convention). Mid-pipeline
 			// redirects on intermediate stages stay where they are
-			// — those are a less common shape we don't lift.
+			// — those are a less common shape we don't lift. When
+			// stages remain after the query (a /bin script split off
+			// above), the last of THEM owns the output redirects and
+			// the query's last stage lifts none.
 			if first, ok := snap.Commands[0].(*bash.SimpleCommand); ok {
 				keep := first.Redirects[:0:0]
 				for _, r := range first.Redirects {
@@ -85,7 +104,7 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 				}
 				first.Redirects = keep
 			}
-			if last, ok := snap.Commands[n-1].(*bash.SimpleCommand); ok {
+			if last, ok := snap.Commands[n-1].(*bash.SimpleCommand); ok && len(rest) == 0 {
 				keep := last.Redirects[:0:0]
 				for _, r := range last.Redirects {
 					if !isStdinRedirect(r.Op) {
@@ -97,7 +116,7 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 				last.Redirects = keep
 			}
 		}
-		pipe.Commands = []bash.Command{
+		pipe.Commands = append([]bash.Command{
 			&bash.CallbackCommand{
 				Name:      "weft-query",
 				Redirects: liftedRedirects,
@@ -146,12 +165,36 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 					return 0
 				},
 			},
-		}
+		}, rest...)
 		// Return false so Walk does not descend into the pipeline's
 		// replaced commands. The original source-command stages are
 		// held alive only through the snapshot captured above.
 		return false
 	})
+}
+
+// firstBinStage returns the index of the first stage after the source
+// whose command names a /bin script, or len(pipe.Commands) when there is
+// none (or fs is nil). Stage 0 is the source command and never splits.
+func firstBinStage(pipe *bash.Pipeline, fs bash.FS) int {
+	n := len(pipe.Commands)
+	if fs == nil {
+		return n
+	}
+	for i := 1; i < n; i++ {
+		sc, ok := pipe.Commands[i].(*bash.SimpleCommand)
+		if !ok || len(sc.Words) == 0 {
+			continue
+		}
+		name := sc.Words[0].Literal()
+		if name == "" || strings.Contains(name, "/") {
+			continue
+		}
+		if _, err := fs.ReadFile("/bin/" + name); err == nil {
+			return i
+		}
+	}
+	return n
 }
 
 // stdoutRedirect returns the first redirect that sends stdout to a
