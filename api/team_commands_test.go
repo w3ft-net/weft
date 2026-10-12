@@ -173,3 +173,58 @@ func TestTeamCommands_OwnerPassesGate(t *testing.T) {
 		t.Fatalf("owner was blocked by the owner-only gate: %v", err)
 	}
 }
+
+// Arguments are checked before anything runs. `adduser --help` used to be
+// treated as an email address and created an invite (and sent an email)
+// for a user named "--help"; deluser, groups and id passed args[0] to the
+// store unchecked the same way. None of these cases may reach the store:
+// the server here has none.
+func TestTeamCommands_ArgumentChecks(t *testing.T) {
+	s := &Server{}
+	owner := &auth.Session{Email: "alice@x.test", IsOwner: true, ActiveCustomerName: "acme"}
+	member := &auth.Session{Email: "bob@x.test", IsOwner: false, ActiveCustomerName: "acme"}
+
+	cases := []struct {
+		name     string
+		session  *auth.Session
+		pipeline string
+		wantOut  string // substring of output (help)
+		wantErr  string // substring of error
+	}{
+		{"adduser --help", owner, "adduser --help", "usage: adduser <email> [<group>]", ""},
+		{"adduser -h", owner, "adduser -h", "usage: adduser", ""},
+		{"help is not privileged", member, "adduser --help", "usage: adduser", ""},
+		{"deluser --help", owner, "deluser --help", "usage: deluser <email> [<group>]", ""},
+		{"groups --help", owner, "groups --help", "usage: groups [<email>]", ""},
+		{"id --help", member, "id --help", "usage: id [<email>]", ""},
+		{"help after an email", owner, "adduser a@x.test --help", "usage: adduser", ""},
+		{"unknown option", owner, "adduser -x", "", "unknown option -x"},
+		{"unknown long option", owner, "deluser --force a@x.test", "", "unknown option --force"},
+		{"not an email", owner, "adduser foo", "", `"foo" is not an email address`},
+		{"not an email, deluser", owner, "deluser bob", "", `"bob" is not an email address`},
+		{"not an email, id", member, "id bob", "", `"bob" is not an email address`},
+		{"address list", owner, "adduser b@x.test,c@x.test", "", "is not an email address"},
+		{"too many args, adduser", owner, "adduser a@x.test g extra", "", "usage: adduser"},
+		{"too many args, id", member, "id a@x.test b@x.test", "", "usage: id"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			handled, out, err := s.maybeHandleTeamCommand(c.session, c.pipeline)
+			if !handled {
+				t.Fatalf("%q was not claimed as a team command", c.pipeline)
+			}
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Errorf("%q: err = %v, want substring %q", c.pipeline, err, c.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%q: unexpected error %v", c.pipeline, err)
+			}
+			if !strings.Contains(out, c.wantOut) {
+				t.Errorf("%q: output %q, want substring %q", c.pipeline, out, c.wantOut)
+			}
+		})
+	}
+}

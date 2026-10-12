@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"strings"
 
 	"github.com/graybeardcorp/saaskit/orgs"
@@ -48,6 +50,9 @@ func (s *Server) maybeHandleTeamCommand(session *auth.Session, pipeline string) 
 	}
 
 	cmd, args := fields[0], fields[1:]
+	if done, out, err := checkTeamArgs(cmd, args); done {
+		return true, out, err
+	}
 	switch cmd {
 	case "id":
 		out, err = s.teamID(session, args)
@@ -59,6 +64,54 @@ func (s *Server) maybeHandleTeamCommand(session *auth.Session, pipeline string) 
 		out, err = s.teamDelUser(session, args)
 	}
 	return true, out, err
+}
+
+// teamUsage is each team command's usage line, shown by --help and by
+// argument errors.
+var teamUsage = map[string]string{
+	"adduser": "usage: adduser <email> [<group>]\n  invite <email> to the org, or add an existing member to <group>\n",
+	"deluser": "usage: deluser <email> [<group>]\n  remove <email> from the org, or from <group>\n",
+	"groups":  "usage: groups [<email>]\n  show a member's groups (yours when no email is given)\n",
+	"id":      "usage: id [<email>]\n  show a member's role and groups (yours when no email is given)\n",
+}
+
+// teamArgLimits is the (min, max) argument count per command.
+var teamArgLimits = map[string][2]int{
+	"adduser": {1, 2},
+	"deluser": {1, 2},
+	"groups":  {0, 1},
+	"id":      {0, 1},
+}
+
+// checkTeamArgs validates a team command's arguments before anything runs,
+// so a mistyped flag or word is never treated as an email address (an
+// `adduser --help` once invited a user named "--help"). done reports that
+// the command is finished: out holds the --help text, err a usage error.
+// Help and argument errors are not privileged, so this runs ahead of the
+// owner check.
+func checkTeamArgs(cmd string, args []string) (done bool, out string, err error) {
+	usage := teamUsage[cmd]
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			return true, usage, nil
+		}
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			return true, "", fmt.Errorf("%s: unknown option %s\n%s", cmd, a, strings.TrimRight(usage, "\n"))
+		}
+	}
+	limits := teamArgLimits[cmd]
+	if len(args) < limits[0] || len(args) > limits[1] {
+		return true, "", errors.New(strings.TrimRight(usage, "\n"))
+	}
+	if len(args) > 0 {
+		// The first argument is always an email address.
+		if addr, perr := mail.ParseAddress(args[0]); perr != nil || addr.Address != args[0] {
+			return true, "", fmt.Errorf("%s: %q is not an email address\n%s", cmd, args[0], strings.TrimRight(usage, "\n"))
+		}
+	}
+	return false, "", nil
 }
 
 // teamID implements `id [<email>]` — the acting user when no email is
