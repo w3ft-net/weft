@@ -75,6 +75,13 @@ describe('TourOverlay: panel steps and the final step', () => {
     await waitFor(() => expect(loc.assign).toHaveBeenCalledWith('/dashboards'))
   })
 
+  it('a panel page that redirects into its subtree still counts as on the page', () => {
+    authStep.current = 'dashboards'
+    render(<MemoryRouter initialEntries={['/dashboards/loom-overview']}><TourOverlay /></MemoryRouter>)
+    expect(screen.getByTestId('tour-overlay-shell-button')).toBeTruthy()
+    expect(screen.queryByTestId('tour-overlay-start-button')).toBeNull()
+  })
+
   it('the graduate step waits for a click before leaving the tour', async () => {
     authStep.current = 'graduate'
     const removeItem = vi.fn()

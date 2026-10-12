@@ -48,7 +48,7 @@ interface PanelStep {
 // choose to leave.
 const GRADUATE_STEP = 'graduate'
 const GRADUATE_COPY =
-  "That's the tour. You've got the shell, the pseudofiles, bins, crons, dashboards and git history of your own org's config. When you finish, you'll leave Loom and land in your own org, where you can set up your first namespace. You can come back to the shell any time before then."
+  "That's a wrap! When you finish the tour, you'll leave Loom and land in your own org, where you can set up your first namespace. Feel free to poke around Loom's logs and setup before you blaze your own trail."
 
 const PANEL_STEPS: PanelStep[] = [
   {
@@ -56,21 +56,21 @@ const PANEL_STEPS: PanelStep[] = [
     route: '/downloads',
     label: 'downloads',
     copy:
-      "You'll want to grab the weft CLI, and — if you have deployments where you run it — weftd, our logging agent — to start shipping those log lines.",
+      "Step one: equip! After the tour, you'll want to grab the weft CLI, so you can do all the things we're going to see from the comfort of your terminal. And, if you have deployments where you run it, weftd, our logging agent.",
   },
   {
     step: 'namespaces',
     route: '/namespaces',
     label: 'namespaces',
     copy:
-      "Namespaces are containers for log integrations, whether via weftd, CloudWatch, or Heroku. You can slice up your log producers however you want, but we tend to think of namespaces as an application, and then the environments and services in that application get assigned tokens within that namespace. You can create namespaces here in the browser or using the weft cli. Note that Loom Inc has only one namespace (loom). We'll see that again in a bit",
+      "Namespaces are containers for log integrations. You can organize your log producers however you want, but we tend to think of namespaces as an application, and then the environments and services in that application get assigned tokens within that namespace. You can create namespaces here in the browser or using the weft CLI. Loom Inc has only one namespace (loom), but you can have as many as you like.",
   },
   {
     step: 'dashboards',
     route: '/dashboards',
     label: 'dashboards',
     copy:
-      "Dashboards can be viewed here in the browser or in the terminal. Dashboards are defined in YAML and are built on top of timeseries data you create with crons operating on your logs or metrics data from weftd — all of which happens in the weft shell.",
+      "Dashboards can be viewed here in the browser or in the terminal. Dashboards are defined in YAML and are built on top of timeseries data you create with crons operating on your logs or metrics data from weftd — all of which happens in the weft shell. Loom only has one dashboard so we drop right into it, but when you have multiple, you see a list of them.",
   },
 ]
 
@@ -142,7 +142,9 @@ export default function TourOverlay() {
   if (panel) {
     const idx = PANEL_STEPS.findIndex(s => s.step === step)
     progress = `tour ${idx + 1}/${PANEL_STEPS.length}`
-    if (location.pathname !== panel.route) {
+    // /dashboards redirects to /dashboards/<name>, so match the subtree.
+    const onPage = location.pathname === panel.route || location.pathname.startsWith(panel.route + '/')
+    if (!onPage) {
       copy = `Click “show me ${panel.label}” to get started.`
       primaryAction = {
         label: `show me ${panel.label}`,
