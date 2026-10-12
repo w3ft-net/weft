@@ -43,7 +43,7 @@ func weftPalette() syntax.Palette {
 
 		// String literals & operators — weft-gold family.
 		String:   "\x1b[38;5;214m",   // gold
-		Key:      "\x1b[1;38;5;214m", // bold gold
+		Key:      "\x1b[1;38;5;39m",  // bold azure
 		Operator: "\x1b[1;38;5;208m", // bold orange
 		Punct:    "\x1b[38;5;173m",   // muted tan-orange
 
