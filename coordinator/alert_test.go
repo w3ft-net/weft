@@ -15,6 +15,14 @@ func runAlert(args string, stdin string) (stdout, stderr string, exitCode int) {
 	return outBuf.String(), errBuf.String(), code
 }
 
+func TestAlert_BareFiresOnNonEmpty(t *testing.T) {
+	// `echo x | alert` with no condition and no --notify: default "any".
+	_, stderr, code := runAlert("", "something happened\n")
+	if code != 0 || strings.Contains(stderr, "usage:") {
+		t.Errorf("bare alert: code=%d stderr=%q, want a fire, not a usage error", code, stderr)
+	}
+}
+
 func TestAlert_AnyNonEmpty(t *testing.T) {
 	// Default condition fires on any non-empty stdin.
 	_, stderr, code := runAlert("--notify=ops", "something happened\n")
@@ -231,13 +239,6 @@ func TestAlert_NonNumeric(t *testing.T) {
 	}
 }
 
-func TestAlert_BadArgs(t *testing.T) {
-	_, _, code := runAlert("", "5\n")
-	if code != 1 {
-		t.Error("expected error for empty args")
-	}
-}
-
 func TestAlert_Rising_NoPrevious(t *testing.T) {
 	// No history in interactive mode — rising can't evaluate, should not trigger.
 	_, stderr, code := runAlert("rising 100%", "50\n")
@@ -255,6 +256,7 @@ func TestAlert_ParseArgs(t *testing.T) {
 		args string
 		ok   bool
 	}{
+		{"bare alert defaults to any", "", true},
 		{"above", "above 50", true},
 		{"below", "below 10", true},
 		{"eq", "eq 0", true},

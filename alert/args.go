@@ -97,12 +97,11 @@ const (
 // required values. Unknown flags are silently ignored to match the prior
 // behavior of parseArgs — change carefully.
 func ParseArgs(args []string) (*Args, error) {
-	if len(args) == 0 {
-		return nil, fmt.Errorf("usage: alert [<condition>] --notify=<alias> [-k <N>] [-t <N>] [--duration <dur>] [--average] [--msg <text>]")
-	}
-
 	parsed := &Args{Condition: Any}
 	i := 0
+	if len(args) == 0 {
+		return parsed, nil
+	}
 
 	// First positional may be a condition keyword. If it starts with "-" or
 	// isn't a known condition, fall through with default (any).
