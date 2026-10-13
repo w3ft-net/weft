@@ -20,10 +20,11 @@ questions into scope.
 - **No in-process fallback.** The coordinator refuses to start
   without `--compute` (`log.Fatal("no compute addr specified")`);
   there is no path that runs queries inside the coordinator process.
-- **SG paths already in place.** `compute_from_coordinator` and
-  `compute_from_shard` security-group rules are both wired
-  (`stacks/asg-weft-application/main.tf:628,650`), so any future
-  re-discovery change doesn't need infra work first.
+- **SG paths already in place.** `compute_from_coordinator` (inbound
+  to compute) and `shard_from_compute_grpc` (compute dials shards) are
+  wired in `stacks/asg-weft-application/main.tf`, so any future
+  re-discovery change doesn't need infra work first. Shards never dial
+  compute — the old `compute_from_shard` rule went with the push path.
 - **Cost posture.** The stack already runs one ALB (API) and two NLBs
   (coordinator public + coordinator internal). Adding a third
   load-balanced target (compute) for a single-instance tier is not
@@ -79,11 +80,6 @@ the re-discovery goroutine becomes a bottleneck or bug source.
 
 ## Related
 
-- `direct-to-compute.md` §6 / "Beyond this plan" — the eventual
-  shard→compute direct RPC flow. That will exercise the
-  `compute_from_shard` SG rule and compounds the cost of compute
-  going away (shards can't route themselves). Re-discovery or NLB
-  matters more at that point.
 - `az-resilience.md` — compute is stateless so it's easier than
   shards; multi-AZ compute is really just "set ASG subnets across
   AZs" once we have >1 instance.
