@@ -18,6 +18,8 @@ go build -o server ./cmd/server
 PORT=9090 ./server
 ```
 
+Run `make hooks` once per clone. The pre-commit hook regenerates the shell help corpus and web manual (`make docs`) whenever a doc under `docs/{shell,manual}/` is staged and adds the generated files to the same commit; CI fails if they are stale. `kevcons build` does not generate them (the build worker has no Go toolchain).
+
 The project depends on `github.com/graybeardcorp/warp` via a local replace directive (`../warp`), so that repo must be checked out as a sibling.
 
 ## Architecture

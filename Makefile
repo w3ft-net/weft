@@ -2,12 +2,16 @@
 # in `kevcons` (see .kevcons.yaml); this Makefile holds local-dev
 # tasks that don't touch AWS.
 
-.PHONY: docs collapse test test-deploy integration integration-clean
+.PHONY: hooks docs collapse test test-deploy integration integration-clean
+
+# Point git at the committed hooks. Run once per clone.
+hooks:
+	git config core.hooksPath .githooks
 
 # Regenerate the shell help corpus (shell/help_corpus_gen.go) and the web
 # manual (frontend/src/generated/docs/) from docs/{shell,manual}/*.md. The
-# generated files are committed, so run this after editing any doc; `kevcons
-# build` runs it before packaging and CI fails if they are stale.
+# generated files are committed; the pre-commit hook (`make hooks`) runs this
+# whenever a doc is staged, and CI fails if they are stale.
 docs:
 	go run ./cmd/docgen
 
