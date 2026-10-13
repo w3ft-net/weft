@@ -4,7 +4,7 @@
 //
 // Source of truth: docs/shell/*.md and docs/manual/*.md. Each file has
 // YAML frontmatter declaring how the document should appear in the shell
-// and/or on the web. Run via `go generate ./shellcore/...`.
+// and/or on the web. Run via `make docs`.
 package main
 
 import (

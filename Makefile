@@ -2,7 +2,14 @@
 # in `kevcons` (see .kevcons.yaml); this Makefile holds local-dev
 # tasks that don't touch AWS.
 
-.PHONY: collapse test test-deploy integration integration-clean
+.PHONY: docs collapse test test-deploy integration integration-clean
+
+# Regenerate the shell help corpus (shell/help_corpus_gen.go) and the web
+# manual (frontend/src/generated/docs/) from docs/{shell,manual}/*.md. The
+# generated files are committed, so run this after editing any doc; `kevcons
+# build` runs it before packaging and CI fails if they are stale.
+docs:
+	go run ./cmd/docgen
 
 # Collapse store/migrations/* into store/schema.sql. Run after a
 # successful production deploy (kevcons will eventually trigger this
