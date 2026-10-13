@@ -10,6 +10,7 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
+	"github.com/itchyny/timefmt-go"
 )
 
 // RenderFromStream renders a pipe-stage chart from the upstream
@@ -21,48 +22,68 @@ import (
 // call it directly without going through shellcore's pipe-stage
 // dispatch.
 func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) {
-	plot, errMsg := PlotFromStream(lines, args)
+	if args.Kind == "line" {
+		plot, errMsg := PlotFromStream(lines, args)
+		if errMsg != "" {
+			return "", errMsg
+		}
+		if len(plot.Series) > 1 || plot.Series[0].Tag != "" {
+			series := make([]chart.NamedSeries, 0, len(plot.Series))
+			for _, s := range plot.Series {
+				series = append(series, chart.NamedSeries{Label: s.Tag, Points: chartPoints(s.Points)})
+			}
+			return renderLine(chart.Line(w, h).Series(series), args, plot.TimeX)
+		}
+		return renderLine(chart.Line(w, h).Points(chartPoints(plot.Series[0].Points)), args, plot.TimeX)
+	}
+
+	// Bar and sparkline draw one cell column per point, so unlike a line
+	// (which maps x onto the braille canvas) they must be binned to the
+	// width up front — from the raw rows, while the aggregate still can
+	// be re-applied. ParsePipeArgs rejects --tag for both, so the input is
+	// always a single series.
+	groups, ordered, _, errMsg := groupRows(lines, args)
 	if errMsg != "" {
 		return "", errMsg
 	}
-
-	// ParsePipeArgs rejects --tag with anything but -t line, so a tagged plot
-	// is always a line chart.
-	if len(plot.Series) > 1 || plot.Series[0].Tag != "" {
-		series := make([]chart.NamedSeries, 0, len(plot.Series))
-		for _, s := range plot.Series {
-			series = append(series, chart.NamedSeries{Label: s.Tag, Points: chartPoints(s.Points)})
-		}
-		return renderLine(chart.Line(w, h).Series(series), args, plot.TimeX)
+	if len(groups) == 0 {
+		return "", "no data points to chart"
 	}
-
-	pts := plot.Series[0].Points
-	switch args.Kind {
-	case "sparkline":
-		values := make([]float64, 0, len(pts))
-		for _, p := range pts {
-			values = append(values, p.Y)
-		}
+	slots := w
+	if args.Kind == "bar" {
+		slots = chart.BarSlots(w)
+	}
+	pts, per := fitPoints(groups, ordered, args.Aggregate, slots)
+	values := make([]float64, 0, len(pts))
+	for _, p := range pts {
+		values = append(values, p.Y)
+	}
+	if args.Kind == "sparkline" {
 		return chart.Sparkline(values) + "\n", ""
-	case "bar":
-		labels := make([]string, 0, len(pts))
-		vals := make([]float64, 0, len(pts))
-		for _, p := range pts {
-			labels = append(labels, p.Label)
-			vals = append(vals, p.Y)
-		}
-		b := chart.Bar(w, h).BarValues(labels, vals)
-		if args.Title != "" {
-			b = b.Title(args.Title)
-		}
-		out, err := b.Render()
-		if err != nil {
-			return "", err.Error()
-		}
-		return out, ""
-	default: // line
-		return renderLine(chart.Line(w, h).Points(chartPoints(pts)), args, plot.TimeX)
 	}
+
+	labels := make([]string, 0, len(pts))
+	for _, p := range pts {
+		labels = append(labels, p.Label)
+	}
+	footer := ""
+	if per > 1 {
+		agg := args.Aggregate
+		if agg == "identity" {
+			agg = "avg"
+		}
+		footer = fmt.Sprintf("\x1b[2m%d points → %d bars, %d per bar (%s)\x1b[0m\n", len(ordered), len(pts), per, agg)
+		h--
+	}
+	b := chart.Bar(w, h).BarValues(labels, values)
+	if args.Title != "" {
+		b = b.Title(args.Title)
+	}
+	out, err := b.Render()
+	if err != nil {
+		return "", err.Error()
+	}
+	return out + footer, ""
 }
 
 func chartPoints(pts []PlotPoint) []chart.Point {
@@ -121,7 +142,7 @@ func resolveXY(line string, args PipeArgs, isTimeX bool, seq int) (xLabel string
 		xLabel = strconv.Itoa(seq)
 		xNum = float64(seq)
 	} else {
-		raw, err := shellcore.ResolveField(args.XSpec, line)
+		raw, err := resolveX(args, line)
 		if err != nil {
 			return "", 0, 0, rowError, "x: " + err.Error()
 		}
@@ -129,7 +150,10 @@ func resolveXY(line string, args PipeArgs, isTimeX bool, seq int) (xLabel string
 			return "", 0, 0, rowSkip, ""
 		}
 		if isTimeX {
-			t, ok := parseTime(raw)
+			t, ok := parseTime(raw, args.XFormat)
+			if !ok && args.XFormat != "" {
+				return "", 0, 0, rowError, fmt.Sprintf("x: %q does not match %s", raw, args.XFormat)
+			}
 			if !ok {
 				return "", 0, 0, rowError, fmt.Sprintf("x: cannot parse %q as a timestamp", raw)
 			}
@@ -179,12 +203,29 @@ func resolveXY(line string, args PipeArgs, isTimeX bool, seq int) (xLabel string
 	return xLabel, xNum, yNum, rowOK, ""
 }
 
+// resolveX is shellcore.ResolveField for -x, plus the column range a
+// ::time cast allows: columns start..end joined by single spaces, or
+// "" when the line is too short to have them all.
+func resolveX(args PipeArgs, line string) (string, error) {
+	if args.XEnd == 0 {
+		return shellcore.ResolveField(args.XSpec, line)
+	}
+	fields := strings.Fields(line)
+	if len(fields) < args.XEnd {
+		return "", nil
+	}
+	return strings.Join(fields[args.XSpec.Index-1:args.XEnd], " "), nil
+}
+
 // detectTimeX decides whether the x axis is a timestamp: always true
-// with --bucket set; otherwise sniffed from the first row that
-// resolves a non-empty -x value. Heterogeneous x columns are a user
-// error this doesn't try to reason about.
+// with --bucket or a ::time cast; otherwise sniffed from the first row
+// that resolves a non-empty -x value, which only an RFC3339 stamp
+// passes — a bare number is far likelier a value (an HHMM minute, a
+// count) than epoch seconds, and `::time` says so when it isn't.
+// Heterogeneous x columns are a user error this doesn't try to reason
+// about.
 func detectTimeX(lines []string, args PipeArgs) bool {
-	if args.Bucket > 0 {
+	if args.Bucket > 0 || args.XTime {
 		return true
 	}
 	if args.XSpec.IsZero() {
@@ -195,14 +236,24 @@ func detectTimeX(lines []string, args PipeArgs) bool {
 		if line == "" {
 			continue
 		}
-		xv, err := shellcore.ResolveField(args.XSpec, line)
+		xv, err := resolveX(args, line)
 		if err != nil || xv == "" {
 			continue
 		}
-		_, ok := parseTime(xv)
+		_, ok := parseRFC3339(xv)
 		return ok
 	}
 	return false
+}
+
+// groupID is the identity rows group under: the label, except on a
+// time axis, where it's the instant — a sub-hour bucket's label
+// ("15:04") omits the date, so the same minute of two days would merge.
+func groupID(label string, x float64, isTimeX bool) string {
+	if isTimeX {
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	}
+	return label
 }
 
 // groupRows walks the input lines, applies x/y extraction, and
@@ -230,10 +281,11 @@ func groupRows(lines []string, args PipeArgs) (map[groupKey][]float64, []groupKe
 			continue
 		}
 
-		key, ok := seen[xLabel]
+		id := groupID(xLabel, xNum, isTimeX)
+		key, ok := seen[id]
 		if !ok {
 			key = groupKey{label: xLabel, x: xNum}
-			seen[xLabel] = key
+			seen[id] = key
 			ordered = append(ordered, key)
 		}
 		groups[key] = append(groups[key], yNum)
@@ -249,7 +301,55 @@ func groupRows(lines []string, args PipeArgs) (map[groupKey][]float64, []groupKe
 			return ordered[i].x < ordered[j].x
 		})
 	}
+	if zeroFills(args) && len(ordered) > 0 {
+		var errMsg string
+		ordered, errMsg = fillEmptyBuckets(groups, ordered, args, ordered[0].x, ordered[len(ordered)-1].x)
+		if errMsg != "" {
+			return nil, nil, false, errMsg
+		}
+	}
 	return groups, ordered, isTimeX, ""
+}
+
+// maxFilledBuckets bounds zero-filling: a --bucket that fine for the
+// data's span is more buckets than any chart can draw.
+const maxFilledBuckets = 100_000
+
+// zeroFills reports whether empty --bucket buckets are drawn as 0:
+// only count and sum have a meaningful zero (no rows → nothing
+// counted); an avg/min/max/percentile of no rows is undefined, so
+// those leave empty buckets out.
+func zeroFills(args PipeArgs) bool {
+	return args.Bucket > 0 && (args.Aggregate == "count" || args.Aggregate == "sum")
+}
+
+// fillEmptyBuckets adds a row-less group for every --bucket step in
+// [lo, hi] (unix seconds of bucket starts) that has none, so a stretch
+// with no logs draws as a hole at 0 instead of the line bridging it.
+// Returns the x-sorted keys including the filled ones.
+func fillEmptyBuckets(groups map[groupKey][]float64, ordered []groupKey, args PipeArgs, lo, hi float64) ([]groupKey, string) {
+	start, end := time.Unix(int64(lo), 0), time.Unix(int64(hi), 0)
+	span := end.Sub(start)
+	if n := int64(span/args.Bucket) + 1; n > maxFilledBuckets {
+		return nil, fmt.Sprintf("--bucket %s over %s is %d buckets (max %d); use a wider --bucket", args.Bucket, span, n, maxFilledBuckets)
+	}
+	have := make(map[float64]bool, len(ordered))
+	for _, key := range ordered {
+		have[key.x] = true
+	}
+	for t := start; !t.After(end); t = t.Add(args.Bucket) {
+		x := float64(t.Unix())
+		if have[x] {
+			continue
+		}
+		key := groupKey{label: formatBucketLabel(t, args.Bucket), x: x}
+		groups[key] = nil
+		ordered = append(ordered, key)
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].x < ordered[j].x
+	})
+	return ordered, ""
 }
 
 // tagGroup is one tag value's grouped rows — the same shape groupRows
@@ -314,14 +414,24 @@ func groupRowsByTag(lines []string, args PipeArgs) ([]tagGroup, bool, string) {
 			continue
 		}
 
-		key, ok := st.seen[xLabel]
+		id := groupID(xLabel, xNum, isTimeX)
+		key, ok := st.seen[id]
 		if !ok {
 			key = groupKey{label: xLabel, x: xNum}
-			st.seen[xLabel] = key
+			st.seen[id] = key
 			st.ordered = append(st.ordered, key)
 		}
 		st.groups[key] = append(st.groups[key], yNum)
 		st.seq++
+	}
+
+	// Every series is filled over the whole chart's span, not just its
+	// own, so a tag that went quiet before another started shows zeros.
+	lo, hi := math.Inf(1), math.Inf(-1)
+	for _, st := range states {
+		for _, key := range st.ordered {
+			lo, hi = min(lo, key.x), max(hi, key.x)
+		}
 	}
 
 	sort.Strings(tagOrder)
@@ -332,6 +442,13 @@ func groupRowsByTag(lines []string, args PipeArgs) ([]tagGroup, bool, string) {
 			sort.SliceStable(st.ordered, func(i, j int) bool {
 				return st.ordered[i].x < st.ordered[j].x
 			})
+		}
+		if zeroFills(args) && len(st.ordered) > 0 {
+			var errMsg string
+			st.ordered, errMsg = fillEmptyBuckets(st.groups, st.ordered, args, lo, hi)
+			if errMsg != "" {
+				return nil, false, errMsg
+			}
 		}
 		out = append(out, tagGroup{tag: tag, groups: st.groups, ordered: st.ordered})
 	}
@@ -400,13 +517,16 @@ func percentile(values []float64, p float64) float64 {
 	return cp[idx]
 }
 
-// parseTime accepts RFC3339 or epoch seconds (integer or float).
-// Returns the parsed time and ok=true on success.
-func parseTime(s string) (time.Time, bool) {
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t, true
+// parseTime parses s with a strftime format when one is given (a
+// zone-less stamp is UTC); otherwise it accepts RFC3339 or epoch
+// seconds (integer or float). Returns the parsed time and ok=true on
+// success.
+func parseTime(s, format string) (time.Time, bool) {
+	if format != "" {
+		t, err := timefmt.Parse(s, format)
+		return t, err == nil
 	}
-	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+	if t, ok := parseRFC3339(s); ok {
 		return t, true
 	}
 	if n, err := strconv.ParseFloat(s, 64); err == nil {
@@ -418,9 +538,21 @@ func parseTime(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// formatBucketLabel renders a bucket key. With bucketing on, drop
+func parseRFC3339(s string) (time.Time, bool) {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
+// formatBucketLabel renders a bucket key in local time, matching the
+// line chart's time axis. With bucketing on, drop
 // sub-bucket precision so the label matches the bucket boundary.
 func formatBucketLabel(t time.Time, bucket time.Duration) string {
+	t = t.Local()
 	switch {
 	case bucket >= time.Hour:
 		return t.Format("2006-01-02 15:04")

@@ -64,3 +64,32 @@ func reduceGroups(groups map[groupKey][]float64, ordered []groupKey, aggregate s
 	}
 	return pts
 }
+
+// fitPoints is reduceGroups for a renderer with only slots columns:
+// consecutive groups are merged per points so the result has at most
+// slots points, each labelled (and positioned) by its first group.
+// A merged bin is re-reduced from its raw rows with the chart's own
+// aggregate, so count/sum add up, min/max keep dips/spikes, and
+// p50/p95 are the bin's true percentiles; identity, which has no
+// reduction, averages its groups' values.
+func fitPoints(groups map[groupKey][]float64, ordered []groupKey, aggregate string, slots int) (pts []PlotPoint, per int) {
+	per = (len(ordered) + slots - 1) / max(slots, 1)
+	if per <= 1 {
+		return reduceGroups(groups, ordered, aggregate), 1
+	}
+	for i := 0; i < len(ordered); i += per {
+		bin := ordered[i:min(i+per, len(ordered))]
+		var raw []float64
+		agg := aggregate
+		for _, key := range bin {
+			if aggregate == "identity" {
+				raw = append(raw, reduce("identity", groups[key]))
+				agg = "avg"
+			} else {
+				raw = append(raw, groups[key]...)
+			}
+		}
+		pts = append(pts, PlotPoint{X: bin[0].x, Label: bin[0].label, Y: reduce(agg, raw)})
+	}
+	return pts, per
+}

@@ -153,6 +153,10 @@ cat /log/myco/api/main.log | jq '{path, latency}' \
 
 # Plot a stream of numbers from jq
 cat /log/myco/api/main.log | jq '.cpu_pct' | chart
+
+# Lines per minute from a plain-text log, to spot a gap
+cat /log/myco/api/main.log \
+  | chart -x '1-2::time(%Y/%m/%d %H:%M:%S)' --bucket 1m
 ```
 
 `-x` and `-y` accept either a 1-indexed whitespace column (`-x 1`)
@@ -160,8 +164,12 @@ or a `.`-prefixed JSON path (`-x .ts`). With no flags, x is the
 row sequence and y is the last whitespace field of each line — so
 something like `wc -l | chart` plots a single value, and a
 multi-line stream of bare numbers from `jq` plots one point per
-line. See `man chart` for the full flag surface (aggregation,
-bucketing, `--type`, title).
+line. An RFC3339 `-x` is read as a time on its own; for epoch
+seconds or any other stamp, cast it: `-x 1::time`, or
+`-x '1-2::time(%Y/%m/%d %H:%M:%S)'` with strftime codes, where `1-2`
+joins two columns. With `--bucket`, minutes with no rows chart as 0.
+See `man chart` for the full flag surface (aggregation, bucketing,
+`--type`, title).
 
 ## Saving a result set
 

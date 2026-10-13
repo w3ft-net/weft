@@ -306,16 +306,16 @@ func TestRenderFromStream_TaggedNoData(t *testing.T) {
 }
 
 func TestParseTime(t *testing.T) {
-	if _, ok := parseTime("2026-01-01T00:00:00Z"); !ok {
+	if _, ok := parseTime("2026-01-01T00:00:00Z", ""); !ok {
 		t.Error("RFC3339 not parsed")
 	}
-	if _, ok := parseTime("1736000000"); !ok {
+	if _, ok := parseTime("1736000000", ""); !ok {
 		t.Error("epoch seconds not parsed")
 	}
-	if _, ok := parseTime("1736000000.5"); !ok {
+	if _, ok := parseTime("1736000000.5", ""); !ok {
 		t.Error("epoch float not parsed")
 	}
-	if _, ok := parseTime("not a time"); ok {
+	if _, ok := parseTime("not a time", ""); ok {
 		t.Error("string parsed as time unexpectedly")
 	}
 }

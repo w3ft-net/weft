@@ -79,11 +79,14 @@ func ParseWatchCmd(args []string) (WatchArgs, string) {
 // weft sh -c "...") can carry it across the query/render boundary.
 type PipeArgs struct {
 	XSpec     shellcore.FieldSpec
+	XEnd      int    // last column of an `-x <start>-<end>` range, joined by spaces; 0 = no range
+	XTime     bool   // -x carries a ::time cast
+	XFormat   string // strftime format from ::time(<format>); "" = RFC3339 or epoch seconds
 	YSpec     shellcore.FieldSpec
 	TagSpec   shellcore.FieldSpec // splits output into one line per tag value; line/sparkline only
-	Aggregate string        // count | sum | avg | min | max | p50 | p95 | identity
-	Bucket    time.Duration // 0 = no bucketing
-	Kind      string        // line | bar | sparkline
+	Aggregate string              // count | sum | avg | min | max | p50 | p95 | identity
+	Bucket    time.Duration       // 0 = no bucketing
+	Kind      string              // line | bar | sparkline
 	Title     string
 }
 
@@ -117,31 +120,26 @@ func ParsePipeArgs(args []string) (any, string) {
 			if i+1 >= len(args) {
 				return out, "chart: -x requires a column index or .json.path"
 			}
-			s, err := shellcore.ParseFieldSpec(args[i+1])
-			if err != nil {
-				return out, "chart: -x: " + err.Error()
+			if msg := parseXArg(args[i+1], &out); msg != "" {
+				return out, "chart: -x: " + msg
 			}
-			out.XSpec = s
 			i++
-		case a == "-y":
+		case a == "-y" || a == "--tag":
 			if i+1 >= len(args) {
-				return out, "chart: -y requires a column index or .json.path"
+				return out, fmt.Sprintf("chart: %s requires a column index or .json.path", a)
+			}
+			if strings.Contains(args[i+1], "::") {
+				return out, fmt.Sprintf("chart: %s: casts are only supported on -x", a)
 			}
 			s, err := shellcore.ParseFieldSpec(args[i+1])
 			if err != nil {
-				return out, "chart: -y: " + err.Error()
+				return out, fmt.Sprintf("chart: %s: %s", a, err.Error())
 			}
-			out.YSpec = s
-			i++
-		case a == "--tag":
-			if i+1 >= len(args) {
-				return out, "chart: --tag requires a column index or .json.path"
+			if a == "-y" {
+				out.YSpec = s
+			} else {
+				out.TagSpec = s
 			}
-			s, err := shellcore.ParseFieldSpec(args[i+1])
-			if err != nil {
-				return out, "chart: --tag: " + err.Error()
-			}
-			out.TagSpec = s
 			i++
 		case a == "-a" || a == "--aggregate":
 			if i+1 >= len(args) {
@@ -231,6 +229,50 @@ func ParsePipeArgs(args []string) (any, string) {
 	}
 
 	return out, ""
+}
+
+// parseXArg parses -x's value into out: a field spec, optionally
+// suffixed with a `::time` or `::time(<strftime format>)` cast. A
+// time-cast column may be a range (`1-2`), whose columns are joined
+// by a space before parsing — for stamps like `2026/10/13 15:04:05`
+// that span two whitespace fields. Returns a terse message on error.
+func parseXArg(v string, out *PipeArgs) string {
+	base, cast, hasCast := strings.Cut(v, "::")
+	if hasCast {
+		switch {
+		case cast == "time":
+		case strings.HasPrefix(cast, "time(") && strings.HasSuffix(cast, ")"):
+			out.XFormat = strings.TrimSuffix(strings.TrimPrefix(cast, "time("), ")")
+			if out.XFormat == "" {
+				return "empty ::time() format"
+			}
+		default:
+			return fmt.Sprintf("unknown cast %q (want time or time(<format>))", cast)
+		}
+		out.XTime = true
+	}
+	if lo, hi, ok := strings.Cut(base, "-"); ok && isDigits(lo) && isDigits(hi) {
+		if !out.XTime {
+			return "a column range needs a ::time cast"
+		}
+		start, _ := strconv.Atoi(lo)
+		end, _ := strconv.Atoi(hi)
+		if end <= start {
+			return "range end must be after its start"
+		}
+		out.XEnd = end
+		base = lo
+	}
+	spec, err := shellcore.ParseFieldSpec(base)
+	if err != nil {
+		return err.Error()
+	}
+	out.XSpec = spec
+	return ""
+}
+
+func isDigits(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
 }
 
 func validAggregate(s string) bool {

@@ -41,7 +41,12 @@ Use it to sketch a chart before saving the pipeline as a cron.
 
 Charts fit the terminal and are never paged through `less`. A resize
 re-fits in cron `--follow` mode on the next tick. There is no zoom or
-scroll; the chart shows the configured window of data.
+scroll; the chart shows the configured window of data. When a bar
+chart or sparkline has more points than the terminal has columns,
+neighbouring points are merged into one bar each, re-applying `-a` to
+their rows (`count`/`sum` add up, `min`/`max` keep dips and spikes; with
+no `-a`, values are averaged), and a footer line says how many points
+went into each bar. Line charts always fit and are never merged.
 
 In cron form, the data point for each result is the **last
 whitespace-separated field** of the cron's stdout, the same
@@ -64,12 +69,25 @@ and y is the last whitespace field of each line.
 
 ## OPTIONS (pipe form)
 
-- `-x <field>` — x source. `<field>` is either a 1-indexed
-  whitespace column (`-x 1`) or a `.`-prefixed JSON path (`-x .ts`).
-  Default: row sequence (0, 1, 2, …).
+- `-x <field>[::time[(<format>)]]` — x source. `<field>` is either a
+  1-indexed whitespace column (`-x 1`) or a `.`-prefixed JSON path
+  (`-x .ts`). Default: row sequence (0, 1, 2, …). An RFC3339 timestamp
+  is recognised as time on its own; anything else is a plain number or
+  label unless cast:
+  - `::time` — x is a time: RFC3339 or epoch seconds (`-x 1::time`).
+  - `::time(<format>)` — x is a time in a strftime format: `%Y` year,
+    `%m` month, `%d` day, `%H` hour, `%M` minute, `%S` second, `%b`
+    month name, `%z` UTC offset, `%s` epoch seconds, and the rest of
+    the usual `date +FORMAT` codes. A stamp with no zone is read as
+    UTC. A row that doesn't match the format stops the chart with an
+    error.
+  - With a time cast, a column range `<start>-<end>` joins those
+    columns with a space before parsing, for stamps that span two
+    fields: `-x '1-2::time(%Y/%m/%d %H:%M:%S)'`.
 - `-y <field>` — y source. Same grammar as `-x`. Default: last
   whitespace field of each line. `-x` and `-y` may not mix
-  positional with JSON-path in the same call.
+  positional with JSON-path in the same call. Casts are only
+  supported on `-x`.
 - `-a`, `--aggregate` `<fn>` — y reduction within an x-group.
   One of `count`, `sum`, `avg`, `min`, `max`, `p50`, `p95`,
   `identity`. Default `identity`, or `count` when `--bucket` is set.
@@ -80,7 +98,9 @@ and y is the last whitespace field of each line.
   (the default when `--tag` is set). Each line gets its own color and
   a legend row.
 - `--bucket <DURATION>` — group rows into time buckets on x.
-  Requires x to parse as a timestamp (RFC3339 or epoch seconds).
+  Implies `-x …::time`: x must parse as RFC3339, epoch seconds, or the
+  cast's format. With `-a count` (the default) or `sum`, a bucket with
+  no rows is drawn as 0, so a stretch with no logs shows as a hole.
   Switches the default chart kind to `line`.
 - `-t`, `--type` `<line|sparkline|bar>` — chart kind. Default `bar`,
   or `line` when `--bucket` or `--tag` is set.
@@ -103,6 +123,11 @@ cat /log/myco/prod/api/metrics.log | jq -c '{host, pct}' \
 cat /log/myco/prod/api/metrics.log \
   | jq -c 'select(.type=="memory")' \
   | chart -x .ts -y .pct --bucket 1m -a p95
+
+# Pipe form: log lines per minute, to spot a window with no logs.
+# The stamp "2026/10/13 15:04:05" spans columns 1 and 2.
+cat /log/myco/prod/api/main.log \
+  | chart -x '1-2::time(%Y/%m/%d %H:%M:%S)' --bucket 1m
 
 # Pipe form: plot a stream of numbers from jq
 cat /log/myco/prod/api/metrics.log | jq 'select(.type=="memory") | .pct' | chart

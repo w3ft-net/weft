@@ -216,14 +216,22 @@ cat /log/myco/api/main.log | jq '{path, latency}' \\
 
 # Plot a stream of numbers from jq
 cat /log/myco/api/main.log | jq '.cpu_pct' | chart
+
+# Lines per minute from a plain-text log, to spot a gap
+cat /log/myco/api/main.log \\
+  | chart -x '1-2::time(%Y/%m/%d %H:%M:%S)' --bucket 1m
 </code></pre>
 <p><code>-x</code> and <code>-y</code> accept either a 1-indexed whitespace column (<code>-x 1</code>)
 or a <code>.</code>-prefixed JSON path (<code>-x .ts</code>). With no flags, x is the
 row sequence and y is the last whitespace field of each line — so
 something like <code>wc -l | chart</code> plots a single value, and a
 multi-line stream of bare numbers from <code>jq</code> plots one point per
-line. See <code>man chart</code> for the full flag surface (aggregation,
-bucketing, <code>--type</code>, title).</p>
+line. An RFC3339 <code>-x</code> is read as a time on its own; for epoch
+seconds or any other stamp, cast it: <code>-x 1::time</code>, or
+<code>-x '1-2::time(%Y/%m/%d %H:%M:%S)'</code> with strftime codes, where <code>1-2</code>
+joins two columns. With <code>--bucket</code>, minutes with no rows chart as 0.
+See <code>man chart</code> for the full flag surface (aggregation, bucketing,
+<code>--type</code>, title).</p>
 <h2 id="saving-a-result-set">Saving a result set</h2>
 <p>Redirect a pipeline into <code>/tmp</code> to keep the output and query it
 several ways:</p>
