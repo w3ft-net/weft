@@ -117,18 +117,22 @@ func (r *Repo) load() (*history, error) {
 	var events []event
 	var userIDs []string
 	seenUser := map[string]bool{}
-	// nextAt[v] is when the same object's next version was written, so a
-	// deletion followed by a re-save can be kept between the two.
 	type objKey struct {
 		kind string
 		id   uint64
 	}
+	// nextAt[v] is when the next version saved under the same name was
+	// written, so a deletion followed by a re-save can be kept between the
+	// two. The next version is the same object when a save revives the row
+	// (/bin, /cron.d) and a different one when it creates a new row
+	// (/etc/dashboards), so it is keyed by name, not object.
+	type nameKey struct{ kind, name string }
 	var nextAt = map[int64]time.Time{}
-	lastOf := map[objKey]store.ObjectVersion{}
+	lastOf := map[nameKey]store.ObjectVersion{}
 	byVersion := append([]store.ObjectVersion(nil), versions...)
 	sort.Slice(byVersion, func(i, j int) bool { return byVersion[i].VersionID < byVersion[j].VersionID })
 	for _, v := range byVersion {
-		k := objKey{v.Kind, v.ObjectID}
+		k := nameKey{v.Kind, v.Name}
 		if prev, ok := lastOf[k]; ok {
 			nextAt[prev.VersionID] = v.AuthoredAt
 		}
