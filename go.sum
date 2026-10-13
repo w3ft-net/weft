@@ -167,6 +167,8 @@ github.com/graybeardcorp/warp v0.2.47 h1:I3rBIA9L3wTSxF6y5IyDj1gxikbI7V6L57P5PTu
 github.com/graybeardcorp/warp v0.2.47/go.mod h1:eUF5gbY1k+hAF07OtsLtfqQMxhSDedAuu93H9CekJzc=
 github.com/graybeardcorp/warp v0.2.48 h1:evLprHD9masZDwKMHZ5sz+MgL901GG1ljyQuZW9OFjo=
 github.com/graybeardcorp/warp v0.2.48/go.mod h1:eUF5gbY1k+hAF07OtsLtfqQMxhSDedAuu93H9CekJzc=
+github.com/graybeardcorp/warp v0.2.49 h1:MOZOSXcPvgKpWzuQcylebh8wWs+63R0InH9Us3Eh3vU=
+github.com/graybeardcorp/warp v0.2.49/go.mod h1:eUF5gbY1k+hAF07OtsLtfqQMxhSDedAuu93H9CekJzc=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=
