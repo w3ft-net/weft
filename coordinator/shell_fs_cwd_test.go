@@ -29,14 +29,21 @@ import (
 //
 // customer is non-empty here (unlike the courier tests) so custID
 // resolves and runLocal takes the shellfs/LogMount branch — that's the
-// branch both bugs live in. userID is empty so LogMount.canReadNamespace
-// short-circuits true (no per-user permission rows needed).
+// branch both bugs live in. userID is empty, which LogMount.Authorize
+// treats as a system caller that reads every namespace — but only ones
+// that exist, so the namespace row is seeded alongside the services.
 
-// seedSeenServices registers two services under namespace "acme": one
-// env-less (acme/api → "api.log") and one env-bearing (acme/worker @ prod
-// → the "prod/" env directory), so the namespace listing exercises both
-// the file and the env-subdirectory arms of LogMount.ReadDir.
-func seedAcmeServices(c *Coordinator, customerID store.OrgID) {
+// seedAcmeServices creates namespace "acme" and registers two services
+// under it: one env-less (acme/api → "api.log") and one env-bearing
+// (acme/worker @ prod → the "prod/" env directory), so the namespace
+// listing exercises both the file and the env-subdirectory arms of
+// LogMount.ReadDir. LogMount.Authorize reads namespaces from the DB, so
+// the services alone are not enough to make /log/acme reachable.
+func seedAcmeServices(t *testing.T, db *store.Store, c *Coordinator, customerID store.OrgID) {
+	t.Helper()
+	if _, err := db.FindOrCreateNamespace(customerID, "acme"); err != nil {
+		t.Fatalf("FindOrCreateNamespace: %v", err)
+	}
 	c.SeenServices.Add(int64(customerID), "acme/api", "")
 	c.SeenServices.Add(int64(customerID), "acme/worker", "prod")
 }
@@ -47,7 +54,7 @@ func TestShellLs_ResolvesCwdAndListsNamespace(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	const customer = "weftfuncs-test"
-	seedAcmeServices(c, custID)
+	seedAcmeServices(t, db, c, custID)
 
 	res, err := c.ExecuteWithDir(context.Background(), "ls", TimeRange{}, customer, "", []string{"/log/acme"})
 	if err != nil {
@@ -103,7 +110,7 @@ func TestShellTree_ListsNamespaceFromSeededCwd(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
 	const customer = "weftfuncs-test"
-	seedAcmeServices(c, custID)
+	seedAcmeServices(t, db, c, custID)
 
 	res, err := c.ExecuteWithDir(context.Background(), "tree", TimeRange{}, customer, "", []string{"/log/acme"})
 	if err != nil {
