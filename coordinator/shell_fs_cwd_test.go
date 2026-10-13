@@ -52,7 +52,7 @@ func seedAcmeServices(t *testing.T, db *store.Store, c *Coordinator, customerID 
 // /log/acme lists acme's children, not the root mounts.
 func TestShellLs_ResolvesCwdAndListsNamespace(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	const customer = "weftfuncs-test"
 	seedAcmeServices(t, db, c, custID)
 
@@ -89,7 +89,7 @@ func TestShellTail_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 	if _, err := db.FindOrCreateNamespace(custID, "vimgym"); err != nil {
 		t.Fatalf("FindOrCreateNamespace: %v", err)
 	}
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
 	res, err := c.ExecuteWithDir(context.Background(), "tail gamestate.log", TimeRange{}, customer, "", []string{"/log/vimgym/api"})
 	if err != nil {
@@ -108,7 +108,7 @@ func TestShellTail_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 // that tree works once the service list is populated.
 func TestShellTree_ListsNamespaceFromSeededCwd(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	const customer = "weftfuncs-test"
 	seedAcmeServices(t, db, c, custID)
 

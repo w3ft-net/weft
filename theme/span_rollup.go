@@ -108,7 +108,7 @@ type parsedOcc struct {
 }
 
 // RenderSpanRollup parses lines — the same "<ts_unix_ns>\t<namespace/
-// service>\t<raw message>" shape compute.LocalComputeJob's
+// service>\t<raw message>" shape compute.Job's
 // emitTraceTagged emits, and RenderTraceColumns already consumes — for
 // "span done"/"span error" lines, grouping them into one SpanRollupRow
 // per distinct span name. Every other line (ordinary log lines, the "#

@@ -86,7 +86,7 @@ func TestComputeFanoutSignsLambdaWithValidRegion(t *testing.T) {
 	defer srv.Close()
 
 	// Configure the pool exactly as cmd/compute/main.go does.
-	pool := &LocalComputePool{
+	pool := &Engine{
 		AWSCreds:  credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", ""),
 		AWSRegion: ResolveRegion(),
 	}

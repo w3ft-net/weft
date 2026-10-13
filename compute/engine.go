@@ -18,14 +18,16 @@ import (
 	"github.com/graybeardcorp/weft/theme"
 )
 
-// LocalComputePool executes compute stages in-process using warp's
-// bash interpreter through bash.RunStreaming. Streaming requires
+// Engine runs queries: it fans out SQL to shards, k-way merges their
+// rows, applies the global limit, and runs the pipeline's compute
+// stages through warp's bash.RunStreaming. It is what the compute
+// worker (cmd/compute) serves; tests use it in-process. Streaming requires
 // warp's per-stage io.Pipe execution path, which is mutually
 // exclusive with warp's chunked intra-stage parallelism today. See
 // docs/plans/streaming-parallel-warp.md for the planned warp-side
 // work to combine streaming with chunk-level parallelism; until
 // that lands, weft's compute stages are always single-worker.
-type LocalComputePool struct {
+type Engine struct {
 	AWSCreds  aws.CredentialsProvider
 	AWSRegion string
 	// ShardSecret is the SHARD_SECRET bearer token attached to outbound
@@ -46,7 +48,7 @@ type LocalComputePool struct {
 	// only happens on rebind) invalidates the entry, closes the stale
 	// connection, and re-dials. Override-derived entries cache too —
 	// their addr is empty and never changes, so the cache hit is
-	// permanent until the pool is dropped.
+	// permanent until the engine is dropped.
 	cache sync.Map // map[string]*cachedShard
 }
 
@@ -63,7 +65,7 @@ type cachedShard struct {
 // that wants compute to bypass descriptor-based dialing for a
 // known-id shard. The override applies until the next call for the
 // same id, at which point this one is replaced.
-func (p *LocalComputePool) RegisterResolver(r Resolver) {
+func (p *Engine) RegisterResolver(r Resolver) {
 	p.overrides.Store(r.ShardID(), r)
 }
 
@@ -73,7 +75,7 @@ func (p *LocalComputePool) RegisterResolver(r Resolver) {
 // cache hit with mismatching addr (rebind) closes the stale handle
 // and re-dials. The freshly-dialed handle is stored in the cache so
 // the next query for this id is a hit.
-func (p *LocalComputePool) resolveShard(d *pb.ShardDescriptor) (shard.Shard, error) {
+func (p *Engine) resolveShard(d *pb.ShardDescriptor) (shard.Shard, error) {
 	if v, ok := p.overrides.Load(d.ShardId); ok {
 		r := v.(Resolver)
 		// Overrides bypass the addr-based invalidation logic — their
@@ -117,14 +119,27 @@ func (p *LocalComputePool) resolveShard(d *pb.ShardDescriptor) (shard.Shard, err
 	return sh, nil
 }
 
-func (p *LocalComputePool) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (LineStream, error) {
+func (p *Engine) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (LineStream, error) {
 	job := p.NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit), req.KeepLast, req.TraceTag)
 	go FanOutToShards(ctx, req, job, p.resolveShard)
 	return job.Stream(), nil
 }
 
-func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool, traceTag bool) ComputeJob {
-	return &LocalComputeJob{
+// NewJob creates a job that merges rows from shardCount shards and runs
+// stages over the result.
+//
+// keepLast selects the limit semantic: false is the default head-style
+// "stop after N emitted"; true switches to tail-style "retain last N,
+// emit at EOF" — required when shards return ASC after the tail
+// subquery flip (see planner/sql.go::Query.Wrap).
+//
+// traceTag, when true, switches the job's zero-stage output from plain
+// streaming to buffer-then-summarize-then-tag: every row is prefixed
+// with a colored [namespace/service] badge and a synthetic summary line
+// precedes the batch. Only ever set true for a bare, interactive
+// `trace <id>` — see coordinator.go's executeQuery.
+func (p *Engine) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool, traceTag bool) *Job {
+	return &Job{
 		stages:     stages,
 		shardCount: shardCount,
 		mergeKey:   mergeKey,
@@ -136,7 +151,7 @@ func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey stri
 	}
 }
 
-// LocalComputeJob collects rows from shards via a channel and pushes
+// Job collects rows from shards via a channel and pushes
 // merged + (optionally) staged output as Lines into streamCh.
 //
 // The job is single-consumer on the output side: callers either drain
@@ -144,13 +159,13 @@ func (p *LocalComputePool) NewJob(stages []string, shardCount int, mergeKey stri
 // internally into a cache). Mixing the two on one job is not
 // supported; the cache only fires when no live consumer has the
 // channel.
-type LocalComputeJob struct {
+type Job struct {
 	stages     []string
 	shardCount int
-	mergeKey   string // see ComputePool.NewJob; empty = concat, otherwise k-way merge
-	limit      int    // see ComputePool.NewJob; 0 = no cap
+	mergeKey   string // see Engine.NewJob; empty = concat, otherwise k-way merge
+	limit      int    // see Engine.NewJob; 0 = no cap
 	keepLast   bool   // tail-mode: retain last N from the merged stream and emit at EOF
-	traceTag   bool   // bare interactive `trace <id>`: buffer, summarize, badge each row — see ComputePool.NewJob
+	traceTag   bool   // bare interactive `trace <id>`: buffer, summarize, badge each row — see Engine.NewJob
 
 	ch        chan ComputeMessage // shards push rows + sentinels here
 	streamCh  chan Line           // consume() pushes output here
@@ -164,22 +179,22 @@ type LocalComputeJob struct {
 	drainedErr   error
 }
 
-func (j *LocalComputeJob) ensureStarted() {
+func (j *Job) ensureStarted() {
 	j.consumeOnce.Do(func() { go j.consume() })
 }
 
-func (j *LocalComputeJob) Send(msg ComputeMessage) {
+func (j *Job) Send(msg ComputeMessage) {
 	j.ensureStarted()
 	j.ch <- msg
 }
 
 // SendRow implements shard.RowSink.
-func (j *LocalComputeJob) SendRow(row *pb.ResultRow, shardID string) {
+func (j *Job) SendRow(row *pb.ResultRow, shardID string) {
 	j.Send(ComputeMessage{Row: row, ShardID: shardID})
 }
 
 // SendSentinel implements shard.RowSink.
-func (j *LocalComputeJob) SendSentinel(shardID string) {
+func (j *Job) SendSentinel(shardID string) {
 	j.Send(ComputeMessage{ShardID: shardID, Sentinel: true})
 }
 
@@ -188,7 +203,7 @@ func (j *LocalComputeJob) SendSentinel(shardID string) {
 // pipeline finishes and its stdout is split (staged jobs). Single-
 // consumer: callers must NOT also call Result/MergedRows on the same
 // job once Stream has been claimed.
-func (j *LocalComputeJob) Stream() LineStream {
+func (j *Job) Stream() LineStream {
 	j.ensureStarted()
 	return newChannelLineStream(j.streamCh, &j.streamErr)
 }
@@ -196,7 +211,7 @@ func (j *LocalComputeJob) Stream() LineStream {
 // drain reads streamCh to exhaustion into a cached slice. Used by
 // Result and MergedRows; fires once via sync.Once so multiple batch-
 // API callers see consistent data.
-func (j *LocalComputeJob) drain() ([]Line, error) {
+func (j *Job) drain() ([]Line, error) {
 	j.ensureStarted()
 	j.drainOnce.Do(func() {
 		for line := range j.streamCh {
@@ -209,7 +224,7 @@ func (j *LocalComputeJob) drain() ([]Line, error) {
 
 // Result drains the stream and returns the joined text. Convenience
 // for callers that want the whole output as one string.
-func (j *LocalComputeJob) Result() (string, error) {
+func (j *Job) Result() (string, error) {
 	lines, err := j.drain()
 	if err != nil {
 		return "", err
@@ -220,7 +235,7 @@ func (j *LocalComputeJob) Result() (string, error) {
 // MergedRows drains the stream and reconstructs *pb.ResultRow entries
 // for zero-stage jobs. Returns nil for staged jobs — the post-stage
 // text path loses row metadata.
-func (j *LocalComputeJob) MergedRows() ([]*pb.ResultRow, error) {
+func (j *Job) MergedRows() ([]*pb.ResultRow, error) {
 	if len(j.stages) > 0 {
 		return nil, nil
 	}
@@ -263,7 +278,7 @@ func (j *LocalComputeJob) MergedRows() ([]*pb.ResultRow, error) {
 // downstream consumer (ASC for the tail-flip case). The buffer is
 // never larger than j.limit, so memory is bounded by the user's
 // requested N.
-func (j *LocalComputeJob) retainLast() []*pb.ResultRow {
+func (j *Job) retainLast() []*pb.ResultRow {
 	if j.limit <= 0 {
 		return nil
 	}
@@ -309,7 +324,7 @@ func (j *LocalComputeJob) retainLast() []*pb.ResultRow {
 // because a trace ID scopes to one bounded request's log lines, unlike
 // a general cat/tail over an app's full volume. j.limit still caps the
 // buffer when set (0 is the common case: trace sets no default limit).
-func (j *LocalComputeJob) emitTraceTagged() {
+func (j *Job) emitTraceTagged() {
 	var rows []*pb.ResultRow
 	onlineMerge(j.ch, j.shardCount, j.mergeKey, func(row *pb.ResultRow) bool {
 		if j.limit > 0 && len(rows) >= j.limit {
@@ -350,7 +365,7 @@ func (j *LocalComputeJob) emitTraceTagged() {
 
 // streamErr is set BEFORE the channel is closed so consumers see the
 // error after the channel signals exhaustion.
-func (j *LocalComputeJob) consume() {
+func (j *Job) consume() {
 	defer close(j.streamCh)
 
 	if len(j.stages) == 0 {

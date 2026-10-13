@@ -16,7 +16,7 @@ mechanism for when it isn't.
 
 ### Queue 1: per-shard cursor queues (online merge)
 
-Once `LocalComputeJob.consume` switches to an online heap (step 1
+Once `Job.consume` switches to an online heap (step 1
 of the streaming plan), each shard has its own queue of arrived-
 but-not-yet-merged rows. The heap can only emit when every active
 cursor has at least one row queued. If shard A is fast and shard
@@ -32,7 +32,7 @@ A's queue can grow to gigabytes before B catches up.
 
 ### Queue 2: streamCh
 
-`LocalComputeJob` pushes Lines into `streamCh chan Line` buffered
+`Job` pushes Lines into `streamCh chan Line` buffered
 at 1024. The gRPC server pumps them onto the wire. If the wire is
 slow (slow client, network congestion), `streamCh` fills and
 producers (the consume goroutine pushing merge output) block.
@@ -67,7 +67,7 @@ step 1 will create), introduce a configurable per-shard queue
 limit:
 
 ```go
-type LocalComputePool struct {
+type Engine struct {
     Parallelism      int
     PerShardQueue    int  // NEW; default 256
     StreamBuffer     int  // NEW; default 1024
@@ -99,10 +99,10 @@ from sending more rows → flow control reaches back to shard.Query.
 Pool option drives the buffer:
 
 ```go
-func (p *LocalComputePool) NewJob(...) ComputeJob {
+func (p *Engine) NewJob(...) *Job {
     bufferSize := p.StreamBuffer
     if bufferSize == 0 { bufferSize = 1024 }
-    return &LocalComputeJob{
+    return &Job{
         // ...
         streamCh: make(chan Line, bufferSize),
     }
@@ -145,7 +145,7 @@ cases.
 Per-job high-water-marks for diagnostics:
 
 ```go
-type LocalComputeJob struct {
+type Job struct {
     // ... existing ...
     maxQueueDepth atomic.Int64  // largest cursor queue len observed
     maxStreamCh   atomic.Int64  // largest len(streamCh) observed

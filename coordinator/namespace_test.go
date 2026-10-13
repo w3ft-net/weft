@@ -86,7 +86,7 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 		t.Fatalf("ingest: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: testQueryStore(t, "graybeard", "weft", "grantcentral")})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: testQueryStore(t, "graybeard", "weft", "grantcentral")})
 	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "ns-shard-0",
 		WindowStart: base,

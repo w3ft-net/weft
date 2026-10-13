@@ -139,18 +139,14 @@ func main() {
 		log.Fatal("no SHARD_SECRET set")
 	}
 
-	// Compute pool setup.
-	var pool compute.ComputePool
-	if *computeAddr != "" {
-		p, err := compute.NewGRPCComputePool(*computeAddr)
-		if err != nil {
-			log.Fatalf("connect to compute at %s: %v", *computeAddr, err)
-		}
-		pool = p
-		log.Printf("connected to compute at %s", *computeAddr)
-	} else {
+	if *computeAddr == "" {
 		log.Fatal("no compute addr specified")
 	}
+	computeClient, err := compute.NewClient(*computeAddr)
+	if err != nil {
+		log.Fatalf("connect to compute at %s: %v", *computeAddr, err)
+	}
+	log.Printf("connected to compute at %s", *computeAddr)
 
 	// Open the store before building the Coordinator so /bin lookup,
 	// alert dispatch, and weft.* all have a tenant-scoped backend from
@@ -194,7 +190,7 @@ func main() {
 	notifier := coordinator.NewNotifier(db, email.ConfigFromEnv())
 
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
-		Pool:              pool,
+		Compute:           computeClient,
 		Store:             db,
 		Notifier:          notifier,
 		Tail:              coordinator.NewTailBroker(),

@@ -62,7 +62,7 @@ func TestExecuteRPC_FollowFlushesSingleLineImmediately(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{},
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{},
 		Store: st,
 		Tail:  coordinator.NewTailBroker()})
 	srv := &Server{Coord: coord, Store: st}

@@ -8,7 +8,7 @@ import (
 )
 
 func TestZeroStageJob_LineNumIsSequential(t *testing.T) {
-	pool := &LocalComputePool{}
+	pool := &Engine{}
 	job := pool.NewJob(nil, 2, "ts", 0, false, false)
 
 	go func() {

@@ -20,7 +20,7 @@ func TestGlobInChainedSource_NoMatchIsAnError(t *testing.T) {
 	if _, err := db.FindOrCreateNamespace(custID, "acme"); err != nil {
 		t.Fatalf("FindOrCreateNamespace: %v", err)
 	}
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	c.SeenServices.Add(int64(custID), "acme/api/main", "prod")
 
 	for _, line := range []string{
@@ -50,7 +50,7 @@ func TestGlobInChainedSource_CrossSourceIsDisallowed(t *testing.T) {
 	if _, err := db.FindOrCreateNamespace(custID, "acme"); err != nil {
 		t.Fatalf("FindOrCreateNamespace: %v", err)
 	}
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	c.SeenServices.Add(int64(custID), "acme/api/main", "prod")
 
 	for _, line := range []string{
@@ -83,7 +83,7 @@ func TestFollowWithStdoutRedirect_IsRefused(t *testing.T) {
 	if _, err := db.FindOrCreateNamespace(custID, "acme"); err != nil {
 		t.Fatalf("FindOrCreateNamespace: %v", err)
 	}
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
 	for _, line := range []string{
 		`tail -f /log/acme/prod/api/main.log > /tmp/stream`,

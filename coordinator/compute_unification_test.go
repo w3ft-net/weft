@@ -9,34 +9,30 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-// spyPool wraps a real compute pool and records every ExecuteQuery
-// call so tests can assert that all queries route through the pool.
-type spyPool struct {
+// spyCompute wraps a real compute.Executor and records every
+// ExecuteQuery call so tests can assert that all queries route through it.
+type spyCompute struct {
 	execCount atomic.Int32
 	lastReq   *pb.ExecuteQueryRequest
-	inner     compute.ComputePool
+	inner     compute.Executor
 }
 
-func (p *spyPool) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (compute.LineStream, error) {
+func (p *spyCompute) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (compute.LineStream, error) {
 	p.execCount.Add(1)
 	p.lastReq = req
 	return p.inner.ExecuteQuery(ctx, req)
 }
 
-func (p *spyPool) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool, traceTag bool) compute.ComputeJob {
-	return p.inner.NewJob(stages, shardCount, mergeKey, limit, keepLast, traceTag)
-}
-
-// TestQuery_NoStages_RoutesThroughComputePool pins the behavior that
+// TestQuery_NoStages_RoutesThroughCompute pins the behavior that
 // every query — including zero-stage shard-only queries — routes
-// through Pool.ExecuteQuery.
-func TestQuery_NoStages_RoutesThroughComputePool(t *testing.T) {
+// through Compute.ExecuteQuery.
+func TestQuery_NoStages_RoutesThroughCompute(t *testing.T) {
 	c := setupTestCoordinator(t)
 	// setupTestCoordinator already registered InProcessResolvers on
-	// c.Pool (a LocalComputePool). Wrap it in spyPool so we
+	// c.Compute (a compute.Engine). Wrap it in spyCompute so we
 	// can observe ExecuteQuery calls without breaking the resolution.
-	pool := &spyPool{inner: c.Pool}
-	c.Pool = pool
+	pool := &spyCompute{inner: c.Compute}
+	c.Compute = pool
 
 	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, "kevlar", "")
 	if err != nil {

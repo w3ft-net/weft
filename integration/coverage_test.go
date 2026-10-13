@@ -26,8 +26,8 @@ func TestParseFuncLine(t *testing.T) {
 		},
 		{
 			name: "zero coverage",
-			in:   "github.com/graybeardcorp/weft/shard/service/server.go:221:\tQueryToCompute\t0.0%",
-			want: CoverageEntry{File: "github.com/graybeardcorp/weft/shard/service/server.go", Line: 221, Function: "QueryToCompute", Percent: 0.0},
+			in:   "github.com/graybeardcorp/weft/shard/service/server.go:221:\tQuery\t0.0%",
+			want: CoverageEntry{File: "github.com/graybeardcorp/weft/shard/service/server.go", Line: 221, Function: "Query", Percent: 0.0},
 			ok:   true,
 		},
 		{

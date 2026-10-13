@@ -60,14 +60,14 @@ func setupGRPCCoordinator(t *testing.T) *Coordinator {
 	}
 	t.Cleanup(func() { gs1.Close() })
 
-	pool, err := compute.NewGRPCComputePool(computeAddr)
+	pool, err := compute.NewClient(computeAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { pool.Close() })
 
 	apps := []string{"vimgym", "callbox"}
-	c := NewCoordinator(CoordinatorConfig{Pool: pool, Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
+	c := NewCoordinator(CoordinatorConfig{Compute: pool, Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
 	e0 := &logdb.Shard{
 		ID:          "shard-0",
 		WindowStart: DevT0, WindowEnd: DevT1,
@@ -110,9 +110,8 @@ func startComputeServer(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool := &compute.LocalComputePool{}
 	srv := grpc.NewServer()
-	pb.RegisterWeftComputeServer(srv, computesvc.NewServer(pool))
+	pb.RegisterWeftComputeServer(srv, computesvc.NewServer(&compute.Engine{}))
 	go srv.Serve(lis)
 	t.Cleanup(func() { srv.GracefulStop() })
 	return lis.Addr().String()

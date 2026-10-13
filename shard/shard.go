@@ -20,7 +20,7 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-// RowSink receives result rows streamed from a shard query. ComputeJob satisfies this.
+// RowSink receives result rows streamed from a shard query. compute.Job satisfies this.
 type RowSink interface {
 	SendRow(row *pb.ResultRow, shardID string)
 	SendSentinel(shardID string)

@@ -157,7 +157,7 @@ func (r *ExecuteResult) Drain(ctx context.Context) (*DrainedResult, error) {
 // registry so c.Provisioner is never nil — drain and query paths
 // read fields fresh on every pass, so the swap is safe.
 type Coordinator struct {
-	Pool         compute.ComputePool     // required; every query dispatches through it
+	Compute      compute.Executor        // required; every query dispatches through it
 	Tail         *TailBroker             // nil = no live-tail subscriptions
 	TailFanout   *TailFanout             // nil exactly when Tail is nil; wraps Tail, with or without Redis configured
 	Ingest       *RingBuffer             // write path: IngestStream → buffer → shards. NewCoordinator always installs one; StartDrain still has to be called explicitly.
@@ -205,13 +205,13 @@ type loweredCacheEntry struct {
 // the canonical wire path mutates fields after construction, every
 // runtime path has to defend against the half-built window.
 //
-// Required: Pool. Everything else is optional — nil means "feature
+// Required: Compute. Everything else is optional — nil means "feature
 // disabled" with a documented runtime fall-through, not "we forgot to
 // wire it." logdb.Provisioner is intentionally absent: NewCoordinator
 // installs a no-op stub so c.Provisioner is never nil, and main.go
 // swaps in the real one once logdb.Start completes.
 type CoordinatorConfig struct {
-	Pool compute.ComputePool
+	Compute compute.Executor
 
 	Store    *store.Store
 	Notifier NotifyDispatcher
@@ -314,11 +314,11 @@ func (s *SeenServices) Names(customerID int64) []string {
 // — registry population is the provisioner's concern, not the
 // coordinator's.
 func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
-	// Every query routes through the compute pool — including the
-	// zero-stage shard-only case — so there is no meaningful default.
-	// Production passes a GRPCComputePool; tests pass a LocalComputePool.
-	if cfg.Pool == nil {
-		panic("coordinator: CoordinatorConfig.Pool is required")
+	// Every query routes through compute — including the zero-stage
+	// shard-only case — so there is no meaningful default. Production
+	// passes a compute.Client; tests pass a compute.Engine.
+	if cfg.Compute == nil {
+		panic("coordinator: CoordinatorConfig.Compute is required")
 	}
 	ingest := cfg.Ingest
 	if ingest == nil {
@@ -349,7 +349,7 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		prov.SetStore(cfg.Store)
 	}
 	c := &Coordinator{
-		Pool:                   cfg.Pool,
+		Compute:                cfg.Compute,
 		Provisioner:            prov,
 		Tail:                   cfg.Tail,
 		Ingest:                 ingest,
@@ -826,7 +826,7 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 			argStrs[i] = fmt.Sprintf("%v", a)
 		}
 	}
-	stream, err := c.Pool.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
+	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:      lp.DirectShardSQL,
 		Args:     argStrs,
 		Shards:   descs,
@@ -1189,7 +1189,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 			logQuery("query: non-string arg at position %d (%T %v) — bound via fmt", i, a, a)
 		}
 	}
-	stream, err := c.Pool.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
+	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:      directSQL,
 		Args:     argStrs,
 		Shards:   descs,

@@ -29,7 +29,7 @@ tokens). Users can browse with
 4. Coordinator fans out SQL to shards →
    `coordinator/coordinator.go`.
 5. Compute pool runs remaining stages →
-   `compute/local.go`.
+   `compute/engine.go`.
 6. Output streams to the user's terminal.
 
 For `tail -f`, the coordinator subscribes to the live broker

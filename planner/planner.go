@@ -57,8 +57,8 @@ type QueryPlan struct {
 	ShardOrderBy string // "", "ts[ DESC]", or "raw[ DESC]"
 	ShardLimit   int    // per-shard LIMIT; 0 when pushdown is unsafe
 
-	// DirectShardSQL is the SQL the coordinator sends to shards via
-	// QueryToCompute — same body as ShardSQL but with ShardOrderBy +
+	// DirectShardSQL is the SQL compute sends to shards on the
+	// coordinator's behalf — same body as ShardSQL but with ShardOrderBy +
 	// ShardLimit substituted for the head/tail-derived "ts ASC"/
 	// "ts DESC". Kept separate so callers still using the legacy Query
 	// RPC (no compute stages, backward-compat tests) see the old
@@ -219,7 +219,7 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 		// (single app, origin implicit from the path). Force the same
 		// MetaVarColumns projection normally reserved for an explicit
 		// awk/jq meta-var reference so NAMESPACE/SERVICE are always
-		// real, pipeline-filterable fields, and so compute/local.go's
+		// real, pipeline-filterable fields, and so compute/engine.go's
 		// trace-tag display branch has namespace/service available on
 		// every row (SpanOccurrence.Label).
 		sql.includeMetaVars = true

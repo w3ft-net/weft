@@ -21,15 +21,10 @@ services:
   # demand, mounting per-shard subdirectories of ./dev/shard-data so
   # each shard's DuckDB + shard.json survive coordinator restarts.
 
-  # Dedicated compute worker. Coordinator fans out rows here for
-  # pipeline execution. The weft-compute binary was always built but
-  # pre-2026-04 not deployed in integration — coordinator fell
-  # through to in-process LocalComputePool, which meant the
-  # coordinator→compute boundary was never exercised under real
-  # gRPC. Putting compute on the wire gives that boundary real-
-  # traffic coverage in every integration run, which is a
-  # prerequisite for the direct-to-compute work (docs/plans/
-  # direct-to-compute.md).
+  # Dedicated compute worker. The coordinator dispatches every query
+  # here; compute fans out to shards, merges, and runs pipeline
+  # stages. The coordinator has no in-process fallback, so this
+  # service is required.
   compute:
     image: weft-server
     build:
@@ -41,7 +36,7 @@ services:
       # Compute dials shards directly for query fan-out, so it needs
       # the SHARD_SECRET bearer (was previously passed per-request in
       # ExecuteQueryRequest; now compute reads its own env — see
-      # compute.LocalComputePool.ShardSecret). Must match the value
+      # compute.Engine.ShardSecret). Must match the value
       # on the coordinator and shard containers.
       SHARD_SECRET: dev-shard-secret
     ports:

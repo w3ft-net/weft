@@ -9,12 +9,12 @@ import (
 
 // TestExecuteQuery_TraceTagsInteractiveOutput: a bare, interactively-
 // typed `trace <id>` sets TraceTag on the request the coordinator
-// hands to the compute pool, so compute/local.go's display branch
+// hands to the compute pool, so compute/engine.go's display branch
 // (summary line + colored [namespace/service] badges) engages.
 func TestExecuteQuery_TraceTagsInteractiveOutput(t *testing.T) {
 	c := setupTestCoordinator(t)
-	pool := &spyPool{inner: c.Pool}
-	c.Pool = pool
+	pool := &spyCompute{inner: c.Compute}
+	c.Compute = pool
 
 	res, err := c.Execute(context.Background(), `trace abc-123`, fullRange, "kevlar", "")
 	if err != nil {
@@ -40,8 +40,8 @@ func TestExecuteQuery_TraceTagsInteractiveOutput(t *testing.T) {
 // executeQuery) is what prevents this.
 func TestExecuteForWatch_TraceDoesNotTagOutput(t *testing.T) {
 	c := setupTestCoordinator(t)
-	pool := &spyPool{inner: c.Pool}
-	c.Pool = pool
+	pool := &spyCompute{inner: c.Compute}
+	c.Compute = pool
 
 	cust, err := c.Store.GetOrgByName("kevlar")
 	if err != nil {
@@ -83,8 +83,8 @@ func TestExecuteQuery_TraceSpansTagsInteractiveOutput(t *testing.T) {
 	for _, pipeline := range []string{"trace spans", "trace spans shard.Query"} {
 		t.Run(pipeline, func(t *testing.T) {
 			c := setupTestCoordinator(t)
-			pool := &spyPool{inner: c.Pool}
-			c.Pool = pool
+			pool := &spyCompute{inner: c.Compute}
+			c.Compute = pool
 
 			res, err := c.Execute(context.Background(), pipeline, fullRange, "kevlar", "")
 			if err != nil {
@@ -107,8 +107,8 @@ func TestExecuteQuery_TraceSpansTagsInteractiveOutput(t *testing.T) {
 // same corruption risk, same alertCtx != nil gate.
 func TestExecuteForWatch_TraceSpansDoesNotTagOutput(t *testing.T) {
 	c := setupTestCoordinator(t)
-	pool := &spyPool{inner: c.Pool}
-	c.Pool = pool
+	pool := &spyCompute{inner: c.Compute}
+	c.Compute = pool
 
 	cust, err := c.Store.GetOrgByName("kevlar")
 	if err != nil {

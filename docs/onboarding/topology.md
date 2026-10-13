@@ -117,9 +117,9 @@ the output.
 Entry point: `cmd/compute/main.go`. gRPC on port 9010.
 
 Key files:
-- Interface: `compute/compute.go`
-- In-process fallback: `compute/local.go`
-- gRPC client: `compute/grpc_client.go`
+- Interface (`Executor`) + shard fan-out: `compute/compute.go`
+- Engine (merge, limits, warp stages): `compute/engine.go`
+- gRPC client the coordinator uses: `compute/client.go`
 
 ## The weftd agent
 

@@ -12,7 +12,7 @@ import (
 // the emitted lines and the stream's terminal error.
 func drainJob(t *testing.T, stages []string, rows ...string) ([]string, error) {
 	t.Helper()
-	pool := &LocalComputePool{}
+	pool := &Engine{}
 	job := pool.NewJob(stages, 1, "ts", 0, false, false)
 	go func() {
 		for i, r := range rows {

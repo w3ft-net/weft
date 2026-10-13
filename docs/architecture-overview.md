@@ -54,20 +54,18 @@ Coordinator.Query(pipeline, timeRange, customer)
     │    ├─ ShardSQL (pushdown WHERE clauses)
     │    └─ ComputeStages (remaining bash pipeline)
     │
-    ├─ Fan out ShardSQL to all matching shards (by time window)
+    ├─ Resolve matching shards (by time window) → ShardDescriptors
     │
-    ├─ If compute stages:
-    │    Coordinator creates job on compute worker (CreateJob RPC)
-    │    Shards stream rows to coordinator (QueryToSink)
-    │    Coordinator forwards to compute worker (SendRows RPC)
-    │    Coordinator fetches result (GetResult RPC)
-    │
-    │  Else: merge LogRows, apply limit/sort
+    ├─ ExecuteQueryStream RPC to the compute worker (every query,
+    │  including zero-stage ones):
+    │    Compute fans ShardSQL out to the shards (QueryToSink)
+    │    Compute k-way merges rows, applies the global limit
+    │    Compute runs ComputeStages through warp, streams line batches back
     │
     └─ Stream results back to client
 ```
 
-In prod, the coordinator connects to a remote compute ASG via `GRPCComputePool`. In dev/Docker, it runs compute in-process via `LocalComputePool`. The compute binary itself always runs warp/bash locally — the "remote" part is that it runs on a separate instance from the coordinator.
+The coordinator always talks to a separate compute worker through `compute.Client` (gRPC); it refuses to start without `--compute`. The worker (`cmd/compute`) serves a `compute.Engine`, which does the shard fan-out, merge, and warp stages. Tests run a `compute.Engine` in-process in place of the client.
 
 See `docs/optimizations.md` for known optimization opportunities (direct shard-to-compute streaming, narrow SELECT for compute path, schema-aware projection).
 
@@ -329,16 +327,13 @@ API client in `frontend/src/lib/api.ts` covers all REST endpoints. Auth state in
 ### ShardQuery (port 9000, runs on each shard)
 
 - `Query(QueryRequest) → stream LogRow` — pushdown SQL
-- `QueryToCompute(QueryToComputeRequest) → QueryToComputeResponse` — **stub**: intended for direct shard-to-compute streaming, currently returns empty
 - `Ingest(IngestRequest) → IngestResponse` — batch row insertion
 - `IngestStream(stream LogRow) → IngestStreamResponse` — long-lived agent stream
 - `Configure(ConfigureRequest) → ConfigureResponse` — blank shard initialization
 
 ### WeftCompute (port 9010, compute workers)
 
-- `CreateJob(CreateJobRequest) → CreateJobResponse` — pipeline stage setup
-- `SendRows(stream ComputeMessage) → SendRowsResponse` — row streaming
-- `GetResult(GetResultRequest) → GetResultResponse` — wait for completion
+- `ExecuteQueryStream(ExecuteQueryRequest) → stream ExecuteQueryStreamResponse` — fan out to shards, merge, run stages, stream line batches back
 
 ### WeftCoordinator (port 9020, client-facing)
 

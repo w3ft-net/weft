@@ -91,7 +91,7 @@ func TestIngestStream_NoGoroutineLeak(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: tx})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: tx})
 	srv := &Server{Coord: coord, Store: tx}
 
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -186,7 +186,7 @@ func TestIngestStream_AbandonedStreamReaped(t *testing.T) {
 	var cfgPtr atomic.Pointer[weftcfg.Runtime]
 	cfgPtr.Store(cfg)
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: tx})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: tx})
 	srv := &Server{Coord: coord, Store: tx, CfgPtr: &cfgPtr}
 
 	ctx := metadata.NewIncomingContext(context.Background(),

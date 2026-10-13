@@ -18,7 +18,7 @@ func TestAddSource_Kinesis(t *testing.T) {
 	st, cleanup := testStore(t)
 	defer cleanup()
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: st})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: st})
 	srv := &Server{Coord: coord, Store: st}
 
 	cust, err := st.FindOrCreateOrg("kinesis-addsource-test")
@@ -69,7 +69,7 @@ func TestAddSource_Kinesis_RequiresLogGroup(t *testing.T) {
 	st, cleanup := testStore(t)
 	defer cleanup()
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: st})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: st})
 	srv := &Server{Coord: coord, Store: st}
 
 	cust, err := st.FindOrCreateOrg("kinesis-addsource-validate-test")

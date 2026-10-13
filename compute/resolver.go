@@ -23,7 +23,7 @@ import (
 // queries against the same shard don't re-open the gRPC connection.
 type Resolver interface {
 	// ShardID returns the registry id for this shard. Used as the
-	// cache key by LocalComputePool.
+	// cache key by Engine.
 	ShardID() string
 
 	// Dial materializes the shard.Shard handle. Called once per

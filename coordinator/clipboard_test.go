@@ -13,7 +13,7 @@ func TestClipboardCommand_MakesAShortLink(t *testing.T) {
 	db, org := testStoreAndCustomer(t)
 	alice, _ := db.CreateUser("alice-clip@example.test")
 	db.SaveShellFunction(org, alice.ID, "scan", "echo hi", "bash")
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db, ShareURLBase: "https://share.test/"})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db, ShareURLBase: "https://share.test/"})
 
 	out := gitRun(t, c, org, alice.ID, "clipboard /bin/scan -- --app=loom --since=1h")
 	m := regexp.MustCompile(`copied: (https://share\.test/s/([0-9A-Za-z]{10}))\n`).FindStringSubmatch(out)
@@ -51,7 +51,7 @@ func TestClipboardCommand_MakesAShortLink(t *testing.T) {
 func TestClipboardCommand_Refusals(t *testing.T) {
 	db, org := testStoreAndCustomer(t)
 	alice, _ := db.CreateUser("alice-clip2@example.test")
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	for line, want := range map[string]string{
 		"clipboard":                           "usage: clipboard",
 		"clipboard /tmp/x":                    "must be a /bin/<name> path",

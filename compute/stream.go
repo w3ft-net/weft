@@ -24,7 +24,7 @@ type LineStream interface {
 }
 
 // channelLineStream wraps a chan Line so producers can push lines
-// incrementally — used by LocalComputeJob.consume after Phase 4's
+// incrementally — used by Job.consume after Phase 4's
 // producer-side streaming refactor. Errors propagate via the
 // dedicated err pointer; producer sets it before closing the channel
 // so consumers see the error after the channel signals exhaustion.
@@ -108,11 +108,7 @@ func drainLineStream(s LineStream) ([]Line, error) {
 	}
 }
 
-// LinesToText joins drained lines into a newline-terminated string.
-func LinesToText(lines []Line) string {
-	return linesToText(lines)
-}
-
+// linesToText joins drained lines into a newline-terminated string.
 func linesToText(lines []Line) string {
 	if len(lines) == 0 {
 		return ""

@@ -18,8 +18,8 @@ import (
 // InProcessResolver wraps a shard.Shard handle that already exists
 // in this process — typically a *shard.DuckDBShard built directly by
 // a test. Dial just returns the wrapped handle; ShardID returns the
-// id the test minted. Compute's LocalComputePool, once a test calls
-// pool.RegisterResolver(NewInProcessResolver(id, sh)), will route
+// id the test minted. compute.Engine, once a test calls
+// engine.RegisterResolver(NewInProcessResolver(id, sh)), will route
 // every descriptor with that ShardID through this resolver instead
 // of trying to dial GrpcAddr/LambdaUrl.
 type InProcessResolver struct {
@@ -34,7 +34,7 @@ func NewInProcessResolver(id string, sh shard.Shard) *InProcessResolver {
 }
 
 // ShardID returns the id this resolver claims. Used as the override
-// key in LocalComputePool.overrides.
+// key in Engine.overrides.
 func (r *InProcessResolver) ShardID() string { return r.id }
 
 // Dial returns the wrapped shard.Shard. Never errors; the handle is

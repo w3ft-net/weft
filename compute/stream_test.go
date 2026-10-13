@@ -8,8 +8,8 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-func TestLocalComputeJob_Stream(t *testing.T) {
-	pool := &LocalComputePool{}
+func TestJob_Stream(t *testing.T) {
+	pool := &Engine{}
 	job := pool.NewJob(nil, 2, "ts", 0, false, false)
 
 	go func() {

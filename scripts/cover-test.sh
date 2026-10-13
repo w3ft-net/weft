@@ -1,8 +1,7 @@
 #!/bin/bash
 # End-to-end runner for the cover-tagged integration tests
-# (everything gated by the `cover` build tag — `coverage_cover_test.go`,
-# `direct_to_compute_op[125]_*` boundary checks, and the op1/op2 main
-# tests that dial shard-0/shard-1 directly).
+# (everything gated by the `cover` build tag — `coverage_cover_test.go`
+# and the `direct_to_compute_op5_*` boundary check).
 #
 # Two passes are required because the boundary-coverage tests assert
 # against per-service `coverage/<service>.out` profile files that only
@@ -10,8 +9,7 @@
 # flush their counter files):
 #
 #   pass 1: stack up with cover overlay → run cover-tagged tests
-#           (port-dialing tests pass; boundary tests skip cleanly
-#           because no profiles exist yet)
+#           (boundary tests skip cleanly because no profiles exist yet)
 #   teardown → containers flush GOCOVERDIR counters to ./coverage/<svc>/
 #   coverage-report.sh → materializes coverage/<service>.out
 #   pass 2: stack down → re-run only the boundary tests against the
@@ -39,7 +37,7 @@ trap cleanup EXIT
 # match the current source tree.
 echo "=== Cleaning $COVDIR/ ==="
 rm -rf "$COVDIR"
-mkdir -p "$COVDIR"/{coordinator,shard-0,shard-1,compute,api}
+mkdir -p "$COVDIR"/{coordinator,compute,api}
 
 echo "=== Building + starting docker stack with cover overlay ==="
 docker compose "${COMPOSE_FILES[@]}" up -d --build
@@ -47,10 +45,9 @@ docker compose "${COMPOSE_FILES[@]}" up -d --build
 echo "=== Waiting for shard adoption ==="
 sleep 15
 
-# Pass 1: run the full cover-tagged suite. The port-9000-needing tests
-# (op1/op2 main, and the op5 main test isn't here — it's plain
-# integration) exercise the live cover-instrumented containers; the
-# boundary tests skip because no .out files exist yet.
+# Pass 1: run the full cover-tagged suite against the live cover-
+# instrumented containers; the boundary tests skip because no .out
+# files exist yet.
 echo "=== Pass 1: cover-tagged integration tests ==="
 go test -tags "$COVER_TAGS" ./integration/ -v -count=1 -timeout 5m
 
@@ -72,4 +69,4 @@ scripts/coverage-report.sh
 # the stack down to flush coverage counters.
 echo "=== Pass 2: boundary coverage checks against fresh profiles ==="
 WEFT_SKIP_STACK_CHECK=1 go test -tags "$COVER_TAGS" ./integration/ -v -count=1 -timeout 60s \
-    -run '^(TestRequireRanIn_.*|TestDirectToCompute_Op[125]_BoundaryCoverage)$'
+    -run '^(TestRequireRanIn_.*|TestDirectToCompute_Op5_BoundaryCoverage)$'

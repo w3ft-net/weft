@@ -286,12 +286,12 @@ func TestOnlineMerge_OneShard(t *testing.T) {
 	<-done
 }
 
-// TestLocalComputeJob_OnlineStreaming asserts the consume() side of
+// TestJob_OnlineStreaming asserts the consume() side of
 // the streaming property: Stream.Next returns A's first row before
 // every shard has sent its sentinel. This pins that consume()'s
 // refactor to onlineMerge actually surfaces the stream end-to-end.
-func TestLocalComputeJob_OnlineStreaming(t *testing.T) {
-	pool := &LocalComputePool{}
+func TestJob_OnlineStreaming(t *testing.T) {
+	pool := &Engine{}
 	job := pool.NewJob(nil, 2, "ts", 0, false, false)
 
 	job.SendRow(row(1, "one"), "a")

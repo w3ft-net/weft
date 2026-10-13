@@ -88,7 +88,7 @@ Two distinct needs, at two different scales:
 
 **Phase 1 — per-trace rollup, client-side only, no backend changes.**
 `trace <id>` already buffers a trace's entire row set before display
-(`compute/local.go`'s `emitTraceTagged` merges the full shard fan-out
+(`compute/engine.go`'s `emitTraceTagged` merges the full shard fan-out
 before emitting). Every span line is already in that buffer today —
 rolling them up is pure client-side text parsing on data weft already
 fetches, the same "server ships plain data, client renders" split
@@ -146,8 +146,8 @@ it: `case "tail":` hand-parses `-f`/`-n N`/bare `-N` with a manual
 loop over `args`; `--spans` follows the identical shape. Threading it
 through: `sourceInfo` gains a `spansOnly bool` field, `QueryPlan`
 mirrors it, and — same relay path `TraceTag` already uses today
-(`coordinator.go`'s `c.Pool.ExecuteQuery` call → `pb.
-ExecuteQueryRequest` → `compute/local.go`'s `NewJob` →
+(`coordinator.go`'s `c.Compute.ExecuteQuery` call → `pb.
+ExecuteQueryRequest` → `compute/engine.go`'s `NewJob` →
 `job.traceTag`/`consume()`) — a sibling `SpansOnly` bool rides the
 same wire request. Server-side, this changes nothing about the SQL
 (`trace_id = ?`, unchanged) or the row data emitted — `emitTraceTagged`
@@ -406,7 +406,7 @@ Phase 2 (backend aggregation) — 🟢 shipped, pending `weft-go` publish
    `JQMetaVars` additions — done (`span_name`/`span_id`/`duration_ns`,
    as `SPAN_NAME`/`SPAN_ID`/`DURATION_NS` and `_span_name`/`_span_id`/
    `_duration_ns` respectively).
-10. ~~`compute/local.go`: new emit/merge path~~ — **not needed.**
+10. ~~`compute/engine.go`: new emit/merge path~~ — **not needed.**
     `coordinator.go`'s existing `TraceTag` condition (which drives
     `emitTraceTagged`) extended to also fire for `SourceCmd ==
     "trace_spans"`; the buffer-then-emit path itself needed zero

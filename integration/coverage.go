@@ -11,7 +11,7 @@
 // This file exposes a loader + RequireRanIn assertion so the
 // integration suite can prove a function actually executed in the
 // process we expected. That matters when we're moving compute
-// boundaries around: "did QueryToCompute run in the shard binary
+// boundaries around: "did FanOutToShards run in the compute binary
 // (not the coordinator)?" catches the kind of mock-in-the-wrong-
 // process regression that's a nightmare to debug in prod.
 package integration
@@ -32,7 +32,7 @@ import (
 type CoverageEntry struct {
 	File     string  // e.g. github.com/graybeardcorp/weft/shard/service/server.go
 	Line     int     // declaration line
-	Function string  // e.g. QueryToCompute
+	Function string  // e.g. FanOutToShards
 	Percent  float64 // 0..100
 }
 

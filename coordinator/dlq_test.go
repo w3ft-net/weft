@@ -166,7 +166,7 @@ func TestDLQ_Write_NilSafe(t *testing.T) {
 // pulled off the ring buffer lands in the DLQ.
 func TestDrain_NoHealthyShards_RoutesToDLQ(t *testing.T) {
 	dlq, putter := testDLQ()
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, DLQ: dlq})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, DLQ: dlq})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -193,7 +193,7 @@ func TestDrain_NoHealthyShards_RoutesToDLQ(t *testing.T) {
 // in the DLQ.
 func TestDrain_PrimaryAndFallbackFail_RoutesToDLQ(t *testing.T) {
 	dlq, putter := testDLQ()
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, DLQ: dlq})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, DLQ: dlq})
 	// Apps must include the row's app, otherwise IngestingShard
 	// returns nil and we'd hit the "no shard owns this app" branch
 	// instead of the primary+fallback-fail one we're pinning here.

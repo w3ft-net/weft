@@ -20,10 +20,9 @@ import (
 // Test feeds two shards their ASC-ordered tail-3 windows (the wire
 // shape after the subquery flip) and asserts the merged output is the
 // global last 3 rows in ts ASC order.
-func TestLocalComputeJob_TailMergeReturnsAscOrder(t *testing.T) {
-	pool := &LocalComputePool{}
-	jobIface := pool.NewJob(nil, 2, "ts", 3, true, false)
-	job := jobIface.(*LocalComputeJob)
+func TestJob_TailMergeReturnsAscOrder(t *testing.T) {
+	pool := &Engine{}
+	job := pool.NewJob(nil, 2, "ts", 3, true, false)
 
 	// Shard A — its last 3 in ASC after the outer-flip subquery.
 	for _, r := range []*pb.ResultRow{
@@ -67,8 +66,8 @@ func TestLocalComputeJob_TailMergeReturnsAscOrder(t *testing.T) {
 // rows in ASC order so downstream tools (grep, awk, sed) operate on a
 // log-shaped stream. Pinning this separately from the zero-stage case
 // because consume() takes a different code path through warp's bash.
-func TestLocalComputeJob_TailMergeAscThroughStages(t *testing.T) {
-	pool := &LocalComputePool{}
+func TestJob_TailMergeAscThroughStages(t *testing.T) {
+	pool := &Engine{}
 	job := pool.NewJob([]string{"grep e"}, 2, "ts", 3, true, false)
 
 	for _, r := range []*pb.ResultRow{
@@ -102,14 +101,13 @@ func TestLocalComputeJob_TailMergeAscThroughStages(t *testing.T) {
 	}
 }
 
-// TestLocalComputeJob_TailUnderLimit exercises the case where the
+// TestJob_TailUnderLimit exercises the case where the
 // merged stream has fewer rows than the requested N — the buffer must
 // emit everything it saw without rotation (rotation logic only kicks
 // in once len(buf) hits j.limit).
-func TestLocalComputeJob_TailUnderLimit(t *testing.T) {
-	pool := &LocalComputePool{}
-	jobIface := pool.NewJob(nil, 2, "ts", 10, true, false)
-	job := jobIface.(*LocalComputeJob)
+func TestJob_TailUnderLimit(t *testing.T) {
+	pool := &Engine{}
+	job := pool.NewJob(nil, 2, "ts", 10, true, false)
 
 	for _, r := range []*pb.ResultRow{
 		{TsUnixNs: 1000, Raw: "one"},

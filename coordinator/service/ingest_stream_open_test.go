@@ -39,7 +39,7 @@ func TestIngestStream_SteadyStateOpenTouchesNoAuthTables(t *testing.T) {
 	tx.EnableAuthCache()
 	seen := store.NewAgentSeenTracker(tx)
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: tx})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: tx})
 	srv := &Server{Coord: coord, Store: tx, AgentSeen: seen}
 
 	var stmts atomic.Int64

@@ -116,7 +116,7 @@ func TestColdShardQueryRouting(t *testing.T) {
 	t.Cleanup(func() { cold.Close() })
 
 	svcs := []store.ShardService{{NamespaceID: ns.ID, Service: "vimgym"}}
-	c := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{},
+	c := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{},
 		Store:             tx,
 		LambdaFunctionURL: lambdaSrv.URL})
 

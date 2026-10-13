@@ -64,7 +64,7 @@ func ctxWithBearer(token string) context.Context {
 // only auth, so we don't need a real DB.
 func helperServer(t *testing.T) *Server {
 	t.Helper()
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}})
 	logdb.SeedShard(coord.Provisioner, &logdb.Shard{ID: "shard-a", State: logdb.StateIngesting})
 	return &Server{Coord: coord}
 }

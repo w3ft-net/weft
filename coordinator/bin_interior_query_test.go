@@ -70,7 +70,7 @@ func newInteriorQueryFixtureOn(t *testing.T, db *store.Store, custID store.OrgID
 		t.Fatalf("ingest: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
 		Store: db})
 	addInProcessShard(t, c, &logdb.Shard{
 		ID:        s.ID(),

@@ -7,14 +7,14 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-// TestLocalComputeJob_JqMetaVarOutputRead is the end-to-end regression
+// TestJob_JqMetaVarOutputRead is the end-to-end regression
 // test for "jq's reserved meta-variables ... resolve to null when read
 // as output" (docs/known-issues.md): runs a real jq stage through
 // warp's bash.RunStreaming (not just mergeMetaVars in isolation) and
 // asserts a bare "._host" read resolves to the row's actual instance
 // column instead of null.
-func TestLocalComputeJob_JqMetaVarOutputRead(t *testing.T) {
-	pool := &LocalComputePool{}
+func TestJob_JqMetaVarOutputRead(t *testing.T) {
+	pool := &Engine{}
 	job := pool.NewJob([]string{`jq -r '._host'`}, 1, "ts", 0, false, false)
 	job.SendRow(&pb.ResultRow{
 		TsUnixNs: 1000,
@@ -37,8 +37,8 @@ func TestLocalComputeJob_JqMetaVarOutputRead(t *testing.T) {
 // unmodified: jq still runs, but "._host" is genuinely absent from the
 // row, so it resolves to null exactly as it would against real
 // standalone jq.
-func TestLocalComputeJob_JqMetaVarOutputRead_NoMetaVarsIsNull(t *testing.T) {
-	pool := &LocalComputePool{}
+func TestJob_JqMetaVarOutputRead_NoMetaVarsIsNull(t *testing.T) {
+	pool := &Engine{}
 	job := pool.NewJob([]string{`jq -r '._host'`}, 1, "ts", 0, false, false)
 	job.SendRow(&pb.ResultRow{TsUnixNs: 1000, Raw: `{"pct":42}`}, "a")
 	job.SendSentinel("a")

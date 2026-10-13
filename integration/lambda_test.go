@@ -111,7 +111,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 //
 // Unlike TestLambdaColdShard_DockerIntegration (which calls ColdShard
 // directly), this drives the real compute lifecycle —
-// LocalComputePool.ExecuteQuery → FanOutToShards → DialShard →
+// Engine.ExecuteQuery → FanOutToShards → DialShard →
 // ColdShard — configured exactly as cmd/compute/main.go configures it,
 // including compute.ResolveRegion(). AWS_REGION is unset here (the
 // prod compute-instance state before the deploy fix), so this also
@@ -148,7 +148,7 @@ func TestComputeLifecycle_LambdaColdShardReachable(t *testing.T) {
 	}
 
 	// Configure the pool exactly as cmd/compute/main.go does.
-	pool := &compute.LocalComputePool{AWSRegion: compute.ResolveRegion()}
+	pool := &compute.Engine{AWSRegion: compute.ResolveRegion()}
 
 	stream, err := pool.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
 		Sql: "SELECT raw, ts FROM logs WHERE customer_id = 1",

@@ -38,7 +38,7 @@ func TestIngestStream_FlushesImmediatelyForActiveTailSubscriber(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{},
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{},
 		Store: tx,
 		Tail:  coordinator.NewTailBroker()})
 	srv := &Server{Coord: coord, Store: tx}

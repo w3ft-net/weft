@@ -20,7 +20,7 @@ When `/bin/audit` runs:
 
 1. `runLocal` applies `BinScriptTransform` when warp loads `/bin/audit`. The rewrite wraps the whole pipeline in a `CallbackCommand` (leading command `cat` is query-shape).
 2. The callback calls `coord.query(…)`. The planner splits: `cat /log/events.log | grep ERROR` pushes into shard SQL; `lookup "$event_field"` is a compute stage.
-3. The compute pool picks up the row stream plus the stage list `["lookup $event_field"]`. `compute/local.go:110` calls `bash.RunWithParallelism(pipeline, input, parallelism)`.
+3. The compute pool picks up the row stream plus the stage list `["lookup $event_field"]`. `compute/engine.go:110` calls `bash.RunWithParallelism(pipeline, input, parallelism)`.
 4. `RunWithParallelism` constructs a fresh `Interpreter` with `NewInterpreter` — no `fs`, no `BinScriptTransform`, no weft context at all. Warp's default FS is an empty `MemFS`.
 5. Warp's `execSimple` looks up `lookup`: not a builtin, not a function, not a registered command. PATH resolution asks `interp.fs.ReadFile("/bin/lookup")` → empty MemFS → not found. Exit 127: `bash: lookup: command not found`.
 
@@ -30,9 +30,9 @@ There is also a subtler problem. Even if we hook `ShellFS` into the compute work
 
 ## Why it's architecturally non-trivial
 
-"Just wire the compute worker's interpreter the same way the coordinator's is" sounds easy, and at the local-compute-pool level it almost is: `compute/local.go` could accept a tenant context and configure the interpreter accordingly. But the wiring cascades:
+"Just wire the compute worker's interpreter the same way the coordinator's is" sounds easy, and at the local-compute-pool level it almost is: `compute/engine.go` could accept a tenant context and configure the interpreter accordingly. But the wiring cascades:
 
-- **Compute isn't always local.** There's a `compute/grpc_client.go` and a `compute/service/server.go`. The remote compute path means the interpreter running `lookup "$event_field"` may live in a different process, possibly on a different host. An interior query inside it needs *something* to call `coord.query` from the compute worker's side — either (a) the compute worker calls back across the network to the coordinator, (b) the compute worker talks to shards directly (needs customer auth, retention enforcement, all the things the coordinator currently centralises), or (c) the coordinator pre-plans the interior query and sends the compute worker a resolved result.
+- **Compute isn't always local.** There's a `compute/client.go` and a `compute/service/server.go`. The remote compute path means the interpreter running `lookup "$event_field"` may live in a different process, possibly on a different host. An interior query inside it needs *something* to call `coord.query` from the compute worker's side — either (a) the compute worker calls back across the network to the coordinator, (b) the compute worker talks to shards directly (needs customer auth, retention enforcement, all the things the coordinator currently centralises), or (c) the coordinator pre-plans the interior query and sends the compute worker a resolved result.
 - **Security boundary.** Compute workers today are trust-minimised: they receive an SQL result stream and a pipeline string, they run bash on it, they return stdout. Giving them a coord-callback channel gives them the ability to issue queries — which means they must authenticate, rate-limit per tenant, observe retention, etc. The coordinator is the current home for all of that; replicating it on the worker, or proxying through the coordinator, is the actual cost.
 - **Failure/retry/timeout posture.** Compute jobs have their own timeout and retry model. An inner `coord.query` call inherits a different model. Composing the two (outer job's deadline vs. inner query's deadline) isn't obvious.
 - **Observability.** A user who runs one top-level query would see one request in logs. A nested /bin query fans that into N queries across a pool. Spans/traces need to stitch.
@@ -53,9 +53,9 @@ Detection: at save time we know (for each customer) the set of /bin script names
 
 ### (B) Make the compute pool coordinator-aware
 
-Wire `ShellFS` and `BinScriptTransform` into the interpreter `compute/local.go` constructs. Introduce a `ComputeContext` that carries `customerID`, `tr`, `coord`, `alertCtx`. The job runner threads it through to the per-stage `RunWithParallelism` call (or a new variant that takes it).
+Wire `ShellFS` and `BinScriptTransform` into the interpreter `compute/engine.go` constructs. Introduce a `ComputeContext` that carries `customerID`, `tr`, `coord`, `alertCtx`. The job runner threads it through to the per-stage `RunWithParallelism` call (or a new variant that takes it).
 
-For the local compute path this is ~30 lines: `compute.LocalComputePool.NewJob` gets new parameters, the interpreter setup copies what `runLocal` does, `BinScriptTransform` captures the same context as in `runLocal`.
+For the local compute path this is ~30 lines: `compute.Engine.NewJob` gets new parameters, the interpreter setup copies what `runLocal` does, `BinScriptTransform` captures the same context as in `runLocal`.
 
 For the remote compute path (if we still have one in production — worth confirming before committing), the wiring is heavier. The compute worker needs:
 - A coordinator endpoint address.
@@ -88,7 +88,7 @@ Cons: new RPC, new auth path, new failure mode to handle (coord unreachable from
 
 **Ship (A) first**, as a short-term user-experience improvement: the current failure is command-not-found from a compute worker, which is opaque. A save-time validation error with a message that points at the offending stage is a strictly better experience while we work out the design for real support.
 
-**Then evaluate (D) versus (B).** If the remote compute path is still a live deployment target, (D) is the right answer — it's the only option that keeps the compute worker's trust surface narrow. If compute is always local in production (worth confirming; there's `compute/grpc_client.go` and `compute/service/server.go`), (B) is simpler and cheaper.
+**Then evaluate (D) versus (B).** If the remote compute path is still a live deployment target, (D) is the right answer — it's the only option that keeps the compute worker's trust surface narrow. If compute is always local in production (worth confirming; there's `compute/client.go` and `compute/service/server.go`), (B) is simpler and cheaper.
 
 **(C) is probably not worth it.** The inliner's edge cases are the same hard problems that made option (b) in the main plan — the synthetic-command rewrite — fail.
 

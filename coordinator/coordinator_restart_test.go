@@ -22,7 +22,7 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 	}
 	t.Cleanup(func() { s0.Close() })
 
-	coord := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: testQueryStore(t, "testcust", "myapp")})
+	coord := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: testQueryStore(t, "testcust", "myapp")})
 	addInProcessShard(t, coord, &logdb.Shard{
 		ID:          "shard-0",
 		WindowStart: DevT0,

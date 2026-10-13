@@ -143,7 +143,7 @@ stage — forces the planner's `includeMetaVars` projection (normally only
 triggered by an explicit meta-var reference) so `NAMESPACE`/`SERVICE`/etc.
 are always real, pipeline-filterable fields for trace specifically
 (`planner/planner.go`). The coordinator buffers the full merged result
-(`compute/local.go`'s `emitTraceTagged`), emits a one-line summary
+(`compute/engine.go`'s `emitTraceTagged`), emits a one-line summary
 ("N line(s) across M service(s), \<first ts\> to \<last ts\>"), then each row
 prefixed with a colored `[namespace/service]` badge (`theme.TraceTag`,
 deterministic per-service color, disjoint from `theme.Palette()`'s

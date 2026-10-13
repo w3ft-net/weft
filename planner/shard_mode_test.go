@@ -172,8 +172,8 @@ func TestClassifyShardMode_C(t *testing.T) {
 	}
 }
 
-// TestDirectShardSQL verifies op 6: the SQL the coordinator sends to
-// shards via QueryToCompute uses ShardOrderBy/ShardLimit instead of
+// TestDirectShardSQL verifies op 6: the SQL compute sends to shards
+// uses ShardOrderBy/ShardLimit instead of
 // the head/tail-derived ts ASC/DESC, and omits ORDER BY entirely in
 // Mode C.
 func TestDirectShardSQL(t *testing.T) {

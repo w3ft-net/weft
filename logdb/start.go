@@ -44,7 +44,7 @@ type Config struct {
 	// ShardSecret is the SHARD_SECRET bearer for outbound coord→shard
 	// gRPC dials made by the Provisioner (heartbeat-adopt, rebind)
 	// and by ReconstructShard during boot. The query path's secret
-	// lives in compute, not here — see compute.LocalComputePool.
+	// lives in compute, not here — see compute.Engine.
 	ShardSecret string
 
 	// AWSRegion is threaded into NewEC2Provisioner / NewEC2VolumeManager.

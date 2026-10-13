@@ -18,20 +18,20 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// poolFromCoord returns the *compute.LocalComputePool that
-// setupTestCoordinator and friends passed as CoordinatorConfig.Pool.
-// Fails the test if some earlier code wrapped or replaced c.Pool — that's a setup-order bug.
-func poolFromCoord(t testing.TB, c *Coordinator) *compute.LocalComputePool {
+// engineFromCoord returns the *compute.Engine that
+// setupTestCoordinator and friends passed as CoordinatorConfig.Compute.
+// Fails the test if some earlier code wrapped or replaced c.Compute — that's a setup-order bug.
+func engineFromCoord(t testing.TB, c *Coordinator) *compute.Engine {
 	t.Helper()
-	pool, ok := c.Pool.(*compute.LocalComputePool)
+	pool, ok := c.Compute.(*compute.Engine)
 	if !ok {
-		t.Fatalf("expected c.Pool to be *compute.LocalComputePool, got %T", c.Pool)
+		t.Fatalf("expected c.Compute to be *compute.Engine, got %T", c.Compute)
 	}
 	return pool
 }
 
 // addInProcessShard wires e.Live into both c.Provisioner (so query
-// planning sees the entry) and c.Pool's resolver overrides (so
+// planning sees the entry) and c.Compute's resolver overrides (so
 // compute can run QueryToSink against the in-process handle without
 // dialing). This is the unit-test replacement for the old
 // registryPool bypass — compute still owns the dispatch, but the
@@ -41,7 +41,7 @@ func addInProcessShard(t testing.TB, c *Coordinator, e *logdb.Shard, apps ...str
 	if e.Live == nil {
 		t.Fatal("addInProcessShard: entry must have non-nil Shard")
 	}
-	poolFromCoord(t, c).RegisterResolver(computetest.NewInProcessResolver(e.ID, e.Live))
+	engineFromCoord(t, c).RegisterResolver(computetest.NewInProcessResolver(e.ID, e.Live))
 	logdb.SeedShard(c.Provisioner, e)
 	stampShardServicesFromApps(t, c, e, apps)
 }
@@ -207,7 +207,7 @@ func setupTestCoordinator(t testing.TB) *Coordinator {
 	}
 
 	apps := []string{"vimgym", "callbox"}
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: testQueryStore(t, "kevlar", "vimgym", "callbox", "warp")})
 	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
@@ -629,11 +629,11 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	now := time.Now()
 	apps := []string{"vimgym", "callbox"}
 
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
 		LambdaFunctionURL: "https://lambda.example.com/cold-query"})
-	// Register in-process resolvers on the LocalComputePool
-	// BEFORE wrapping in spyPool, because addInProcessShard reaches
-	// for the underlying *compute.LocalComputePool through c.Pool.
+	// Register in-process resolvers on the compute.Engine
+	// BEFORE wrapping in spyCompute, because addInProcessShard reaches
+	// for the underlying *compute.Engine through c.Compute.
 	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-live",
 		WindowStart: now.Add(-2 * time.Hour), WindowEnd: now.Add(-1 * time.Hour),
@@ -647,8 +647,8 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 		RowCount:  1,
 		CreatedAt: now,
 	}, apps...)
-	spy := &spyPool{inner: c.Pool}
-	c.Pool = spy
+	spy := &spyCompute{inner: c.Compute}
+	c.Compute = spy
 
 	tr := TimeRange{Start: now.Add(-2 * time.Hour), End: now}
 	plan := &planner.QueryPlan{

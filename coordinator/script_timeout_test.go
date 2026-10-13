@@ -32,7 +32,7 @@ func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
 		Store:                  db,
 		ScriptExecutionTimeout: 200 * time.Millisecond})
 
@@ -75,7 +75,7 @@ func TestRunLocal_QuickScriptCompletesNormally(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
 		Store:                  db,
 		ScriptExecutionTimeout: 5 * time.Second})
 

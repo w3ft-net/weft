@@ -49,7 +49,7 @@ func TestIngestStream_PerTokenRateLimit_ThrottlesButDeliversAll(t *testing.T) {
 	var cfgPtr atomic.Pointer[weftcfg.Runtime]
 	cfgPtr.Store(cfg)
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: tx})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: tx})
 	srv := &Server{Coord: coord, Store: tx, CfgPtr: &cfgPtr}
 
 	ctx := metadata.NewIncomingContext(context.Background(),
@@ -104,7 +104,7 @@ func TestIngestStream_PerTokenRateLimit_Disabled(t *testing.T) {
 	var cfgPtr atomic.Pointer[weftcfg.Runtime]
 	cfgPtr.Store(cfg)
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: tx})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: tx})
 	srv := &Server{Coord: coord, Store: tx, CfgPtr: &cfgPtr}
 
 	ctx := metadata.NewIncomingContext(context.Background(),

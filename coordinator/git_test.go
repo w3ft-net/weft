@@ -43,7 +43,7 @@ func TestGitCommand_EndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
 	// Org-wide and per-path log; a relative path after cd.
 	if out := gitRun(t, c, org, alice.ID, "git log --oneline --no-decorate"); strings.Count(out, "bin/scan") != 3 {

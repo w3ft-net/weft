@@ -17,7 +17,7 @@ Chrome. Two real bugs found and fixed during that pass:
   ignored (the in-flight replacement request's own state update wins).
 - The server embeds ANSI color codes in `trace`'s passthrough
   lines (the "# N line(s)..." summary and "# no lines found" text —
-  see `compute/local.go`'s `emitTraceTagged`, written for CLI
+  see `compute/engine.go`'s `emitTraceTagged`, written for CLI
   scrollback). `GapView` was rendering that `Raw` text verbatim into
   the DOM, showing literal escape codes. Fixed with a `stripAnsi`
   helper applied to non-data rows.

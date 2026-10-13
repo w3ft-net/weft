@@ -85,7 +85,7 @@ func ParseTraceRows(lines []string) []TraceRow {
 	return rows
 }
 
-// RenderTraceColumns re-renders the delimited rows compute.LocalComputeJob's
+// RenderTraceColumns re-renders the delimited rows compute.Job's
 // emitTraceTagged emits for a bare `trace <id>` ("<ts_unix_ns>\t<namespace/
 // service>\t<raw message>") into a 3-column display sized to termWidth:
 //

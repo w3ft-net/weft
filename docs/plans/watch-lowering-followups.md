@@ -249,11 +249,11 @@ unsupported shapes, version mismatches). But for those that do, the
 1.2 ms could come down.
 
 Likely levers:
-- **Zero-stage fast path in compute.** `compute.LocalComputeJob`
+- **Zero-stage fast path in compute.** `compute.Job`
   already special-cases zero-stage in `consume()` (streams directly
   to `streamCh` without warp). Verify it's being hit; if there's a
   reason it isn't, fix that.
-- **Channel size tuning**. `LocalComputeJob.ch` is 1024; check if
+- **Channel size tuning**. `compute.Job.ch` is 1024; check if
   smaller (or unbuffered) hurts or helps for low-row queries.
 - **Warp interpreter cold-start**. If warp does heavyweight setup
   per `bash.RunStreaming` call, amortize via a pooled interpreter
@@ -265,7 +265,7 @@ slow-path callers may have different shape). Then write targeted
 benches before any code change.
 
 Files:
-- `compute/local.go::consume` — zero-stage path inspection.
+- `compute/engine.go::consume` — zero-stage path inspection.
 - Possibly `compute/compute.go` — pool the interpreter.
 - New `compute/orchestration_bench_test.go` — focused per-stage
   benches.

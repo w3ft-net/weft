@@ -69,7 +69,7 @@ func TestExecuteRPC_TraceIDSurvivesGRPCMetadataBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: st})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: st})
 	srv := &Server{Coord: coord, Store: st}
 
 	ctx := auth.WithClaims(context.Background(), &auth.Claims{UserID: user.ID})

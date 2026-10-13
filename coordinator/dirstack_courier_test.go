@@ -28,7 +28,7 @@ import (
 // when the pipeline doesn't move.
 func TestCourier_SeedReadback(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
 	res, err := c.ExecuteWithDir(context.Background(), "pwd", TimeRange{}, "", "", []string{"/log/acme"})
 	if err != nil {
@@ -47,7 +47,7 @@ func TestCourier_SeedReadback(t *testing.T) {
 // the new cwd comes back on FinalDirStack — the server owns cd semantics.
 func TestCourier_CdMovesCwd(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
 	res, err := c.ExecuteWithDir(context.Background(), "cd /bin && pwd", TimeRange{}, "", "", []string{"/tmp"})
 	if err != nil {
@@ -67,7 +67,7 @@ func TestCourier_CdMovesCwd(t *testing.T) {
 // (without it the server would resolve against "/").
 func TestCourier_RelativeCdResolvesAgainstSeed(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
 	res, err := c.ExecuteWithDir(context.Background(), "cd sub && pwd", TimeRange{}, "", "", []string{"/log/acme"})
 	if err != nil {
@@ -86,7 +86,7 @@ func TestCourier_RelativeCdResolvesAgainstSeed(t *testing.T) {
 // stack (index 0 == cwd) comes back, so the client caches more than cwd.
 func TestCourier_PushdReturnsFullStack(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
 	res, err := c.ExecuteWithDir(context.Background(), "pushd /bin", TimeRange{}, "", "", []string{"/tmp"})
 	if err != nil {
@@ -103,7 +103,7 @@ func TestCourier_PushdReturnsFullStack(t *testing.T) {
 // Guards backwards-compat for every existing Execute caller.
 func TestCourier_NilSeedDefaultsToRoot(t *testing.T) {
 	db, _ := testStoreAndCustomer(t)
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
 	res, err := c.Execute(context.Background(), "pwd", TimeRange{}, "", "")
 	if err != nil {

@@ -27,7 +27,7 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 		t.Fatalf("get customer: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
 		Store:    db,
 		Notifier: NewNotifier(db, nil)})
 
@@ -61,7 +61,7 @@ func TestQuery_InteractiveAlertFallbackWhenNoNotifier(t *testing.T) {
 		t.Fatalf("get customer: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
 		Store: db}) // Notifier: nil
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}

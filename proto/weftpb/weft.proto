@@ -12,11 +12,6 @@ service ShardQuery {
   // Query executes pushed-down SQL and streams result rows (raw, ts).
   rpc Query(QueryRequest) returns (stream ResultRow);
 
-  // QueryToCompute executes SQL and streams rows directly to a compute
-  // job, followed by a sentinel. The shard manages its own connection
-  // to the compute service.
-  rpc QueryToCompute(QueryToComputeRequest) returns (QueryToComputeResponse);
-
   // Ingest accepts a batch of rows for insertion into the shard.
   rpc Ingest(IngestRequest) returns (IngestResponse);
 
@@ -82,19 +77,6 @@ message QueryRequest {
   // Positional placeholder values for `?` markers in sql, in render
   // order. See ExecuteQueryRequest.args for the binding contract.
   repeated string args = 2;
-}
-
-message QueryToComputeRequest {
-  string sql = 1;
-  string compute_addr = 2;  // address of the compute worker
-  string job_id = 3;        // compute job to send rows to
-  // Positional placeholder values for `?` markers in sql. See
-  // ExecuteQueryRequest.args.
-  repeated string args = 7;
-}
-
-message QueryToComputeResponse {
-  int64 rows_sent = 1;
 }
 
 // ResultRow is the query result type — shards return (raw, ts).
@@ -182,82 +164,10 @@ message IngestResponse {
 // ---------------------------------------------------------------------------
 
 service WeftCompute {
-  // CreateJob creates a new compute job with the given pipeline stages.
-  rpc CreateJob(CreateJobRequest) returns (CreateJobResponse);
-
-  // SendRows streams rows and sentinels to an active job.
-  rpc SendRows(stream ComputeMessage) returns (SendRowsResponse);
-
-  // GetResult blocks until the job is complete and returns the output.
-  rpc GetResult(GetResultRequest) returns (GetResultResponse);
-
-  // ExecuteQuery fans out SQL to shards, merges results, applies
-  // pipeline stages, and returns the output. The coordinator sends
-  // the full plan; compute does all shard I/O.
-  rpc ExecuteQuery(ExecuteQueryRequest) returns (ExecuteQueryResponse);
-
-  // ExecuteQueryStream is the streaming variant of ExecuteQuery.
-  // Lines are sent in batches as the merge/pipeline produces them.
+  // ExecuteQueryStream fans out SQL to shards, merges results, applies
+  // pipeline stages, and streams the output back in line batches. The
+  // coordinator sends the full plan; compute does all shard I/O.
   rpc ExecuteQueryStream(ExecuteQueryRequest) returns (stream ExecuteQueryStreamResponse);
-}
-
-message CreateJobRequest {
-  repeated string stages = 1;
-  int32 shard_count = 2;
-
-  // Ordering key for compute's k-way merge across shard input
-  // streams. One of:
-  //   ""             → concat (rows emitted in arrival order).
-  //   "ts"           → merge by ts_unix_ns ascending.
-  //   "ts DESC"      → merge by ts_unix_ns descending.
-  //   "raw"          → merge by raw ascending.
-  //   "raw DESC"     → merge by raw descending.
-  // Shards bake the same ORDER BY into their SQL so their per-shard
-  // output is already sorted; merge_key tells compute which column
-  // to walk through the heap on. Empty = "don't merge, just concat"
-  // — matches the old coordinator-side buffered path.
-  string merge_key = 3;
-
-  // Global limit applied to the merged stream BEFORE the stages run.
-  // 0 = no limit. Mirrors planner.QueryPlan.Limit (the user-visible
-  // head/tail count). Without this, per-shard LIMIT N gets multiplied
-  // by shard count when downstream stages see the union — a bare
-  // `tail -n N | wc -l` would return N×num_shards.
-  int32 limit = 4;
-
-  // keep_last selects the limit semantics. false (default) is the
-  // head-style "stop after N emitted" trim. true switches to tail-
-  // style "retain the last N seen, emit at EOF" — required when the
-  // shard SQL is the tail subquery flip (inner ts-DESC LIMIT N, outer
-  // ts-ASC) and rows arrive at compute in ASC: cross-shard LIMIT N on
-  // an ASC merge would otherwise return the *oldest* N of the per-
-  // shard tails, not the global last N. See
-  // planner/sql.go::Query.Wrap.
-  bool keep_last = 5;
-}
-
-message CreateJobResponse {
-  string job_id = 1;
-}
-
-message ComputeMessage {
-  string job_id = 1;
-  string shard_id = 2;
-  bool sentinel = 3;
-  ResultRow row = 4;  // nil/empty for sentinel messages
-}
-
-message SendRowsResponse {
-  int64 rows_received = 1;
-}
-
-message GetResultRequest {
-  string job_id = 1;
-}
-
-message GetResultResponse {
-  string text = 1;
-  string error = 2;
 }
 
 // ShardDescriptor tells compute how to reach a shard.
@@ -278,7 +188,24 @@ message ExecuteQueryRequest {
   string sql = 1;
   repeated ShardDescriptor shards = 2;
   repeated string stages = 3;
+  // Ordering key for compute's k-way merge across shard input
+  // streams. One of:
+  //   ""             → concat (rows emitted in arrival order).
+  //   "ts"           → merge by ts_unix_ns ascending.
+  //   "ts DESC"      → merge by ts_unix_ns descending.
+  //   "raw"          → merge by raw ascending.
+  //   "raw DESC"     → merge by raw descending.
+  // Shards bake the same ORDER BY into their SQL so their per-shard
+  // output is already sorted; merge_key tells compute which column
+  // to walk through the heap on. Empty = "don't merge, just concat"
+  // — matches the old coordinator-side buffered path.
   string merge_key = 4;
+
+  // Global limit applied to the merged stream BEFORE the stages run.
+  // 0 = no limit. Mirrors planner.QueryPlan.Limit (the user-visible
+  // head/tail count). Without this, per-shard LIMIT N gets multiplied
+  // by shard count when downstream stages see the union — a bare
+  // `tail -n N | wc -l` would return N×num_shards.
   int32 limit = 5;
   // Tag 6 was string shard_secret; the bearer token now lives on the
   // compute worker (SHARD_SECRET env var, read in cmd/compute/main.go)
@@ -290,7 +217,7 @@ message ExecuteQueryRequest {
   // seen across the merged stream and emits at EOF (tail). Set by the
   // coordinator when planner.QueryPlan.TailMode is true — tail's
   // subquery flip lands rows in ts ASC, so the global last N can't be
-  // resolved by stopping early. See compute/local.go::consume.
+  // resolved by stopping early. See compute/engine.go::consume.
   bool keep_last = 7;
   // Positional placeholder values for `?` markers in sql, in render
   // order. Today the planner ships values as strings (customer id,
@@ -303,15 +230,10 @@ message ExecuteQueryRequest {
   // trace_tag is set by the coordinator when planner.QueryPlan.SourceCmd ==
   // "trace", there are no downstream compute stages, and the dispatch is
   // interactive (not a cron/watch/dashboard fire — see AlertContext gating
-  // in coordinator.go). Tells compute/local.go::consume to buffer the
+  // in coordinator.go). Tells compute/engine.go::consume to buffer the
   // merged stream, emit a synthetic summary line, and prefix each row with
   // a colored [namespace/service] badge. See docs/plans/request-tracing.md.
   bool trace_tag = 9;
-}
-
-message ExecuteQueryResponse {
-  string text = 1;
-  string error = 2;
 }
 
 message ExecuteQueryStreamResponse {

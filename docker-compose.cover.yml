@@ -1,6 +1,6 @@
 # Compose overlay for coverage-instrumented integration runs. Usage:
 #
-#   mkdir -p coverage/{coordinator,shard-0,shard-1,compute,api}
+#   mkdir -p coverage/{coordinator,compute,api}
 #   docker compose -f docker-compose.yml -f docker-compose.cover.yml \
 #       up -d --build
 #   go test -tags integration ./integration/ -count=1 -timeout 5m
@@ -36,57 +36,6 @@ services:
     volumes:
       - ./coverage/coordinator:/coverage
 
-  # shard-0 and shard-1 are pre-provisioned test fixtures that the
-  # direct-to-compute op1/op2 tests dial directly (they run Configure
-  # + Ingest + QueryToCompute themselves rather than going through
-  # the coordinator's DockerLauncher). Each container's gRPC port
-  # (9000 internal) is mapped to a distinct host port so a single
-  # test can reach both without ambiguity. No COORDINATOR_ADDR is set
-  # — these shards don't heartbeat; they're isolated test endpoints,
-  # not part of the coordinator's shard registry.
-  shard-0:
-    build:
-      context: ..
-      dockerfile: weft/Dockerfile
-      args:
-        BUILD_FLAGS: "-cover -coverpkg=github.com/graybeardcorp/weft/..."
-    entrypoint: ["/usr/local/bin/entrypoint.sh"]
-    environment:
-      ROLE: shard
-      GOCOVERDIR: /coverage
-      # Match the secret in dialShard (integration/direct_to_compute_op1_test.go).
-      # Without this the shard defaults to a different value and rejects
-      # the test's Configure RPC with "shared token mismatch".
-      SHARD_SECRET: dev-shard-secret
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - ./coverage/shard-0:/coverage
-      - shard0_data:/opt/app/data
-    depends_on:
-      - compute
-
-  shard-1:
-    build:
-      context: ..
-      dockerfile: weft/Dockerfile
-      args:
-        BUILD_FLAGS: "-cover -coverpkg=github.com/graybeardcorp/weft/..."
-    entrypoint: ["/usr/local/bin/entrypoint.sh"]
-    environment:
-      ROLE: shard
-      GOCOVERDIR: /coverage
-      SHARD_SECRET: dev-shard-secret
-    ports:
-      - "9002:9000"
-      - "9003:9001"
-    volumes:
-      - ./coverage/shard-1:/coverage
-      - shard1_data:/opt/app/data
-    depends_on:
-      - compute
-
   api:
     build:
       context: ..
@@ -106,7 +55,3 @@ services:
     # much but is fast enough that one wins cleanly before the other
     # even starts goose.
     restart: on-failure
-
-volumes:
-  shard0_data:
-  shard1_data:

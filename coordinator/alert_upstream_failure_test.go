@@ -19,7 +19,7 @@ func TestAlert_UpstreamFailureIsNotEvaluated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db, Notifier: NewNotifier(db, nil)})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db, Notifier: NewNotifier(db, nil)})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	for _, cond := range []string{"absent", "below 5", "changed", "any"} {
@@ -49,7 +49,7 @@ func TestAlert_AbsentStillFiresOnEmptySuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db, Notifier: NewNotifier(db, nil)})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db, Notifier: NewNotifier(db, nil)})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	res, err := c.Execute(context.Background(), `echo hello | grep nomatch | alert absent`, tr, cust.Name, "")

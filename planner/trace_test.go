@@ -74,7 +74,7 @@ func TestPlanTrace_TimeBoundsApplied(t *testing.T) {
 // TestPlanTrace_IncludeMetaVars: a bare trace forces the same
 // MetaVarColumns projection normally reserved for an explicit awk/jq
 // meta-variable reference, so NAMESPACE/SERVICE/etc. are always real,
-// pipeline-filterable fields for trace (and so compute/local.go's
+// pipeline-filterable fields for trace (and so compute/engine.go's
 // display layer has namespace/service available on every row) even
 // with no downstream compute stage.
 func TestPlanTrace_IncludeMetaVars(t *testing.T) {

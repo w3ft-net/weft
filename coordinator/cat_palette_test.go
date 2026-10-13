@@ -23,7 +23,7 @@ func TestRunLocal_CatHighlightsWithWeftPalette(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: db})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	result, err := c.runLocal(context.Background(), "cat /bin/greet", TimeRange{}, "", custID, "", nil, nil)
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)

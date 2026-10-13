@@ -54,7 +54,7 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: st})
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: st})
 	srv := &Server{Coord: coord, Store: st}
 
 	// Inject the authenticated caller into the context (the auth

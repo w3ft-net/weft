@@ -11,20 +11,16 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
-// noopPool returns an empty stream immediately. Used by the cron-fire
+// noopCompute returns an empty stream immediately. Used by the cron-fire
 // benchmark so we measure ONLY the coordinator-side work that save-
 // time lowering would replace (preflight, expandBinPipeline, Plan,
 // dispatch struct construction). The actual shard query time is what
 // save-time lowering *cannot* eliminate — it lives downstream of the
 // dispatch.
-type noopPool struct{}
+type noopCompute struct{}
 
-func (noopPool) ExecuteQuery(_ context.Context, _ *pb.ExecuteQueryRequest) (compute.LineStream, error) {
+func (noopCompute) ExecuteQuery(_ context.Context, _ *pb.ExecuteQueryRequest) (compute.LineStream, error) {
 	return compute.NewSliceLineStream(nil, nil), nil
-}
-
-func (noopPool) NewJob(_ []string, _ int, _ string, _ int, _ bool, _ bool) compute.ComputeJob {
-	return nil
 }
 
 // benchBinResolver is the in-process BinResolver used by /bin-using
@@ -58,7 +54,7 @@ func (r benchBinResolver) Source(name string) (string, string, bool) {
 //	go test -bench=BenchmarkExecuteForWatch -benchmem -benchtime=1s ./coordinator/
 func BenchmarkExecuteForWatch(b *testing.B) {
 	c := setupTestCoordinator(b)
-	c.Pool = noopPool{}
+	c.Compute = noopCompute{}
 
 	// Resolve the customer ID the test fixture seeded.
 	cust, err := c.Store.GetOrgByName("kevlar")

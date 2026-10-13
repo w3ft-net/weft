@@ -12,18 +12,14 @@ questions into scope.
 - **One compute instance.** `prod/weft/terraform.tfvars` pins
   `compute_desired = 1`. The compute ASG can scale up to
   `compute_max = 10` but nothing currently drives scale-out.
-- **Boot-time discovery, single target.**
-  `cmd/coordinator/main.go:82` calls `discovery.NewASGDiscovery(...).
-  DiscoverAddrs(ctx)`, takes `addrs[0]`, and caches a single
-  `GRPCComputePool` for the process lifetime. If the compute instance
+- **Single target.**
+  The coordinator takes a single `--compute` address and caches one
+  `compute.Client` for the process lifetime. If the compute instance
   is replaced (autoscaling event, AMI refresh, instance failure) the
   coordinator holds a stale private IP until it restarts.
-- **Silent fallback to in-process pool.** If discovery returns zero
-  instances or errors, the coordinator logs
-  `no compute workers found, using local pool` and falls back to
-  `LocalComputePool{Parallelism: 2}`. Queries still run — inside the
-  coordinator process — but with no isolation and with coordinator
-  CPU budget instead of compute's.
+- **No in-process fallback.** The coordinator refuses to start
+  without `--compute` (`log.Fatal("no compute addr specified")`);
+  there is no path that runs queries inside the coordinator process.
 - **SG paths already in place.** `compute_from_coordinator` and
   `compute_from_shard` security-group rules are both wired
   (`stacks/asg-weft-application/main.tf:628,650`), so any future
@@ -57,7 +53,7 @@ Keep compute pooled by IP list; refresh it periodically.
 
 - Add a goroutine in `cmd/coordinator/main.go` that calls
   `DiscoverAddrs` every ~60s and swaps the active pool atomically.
-- Make `GRPCComputePool` accept multiple addrs and round-robin jobs.
+- Make `compute.Client` accept multiple addrs and round-robin queries.
 - Dial retries handle transient replacement; a 60s re-discovery
   catches the address change.
 - No infra change. Cheapest. Good enough for <10 compute instances.

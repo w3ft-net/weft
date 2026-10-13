@@ -42,7 +42,7 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 
 	// Prod-shaped Coordinator: Store + Notifier are set, but OrgID
 	// is zero (it's never set by cmd/coordinator/main.go either).
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
 		Store:    db,
 		Notifier: NewNotifier(db, nil)})
 
@@ -107,7 +107,7 @@ func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{},
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
 		Store:    db,
 		Notifier: NewNotifier(db, nil)}) // OrgID intentionally zero.
 

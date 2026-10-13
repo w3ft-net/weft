@@ -44,14 +44,14 @@ func main() {
 		log.Fatal("no SHARD_SECRET set")
 	}
 
-	pool := &compute.LocalComputePool{AWSRegion: region, ShardSecret: shardSecret}
+	engine := &compute.Engine{AWSRegion: region, ShardSecret: shardSecret}
 	if awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region)); err != nil {
 		log.Printf("warning: AWS config unavailable — cold shard queries will fail: %v", err)
 	} else {
-		pool.AWSCreds = awsCfg.Credentials
+		engine.AWSCreds = awsCfg.Credentials
 	}
 	srv := grpc.NewServer()
-	pb.RegisterWeftComputeServer(srv, computesvc.NewServer(pool))
+	pb.RegisterWeftComputeServer(srv, computesvc.NewServer(engine))
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {

@@ -7,8 +7,8 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-func TestLocalComputeJob_LimitTruncatesMergedStream(t *testing.T) {
-	pool := &LocalComputePool{}
+func TestJob_LimitTruncatesMergedStream(t *testing.T) {
+	pool := &Engine{}
 	job := pool.NewJob([]string{"wc -l"}, 2, "ts", 3, false, false)
 	for _, r := range []*pb.ResultRow{
 		{TsUnixNs: 1000, Raw: "one"},
@@ -41,8 +41,8 @@ func TestLocalComputeJob_LimitTruncatesMergedStream(t *testing.T) {
 	}
 }
 
-func TestLocalComputeJob_LimitZeroIsUnlimited(t *testing.T) {
-	pool := &LocalComputePool{}
+func TestJob_LimitZeroIsUnlimited(t *testing.T) {
+	pool := &Engine{}
 	job := pool.NewJob([]string{"wc -l"}, 2, "ts", 0, false, false)
 	for _, r := range []*pb.ResultRow{
 		{TsUnixNs: 1000, Raw: "one"},

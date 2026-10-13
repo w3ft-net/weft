@@ -25,7 +25,7 @@ var failoverRange = TimeRange{
 func TestFailover_EmptyThenRecover(t *testing.T) {
 	// Start with zero shards — simulates startup during ASG replacement
 	// when no shard instances are InService yet.
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
 
 	res, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, "kevlar", "")
 	if err != nil {
@@ -77,7 +77,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
 	addInProcessShard(t, c, &logdb.Shard{
 		ID:          "shard-0",
 		WindowStart: t0, WindowEnd: t1,
@@ -139,7 +139,7 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 	}
 
 	apps := []string{"vimgym", "callbox"}
-	c := NewCoordinator(CoordinatorConfig{Pool: &compute.LocalComputePool{}, Store: testQueryStoreReal(t, "kevlar", "vimgym", "callbox")})
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: testQueryStoreReal(t, "kevlar", "vimgym", "callbox")})
 	// testQueryStoreReal's own cleanup (deleteOrgData) only touches
 	// subscriptions/namespaces/organizations — shard_records isn't
 	// customer-scoped, so addInProcessShard's real (non-rolled-back)

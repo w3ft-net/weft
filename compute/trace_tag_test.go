@@ -7,13 +7,13 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-// TestLocalComputeJob_TraceTagEmitsSummaryFirst: a bare interactive
+// TestJob_TraceTagEmitsSummaryFirst: a bare interactive
 // `trace <id>` (traceTag=true, no compute stages) buffers the full
 // merged stream and emits a synthetic summary line — mentioning the
 // line and distinct-service counts — before any log row.
-func TestLocalComputeJob_TraceTagEmitsSummaryFirst(t *testing.T) {
-	pool := &LocalComputePool{}
-	job := pool.NewJob(nil, 2, "ts", 0, false, true).(*LocalComputeJob)
+func TestJob_TraceTagEmitsSummaryFirst(t *testing.T) {
+	pool := &Engine{}
+	job := pool.NewJob(nil, 2, "ts", 0, false, true)
 
 	job.SendRow(&pb.ResultRow{TsUnixNs: 1000, Raw: `{"msg":"a"}`, MetaVars: map[string]string{"namespace": "acme", "service": "api"}}, "a")
 	job.SendSentinel("a")
@@ -33,14 +33,14 @@ func TestLocalComputeJob_TraceTagEmitsSummaryFirst(t *testing.T) {
 	}
 }
 
-// TestLocalComputeJob_TraceTagEmitsDelimitedRows: every row after the
+// TestJob_TraceTagEmitsDelimitedRows: every row after the
 // summary is plain "<ts_unix_ns>\t<namespace/service>\t<raw>" data, not
 // pre-rendered ANSI — the coordinator doesn't know the client's
 // terminal width, so it leaves the actual column/badge/wrap rendering
 // to theme.RenderTraceColumns on the client (shell.ExecNonInteractive).
-func TestLocalComputeJob_TraceTagEmitsDelimitedRows(t *testing.T) {
-	pool := &LocalComputePool{}
-	job := pool.NewJob(nil, 1, "ts", 0, false, true).(*LocalComputeJob)
+func TestJob_TraceTagEmitsDelimitedRows(t *testing.T) {
+	pool := &Engine{}
+	job := pool.NewJob(nil, 1, "ts", 0, false, true)
 
 	job.SendRow(&pb.ResultRow{TsUnixNs: 1000, Raw: "hello", MetaVars: map[string]string{"namespace": "acme", "service": "api"}}, "a")
 	job.SendSentinel("a")
@@ -58,12 +58,12 @@ func TestLocalComputeJob_TraceTagEmitsDelimitedRows(t *testing.T) {
 	}
 }
 
-// TestLocalComputeJob_TraceTagZeroRows: a trace ID with no matching
+// TestJob_TraceTagZeroRows: a trace ID with no matching
 // rows gets a distinct "no lines found" message rather than a summary
 // claiming "0 line(s) across 0 service(s)".
-func TestLocalComputeJob_TraceTagZeroRows(t *testing.T) {
-	pool := &LocalComputePool{}
-	job := pool.NewJob(nil, 1, "ts", 0, false, true).(*LocalComputeJob)
+func TestJob_TraceTagZeroRows(t *testing.T) {
+	pool := &Engine{}
+	job := pool.NewJob(nil, 1, "ts", 0, false, true)
 	job.SendSentinel("a")
 
 	lines, err := DrainLineStream(job.Stream())
@@ -78,12 +78,12 @@ func TestLocalComputeJob_TraceTagZeroRows(t *testing.T) {
 	}
 }
 
-// TestLocalComputeJob_TraceTagRespectsLimit: the buffering branch
+// TestJob_TraceTagRespectsLimit: the buffering branch
 // still honors j.limit as a hard cap via the onlineMerge emit
 // callback, same mechanism the normal zero-stage branch uses.
-func TestLocalComputeJob_TraceTagRespectsLimit(t *testing.T) {
-	pool := &LocalComputePool{}
-	job := pool.NewJob(nil, 1, "ts", 2, false, true).(*LocalComputeJob)
+func TestJob_TraceTagRespectsLimit(t *testing.T) {
+	pool := &Engine{}
+	job := pool.NewJob(nil, 1, "ts", 2, false, true)
 
 	for _, r := range []*pb.ResultRow{
 		{TsUnixNs: 1000, Raw: "one", MetaVars: map[string]string{"namespace": "acme", "service": "api"}},
@@ -109,13 +109,13 @@ func TestLocalComputeJob_TraceTagRespectsLimit(t *testing.T) {
 	}
 }
 
-// TestLocalComputeJob_TraceTagEmptyNamespaceService: a row missing
+// TestJob_TraceTagEmptyNamespaceService: a row missing
 // namespace/service metadata (a malformed or pre-metavar shard
 // response) labels itself "unknown" rather than a blank or malformed
 // bare "/".
-func TestLocalComputeJob_TraceTagEmptyNamespaceService(t *testing.T) {
-	pool := &LocalComputePool{}
-	job := pool.NewJob(nil, 1, "ts", 0, false, true).(*LocalComputeJob)
+func TestJob_TraceTagEmptyNamespaceService(t *testing.T) {
+	pool := &Engine{}
+	job := pool.NewJob(nil, 1, "ts", 0, false, true)
 
 	job.SendRow(&pb.ResultRow{TsUnixNs: 1000, Raw: "mystery"}, "a")
 	job.SendSentinel("a")
