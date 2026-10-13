@@ -59,6 +59,15 @@ type OrgPerms struct {
 	CanCreateNamespaces bool
 }
 
+// Every mount gates access through Authorize. MountFS probes for it at
+// runtime, so a signature that drifts would silently leave the mount open.
+var (
+	_ shellcore.AuthMount = (*BinMount)(nil)
+	_ shellcore.AuthMount = (*CronMount)(nil)
+	_ shellcore.AuthMount = (*EtcMount)(nil)
+	_ shellcore.AuthMount = (*LogMount)(nil)
+)
+
 // New constructs a MountFS with all weft virtual directories registered.
 func New(cfg Config) *shellcore.MountFS {
 	mfs := shellcore.NewMountFS()

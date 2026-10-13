@@ -18,6 +18,16 @@ func (m *CronMount) Caps() shellcore.MountCaps {
 	return shellcore.MountCaps{Writable: true}
 }
 
+// Authorize is the mount's one access check, called by MountFS before every
+// operation: every member can read /cron.d, only the cronmgr group can
+// change it.
+func (m *CronMount) Authorize(rel string, want shellcore.Perm) error {
+	if want&shellcore.PermWrite != 0 && !m.cfg.CanManageWatches {
+		return denyWrite("/cron.d", "cronmgr")
+	}
+	return nil
+}
+
 func (m *CronMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	if rel != "" {
 		return nil, fs.ErrNotExist
@@ -69,9 +79,6 @@ func (m *CronMount) Stat(rel string) (fs.FileInfo, error) {
 }
 
 func (m *CronMount) WriteFile(rel string, data []byte) error {
-	if !m.cfg.CanManageWatches {
-		return denyWrite("/cron.d", "cronmgr")
-	}
 	schedule, pipeline, err := ParseCron(string(data))
 	if err != nil {
 		return fmt.Errorf("/cron.d/%s: %w", rel, err)
@@ -127,13 +134,11 @@ func (r cronBinResolver) Source(name string) (string, string, bool) {
 }
 
 func (m *CronMount) Remove(rel string) error {
-	if !m.cfg.CanManageWatches {
-		return denyWrite("/cron.d", "cronmgr")
-	}
 	return m.cfg.Store.DeleteCronWatch(m.cfg.OrgID, rel)
 }
 
-// AmendVersionMessage allows recording a commit message for cron entries.
+// AmendVersionMessage allows recording a commit message for cron entries. It
+// is not a MountFS operation, so it checks write access itself.
 func (m *CronMount) AmendVersionMessage(rel, message string) error {
 	if !m.cfg.CanManageWatches {
 		return denyWrite("/cron.d", "cronmgr")

@@ -11,6 +11,10 @@ import (
 
 type LogMount struct{ cfg Config }
 
+// A mount whose Authorize drifts from the interface silently stops being
+// gated, because MountFS probes for it at runtime.
+var _ shellcore.AuthMount = (*LogMount)(nil)
+
 func (m *LogMount) Prefix() string { return "/log" }
 
 func (m *LogMount) Caps() shellcore.MountCaps {
@@ -21,7 +25,7 @@ func (m *LogMount) Caps() shellcore.MountCaps {
 // operation: the first path segment must be a namespace the caller can read.
 // A namespace that is missing and one that is unreadable are
 // indistinguishable, so probing names reveals nothing.
-func (m *LogMount) Authorize(rel string) error {
+func (m *LogMount) Authorize(rel string, _ shellcore.Perm) error {
 	if rel == "" {
 		return nil
 	}

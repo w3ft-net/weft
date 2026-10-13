@@ -18,6 +18,23 @@ func (m *EtcMount) Caps() shellcore.MountCaps {
 	return shellcore.MountCaps{Writable: true}
 }
 
+// Authorize is the mount's one access check, called by MountFS before every
+// operation: every member can read /etc, only the configmgr group can change
+// it, and /etc/passwd is read-only for everyone — the team is mutated with
+// adduser/deluser, not by editing the file.
+func (m *EtcMount) Authorize(rel string, want shellcore.Perm) error {
+	if want&shellcore.PermWrite == 0 {
+		return nil
+	}
+	if rel == "passwd" {
+		return fmt.Errorf("/etc/passwd is read-only — manage the team with adduser/deluser")
+	}
+	if !m.cfg.CanManageEtc {
+		return denyWrite("/etc", "configmgr")
+	}
+	return nil
+}
+
 func (m *EtcMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	if rel == "dashboards" {
 		dashboards, err := m.cfg.Store.ListDashboards(m.cfg.OrgID)
@@ -123,14 +140,6 @@ func (m *EtcMount) Stat(rel string) (fs.FileInfo, error) {
 }
 
 func (m *EtcMount) WriteFile(rel string, data []byte) error {
-	// /etc/passwd is the read-only team roster; the team is mutated
-	// with the adduser/deluser commands, not by editing the file.
-	if rel == "passwd" {
-		return fmt.Errorf("/etc/passwd is read-only — manage the team with adduser/deluser")
-	}
-	if !m.cfg.CanManageEtc {
-		return denyWrite("/etc", "configmgr")
-	}
 	switch {
 	case rel == "notify.yaml":
 		// What the user edited is the redacted view: a header still showing
@@ -164,12 +173,6 @@ func (m *EtcMount) WriteFile(rel string, data []byte) error {
 }
 
 func (m *EtcMount) Remove(rel string) error {
-	if rel == "passwd" {
-		return fmt.Errorf("/etc/passwd: operation not permitted")
-	}
-	if !m.cfg.CanManageEtc {
-		return denyWrite("/etc", "configmgr")
-	}
 	if dashName, ok := dashboardName(rel); ok {
 		return m.cfg.Store.DeleteDashboard(m.cfg.OrgID, dashName)
 	}
@@ -177,10 +180,11 @@ func (m *EtcMount) Remove(rel string) error {
 }
 
 // AmendVersionMessage records a commit message for the versioned /etc files
-// (notify.yaml and the dashboards).
+// (notify.yaml and the dashboards). It is not a MountFS operation, so it
+// checks write access itself.
 func (m *EtcMount) AmendVersionMessage(rel, message string) error {
-	if !m.cfg.CanManageEtc {
-		return denyWrite("/etc", "configmgr")
+	if err := m.Authorize(rel, shellcore.PermWrite); err != nil {
+		return err
 	}
 	if rel == "notify.yaml" {
 		return m.cfg.Store.AmendNotifyAliasesMessage(m.cfg.OrgID, m.cfg.UserID, message)

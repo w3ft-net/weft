@@ -18,6 +18,16 @@ func (m *BinMount) Caps() shellcore.MountCaps {
 	return shellcore.MountCaps{Writable: true}
 }
 
+// Authorize is the mount's one access check, called by MountFS before every
+// operation: every member can read and run /bin, only the binmgr group can
+// change it.
+func (m *BinMount) Authorize(rel string, want shellcore.Perm) error {
+	if want&shellcore.PermWrite != 0 && !m.cfg.CanManageFunctions {
+		return denyWrite("/bin", "binmgr")
+	}
+	return nil
+}
+
 func (m *BinMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	if rel != "" {
 		return nil, fs.ErrNotExist
@@ -72,17 +82,11 @@ func (m *BinMount) Stat(rel string) (fs.FileInfo, error) {
 }
 
 func (m *BinMount) WriteFile(rel string, data []byte) error {
-	if !m.cfg.CanManageFunctions {
-		return denyWrite("/bin", "binmgr")
-	}
 	lang, cleanSource := ClassifyBinScript(rel, string(data))
 	return m.cfg.Store.SaveShellFunction(m.cfg.OrgID, m.cfg.UserID, rel, cleanSource, lang)
 }
 
 func (m *BinMount) Remove(rel string) error {
-	if !m.cfg.CanManageFunctions {
-		return denyWrite("/bin", "binmgr")
-	}
 	return m.cfg.Store.DeleteShellFunction(m.cfg.OrgID, rel)
 }
 
@@ -95,7 +99,8 @@ func (m *BinMount) FileLanguage(rel string) string {
 	return fn.Language
 }
 
-// AmendVersionMessage allows the vim popup to record a commit message.
+// AmendVersionMessage allows the vim popup to record a commit message. It is
+// not a MountFS operation, so it checks write access itself.
 func (m *BinMount) AmendVersionMessage(rel, message string) error {
 	if !m.cfg.CanManageFunctions {
 		return denyWrite("/bin", "binmgr")

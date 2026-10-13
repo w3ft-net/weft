@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/saaskit/orgs"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
 
 	"github.com/graybeardcorp/weft/store"
 )
@@ -49,14 +50,14 @@ func TestAuthorize_NeverCreatesNamespaces(t *testing.T) {
 
 	m := &LogMount{cfg: Config{Store: tx, OrgID: org.ID, UserID: user.ID}}
 
-	if err := m.Authorize("readable/prod/api"); err != nil {
+	if err := m.Authorize("readable/prod/api", shellcore.PermRead); err != nil {
 		t.Errorf("a member with read permission must read their namespace: %v", err)
 	}
-	if err := m.Authorize("private"); !errors.Is(err, fs.ErrNotExist) {
+	if err := m.Authorize("private", shellcore.PermRead); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a member without a permission row: err = %v, want ErrNotExist", err)
 	}
 	for _, typo := range []string{"typo", "readabel", "no such"} {
-		if err := m.Authorize(typo); !errors.Is(err, fs.ErrNotExist) {
+		if err := m.Authorize(typo, shellcore.PermRead); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("%q does not exist: err = %v, want ErrNotExist", typo, err)
 		}
 		if _, err := tx.GetNamespace(org.ID, typo); err == nil {
