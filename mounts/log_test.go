@@ -11,15 +11,12 @@ import (
 // service is a directory holding <kind>.log files. cd already accepts
 // /log/loom/prod/api; ls must list it too.
 func TestLogMountServiceIsDirectory(t *testing.T) {
-	m := &LogMount{cfg: Config{
-		IsOwner: true,
-		LogServices: []string{
-			"loom/prod/api/main",
-			"loom/prod/api/metrics",
-			"loom/prod/worker/main",
-			"loom/edge/main", // env-less: <ns>/<svc>/<kind>
-		},
-	}}
+	m := &LogMount{cfg: ownerCfg(t, []string{
+		"loom/prod/api/main",
+		"loom/prod/api/metrics",
+		"loom/prod/worker/main",
+		"loom/edge/main", // env-less: <ns>/<svc>/<kind>
+	})}
 
 	names := func(rel string) []string {
 		t.Helper()
@@ -75,10 +72,7 @@ func TestLogMountServiceIsDirectory(t *testing.T) {
 
 // Walk of a service directory returns only that service's files.
 func TestLogMountWalkServiceSubtree(t *testing.T) {
-	m := &LogMount{cfg: Config{
-		IsOwner:     true,
-		LogServices: []string{"loom/prod/api/main", "loom/prod/api/metrics", "loom/prod/worker/main"},
-	}}
+	m := &LogMount{cfg: ownerCfg(t, []string{"loom/prod/api/main", "loom/prod/api/metrics", "loom/prod/worker/main"})}
 	got, err := m.Walk("loom/prod/api")
 	if err != nil {
 		t.Fatal(err)
@@ -94,16 +88,13 @@ func TestLogMountWalkServiceSubtree(t *testing.T) {
 // /log/<ns>/<svc> is a directory of the kinds any env carries. It used to
 // answer "file does not exist" for a path cat reads happily.
 func TestLogMountThreeSegmentServiceSpansEnvs(t *testing.T) {
-	m := &LogMount{cfg: Config{
-		IsOwner: true,
-		LogServices: []string{
-			"acme/prod/api/main",
-			"acme/prod/api/metrics",
-			"acme/sand/api/main",
-			"acme/sand/api/heartbeats",
-			"acme/sand/worker/main",
-		},
-	}}
+	m := &LogMount{cfg: ownerCfg(t, []string{
+		"acme/prod/api/main",
+		"acme/prod/api/metrics",
+		"acme/sand/api/main",
+		"acme/sand/api/heartbeats",
+		"acme/sand/worker/main",
+	})}
 	names := func(rel string) []string {
 		t.Helper()
 		ents, err := m.ReadDir(rel)
@@ -162,14 +153,11 @@ func TestLogMountThreeSegmentServiceSpansEnvs(t *testing.T) {
 
 // A real env-less service directory keeps precedence over the merged view.
 func TestLogMountEnvlessServiceWinsOverMergedView(t *testing.T) {
-	m := &LogMount{cfg: Config{
-		IsOwner: true,
-		LogServices: []string{
-			"acme/api/main",      // env-less: /log/acme/api is a real directory
-			"acme/prod/api/main", // env-bearing service of the same name
-			"acme/prod/api/metrics",
-		},
-	}}
+	m := &LogMount{cfg: ownerCfg(t, []string{
+		"acme/api/main",      // env-less: /log/acme/api is a real directory
+		"acme/prod/api/main", // env-bearing service of the same name
+		"acme/prod/api/metrics",
+	})}
 	ents, err := m.ReadDir("acme/api")
 	if err != nil {
 		t.Fatal(err)

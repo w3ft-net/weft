@@ -1,8 +1,8 @@
 package mounts
 
 import (
-	"fmt"
 	"io/fs"
+	"slices"
 	"sort"
 	"strings"
 
@@ -17,22 +17,35 @@ func (m *LogMount) Caps() shellcore.MountCaps {
 	return shellcore.MountCaps{Writable: false}
 }
 
+// Authorize is the mount's one access check, called by MountFS before every
+// operation: the first path segment must be a namespace the caller can read.
+// A namespace that is missing and one that is unreadable are
+// indistinguishable, so probing names reveals nothing.
+func (m *LogMount) Authorize(rel string) error {
+	if rel == "" {
+		return nil
+	}
+	nss, err := m.cfg.Store.NamespaceNames(m.cfg.OrgID, m.cfg.UserID, m.cfg.IsOwner || m.cfg.UserID == "")
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(nss, strings.SplitN(rel, "/", 2)[0]) {
+		return fs.ErrNotExist
+	}
+	return nil
+}
+
 func (m *LogMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	if rel == "" {
-		nss := m.logNamespaces()
+		nss, err := m.cfg.Store.NamespaceNames(m.cfg.OrgID, m.cfg.UserID, m.cfg.IsOwner || m.cfg.UserID == "")
+		if err != nil {
+			return nil, err
+		}
 		var entries []fs.DirEntry
 		for _, ns := range nss {
-			if !m.canReadNamespace(ns) {
-				continue
-			}
 			entries = append(entries, &vfsDirEntry{name: ns, dir: true})
 		}
 		return entries, nil
-	}
-
-	nsName := strings.SplitN(rel, "/", 2)[0]
-	if !m.canReadNamespace(nsName) {
-		return nil, fmt.Errorf("/log/%s: permission denied", rel)
 	}
 
 	// Every LogServices entry is a slash path whose last segment is the
@@ -65,7 +78,9 @@ func (m *LogMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 			return entries, nil
 		}
 	}
-	if !found && !m.isNamespace(rel) {
+	// Authorize has vouched for the first segment, so a bare one is a
+	// namespace with no services yet: an empty directory.
+	if !found && strings.Contains(rel, "/") {
 		return nil, fs.ErrNotExist
 	}
 	return entries, nil
@@ -77,10 +92,6 @@ func (m *LogMount) ReadFile(rel string) ([]byte, error) {
 	}
 	app := strings.TrimSuffix(rel, ".log")
 	if m.hasLogService(app) || m.hasMergedKind(app) {
-		ns := namespaceFromApp(app)
-		if !m.canReadNamespace(ns) {
-			return nil, fmt.Errorf("/log/%s: permission denied", rel)
-		}
 		return []byte{}, nil
 	}
 	return nil, fs.ErrNotExist
@@ -90,22 +101,15 @@ func (m *LogMount) Stat(rel string) (fs.FileInfo, error) {
 	if rel == "" {
 		return &vfsFileInfo{name: "log", dir: true}, nil
 	}
-	nsName := strings.SplitN(rel, "/", 2)[0]
 
 	if !strings.HasSuffix(rel, ".log") {
-		if m.isNamespace(rel) || m.hasLogDir(rel) || len(m.mergedKinds(rel)) > 0 {
-			if !m.canReadNamespace(nsName) {
-				return nil, fmt.Errorf("/log/%s: permission denied", rel)
-			}
+		// A bare first segment is a namespace, vouched for by Authorize.
+		if !strings.Contains(rel, "/") || m.hasLogDir(rel) || len(m.mergedKinds(rel)) > 0 {
 			return &vfsFileInfo{name: lastSegment(rel), dir: true}, nil
 		}
 	} else {
 		app := strings.TrimSuffix(rel, ".log")
 		if m.hasLogService(app) || m.hasMergedKind(app) {
-			ns := namespaceFromApp(app)
-			if !m.canReadNamespace(ns) {
-				return nil, fmt.Errorf("/log/%s: permission denied", rel)
-			}
 			return &vfsFileInfo{name: lastSegment(rel)}, nil
 		}
 	}
@@ -121,46 +125,33 @@ func (m *LogMount) Remove(string) error            { return shellcore.ErrReadOnl
 // scans + an uncached permission lookup per visited directory). The
 // flat list uses mount-relative paths with "/" separators; files
 // carry the ".log" suffix exactly as ReadDir emits them, and each
-// namespace also yields a bare "ns/" so empty namespaces still show.
+// readable namespace also yields a bare "ns/" so empty namespaces still
+// show.
 //
-// Permission is checked at most once per namespace (memoised) instead
-// of once per visited directory.
+// Readable namespaces come from one query, not a permission lookup per
+// namespace.
 func (m *LogMount) Walk(rel string) ([]string, error) {
-	var nsFilter string
-	if rel != "" {
-		nsFilter = strings.SplitN(rel, "/", 2)[0]
-		if !m.canReadNamespace(nsFilter) {
-			return nil, fmt.Errorf("/log/%s: permission denied", rel)
-		}
+	nss, err := m.cfg.Store.NamespaceNames(m.cfg.OrgID, m.cfg.UserID, m.cfg.IsOwner || m.cfg.UserID == "")
+	if err != nil {
+		return nil, err
+	}
+	readable := make(map[string]bool, len(nss))
+	for _, ns := range nss {
+		readable[ns] = true
 	}
 
-	permCache := map[string]bool{}
-	canRead := func(ns string) bool {
-		if v, ok := permCache[ns]; ok {
-			return v
-		}
-		v := m.canReadNamespace(ns)
-		permCache[ns] = v
-		return v
-	}
+	nsFilter, _, _ := strings.Cut(rel, "/")
 
 	var out []string
-	nsSeen := map[string]bool{}
-	for _, a := range m.cfg.LogServices {
-		parts := strings.Split(a, "/")
-		ns := parts[0]
-		if nsFilter != "" && ns != nsFilter {
-			continue
-		}
-		if !canRead(ns) {
-			continue
-		}
-		if !nsSeen[ns] {
-			nsSeen[ns] = true
+	for _, ns := range nss {
+		if nsFilter == "" || ns == nsFilter {
 			out = append(out, ns+"/")
 		}
-		if len(parts) == 1 {
-			continue // bare namespace, no app — the "ns/" marker is enough
+	}
+	for _, a := range m.cfg.LogServices {
+		parts := strings.Split(a, "/")
+		if len(parts) == 1 || !readable[parts[0]] || nsFilter != "" && parts[0] != nsFilter {
+			continue
 		}
 		if rel != "" && a != rel && !strings.HasPrefix(a, rel+"/") {
 			continue
@@ -171,31 +162,6 @@ func (m *LogMount) Walk(rel string) ([]string, error) {
 }
 
 // --- log tree helpers ---
-
-func (m *LogMount) logNamespaces() []string {
-	seen := map[string]bool{}
-	var nss []string
-	for _, a := range m.cfg.LogServices {
-		ns := a
-		if idx := strings.Index(a, "/"); idx >= 0 {
-			ns = a[:idx]
-		}
-		if !seen[ns] {
-			seen[ns] = true
-			nss = append(nss, ns)
-		}
-	}
-	return nss
-}
-
-func (m *LogMount) isNamespace(name string) bool {
-	for _, ns := range m.logNamespaces() {
-		if ns == name {
-			return true
-		}
-	}
-	return false
-}
 
 // mergedKinds backs the 3-segment form /log/<ns>/<svc>: when rel is
 // "<ns>/<svc>", names no real directory (no env-less service of that name),
@@ -256,29 +222,4 @@ func (m *LogMount) hasLogService(app string) bool {
 		}
 	}
 	return false
-}
-
-func (m *LogMount) canReadNamespace(ns string) bool {
-	if m.cfg.IsOwner || m.cfg.UserID == "" {
-		return true
-	}
-	// Look up, never create: asking whether a member can read /log/<ns>
-	// must not leave a namespace behind for every name they probe. A
-	// namespace that doesn't exist is simply not readable.
-	nsObj, err := m.cfg.Store.GetNamespace(m.cfg.OrgID, ns)
-	if err != nil {
-		return false
-	}
-	perm, err := m.cfg.Store.GetNamespacePermission(m.cfg.UserID, nsObj.ID)
-	if err != nil {
-		return false
-	}
-	return perm.CanRead
-}
-
-func namespaceFromApp(app string) string {
-	if idx := strings.Index(app, "/"); idx >= 0 {
-		return app[:idx]
-	}
-	return app
 }

@@ -1,7 +1,9 @@
 package shellfs
 
 import (
+	"errors"
 	"fmt"
+	iofs "io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -24,6 +26,24 @@ func testStore(t *testing.T) *store.Store {
 		db.Close()
 	})
 	return db
+}
+
+// logFS returns a ShellFS over a real org holding one namespace per first
+// path segment of services.
+func logFS(t *testing.T, services []string) *ShellFS {
+	t.Helper()
+	db := testStore(t)
+	org, err := db.FindOrCreateOrg("shellfs-log-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range services {
+		ns, _, _ := strings.Cut(a, "/")
+		if _, err := db.FindOrCreateNamespace(org.ID, ns); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return New(db, org.ID, services)
 }
 
 func TestReadFile_EtcUsage(t *testing.T) {
@@ -177,7 +197,7 @@ func TestReadDir_Etc_IncludesUsage(t *testing.T) {
 	}
 }
 
-func TestReadFile_LogNamespace_PermissionDenied(t *testing.T) {
+func TestReadFile_LogNamespace_UnreadableIsHidden(t *testing.T) {
 	db := testStore(t)
 
 	cust, err := db.FindOrCreateOrg("nsperm-test")
@@ -206,13 +226,10 @@ func TestReadFile_LogNamespace_PermissionDenied(t *testing.T) {
 		WithCustomerName("nsperm-test"),
 		WithUser(user.ID, mounts.OrgPerms{}))
 
-	// ReadFile should return permission denied.
+	// An unreadable namespace is indistinguishable from a missing one.
 	_, err = fs.ReadFile("/log/secret/app.log")
-	if err == nil {
-		t.Fatal("expected permission denied")
-	}
-	if !strings.Contains(err.Error(), "permission denied") {
-		t.Errorf("expected 'permission denied', got: %v", err)
+	if !errors.Is(err, iofs.ErrNotExist) {
+		t.Errorf("err = %v, want not-exist", err)
 	}
 }
 
@@ -310,7 +327,7 @@ func TestStat_EtcUsage(t *testing.T) {
 func TestReadDir_LogNamespaceNoSenders(t *testing.T) {
 	// A namespace with no log senders (bare name, no slash) should
 	// appear as an empty directory, not a .log file.
-	sfs := New(nil, testOrgID, []string{"loom"})
+	sfs := logFS(t, []string{"loom"})
 
 	entries, err := sfs.ReadDir("/log")
 	if err != nil {
@@ -330,7 +347,7 @@ func TestReadDir_LogNamespaceNoSenders(t *testing.T) {
 func TestReadDir_LogNamespaceNoSendersEmpty(t *testing.T) {
 	// Drilling into a namespace with no senders should return an
 	// empty directory, not an error.
-	sfs := New(nil, testOrgID, []string{"loom"})
+	sfs := logFS(t, []string{"loom"})
 
 	entries, err := sfs.ReadDir("/log/loom")
 	if err != nil {
@@ -342,7 +359,7 @@ func TestReadDir_LogNamespaceNoSendersEmpty(t *testing.T) {
 }
 
 func TestReadDir_LogNamespaceWithApps(t *testing.T) {
-	sfs := New(nil, testOrgID, []string{"loom/api", "loom/worker", "loom/edge"})
+	sfs := logFS(t, []string{"loom/api", "loom/worker", "loom/edge"})
 
 	entries, err := sfs.ReadDir("/log")
 	if err != nil {
@@ -386,7 +403,7 @@ func TestReadDir_LogNamespaceWithApps(t *testing.T) {
 
 func TestReadDir_LogMixedNamespaces(t *testing.T) {
 	// Mix of bare namespace and namespaced apps — both should be directories.
-	sfs := New(nil, testOrgID, []string{"loom", "loom/api", "acme/orders"})
+	sfs := logFS(t, []string{"loom", "loom/api", "acme/orders"})
 
 	entries, err := sfs.ReadDir("/log")
 	if err != nil {

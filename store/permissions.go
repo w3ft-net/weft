@@ -34,6 +34,19 @@ func (s *Store) ListUserNamespacePermissions(userID string) ([]NamespacePermissi
 	return perms, err
 }
 
+// NamespaceNames returns the names of the org's namespaces, ordered by name.
+// With all set (owners) every namespace is returned; otherwise only those the
+// user has read permission on.
+func (s *Store) NamespaceNames(orgID OrgID, userID string, all bool) ([]string, error) {
+	var names []string
+	err := s.scoped(orgID).Model(&Namespace{}).
+		Joins("LEFT JOIN namespace_permissions p ON p.namespace_id = namespaces.id AND p.user_id = ? AND p.deleted_at IS NULL", userID).
+		Where("? OR p.can_read", all).
+		Order("namespaces.name").
+		Pluck("namespaces.name", &names).Error
+	return names, err
+}
+
 // UpsertNamespacePermission creates or updates a namespace permission.
 func (s *Store) UpsertNamespacePermission(p *NamespacePermission) error {
 	var existing NamespacePermission

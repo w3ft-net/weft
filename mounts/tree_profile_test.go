@@ -75,13 +75,8 @@ func itoa(i int) string {
 	return string(b)
 }
 
-func newCountingTreeFS(logServices []string) (*shellcore.MountFS, *countingLogMount) {
-	cm := &countingLogMount{
-		inner: &LogMount{cfg: Config{
-			LogServices: logServices,
-			IsOwner:     true, // short-circuits canReadNamespace (no DB needed here)
-		}},
-	}
+func newCountingTreeFS(t testing.TB, logServices []string) (*shellcore.MountFS, *countingLogMount) {
+	cm := &countingLogMount{inner: &LogMount{cfg: ownerCfg(t, logServices)}}
 	mfs := shellcore.NewMountFS()
 	mfs.Register(cm)
 	return mfs, cm
@@ -122,7 +117,7 @@ func projectedNonOwnerDBQueries(cm *countingLogMount, logServices []string) int 
 // traversal made O(directories) ReadDir calls (301 for 7,500 apps).
 func TestTreeLogUsesSingleWalk(t *testing.T) {
 	apps := buildLogServices(50, 5, 30) // 7,500 apps
-	mfs, cm := newCountingTreeFS(apps)
+	mfs, cm := newCountingTreeFS(t, apps)
 
 	if _, err := mfs.Tree("/log"); err != nil {
 		t.Fatalf("tree /log: %v", err)
@@ -151,9 +146,11 @@ func TestTreeWalkOutputParity(t *testing.T) {
 	// directly under it (no env) to exercise both LogMount branches.
 	apps = append(apps, "bare", "direct/svcX", "direct/env9/svcY")
 
+	cfg := ownerCfg(t, apps)
+
 	// Walk path.
 	walkFS := shellcore.NewMountFS()
-	walkFS.Register(&LogMount{cfg: Config{LogServices: apps, IsOwner: true}})
+	walkFS.Register(&LogMount{cfg: cfg})
 	walkOut, err := walkFS.Tree("/log")
 	if err != nil {
 		t.Fatalf("walk tree: %v", err)
@@ -162,7 +159,7 @@ func TestTreeWalkOutputParity(t *testing.T) {
 	// ReadDir-only path: a wrapper that does NOT expose Walk, forcing
 	// MountFS.Tree's recursive ReadDir fallback.
 	rdFS := shellcore.NewMountFS()
-	rdFS.Register(readDirOnly{&LogMount{cfg: Config{LogServices: apps, IsOwner: true}}})
+	rdFS.Register(readDirOnly{&LogMount{cfg: cfg}})
 	rdOut, err := rdFS.Tree("/log")
 	if err != nil {
 		t.Fatalf("readdir tree: %v", err)
@@ -196,7 +193,7 @@ func TestProfileTreeLog(t *testing.T) {
 	}
 	for _, c := range cases {
 		apps := buildLogServices(c.ns, c.env, c.app)
-		mfs, cm := newCountingTreeFS(apps)
+		mfs, cm := newCountingTreeFS(t, apps)
 		start := time.Now()
 		if _, err := mfs.Tree("/log"); err != nil {
 			t.Fatalf("tree /log: %v", err)
@@ -211,7 +208,7 @@ func TestProfileTreeLog(t *testing.T) {
 func BenchmarkTreeLog(b *testing.B) {
 	apps := buildLogServices(50, 5, 30) // 7500 apps
 	mfs := shellcore.NewMountFS()
-	mfs.Register(&LogMount{cfg: Config{LogServices: apps, IsOwner: true}})
+	mfs.Register(&LogMount{cfg: ownerCfg(b, apps)})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := mfs.Tree("/log"); err != nil {
