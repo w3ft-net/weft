@@ -385,12 +385,18 @@ build {
     destination = "/tmp/streams.yaml"
   }
 
+  provisioner "file" {
+    source      = "deploy/loom-producer/loom.logrotate"
+    destination = "/tmp/loom.logrotate"
+  }
+
   provisioner "shell" {
     inline = [
       "sudo install -d -m 0755 /opt/app/scripts/loom-producer /etc/loom-producer",
       "sudo mv /tmp/weft-loom-producer.service /tmp/weftd-loom@.service /tmp/weftd-loom-config@.service /etc/systemd/system/",
       "sudo mv /tmp/render-weftd-config.sh /opt/app/scripts/loom-producer/render-weftd-config.sh",
       "sudo mv /tmp/streams.yaml /etc/loom-producer/streams.yaml",
+      "sudo install -m 0644 -o root -g root /tmp/loom.logrotate /etc/logrotate.d/loom && rm /tmp/loom.logrotate",
       "sudo chmod +x /opt/app/scripts/loom-producer/render-weftd-config.sh",
       "sudo systemctl daemon-reload",
     ]

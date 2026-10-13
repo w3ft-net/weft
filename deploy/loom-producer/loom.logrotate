@@ -1,0 +1,17 @@
+# loom-producer appends to these forever; the synthetic streams write several
+# MB/min in total, so without rotation they filled the root volume
+# (2026-10-12) and loom went silent. copytruncate: the producer holds the
+# files open, and weftd's tailer follows truncation.
+#
+# Relies on the hourly logrotate.timer installed in the base AMI (see
+# infrastructure-catalog roles/logrotate) — the stock daily timer is too slow
+# for this write rate.
+/var/log/loom/*.log {
+    size 50M
+    rotate 2
+    compress
+    delaycompress
+    copytruncate
+    missingok
+    notifempty
+}

@@ -207,6 +207,22 @@ build {
     ]
   }
 
+  # Disk-growth guards: hourly logrotate, /opt/app/logs rotation, journald cap.
+  # Canonical script lives in the infrastructure-catalog logrotate role (same
+  # script the ansible-built AMIs run); like load-app-env above, we reach
+  # across to the sibling checkout. A bake without it fails loudly.
+  provisioner "file" {
+    source      = "../infrastructure-catalog/packer/ansible/roles/logrotate/files/install-logrotate.sh"
+    destination = "/tmp/install-logrotate.sh"
+  }
+
+  provisioner "shell" {
+    inline = [
+      "sudo bash /tmp/install-logrotate.sh",
+      "rm /tmp/install-logrotate.sh",
+    ]
+  }
+
   # Install CloudWatch agent
   provisioner "shell" {
     inline = [
