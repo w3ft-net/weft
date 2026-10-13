@@ -38,6 +38,7 @@ build order; this table is for picking opportunistic wins.
 | [http-ingest](http-ingest.md) | ~1d left | 4 | 5 | Heroku + CloudWatch adapters shipped; JSONAdapter remains |
 | [shard-archive-test](shard-archive-test.md) | ~2–3d | 4 | 3 | Operational validation only |
 | [weftd-multiline](weftd-multiline.md) | 3d | 4 | 4 | Easiest high-ROI win |
+| [planner-ir](planner-ir.md) | ~10d (phase 1 ~2d) | 3 | 5 | Phase 1 fixes 3 live pushdown bugs (awk `?`, dropped rules, quoting) |
 | [cloudwatch-kinesis-subscription](cloudwatch-kinesis-subscription.md) | ~0.5d left | 5 | 4 | Push path, CLI/frontend onboarding, and the poll-mode ripout all shipped; live pilot + rate-limit plumbing remain |
 | [alert-silencing](alert-silencing.md) | 3.5d | 4 | 5 | |
 | [browser-span-view](browser-span-view.md) | shipped | 4 | 3 | Implemented + live-verified in browser (2 bugs found/fixed); unrelated pre-existing local-dev trace_id/duration_ns extraction gap noted in the plan |
