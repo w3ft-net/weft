@@ -20,31 +20,31 @@ func TestPushdown_ChainedHeadTail(t *testing.T) {
 		{
 			name:        "head then tail keeps the head window",
 			pipeline:    `cat ` + src + ` | head -n 3 | tail -n 1`,
-			wantSQL:     `SELECT raw, ts FROM logs ` + where + ` ORDER BY ts ASC LIMIT 3`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs ` + where + ` ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST LIMIT 3`,
 			wantCompute: []string{"tail -n 1"},
 		},
 		{
 			name:        "tail then head keeps the tail window",
 			pipeline:    `cat ` + src + ` | tail -n 3 | head -n 1`,
-			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs ` + where + ` ORDER BY ts DESC LIMIT 3) AS t ORDER BY ts ASC`,
+			wantSQL:     `SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs ` + where + ` ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 3) AS t ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST`,
 			wantCompute: []string{"head -n 1"},
 		},
 		{
 			name:        "head then larger head stays at the smaller limit",
 			pipeline:    `cat ` + src + ` | head -n 3 | head -n 10`,
-			wantSQL:     `SELECT raw, ts FROM logs ` + where + ` ORDER BY ts ASC LIMIT 3`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs ` + where + ` ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST LIMIT 3`,
 			wantCompute: []string{"head -n 10"},
 		},
 		{
 			name:        "tail then larger tail stays at the smaller limit",
 			pipeline:    `cat ` + src + ` | tail -n 3 | tail -n 10`,
-			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs ` + where + ` ORDER BY ts DESC LIMIT 3) AS t ORDER BY ts ASC`,
+			wantSQL:     `SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs ` + where + ` ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 3) AS t ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST`,
 			wantCompute: []string{"tail -n 10"},
 		},
 		{
 			name:        "head then smaller head is applied in compute",
 			pipeline:    `cat ` + src + ` | head -n 10 | head -n 3`,
-			wantSQL:     `SELECT raw, ts FROM logs ` + where + ` ORDER BY ts ASC LIMIT 10`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs ` + where + ` ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST LIMIT 10`,
 			wantCompute: []string{"head -n 3"},
 		},
 	}

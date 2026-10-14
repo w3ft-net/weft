@@ -25,37 +25,37 @@ func TestKindPredicate(t *testing.T) {
 		{
 			name:     "heartbeats: ns/svc/kind",
 			pipeline: `cat /log/weft/compute/heartbeats.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND service = ? AND kind = ?`,
+			wantSQL:  `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND service = ? AND kind = ?`,
 			wantArgs: []any{"weft", "compute", "heartbeats"},
 		},
 		{
 			name:     "main: ns/svc/main is the regular logs",
 			pipeline: `cat /log/weft/compute/main.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND service = ? AND kind = ?`,
+			wantSQL:  `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND service = ? AND kind = ?`,
 			wantArgs: []any{"weft", "compute", "main"},
 		},
 		{
 			name:     "metrics: ns/svc/kind",
 			pipeline: `cat /log/weft/compute/metrics.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND service = ? AND kind = ?`,
+			wantSQL:  `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND service = ? AND kind = ?`,
 			wantArgs: []any{"weft", "compute", "metrics"},
 		},
 		{
 			name:     "runtime: ns/svc/kind",
 			pipeline: `cat /log/weft/coordinator/runtime.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND service = ? AND kind = ?`,
+			wantSQL:  `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND service = ? AND kind = ?`,
 			wantArgs: []any{"weft", "coordinator", "runtime"},
 		},
 		{
 			name:     "multi-arg cat unions kinds within a service",
 			pipeline: `cat /log/weft/compute/heartbeats.log /log/weft/compute/metrics.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND service = ? AND kind IN (?, ?)`,
+			wantSQL:  `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND service = ? AND kind IN (?, ?)`,
 			wantArgs: []any{"weft", "compute", "heartbeats", "metrics"},
 		},
 		{
 			name:     "tail -f heartbeats",
 			pipeline: `tail -10 /log/weft/compute/heartbeats.log`,
-			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? AND service = ? AND kind = ? ORDER BY ts DESC LIMIT 10) AS t ORDER BY ts ASC`,
+			wantSQL:  `SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND service = ? AND kind = ? ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 10) AS t ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST`,
 			wantArgs: []any{"weft", "compute", "heartbeats"},
 		},
 	}
@@ -109,19 +109,19 @@ func TestEnvBearing_FourSeg(t *testing.T) {
 		{
 			name:     "env-bearing main log",
 			pipeline: `cat /log/loom/prod/api/main.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE env = ? AND namespace = ? AND service = ? AND kind = ?`,
+			wantSQL:  `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE env = ? AND namespace = ? AND service = ? AND kind = ?`,
 			wantArgs: []any{"prod", "loom", "api", "main"},
 		},
 		{
 			name:     "env-bearing heartbeats",
 			pipeline: `cat /log/loom/sand/worker/heartbeats.log`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE env = ? AND namespace = ? AND service = ? AND kind = ?`,
+			wantSQL:  `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE env = ? AND namespace = ? AND service = ? AND kind = ?`,
 			wantArgs: []any{"sand", "loom", "worker", "heartbeats"},
 		},
 		{
 			name:     "env-bearing tail",
 			pipeline: `tail -10 /log/loom/prod/api/metrics.log`,
-			wantSQL:  `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE env = ? AND namespace = ? AND service = ? AND kind = ? ORDER BY ts DESC LIMIT 10) AS t ORDER BY ts ASC`,
+			wantSQL:  `SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE env = ? AND namespace = ? AND service = ? AND kind = ? ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 10) AS t ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST`,
 			wantArgs: []any{"prod", "loom", "api", "metrics"},
 		},
 	}

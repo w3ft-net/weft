@@ -50,6 +50,29 @@ type Query struct {
 // extra columns in ResultRow.MetaVars, keyed by name.
 const PayloadColumn = "payload"
 
+// EventIDColumn and LineNoColumn name the columns every row query returns
+// after (raw, ts): the stored row's event grouping, empty/NULL on a
+// one-line event. ScanResultRows moves them into ResultRow's typed
+// fields rather than MetaVars.
+const (
+	EventIDColumn = "event_id"
+	LineNoColumn  = "line_no"
+)
+
+// orderClause expands a ts order into the full (ts, event_id, line_no)
+// ordering, one-line events (NULL event_id) first. DESC is the exact
+// reverse, so tail's inner DESC LIMIT and outer ASC re-sort agree.
+// Other orders (raw, raw DESC) pass through.
+func orderClause(order string) string {
+	switch order {
+	case "ts", "ts ASC":
+		return "ts, event_id NULLS FIRST, line_no NULLS FIRST"
+	case "ts DESC":
+		return "ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST"
+	}
+	return order
+}
+
 // CountColumn names the extra column carrying an aggregate's count: the
 // lines a shard saw of each distinct raw (or of all of them, for
 // AggregateLines).
@@ -342,6 +365,13 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 	} else {
 		fmt.Fprintf(b, "%s as raw, ts", q.rawExpr)
 	}
+	// Every row carries its event grouping so ts ties order the same way
+	// in the shard, in a wrapping query, and in compute's merge.
+	if q.from.Subquery != nil {
+		b.WriteString(", " + EventIDColumn + ", " + LineNoColumn)
+	} else {
+		b.WriteString(", CAST(event_id AS VARCHAR) AS " + EventIDColumn + ", " + LineNoColumn)
+	}
 	if q.includeMetaVars {
 		for _, col := range MetaVarColumns {
 			b.WriteString(", ")
@@ -366,7 +396,7 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 	}
 	q.renderWhere(b, onArg)
 	if q.orderBy != "" {
-		fmt.Fprintf(b, " ORDER BY %s", q.orderBy)
+		fmt.Fprintf(b, " ORDER BY %s", orderClause(q.orderBy))
 	}
 	if q.limit > 0 {
 		fmt.Fprintf(b, " LIMIT %d", q.limit)

@@ -14,8 +14,8 @@ import (
 //
 // Supported merge keys:
 //
-//	"ts"       → ascending by ResultRow.TsUnixNs
-//	"ts DESC"  → descending by TsUnixNs
+//	"ts"       → ascending by (TsUnixNs, EventId, LineNo)
+//	"ts DESC"  → descending by the same triple
 //	"raw"      → ascending by ResultRow.Raw
 //	"raw DESC" → descending by Raw
 //
@@ -34,24 +34,13 @@ func mergeRows(perShard map[string][]*pb.ResultRow, mergeKey string) []string {
 
 // mergeRowsFull is the row-preserving counterpart to mergeRows.
 func mergeRowsFull(perShard map[string][]*pb.ResultRow, mergeKey string) []*pb.ResultRow {
-	key, desc := parseMergeKey(mergeKey)
-
-	var less func(a, b *pb.ResultRow) bool
-	switch key {
-	case "ts":
-		less = func(a, b *pb.ResultRow) bool { return a.TsUnixNs < b.TsUnixNs }
-	case "raw":
-		less = func(a, b *pb.ResultRow) bool { return a.Raw < b.Raw }
-	default:
+	less := makeLess(mergeKey)
+	if less == nil {
 		var out []*pb.ResultRow
 		for _, rows := range perShard {
 			out = append(out, rows...)
 		}
 		return out
-	}
-	if desc {
-		orig := less
-		less = func(a, b *pb.ResultRow) bool { return orig(b, a) }
 	}
 
 	cursors := make([]*shardCursor, 0, len(perShard))

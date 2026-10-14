@@ -16,6 +16,7 @@ import (
 	"time"
 
 	duckdb "github.com/duckdb/duckdb-go/v2"
+	"github.com/google/uuid"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -211,7 +212,9 @@ CREATE TABLE IF NOT EXISTS logs (
     span_name      TEXT,
     span_id        TEXT,
     parent_span_id TEXT,
-    duration_ns    BIGINT
+    duration_ns    BIGINT,
+    event_id       UUID,
+    line_no        INTEGER
 );
 `
 
@@ -268,6 +271,11 @@ var migrationSteps = []string{
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS span_id TEXT`,
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS parent_span_id TEXT`,
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS duration_ns BIGINT`,
+	// Multi-line text events are stored one row per line; event_id/line_no
+	// group them. NULL on one-line events and on rows ingested before this
+	// existed. See docs/plans/line-storage.md.
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS event_id UUID`,
+	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS line_no INTEGER`,
 }
 
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
@@ -334,6 +342,7 @@ var logColumns = []string{
 	"instance", "customer_id", "payload", "deployment", "env", "version",
 	"region", "cluster", "k8s_namespace", "pod", "container", "node",
 	"trace_id", "span_name", "span_id", "parent_span_id", "duration_ns",
+	"event_id", "line_no",
 }
 
 // awkFields splits a line into the fields column the way awk's default
@@ -382,6 +391,17 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 			if kind == "" {
 				kind = "main"
 			}
+			// A one-line event or JSON row carries no event_id: both
+			// columns are NULL, not 0.
+			var eventID, lineNo any
+			if r.EventId != "" {
+				id, perr := uuid.Parse(r.EventId)
+				if perr != nil {
+					appender.Close()
+					return fmt.Errorf("event_id %q: %w", r.EventId, perr)
+				}
+				eventID, lineNo = duckdb.UUID(id), r.LineNo
+			}
 			if rerr := appender.AppendRow(
 				r.Raw,
 				awkFields(r.Raw),
@@ -407,6 +427,8 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 				r.SpanId,
 				r.ParentSpanId,
 				r.DurationNs,
+				eventID,
+				lineNo,
 			); rerr != nil {
 				appender.Close()
 				return fmt.Errorf("append row: %w", rerr)

@@ -10,7 +10,7 @@ import (
 // (negation, regex with no anchor on a low-cardinality field, etc.):
 // `tail -n N | grep -v ERROR | wc -l` asks "of the last N rows, count
 // those NOT matching ERROR." If the planner merged that into a single
-// `WHERE NOT regexp_matches(raw, 'ERROR') ORDER BY ts DESC LIMIT N`, each shard would
+// `WHERE NOT regexp_matches(raw, 'ERROR') ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT N`, each shard would
 // return N non-ERROR rows, the cross-shard merge would trim back to N,
 // and the count saturates at N regardless of how many rows actually
 // have ERROR. See docs/plans/cross-shard-post-limit-filter.md.
@@ -36,7 +36,7 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 		{
 			name:        "tail then inverted grep (saturation hazard)",
 			pipeline:    `cat vimgym.log | tail -n 2000 | grep -v ERROR | wc -l`,
-			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? ORDER BY ts DESC LIMIT 2000) AS t ORDER BY ts ASC`,
+			wantSQL:     `SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 2000) AS t ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST`,
 			wantCompute: []string{"grep -v ERROR", "wc -l"},
 		},
 		{
@@ -45,13 +45,13 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 			// The inequality isn't limit-safe, so the whole filter runs
 			// in compute and needs LEVEL's real per-row value — see
 			// docs/known-issues.md's (fixed) awk meta-variable entry.
-			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? ORDER BY ts ASC LIMIT 100`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST LIMIT 100`,
 			wantCompute: []string{`awk 'LEVEL != "ERROR"'`},
 		},
 		{
 			name:        "tail then awk negated regex (not limit-safe)",
 			pipeline:    `cat vimgym.log | tail -n 100 | awk '$0 !~ /ERROR/'`,
-			wantSQL:     `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`,
+			wantSQL:     `SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 100) AS t ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST`,
 			wantCompute: []string{`awk '$0 !~ /ERROR/'`},
 		},
 	}
@@ -94,7 +94,7 @@ func TestPlanCustomer_BoundsPerShardLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	want := `SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE customer_id = CAST(? AS BIGINT) ORDER BY ts DESC LIMIT 100) AS t ORDER BY ts ASC`
+	want := `SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE customer_id = CAST(? AS BIGINT) ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 100) AS t ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST`
 	if plan.ShardSQL != want {
 		t.Errorf("ShardSQL must place customer predicate before the LIMIT\n got: %s\nwant: %s", plan.ShardSQL, want)
 	}
@@ -118,42 +118,42 @@ func TestPushdown_HardLimitBlocksPredicatePushdown(t *testing.T) {
 		{
 			name:        "tail then awk meta-var equality",
 			pipeline:    `cat vimgym.log | tail -n 100 | awk 'LEVEL == "ERROR"'`,
-			wantLimit:   "ORDER BY ts DESC LIMIT 100",
+			wantLimit:   "ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 100",
 			notInSQL:    "level = 'ERROR'",
 			wantCompute: []string{`awk 'LEVEL == "ERROR"'`},
 		},
 		{
 			name:        "tail then awk positional equality",
 			pipeline:    `cat vimgym.log | tail -n 100 | awk '$3 == "foo"'`,
-			wantLimit:   "ORDER BY ts DESC LIMIT 100",
+			wantLimit:   "ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 100",
 			notInSQL:    "list_extract",
 			wantCompute: []string{`awk '$3 == "foo"'`},
 		},
 		{
 			name:        "tail then plain grep",
 			pipeline:    `cat vimgym.log | tail -n 2000 | grep ERROR | wc -l`,
-			wantLimit:   "ORDER BY ts DESC LIMIT 2000",
+			wantLimit:   "ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 2000",
 			notInSQL:    "regexp_matches",
 			wantCompute: []string{"grep ERROR", "wc -l"},
 		},
 		{
 			name:        "head then awk regex",
 			pipeline:    `cat vimgym.log | head -n 100 | awk '$0 ~ /^ERROR/'`,
-			wantLimit:   "ORDER BY ts ASC LIMIT 100",
+			wantLimit:   "ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST LIMIT 100",
 			notInSQL:    "regexp_matches",
 			wantCompute: []string{`awk '$0 ~ /^ERROR/'`},
 		},
 		{
 			name:        "head source then awk equality",
 			pipeline:    `head -50 vimgym.log | awk 'LEVEL == "ERROR"'`,
-			wantLimit:   "ORDER BY ts ASC LIMIT 50",
+			wantLimit:   "ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST LIMIT 50",
 			notInSQL:    "level = 'ERROR'",
 			wantCompute: []string{`awk 'LEVEL == "ERROR"'`},
 		},
 		{
 			name:        "tail then sed selection",
 			pipeline:    `cat vimgym.log | tail -n 100 | sed -n '/ERROR/p'`,
-			wantLimit:   "ORDER BY ts DESC LIMIT 100",
+			wantLimit:   "ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 100",
 			notInSQL:    "regexp_matches",
 			wantCompute: []string{`sed -n '/ERROR/p'`},
 		},
@@ -185,7 +185,7 @@ func TestPushdown_HardLimitBlocksPredicatePushdown(t *testing.T) {
 
 // A filter BEFORE the line count still pushes: `grep ERROR | tail -n N`
 // asks for the last N matching rows, which is exactly the SQL
-// `WHERE ... ORDER BY ts DESC LIMIT N`.
+// `WHERE ... ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT N`.
 func TestPushdown_PreLimitFilterStillPushes(t *testing.T) {
 	plan, err := Plan(`cat vimgym.log | grep ERROR | tail -n 100`, 0, "", time.Time{}, time.Time{})
 	if err != nil {

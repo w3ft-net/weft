@@ -6,13 +6,13 @@ import (
 )
 
 // TestQueryBuilder_BareSelect covers the simplest output shape: no
-// predicates, no order, no limit — just SELECT raw, ts FROM logs.
+// predicates, no order, no limit — just SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs.
 // Pins that the empty builder emits a valid query rather than a
 // half-formed string.
 func TestQueryBuilder_BareSelect(t *testing.T) {
 	q := newSQLBuilder()
 	got := q.build()
-	want := "SELECT raw, ts FROM logs"
+	want := "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs"
 	if got != want {
 		t.Fatalf("bare select:\n got: %s\nwant: %s", got, want)
 	}
@@ -32,7 +32,7 @@ func TestQueryBuilder_AllClauses(t *testing.T) {
 	q.setSelect("json_extract(raw, '$.msg')")
 
 	got := q.build()
-	want := "SELECT json_extract(raw, '$.msg') as raw, ts FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' ORDER BY ts ASC LIMIT 100 OFFSET 20"
+	want := "SELECT json_extract(raw, '$.msg') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = 'vimgym' AND level = 'ERROR' ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST LIMIT 100 OFFSET 20"
 	if got != want {
 		t.Fatalf("full query:\n got: %s\nwant: %s", got, want)
 	}
@@ -53,7 +53,7 @@ func TestQueryBuilder_CustomerAndBoundsOrder(t *testing.T) {
 	q.addPredicate("namespace = ?", "vimgym")
 
 	sql, args := q.ToSQL()
-	wantSQL := "SELECT raw, ts FROM logs WHERE customer_id = CAST(? AS BIGINT) AND ts >= CAST(? AS TIMESTAMP) AND ts <= CAST(? AS TIMESTAMP) AND namespace = ?"
+	wantSQL := "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE customer_id = CAST(? AS BIGINT) AND ts >= CAST(? AS TIMESTAMP) AND ts <= CAST(? AS TIMESTAMP) AND namespace = ?"
 	if sql != wantSQL {
 		t.Fatalf("ordered predicates:\n got: %s\nwant: %s", sql, wantSQL)
 	}
@@ -81,7 +81,7 @@ func TestQueryBuilder_Wrap(t *testing.T) {
 
 	outer := inner.Wrap("ts ASC")
 	got := outer.build()
-	want := "SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 50) AS t ORDER BY ts ASC"
+	want := "SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 50) AS t ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST"
 	if got != want {
 		t.Fatalf("wrap:\n got: %s\nwant: %s", got, want)
 	}
@@ -128,7 +128,7 @@ func TestQueryBuilder_ToSQLArgs(t *testing.T) {
 	})
 
 	sql, args := outer.ToSQL()
-	wantSQL := "SELECT raw, ts FROM (SELECT raw, ts FROM logs WHERE namespace = ? AND service = ? ORDER BY ts DESC LIMIT 50) AS t WHERE ts >= ? ORDER BY ts ASC"
+	wantSQL := "SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND service = ? ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 50) AS t WHERE ts >= ? ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST"
 	if sql != wantSQL {
 		t.Errorf("ToSQL sql:\n got: %s\nwant: %s", sql, wantSQL)
 	}
@@ -154,13 +154,13 @@ func TestQueryBuilder_BuildWithOverride(t *testing.T) {
 	q.setOrderLimit("ts DESC", 50)
 
 	direct := q.buildWith("raw", 0)
-	wantDirect := "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY raw"
+	wantDirect := "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = 'vimgym' ORDER BY raw"
 	if direct != wantDirect {
 		t.Errorf("buildWith:\n got: %s\nwant: %s", direct, wantDirect)
 	}
 
 	again := q.build()
-	wantOriginal := "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC LIMIT 50"
+	wantOriginal := "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = 'vimgym' ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 50"
 	if again != wantOriginal {
 		t.Errorf("build() after buildWith should be unchanged:\n got: %s\nwant: %s", again, wantOriginal)
 	}

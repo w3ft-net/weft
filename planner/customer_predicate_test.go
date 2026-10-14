@@ -13,7 +13,7 @@ func TestPlanCustomer_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	wantSQL := `SELECT raw, ts FROM logs WHERE customer_id = CAST(? AS BIGINT) AND namespace = ?`
+	wantSQL := `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE customer_id = CAST(? AS BIGINT) AND namespace = ?`
 	if plan.ShardSQL != wantSQL {
 		t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, wantSQL)
 	}

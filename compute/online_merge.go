@@ -138,7 +138,7 @@ func makeLess(mergeKey string) func(a, b *pb.ResultRow) bool {
 	var less func(a, b *pb.ResultRow) bool
 	switch key {
 	case "ts":
-		less = func(a, b *pb.ResultRow) bool { return a.TsUnixNs < b.TsUnixNs }
+		less = lessTS
 	case "raw":
 		less = func(a, b *pb.ResultRow) bool { return a.Raw < b.Raw }
 	default:
@@ -149,4 +149,18 @@ func makeLess(mergeKey string) func(a, b *pb.ResultRow) bool {
 		less = func(a, b *pb.ResultRow) bool { return orig(b, a) }
 	}
 	return less
+}
+
+// lessTS orders by (ts, event_id, line_no), a row with no event_id first:
+// the order a shard sorts its rows in, so rows tied on ts from two shards
+// merge deterministically and an event's lines stay together and in order
+// (an event lives on one shard).
+func lessTS(a, b *pb.ResultRow) bool {
+	if a.TsUnixNs != b.TsUnixNs {
+		return a.TsUnixNs < b.TsUnixNs
+	}
+	if a.EventId != b.EventId {
+		return a.EventId < b.EventId
+	}
+	return a.LineNo < b.LineNo
 }

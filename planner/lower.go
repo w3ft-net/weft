@@ -34,7 +34,9 @@ import (
 // v8: grep and sed after a plain sort or the SELECT's projection filter
 // each line in the shard; sort with an operand no longer orders or
 // aggregates there.
-const PlannerVersion = 8
+// v9: every row query selects event_id and line_no after (raw, ts), and a
+// ts order is (ts, event_id, line_no), one-line events first.
+const PlannerVersion = 9
 
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to

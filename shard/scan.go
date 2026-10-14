@@ -3,6 +3,7 @@ package shard
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 	"time"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -14,7 +15,8 @@ import (
 // column name — the planner adds these (MetaVarColumns, in
 // planner/jq.go) only when a remaining jq compute stage might read a
 // bare "._"-prefixed meta-variable for output, so the common (raw,
-// ts)-only shape allocates nothing extra.
+// ts)-only shape allocates nothing extra. The event_id and line_no
+// columns the planner always selects fill ResultRow's typed fields.
 func ScanResultRows(sqlRows *sql.Rows) ([]*pb.ResultRow, error) {
 	cols, err := sqlRows.Columns()
 	if err != nil {
@@ -41,6 +43,18 @@ func ScanResultRows(sqlRows *sql.Rows) ([]*pb.ResultRow, error) {
 		}
 		for i, col := range extraCols {
 			if !extraVals[i].Valid {
+				continue
+			}
+			switch col {
+			case "event_id":
+				row.EventId = extraVals[i].String
+				continue
+			case "line_no":
+				n, err := strconv.ParseInt(extraVals[i].String, 10, 32)
+				if err != nil {
+					return nil, fmt.Errorf("line_no %q: %w", extraVals[i].String, err)
+				}
+				row.LineNo = int32(n)
 				continue
 			}
 			if row.MetaVars == nil {

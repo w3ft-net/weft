@@ -23,7 +23,7 @@ func TestRawExpr_AwkPrint(t *testing.T) {
 		{
 			name:      "print $0 (identity)",
 			pipeline:  `cat vimgym.log | awk '{ print }'`,
-			wantInSQL: "SELECT raw, ts FROM logs",
+			wantInSQL: "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs",
 			noCompute: true,
 		},
 	}
@@ -100,7 +100,7 @@ func TestRawExpr_NoProjection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
-			if !strings.HasPrefix(plan.ShardSQL, "SELECT raw, ts FROM logs") {
+			if !strings.HasPrefix(plan.ShardSQL, "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs") {
 				t.Errorf("expected plain raw SELECT, got: %s", plan.ShardSQL)
 			}
 		})

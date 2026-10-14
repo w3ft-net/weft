@@ -6,32 +6,27 @@ a fix. Not a bug tracker; keep entries here only once root-caused, with
 enough detail that fixing them later doesn't require re-discovery. Move an
 entry to `docs/completed/` (or delete it) once fixed.
 
-## cut and awk projections run once per row, not once per line
+## cut and awk projections run once per row, not once per line, on JSON rows
 
 **Where:** projection pushdown (`planner/passes.go` `pushProjection`) for
 `cut` (`cutProjection`) and awk `print` (`awkProjection`), versus the
 stages themselves in compute.
 
-**What:** compute feeds a row's raw to a stage followed by a newline, so a
-row holding several lines (a stack trace) is several lines to `cut` and
-several records to awk. The shard's projection reads the whole raw once:
-`cut -d i -f 1` over `multi\nline\nrow` returns `mult`, where cut prints
-`mult`, `l` and `row`; awk `{ print $1 }` returns the row's first field
-(`fields`, split from the whole row) once instead of each line's;
-`{ print LEVEL }` prints the level once instead of once per line. jq
-projections are unaffected: jq reads the row's payload, once. Found by
-multi-line probes in `TestDifferentialLineSplits` (2026-10-14).
+**What:** text events are stored one row per line
+([line-storage](plans/line-storage.md)), so these projections are exact
+for them. A row with a JSON payload isn't split, and its `raw` can still
+hold several lines (a pretty-printed document): compute feeds them to a
+stage as several lines, while the shard's projection reads the whole raw
+once. `cut -d i -f 1` over `multi\nline\nrow` returns `mult`, where cut
+prints `mult`, `l` and `row`. A projection's own output (`jq -r` of a
+string with a newline) is also lines the shard doesn't split. jq
+projections themselves are unaffected: jq reads the payload, once.
 
-**Fix:** [line-storage](plans/line-storage.md) stores text events one
-row per line, which makes the per-row projection exact for new rows; it
-remains for rows ingested before it and for JSON rows whose `raw` holds
-newlines. The query-time alternative it replaces: split the lines under the projection
-(`SELECT * REPLACE (unnest(string_split(raw, chr(10))) AS raw, …)`), with
-awk's `$N` read from a per-line split matching warp's (space, tab,
-newline) instead of `fields`. That costs an unnest on every shard row of
-a cut/awk projection query, which is the decision left open.
+**Fix, if it matters:** compact a JSON row's `raw` at ingest, or leave
+text pushdown off rows with a payload. NDJSON, the norm, never has the
+problem.
 
-## Shard aggregates keep a trailing `\r` that warp's line readers drop
+## Shard aggregates keep a trailing `\r` that warp's line readers drop, on JSON rows
 
 **Where:** `planner.Query.Aggregate` (the shard half of `wc -l`, `sort -u`,
 `sort | uniq [-c]`; docs/plans/planner-ir.md, Phase 3) versus warp's
@@ -46,6 +41,10 @@ engine's). The shard's `GROUP BY` keeps the line as stored, as GNU sort and
 uniq would, so a row ending in `\r` groups and prints differently from the
 same pipeline run in compute. Verified with the differential harness: rows
 `cr\r` under `sort -u` and `sort | uniq -c` (plan `cr\r`, reference `cr`).
+
+Text rows no longer have this: ingest drops a trailing `\r` from every line
+([line-storage](plans/line-storage.md)). It remains for rows with a JSON
+payload, which ingest leaves as they are.
 
 Row filters agree either way (a leading grep keeps or drops the whole row on
 both paths), and so does `wc -l`, which counts newlines.

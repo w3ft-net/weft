@@ -425,7 +425,13 @@ type ResultRow struct {
 	// (no such stage) selects and carries nothing extra. See
 	// compute.mergeMetaVars, which splices these into each row's JSON
 	// body before it reaches the jq stage.
-	MetaVars      map[string]string `protobuf:"bytes,4,rep,name=meta_vars,json=metaVars,proto3" json:"meta_vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	MetaVars map[string]string `protobuf:"bytes,4,rep,name=meta_vars,json=metaVars,proto3" json:"meta_vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// event_id/line_no are the stored row's event grouping (empty/0 for a
+	// one-line event). They break ts ties in the k-way merge so an event's
+	// lines stay together and in order: (ts, event_id, line_no), empty
+	// event_id first. See docs/plans/line-storage.md.
+	EventId       string `protobuf:"bytes,5,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	LineNo        int32  `protobuf:"varint,6,opt,name=line_no,json=lineNo,proto3" json:"line_no,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -489,6 +495,20 @@ func (x *ResultRow) GetMetaVars() map[string]string {
 	return nil
 }
 
+func (x *ResultRow) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *ResultRow) GetLineNo() int32 {
+	if x != nil {
+		return x.LineNo
+	}
+	return 0
+}
+
 // LogRow is the ingestion type — weftd agents and CloudWatch poller send
 // structured rows to the coordinator for insertion into shards.
 type LogRow struct {
@@ -534,10 +554,17 @@ type LogRow struct {
 	// ingest.Parser's span_*_field/span_*_pattern schema extraction. Only
 	// "span done" lines populate duration_ns; empty/zero on every other
 	// row. See docs/plans/span-display.md.
-	SpanName      string `protobuf:"bytes,22,opt,name=span_name,json=spanName,proto3" json:"span_name,omitempty"`
-	SpanId        string `protobuf:"bytes,23,opt,name=span_id,json=spanId,proto3" json:"span_id,omitempty"`
-	ParentSpanId  string `protobuf:"bytes,24,opt,name=parent_span_id,json=parentSpanId,proto3" json:"parent_span_id,omitempty"`
-	DurationNs    int64  `protobuf:"varint,25,opt,name=duration_ns,json=durationNs,proto3" json:"duration_ns,omitempty"`
+	SpanName     string `protobuf:"bytes,22,opt,name=span_name,json=spanName,proto3" json:"span_name,omitempty"`
+	SpanId       string `protobuf:"bytes,23,opt,name=span_id,json=spanId,proto3" json:"span_id,omitempty"`
+	ParentSpanId string `protobuf:"bytes,24,opt,name=parent_span_id,json=parentSpanId,proto3" json:"parent_span_id,omitempty"`
+	DurationNs   int64  `protobuf:"varint,25,opt,name=duration_ns,json=durationNs,proto3" json:"duration_ns,omitempty"`
+	// event_id/line_no tie together the rows of one multi-line text event.
+	// The coordinator mints event_id (a UUIDv7, as text) when it splits an
+	// event into one row per line and never trusts a sender's; both are
+	// empty/zero on a one-line event and on a JSON-payload row, which is
+	// never split. See docs/plans/line-storage.md.
+	EventId       string `protobuf:"bytes,27,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	LineNo        int32  `protobuf:"varint,28,opt,name=line_no,json=lineNo,proto3" json:"line_no,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -737,6 +764,20 @@ func (x *LogRow) GetParentSpanId() string {
 func (x *LogRow) GetDurationNs() int64 {
 	if x != nil {
 		return x.DurationNs
+	}
+	return 0
+}
+
+func (x *LogRow) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *LogRow) GetLineNo() int32 {
+	if x != nil {
+		return x.LineNo
 	}
 	return 0
 }
@@ -4691,16 +4732,18 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\rrows_received\x18\x01 \x01(\x03R\frowsReceived\"4\n" +
 	"\fQueryRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12\x12\n" +
-	"\x04args\x18\x02 \x03(\tR\x04args\"\xd3\x01\n" +
+	"\x04args\x18\x02 \x03(\tR\x04args\"\x87\x02\n" +
 	"\tResultRow\x12\x1d\n" +
 	"\bline_num\x18\x01 \x01(\x03B\x02\x18\x01R\alineNum\x12\x10\n" +
 	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x1c\n" +
 	"\n" +
 	"ts_unix_ns\x18\x03 \x01(\x03R\btsUnixNs\x12:\n" +
-	"\tmeta_vars\x18\x04 \x03(\v2\x1d.weft.ResultRow.MetaVarsEntryR\bmetaVars\x1a;\n" +
+	"\tmeta_vars\x18\x04 \x03(\v2\x1d.weft.ResultRow.MetaVarsEntryR\bmetaVars\x12\x19\n" +
+	"\bevent_id\x18\x05 \x01(\tR\aeventId\x12\x17\n" +
+	"\aline_no\x18\x06 \x01(\x05R\x06lineNo\x1a;\n" +
 	"\rMetaVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb6\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xea\x05\n" +
 	"\x06LogRow\x12\x1d\n" +
 	"\bline_num\x18\x01 \x01(\x03B\x02\x18\x01R\alineNum\x12\x10\n" +
 	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x18\n" +
@@ -4731,7 +4774,9 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\aspan_id\x18\x17 \x01(\tR\x06spanId\x12$\n" +
 	"\x0eparent_span_id\x18\x18 \x01(\tR\fparentSpanId\x12\x1f\n" +
 	"\vduration_ns\x18\x19 \x01(\x03R\n" +
-	"durationNsJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"durationNs\x12\x19\n" +
+	"\bevent_id\x18\x1b \x01(\tR\aeventId\x12\x17\n" +
+	"\aline_no\x18\x1c \x01(\x05R\x06lineNoJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
 	"R\x06fieldsR\bcustomer\"1\n" +
 	"\rIngestRequest\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +

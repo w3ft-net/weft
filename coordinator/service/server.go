@@ -678,6 +678,9 @@ recvLoop:
 		// the same customer and contaminate B's queries — the wire no
 		// longer carries the namespace as a trusted, agent-supplied field.
 		row.Namespace = authNamespace
+		// The coordinator mints event ids when it splits an event into
+		// lines; a sender's are never trusted (docs/plans/line-storage.md).
+		row.EventId, row.LineNo = "", 0
 		// kind defaults to "main" (the canonical single-stream source).
 		if row.Kind == "" {
 			row.Kind = "main"
@@ -775,6 +778,10 @@ func (s *Server) authenticateStream(ctx context.Context) (*store.AgentAuthResult
 }
 
 func (s *Server) ingestBatch(rows []*pb.LogRow) {
+	// Store a multi-line text event as one row per line, here, so the
+	// shards' buffer and live tail see the same rows.
+	rows = ingest.SplitLines(rows)
+
 	// Write to ring buffer (non-blocking). Background drain pushes to
 	// shards. NewCoordinator always installs a buffer, so no nil-check.
 	s.Coord.Ingest.Write(rows)

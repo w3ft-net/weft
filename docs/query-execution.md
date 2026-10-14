@@ -18,6 +18,21 @@ cat vimgym.log | awk 'LEVEL == "ERROR" && $3 > 100' | jq '.payload' | sort | uni
 6. **Compute execution** — coordinator merges shard streams and runs the remaining gpipe stages
 7. **Output** — results stream to the client
 
+## Rows are lines
+
+Ingest stores a multi-line text event (a stack trace) as one row per
+line, so a row is a line to the shard and to grep alike: every pushed
+filter and projection acts on lines, not on a whole event. The lines
+share the event's other columns and carry an `event_id` and a `line_no`.
+Line endings are normalized on the way in (`\r\n` becomes `\n`, no
+trailing `\r`). Rows with a JSON payload are never split, since jq reads
+the payload once per event. See [line-storage](plans/line-storage.md).
+
+Every row query returns `event_id` and `line_no` after `raw, ts`, and a
+time order is `(ts, event_id, line_no)`, rows with no event first. The
+shards sort that way and compute's merge breaks `ts` ties the same way,
+so an event's lines stay together and in order across shards.
+
 ## Predicate extraction
 
 The planner is greedy — it attempts to push down as much as possible. Pushable patterns:

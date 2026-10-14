@@ -186,7 +186,7 @@ func TestRawExpr_JqInternalPipeBreak(t *testing.T) {
 				t.Fatalf("Plan: %v", err)
 			}
 			// The stage reads the payload, not raw.
-			if !strings.HasPrefix(plan.ShardSQL, "SELECT CAST(payload AS VARCHAR) as raw, ts FROM logs") {
+			if !strings.HasPrefix(plan.ShardSQL, "SELECT CAST(payload AS VARCHAR) as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs") {
 				t.Errorf("expected the payload as the stage's input, got: %s", plan.ShardSQL)
 			}
 			stage := strings.TrimPrefix(pipeline, "cat vimgym.log | ")

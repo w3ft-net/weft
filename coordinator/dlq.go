@@ -83,6 +83,8 @@ func (d *DLQ) Write(rows []*pb.LogRow) string {
 			"ts_ns":       r.TsUnixNs,
 			"payload":     string(r.PayloadJson),
 			"deployment":  r.Deployment,
+			"event_id":    r.EventId,
+			"line_no":     r.LineNo,
 		})
 	}
 	gz.Close()

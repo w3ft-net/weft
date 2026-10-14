@@ -284,10 +284,10 @@ func (h *harness) runReference(source string, stages []string, meta bool) (strin
 	if meta {
 		cols = strings.Join(planner.MetaVarColumns, ", ") + ", "
 	}
-	sql := strings.Replace(src.DirectShardSQL, "SELECT raw, ts FROM logs",
-		"SELECT raw, ts, "+cols+"CAST(payload AS VARCHAR) AS "+planner.PayloadColumn+" FROM logs", 1)
-	sql = strings.Replace(sql, "SELECT raw, ts FROM (",
-		"SELECT raw, ts, "+cols+planner.PayloadColumn+" FROM (", 1)
+	sql := strings.Replace(src.DirectShardSQL, "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs",
+		"SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, "+cols+"CAST(payload AS VARCHAR) AS "+planner.PayloadColumn+" FROM logs", 1)
+	sql = strings.Replace(sql, "SELECT raw, ts, event_id, line_no FROM (",
+		"SELECT raw, ts, event_id, line_no, "+cols+planner.PayloadColumn+" FROM (", 1)
 	n := 0
 	for n < len(stages) && planner.IsRowStage(stages[n]) {
 		n++

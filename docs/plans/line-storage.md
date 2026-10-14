@@ -2,9 +2,10 @@
 
 ## Status
 
-🟡 Designed 2026-10-14, not started. Decided: one stored row per line
-for text events; JSON-schemaed rows are never split; no migration of
-existing rows; ingest normalizes line endings.
+🟡 Designed 2026-10-14. Phases 1–3 implemented
+2026-10-14, uncommitted, not yet deployed. Decided: one stored row per line
+for text events; JSON-schemaed rows are never split; old data is deleted, not
+migrated or read; ingest normalizes line endings.
 
 ## Problem
 
@@ -129,16 +130,12 @@ them.
 
 ## Existing data
 
-Not migrated. Rows ingested before the change keep their newlines, with
-today's behavior, until retention ages them out. `event_id`/`line_no`
-are NULL on them, which orders them as one-line events.
-
-Hot shards get the columns by `ALTER TABLE ADD COLUMN` (`logColumns`
-already names columns, for migrated shards). Archived parquet written
-before the change lacks them: the archive and cold-shard readers must
-read old files with the columns as NULL (`union_by_name`, or a
-per-file projection), or the new ORDER BY fails on them. Verify both
-paths against a pre-change archive.
+Not migrated, and not read: pre-change archives and shards are deleted
+at cutover rather than supported (weft has no paying customers yet), so
+no reader handles a missing `event_id`/`line_no`, and no row has them
+NULL because of age. Shards still running at cutover get the columns by
+`ALTER TABLE ADD COLUMN` (`logColumns` already names columns, for
+migrated shards) before they ingest split rows.
 
 ## What it enables (not in this plan)
 
@@ -167,10 +164,10 @@ need their own plans.
    and compute's merge; harness rows of several lines with equal `ts`
    across shards.
 3. **Cleanup.** Narrow `docs/known-issues.md` (the CR entry and the
-   projection entry apply only to pre-change rows and JSON rows), and
+   projection entry apply only to JSON rows), and
    update the docs that describe a row as an event
-   (`docs/query-execution.md`, `docs/shard-lifecycle.md`'s schema,
-   weftd-multiline's "Emitted row shape").
+   (`docs/query-execution.md`; weftd-multiline's "Emitted row shape"
+   already points here; `docs/shard-lifecycle.md` lists no schema).
 
 ## Open questions
 
@@ -179,6 +176,3 @@ need their own plans.
   compute and one string in the shard. Rare in practice (NDJSON is the
   norm); options are compacting `raw` at ingest (it changes what the
   user sees) or leaving text pushdown off those rows.
-- **Retention window for the mixed period.** How long pre-change rows
-  with newlines stay queryable, and whether that's worth a note in the
-  shell docs.
