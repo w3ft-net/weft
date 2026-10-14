@@ -2,6 +2,7 @@ package compute
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/graybeardcorp/weft/planner"
@@ -153,4 +154,90 @@ func TestRowStages_HeadAndTailCountSurvivors(t *testing.T) {
 	if got := runRowStagesJob(t, []string{"tail -n 3", "head -n 1"}, []string{"wc -l"}, 0, false); got != "1" {
 		t.Errorf("tail | head | wc: got %q", got)
 	}
+}
+
+// BenchmarkRowStageKeep measures one row through a text row stage, which
+// builds an interpreter per row, against a jq select chain, which doesn't.
+func BenchmarkRowStageKeep(b *testing.B) {
+	raw := `2026-10-14T12:00:00Z ERROR request failed status=500 path=/api/orders/123`
+	payload := `{"status":500,"path":"/api/orders/123"}`
+	for name, stage := range map[string]string{
+		"grep": `grep ERROR`,
+		"sed":  `sed -n '/ERROR/p'`,
+		"awk":  `awk '$2 == "ERROR"'`,
+		"jq":   `jq 'select(.status == 500)'`,
+	} {
+		rs, err := NewRowStages([]string{stage})
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if !rs.Keep(raw, payload, nil) {
+					b.Fatal("row dropped")
+				}
+			}
+		})
+	}
+}
+
+// TestRowStages_ReusedInterpreterSeesEachRowsMeta: a stage's interpreter is
+// reused across rows, so an awk reading a meta-variable must get the
+// current row's value, not the first row's, and a dropped row mustn't
+// leak output into the next.
+func TestRowStages_ReusedInterpreterSeesEachRowsMeta(t *testing.T) {
+	rs, err := NewRowStages([]string{`awk 'HOST == "b"'`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, tc := range []struct {
+		host string
+		want bool
+	}{{"a", false}, {"b", true}, {"a", false}, {"b", true}, {"b", true}, {"c", false}} {
+		if got := rs.Keep("line", "", map[string]string{"instance": tc.host}); got != tc.want {
+			t.Fatalf("row %d host %q: Keep = %v, want %v", i, tc.host, got, tc.want)
+		}
+	}
+
+	g, err := NewRowStages([]string{`grep ERROR`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, tc := range []struct {
+		raw  string
+		want bool
+	}{{"ERROR x", true}, {"ok", false}, {"ok", false}, {"ERROR y", true}} {
+		if got := g.Keep(tc.raw, "", nil); got != tc.want {
+			t.Fatalf("row %d %q: Keep = %v, want %v", i, tc.raw, got, tc.want)
+		}
+	}
+}
+
+// TestRowStages_KeepIsConcurrencySafe: the live path calls Keep from many
+// subscribers at once; run with -race.
+func TestRowStages_KeepIsConcurrencySafe(t *testing.T) {
+	rs, err := NewRowStages([]string{`grep ERROR`, `awk 'HOST == "b"'`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 500; i++ {
+				host, raw := "a", "ok"
+				want := false
+				if i%2 == 0 {
+					host, raw, want = "b", "ERROR x", true
+				}
+				if got := rs.Keep(raw, "", map[string]string{"instance": host}); got != want {
+					t.Errorf("Keep(%q, %q) = %v, want %v", raw, host, got, want)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

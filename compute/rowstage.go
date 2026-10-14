@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/warp/pkg/jq"
@@ -26,6 +27,7 @@ type rowStage struct {
 	jq     jq.Expr      // a select chain, over the payload
 	meta   bool         // the select chain names a meta-variable
 	script *bash.Script // a filter over the raw line
+	interp *sync.Pool   // of *rowInterp, for script: built once, reused per row
 	head   int          // head -n N: keep the first N (when > -1)
 	tail   int          // tail -n N: keep the last N (when > -1)
 }
@@ -80,7 +82,32 @@ func parseRowStage(src string) (rowStage, error) {
 		return st, nil
 	}
 	st.script = script
+	st.interp = &sync.Pool{New: func() any { return newRowInterp() }}
 	return st, nil
+}
+
+// rowInterp is an interpreter with the tool commands registered, kept
+// between rows: building one costs about as much as running a filter on a
+// row. A stage's script is one simple command (grep, sed or awk), so no
+// state it could leave behind reaches the next row. RegisterToolCommands
+// captures AwkPerRecordVars once, so it reads the current row's
+// meta-variables through the struct.
+type rowInterp struct {
+	interp *bash.Interpreter
+	meta   map[string]string
+	in     strings.Reader
+	out    bytes.Buffer
+}
+
+func newRowInterp() *rowInterp {
+	ri := &rowInterp{interp: bash.NewInterpreter()}
+	ri.interp.AwkMaxSteps = 0
+	ri.interp.SedMaxSteps = 0
+	ri.interp.AwkPerRecordVars = func(string) map[string]string { return awkVarsFromMeta(ri.meta) }
+	ri.interp.SetStdout(&ri.out)
+	ri.interp.SetStderr(io.Discard)
+	bash.RegisterToolCommands(ri.interp)
+	return ri
 }
 
 // lineCount reads head/tail's `-n N` or `-N`; no argument is 10.
@@ -125,17 +152,14 @@ func (st *rowStage) keep(raw, payload string, meta map[string]string) bool {
 		out, err := jq.EvalAll(st.jq, v)
 		return err == nil && len(out) > 0
 	}
-	interp := bash.NewInterpreter()
-	interp.AwkMaxSteps = 0
-	interp.SedMaxSteps = 0
-	interp.AwkPerRecordVars = func(string) map[string]string { return awkVarsFromMeta(meta) }
-	interp.SetStdin(strings.NewReader(raw + "\n"))
-	var out bytes.Buffer
-	interp.SetStdout(&out)
-	interp.SetStderr(io.Discard)
-	bash.RegisterToolCommands(interp)
-	interp.ExecScript(st.script)
-	return out.Len() > 0
+	ri := st.interp.Get().(*rowInterp)
+	defer st.interp.Put(ri)
+	ri.meta = meta
+	ri.out.Reset()
+	ri.in.Reset(raw + "\n")
+	ri.interp.SetStdin(&ri.in)
+	ri.interp.ExecScript(st.script)
+	return ri.out.Len() > 0
 }
 
 // rowRunner streams merged rows through the row stages into sink.
