@@ -8,7 +8,7 @@ import (
 // into ResultRow.MetaVars, keyed by its column name — the mechanism
 // the planner relies on to fix "jq's reserved meta-variables ...
 // resolve to null when read as output" (docs/known-issues.md): a bare
-// "._host"-shaped read only works if a row's MetaVars actually carries
+// "$host"-shaped read only works if a row's MetaVars actually carries
 // the "instance" column value for compute (compute/metavars.go) to
 // splice into the row's JSON body.
 func TestScanResultRows_CarriesExtraColumnsAsMetaVars(t *testing.T) {

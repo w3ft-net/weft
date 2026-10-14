@@ -403,7 +403,7 @@ func (j *Job) stageInput(row *pb.ResultRow) string {
 		in = row.MetaVars[planner.PayloadColumn]
 	}
 	if j.spliceMeta && strings.HasPrefix(j.stages[0], "jq ") {
-		return MergeMetaVars(in, rowMetaVars(row))
+		return WrapJqInput(in, rowMetaVars(row))
 	}
 	return in
 }
@@ -546,7 +546,7 @@ func (j *Job) consume() {
 		// jq prints compact (one value per line) by default in weft:
 		// its output feeds line-oriented stages, and it matches what a
 		// projection SQL computes. See docs/plans/planner-ir.md, "jq".
-		opts := bash.StreamingOptions{JqCompact: true}
+		opts := bash.StreamingOptions{JqCompact: true, JqPerInput: JqPerInput}
 		if awkVarsCh != nil {
 			var cur rowAwkVars
 			opts.AwkPerRecordVars = func(string) map[string]string {

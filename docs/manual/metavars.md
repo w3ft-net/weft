@@ -18,21 +18,30 @@ that can't match.
 
 | awk                        | jq                       | Column           | Source                                                    |
 |----------------------------|--------------------------|------------------|-----------------------------------------------------------|
-| `NAMESPACE`                | `._namespace`            | `namespace`      | the `<namespace>` path segment / agent token's namespace  |
-| `SERVICE`                  | `._service`              | `service`        | source declaration, log filename, or HTTP ingest payload  |
-| `KIND`                     | `._kind`                 | `kind`           | the stream kind (`main`, `heartbeats`, `metrics`, `runtime`) |
-| `HOST` *(alias `INSTANCE`)* | `._host` *(alias `._instance`)* | `instance`       | the agent's hostname                                      |
-| `LEVEL`                    | `._level`                | `level`          | schema-extracted from the row                             |
-| `TS`                       | `._ts`                   | `ts`             | schema-extracted from the row                             |
-| `DEPLOYMENT`               | `._deployment`           | `deployment`     | weftd `deployment:` config (or k8s/ASG)                   |
-| `ENV`                      | `._env`                  | `env`            | bound to the agent token at mint time                     |
-| `VERSION`                  | `._version`              | `version`        | weftd `version.file:` (live) or `version.env:` (snapshot) |
-| `REGION`                   | `._region`               | `region`         | cloud metadata probe at agent startup                     |
-| `CLUSTER`                  | `._cluster`              | `cluster`        | weftd k8s mode                                            |
-| `K8S_NAMESPACE`            | `._k8s_namespace`        | `k8s_namespace`  | weftd k8s mode                                            |
-| `POD`                      | `._pod`                  | `pod`            | weftd k8s mode                                            |
-| `CONTAINER`                | `._container`            | `container`      | weftd k8s mode                                            |
-| `NODE`                     | `._node`                 | `node`           | weftd `dimensions.node:` (file-sourced)                   |
+| `NAMESPACE`                | `$namespace`            | `namespace`      | the `<namespace>` path segment / agent token's namespace  |
+| `SERVICE`                  | `$service`              | `service`        | source declaration, log filename, or HTTP ingest payload  |
+| `KIND`                     | `$kind`                 | `kind`           | the stream kind (`main`, `heartbeats`, `metrics`, `runtime`) |
+| `HOST` *(alias `INSTANCE`)* | `$host` *(alias `$instance`)* | `instance`       | the agent's hostname                                      |
+| `LEVEL`                    | `$level`                | `level`          | schema-extracted from the row                             |
+| `TS`                       | `$ts`                   | `ts`             | schema-extracted from the row                             |
+| `DEPLOYMENT`               | `$deployment`           | `deployment`     | weftd `deployment:` config (or k8s/ASG)                   |
+| `ENV`                      | `$env`                  | `env`            | bound to the agent token at mint time                     |
+| `VERSION`                  | `$version`              | `version`        | weftd `version.file:` (live) or `version.env:` (snapshot) |
+| `REGION`                   | `$region`               | `region`         | cloud metadata probe at agent startup                     |
+| `CLUSTER`                  | `$cluster`              | `cluster`        | weftd k8s mode                                            |
+| `K8S_NAMESPACE`            | `$k8s_namespace`        | `k8s_namespace`  | weftd k8s mode                                            |
+| `POD`                      | `$pod`                  | `pod`            | weftd k8s mode                                            |
+| `CONTAINER`                | `$container`            | `container`      | weftd k8s mode                                            |
+| `NODE`                     | `$node`                 | `node`           | weftd `dimensions.node:` (file-sourced)                   |
+| `EVENT_ID`                 | `$event_id`             | `event_id`       | shared by the lines of one multi-line event               |
+| `LINE_NO`                  | `$line_no`              | `line_no`        | the line's 0-based position within its event              |
+
+`EVENT_ID` and `LINE_NO` tie together the lines of a multi-line event
+(a stack trace, a Python traceback): each line is its own row, and they
+share an `EVENT_ID`. A one-line event is line 0 and has an empty
+`EVENT_ID`, so `LINE_NO == 0` selects the first line of every event and
+`EVENT_ID != ""` selects only lines that belong to a multi-line event.
+In jq `$line_no` and `$duration_ns` are numbers (`$duration_ns` is null on a row without one); the other meta-variables are strings.
 
 A row without a given dimension carries an empty string. `ENV == "prod"` does not match it, but `ENV != "prod"` does.
 
@@ -48,16 +57,17 @@ field-by-variable-index syntax (`$n` where `n` is `NAME`'s value) and
 cannot carry a string like `"web-1"`. A bare `HOST` is an ordinary awk
 global, like awk's built-in `NR`/`NF`/`FILENAME`.
 
-jq meta-variables use leading-underscore lowercase — `._env`,
-`._pod`. The underscore separates the columns from JSON payload keys:
-`.pod` is whatever the producer wrote into the row body; `._pod` is
-the column. Real JSONL sometimes carries `Pod` / `PoD` / `POD` keys,
-so the underscore marks the column reliably in any case.
+jq meta-variables are lowercase jq variables — `$env`, `$pod`. A
+variable can't be mistaken for a payload key: `.pod` is whatever the
+producer wrote into the row body; `$pod` is the column. Real JSONL
+sometimes carries `Pod` / `PoD` / `POD` keys, so the `$` marks the
+column reliably in any case. A program that rebinds one of the names
+(`. as $env | ...`) reads its own value.
 
 `NAMESPACE` is weft's logical token grouping — the `<namespace>`
 segment in the path (`/log/<namespace>/...`). The Kubernetes
 namespace is a distinct dimension named `K8S_NAMESPACE`
-(`._k8s_namespace`).
+(`$k8s_namespace`).
 
 ## Path layout
 
@@ -105,7 +115,7 @@ query-time dimensions.
 
 Filtering on a reserved meta-variable is the fast path, in awk
 (`awk 'ENV == "prod"'`, `awk 'POD ~ "api-7f9b"'`) and in jq
-(`jq 'select(._level == "ERROR")'`). A filter on any other field, such
+(`jq 'select($level == "ERROR")'`). A filter on any other field, such
 as `jq 'select(.feature_flag == "abc")'`, reads and parses every row in
 the time range. awk's numbered fields (`awk '$3 == "POST"'`) also run
 against every row. One pipeline can mix both: the meta-variable filters
@@ -128,7 +138,7 @@ so omit `-n` here: a line count can silently truncate the window.
 # /cron.d/memory-per-host
 # schedule: */1 * * * *
 cat /log/myco/prod/api/metrics.log \
-  | jq -r 'select(._level == "INFO" and .type == "memory") | "\(._host) \(.pct)"'
+  | jq -r 'select($level == "INFO" and .type == "memory") | "\($host) \(.pct)"'
 ```
 
 Each tick emits one `<host> <pct>` row per memory sample. Multi-row
@@ -146,7 +156,7 @@ cat myco.log \
 The `ENV` and `DEPLOYMENT` filters are fast-path filters, so weft
 narrows to env=prod and deployment=api without parsing each row's
 JSON. For JSON log streams the same filter reads
-`jq 'select(._env == "prod" and ._deployment == "api")'`.
+`jq 'select($env == "prod" and $deployment == "api")'`.
 
 ### Compare a single deployment across regions
 

@@ -8,36 +8,46 @@ import (
 	"github.com/graybeardcorp/warp/pkg/jq"
 )
 
-// JQMetaVars maps jq underscore-prefixed field names to SQL column names.
-// The leading underscore is the disambiguation convention — jq is
-// case-sensitive, but real JSONL sometimes carries Pod/.Pod-style keys
-// so the underscore is more reliable than casing. See
-// docs/plans/ingest-dimensions.md. Exported so compute (compute/
-// metavars.go) can expand a row's projected MetaVarColumns back out to
-// every alias a jq expression might read.
+// JQMetaVars maps the jq variables a program may read ($level, $host) to
+// SQL column names. They're variables, not fields, so a payload key of
+// the same name (.level) stays distinct from the column, and a program
+// can rebind one (`. as $level | ...`); a program that does is opaque to
+// the planner and reads its own. Exported so compute can bind a row's
+// projected MetaVarColumns to every alias a jq expression might read.
 var JQMetaVars = map[string]string{
-	"_namespace":     "namespace",
-	"_service":       "service",
-	"_kind":          "kind",
-	"_level":         "level",
-	"_instance":      "instance",
-	"_host":          "instance",
-	"_ts":            "ts",
-	"_deployment":    "deployment",
-	"_env":           "env",
-	"_version":       "version",
-	"_region":        "region",
-	"_cluster":       "cluster",
-	"_k8s_namespace": "k8s_namespace",
-	"_pod":           "pod",
-	"_container":     "container",
-	"_node":          "node",
-	"_trace_id":      "trace_id",
-	"_span_name":     "span_name",
-	"_span_id":       "span_id",
-	"_duration_ns":   "duration_ns",
+	"namespace":     "namespace",
+	"service":       "service",
+	"kind":          "kind",
+	"level":         "level",
+	"instance":      "instance",
+	"host":          "instance",
+	"ts":            "ts",
+	"deployment":    "deployment",
+	"env":           "env",
+	"version":       "version",
+	"region":        "region",
+	"cluster":       "cluster",
+	"k8s_namespace": "k8s_namespace",
+	"pod":           "pod",
+	"container":     "container",
+	"node":          "node",
+	"trace_id":      "trace_id",
+	"span_name":     "span_name",
+	"span_id":       "span_id",
+	"duration_ns":   "duration_ns",
+	"event_id":      "event_id",
+	"line_no":       "line_no",
 }
 
+// JQNumericMetaColumn reports whether jq reads a meta-variable's column
+// as a number; the rest are strings. A NULL duration_ns is null; a
+// one-line event is line 0.
+func JQNumericMetaColumn(col string) bool { return col == "duration_ns" || col == "line_no" }
+
+// event_id and line_no are in JQMetaVars but not MetaVarColumns: every
+// query already selects them as typed columns, and compute reads them
+// from there (see rowMetaVars).
+//
 // MetaVarColumns is the distinct, deterministically-ordered set of real
 // shard columns backing JQMetaVars (excluding "ts", which every query
 // already selects). Appended to the SELECT list whenever a remaining
@@ -79,16 +89,19 @@ func jqCondToSQL(cond jq.Expr) string {
 // literal-typed except the field, so the SQL picks the branch by the
 // field's JSON type.
 func jqComparisonToSQL(left, right jq.Expr, op string) string {
-	field, ok := left.(jq.FieldExpr)
-	if !ok {
-		return ""
-	}
 	lit, ok := right.(jq.LiteralExpr)
 	if !ok {
 		return ""
 	}
-	if col, isMeta := JQMetaVars[field.Name]; isMeta {
-		return jqMetaComparisonToSQL(col, lit.Value, op)
+	if ref, ok := left.(jq.VarRef); ok {
+		if col, isMeta := JQMetaVars[ref.Name]; isMeta {
+			return jqMetaComparisonToSQL(col, lit.Value, op)
+		}
+		return ""
+	}
+	field, ok := left.(jq.FieldExpr)
+	if !ok {
+		return ""
 	}
 
 	path := fmt.Sprintf("'$.%s'", escapeSQLString(field.Name))
@@ -197,21 +210,41 @@ var jqRankTypes = [][]string{
 	jqRankObject: {"OBJECT"},
 }
 
+// jqMetaSQL is the SQL value of a meta-variable column as jq reads it: a
+// string, or for the numeric columns a number. A one-line event has an
+// empty event_id and is line 0.
+func jqMetaSQL(col string) string {
+	switch col {
+	case "event_id":
+		return "COALESCE(CAST(event_id AS VARCHAR), '')"
+	case "line_no":
+		return "COALESCE(line_no, 0)"
+	case "ts":
+		return "CAST(ts AS VARCHAR)"
+	}
+	return col
+}
+
 // jqMetaComparisonToSQL lowers a meta-variable comparison. jq reads a
-// meta-variable as the string compute splices in (the column's text),
-// or null when the column is NULL; only string literals lower.
+// string column as its text and a numeric one as a number, and null when
+// the column is NULL. Only a literal of the column's own type lowers: jq
+// orders every number below every string, which SQL doesn't.
 func jqMetaComparisonToSQL(col string, lit jq.Value, op string) string {
-	if lit.Type != jq.TypeString {
+	var rhs string
+	switch {
+	case JQNumericMetaColumn(col) && lit.Type == jq.TypeNumber:
+		rhs = formatAwkNumber(lit.Num)
+	case !JQNumericMetaColumn(col) && lit.Type == jq.TypeString:
+		rhs = "'" + escapeSQLString(lit.Str) + "'"
+	default:
 		return ""
 	}
-	if col == "ts" || col == "duration_ns" {
-		col = fmt.Sprintf("CAST(%s AS VARCHAR)", col)
-	}
-	cmp := fmt.Sprintf("%s %s '%s'", col, op, escapeSQLString(lit.Str))
+	val := jqMetaSQL(col)
+	cmp := fmt.Sprintf("%s %s %s", val, op, rhs)
 	switch op {
 	case "!=", "<", "<=":
-		// null sorts below every string.
-		return fmt.Sprintf("(%s IS NULL OR %s)", col, cmp)
+		// null sorts below every number and string.
+		return fmt.Sprintf("(%s IS NULL OR %s)", val, cmp)
 	}
 	return cmp
 }
@@ -296,21 +329,36 @@ func analyzeJq(args []string) (*jqProgram, reason) {
 // selectChain reports whether the program is a row filter.
 func (p *jqProgram) selectChain() bool { return p.tail == nil && !p.slurp }
 
-// readsJqMetaVar reports whether a jq program names a "_"-prefixed
-// meta-variable: as a field (._host), or as a string (.["_host"],
-// has("_host")).
+// readsJqMetaVar reports whether a jq program reads a meta-variable
+// ($host), or rebinds a name it uses (see JQMetaVars), which it can't
+// tell from a read.
 func readsJqMetaVar(expr jq.Expr) bool {
 	return astContains(expr, func(n any) bool {
 		switch e := n.(type) {
-		case jq.FieldExpr:
+		case jq.VarRef:
 			_, ok := JQMetaVars[e.Name]
 			return ok
-		case jq.LiteralExpr:
-			_, ok := JQMetaVars[e.Value.Str]
-			return ok && e.Value.Type == jq.TypeString
 		}
-		return false
+		return jqBindsMetaVar(n)
 	})
+}
+
+// jqBindsMetaVar reports whether a node binds a variable that has a
+// meta-variable's name.
+func jqBindsMetaVar(n any) bool {
+	var name string
+	switch e := n.(type) {
+	case jq.AsExpr:
+		name = e.Var
+	case jq.ReduceExpr:
+		name = e.Var
+	case jq.ForeachExpr:
+		name = e.Var
+	default:
+		return false
+	}
+	_, ok := JQMetaVars[name]
+	return ok
 }
 
 // jqFlattenPipe flattens a left-associative PipeExpr chain into a slice.

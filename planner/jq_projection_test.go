@@ -112,7 +112,7 @@ func TestRawExpr_JqObject(t *testing.T) {
 		},
 		{
 			name:      "object with metavar value",
-			pipeline:  `cat vimgym.log | jq '{when: ._ts, who: .user_id}'`,
+			pipeline:  `cat vimgym.log | jq '{when: $ts, who: .user_id}'`,
 			wantInSQL: jqProj("json_object('when', to_json(CAST(ts AS VARCHAR)), 'who', json_extract(payload, '$.user_id'))"),
 		},
 	}

@@ -118,7 +118,7 @@ func TestJob_MetaVarsSpliceOnlyForAJqFirstStage(t *testing.T) {
 	for stages, want := range map[string]string{
 		`awk 'LEVEL == "ERROR"'`: raw,
 		`grep a`:                 raw,
-		`jq -c '._level'`:        `"ERROR"`,
+		`jq -c '$level'`:         `"ERROR"`,
 	} {
 		job := (&Engine{}).NewJob([]string{stages}, 1, "ts", 0, false, false)
 		job.SendRow(&pb.ResultRow{TsUnixNs: 1, Raw: raw, MetaVars: map[string]string{"level": "ERROR"}}, "a")
@@ -178,5 +178,23 @@ func TestJob_AwkMetaVarsRowLongerThanTheQueue(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("job deadlocked")
+	}
+}
+
+// awk keeps a global's last value, so a row whose column is NULL (absent
+// from MetaVars) must not read the previous row's value, and a numeric
+// one must still compare equal to 0.
+func TestJob_AwkMetaVarNullDoesNotKeepThePreviousRowsValue(t *testing.T) {
+	job := (&Engine{}).NewJob([]string{`awk '{ print $0 ":" TRACE_ID ":" DURATION_NS ":" (DURATION_NS == 0) }'`}, 1, "ts", 0, false, false)
+	job.SendRow(&pb.ResultRow{TsUnixNs: 1, Raw: "a", MetaVars: map[string]string{"trace_id": "t1", "duration_ns": "500"}}, "a")
+	job.SendRow(&pb.ResultRow{TsUnixNs: 2, Raw: "b"}, "a")
+	job.SendRow(&pb.ResultRow{TsUnixNs: 3, Raw: "c", MetaVars: map[string]string{"trace_id": "t3"}}, "a")
+	job.SendSentinel("a")
+	out, err := job.Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.TrimSpace(out), "a:t1:500:0\nb:::1\nc:t3::1"; got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
 }

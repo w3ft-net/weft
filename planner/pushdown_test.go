@@ -454,7 +454,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		// as a json_object SELECT (jq construction folded into projection).
 		{
 			name:        "awk filter then jq construction",
-			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | jq '{ts: ._ts, msg: .message}'`,
+			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | jq '{ts: $ts, msg: .message}'`,
 			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR)), 'msg', json_extract(payload, '$.message')) AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: nil,
 		},
@@ -533,7 +533,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		// construction folds into a json_object SELECT, no compute remainder.
 		{
 			name:        "jq select piped to object construction",
-			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | {ts: ._ts, msg: .message}'`,
+			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | {ts: $ts, msg: .message}'`,
 			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR)), 'msg', json_extract(payload, '$.message')) AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
 			wantCompute: nil,
 		},

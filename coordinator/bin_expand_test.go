@@ -228,7 +228,7 @@ func TestExpandBinPipeline_QuotedArgRoundTripsToPlanner(t *testing.T) {
 // after Plan(), we re-parse the joined compute script and check
 // that grep has the expected literal positional arg.
 func TestComputeStage_PreservesShellMetacharacters(t *testing.T) {
-	pipeline := `tail -n 100 /log/weft/shard/metrics.log | jq -r '._node // "(empty)"' | sort | uniq -c | grep '(empty)' | awk '{print $1}'`
+	pipeline := `tail -n 100 /log/weft/shard/metrics.log | jq -r '$node // "(empty)"' | sort | uniq -c | grep '(empty)' | awk '{print $1}'`
 
 	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
 	if err != nil {

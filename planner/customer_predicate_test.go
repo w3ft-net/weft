@@ -64,7 +64,7 @@ func TestPlanCustomer_BoundAsCastPlaceholder(t *testing.T) {
 // copy-pasted from an upstream system) would land in the SQL unescaped.
 // This test would fail before the jq.go:118 fix and pass after.
 func TestPlanJQMetaVar_Escaping(t *testing.T) {
-	plan, err := Plan(`cat vimgym.log | jq 'select(._trace_id == "trace-o'"'"'brien-123")'`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`cat vimgym.log | jq 'select($trace_id == "trace-o'"'"'brien-123")'`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}

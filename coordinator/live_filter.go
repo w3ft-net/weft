@@ -57,15 +57,15 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 	admit := func(row *pb.LogRow) bool {
 		return gate.Match(row) && (rowStages == nil || rowStages.Keep(row.Raw, string(row.PayloadJson), liveMetaVars(row)))
 	}
-	spliceMeta := len(plan.LiveStages) > 0 && planner.StageReadsMetaVars(plan.LiveStages[0])
+	wrapMeta := len(plan.LiveStages) > 0 && strings.HasPrefix(plan.LiveStages[0], "jq ") && planner.StageReadsMetaVars(plan.LiveStages[0])
 	input := func(row *pb.LogRow) string {
 		if plan.LiveReadsPayload {
 			payload := string(row.PayloadJson)
 			if payload == "" {
 				payload = "{}"
 			}
-			if spliceMeta {
-				return compute.MergeMetaVars(payload, liveMetaVars(row))
+			if wrapMeta {
+				return compute.WrapJqInput(payload, liveMetaVars(row))
 			}
 			return payload
 		}
@@ -107,7 +107,7 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 // the shape compute builds them for a batch row, so jq sees the same
 // meta-variables live as in the batch.
 func liveMetaVars(row *pb.LogRow) map[string]string {
-	return map[string]string{
+	meta := map[string]string{
 		"namespace":     row.Namespace,
 		"service":       row.Service,
 		"kind":          row.Kind,
@@ -128,6 +128,9 @@ func liveMetaVars(row *pb.LogRow) map[string]string {
 		"duration_ns":   strconv.FormatInt(row.DurationNs, 10),
 		"ts":            compute.FormatTS(row.TsUnixNs),
 	}
+	meta["event_id"] = row.EventId
+	meta["line_no"] = strconv.Itoa(int(row.LineNo))
+	return meta
 }
 
 // runStages feeds raw to a fresh bash interpreter running the parsed
@@ -138,6 +141,7 @@ func liveMetaVars(row *pb.LogRow) map[string]string {
 func runStages(raw string, ast *bash.Script) []string {
 	interp := bash.NewInterpreter()
 	interp.JqCompact = true // as in compute; see compute/engine.go
+	interp.JqPerInput = compute.JqPerInput
 	bash.RegisterToolCommands(interp)
 	interp.SetStdin(strings.NewReader(raw + "\n"))
 	var out bytes.Buffer

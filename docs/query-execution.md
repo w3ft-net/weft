@@ -61,8 +61,8 @@ with awk.
 | Expression | SQL |
 |-----------|-----|
 | `select(.status == 500)` | `WHERE CAST(json_extract(payload, '$.status') AS INT) = 500` |
-| `select(._service == "coordinator")` | `WHERE service = 'coordinator'` |
-| `select(._level == "ERROR")` | `WHERE level = 'ERROR'` |
+| `select($service == "coordinator")` | `WHERE service = 'coordinator'` |
+| `select($level == "ERROR")` | `WHERE level = 'ERROR'` |
 | `.a.b`, `{k: .x}`, `[.a, .b]` | `SELECT` the JSON text jq prints (compact; `null` when missing) |
 | `-r .a` | The same, with a string printed as its unescaped text |
 
@@ -125,7 +125,7 @@ These become gpipe compute stages:
 - `sort` with a key (`-n`, `-k`), `uniq` without a `sort` right before it, `wc` other than `-l`
 - `sed 's/foo/bar/'` — substitution (modifies output, not a filter)
 - `awk '{ print $NF }'` — a field by a computed index
-- `jq '{ ts: ._ts, msg: .message }'` — object construction
+- `jq '{ ts: $ts, msg: .message }'` — object construction
 - `awk` with `END` blocks — requires seeing all rows before producing output
 
 ## Pipeline splitting

@@ -182,7 +182,7 @@ The planner walks stages left to right, accumulating SQL:
 | `grep -v PATTERN` | `WHERE raw NOT ILIKE '%PATTERN%'` |
 | `awk 'LEVEL == "ERROR"'` | `WHERE level = 'ERROR'` |
 | `awk 'HOST ~ "api-"'` | `WHERE instance LIKE 'api-%'` |
-| `jq 'select(._env == "prod")'` | `WHERE env = 'prod'` |
+| `jq 'select($env == "prod")'` | `WHERE env = 'prod'` |
 | `head -n 100` | `LIMIT 100` (ASC order) |
 | `tail -n 50` | `LIMIT 50` (DESC order) |
 

@@ -67,91 +67,91 @@ but is slower.</p>
 <tbody>
 <tr>
 <td><code>NAMESPACE</code></td>
-<td><code>._namespace</code></td>
+<td><code>$namespace</code></td>
 <td><code>namespace</code></td>
 <td>the <code>&lt;namespace&gt;</code> segment in <code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code></td>
 </tr>
 <tr>
 <td><code>SERVICE</code></td>
-<td><code>._service</code></td>
+<td><code>$service</code></td>
 <td><code>service</code></td>
 <td>the log file's source name (the <code>&lt;service&gt;</code> in <code>/log/&lt;ns&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>)</td>
 </tr>
 <tr>
 <td><code>KIND</code></td>
-<td><code>._kind</code></td>
+<td><code>$kind</code></td>
 <td><code>kind</code></td>
 <td>the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>)</td>
 </tr>
 <tr>
 <td><code>HOST</code> (alias <code>INSTANCE</code>)</td>
-<td><code>._host</code> (alias <code>._instance</code>)</td>
+<td><code>$host</code> (alias <code>$instance</code>)</td>
 <td><code>instance</code></td>
 <td>the agent's hostname</td>
 </tr>
 <tr>
 <td><code>LEVEL</code></td>
-<td><code>._level</code></td>
+<td><code>$level</code></td>
 <td><code>level</code></td>
 <td>parsed from the line per the source's schema</td>
 </tr>
 <tr>
 <td><code>TS</code></td>
-<td><code>._ts</code></td>
+<td><code>$ts</code></td>
 <td><code>ts</code></td>
 <td>row timestamp</td>
 </tr>
 <tr>
 <td><code>DEPLOYMENT</code></td>
-<td><code>._deployment</code></td>
+<td><code>$deployment</code></td>
 <td><code>deployment</code></td>
 <td>weftd config <code>deployment:</code> value (k8s Deployment, AWS ASG, etc.)</td>
 </tr>
 <tr>
 <td><code>ENV</code></td>
-<td><code>._env</code></td>
+<td><code>$env</code></td>
 <td><code>env</code></td>
 <td>bound to the agent token at mint time (<code>weft token create --env prod</code>)</td>
 </tr>
 <tr>
 <td><code>VERSION</code></td>
-<td><code>._version</code></td>
+<td><code>$version</code></td>
 <td><code>version</code></td>
 <td>weftd <code>version.file:</code> (live) or <code>version.env:</code> (snapshot)</td>
 </tr>
 <tr>
 <td><code>REGION</code></td>
-<td><code>._region</code></td>
+<td><code>$region</code></td>
 <td><code>region</code></td>
 <td>detected from cloud metadata at agent startup</td>
 </tr>
 <tr>
 <td><code>CLUSTER</code></td>
-<td><code>._cluster</code></td>
+<td><code>$cluster</code></td>
 <td><code>cluster</code></td>
 <td>k8s mode only: cluster name from the DaemonSet config</td>
 </tr>
 <tr>
 <td><code>K8S_NAMESPACE</code></td>
-<td><code>._k8s_namespace</code></td>
+<td><code>$k8s_namespace</code></td>
 <td><code>k8s_namespace</code></td>
 <td>k8s mode only: pod's k8s namespace</td>
 </tr>
 <tr>
 <td><code>POD</code></td>
-<td><code>._pod</code></td>
+<td><code>$pod</code></td>
 <td><code>pod</code></td>
 <td>k8s mode only: pod name</td>
 </tr>
 <tr>
 <td><code>CONTAINER</code></td>
-<td><code>._container</code></td>
+<td><code>$container</code></td>
 <td><code>container</code></td>
 <td>k8s mode only: container name</td>
 </tr>
 <tr>
 <td><code>NODE</code></td>
-<td><code>._node</code></td>
+<td><code>$node</code></td>
 <td><code>node</code></td>
 <td>stable workload identity (e.g. a workload ID) — file-sourced via the agent's <code>dimensions:</code> config; never auto-derived</td>
 </tr>
@@ -162,25 +162,24 @@ but is slower.</p>
 cat /log/myco/prod/api/main.log | awk 'LEVEL == &quot;ERROR&quot; &amp;&amp; DEPLOYMENT == &quot;api-east&quot;'
 
 # Same query in jq form against a JSON source
-cat /log/myco/prod/api/main.log | jq 'select(._level == &quot;ERROR&quot; and ._deployment == &quot;api-east&quot;)'
+cat /log/myco/prod/api/main.log | jq 'select($level == &quot;ERROR&quot; and $deployment == &quot;api-east&quot;)'
 
 # Per-host memory metrics
-tail /log/myco/prod/api/metrics.log | jq 'select(._host == &quot;web-3&quot; and .type == &quot;memory&quot;) | .pct'
+tail /log/myco/prod/api/metrics.log | jq 'select($host == &quot;web-3&quot; and .type == &quot;memory&quot;) | .pct'
 
 # Region-scoped grep
 cat /log/myco/prod/api/main.log | awk 'REGION == &quot;us-east-2&quot;' | grep &quot;timeout&quot;
 </code></pre>
 <h3 id="why-two-naming-styles">Why two naming styles</h3>
 <p>awk meta-variables are uppercase short names (<code>SERVICE</code>, <code>ENV</code>); jq
-uses leading-underscore lowercase (<code>._service</code>, <code>._env</code>). The
-underscore is the disambiguation convention — jq is case-sensitive
+uses lowercase variables (<code>$service</code>, <code>$env</code>). jq is case-sensitive
 and real JSONL sometimes carries keys like <code>Pod</code> or <code>pod</code>, so
-<code>._pod</code> always means &quot;the indexed column&quot; and <code>.pod</code> always means
+<code>$pod</code> always means &quot;the indexed column&quot; and <code>.pod</code> always means
 &quot;a key in this row's JSON payload.&quot;</p>
 <p>The source coordinates address three separate columns —
 <code>NAMESPACE</code>, <code>SERVICE</code>, <code>KIND</code> — mirroring the path layout
-<code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>. <code>HOST</code> / <code>._host</code> is an
-alias for <code>INSTANCE</code> / <code>._instance</code> — use whichever name fits your
+<code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>. <code>HOST</code> / <code>$host</code> is an
+alias for <code>INSTANCE</code> / <code>$instance</code> — use whichever name fits your
 team's vocabulary.</p>
 <h3 id="custom-fields-fall-through-to-json-extract">Custom fields fall through to JSON-extract</h3>
 <p>Anything not in the table above lives in the row's JSON payload
@@ -193,7 +192,7 @@ dimensions you query constantly, use the indexed columns.</p>
 <p>jq reads each row's JSON payload: the whole line for a JSON log, or the
 JSON part of a line that has text around it (a timestamp prefix, a
 CloudWatch envelope, Heroku's <code>key=value</code> metrics). The meta-variables
-(<code>._level</code>, <code>._host</code>, <code>._ts</code>, ...) are there too.</p>
+(<code>$level</code>, <code>$host</code>, <code>$ts</code>, ...) are there too.</p>
 <p>A jq program made only of <code>select(...)</code> filters rows, and prints the log
 lines it keeps, exactly as they were:</p>
 <pre><code># The matching log lines, timestamp prefix and all
@@ -223,7 +222,7 @@ time&quot;. The full recipe — including
 per-tag incident dedup with <code>-k</code>/<code>-t</code> and per-tag debouncing — is
 in <strong>Alerting strategies</strong>.</p>
 <p>In short: write a cron whose body emits one line per tag (e.g.
-<code>&quot;\\(._host) \\(.pct)&quot;</code> from <code>jq -r</code>) and pipe it through
+<code>&quot;\\($host) \\(.pct)&quot;</code> from <code>jq -r</code>) and pipe it through
 <code>alert above N -k 2 -t 1 --notify=ops</code>. Each host opens and closes
 incidents independently against its tag.</p>
 <p>Window aggregates (<code>weft::avg</code>, <code>weft::max</code>, etc.) summarize the

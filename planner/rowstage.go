@@ -146,9 +146,8 @@ func splitRowStages(stages []*loweredStage) (rows, rest []*loweredStage) {
 }
 
 // StageReadsMetaVars reports whether a stage, as written, names a
-// meta-variable (an awk's HOST, a jq's ._host). Compute splices
-// meta-variables into a jq's input only then, so `jq -c .` and `keys`
-// don't show them (docs/plans/planner-ir.md, "jq").
+// meta-variable (an awk's HOST, a jq's $host). Compute carries them to
+// a jq stage only then.
 func StageReadsMetaVars(stage string) bool {
 	sc, ok := parseOneStage(stage)
 	return ok && lowerStage(parseStage(sc), 1).readsMeta

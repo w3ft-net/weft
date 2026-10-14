@@ -59,7 +59,7 @@ func TestJq_SelectChainIsExact(t *testing.T) {
 		},
 		{
 			name:        "three chained selects",
-			pipeline:    `cat vimgym.log | jq 'select(._level == "ERROR") | select(.status == 500) | select(.action == "login")'`,
+			pipeline:    `cat vimgym.log | jq 'select($level == "ERROR") | select(.status == 500) | select(.action == "login")'`,
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR' AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500) AND (COALESCE(json_type(payload, '$.action'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.action') = 'login')`,
 			wantCompute: nil,
 		},
@@ -77,13 +77,13 @@ func TestJq_SelectChainIsExact(t *testing.T) {
 		},
 		{
 			name:        "select on meta _app",
-			pipeline:    `cat warp.log | jq 'select(._namespace == "vimgym")'`,
+			pipeline:    `cat warp.log | jq 'select($namespace == "vimgym")'`,
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = 'vimgym'`,
 			wantCompute: nil,
 		},
 		{
 			name:        "select on meta _level",
-			pipeline:    `cat vimgym.log | jq 'select(._level == "ERROR")'`,
+			pipeline:    `cat vimgym.log | jq 'select($level == "ERROR")'`,
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: nil,
 		},

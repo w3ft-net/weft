@@ -375,7 +375,7 @@ func TestEdge_Awk_PartialPushdown(t *testing.T) {
 
 // TestEdge_Jq_MetaVarOutputRead pins the fix for the known-issues.md
 // entry "jq's reserved meta-variables ... resolve to null when read as
-// output": a bare "._host"-shaped read (not inside a pushable select())
+// output": a bare "$host"-shaped read (not inside a pushable select())
 // falls through to the jq compute-stage evaluator, which only sees the
 // row's raw JSON body — so the planner must project the backing
 // MetaVarColumns alongside raw whenever such a read is present, for
@@ -389,13 +389,13 @@ func TestEdge_Jq_MetaVarOutputRead(t *testing.T) {
 	}{
 		{
 			name:        "host read with -r, piped on",
-			pipeline:    `cat vimgym.log | jq -r '._host | ascii_downcase'`,
-			wantCompute: []string{`jq -r '._host | ascii_downcase'`},
+			pipeline:    `cat vimgym.log | jq -r '$host | ascii_downcase'`,
+			wantCompute: []string{`jq -r '$host | ascii_downcase'`},
 		},
 		{
 			name:        "host read inside string interpolation",
-			pipeline:    `cat vimgym.log | jq -r 'select(._level == "INFO") | "\(._host) \(.pct)"'`,
-			wantCompute: []string{`jq -r 'select(._level == "INFO") | "\(._host) \(.pct)"'`},
+			pipeline:    `cat vimgym.log | jq -r 'select($level == "INFO") | "\($host) \(.pct)"'`,
+			wantCompute: []string{`jq -r 'select($level == "INFO") | "\($host) \(.pct)"'`},
 		},
 	}
 
@@ -610,10 +610,10 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		},
 		// select | select | object construction — both selects push as
 		// predicates, and the trailing object construction folds into a
-		// json_object SELECT (metavar ._ts maps to the ts column).
+		// json_object SELECT (metavar $ts maps to the ts column).
 		{
 			name:        "two selects then construction",
-			pipeline:    `cat vimgym.log | jq 'select(._level == "ERROR") | select(.status == 500) | {ts: ._ts}'`,
+			pipeline:    `cat vimgym.log | jq 'select($level == "ERROR") | select(.status == 500) | {ts: $ts}'`,
 			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR))) AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR' AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
 			wantCompute: nil,
 		},
@@ -1132,7 +1132,7 @@ func TestEdge_WarpLog(t *testing.T) {
 		},
 		{
 			name:        "warp.log with jq meta app filter",
-			pipeline:    `cat warp.log | jq 'select(._namespace == "callbox")'`,
+			pipeline:    `cat warp.log | jq 'select($namespace == "callbox")'`,
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = 'callbox'`,
 			wantCompute: nil,
 		},

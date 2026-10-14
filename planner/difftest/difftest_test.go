@@ -24,6 +24,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/compute/computetest"
+	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
@@ -98,6 +99,41 @@ func TestDifferentialLineSplits(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDifferentialEventMetaVars checks EVENT_ID and LINE_NO, which
+// one-line events leave unset, over events of several lines.
+func TestDifferentialEventMetaVars(t *testing.T) {
+	var rows []*pb.LogRow
+	base := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for i, raw := range []string{
+		"a", "b\nc\nd", "e", "f\ng", "h", "i\nj\nk\nl", "m",
+	} {
+		rows = append(rows, &pb.LogRow{
+			Raw: raw, TsUnixNs: base.Add(time.Duration(i) * time.Second).UnixNano(),
+			Namespace: "acme", Service: "api", Kind: "main", CustomerId: 1,
+		})
+	}
+	h := newHarness(t, ingest.SplitLines(rows), 2)
+	for _, p := range []string{
+		`cat /log/acme/api/main.log | awk 'LINE_NO == 0'`,
+		`cat /log/acme/api/main.log | awk 'LINE_NO > 0'`,
+		`cat /log/acme/api/main.log | awk 'LINE_NO >= 2'`,
+		`cat /log/acme/api/main.log | awk 'LINE_NO != 1'`,
+		`cat /log/acme/api/main.log | awk 'EVENT_ID == ""'`,
+		`cat /log/acme/api/main.log | awk 'EVENT_ID != ""'`,
+		`cat /log/acme/api/main.log | awk 'EVENT_ID ~ /^[0-9a-f-]{36}$/'`,
+		`cat /log/acme/api/main.log | awk '{ print EVENT_ID, LINE_NO, $0 }'`,
+		`cat /log/acme/api/main.log | awk '{ print LINE_NO }' | sort | uniq -c`,
+		`cat /log/acme/api/main.log | jq '$line_no'`,
+		`cat /log/acme/api/main.log | jq 'select($line_no == 1)'`,
+		`cat /log/acme/api/main.log | jq 'select($event_id != "")'`,
+		`cat /log/acme/api/main.log | jq '{e: $event_id, n: $line_no}'`,
+		`tail -n 4 /log/acme/api/main.log | awk 'LINE_NO > 0'`,
+		`head -n 4 /log/acme/api/main.log | awk '{ print LINE_NO }'`,
+	} {
+		t.Run(p, func(t *testing.T) { h.check(t, p) })
 	}
 }
 
@@ -309,7 +345,7 @@ func (h *harness) runReference(source string, stages []string, meta bool) (strin
 func readsMetaVars(stages []string) bool {
 	for _, st := range stages {
 		for name := range planner.JQMetaVars {
-			if strings.Contains(st, "."+name) {
+			if strings.Contains(st, "$"+name) {
 				return true
 			}
 		}
@@ -489,12 +525,12 @@ func generatedCorpus(n int) []string {
 		`awk '$5 > 100'`, `awk '$1 ~ /^[0-9]/'`,
 		`jq 'select(.status == 500)'`, `jq 'select(.status >= 200)'`,
 		`jq 'select(.action == "it'\''s")'`, `jq 'select(.status == 500 and .action == "login")'`,
-		`jq 'select(._level == "ERROR")'`,
+		`jq 'select($level == "ERROR")'`,
 		// projections and transforms
 		`awk '{ print LEVEL }'`, `awk '{ print NAMESPACE, $0 }'`, `awk '{ print $2 }'`,
 		`awk '{ print $3, $1 }'`,
 		`jq '.action'`, `jq -r '.action'`, `jq '{a: .action, s: .status}'`, `jq -c '.foo'`,
-		`jq -r '._level'`, `jq 'select(.status == 500) | .action'`, `cut -c 1-12`,
+		`jq -r '$level'`, `jq 'select(.status == 500) | .action'`, `cut -c 1-12`,
 		`jq -r '.status'`, `jq -r '.foo'`, `cut -d ' ' -f 2`, `cut -d, -f1,3-`, `cut -d'"' -f4,2`,
 		`sed 's/o/0/g'`, `tr a-z A-Z`,
 		// line counts
@@ -521,8 +557,8 @@ var extraCorpus = []string{
 	`cat /log/acme/api/main.log | jq '{a: .action, s: .status}'`,
 	`cat /log/acme/api/main.log | jq '[.status, .action]'`,
 	`cat /log/acme/api/main.log | jq '.foo.bar'`,
-	`cat /log/acme/api/main.log | jq '._level'`,
-	`cat /log/acme/api/main.log | jq 'select(._level == "ERROR") | {l: ._level, h: ._host}'`,
+	`cat /log/acme/api/main.log | jq '$level'`,
+	`cat /log/acme/api/main.log | jq 'select($level == "ERROR") | {l: $level, h: $host}'`,
 	`tail -n 30 /log/acme/api/main.log | jq 'select(.status == 500)' | wc -l`,
 	`head -n 30 /log/acme/api/main.log | jq 'select(.status == 500)'`,
 	`cat /log/acme/api/main.log | jq 'select(.status == 500)' | grep login`,
@@ -573,7 +609,7 @@ var extraCorpus = []string{
 	// count; row stages first.
 	`cat /log/acme/api/main.log | sort | uniq -c | awk '{ print LEVEL, $0 }'`,
 	`tail -n 60 /log/acme/api/main.log | sort | uniq -c`,
-	`cat /log/acme/api/main.log | grep -E 'it.s' | jq 'select(._level == "ERROR")' | wc -l`,
+	`cat /log/acme/api/main.log | grep -E 'it.s' | jq 'select($level == "ERROR")' | wc -l`,
 	// Projections: cut and jq -r.
 	`cat /log/acme/api/main.log | cut -d ' ' -f 3,1`,
 	`cat /log/acme/api/main.log | cut -d ' ' -f 2-4`,

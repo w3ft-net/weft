@@ -105,6 +105,6 @@ func TestLiveFilter_JqReadsPayload(t *testing.T) {
 	runFilterCase(t, filter, failed, []string{"12:00 api login failed"})
 	runFilterCase(t, filter, ok, nil)
 
-	runFilterCase(t, `tail -f vimgym.log | jq 'select(._level == "ERROR")' | wc -l`, failed, []string{"1"})
+	runFilterCase(t, `tail -f vimgym.log | jq 'select($level == "ERROR")' | wc -l`, failed, []string{"1"})
 	runFilterCase(t, `tail -f vimgym.log | jq '{u: .user}'`, ok, []string{`{"u":"u2"}`})
 }

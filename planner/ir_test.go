@@ -122,11 +122,13 @@ func TestFrontendReadsMeta(t *testing.T) {
 		{`awk -F, '{ print HOST }'`, true},
 		{`awk '{ print "HOST" }'`, false},
 		{`awk '{ print MYHOST }'`, false},
-		{`jq -r '._host'`, true},
-		{`jq '.["_pod"]'`, true},
-		{`jq 'select(has("_ts"))'`, true},
-		{`jq '.a._host_name'`, false},
-		{`jq '"._host"'`, false},
+		{`jq -r '$host'`, true},
+		{`jq 'select($pod == "a")'`, true},
+		{`jq '. as $level | $level'`, true}, // a rebinding is read conservatively
+		{`jq '.host'`, false},
+		{`jq '.a.host_name'`, false},
+		{`jq '"$host"'`, false},
+		{`jq '$__loc__'`, false},
 		{`grep HOST`, false},
 	}
 	for _, tt := range tests {

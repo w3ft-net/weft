@@ -59,21 +59,21 @@ but is slower.
 
 | awk | jq | Column | Source |
 |---|---|---|---|
-| `NAMESPACE` | `._namespace` | `namespace` | the `<namespace>` segment in `/log/<namespace>/<service>/<kind>.log` |
-| `SERVICE` | `._service` | `service` | the log file's source name (the `<service>` in `/log/<ns>/<service>/<kind>.log`) |
-| `KIND` | `._kind` | `kind` | the stream kind (`main`, `heartbeats`, `metrics`, `runtime`) |
-| `HOST` (alias `INSTANCE`) | `._host` (alias `._instance`) | `instance` | the agent's hostname |
-| `LEVEL` | `._level` | `level` | parsed from the line per the source's schema |
-| `TS` | `._ts` | `ts` | row timestamp |
-| `DEPLOYMENT` | `._deployment` | `deployment` | weftd config `deployment:` value (k8s Deployment, AWS ASG, etc.) |
-| `ENV` | `._env` | `env` | bound to the agent token at mint time (`weft token create --env prod`) |
-| `VERSION` | `._version` | `version` | weftd `version.file:` (live) or `version.env:` (snapshot) |
-| `REGION` | `._region` | `region` | detected from cloud metadata at agent startup |
-| `CLUSTER` | `._cluster` | `cluster` | k8s mode only: cluster name from the DaemonSet config |
-| `K8S_NAMESPACE` | `._k8s_namespace` | `k8s_namespace` | k8s mode only: pod's k8s namespace |
-| `POD` | `._pod` | `pod` | k8s mode only: pod name |
-| `CONTAINER` | `._container` | `container` | k8s mode only: container name |
-| `NODE` | `._node` | `node` | stable workload identity (e.g. a workload ID) — file-sourced via the agent's `dimensions:` config; never auto-derived |
+| `NAMESPACE` | `$namespace` | `namespace` | the `<namespace>` segment in `/log/<namespace>/<service>/<kind>.log` |
+| `SERVICE` | `$service` | `service` | the log file's source name (the `<service>` in `/log/<ns>/<service>/<kind>.log`) |
+| `KIND` | `$kind` | `kind` | the stream kind (`main`, `heartbeats`, `metrics`, `runtime`) |
+| `HOST` (alias `INSTANCE`) | `$host` (alias `$instance`) | `instance` | the agent's hostname |
+| `LEVEL` | `$level` | `level` | parsed from the line per the source's schema |
+| `TS` | `$ts` | `ts` | row timestamp |
+| `DEPLOYMENT` | `$deployment` | `deployment` | weftd config `deployment:` value (k8s Deployment, AWS ASG, etc.) |
+| `ENV` | `$env` | `env` | bound to the agent token at mint time (`weft token create --env prod`) |
+| `VERSION` | `$version` | `version` | weftd `version.file:` (live) or `version.env:` (snapshot) |
+| `REGION` | `$region` | `region` | detected from cloud metadata at agent startup |
+| `CLUSTER` | `$cluster` | `cluster` | k8s mode only: cluster name from the DaemonSet config |
+| `K8S_NAMESPACE` | `$k8s_namespace` | `k8s_namespace` | k8s mode only: pod's k8s namespace |
+| `POD` | `$pod` | `pod` | k8s mode only: pod name |
+| `CONTAINER` | `$container` | `container` | k8s mode only: container name |
+| `NODE` | `$node` | `node` | stable workload identity (e.g. a workload ID) — file-sourced via the agent's `dimensions:` config; never auto-derived |
 
 A few examples:
 
@@ -82,10 +82,10 @@ A few examples:
 cat /log/myco/prod/api/main.log | awk 'LEVEL == "ERROR" && DEPLOYMENT == "api-east"'
 
 # Same query in jq form against a JSON source
-cat /log/myco/prod/api/main.log | jq 'select(._level == "ERROR" and ._deployment == "api-east")'
+cat /log/myco/prod/api/main.log | jq 'select($level == "ERROR" and $deployment == "api-east")'
 
 # Per-host memory metrics
-tail /log/myco/prod/api/metrics.log | jq 'select(._host == "web-3" and .type == "memory") | .pct'
+tail /log/myco/prod/api/metrics.log | jq 'select($host == "web-3" and .type == "memory") | .pct'
 
 # Region-scoped grep
 cat /log/myco/prod/api/main.log | awk 'REGION == "us-east-2"' | grep "timeout"
@@ -94,16 +94,15 @@ cat /log/myco/prod/api/main.log | awk 'REGION == "us-east-2"' | grep "timeout"
 ### Why two naming styles
 
 awk meta-variables are uppercase short names (`SERVICE`, `ENV`); jq
-uses leading-underscore lowercase (`._service`, `._env`). The
-underscore is the disambiguation convention — jq is case-sensitive
+uses lowercase variables (`$service`, `$env`). jq is case-sensitive
 and real JSONL sometimes carries keys like `Pod` or `pod`, so
-`._pod` always means "the indexed column" and `.pod` always means
+`$pod` always means "the indexed column" and `.pod` always means
 "a key in this row's JSON payload."
 
 The source coordinates address three separate columns —
 `NAMESPACE`, `SERVICE`, `KIND` — mirroring the path layout
-`/log/<namespace>/<service>/<kind>.log`. `HOST` / `._host` is an
-alias for `INSTANCE` / `._instance` — use whichever name fits your
+`/log/<namespace>/<service>/<kind>.log`. `HOST` / `$host` is an
+alias for `INSTANCE` / `$instance` — use whichever name fits your
 team's vocabulary.
 
 ### Custom fields fall through to JSON-extract
@@ -123,7 +122,7 @@ dimensions you query constantly, use the indexed columns.
 jq reads each row's JSON payload: the whole line for a JSON log, or the
 JSON part of a line that has text around it (a timestamp prefix, a
 CloudWatch envelope, Heroku's `key=value` metrics). The meta-variables
-(`._level`, `._host`, `._ts`, ...) are there too.
+(`$level`, `$host`, `$ts`, ...) are there too.
 
 A jq program made only of `select(...)` filters rows, and prints the log
 lines it keeps, exactly as they were:
@@ -165,7 +164,7 @@ per-tag incident dedup with `-k`/`-t` and per-tag debouncing — is
 in **Alerting strategies**.
 
 In short: write a cron whose body emits one line per tag (e.g.
-`"\(._host) \(.pct)"` from `jq -r`) and pipe it through
+`"\($host) \(.pct)"` from `jq -r`) and pipe it through
 `alert above N -k 2 -t 1 --notify=ops`. Each host opens and closes
 incidents independently against its tag.
 

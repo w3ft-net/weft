@@ -57,7 +57,7 @@ func TestRowStages_JqKeepsRawLinesWhosePayloadMatches(t *testing.T) {
 }
 
 func TestRowStages_JqReadsMetaVars(t *testing.T) {
-	got := runRowFilterJob(t, nil, 0, false, `select(._level == "ERROR")`)
+	got := runRowFilterJob(t, nil, 0, false, `select($level == "ERROR")`)
 	want := "10:00 api login failed\n10:02 api search failed"
 	if got != want {
 		t.Errorf("got\n%s\nwant\n%s", got, want)

@@ -38,20 +38,20 @@ func TestPushdown_NewDimensions(t *testing.T) {
 		{"awk host alias", `cat vimgym.log | awk 'HOST == "i-abc"'`, "instance = 'i-abc'"},
 
 		// ── jq meta-vars ─────────────────────────────────────────────
-		{"jq deployment", `cat vimgym.log | jq 'select(._deployment == "shard")'`, "deployment = 'shard'"},
-		{"jq env", `cat vimgym.log | jq 'select(._env == "prod")'`, "env = 'prod'"},
-		{"jq version", `cat vimgym.log | jq 'select(._version == "v1.2.3")'`, "version = 'v1.2.3'"},
-		{"jq region", `cat vimgym.log | jq 'select(._region == "us-east-2")'`, "region = 'us-east-2'"},
-		{"jq cluster", `cat vimgym.log | jq 'select(._cluster == "prod-cluster")'`, "cluster = 'prod-cluster'"},
-		{"jq k8s_namespace", `cat vimgym.log | jq 'select(._k8s_namespace == "default")'`, "k8s_namespace = 'default'"},
-		{"jq pod", `cat vimgym.log | jq 'select(._pod == "api-7f9b")'`, "pod = 'api-7f9b'"},
-		{"jq container", `cat vimgym.log | jq 'select(._container == "main")'`, "container = 'main'"},
-		{"jq node", `cat vimgym.log | jq 'select(._node == "shard-abc")'`, "node = 'shard-abc'"},
-		{"jq trace_id", `cat vimgym.log | jq 'select(._trace_id == "trace-abc-123")'`, "trace_id = 'trace-abc-123'"},
+		{"jq deployment", `cat vimgym.log | jq 'select($deployment == "shard")'`, "deployment = 'shard'"},
+		{"jq env", `cat vimgym.log | jq 'select($env == "prod")'`, "env = 'prod'"},
+		{"jq version", `cat vimgym.log | jq 'select($version == "v1.2.3")'`, "version = 'v1.2.3'"},
+		{"jq region", `cat vimgym.log | jq 'select($region == "us-east-2")'`, "region = 'us-east-2'"},
+		{"jq cluster", `cat vimgym.log | jq 'select($cluster == "prod-cluster")'`, "cluster = 'prod-cluster'"},
+		{"jq k8s_namespace", `cat vimgym.log | jq 'select($k8s_namespace == "default")'`, "k8s_namespace = 'default'"},
+		{"jq pod", `cat vimgym.log | jq 'select($pod == "api-7f9b")'`, "pod = 'api-7f9b'"},
+		{"jq container", `cat vimgym.log | jq 'select($container == "main")'`, "container = 'main'"},
+		{"jq node", `cat vimgym.log | jq 'select($node == "shard-abc")'`, "node = 'shard-abc'"},
+		{"jq trace_id", `cat vimgym.log | jq 'select($trace_id == "trace-abc-123")'`, "trace_id = 'trace-abc-123'"},
 
 		// jq aliases.
-		{"jq service alias", `cat vimgym.log | jq 'select(._service == "api")'`, "namespace = ?"},
-		{"jq host alias", `cat vimgym.log | jq 'select(._host == "i-abc")'`, "instance = 'i-abc'"},
+		{"jq service alias", `cat vimgym.log | jq 'select($service == "api")'`, "namespace = ?"},
+		{"jq host alias", `cat vimgym.log | jq 'select($host == "i-abc")'`, "instance = 'i-abc'"},
 	}
 
 	for _, tc := range tests {

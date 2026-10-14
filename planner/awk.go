@@ -56,6 +56,8 @@ var AwkMetaVars = map[string]string{
 	"SPAN_NAME":     "span_name",
 	"SPAN_ID":       "span_id",
 	"DURATION_NS":   "duration_ns",
+	"EVENT_ID":      "event_id",
+	"LINE_NO":       "line_no",
 }
 
 // tryAwkPushdown extracts a SQL predicate from an awk program. It never
@@ -428,7 +430,7 @@ func extractAwkComparison(e *awk.BinaryExpr) *awkPushdown {
 	}
 
 	if c.number {
-		// The one numeric column is DURATION_NS. Unset is 0.
+		// The numeric columns are DURATION_NS and LINE_NO. Unset is 0.
 		l, ok := lit.(*awk.NumberLit)
 		if !ok {
 			return nil
@@ -583,7 +585,7 @@ func tryNRComparison(e *awk.BinaryExpr) *awkPushdown {
 type awkColumn struct {
 	sql      string
 	nullable bool // NULL reaches awk as unset: 0, or ""
-	number   bool // compared as a number (DURATION_NS)
+	number   bool // compared as a number (DURATION_NS, LINE_NO)
 }
 
 // awkColumnToSQL maps what an awk comparison can read to a shard column:
@@ -606,8 +608,11 @@ func awkColumnToSQL(expr awk.Expr) (awkColumn, bool) {
 	case *awk.IdentExpr:
 		switch col := AwkMetaVars[e.Name]; col {
 		case "", "ts":
-		case "duration_ns":
+		case "duration_ns", "line_no":
 			return awkColumn{sql: col, nullable: true, number: true}, true
+		case "event_id":
+			// A UUID column; awk sees its text.
+			return awkColumn{sql: "CAST(event_id AS VARCHAR)", nullable: true}, true
 		default:
 			return awkColumn{sql: col, nullable: true}, true
 		}

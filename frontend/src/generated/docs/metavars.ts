@@ -34,96 +34,114 @@ that can't match.</p>
 <tbody>
 <tr>
 <td><code>NAMESPACE</code></td>
-<td><code>._namespace</code></td>
+<td><code>$namespace</code></td>
 <td><code>namespace</code></td>
 <td>the <code>&lt;namespace&gt;</code> path segment / agent token's namespace</td>
 </tr>
 <tr>
 <td><code>SERVICE</code></td>
-<td><code>._service</code></td>
+<td><code>$service</code></td>
 <td><code>service</code></td>
 <td>source declaration, log filename, or HTTP ingest payload</td>
 </tr>
 <tr>
 <td><code>KIND</code></td>
-<td><code>._kind</code></td>
+<td><code>$kind</code></td>
 <td><code>kind</code></td>
 <td>the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>)</td>
 </tr>
 <tr>
 <td><code>HOST</code> <em>(alias <code>INSTANCE</code>)</em></td>
-<td><code>._host</code> <em>(alias <code>._instance</code>)</em></td>
+<td><code>$host</code> <em>(alias <code>$instance</code>)</em></td>
 <td><code>instance</code></td>
 <td>the agent's hostname</td>
 </tr>
 <tr>
 <td><code>LEVEL</code></td>
-<td><code>._level</code></td>
+<td><code>$level</code></td>
 <td><code>level</code></td>
 <td>schema-extracted from the row</td>
 </tr>
 <tr>
 <td><code>TS</code></td>
-<td><code>._ts</code></td>
+<td><code>$ts</code></td>
 <td><code>ts</code></td>
 <td>schema-extracted from the row</td>
 </tr>
 <tr>
 <td><code>DEPLOYMENT</code></td>
-<td><code>._deployment</code></td>
+<td><code>$deployment</code></td>
 <td><code>deployment</code></td>
 <td>weftd <code>deployment:</code> config (or k8s/ASG)</td>
 </tr>
 <tr>
 <td><code>ENV</code></td>
-<td><code>._env</code></td>
+<td><code>$env</code></td>
 <td><code>env</code></td>
 <td>bound to the agent token at mint time</td>
 </tr>
 <tr>
 <td><code>VERSION</code></td>
-<td><code>._version</code></td>
+<td><code>$version</code></td>
 <td><code>version</code></td>
 <td>weftd <code>version.file:</code> (live) or <code>version.env:</code> (snapshot)</td>
 </tr>
 <tr>
 <td><code>REGION</code></td>
-<td><code>._region</code></td>
+<td><code>$region</code></td>
 <td><code>region</code></td>
 <td>cloud metadata probe at agent startup</td>
 </tr>
 <tr>
 <td><code>CLUSTER</code></td>
-<td><code>._cluster</code></td>
+<td><code>$cluster</code></td>
 <td><code>cluster</code></td>
 <td>weftd k8s mode</td>
 </tr>
 <tr>
 <td><code>K8S_NAMESPACE</code></td>
-<td><code>._k8s_namespace</code></td>
+<td><code>$k8s_namespace</code></td>
 <td><code>k8s_namespace</code></td>
 <td>weftd k8s mode</td>
 </tr>
 <tr>
 <td><code>POD</code></td>
-<td><code>._pod</code></td>
+<td><code>$pod</code></td>
 <td><code>pod</code></td>
 <td>weftd k8s mode</td>
 </tr>
 <tr>
 <td><code>CONTAINER</code></td>
-<td><code>._container</code></td>
+<td><code>$container</code></td>
 <td><code>container</code></td>
 <td>weftd k8s mode</td>
 </tr>
 <tr>
 <td><code>NODE</code></td>
-<td><code>._node</code></td>
+<td><code>$node</code></td>
 <td><code>node</code></td>
 <td>weftd <code>dimensions.node:</code> (file-sourced)</td>
 </tr>
+<tr>
+<td><code>EVENT_ID</code></td>
+<td><code>$event_id</code></td>
+<td><code>event_id</code></td>
+<td>shared by the lines of one multi-line event</td>
+</tr>
+<tr>
+<td><code>LINE_NO</code></td>
+<td><code>$line_no</code></td>
+<td><code>line_no</code></td>
+<td>the line's 0-based position within its event</td>
+</tr>
 </tbody>
 </table>
+<p><code>EVENT_ID</code> and <code>LINE_NO</code> tie together the lines of a multi-line event
+(a stack trace, a Python traceback): each line is its own row, and they
+share an <code>EVENT_ID</code>. A one-line event is line 0 and has an empty
+<code>EVENT_ID</code>, so <code>LINE_NO == 0</code> selects the first line of every event and
+<code>EVENT_ID != &quot;&quot;</code> selects only lines that belong to a multi-line event.
+In jq <code>$line_no</code> and <code>$duration_ns</code> are numbers (<code>$duration_ns</code> is null on a row without one); the other meta-variables are strings.</p>
 <p>A row without a given dimension carries an empty string. <code>ENV == &quot;prod&quot;</code> does not match it, but <code>ENV != &quot;prod&quot;</code> does.</p>
 <h3 id="naming-convention">Naming convention</h3>
 <p>awk meta-variables are all-caps short flat names — <code>ENV</code>, <code>POD</code>,
@@ -134,15 +152,16 @@ directly.</p>
 field-by-variable-index syntax (<code>$n</code> where <code>n</code> is <code>NAME</code>'s value) and
 cannot carry a string like <code>&quot;web-1&quot;</code>. A bare <code>HOST</code> is an ordinary awk
 global, like awk's built-in <code>NR</code>/<code>NF</code>/<code>FILENAME</code>.</p>
-<p>jq meta-variables use leading-underscore lowercase — <code>._env</code>,
-<code>._pod</code>. The underscore separates the columns from JSON payload keys:
-<code>.pod</code> is whatever the producer wrote into the row body; <code>._pod</code> is
-the column. Real JSONL sometimes carries <code>Pod</code> / <code>PoD</code> / <code>POD</code> keys,
-so the underscore marks the column reliably in any case.</p>
+<p>jq meta-variables are lowercase jq variables — <code>$env</code>, <code>$pod</code>. A
+variable can't be mistaken for a payload key: <code>.pod</code> is whatever the
+producer wrote into the row body; <code>$pod</code> is the column. Real JSONL
+sometimes carries <code>Pod</code> / <code>PoD</code> / <code>POD</code> keys, so the <code>$</code> marks the
+column reliably in any case. A program that rebinds one of the names
+(<code>. as $env | ...</code>) reads its own value.</p>
 <p><code>NAMESPACE</code> is weft's logical token grouping — the <code>&lt;namespace&gt;</code>
 segment in the path (<code>/log/&lt;namespace&gt;/...</code>). The Kubernetes
 namespace is a distinct dimension named <code>K8S_NAMESPACE</code>
-(<code>._k8s_namespace</code>).</p>
+(<code>$k8s_namespace</code>).</p>
 <h2 id="path-layout">Path layout</h2>
 <p>The pseudofile path encodes the namespace, service, and stream
 kind, plus the env when the producing token carries one:</p>
@@ -177,7 +196,7 @@ query-time dimensions.</p>
 <h2 id="speed">Speed</h2>
 <p>Filtering on a reserved meta-variable is the fast path, in awk
 (<code>awk 'ENV == &quot;prod&quot;'</code>, <code>awk 'POD ~ &quot;api-7f9b&quot;'</code>) and in jq
-(<code>jq 'select(._level == &quot;ERROR&quot;)'</code>). A filter on any other field, such
+(<code>jq 'select($level == &quot;ERROR&quot;)'</code>). A filter on any other field, such
 as <code>jq 'select(.feature_flag == &quot;abc&quot;)'</code>, reads and parses every row in
 the time range. awk's numbered fields (<code>awk '$3 == &quot;POST&quot;'</code>) also run
 against every row. One pipeline can mix both: the meta-variable filters
@@ -194,7 +213,7 @@ so omit <code>-n</code> here: a line count can silently truncate the window.</p>
 <pre><code># /cron.d/memory-per-host
 # schedule: */1 * * * *
 cat /log/myco/prod/api/metrics.log \\
-  | jq -r 'select(._level == &quot;INFO&quot; and .type == &quot;memory&quot;) | &quot;\\(._host) \\(.pct)&quot;'
+  | jq -r 'select($level == &quot;INFO&quot; and .type == &quot;memory&quot;) | &quot;\\($host) \\(.pct)&quot;'
 </code></pre>
 <p>Each tick emits one <code>&lt;host&gt; &lt;pct&gt;</code> row per memory sample. Multi-row
 alerts (<code>alert above 80 -k 2 -t 1</code>) page per host independently
@@ -207,7 +226,7 @@ because <code>-t 1</code> tags each row by its first field (the host).</p>
 <p>The <code>ENV</code> and <code>DEPLOYMENT</code> filters are fast-path filters, so weft
 narrows to env=prod and deployment=api without parsing each row's
 JSON. For JSON log streams the same filter reads
-<code>jq 'select(._env == &quot;prod&quot; and ._deployment == &quot;api&quot;)'</code>.</p>
+<code>jq 'select($env == &quot;prod&quot; and $deployment == &quot;api&quot;)'</code>.</p>
 <h3 id="compare-a-single-deployment-across-regions">Compare a single deployment across regions</h3>
 <pre><code>cat /log/myco/prod/api/main.log \\
   | awk 'DEPLOYMENT == &quot;api&quot; {print REGION, LEVEL}' \\

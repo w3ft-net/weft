@@ -86,7 +86,7 @@ The IR operates on shard rows, with the columns the shard exposes today: `ts`,
 row-level-security `customer_id`, which the planner injects and no stage can
 reference. Each node knows which columns it *requires* from below. That
 replaces regex-sniffing for meta-variables: a node that reads `HOST` or
-`._host` requires that column, and projection follows.
+`$host` requires that column, and projection follows.
 
 ### Nodes
 
@@ -371,7 +371,7 @@ exercise it.
      only to an awk reading the interpreter's stdin.
    - Bugs the harness found and Phase 1 fixed: jq `"500" == 500` and
      missing-field comparisons; meta-variable keys spliced into the text of
-     every stage, not just jq's; `._ts`/`TS` never set in compute; adjacent
+     every stage, not just jq's; `$ts`/`TS` never set in compute; adjacent
      awk stages deadlocking on the meta-variable channel.
 2. **IR with `Scan`/`Filter`/`Limit`/`Opaque`**. ✅ Landed 2026-10-13.
    - ✅ grep, awk, jq, sed, head/tail and sort lower through frontends

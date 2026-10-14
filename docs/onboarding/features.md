@@ -47,10 +47,10 @@ In awk, meta-variables are all-caps flat names:
 awk 'LEVEL == "ERROR" && HOST ~ "api-"'
 ```
 
-In jq, they use leading-underscore lowercase:
+In jq, they are lowercase variables:
 
 ```
-jq 'select(._level == "ERROR") | ._host'
+jq 'select($level == "ERROR") | $host'
 ```
 
 Each meta-variable rewrites to a direct `WHERE` clause. The

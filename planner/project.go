@@ -90,6 +90,9 @@ func awkPrintArgToSQL(expr awk.Expr) (string, bool) {
 		switch col := AwkMetaVars[e.Name]; col {
 		case "", "ts":
 			return "", false
+		case "line_no":
+			// A one-line event is line 0.
+			return "CAST(COALESCE(line_no, 0) AS VARCHAR)", true
 		default:
 			return fmt.Sprintf("COALESCE(CAST(%s AS VARCHAR), '')", col), true
 		}
@@ -115,12 +118,15 @@ func wrapJqProjection(sql string, raw bool) string {
 // Returns ok=false otherwise.
 func jqValueToSQL(expr jq.Expr) (string, bool) {
 	switch e := expr.(type) {
-	case jq.FieldExpr:
-		if col, isMeta := JQMetaVars[e.Name]; isMeta {
-			// jq reads a meta-variable as the JSON string compute
-			// splices into the payload: the column's text form.
-			return fmt.Sprintf("to_json(CAST(%s AS VARCHAR))", col), true
+	case jq.VarRef:
+		col, isMeta := JQMetaVars[e.Name]
+		if !isMeta {
+			return "", false
 		}
+		// A string column is its text, a numeric one a number; NULL is null.
+		return fmt.Sprintf("to_json(%s)", jqMetaSQL(col)), true
+
+	case jq.FieldExpr:
 		return fmt.Sprintf("json_extract(payload, '$.%s')", e.Name), true
 
 	case jq.LiteralExpr:
@@ -169,13 +175,9 @@ func jqValueToSQL(expr jq.Expr) (string, bool) {
 
 // jqPathParts returns the JSONPath fragments for a pure-path expression
 // (FieldExpr / numeric IndexExpr / left-associative pipes thereof).
-// Meta-variables can't appear in a JSONPath, so they fail the check.
 func jqPathParts(expr jq.Expr) ([]string, bool) {
 	switch e := expr.(type) {
 	case jq.FieldExpr:
-		if _, isMeta := JQMetaVars[e.Name]; isMeta {
-			return nil, false
-		}
 		return []string{"." + e.Name}, true
 	case jq.IndexExpr:
 		lit, ok := e.Index.(jq.LiteralExpr)

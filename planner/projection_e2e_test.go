@@ -94,7 +94,7 @@ func TestProjection_E2E(t *testing.T) {
 		},
 		{
 			name:     "select + object projection (with metavar)",
-			pipeline: `cat vimgym.log | jq 'select(.status == 500) | {who: .user_id, lvl: ._level}'`,
+			pipeline: `cat vimgym.log | jq 'select(.status == 500) | {who: .user_id, lvl: $level}'`,
 			wantRaws: []string{`{"who":"u1","lvl":"ERROR"}`},
 		},
 		{

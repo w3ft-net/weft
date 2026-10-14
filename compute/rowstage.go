@@ -142,14 +142,15 @@ func (st *rowStage) keep(raw, payload string, meta map[string]string) bool {
 		if payload == "" {
 			payload = "{}"
 		}
-		if st.meta {
-			payload = MergeMetaVars(payload, meta)
-		}
 		v, err := jq.ParseValue(payload)
 		if err != nil {
 			return false
 		}
-		out, err := jq.EvalAll(st.jq, v)
+		var opts jq.Options
+		if st.meta {
+			opts.Vars = JqVars(meta)
+		}
+		out, err := jq.EvalAllWithOptions(st.jq, v, opts)
 		return err == nil && len(out) > 0
 	}
 	ri := st.interp.Get().(*rowInterp)

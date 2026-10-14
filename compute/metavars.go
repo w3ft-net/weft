@@ -2,74 +2,100 @@ package compute
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/graybeardcorp/warp/pkg/jq"
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-// MergeMetaVars splices a row's projected meta-var columns (see
-// planner.MetaVarColumns/JQMetaVars) into its raw JSON body as
-// "_"-prefixed keys — every alias name that maps to a given column
-// gets the same value (e.g. both "_host" and "_instance" for the
-// "instance" column) — before the row reaches a jq compute stage.
-//
-// This exists because the jq stage runs as a literal program string
-// piped raw text through warp's bash.RunStreaming: one process handles
-// the whole row stream, so there's no per-row side channel (like a jq
-// --arg) to hand the evaluator these values out of band. The row's own
-// JSON body is the only thing that varies per row, so it's the only
-// place a per-row value can actually reach the evaluator. See
-// docs/known-issues.md's (fixed) jq meta-variable entry.
-//
-// Returns raw unchanged when there are no meta vars to inject, or when
-// raw doesn't parse as a JSON object (plain text, an array, a bare
-// scalar) — jq already behaves oddly against non-object input
-// regardless of this fix, so there's nothing sensible to inject into.
-// A real payload key is never overwritten: the underscore-prefix
-// convention (docs/manual/metavars.md) exists specifically so these
-// reserved keys don't collide with real producer data.
-func MergeMetaVars(raw string, meta map[string]string) string {
-	if len(meta) == 0 {
-		return raw
+// The envelope WrapJqInput puts around a payload, and JqPerInput takes off.
+const (
+	jqVarsKey  = "__weft_vars__"
+	jqInputKey = "__weft_input__"
+)
+
+// WrapJqInput carries a row's meta-variables next to its payload for a
+// jq stage that reads them (see planner.JQMetaVars). One jq process
+// handles the whole row stream, so there's no per-row side channel; the
+// row's own input is the only thing that varies. JqPerInput unwraps it
+// and binds the variables, so the payload reaches the program as it is.
+// A payload that isn't JSON makes the envelope invalid, which jq reports
+// as it would the bare payload; an empty one stays empty.
+func WrapJqInput(payload string, meta map[string]string) string {
+	if strings.TrimSpace(payload) == "" {
+		return payload // no value for jq to read, as without the envelope
 	}
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &obj); err != nil || obj == nil {
-		// obj is nil for `null`, which unmarshals without an error.
-		return raw
-	}
-	for alias, col := range planner.JQMetaVars {
-		val, ok := meta[col]
-		if !ok {
-			continue
-		}
-		if _, exists := obj[alias]; exists {
-			continue
-		}
-		encoded, err := json.Marshal(val)
-		if err != nil {
-			continue
-		}
-		obj[alias] = encoded
-	}
-	merged, err := json.Marshal(obj)
-	if err != nil {
-		return raw
-	}
-	return string(merged)
+	vars, _ := json.Marshal(jqVars(meta))
+	return `{"` + jqVarsKey + `":` + string(vars) + `,"` + jqInputKey + `":` + payload + `}`
 }
 
-// rowMetaVars is a row's meta-variable columns plus ts, which every
-// query selects as its own column rather than projecting it as a
-// meta-variable. Its text is DuckDB's CAST(ts AS VARCHAR), the form a
-// SQL projection of ._ts or a TS comparison sees.
+// JqPerInput is jq.Options.PerInput (bash.StreamingOptions.JqPerInput)
+// for inputs WrapJqInput made. Any other input, such as a later jq
+// stage's, passes through unbound.
+func JqPerInput(in jq.Value) (jq.Value, map[string]jq.Value) {
+	if in.Type != jq.TypeObject || len(in.Obj) != 2 || in.Obj[0].Key != jqVarsKey {
+		return in, nil
+	}
+	return in.ObjGet(jqInputKey), in.ObjGet(jqVarsKey).ObjMap()
+}
+
+// JqVars is a row's meta-variables as jq reads them, for a caller that
+// evaluates a jq program directly.
+func JqVars(meta map[string]string) map[string]jq.Value {
+	vars := make(map[string]jq.Value, len(planner.JQMetaVars))
+	for name, v := range jqVars(meta) {
+		switch x := v.(type) {
+		case string:
+			vars[name] = jq.StrValue(x)
+		case float64:
+			vars[name] = jq.NumValue(x)
+		default:
+			vars[name] = jq.NullValue()
+		}
+	}
+	return vars
+}
+
+// jqVars maps every jq meta-variable name to its value: a string, a
+// float64 for the numeric columns, or nil when the row has none.
+func jqVars(meta map[string]string) map[string]any {
+	vars := make(map[string]any, len(planner.JQMetaVars))
+	for name, col := range planner.JQMetaVars {
+		text, ok := meta[col]
+		switch {
+		case !ok:
+			vars[name] = nil
+		case planner.JQNumericMetaColumn(col):
+			if n, err := strconv.ParseFloat(text, 64); err == nil {
+				vars[name] = n
+			} else {
+				vars[name] = nil
+			}
+		default:
+			vars[name] = text
+		}
+	}
+	return vars
+}
+
+// rowMetaVars is a row's meta-variable columns plus ts, event_id and
+// line_no, which every query selects as their own columns rather than
+// projecting them as meta-variables. Its text is DuckDB's CAST(ts AS VARCHAR), the form a
+// SQL projection of $ts or a TS comparison sees.
 func rowMetaVars(row *pb.ResultRow) map[string]string {
 	meta := make(map[string]string, len(row.MetaVars)+1)
 	for k, v := range row.MetaVars {
 		meta[k] = v
 	}
 	meta["ts"] = FormatTS(row.TsUnixNs)
+	// A one-line event is line 0 of an event with no id. Both are always
+	// set, since awk would otherwise keep the previous record's.
+	meta["event_id"] = row.EventId
+	meta["line_no"] = strconv.Itoa(int(row.LineNo))
 	return meta
 }
 

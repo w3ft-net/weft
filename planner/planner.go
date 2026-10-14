@@ -235,7 +235,7 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 	case c.readsPayload:
 		sql.setSelect("CAST(payload AS VARCHAR)")
 	}
-	// A compute stage reading a meta-variable (`jq -r '._host'`, awk's
+	// A compute stage reading a meta-variable (`jq -r '$host'`, awk's
 	// `HOST`) gets it from the row: the shard projects every
 	// MetaVarColumns column alongside raw, and compute (compute/
 	// metavars.go) hands the values to the stage.

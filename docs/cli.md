@@ -88,7 +88,7 @@ Since weft controls the awk interpreter, metadata is injected as special variabl
 For jq, metadata is injected as top-level keys prefixed with `_`:
 
 ```bash
-cat vimgym.log | jq 'select(._level == "ERROR") | {ts: ._ts, msg: .message}'
+cat vimgym.log | jq 'select($level == "ERROR") | {ts: $ts, msg: .message}'
 ```
 
 ## Commands
