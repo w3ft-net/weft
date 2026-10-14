@@ -33,7 +33,7 @@ func TestIngestStream_FlushesImmediatelyForActiveTailSubscriber(t *testing.T) {
 	}
 	tx.SeedDevSubscription(cust.ID)
 	ns, _ := tx.FindOrCreateNamespace(cust.ID, "flushtest")
-	rawTok, _, err := tx.CreateAgentToken(cust.ID, ns.ID, "flush-agent", "", "")
+	rawTok, _, err := tx.CreateAgentToken(cust.ID, ns.ID, "flush-agent", "")
 	if err != nil {
 		t.Fatal(err)
 	}

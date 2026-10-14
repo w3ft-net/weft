@@ -127,10 +127,9 @@ func (ss *SyslogServer) trackConn(conn net.Conn, add bool) {
 }
 
 // handleConn owns one Render (or other producer) connection end to
-// end: read the token off the first line, validate it scoped to this
-// server's producer, open one coordinator IngestStream for the life of
-// the connection, and forward every frame that Producer.MapFields
-// accepts. See docs/ingestion-syslog.md, "Auth model", for the
+// end: read the token off the first line, validate it, open one
+// coordinator IngestStream for the life of the connection, and forward
+// every frame that Producer.MapFields accepts. See docs/ingestion-syslog.md, "Auth model", for the
 // leading-"TOKEN SP" wire shape this decodes.
 func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
@@ -160,19 +159,19 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 	token := string(trimmed[:sp])
 	tokenPrefix := append([]byte(nil), trimmed[:sp+1]...) // "TOKEN " including the space
 
-	auth, err := ss.store.ValidateAgentTokenForProducer(token, name)
+	auth, err := ss.store.ValidateAgentToken(token)
 	if err != nil {
 		log.Printf("syslog[%s]: token validation error from %s: %v", name, remote, err)
 		return
 	}
 	if auth == nil {
-		log.Printf("syslog[%s]: rejecting %s: invalid, revoked, or wrong-producer token", name, remote)
+		log.Printf("syslog[%s]: rejecting %s: invalid or revoked token", name, remote)
 		return
 	}
 
 	// Same bearer token in gRPC metadata so the coordinator's own
 	// authenticateStream re-validates independently — this server's
-	// producer-scoped check is an extra gate, not a replacement for it.
+	// check is an extra gate, not a replacement for it.
 	streamCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 	stream, err := ss.coordClient.IngestStream(streamCtx)
 	if err != nil {

@@ -3,10 +3,39 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/store"
 )
+
+// setUpTokenCreator returns a ready owner JWT for a fresh org with a
+// "default" namespace — the common setup every handleCreateToken test
+// needs.
+func setUpTokenCreator(t *testing.T, s *store.Store, orgPrefix string) string {
+	t.Helper()
+	cust, err := s.FindOrCreateOrg(fmt.Sprintf("%s-%d", orgPrefix, os.Getpid()))
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	user, err := s.CreateVerifiedUser(fmt.Sprintf("%s-%d@example.com", orgPrefix, os.Getpid()))
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
+	if _, err := s.FindOrCreateNamespace(cust.ID, "default"); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+	jwt, err := auth.Generate(user, "test-secret")
+	if err != nil {
+		t.Fatalf("generate jwt: %v", err)
+	}
+	return jwt
+}
 
 func postJSON(srv *Server, jwt, path string, body map[string]string) *httptest.ResponseRecorder {
 	b, _ := json.Marshal(body)

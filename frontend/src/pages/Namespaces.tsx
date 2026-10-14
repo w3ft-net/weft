@@ -6,8 +6,8 @@ import AddKinesisSource from '../components/AddKinesisSource'
 import ConfiguredSourcesList from '../components/ConfiguredSourcesList'
 import {
   getNamespaces, createNamespace, getTokens, createToken, revokeToken,
-  getPendingSources, onPendingSourcesChanged, listSources, getSyslogProducers,
-  type NamespaceInfo, type AgentToken, type PendingSource, type SourceInfo, type SyslogProducer,
+  getPendingSources, onPendingSourcesChanged, listSources,
+  type NamespaceInfo, type AgentToken, type PendingSource, type SourceInfo,
 } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import './Dashboard.css'
@@ -32,20 +32,16 @@ export default function Namespaces() {
   const [showTokenForm, setShowTokenForm] = useState<string | null>(null)
   const [tokenLabel, setTokenLabel] = useState('')
   const [tokenEnv, setTokenEnv] = useState('')
-  const [tokenProducer, setTokenProducer] = useState('')
   const [newTokenSecret, setNewTokenSecret] = useState('')
-  const [newTokenEndpoint, setNewTokenEndpoint] = useState('')
   const [copied, setCopied] = useState(false)
   const [sources, setSources] = useState<SourceInfo[]>([])
   const [showAddKinesis, setShowAddKinesis] = useState<string | null>(null)
-  const [producers, setProducers] = useState<SyslogProducer[]>([])
 
   function loadData() {
     getNamespaces().then(setNamespaces).catch(() => {})
     getTokens().then(setTokens).catch(() => {})
     getPendingSources().then(setPendingSources).catch(() => {})
     listSources().then(setSources).catch(() => {})
-    getSyslogProducers().then(setProducers).catch(() => {})
   }
 
   function sourcesForNamespace(nsName: string): SourceInfo[] {
@@ -92,12 +88,10 @@ export default function Namespaces() {
   async function handleCreateToken(nsName: string) {
     if (!tokenLabel.trim()) return
     try {
-      const resp = await createToken(tokenLabel.trim(), nsName, tokenEnv.trim(), tokenProducer)
+      const resp = await createToken(tokenLabel.trim(), nsName, tokenEnv.trim())
       setNewTokenSecret(resp.token)
-      setNewTokenEndpoint(resp.endpoint || '')
       setTokenLabel('')
       setTokenEnv('')
-      setTokenProducer('')
       setShowTokenForm(null)
       loadData()
     } catch {
@@ -134,21 +128,12 @@ export default function Namespaces() {
                 <span className="ns-key">token:</span>
                 <code className="ns-reveal-value" data-testid="namespace-token-secret">{newTokenSecret}</code>
               </div>
-              {newTokenEndpoint && (
-                <>
-                  <div className="ns-reveal-kv">
-                    <span className="ns-key">endpoint:</span>
-                    <code className="ns-reveal-value" data-testid="namespace-token-endpoint">{newTokenEndpoint}</code>
-                  </div>
-                  <p className="ns-hint">paste both into the platform's log-stream config.</p>
-                </>
-              )}
               <div className="ns-actions">
                 <button className="tui-btn tui-btn-primary" data-testid="namespace-token-copy-button"
                   onClick={() => { navigator.clipboard.writeText(newTokenSecret); setCopied(true); setTimeout(() => setCopied(false), 2000) }}>
                   {copied ? 'copied' : 'copy to clipboard'}
                 </button>
-                <button className="tui-btn" onClick={() => { setNewTokenSecret(''); setNewTokenEndpoint('') }}
+                <button className="tui-btn" onClick={() => setNewTokenSecret('')}
                   data-testid="namespace-token-reveal-done-button">done</button>
               </div>
             </Pane>
@@ -282,7 +267,7 @@ export default function Namespaces() {
                               <div className="ns-table-wrap">
                                 <table className="tui-table" data-testid={`namespace-tokens-${ns.name}`}>
                                   <thead>
-                                    <tr><th>prefix</th><th>label</th><th>env</th><th>for</th><th>status</th><th>created</th><th></th></tr>
+                                    <tr><th>prefix</th><th>label</th><th>env</th><th>status</th><th>created</th><th></th></tr>
                                   </thead>
                                   <tbody>
                                     {nsTokens.map(t => (
@@ -290,11 +275,6 @@ export default function Namespaces() {
                                         <td className="ns-token-prefix">{t.prefix}…</td>
                                         <td className="ns-token-label">{t.label}</td>
                                         <td>{t.env || <span className="tui-dim">-</span>}</td>
-                                        <td data-testid={`namespace-token-producer-${t.id}`}>
-                                          {t.producer ? (
-                                            <span title={t.endpoint}>{t.producer} <span className="tui-dim">{t.endpoint}</span></span>
-                                          ) : <span className="tui-dim">-</span>}
-                                        </td>
                                         <td>
                                           <span className={`tui-tag ${t.status === 'active' ? 'tui-tag-ok' : ''}`}>{t.status}</span>
                                         </td>
@@ -328,32 +308,11 @@ export default function Namespaces() {
                                     onChange={e => setTokenEnv(e.target.value)}
                                     data-testid={`namespace-token-env-${ns.name}`} />
                                 </label>
-                                {producers.length > 0 && (
-                                  <label className="ns-field">
-                                    <span className="ns-key">for:</span>
-                                    <select value={tokenProducer}
-                                      onChange={e => setTokenProducer(e.target.value)}
-                                      data-testid={`namespace-token-producer-${ns.name}`}>
-                                      <option value="">weftd / API (default)</option>
-                                      {producers.map(p => (
-                                        <option key={p.name} value={p.name}>
-                                          {p.name[0].toUpperCase() + p.name.slice(1)}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                )}
-                                {tokenProducer && (
-                                  <p className="ns-hint">
-                                    endpoint: <code>{producers.find(p => p.name === tokenProducer)?.endpoint}</code> — paste
-                                    both the token and this endpoint into {tokenProducer}'s log-stream config.
-                                  </p>
-                                )}
                                 <div className="ns-actions">
                                   <button className="tui-btn tui-btn-primary"
                                     onClick={() => handleCreateToken(ns.name)}
                                     data-testid={`namespace-token-create-${ns.name}`}>create token</button>
-                                  <button className="tui-btn" onClick={() => { setShowTokenForm(null); setTokenEnv(''); setTokenProducer('') }}
+                                  <button className="tui-btn" onClick={() => { setShowTokenForm(null); setTokenEnv('') }}
                                     data-testid={`namespace-token-cancel-${ns.name}-button`}>cancel</button>
                                 </div>
                               </div>

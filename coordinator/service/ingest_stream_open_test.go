@@ -31,7 +31,7 @@ func TestIngestStream_SteadyStateOpenTouchesNoAuthTables(t *testing.T) {
 	}
 	tx.SeedDevSubscription(cust.ID)
 	ns, _ := tx.FindOrCreateNamespace(cust.ID, "opencost")
-	rawTok, tok, err := tx.CreateAgentToken(cust.ID, ns.ID, "open-cost-agent", "", "")
+	rawTok, tok, err := tx.CreateAgentToken(cust.ID, ns.ID, "open-cost-agent", "")
 	if err != nil {
 		t.Fatal(err)
 	}

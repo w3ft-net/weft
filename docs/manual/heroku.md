@@ -29,7 +29,7 @@ weft token create --namespace myco --env prod --label heroku
 Token created: wft_a1b2c3d4e5f6...
 Label: heroku
 Env:   prod (stamped on every row from this token)
-Store this token in your weftd config. It cannot be retrieved again.
+Store this token somewhere safe. It cannot be retrieved again.
 ```
 
 Copy the token immediately. It is shown only once. One token can carry

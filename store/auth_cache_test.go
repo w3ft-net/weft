@@ -135,7 +135,7 @@ func TestAuthCache_NegativeEntryIsShortLived(t *testing.T) {
 	// short negative TTL passes.
 	cust, _ := db.FindOrCreateOrg("authcache-neg")
 	ns, _ := db.FindOrCreateNamespace(cust.ID, "test")
-	raw, _, err := db.CreateAgentToken(cust.ID, ns.ID, "neg", "", "")
+	raw, _, err := db.CreateAgentToken(cust.ID, ns.ID, "neg", "")
 	if err != nil {
 		t.Fatal(err)
 	}

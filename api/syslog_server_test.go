@@ -102,7 +102,7 @@ func startTestSyslogServer(t *testing.T, srv *Server) (*SyslogServer, string) {
 	return ss, ss.ln.Addr().String()
 }
 
-func createOrgAndProducerToken(t *testing.T, s *store.Store, producer string) string {
+func createOrgAndToken(t *testing.T, s *store.Store) string {
 	t.Helper()
 	cust, err := s.FindOrCreateOrg(fmt.Sprintf("syslog-test-%d-%d", os.Getpid(), time.Now().UnixNano()))
 	if err != nil {
@@ -112,7 +112,7 @@ func createOrgAndProducerToken(t *testing.T, s *store.Store, producer string) st
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
-	raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, "syslog-token", "", producer)
+	raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, "syslog-token", "")
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}
@@ -133,7 +133,7 @@ func waitForRows(t *testing.T, fake *fakeIngestCoord, n int) []*pb.LogRow {
 }
 
 // TestSyslogServer_ValidatesAndForwards is the golden path: a
-// producer-scoped token, three RFC5424 frames each carrying the
+// plain namespace token, three RFC5424 frames each carrying the
 // leading "TOKEN SP" prefix the wire capture confirmed (see
 // docs/ingestion-syslog.md, "Wire-capture first, always"). Two are
 // real service output and should be forwarded field-mapped; the third
@@ -144,7 +144,7 @@ func TestSyslogServer_ValidatesAndForwards(t *testing.T) {
 	fake, coordClient := startFakeCoord(t)
 	srv.coordClient = coordClient
 
-	raw := createOrgAndProducerToken(t, s, "render")
+	raw := createOrgAndToken(t, s)
 	_, addr := startTestSyslogServer(t, srv)
 
 	conn, err := net.Dial("tcp", addr)
@@ -185,16 +185,13 @@ func TestSyslogServer_ValidatesAndForwards(t *testing.T) {
 	}
 }
 
-// TestSyslogServer_RejectsUnscopedToken confirms a token minted with
-// no producer (every weftd/JSON/Heroku token) cannot authenticate a
-// syslog connection even though it's otherwise valid and unrevoked —
-// the whole point of the Producer-scoping added in migration 073.
-func TestSyslogServer_RejectsUnscopedToken(t *testing.T) {
-	srv, s := testServer(t)
+// TestSyslogServer_RejectsInvalidToken confirms a token that was never
+// minted cannot authenticate a syslog connection.
+func TestSyslogServer_RejectsInvalidToken(t *testing.T) {
+	srv, _ := testServer(t)
 	fake, coordClient := startFakeCoord(t)
 	srv.coordClient = coordClient
 
-	raw := createOrgAndProducerToken(t, s, "") // unscoped
 	_, addr := startTestSyslogServer(t, srv)
 
 	conn, err := net.Dial("tcp", addr)
@@ -203,46 +200,14 @@ func TestSyslogServer_RejectsUnscopedToken(t *testing.T) {
 	}
 	defer conn.Close()
 
-	if _, err := conn.Write([]byte(raw + " <6>1 2026-09-02T14:08:25Z test-service web-1 1 web-1 - hi\n")); err != nil {
+	if _, err := conn.Write([]byte("wft_00000000000000000000000000000000 <6>1 2026-09-02T14:08:25Z test-service web-1 1 web-1 - hi\n")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	buf := make([]byte, 1)
 	if _, err := conn.Read(buf); err == nil {
-		t.Fatal("expected the server to close the connection on an unscoped token")
-	}
-
-	if _, _, calls := fake.snapshot(); calls != 0 {
-		t.Errorf("coordinator IngestStream should never have been called, got %d calls", calls)
-	}
-}
-
-// TestSyslogServer_RejectsWrongProducerToken confirms a token scoped
-// to a different producer (a hypothetical second platform) can't be
-// replayed against this SyslogServer instance.
-func TestSyslogServer_RejectsWrongProducerToken(t *testing.T) {
-	srv, s := testServer(t)
-	fake, coordClient := startFakeCoord(t)
-	srv.coordClient = coordClient
-
-	raw := createOrgAndProducerToken(t, s, "flyio")
-	_, addr := startTestSyslogServer(t, srv)
-
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatalf("dial syslog server: %v", err)
-	}
-	defer conn.Close()
-
-	if _, err := conn.Write([]byte(raw + " <6>1 2026-09-02T14:08:25Z test-service web-1 1 web-1 - hi\n")); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	buf := make([]byte, 1)
-	if _, err := conn.Read(buf); err == nil {
-		t.Fatal("expected the server to close the connection on a wrong-producer token")
+		t.Fatal("expected the server to close the connection on an invalid token")
 	}
 
 	if _, _, calls := fake.snapshot(); calls != 0 {
@@ -258,7 +223,7 @@ func TestSyslogServer_RejectsMissingTokenPrefix(t *testing.T) {
 	srv, s := testServer(t)
 	fake, coordClient := startFakeCoord(t)
 	srv.coordClient = coordClient
-	createOrgAndProducerToken(t, s, "render") // exists, but never presented
+	createOrgAndToken(t, s) // exists, but never presented
 
 	_, addr := startTestSyslogServer(t, srv)
 

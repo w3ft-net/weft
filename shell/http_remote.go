@@ -325,32 +325,26 @@ func (h *HTTPCoordinator) CreateNamespace(name string) (*NamespaceInfo, error) {
 	return &ns, nil
 }
 
-// CreateToken mints an agent token. producer is optional — pass "" for
-// every non-syslog token (the common case); a registered
-// ingest/syslog.Producer name (e.g. "render") scopes the token to that
-// producer and the response's endpoint carries the hostname:port the
-// customer pastes into that platform's log-stream config. See
-// docs/ingestion-syslog.md.
-func (h *HTTPCoordinator) CreateToken(customer, label, namespace, env, producer string) (token, endpoint string, err error) {
-	body, _ := json.Marshal(map[string]string{"label": label, "namespace": namespace, "env": env, "producer": producer})
+// CreateToken mints an agent token scoped to one namespace (and, optionally, env).
+func (h *HTTPCoordinator) CreateToken(customer, label, namespace, env string) (token string, err error) {
+	body, _ := json.Marshal(map[string]string{"label": label, "namespace": namespace, "env": env})
 	req, _ := http.NewRequest("POST", h.baseURL+"/api/tokens", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	h.setAuthHeaders(req)
 
 	resp, err := h.client.Do(req)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return "", "", httpError(resp)
+		return "", httpError(resp)
 	}
 	var result struct {
-		Token    string `json:"token"`
-		Endpoint string `json:"endpoint"`
+		Token string `json:"token"`
 	}
 	json.NewDecoder(resp.Body).Decode(&result)
-	return result.Token, result.Endpoint, nil
+	return result.Token, nil
 }
 
 func (h *HTTPCoordinator) ListTokens(customer string) ([]TokenInfo, error) {

@@ -1,8 +1,6 @@
 package store
 
-import (
-	"testing"
-)
+import "testing"
 
 // testOpen connects to the dedicated `weft_test` database on the dev
 // postgres server and returns a transaction-wrapped Store that rolls
@@ -34,7 +32,7 @@ func testOpen(t *testing.T) *Store {
 
 func createTestToken(db *Store, custID OrgID, label string) (string, *AgentToken, error) {
 	ns, _ := db.FindOrCreateNamespace(custID, "test")
-	return db.CreateAgentToken(custID, ns.ID, label, "", "")
+	return db.CreateAgentToken(custID, ns.ID, label, "")
 }
 
 func TestUpdateAgentMetricsConfig(t *testing.T) {

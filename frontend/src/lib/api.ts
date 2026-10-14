@@ -119,27 +119,15 @@ export function getTokens(): Promise<AgentToken[]> {
   return apiFetch('/api/tokens')
 }
 
-export function createToken(label: string, namespace: string, env: string, producer?: string): Promise<AgentToken & { token: string }> {
+export function createToken(label: string, namespace: string, env: string): Promise<AgentToken & { token: string }> {
   return apiFetch('/api/tokens', {
     method: 'POST',
-    body: JSON.stringify({ label, namespace, env, producer: producer || undefined }),
+    body: JSON.stringify({ label, namespace, env }),
   })
 }
 
 export function revokeToken(id: number): Promise<void> {
   return apiFetch(`/api/tokens/${id}`, { method: 'DELETE' })
-}
-
-// Registered ingest/syslog.Producer platforms (e.g. Render) a token can
-// be minted `--for`. Drives the producer selector on the token-create
-// form instead of hardcoding platform names — see docs/ingestion-syslog.md.
-export interface SyslogProducer {
-  name: string
-  endpoint: string
-}
-
-export function getSyslogProducers(): Promise<SyslogProducer[]> {
-  return apiFetch('/api/syslog-producers')
 }
 
 // Functions (/bin/)
@@ -356,8 +344,6 @@ export interface AgentToken {
   env: string
   status: 'active' | 'revoked'
   created_at: string
-  producer?: string
-  endpoint?: string
 }
 
 export interface ShellFunction {

@@ -26,7 +26,7 @@ func setupIngestOrg(t *testing.T, s *store.Store) (token string, ns *store.Names
 	if err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
-	raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, "adapter-test-token", "", "")
+	raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, "adapter-test-token", "")
 	if err != nil {
 		t.Fatalf("create token: %v", err)
 	}

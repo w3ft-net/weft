@@ -32,7 +32,7 @@ func TestIngestStream_PerTokenRateLimit_ThrottlesButDeliversAll(t *testing.T) {
 	}
 	tx.SeedDevSubscription(cust.ID)
 	ns, _ := tx.FindOrCreateNamespace(cust.ID, "ratelimit-test")
-	rawTok, _, err := tx.CreateAgentToken(cust.ID, ns.ID, "rl-agent", "", "")
+	rawTok, _, err := tx.CreateAgentToken(cust.ID, ns.ID, "rl-agent", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestIngestStream_PerTokenRateLimit_Disabled(t *testing.T) {
 	}
 	tx.SeedDevSubscription(cust.ID)
 	ns, _ := tx.FindOrCreateNamespace(cust.ID, "ratelimit-disabled-test")
-	rawTok, _, err := tx.CreateAgentToken(cust.ID, ns.ID, "rl-agent-2", "", "")
+	rawTok, _, err := tx.CreateAgentToken(cust.ID, ns.ID, "rl-agent-2", "")
 	if err != nil {
 		t.Fatal(err)
 	}

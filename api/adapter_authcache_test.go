@@ -72,7 +72,7 @@ func TestIngestHandler_RevokeTakesEffectImmediatelyInAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	ns, _ := s.FindOrCreateNamespace(cust.ID, "test")
-	token, tok, err := s.CreateAgentToken(cust.ID, ns.ID, "revoke-me", "", "")
+	token, tok, err := s.CreateAgentToken(cust.ID, ns.ID, "revoke-me", "")
 	if err != nil {
 		t.Fatal(err)
 	}

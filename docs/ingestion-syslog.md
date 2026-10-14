@@ -29,7 +29,7 @@ Platform (Render, ...)  ──TLS 6514──►  weft-nlb  <producer>.syslog.w3f
                           - the port IS the producer identity — no
                             content-sniffing needed
                           - strips the platform's line-prefix auth shape
-                          - store.ValidateAgentTokenForProducer(token, name)
+                          - store.ValidateAgentToken(token)
                           - ingest/syslog.ParseStream → Producer.MapFields → []*pb.LogRow
                                             │
                                             ▼
@@ -53,10 +53,7 @@ shape and the field-mapping rules from content before anything is
 validated — was tried in early design and rejected: PPv2 doesn't carry
 SNI through AWS's NLB (confirmed with a live packet capture against
 Render), so there's no reliable signal to disambiguate on before the TLS
-session terminates. Binding identity to the listener also means
-`store.ValidateAgentTokenForProducer` can reject a token minted for a
-different producer outright, even if it leaked — a Render token can never
-be replayed against a hypothetical Fly.io listener.
+session terminates. Tokens carry no producer identity — see *Auth model*.
 
 Cardinality here is hosting *platforms* (a handful, growing slowly), not
 tenants, so this doesn't run into an NLB's per-listener limits the way a
@@ -83,12 +80,13 @@ will add (see *Adding a new syslog-speaking platform* below).
 
 ## Auth model
 
-One token per namespace+env, scoped to the producer it was minted for
-(`AgentToken.Producer`, `store.ValidateAgentTokenForProducer`). Unscoped
-tokens (`Producer == ""`) still validate against the producer-agnostic
-`ValidateAgentToken` used by weftd and Heroku, but never against a
-producer-scoped check — so a plain namespace token can't be used to open
-a syslog listener even by accident.
+One token per namespace+env, the same bearer token weftd and Heroku use,
+validated with `store.ValidateAgentToken`. Tokens are not scoped to a
+platform: minting one is `weft token create --namespace NS [--env ENV]`
+regardless of where it will be pasted, and the listener it arrives at
+(not the token) decides how its frames are mapped. The cost is that a
+leaked token is valid on every ingest path, as it already was for
+weftd/JSON/Heroku.
 
 `SyslogServer.handleConn` reads whatever the platform's line-prefix or
 SD-element format is, resolves the token, then opens a normal
@@ -135,9 +133,8 @@ Render specifically and is not safe to assume for the next platform.
    `APP-NAME`/`MSGID` for kind+instance; another platform may use
    different fields).
 2. **Implement `ingest/syslog.Producer`** in a new
-   `ingest/syslog/producer_<name>.go`: `Name() string` (the token-scoping
-   key and the `--for` value) and `MapFields(Frame) (service, kind,
-   instance string, ok bool)`. Return `ok=false` to drop a frame without
+   `ingest/syslog/producer_<name>.go`: `Name() string` (used in log lines)
+   and `MapFields(Frame) (service, kind, instance string, ok bool)`. Return `ok=false` to drop a frame without
    forwarding it (Render does this for its own connectivity-test ping).
    See `producer_render.go` for the shape.
 3. **If the auth shape isn't a "TOKEN SP" line prefix**, `SyslogServer.handleConn`
@@ -145,21 +142,15 @@ Render specifically and is not safe to assume for the next platform.
    An SD-element credential (`f.SD(id, key)` on the parsed `Frame`) is
    the most likely alternative; there's no framework for it yet, so this
    is new code, not a config toggle.
-4. **Register the producer** in `api/handlers.go`'s `syslogProducers`
-   slice. This one list drives three things: `weft token create --for
-   <name>` validation, the `GET /api/syslog-producers` registry the
-   dashboard's token-create form reads to populate its **For** selector,
-   and `(*Server).syslogEndpoint`'s `<name>.syslog.<host>:6514` string.
-5. **Construct a new `SyslogServer`** in `cmd/api/main.go` next to the
+4. **Construct a new `SyslogServer`** in `cmd/api/main.go` next to the
    existing one: `apiSrv.NewSyslogServer(yourProducer, yourPort)`, with a
    new `--<name>-syslog-port` flag mirroring `--render-syslog-port`.
-6. **Tests**: a `producer_<name>_test.go` pinning the field mapping
+5. **Tests**: a `producer_<name>_test.go` pinning the field mapping
    (mirroring `producer_render_test.go`), plus whatever
    `api/syslog_server_test.go`-style auth-path coverage a new auth shape
-   needs. `TestListSyslogProducers` and `TestEndpointsRequireAuth` in
-   `api/token_producer_test.go` / `api/auth_required_test.go` extend
-   automatically once the producer is registered — no test-side
-   registry to update by hand.
+   needs. Add the platform's manual page (`docs/manual/<name>.md`) with
+   its endpoint (`<name>.syslog.w3ft.net:6514`) — nothing in the API
+   surfaces it any more.
 
 ### Infra
 

@@ -15,12 +15,11 @@ const connectRender = {
 syslog over TLS. Here's how to start receiving those logs:</p>
 <h3 id="1-creating-a-token">1. Creating a token</h3>
 <p>From the dashboard, go to <strong>Namespaces</strong> and create a namespace (or use an
-existing one), then <strong>Create token</strong> within that namespace.  <strong>Render</strong> in the
-<strong>For</strong> dropdown, and click <strong>Create token</strong>. The token is shown only once, so
-copy it now. The endpoint is the same for every Render token, so you can look
-it up again later.</p>
+existing one), then <strong>Create token</strong> within that namespace. The token is
+shown only once, so copy it now. Render tokens are ordinary namespace tokens,
+the same kind you use for any other source.</p>
 <p>Or, from the CLI:</p>
-<pre><code>weft token create --namespace myco --label render --for render
+<pre><code>weft token create --namespace myco --label render
 </code></pre>
 <h3 id="2-add-the-log-stream-in-render">2. Add the log stream in Render</h3>
 <p>In the Render dashboard, click <strong>Integrations → Observability</strong> in the sidebar.

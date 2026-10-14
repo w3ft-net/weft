@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -31,7 +30,6 @@ import (
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/coordinator/onboarding"
 	"github.com/graybeardcorp/weft/ingest"
-	ingsyslog "github.com/graybeardcorp/weft/ingest/syslog"
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -285,7 +283,6 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/tokens", s.handleListTokens)
 	auth.Handle("POST /api/tokens", protected(s.handleCreateToken))
 	auth.Handle("DELETE /api/tokens/{id}", protected(s.handleRevokeToken))
-	auth.HandleFunc("GET /api/syslog-producers", s.handleListSyslogProducers)
 	auth.HandleFunc("GET /api/apps", s.handleListApps)
 	auth.HandleFunc("GET /api/ingestion-status", s.handleIngestionStatus)
 	auth.Handle("POST /api/shell/exec", BodyCapFunc(cfg.ShellExecBodyMax, s.handleShellExec))
@@ -396,7 +393,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/billing/usage", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/tokens", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/tokens/", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
-	mux.Handle("/api/syslog-producers", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/apps", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/shell/exec", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
 	mux.Handle("/api/shell/builtin", AuthMiddleware(s.store, s.jwtSecret, gatedAuth))
@@ -1343,8 +1339,6 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 		Env       string `json:"env"`
 		Status    string `json:"status"`
 		CreatedAt string `json:"created_at"`
-		Producer  string `json:"producer,omitempty"`
-		Endpoint  string `json:"endpoint,omitempty"`
 	}
 	out := make([]tokenResult, 0, len(tokens))
 	for _, t := range tokens {
@@ -1360,10 +1354,6 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 			Env:       t.Env,
 			Status:    status,
 			CreatedAt: t.CreatedAt.Format(time.RFC3339),
-		}
-		if t.Producer != "" {
-			tr.Producer = t.Producer
-			tr.Endpoint = s.syslogEndpoint(t.Producer)
 		}
 		out = append(out, tr)
 	}
@@ -1381,11 +1371,6 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		Label     string `json:"label"`
 		Namespace string `json:"namespace"`
 		Env       string `json:"env"`
-		// Producer scopes the token to one registered
-		// ingest/syslog.Producer (e.g. "render"), minted via
-		// `weft token create --for render`. Empty for every other
-		// token. See docs/ingestion-syslog.md.
-		Producer string `json:"producer"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Label == "" {
 		http.Error(w, "label required", http.StatusBadRequest)
@@ -1393,10 +1378,6 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Namespace == "" {
 		http.Error(w, "namespace required", http.StatusBadRequest)
-		return
-	}
-	if req.Producer != "" && !validSyslogProducer(req.Producer) {
-		http.Error(w, fmt.Sprintf("unknown producer %q", req.Producer), http.StatusBadRequest)
 		return
 	}
 
@@ -1427,7 +1408,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	raw, tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label, req.Env, req.Producer)
+	raw, tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label, req.Env)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1444,60 +1425,8 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		"status":     "active",
 		"created_at": tok.CreatedAt.Format(time.RFC3339),
 	}
-	if tok.Producer != "" {
-		resp["producer"] = tok.Producer
-		resp["endpoint"] = s.syslogEndpoint(tok.Producer)
-	}
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(resp)
-}
-
-// syslogProducers lists every registered ingest/syslog.Producer. Used
-// to validate `weft token create --for <name>` and to derive the
-// endpoint hostname shown after minting. A second syslog-speaking
-// platform (Fly.io, Railway, ...) adds itself here alongside its own
-// SyslogServer instance in cmd/api/main.go — see docs/ingestion-syslog.md,
-// "Adding a new syslog-speaking platform".
-var syslogProducers = []ingsyslog.Producer{
-	ingsyslog.RenderProducer{},
-}
-
-func validSyslogProducer(name string) bool {
-	for _, p := range syslogProducers {
-		if p.Name() == name {
-			return true
-		}
-	}
-	return false
-}
-
-// handleListSyslogProducers lists every registered ingest/syslog.Producer
-// with its endpoint, so the dashboard's token-create form can offer a
-// producer selector without hardcoding platform names — the same
-// registry the CLI's `--for` flag and handleCreateToken validate against.
-func (s *Server) handleListSyslogProducers(w http.ResponseWriter, r *http.Request) {
-	type producerResult struct {
-		Name     string `json:"name"`
-		Endpoint string `json:"endpoint"`
-	}
-	out := make([]producerResult, 0, len(syslogProducers))
-	for _, p := range syslogProducers {
-		out = append(out, producerResult{Name: p.Name(), Endpoint: s.syslogEndpoint(p.Name())})
-	}
-	json.NewEncoder(w).Encode(out)
-}
-
-// syslogEndpoint returns the customer-facing hostname:port for a
-// producer's TLS syslog listener. Derived from the same baseURL every
-// other public link on this server is built from (apiBaseURL, magic
-// links, ...) rather than a hardcoded domain, so a dev/staging
-// deployment prints its own host instead of production's.
-func (s *Server) syslogEndpoint(producer string) string {
-	host := s.baseURL
-	if u, err := url.Parse(s.baseURL); err == nil && u.Host != "" {
-		host = u.Host
-	}
-	return fmt.Sprintf("%s.syslog.%s:6514", producer, host)
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {

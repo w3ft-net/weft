@@ -15,15 +15,14 @@ syslog over TLS. Here's how to start receiving those logs:
 ### 1. Creating a token
 
 From the dashboard, go to **Namespaces** and create a namespace (or use an
-existing one), then **Create token** within that namespace.  **Render** in the
-**For** dropdown, and click **Create token**. The token is shown only once, so
-copy it now. The endpoint is the same for every Render token, so you can look
-it up again later.
+existing one), then **Create token** within that namespace. The token is
+shown only once, so copy it now. Render tokens are ordinary namespace tokens,
+the same kind you use for any other source.
 
 Or, from the CLI:
 
 ```
-weft token create --namespace myco --label render --for render
+weft token create --namespace myco --label render
 ```
 
 ### 2. Add the log stream in Render
