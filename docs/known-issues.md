@@ -22,7 +22,10 @@ several records to awk. The shard's projection reads the whole raw once:
 projections are unaffected: jq reads the row's payload, once. Found by
 multi-line probes in `TestDifferentialLineSplits` (2026-10-14).
 
-**Fix shape:** split the lines under the projection
+**Fix:** [line-storage](plans/line-storage.md) stores text events one
+row per line, which makes the per-row projection exact for new rows; it
+remains for rows ingested before it and for JSON rows whose `raw` holds
+newlines. The query-time alternative it replaces: split the lines under the projection
 (`SELECT * REPLACE (unnest(string_split(raw, chr(10))) AS raw, …)`), with
 awk's `$N` read from a per-line split matching warp's (space, tab,
 newline) instead of `fields`. That costs an unnest on every shard row of

@@ -17,7 +17,7 @@ ValueError: missing field: user_id
 
 becomes seven rows. `grep ValueError` hits only the last line; `grep do_work` hits a different line; the shape of the trace is only recoverable by sorting and pasting in your head. This is the single most common complaint against file-tailing agents and the reason Fluent Bit / Vector / Filebeat all have dedicated multi-line parsers.
 
-The fix is entirely agent-side: the coordinator sees one already-stitched event, shard schema is unchanged, query planner is unchanged.
+The stitching is agent-side: the coordinator sees one already-stitched event. Storage splits it back into one row per line sharing an `event_id` ([line-storage](line-storage.md)), so the stitch is what groups the lines.
 
 ## Architecture
 
@@ -61,7 +61,7 @@ Guardrails on every mode:
 
 ## Emitted row shape
 
-A stitched event is a single `LogRow` whose `Raw` field is the joined lines with `\n` between them, and whose `Fields` is the whitespace-split of the first line only. The timestamp comes from the first line (per the existing schema). `line_num` is the first line's number; `line_num_end` is a new field that carries the last line's number so the shell can tell the user how wide an event was.
+A stitched event is a single `LogRow` whose `Raw` field is the joined lines with `\n` between them; the coordinator splits it into lines at ingest ([line-storage](line-storage.md)). The timestamp comes from the first line (per the existing schema). `line_num` is the first line's number; `line_num_end` is a new field that carries the last line's number so the shell can tell the user how wide an event was.
 
 This is additive; the coordinator ignores `line_num_end` if schema doesn't declare it, and existing single-line events are unchanged (they just have `line_num == line_num_end`).
 
