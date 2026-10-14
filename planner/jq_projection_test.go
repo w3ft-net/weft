@@ -18,7 +18,7 @@ import (
 // jqProj wraps the inner SQL projection with the VARCHAR cast the planner
 // emits so downstream jq stages (and the Go driver) see consistent text.
 func jqProj(inner string) string {
-	return "CAST(" + inner + " AS VARCHAR) as raw"
+	return "COALESCE(CAST(" + inner + " AS VARCHAR), 'null') as raw"
 }
 
 // TestRawExpr_JqNestedField — pure path access composes into a deep $.a.b.c
@@ -113,7 +113,7 @@ func TestRawExpr_JqObject(t *testing.T) {
 		{
 			name:      "object with metavar value",
 			pipeline:  `cat vimgym.log | jq '{when: ._ts, who: .user_id}'`,
-			wantInSQL: jqProj("json_object('when', ts, 'who', json_extract(payload, '$.user_id'))"),
+			wantInSQL: jqProj("json_object('when', to_json(CAST(ts AS VARCHAR)), 'who', json_extract(payload, '$.user_id'))"),
 		},
 	}
 	for _, tt := range tests {
@@ -167,91 +167,31 @@ func TestRawExpr_JqArray(t *testing.T) {
 	}
 }
 
-// TestRawExpr_JqInternalPipeBreak — when a jq expression is a pipe whose
-// PREFIX is pushable (path access, optionally after row-level selects) but
-// whose SUFFIX is not (length, sort_by, select-against-the-value, iter, etc.),
-// we should push the prefix into SELECT and ship only the unpushable tail
-// to compute. Today the planner takes one of two wrong actions: it either
-// (a) refuses to push anything because the whole expression isn't a single
-// FieldExpr, or (b) for select-after-path, would incorrectly push the
-// inner select as a row-level WHERE — `.foo | select(.bar==1)` filters by
-// `.foo.bar==1`, NOT `.bar==1`.
+// TestRawExpr_JqInternalPipeBreak pins that a jq program whose head is
+// a path but whose tail isn't SQL runs whole, as written, over the
+// row's payload. The planner
+// used to project the path and re-render the tail (`.foo | length` →
+// SELECT $.foo, compute `jq 'length'`); re-rendering is gone (see
+// docs/plans/planner-ir.md, "Never regenerate source").
 func TestRawExpr_JqInternalPipeBreak(t *testing.T) {
-	tests := []struct {
-		name        string
-		pipeline    string
-		wantInSQL   string
-		wantCompute []string
-		// If notPushable is true, the prefix can't be a SELECT projection
-		// either (e.g. `.items[]` destructures one row into many) — the
-		// whole jq stays in compute and raw stays "raw".
-		notPushable bool
-	}{
-		{
-			name:        "field then length",
-			pipeline:    `cat vimgym.log | jq '.foo | length'`,
-			wantInSQL:   jqProj("json_extract(payload, '$.foo')"),
-			wantCompute: []string{"jq 'length'"},
-		},
-		{
-			name:        "field then tostring",
-			pipeline:    `cat vimgym.log | jq '.tags | tostring'`,
-			wantInSQL:   jqProj("json_extract(payload, '$.tags')"),
-			wantCompute: []string{"jq 'tostring'"},
-		},
-		{
-			name:        "row-select then field then sort_by",
-			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | .users | sort_by(.name)'`,
-			wantInSQL:   jqProj("json_extract(payload, '$.users')"),
-			wantCompute: []string{"jq 'sort_by(.name)'"},
-		},
-		{
-			name: "select after path is value-relative — must terminate before it",
-			// .foo | select(.bar == 1) means "keep rows where foo.bar == 1
-			// and emit foo". The select operates on the value of .foo, so
-			// it CANNOT be lifted to a row-level WHERE on $.bar. Safe move:
-			// project .foo, run the select in compute against that value.
-			pipeline:    `cat vimgym.log | jq '.foo | select(.bar == 1)'`,
-			wantInSQL:   jqProj("json_extract(payload, '$.foo')"),
-			wantCompute: []string{`jq 'select(.bar == 1)'`},
-		},
-		{
-			name: "iter — array projects, .[] runs in compute",
-			// .items[] is PipeExpr{FieldExpr(items), IterExpr}. The path
-			// prefix `.items` is pushable; the residual IterExpr renders as
-			// `.[]` (valid jq after a pipe). Net effect: the shard ships
-			// just the array, the compute jq fans it out into per-element
-			// values — same outputs as running `jq '.items[]'` on the full
-			// payload.
-			pipeline:    `cat vimgym.log | jq '.items[]'`,
-			wantInSQL:   jqProj("json_extract(payload, '$.items')"),
-			wantCompute: []string{`jq '.[]'`},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+	for _, pipeline := range []string{
+		`cat vimgym.log | jq '.foo | length'`,
+		`cat vimgym.log | jq '.tags | tostring'`,
+		`cat vimgym.log | jq '.foo | select(.bar == 1)'`,
+		`cat vimgym.log | jq '.items[]'`,
+	} {
+		t.Run(pipeline, func(t *testing.T) {
+			plan, err := Plan(pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
-			if tt.notPushable {
-				if !strings.Contains(plan.ShardSQL, "SELECT raw, ts FROM logs") {
-					t.Errorf("expected un-projected SELECT, got: %s", plan.ShardSQL)
-				}
-			} else {
-				if !strings.Contains(plan.ShardSQL, tt.wantInSQL) {
-					t.Errorf("ShardSQL missing %q\n got: %s", tt.wantInSQL, plan.ShardSQL)
-				}
+			// The stage reads the payload, not raw.
+			if !strings.HasPrefix(plan.ShardSQL, "SELECT CAST(payload AS VARCHAR) as raw, ts FROM logs") {
+				t.Errorf("expected the payload as the stage's input, got: %s", plan.ShardSQL)
 			}
-			if len(plan.ComputeStages) != len(tt.wantCompute) {
-				t.Fatalf("ComputeStages count: got %d %v, want %d %v",
-					len(plan.ComputeStages), plan.ComputeStages,
-					len(tt.wantCompute), tt.wantCompute)
-			}
-			for i, w := range tt.wantCompute {
-				if plan.ComputeStages[i] != w {
-					t.Errorf("ComputeStages[%d]: got %q want %q", i, plan.ComputeStages[i], w)
-				}
+			stage := strings.TrimPrefix(pipeline, "cat vimgym.log | ")
+			if len(plan.ComputeStages) != 1 || plan.ComputeStages[0] != stage {
+				t.Errorf("compute = %q, want [%q]", plan.ComputeStages, stage)
 			}
 		})
 	}

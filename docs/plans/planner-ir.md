@@ -2,8 +2,11 @@
 
 ## Status
 
-🟡 Designed, not started. Three bugs below are reproduced by failing tests in
-`planner/awk_compute_test.go` (uncommitted; red until Phase 1 lands).
+🟡 Phase 1 landed 2026-10-13: compute stages are the user's text, jq and
+row-identity semantics are defined (see "jq" and "Row identity"), and the
+differential harness (`planner/difftest`) passes on 307 pipelines. Needs the
+matching warp commit (`StreamingOptions`, awk hook scope). Phase 2 is next;
+Phase 3 not started.
 
 ## Problem
 
@@ -114,10 +117,13 @@ flags, unknown constructs or failed preconditions produce `Opaque(stage)`.
   - *Projection*: when the whole program is `{ print $i, $j }`,
     `Project(exact)`. This is today's `awkProgramToSQL`, moved behind the
     exactness tag.
-- **jq**: `select(cond)` prefix → `Filter`. Then `.path` → `Project(exact)`.
-  The remainder is `Opaque(whole stage)`, not a re-rendered tail. This
-  replaces `jqRenderPipe`. Re-running the `select` in compute is the cost of
-  never regenerating source.
+- **jq**: see "jq" for what a jq stage reads and emits.
+  - A select chain is a row filter: `Filter(exact)` when every select
+    lowers, else the lowered ones prefilter and the chain is a row stage.
+  - Selects followed by a tail SQL computes fully (`.a.b`, `{k: .x}`,
+    `[.a, .b]`, meta-variables) → `Filter(exact) → Project(exact)`.
+  - Anything else: selects prefilter, then `Opaque(whole stage)` reading the
+    payload. Never a re-rendered tail.
 - **sed**: an address-only program (`/re/p` with `-n`, `/re/d`) →
   `Filter(exact)`. A substitution with an address →
   `Filter(prefilter) → Opaque`.
@@ -162,8 +168,86 @@ Passes are rewrites on the IR, each with an explicit precondition:
   arg sources, compute strings). Bump `PlannerVersion`; stored cron plans
   recompile on their next fire.
 
+### Explain
+
+`planner.Explain` (and `cmd/explain`, which wraps it) shows the IR, not just
+what comes out of the backends. Today it prints the shard SQL and the compute
+strings, so it can say *what* ran where but never *why*. The why is the part
+people need: "why didn't my awk filter push down?"
+
+That means the IR has to keep its reasons:
+
+- **Frontends record why a stage went `Opaque`**, or why it lowered only as a
+  prefilter: `BEGIN present`, `NR outside a window`, `regex uses a
+  back-reference`, `unknown flag -A`, `action is not a plain print $n`. These
+  are typed reason values, not free text, so tests can assert on them.
+- **Passes record what they did and what they declined**: `moved Filter below
+  Opaque (own prefilter)`, `Filter held above Limit (head 10)`, `no Sort next
+  to the boundary, no ORDER BY fusion`.
+
+Sketch of the output:
+
+```
+Pipeline: cat app.log | awk '$3 > 10 { print $1 $2 }' | head 5
+
+Plan:
+  Scan     app.log  namespace=(all) service=app kind=log
+  Filter   prefilter  CAST(fields[3] AS DOUBLE) > 10         [1: awk]
+  ─── shard │ compute ───
+  Opaque   awk '$3 > 10 { print $1 $2 }'                     [1: awk]
+             not exact: action prints a concatenation, not a plain $n
+  Limit    5                                                 [2: head]
+             not pushed: above an Opaque
+
+Passes:
+  filter-pushdown    moved Filter[1] below Opaque[1] (own prefilter)
+  sort-limit-fusion  skipped: no Sort next to the boundary
+
+Shard SQL:
+  …                  (as today, with bound args inline)
+
+Compute stages:
+  1. awk '$3 > 10 { print $1 $2 }'                           [stage 1, verbatim]
+  2. head 5                                                  [stage 2, verbatim]
+```
+
+- Each node shows its span as `[stage index: command]`, so the reader can
+  line every SQL fragment and every compute stage up with what they typed.
+  Every compute line says `verbatim`, which makes principle 1 visible: it's
+  only ever true.
+- The `shard │ compute` line is the SQL boundary from the backends section.
+- Explain is a test surface too:
+  - planner tests can golden-test `Explain` output instead of comparing raw
+    SQL strings;
+  - when the differential harness finds a mismatch, it prints `Explain` for
+    the plan under test next to the reference plan, so the failure shows which
+    rewrite fired.
+- `Explain` keeps working on an Opaque-only plan. A pipeline the compiler
+  understands nothing about shows `Scan → Opaque(every stage)` with a reason
+  on each `Opaque`. That's the most useful output of all, because it lists
+  exactly what to teach the frontends next.
+
 ### awk semantics the lowering must respect
 
+- **Positional fields don't match the shard's `fields` column.** Ingest
+  builds `fields` from the line *after* the envelope is stripped, split by
+  the schema's `FieldSeparator` with Go's `strings.Fields` (all Unicode
+  whitespace). awk in compute splits the whole `raw` line on space, tab and
+  newline. So `list_extract(fields, N)` is not awk's `$N`, not even as a
+  prefilter: for `a\u00a0b x`, `fields[2]` is `b` but awk's `$2` is `x`.
+  Until `Scan` can prove they agree, any `$N` with N>0 makes the stage
+  `Opaque`, in patterns and in `print` projections alike. `cut -f` is the
+  same (cut splits `raw` on tabs). `$0` and meta-variables still lower.
+  Making `$N` lowerable needs:
+  - `Scan` carrying schema facts for every source the query can read
+    (wildcards and multi-file sources span several schemas, and some
+    sources have none),
+  - over the whole time range, since `fields` was split by whatever schema
+    was active at ingest,
+  - a plan-staleness rule so a saved cron plan recompiles after a schema
+    edit,
+  - and ingest splitting the way awk does first, so new rows agree even
+    when there's no envelope and the separator is the default.
 - **String vs number comparison.** `$3 > 10` is numeric only when `$3` looks
   like a number ("strnum"); otherwise it's a string comparison. The current
   `CAST(... AS DOUBLE)` is fine as a **prefilter** only if non-numeric fields
@@ -174,27 +258,75 @@ Passes are rewrites on the IR, each with an explicit precondition:
   (back-references, POSIX classes) → `Opaque`.
 - **Uninitialised variables** in patterns (`x == ""`): they're always true on
   the first record. Only meta-variables and literals lower.
+- **Meta-variables** are strings, and a NULL column is an unset variable,
+  which is `""`. A comparison lowers with `COALESCE(col, '')` exactly when
+  `""` would satisfy it. `TS` doesn't lower (awk sees its text, SQL a
+  TIMESTAMP).
+
+### jq
+
+Decided 2026-10-13. A jq stage that reads rows (the first stage in compute,
+or the first after row stages, see "Row identity") reads each row's
+**payload**: the whole line for a JSON log, the JSON part of a line with
+text around it. Meta-variables are spliced in as `_`-prefixed keys, but
+only when a stage names one, so `keys` and `.` don't show them.
+
+- A program made only of `select(...)`s is a **row filter**: it keeps or
+  drops the row, which stays its raw line. `| .` after the selects prints
+  the payload instead.
+- Everything else prints jq's output, **compact** (one value per line;
+  warp's `JqCompact`). A missing field prints `null`.
+- A stage after one that changed the text reads that text.
+
+Comparisons lower by **jq's total order**, null < false < true < numbers <
+strings < arrays < objects, with a missing field as null. The SQL picks the
+branch by `json_type`: `.n == 500` doesn't match the string `"500"`, and
+`.n < 100` matches a row without `.n`. Only `field op literal` lowers.
+
+### Row identity
+
+Decided 2026-10-13. A stage that passes rows through unchanged keeps the
+row, payload and meta-variables included, so the stage after it still reads
+a row:
+
+- `grep` with only `-i`, `-v`, `-E` and one pattern,
+- an awk that's one pattern with the default print, no `BEGIN`/`END`, no
+  `NR`/`FNR`, no `getline`, and no side effects in the pattern (assignments,
+  `++`, calls other than pure builtins),
+- `sed -n '/re/p'`,
+- a jq select chain,
+- `head`/`tail -n N`.
+
+This holds whether or not the stage pushed down. When such stages land in
+compute ahead of a stage that reads row metadata, they run per row in the
+engine (`QueryPlan.RowStages`: filters through warp on the one row, head and
+tail counted), and the next stage gets the rows whole. Otherwise they stay a
+plain text pipe. The awk meta-variable hook only feeds an awk reading the
+pipeline's stdin.
 
 ## Differential harness
 
-`planner/difftest` (test-only):
+`planner/difftest` (test-only). Built in Phase 1:
 
-- An in-memory DuckDB with the shard `logs` schema (`shard/shard.go`), loaded
-  with generated rows:
-  - mixed structured and plain text
-  - numeric-looking and non-numeric fields
-  - quotes, empty fields, unicode
-  - timestamps spanning midnight
-- Runs a pipeline both ways:
-  - **plan under test**: `Plan()`, then its `ShardSQL` on DuckDB, then a
-    `compute.Engine` job with its `ComputeStages`;
-  - **reference**: `SELECT raw, ts` with only the scan predicates, then a
-    `compute.Engine` job with the original stages.
-- The outputs must match byte for byte (or as multisets where the pipeline
-  has no ordering).
-- The corpus:
+- Two in-memory `shard.DuckDBShard`s, loaded round-robin with 400 generated
+  rows:
+  - JSON lines, text with a JSON tail, kevcons envelopes, l2met, plain text
+  - status as a number, a numeric string, or missing; quotes, unicode,
+    nested objects, arrays, nulls
+  - unique timestamps, some sub-second, spanning midnight
+- Runs a pipeline both ways through the real `compute.Engine`
+  (`ExecuteQuery`, as the coordinator dispatches):
+  - **plan under test**: `Plan()` as compiled;
+  - **reference**: a scan of the source (its head/tail kept), every leading
+    row stage per row, everything else in compute.
+- The outputs must match byte for byte. They're compared as multisets when
+  the plan has no merge key, since rows then arrive in shard order.
+  Identical errors on both sides count as agreement.
+- `TestRowStagesAreRowwise` checks the row-stage classifier: a text filter
+  it accepts keeps, row by row, exactly what it keeps over the stream.
+- The corpus today: every finite pipeline in the planner's tests, plus
+  `extraCorpus`. Still to add:
   - every pipeline in `docs/shell` and `docs/manual`
-  - every planner test's pipeline
   - pipelines exported from the dogfood account's crons and dashboards,
     plus shell history (kept outside git, per the no-account-config rule)
   - a generator that composes stages from the supported constructs
@@ -204,23 +336,38 @@ exercise it.
 
 ## Phases
 
-1. **Contract change + harness** (~2d). Turns the three repro tests green.
-   - Every recognizer returns only a prefilter, and the stage runs verbatim in
-     compute.
-   - Delete `formatAwkAction`/`formatAwkStmt`/`formatAwkExpr`, the jq tail
-     re-render, and `parseComputeString`.
-   - Compute stages are sliced from the original pipeline, with no
-     `formatToolStage` re-quoting.
-   - Multi-rule awk lowers as an OR prefilter.
-   - Programs that use `NR`/`FNR` outside a window → no pushdown.
-   - Harness and corpus in place.
-   - Cost: some stages that were dropped from compute now re-run (a jq
-     `select` that was fully pushed, an awk pattern). That's CPU on compute,
-     not extra rows shipped, since the shard still filters.
+1. **Contract change + harness**. ✅ Landed 2026-10-13.
+   - Each recognizer returns a predicate that's exact (the stage drops) or a
+     prefilter (the stage runs verbatim in compute). An AND keeps the side
+     that lowers as a prefilter; multi-rule awk lowers as an OR prefilter.
+   - Deleted `formatAwkAction`/`formatAwkStmt`/`formatAwkExpr`, the jq tail
+     re-render (`formatJqExpr`, `jqRenderPipe`), `parseComputeString`,
+     `formatToolStage`/`joinArgs`. A compute stage is its own `SimpleCommand`
+     through warp's `bash.Unparse`.
+   - `NR`/`FNR` outside a window, `$N` (N>0), `cut -f` → no pushdown.
+   - jq: payload input, select chain as row filter, compact output,
+     jq-ordered comparisons (see "jq").
+   - Row identity: `QueryPlan.RowStages` and `StagesReadPayload`, also on
+     the live path (`LiveRowStages`) and in `LoweredPlan`;
+     `ExecuteQueryRequest.row_stages`/`stages_read_payload`;
+     `PlannerVersion` 4.
+   - `explain` lists row stages.
+   - Harness in place (see above).
+   - warp: `StreamingOptions{JqCompact}`; the awk per-record hook applies
+     only to an awk reading the interpreter's stdin.
+   - Bugs the harness found and Phase 1 fixed: jq `"500" == 500` and
+     missing-field comparisons; meta-variable keys spliced into the text of
+     every stage, not just jq's; `._ts`/`TS` never set in compute; adjacent
+     awk stages deadlocking on the meta-variable channel.
 2. **IR with `Scan`/`Filter`/`Limit`/`Opaque`** (~4–5d). Move grep, awk, jq
    and sed onto frontends, replace the `tryPushdown` loop and `limitFrozen`
    with passes, and re-express `classifyShardMode` and meta-variable
    projection on nodes.
+   - Schema-aware `$N`: `Scan` carries schema facts, and the awk frontend
+     lowers `$N` only when they prove `fields` matches awk's split.
+     Otherwise the `Opaque` reason names the source and why.
+   - `Explain` renders the IR, with spans, Opaque/prefilter reasons and the
+     pass log (see "Explain"). Phase 1 only added the row-stage list.
    - Exit criteria: no planner code reads a compute string, and the harness
      is green on the full corpus.
 3. **Exact lowering** (~4d). `Project` (`cut`, awk `print $n`, jq `.path`)
@@ -231,14 +378,11 @@ exercise it.
 
 ## Open questions
 
-- **Multiset vs ordered comparison in the harness.** Shard fan-out merges by
-  `ts`, so ties across shards can reorder. The harness probably needs a
-  single-shard mode (exact order) and a multi-shard mode (order only where
-  the pipeline imposes it).
-- **jq exactness.** jq's `select` truthiness (`null`/`false` vs everything
-  else) and number semantics vs DuckDB `json_extract` casts. Phase 1 makes jq
-  prefilter-only, which removes the risk. Phase 3 decides whether exact jq
-  filters are worth proving.
-- **Cost of re-running prefiltered stages.** Probably negligible next to row
-  transfer. Measure on the dogfood account's heaviest crons before and after
-  Phase 1.
+- **Cost of re-running prefiltered stages, and of per-row row stages.**
+  Row stages start an interpreter per row, so `grep -E x | jq ...` over a
+  full scan is slow. Measure on the dogfood account's heaviest crons. If it
+  bites, lower more filters (`grep -E` is RE2-compatible for most patterns)
+  or reuse one interpreter per stage.
+- **warp's jq rejects `.end`** (a keyword, valid as a field in real jq), and
+  its grep has no `-w`. The harness treats both sides failing alike as
+  agreement; both belong in warp.

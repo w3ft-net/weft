@@ -10,7 +10,7 @@ import (
 // TestJob_JqMetaVarOutputRead is the end-to-end regression
 // test for "jq's reserved meta-variables ... resolve to null when read
 // as output" (docs/known-issues.md): runs a real jq stage through
-// warp's bash.RunStreaming (not just mergeMetaVars in isolation) and
+// warp's bash.RunStreaming (not just MergeMetaVars in isolation) and
 // asserts a bare "._host" read resolves to the row's actual instance
 // column instead of null.
 func TestJob_JqMetaVarOutputRead(t *testing.T) {

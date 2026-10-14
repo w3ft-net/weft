@@ -56,13 +56,23 @@ func Explain(pipeline string) string {
 		}
 	}
 
+	if len(plan.RowStages) > 0 {
+		fmt.Fprintf(&b, "\nRow stages (run per row; rows pass through whole):\n")
+		for i, st := range plan.RowStages {
+			fmt.Fprintf(&b, "  %d. %s\n", i+1, st)
+		}
+	}
+
 	// Compute stages.
 	if len(plan.ComputeStages) > 0 {
 		fmt.Fprintf(&b, "\nCompute stages:\n")
 		for i, stage := range plan.ComputeStages {
 			fmt.Fprintf(&b, "  %d. %s\n", i+1, stage)
 		}
-	} else {
+		if plan.StagesReadPayload {
+			fmt.Fprintf(&b, "  (stage 1 reads each row's payload)\n")
+		}
+	} else if len(plan.RowStages) == 0 {
 		fmt.Fprintf(&b, "\nCompute stages: (none — fully pushed down)\n")
 	}
 
@@ -76,7 +86,7 @@ func Explain(pipeline string) string {
 // SELECT on its own line; the closing `) AS t` lands as a separate clause
 // so the nesting is visible.
 func formatSQL(sql string) []string {
-	keywords := []string{" WHERE ", " AND ", " ORDER BY ", " LIMIT ", " OFFSET ", " FROM (", ") AS "}
+	keywords := []string{" WHERE ", " AND ", " ORDER BY ", " LIMIT ", " OFFSET ", " FROM (", ") AS t"}
 	result := sql
 	for _, kw := range keywords {
 		result = strings.ReplaceAll(result, kw, "\n"+strings.TrimLeft(kw, " "))

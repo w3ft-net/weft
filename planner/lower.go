@@ -22,7 +22,10 @@ import (
 // (namespace, service, kind) columns are carried split.
 // v3: the row-level-security predicate is `customer_id = CAST(? AS BIGINT)`
 // and LoweredPlan carries customer_id (was the customer name).
-const PlannerVersion = 3
+// v4: compute stages are the user's stages verbatim (no synthesized awk/jq
+// remainders); awk $N and cut -f no longer push down; a jq stage reads
+// the payload; row stages run per row (RowStages).
+const PlannerVersion = 4
 
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to
@@ -56,28 +59,30 @@ type LoweredPlan struct {
 	// to pick up extended retention immediately. The fire path
 	// could instead invalidate on tier change via subscription
 	// hooks, but that's wider scope than this commit.
-	Tier            string        `json:"tier"`
-	ShardSQL        string        `json:"shard_sql"`
-	DirectShardSQL  string        `json:"direct_shard_sql"`
-	ArgSources      []ArgSource   `json:"args,omitempty"`
-	ComputeStages   []string      `json:"compute_stages,omitempty"`
-	LiveStages      []string      `json:"live_stages,omitempty"`
-	MergeKey        string        `json:"merge_key,omitempty"`
-	Limit           int           `json:"limit,omitempty"`
-	ShardLimit      int           `json:"shard_limit,omitempty"`
-	TailMode        bool          `json:"tail_mode,omitempty"`
-	Follow          bool          `json:"follow,omitempty"`
-	FollowPatterns  []GrepPattern `json:"follow_patterns,omitempty"`
-	SourceCmd       string        `json:"source_cmd,omitempty"`
-	SourceNamespace string        `json:"source_namespace,omitempty"`
-	SourceService   string        `json:"source_service,omitempty"`
-	SourceKind      string        `json:"source_kind,omitempty"`
-	AlertArgs       []string      `json:"alert_args,omitempty"`
-	RedirectTarget  string        `json:"redirect_target,omitempty"`
-	RedirectAppend  bool          `json:"redirect_append,omitempty"`
-	BinDeps         []BinDep      `json:"bin_deps,omitempty"`
-	CompiledAt      time.Time     `json:"compiled_at"`
-	PlannerVersion  int           `json:"planner_version"`
+	Tier              string        `json:"tier"`
+	ShardSQL          string        `json:"shard_sql"`
+	DirectShardSQL    string        `json:"direct_shard_sql"`
+	ArgSources        []ArgSource   `json:"args,omitempty"`
+	ComputeStages     []string      `json:"compute_stages,omitempty"`
+	RowStages         []string      `json:"row_stages,omitempty"`
+	StagesReadPayload bool          `json:"stages_read_payload,omitempty"`
+	LiveStages        []string      `json:"live_stages,omitempty"`
+	MergeKey          string        `json:"merge_key,omitempty"`
+	Limit             int           `json:"limit,omitempty"`
+	ShardLimit        int           `json:"shard_limit,omitempty"`
+	TailMode          bool          `json:"tail_mode,omitempty"`
+	Follow            bool          `json:"follow,omitempty"`
+	FollowPatterns    []GrepPattern `json:"follow_patterns,omitempty"`
+	SourceCmd         string        `json:"source_cmd,omitempty"`
+	SourceNamespace   string        `json:"source_namespace,omitempty"`
+	SourceService     string        `json:"source_service,omitempty"`
+	SourceKind        string        `json:"source_kind,omitempty"`
+	AlertArgs         []string      `json:"alert_args,omitempty"`
+	RedirectTarget    string        `json:"redirect_target,omitempty"`
+	RedirectAppend    bool          `json:"redirect_append,omitempty"`
+	BinDeps           []BinDep      `json:"bin_deps,omitempty"`
+	CompiledAt        time.Time     `json:"compiled_at"`
+	PlannerVersion    int           `json:"planner_version"`
 }
 
 // BinDep is one /bin/ script the lowered pipeline inlines. Hash is
@@ -161,29 +166,31 @@ func Lower(pipeline string, customerID int64, tier string, resolveBin BinResolve
 	}
 
 	return &LoweredPlan{
-		CustomerID:      customerID,
-		Tier:            tier,
-		ShardSQL:        plan.ShardSQL,
-		DirectShardSQL:  plan.DirectShardSQL,
-		ArgSources:      plan.ArgSources,
-		ComputeStages:   plan.ComputeStages,
-		LiveStages:      plan.LiveStages,
-		MergeKey:        plan.ShardOrderBy,
-		Limit:           plan.Limit,
-		ShardLimit:      plan.ShardLimit,
-		TailMode:        plan.TailMode,
-		Follow:          plan.Follow,
-		FollowPatterns:  plan.FollowPatterns,
-		SourceCmd:       plan.SourceCmd,
-		SourceNamespace: plan.SourceNamespace,
-		SourceService:   plan.SourceService,
-		SourceKind:      plan.SourceKind,
-		AlertArgs:       plan.AlertArgs,
-		RedirectTarget:  plan.RedirectTarget,
-		RedirectAppend:  plan.RedirectAppend,
-		BinDeps:         deps,
-		CompiledAt:      time.Now().UTC(),
-		PlannerVersion:  PlannerVersion,
+		CustomerID:        customerID,
+		Tier:              tier,
+		ShardSQL:          plan.ShardSQL,
+		DirectShardSQL:    plan.DirectShardSQL,
+		ArgSources:        plan.ArgSources,
+		ComputeStages:     plan.ComputeStages,
+		RowStages:         plan.RowStages,
+		StagesReadPayload: plan.StagesReadPayload,
+		LiveStages:        plan.LiveStages,
+		MergeKey:          plan.ShardOrderBy,
+		Limit:             plan.Limit,
+		ShardLimit:        plan.ShardLimit,
+		TailMode:          plan.TailMode,
+		Follow:            plan.Follow,
+		FollowPatterns:    plan.FollowPatterns,
+		SourceCmd:         plan.SourceCmd,
+		SourceNamespace:   plan.SourceNamespace,
+		SourceService:     plan.SourceService,
+		SourceKind:        plan.SourceKind,
+		AlertArgs:         plan.AlertArgs,
+		RedirectTarget:    plan.RedirectTarget,
+		RedirectAppend:    plan.RedirectAppend,
+		BinDeps:           deps,
+		CompiledAt:        time.Now().UTC(),
+		PlannerVersion:    PlannerVersion,
 	}, nil
 }
 

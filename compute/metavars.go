@@ -3,11 +3,13 @@ package compute
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/graybeardcorp/weft/planner"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-// mergeMetaVars splices a row's projected meta-var columns (see
+// MergeMetaVars splices a row's projected meta-var columns (see
 // planner.MetaVarColumns/JQMetaVars) into its raw JSON body as
 // "_"-prefixed keys — every alias name that maps to a given column
 // gets the same value (e.g. both "_host" and "_instance" for the
@@ -28,7 +30,7 @@ import (
 // A real payload key is never overwritten: the underscore-prefix
 // convention (docs/manual/metavars.md) exists specifically so these
 // reserved keys don't collide with real producer data.
-func mergeMetaVars(raw string, meta map[string]string) string {
+func MergeMetaVars(raw string, meta map[string]string) string {
 	if len(meta) == 0 {
 		return raw
 	}
@@ -57,24 +59,39 @@ func mergeMetaVars(raw string, meta map[string]string) string {
 	return string(merged)
 }
 
-// stagesHaveAwk reports whether any compute stage is an awk
-// invocation — used to decide whether a job needs the per-record
-// meta-var channel/hook at all. The overwhelming common case (no awk
-// stage) skips that machinery entirely.
-func stagesHaveAwk(stages []string) bool {
-	for _, s := range stages {
-		if s == "awk" || strings.HasPrefix(s, "awk ") {
-			return true
-		}
+// rowMetaVars is a row's meta-variable columns plus ts, which every
+// query selects as its own column rather than projecting it as a
+// meta-variable. Its text is DuckDB's CAST(ts AS VARCHAR), the form a
+// SQL projection of ._ts or a TS comparison sees.
+func rowMetaVars(row *pb.ResultRow) map[string]string {
+	meta := make(map[string]string, len(row.MetaVars)+1)
+	for k, v := range row.MetaVars {
+		meta[k] = v
 	}
-	return false
+	meta["ts"] = FormatTS(row.TsUnixNs)
+	return meta
+}
+
+// FormatTS renders a unix-nanosecond timestamp as DuckDB casts a
+// TIMESTAMP to VARCHAR.
+func FormatTS(unixNs int64) string {
+	return time.Unix(0, unixNs).UTC().Format("2006-01-02 15:04:05.999999")
+}
+
+// firstStageIsAwk reports whether the job's first stage is awk, the one
+// stage that reads shard rows and so the only one the per-record
+// meta-var hook feeds (warp applies it only to an awk reading the
+// pipeline's stdin). Any other shape skips the channel: nothing would
+// drain it.
+func firstStageIsAwk(stages []string) bool {
+	return len(stages) > 0 && (stages[0] == "awk" || strings.HasPrefix(stages[0], "awk "))
 }
 
 // awkVarsFromMeta expands a row's projected meta-var columns (see
 // planner.MetaVarColumns/AwkMetaVars) into every alias name that maps
 // to a given column (e.g. both "HOST" and "INSTANCE" for the
 // "instance" column) — the shape awk.Interpreter.PerRecordVars (via
-// bash.RunStreamingWithAwkHook) expects. Unlike jq's mergeMetaVars,
+// bash.RunStreamingWithAwkHook) expects. Unlike jq's MergeMetaVars,
 // this doesn't touch the record's own text: a bare reserved name is
 // just an ordinary awk global once bound, no splicing into $0 needed
 // or possible. See docs/known-issues.md's (fixed) awk meta-variable

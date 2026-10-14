@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/graybeardcorp/warp/pkg/bash"
 
+	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/theme"
@@ -121,6 +122,14 @@ func (p *Engine) resolveShard(d *pb.ShardDescriptor) (shard.Shard, error) {
 
 func (p *Engine) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (LineStream, error) {
 	job := p.NewJob(req.Stages, len(req.Shards), req.MergeKey, int(req.Limit), req.KeepLast, req.TraceTag)
+	if len(req.RowStages) > 0 {
+		rs, err := NewRowStages(req.RowStages)
+		if err != nil {
+			return nil, err
+		}
+		job.rowStages = rs
+	}
+	job.stagesReadPayload = req.StagesReadPayload
 	go FanOutToShards(ctx, req, job, p.resolveShard)
 	return job.Stream(), nil
 }
@@ -166,6 +175,12 @@ type Job struct {
 	limit      int    // see Engine.NewJob; 0 = no cap
 	keepLast   bool   // tail-mode: retain last N from the merged stream and emit at EOF
 	traceTag   bool   // bare interactive `trace <id>`: buffer, summarize, badge each row — see Engine.NewJob
+	// rowStages, when set, run on each merged row after the limit and
+	// before the stages; see RowStages.
+	rowStages *RowStages
+	// stagesReadPayload feeds the first stage each row's payload instead
+	// of its raw line (planner.QueryPlan.StagesReadPayload).
+	stagesReadPayload bool
 
 	ch        chan ComputeMessage // shards push rows + sentinels here
 	streamCh  chan Line           // consume() pushes output here
@@ -363,6 +378,46 @@ func (j *Job) emitTraceTagged() {
 	}
 }
 
+// stageInput is the text a row feeds the first stage. A jq first stage
+// reads meta-variables as "_"-prefixed keys spliced into the JSON;
+// every other stage sees the row as it is.
+func (j *Job) stageInput(row *pb.ResultRow) string {
+	switch {
+	case j.stagesReadPayload:
+		return MergeMetaVars(row.MetaVars[planner.PayloadColumn], rowMetaVars(row))
+	case strings.HasPrefix(j.stages[0], "jq "):
+		return MergeMetaVars(row.Raw, rowMetaVars(row))
+	}
+	return row.Raw
+}
+
+// feed drives the merged rows, cut to the limit, through the row stages
+// into sink, which returns false to stop. The limit counts rows before
+// the row stages, as the head/tail it came from ran first.
+func (j *Job) feed(sink func(*pb.ResultRow) bool) {
+	if j.rowStages != nil {
+		r := j.rowStages.runner(sink)
+		defer r.flush()
+		sink = func(row *pb.ResultRow) bool { return r.push(0, row) }
+	}
+	if j.keepLast && j.limit > 0 {
+		for _, r := range j.retainLast() {
+			if !sink(r) {
+				return
+			}
+		}
+		return
+	}
+	seen := 0
+	onlineMerge(j.ch, j.shardCount, j.mergeKey, func(row *pb.ResultRow) bool {
+		if j.limit > 0 && seen >= j.limit {
+			return false
+		}
+		seen++
+		return sink(row)
+	})
+}
+
 // streamErr is set BEFORE the channel is closed so consumers see the
 // error after the channel signals exhaustion.
 func (j *Job) consume() {
@@ -373,18 +428,8 @@ func (j *Job) consume() {
 			j.emitTraceTagged()
 			return
 		}
-		if j.keepLast && j.limit > 0 {
-			buf := j.retainLast()
-			for i, r := range buf {
-				j.streamCh <- Line{Raw: r.Raw, LineNum: int64(i + 1)}
-			}
-			return
-		}
 		emitted := 0
-		onlineMerge(j.ch, j.shardCount, j.mergeKey, func(row *pb.ResultRow) bool {
-			if j.limit > 0 && emitted >= j.limit {
-				return false
-			}
+		j.feed(func(row *pb.ResultRow) bool {
 			emitted++
 			j.streamCh <- Line{Raw: row.Raw, LineNum: int64(emitted)}
 			return true
@@ -412,7 +457,7 @@ func (j *Job) consume() {
 	// awk stage) skips it entirely, since nothing would ever drain it
 	// (a full buffer would then wedge the writer goroutine).
 	var awkVarsCh chan map[string]string
-	if stagesHaveAwk(j.stages) {
+	if firstStageIsAwk(j.stages) {
 		awkVarsCh = make(chan map[string]string, 1024)
 	}
 
@@ -431,35 +476,16 @@ func (j *Job) consume() {
 		if awkVarsCh != nil {
 			defer close(awkVarsCh)
 		}
-		if j.keepLast && j.limit > 0 {
-			for _, r := range j.retainLast() {
-				if _, err := io.WriteString(stdinW, mergeMetaVars(r.Raw, r.MetaVars)); err != nil {
-					return
-				}
-				if _, err := stdinW.Write([]byte{'\n'}); err != nil {
-					return
-				}
-				if awkVarsCh != nil {
-					awkVarsCh <- awkVarsFromMeta(r.MetaVars)
-				}
-			}
-			return
-		}
-		emitted := 0
-		onlineMerge(j.ch, j.shardCount, j.mergeKey, func(row *pb.ResultRow) bool {
-			if j.limit > 0 && emitted >= j.limit {
-				return false
-			}
-			if _, err := io.WriteString(stdinW, mergeMetaVars(row.Raw, row.MetaVars)); err != nil {
+		j.feed(func(row *pb.ResultRow) bool {
+			if _, err := io.WriteString(stdinW, j.stageInput(row)); err != nil {
 				return false
 			}
 			if _, err := stdinW.Write([]byte{'\n'}); err != nil {
 				return false
 			}
 			if awkVarsCh != nil {
-				awkVarsCh <- awkVarsFromMeta(row.MetaVars)
+				awkVarsCh <- awkVarsFromMeta(rowMetaVars(row))
 			}
-			emitted++
 			return true
 		})
 	}()
@@ -473,13 +499,16 @@ func (j *Job) consume() {
 		defer stdoutW.Close()
 		var exitCode int
 		var err error
+		// jq prints compact (one value per line) by default in weft:
+		// its output feeds line-oriented stages, and it matches what a
+		// projection SQL computes. See docs/plans/planner-ir.md, "jq".
+		opts := bash.StreamingOptions{JqCompact: true}
 		if awkVarsCh != nil {
-			exitCode, err = bash.RunStreamingWithAwkHook(pipeline, stdinR, stdoutW, &stderrBuf, func(string) map[string]string {
+			opts.AwkPerRecordVars = func(string) map[string]string {
 				return <-awkVarsCh
-			})
-		} else {
-			exitCode, err = bash.RunStreaming(pipeline, stdinR, stdoutW, &stderrBuf)
+			}
 		}
+		exitCode, err = bash.RunStreamingWithOptions(pipeline, stdinR, stdoutW, &stderrBuf, opts)
 		if err != nil {
 			runErrCh <- fmt.Errorf("compute: %w", err)
 			return

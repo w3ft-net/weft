@@ -949,7 +949,7 @@ type ExecuteQueryRequest struct {
 	// seen across the merged stream and emits at EOF (tail). Set by the
 	// coordinator when planner.QueryPlan.TailMode is true — tail's
 	// subquery flip lands rows in ts ASC, so the global last N can't be
-	// resolved by stopping early. See compute/local.go::consume.
+	// resolved by stopping early. See compute/engine.go::consume.
 	KeepLast bool `protobuf:"varint,7,opt,name=keep_last,json=keepLast,proto3" json:"keep_last,omitempty"`
 	// Positional placeholder values for `?` markers in sql, in render
 	// order. Today the planner ships values as strings (customer id,
@@ -962,12 +962,22 @@ type ExecuteQueryRequest struct {
 	// trace_tag is set by the coordinator when planner.QueryPlan.SourceCmd ==
 	// "trace", there are no downstream compute stages, and the dispatch is
 	// interactive (not a cron/watch/dashboard fire — see AlertContext gating
-	// in coordinator.go). Tells compute/local.go::consume to buffer the
+	// in coordinator.go). Tells compute/engine.go::consume to buffer the
 	// merged stream, emit a synthetic summary line, and prefix each row with
 	// a colored [namespace/service] badge. See docs/plans/request-tracing.md.
-	TraceTag      bool `protobuf:"varint,9,opt,name=trace_tag,json=traceTag,proto3" json:"trace_tag,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	TraceTag bool `protobuf:"varint,9,opt,name=trace_tag,json=traceTag,proto3" json:"trace_tag,omitempty"`
+	// row_stages run on each merged row after the limit and before
+	// stages: stages that pass rows through unchanged (filters,
+	// head/tail -n N), run per row so the rows reach the next stage whole,
+	// payload and meta-variables included. See
+	// planner.QueryPlan.RowStages and docs/plans/planner-ir.md, "Row
+	// identity".
+	RowStages []string `protobuf:"bytes,10,rep,name=row_stages,json=rowStages,proto3" json:"row_stages,omitempty"`
+	// stages_read_payload feeds the first stage, a jq, each row's payload
+	// (the `payload` column) instead of its raw line.
+	StagesReadPayload bool `protobuf:"varint,11,opt,name=stages_read_payload,json=stagesReadPayload,proto3" json:"stages_read_payload,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ExecuteQueryRequest) Reset() {
@@ -1052,6 +1062,20 @@ func (x *ExecuteQueryRequest) GetArgs() []string {
 func (x *ExecuteQueryRequest) GetTraceTag() bool {
 	if x != nil {
 		return x.TraceTag
+	}
+	return false
+}
+
+func (x *ExecuteQueryRequest) GetRowStages() []string {
+	if x != nil {
+		return x.RowStages
+	}
+	return nil
+}
+
+func (x *ExecuteQueryRequest) GetStagesReadPayload() bool {
+	if x != nil {
+		return x.StagesReadPayload
 	}
 	return false
 }
@@ -4714,7 +4738,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"lambda_url\x18\x03 \x01(\tR\tlambdaUrl\x12!\n" +
 	"\fparquet_path\x18\x04 \x01(\tR\vparquetPath\x12\x1a\n" +
-	"\bservices\x18\x05 \x03(\tR\bservices\"\x83\x02\n" +
+	"\bservices\x18\x05 \x03(\tR\bservices\"\xd2\x02\n" +
 	"\x13ExecuteQueryRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12-\n" +
 	"\x06shards\x18\x02 \x03(\v2\x15.weft.ShardDescriptorR\x06shards\x12\x16\n" +
@@ -4723,7 +4747,11 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x05limit\x18\x05 \x01(\x05R\x05limit\x12\x1b\n" +
 	"\tkeep_last\x18\a \x01(\bR\bkeepLast\x12\x12\n" +
 	"\x04args\x18\b \x03(\tR\x04args\x12\x1b\n" +
-	"\ttrace_tag\x18\t \x01(\bR\btraceTagJ\x04\b\x06\x10\aR\fshard_secret\"H\n" +
+	"\ttrace_tag\x18\t \x01(\bR\btraceTag\x12\x1d\n" +
+	"\n" +
+	"row_stages\x18\n" +
+	" \x03(\tR\trowStages\x12.\n" +
+	"\x13stages_read_payload\x18\v \x01(\bR\x11stagesReadPayloadJ\x04\b\x06\x10\aR\fshard_secret\"H\n" +
 	"\x1aExecuteQueryStreamResponse\x12\x14\n" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\xd8\x01\n" +

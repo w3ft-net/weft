@@ -6,50 +6,6 @@ import (
 	"time"
 )
 
-// TestRawExpr_Cut verifies that cut projections produce the correct SQL raw expression.
-func TestRawExpr_Cut(t *testing.T) {
-	tests := []struct {
-		name      string
-		pipeline  string
-		wantInSQL string
-		noCompute bool
-	}{
-		{
-			name:      "single field",
-			pipeline:  `cat vimgym.log | cut -f3`,
-			wantInSQL: "list_extract(fields, 3) as raw",
-			noCompute: true,
-		},
-		{
-			name:      "multiple fields",
-			pipeline:  `cat vimgym.log | cut -f1,3`,
-			wantInSQL: "concat_ws(' ', list_extract(fields, 1), list_extract(fields, 3)) as raw",
-			noCompute: true,
-		},
-		{
-			name:      "open-ended range",
-			pipeline:  `cat vimgym.log | cut -f5-`,
-			wantInSQL: "array_to_string(fields[5:], ' ') as raw",
-			noCompute: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
-			if err != nil {
-				t.Fatalf("Plan: %v", err)
-			}
-			if !strings.Contains(plan.ShardSQL, tt.wantInSQL) {
-				t.Errorf("ShardSQL missing %q\n got: %s", tt.wantInSQL, plan.ShardSQL)
-			}
-			if tt.noCompute && len(plan.ComputeStages) != 0 {
-				t.Errorf("expected no compute stages, got %v", plan.ComputeStages)
-			}
-		})
-	}
-}
-
 // TestRawExpr_AwkPrint verifies awk print projections.
 func TestRawExpr_AwkPrint(t *testing.T) {
 	tests := []struct {
@@ -59,9 +15,9 @@ func TestRawExpr_AwkPrint(t *testing.T) {
 		noCompute bool
 	}{
 		{
-			name:      "print two fields",
-			pipeline:  `cat vimgym.log | awk '{ print $2, $3 }'`,
-			wantInSQL: "concat_ws(' ', list_extract(fields, 2), list_extract(fields, 3)) as raw",
+			name:      "print two meta-vars",
+			pipeline:  `cat vimgym.log | awk '{ print LEVEL, HOST }'`,
+			wantInSQL: "concat_ws(' ', COALESCE(CAST(level AS VARCHAR), ''), COALESCE(CAST(instance AS VARCHAR), '')) as raw",
 			noCompute: true,
 		},
 		{
@@ -100,13 +56,7 @@ func TestRawExpr_Jq(t *testing.T) {
 		{
 			name:      "jq field access",
 			pipeline:  `cat vimgym.log | jq '.status'`,
-			wantInSQL: "CAST(json_extract(payload, '$.status') AS VARCHAR) as raw",
-			wantComp:  nil,
-		},
-		{
-			name:      "jq select then field",
-			pipeline:  `cat vimgym.log | jq 'select(.status == 500) | .message'`,
-			wantInSQL: "CAST(json_extract(payload, '$.message') AS VARCHAR) as raw",
+			wantInSQL: "COALESCE(CAST(json_extract(payload, '$.status') AS VARCHAR), 'null') as raw",
 			wantComp:  nil,
 		},
 	}

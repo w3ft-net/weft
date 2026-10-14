@@ -107,7 +107,8 @@ Filtering on a reserved meta-variable is the fast path, in awk
 (`awk 'ENV == "prod"'`, `awk 'POD ~ "api-7f9b"'`) and in jq
 (`jq 'select(._level == "ERROR")'`). A filter on any other field, such
 as `jq 'select(.feature_flag == "abc")'`, reads and parses every row in
-the time range. One pipeline can mix both: the meta-variable filters
+the time range. awk's numbered fields (`awk '$3 == "POST"'`) also run
+against every row. One pipeline can mix both: the meta-variable filters
 narrow the data first and the rest runs on what remains.
 
 A hard line count (`head -n N` or `tail -n N`) stops later filters from

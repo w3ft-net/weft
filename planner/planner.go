@@ -26,7 +26,18 @@ type QueryPlan struct {
 	// runtime kinds from fresh context. 1:1 with Args.
 	ArgSources    []ArgSource
 	ComputeStages []string
-	Limit         int // post-merge limit (from head/tail), 0 = unlimited
+	// RowStages are stages that pass rows through unchanged (filters,
+	// head/tail -n N), which the compute engine runs per merged row,
+	// after Limit and before ComputeStages, because a later stage reads
+	// row metadata. A jq select chain reads the payload; grep, sed and
+	// awk read the raw line (awk with its meta-variables). See
+	// docs/plans/planner-ir.md, "Row identity".
+	RowStages []string
+	// StagesReadPayload makes the first ComputeStage, a jq, read each
+	// row's payload instead of its raw line. Only set with RowStages;
+	// without them SQL selects the payload as raw instead.
+	StagesReadPayload bool
+	Limit             int // post-merge limit (from head/tail), 0 = unlimited
 	// TailMode is true when the source command is `tail` (or an inline
 	// `tail` stage). Coordinator forwards it to compute as KeepLast,
 	// which switches the merged-stream trim from "stop after N emitted"
@@ -42,7 +53,13 @@ type QueryPlan struct {
 	// the user's pipeline minus the source. Consumed by
 	// coordinator.BuildLiveFilter so the live broker rows go through
 	// the same transformations as the historical batch.
-	LiveStages       []string
+	LiveStages []string
+	// LiveRowStages and LiveReadsPayload are RowStages and the
+	// payload rule for the live path: leading row stages (removed from
+	// LiveStages) keep or drop each live row, and a jq first LiveStage
+	// reads the row's payload instead of its raw line.
+	LiveRowStages    []string
+	LiveReadsPayload bool
 	SourceCmd        string   // source command: "cat", "head", "tail", or "trace"
 	SourceCustomerID int64    // the customer_id the query is scoped to (0 only in tests)
 	SourceNamespace  string   // namespace column value — routing + allowlist ("" = all namespaces)
@@ -94,7 +111,10 @@ type GrepPattern struct {
 type pushdownResult struct {
 	pushed    bool   // true if at least a predicate was extracted
 	predicate string // SQL WHERE fragment (may be "" even if pushed, e.g. head/tail)
-	compute   string // non-empty if the stage was partially pushed, leaving a compute remainder
+	// keep marks predicate as a prefilter: the stage still runs,
+	// verbatim, in compute. Without it the predicate is exact and the
+	// stage is dropped.
+	keep bool
 }
 
 // ErrNotPlannable is the typed sentinel Plan returns when a pipeline
@@ -153,6 +173,15 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 	// per row on the live-tail broker stream so the transformations
 	// stay consistent with the historical batch.
 	liveStages := formatComputeStages(info.stages)
+	// Live rows follow the same rule, one row at a time: leading row
+	// stages keep or drop the row, and a jq after them reads its
+	// payload. There's no SQL projection to fold into on the live path.
+	liveRows, liveRest := splitRowStages(info.stages)
+	liveRowStages := formatComputeStages(liveRows)
+	liveReadsPayload := len(liveRest) > 0 && liveRest[0].cmd == "jq"
+	if len(liveRows) > 0 {
+		liveStages = formatComputeStages(liveRest)
+	}
 
 	// Apply source filters from the pseudofile path. Each path segment
 	// maps to a column: namespace, env, service, kind. These are
@@ -235,7 +264,6 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 	// Walk stages left-to-right, pushing down as many as possible.
 	// Keep raw stageInfo for compute stages so we can extract projections.
 	var computeStages []stageInfo
-	var computeStrings []string    // formatted strings from partial pushdown
 	var grepPatterns []GrepPattern // collected for follow mode
 	pushing := true
 
@@ -278,9 +306,10 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 					})
 				}
 			}
-			if r.compute != "" {
+			if r.keep {
 				pushing = false
-				computeStrings = append(computeStrings, r.compute)
+				stage.prefiltered = true
+				computeStages = append(computeStages, stage)
 			}
 		} else {
 			pushing = false
@@ -288,52 +317,38 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 		}
 	}
 
-	// Build compute stage strings.
-	var compute []string
-	compute = append(compute, computeStrings...)
-	for _, s := range computeStages {
-		compute = append(compute, formatStage(s))
-	}
-
-	// Determine the raw expression for the SELECT clause. The projection
-	// examines the first compute stage to see what columns/keys the pipeline
-	// needs. extractRawExpr returns either:
-	//   - residual=nil: the stage is fully covered, drop it
-	//   - residual!=nil: a path prefix folded in; replace the stage with the
-	//     residual and let it run in compute
+	// Compute's first stage reads shard rows rather than text, and so
+	// does every stage after row stages that pass rows through. When
+	// row stages are followed by a stage that reads row metadata, they
+	// run per row in the engine (RowStages) and the rows reach the next
+	// stage whole; a jq there reads the payload (StagesReadPayload).
+	// Otherwise the first stage may be exactly a projection SQL computes
+	// (awk '{ print LEVEL }', jq '.a'), which becomes the SELECT, or a
+	// jq reading the payload, which SQL selects in raw's place.
+	rowStages, computeStages := splitRowStages(computeStages)
 	rawExpr := "raw"
-	if len(computeStages) > 0 && len(computeStrings) == 0 {
-		expr, residual, ok := extractRawExpr(computeStages[0])
-		if ok {
-			rawExpr = expr
-			if residual == nil {
-				compute = compute[:len(computeStrings)]
-				compute = append(compute, formatComputeStages(computeStages[1:])...)
-			} else {
-				compute = compute[:len(computeStrings)]
-				compute = append(compute, formatStage(*residual))
-				compute = append(compute, formatComputeStages(computeStages[1:])...)
-			}
+	var stagesReadPayload bool
+	if len(rowStages) > 0 {
+		stagesReadPayload = len(computeStages) > 0 && computeStages[0].cmd == "jq"
+		sql.includePayload = stagesReadPayload
+		for _, rs := range rowStages {
+			sql.includePayload = sql.includePayload || rs.cmd == "jq"
 		}
-	}
-	// Same treatment for the residual of a partial-pushdown stage (e.g. the
-	// jq remainder after pushing select(...) — we may still be able to fold
-	// a `.foo` projection out of it).
-	if rawExpr == "raw" && len(computeStrings) > 0 {
-		partial := parseComputeString(computeStrings[0])
-		if partial != nil {
-			expr, residual, ok := extractRawExpr(*partial)
-			if ok {
+	} else if len(computeStages) > 0 {
+		first := computeStages[0]
+		if first.cmd == "jq" {
+			if expr := lowerFirstJqStage(first, first.prefiltered); expr != "" {
 				rawExpr = expr
-				if residual == nil {
-					compute = append(computeStrings[1:], formatComputeStages(computeStages)...)
-				} else {
-					compute = append([]string{formatStage(*residual)}, computeStrings[1:]...)
-					compute = append(compute, formatComputeStages(computeStages)...)
-				}
+				computeStages = computeStages[1:]
+			} else {
+				rawExpr = "CAST(payload AS VARCHAR)"
 			}
+		} else if expr, ok := extractRawExpr(first); ok {
+			rawExpr = expr
+			computeStages = computeStages[1:]
 		}
 	}
+	compute := formatComputeStages(computeStages)
 
 	// A remaining jq stage might read a bare "._"-prefixed meta-variable
 	// for output (e.g. `jq -r '._host'`) rather than only inside a
@@ -359,7 +374,8 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 	// identifier (e.g. "MYHOST"). Same bounded-feature tradeoff as the
 	// jq check: a false positive (the reserved name happening to be the
 	// user's own unrelated awk variable) only costs a few extra columns.
-	for _, s := range compute {
+	metaReaders := append(formatComputeStages(rowStages), compute...)
+	for _, s := range metaReaders {
 		if strings.HasPrefix(s, "jq") {
 			for metaVar := range JQMetaVars {
 				if strings.Contains(s, "."+metaVar) {
@@ -415,26 +431,30 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 	}
 
 	return &QueryPlan{
-		ShardSQL:         shardSQL,
-		Args:             shardArgs,
-		ArgSources:       shardArgSources,
-		DirectShardSQL:   directShardSQL,
-		ComputeStages:    compute,
-		Limit:            sql.limit,
-		TailMode:         orderDesc,
-		Follow:           info.source.follow,
-		FollowPatterns:   grepPatterns,
-		LiveStages:       liveStages,
-		SourceCmd:        info.source.cmd,
-		SourceCustomerID: customerID,
-		SourceNamespace:  firstOrEmpty(info.source.namespaces),
-		SourceService:    firstOrEmpty(info.source.services),
-		SourceKind:       firstOrEmpty(info.source.kinds),
-		AlertArgs:        alertArgs,
-		ShardOrderBy:     mergeOrderBy,
-		ShardLimit:       shardLimit,
-		RedirectTarget:   redirTarget,
-		RedirectAppend:   redirAppend,
+		ShardSQL:          shardSQL,
+		Args:              shardArgs,
+		ArgSources:        shardArgSources,
+		DirectShardSQL:    directShardSQL,
+		ComputeStages:     compute,
+		RowStages:         formatComputeStages(rowStages),
+		StagesReadPayload: stagesReadPayload,
+		Limit:             sql.limit,
+		TailMode:          orderDesc,
+		Follow:            info.source.follow,
+		FollowPatterns:    grepPatterns,
+		LiveStages:        liveStages,
+		LiveRowStages:     liveRowStages,
+		LiveReadsPayload:  liveReadsPayload,
+		SourceCmd:         info.source.cmd,
+		SourceCustomerID:  customerID,
+		SourceNamespace:   firstOrEmpty(info.source.namespaces),
+		SourceService:     firstOrEmpty(info.source.services),
+		SourceKind:        firstOrEmpty(info.source.kinds),
+		AlertArgs:         alertArgs,
+		ShardOrderBy:      mergeOrderBy,
+		ShardLimit:        shardLimit,
+		RedirectTarget:    redirTarget,
+		RedirectAppend:    redirAppend,
 	}, nil
 }
 
@@ -511,7 +531,9 @@ func extractTrailingFSRedirect(pipeline string) (string, string, bool, error) {
 func tryPushdown(stage stageInfo, sql *Query) pushdownResult {
 	switch stage.cmd {
 	case "awk":
-		if len(stage.args) == 0 {
+		// Flags (-F, -v) change how awk splits and what its variables
+		// hold, so only a bare program is analyzed.
+		if len(stage.args) != 1 || strings.HasPrefix(stage.args[0], "-") {
 			return pushdownResult{}
 		}
 		pd := tryAwkPushdown(stage.args[0])
@@ -525,18 +547,14 @@ func tryPushdown(stage stageInfo, sql *Query) pushdownResult {
 		return pushdownResult{
 			pushed:    true,
 			predicate: pd.predicate,
-			compute:   pd.compute,
+			keep:      !pd.exact,
 		}
 
 	case "jq":
 		if len(stage.args) == 0 {
 			return pushdownResult{}
 		}
-		flags, expr := splitJqArgs(stage.args)
-		if expr == "" {
-			return pushdownResult{}
-		}
-		return tryJqStagePushdown(expr, flags)
+		return tryJqStagePushdown(stage.args)
 
 	case "grep":
 		pred := tryGrepPushdown(stage.args)
@@ -572,122 +590,11 @@ func tryPushdown(stage stageInfo, sql *Query) pushdownResult {
 	return pushdownResult{}
 }
 
-// formatStage converts a stageInfo back to a string representation for compute.
-func formatStage(s stageInfo) string {
-	if len(s.args) == 0 {
-		return s.cmd
-	}
-	// Commands whose first non-flag argument is a program need quoting.
-	switch s.cmd {
-	case "awk", "jq", "sed":
-		return formatToolStage(s.cmd, s.args)
-	}
-	return s.cmd + " " + joinArgs(s.args)
-}
-
-// formatToolStage quotes the program argument for awk/jq/sed.
-func formatToolStage(cmd string, args []string) string {
-	var parts []string
-	quoted := false
-	for _, a := range args {
-		if !quoted && !strings.HasPrefix(a, "-") {
-			parts = append(parts, "'"+a+"'")
-			quoted = true
-		} else {
-			parts = append(parts, a)
-		}
-	}
-	return cmd + " " + strings.Join(parts, " ")
-}
-
+// formatComputeStages returns each stage's own source text.
 func formatComputeStages(stages []stageInfo) []string {
 	var out []string
 	for _, s := range stages {
-		out = append(out, formatStage(s))
+		out = append(out, s.src)
 	}
 	return out
-}
-
-// parseComputeString tries to parse a formatted compute string like "awk '{ print $3 }'"
-// or "jq -r 'select(.x==1)'" back into a stageInfo. Used for extracting
-// projections from partial pushdown remainders. Handles leading flags before
-// the single-quoted expression.
-func parseComputeString(s string) *stageInfo {
-	fields := strings.Fields(s)
-	if len(fields) == 0 {
-		return nil
-	}
-	cmd := fields[0]
-	rest := strings.TrimSpace(strings.TrimPrefix(s, cmd))
-	if rest == "" {
-		return &stageInfo{cmd: cmd}
-	}
-	// Split on the first single-quote: everything before is flags, the
-	// quoted portion is the expression arg. If there's no quote, fall
-	// back to whitespace-split.
-	quoteIdx := strings.IndexByte(rest, '\'')
-	if quoteIdx < 0 {
-		return &stageInfo{cmd: cmd, args: fields[1:]}
-	}
-	var args []string
-	if flagPart := strings.TrimSpace(rest[:quoteIdx]); flagPart != "" {
-		args = append(args, strings.Fields(flagPart)...)
-	}
-	quoted := rest[quoteIdx:]
-	if len(quoted) >= 2 && quoted[len(quoted)-1] == '\'' {
-		args = append(args, quoted[1:len(quoted)-1])
-	} else {
-		args = append(args, quoted)
-	}
-	return &stageInfo{cmd: cmd, args: args}
-}
-
-// shellMetachars must be quoted so the joined compute-stage script
-// re-parses to the same argv when the compute pool feeds it back to
-// the bash interpreter. Whitespace alone wasn't enough — `grep
-// '(empty)'` joined as bare `grep (empty)` parses as a subshell and
-// grep ends up with no positional arg ("missing pattern" in prod).
-const shellMetachars = " \t\n();&|<>*?[]{}~!#$`'\"\\"
-
-func joinArgs(args []string) string {
-	result := ""
-	for i, a := range args {
-		if i > 0 {
-			result += " "
-		}
-		if needsShellQuote(a) {
-			// If it's a short flag bundling its value (`-d `), keep the
-			// flag prefix outside the quotes so the quoted form is
-			// `-d' '` rather than `'-d '` — same shape awk/sed expect.
-			if len(a) > 2 && a[0] == '-' && !strings.HasPrefix(a, "--") {
-				flag := a[:2]
-				val := a[2:]
-				result += flag + singleQuote(val)
-			} else {
-				result += singleQuote(a)
-			}
-		} else {
-			result += a
-		}
-	}
-	return result
-}
-
-// needsShellQuote reports whether s would be reinterpreted by the
-// bash parser if emitted bare. Empty string requires quoting too —
-// it must round-trip as `”`, not collapse to nothing.
-func needsShellQuote(s string) bool {
-	if s == "" {
-		return true
-	}
-	return strings.ContainsAny(s, shellMetachars)
-}
-
-// singleQuote wraps s in single quotes, escaping any embedded
-// single-quote with the standard `'\”` close-reopen idiom.
-func singleQuote(s string) string {
-	if !strings.Contains(s, "'") {
-		return "'" + s + "'"
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

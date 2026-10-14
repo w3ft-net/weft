@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// mergeMetaVars is the fix for "jq's reserved meta-variables ...
+// MergeMetaVars is the fix for "jq's reserved meta-variables ...
 // resolve to null when read as output" (docs/known-issues.md): the jq
 // compute stage runs as a literal program string piped raw JSON text
 // via warp's bash.RunStreaming, so a bare "._host" read can only ever
@@ -14,7 +14,7 @@ import (
 // values out of band, since one bash/jq process handles the whole
 // stream.
 func TestMergeMetaVars_InjectsEveryAlias(t *testing.T) {
-	got := mergeMetaVars(`{"pct":42}`, map[string]string{"instance": "web-1"})
+	got := MergeMetaVars(`{"pct":42}`, map[string]string{"instance": "web-1"})
 
 	// Both "_host" and "_instance" alias the "instance" column
 	// (planner.JQMetaVars) — a reader of either must see the value.
@@ -27,8 +27,8 @@ func TestMergeMetaVars_InjectsEveryAlias(t *testing.T) {
 
 func TestMergeMetaVars_NoMetaVarsReturnsRawUnchanged(t *testing.T) {
 	raw := `{"pct":42}`
-	if got := mergeMetaVars(raw, nil); got != raw {
-		t.Errorf("mergeMetaVars(raw, nil) = %q, want unchanged %q", got, raw)
+	if got := MergeMetaVars(raw, nil); got != raw {
+		t.Errorf("MergeMetaVars(raw, nil) = %q, want unchanged %q", got, raw)
 	}
 }
 
@@ -44,8 +44,8 @@ func TestMergeMetaVars_NonObjectRawReturnsUnchanged(t *testing.T) {
 		`"a bare string"`,
 		`42`,
 	} {
-		if got := mergeMetaVars(raw, meta); got != raw {
-			t.Errorf("mergeMetaVars(%q, meta) = %q, want unchanged", raw, got)
+		if got := MergeMetaVars(raw, meta); got != raw {
+			t.Errorf("MergeMetaVars(%q, meta) = %q, want unchanged", raw, got)
 		}
 	}
 }
@@ -55,13 +55,13 @@ func TestMergeMetaVars_NonObjectRawReturnsUnchanged(t *testing.T) {
 // reserved keys, matching the underscore-prefix convention's whole
 // rationale (docs/manual/metavars.md).
 func TestMergeMetaVars_DoesNotClobberRealKeys(t *testing.T) {
-	got := mergeMetaVars(`{"_host":"already-here","pct":1}`, map[string]string{"instance": "web-1"})
+	got := MergeMetaVars(`{"_host":"already-here","pct":1}`, map[string]string{"instance": "web-1"})
 	if !strings.Contains(got, `"_host":"already-here"`) {
 		t.Errorf("merged JSON %q clobbered a pre-existing real key", got)
 	}
 }
 
-func TestStagesHaveAwk(t *testing.T) {
+func TestFirstStageIsAwk(t *testing.T) {
 	cases := []struct {
 		stages []string
 		want   bool
@@ -69,11 +69,12 @@ func TestStagesHaveAwk(t *testing.T) {
 		{nil, false},
 		{[]string{"grep ERROR", "sort"}, false},
 		{[]string{"awk"}, true},
-		{[]string{"grep ERROR", `awk 'HOST == "web-1"'`}, true},
+		{[]string{`awk 'HOST == "web-1"'`, "sort"}, true},
+		{[]string{"grep ERROR", `awk 'HOST == "web-1"'`}, false},
 	}
 	for _, tt := range cases {
-		if got := stagesHaveAwk(tt.stages); got != tt.want {
-			t.Errorf("stagesHaveAwk(%v) = %v, want %v", tt.stages, got, tt.want)
+		if got := firstStageIsAwk(tt.stages); got != tt.want {
+			t.Errorf("firstStageIsAwk(%v) = %v, want %v", tt.stages, got, tt.want)
 		}
 	}
 }

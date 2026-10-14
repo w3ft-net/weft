@@ -42,6 +42,14 @@ type sourceInfo struct {
 type stageInfo struct {
 	cmd  string   // command name: "awk", "jq", "grep", "sed", "sort", "head", "tail", etc.
 	args []string // command arguments (raw literal strings)
+	// src is the stage as the user wrote it, rendered from its own shell
+	// AST. It's the only text a compute stage is ever built from: the
+	// planner never synthesizes source for awk/jq/sed (see
+	// docs/plans/planner-ir.md, "Never regenerate source").
+	src string
+	// prefiltered marks a stage whose predicate the shard already
+	// applies as a prefilter; the stage still runs.
+	prefiltered bool
 }
 
 // pipelineInfo is the parsed representation of a weft shell pipeline.
@@ -371,7 +379,8 @@ func parseStage(cmd *bash.SimpleCommand) stageInfo {
 	}
 	name := cmd.Words[0].Literal()
 	args := literalArgs(cmd.Words[1:])
-	return stageInfo{cmd: name, args: args}
+	src := bash.Unparse(&bash.Script{Commands: []*bash.List{{First: &bash.Pipeline{Commands: []bash.Command{cmd}}}}})
+	return stageInfo{cmd: name, args: args, src: src}
 }
 
 // resolveSourcePath turns a relative source argument into an absolute

@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -180,11 +181,9 @@ func TestExpandBinPipeline_QuotedPositionalWithSpaces(t *testing.T) {
 }
 
 // TestExpandBinPipeline_QuotedArgRoundTripsToPlanner takes the
-// expanded pipeline, hands it to planner.Plan, and confirms that
-// the compute-stage formatter emits `grep -c 'compute exit 127'`
-// (single quoted arg) rather than `grep -c compute exit 127`
-// (word-split). joinArgs (planner/planner.go) is supposed to
-// re-quote whitespace-bearing args; this pins that.
+// expanded pipeline, hands it to planner.Plan, and confirms that the
+// compute stage re-parses to grep's argv with 'compute exit 127' as one
+// argument, not word-split.
 func TestExpandBinPipeline_QuotedArgRoundTripsToPlanner(t *testing.T) {
 	fs := newTestFS()
 	fs.setBash("/bin/log-pattern-count", `tail -n $2 /log/weft/$1/main.log | grep -c "$3"`)
@@ -203,9 +202,16 @@ func TestExpandBinPipeline_QuotedArgRoundTripsToPlanner(t *testing.T) {
 			len(plan.ComputeStages), plan.ComputeStages)
 	}
 	stage := plan.ComputeStages[0]
-	want := `grep -c 'compute exit 127'`
-	if stage != want {
-		t.Errorf("compute stage\n got: %q\nwant: %q", stage, want)
+	script, err := bash.Parse(stage)
+	if err != nil {
+		t.Fatalf("compute stage %q does not re-parse: %v", stage, err)
+	}
+	var argv []string
+	for _, w := range script.Commands[0].First.Commands[0].(*bash.SimpleCommand).Words {
+		argv = append(argv, w.Literal())
+	}
+	if want := []string{"grep", "-c", "compute exit 127"}; !slices.Equal(argv, want) {
+		t.Errorf("compute stage %q re-parses to %q, want %q", stage, argv, want)
 	}
 }
 

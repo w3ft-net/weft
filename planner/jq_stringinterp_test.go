@@ -6,38 +6,31 @@ import (
 	"github.com/graybeardcorp/warp/pkg/jq"
 )
 
-// TestTryJqStagePushdown_StringInterp pins partial pushdown for jq pipelines
-// of the shape `select(...) | "\(.a) \(.b)"`. warp's parser emits a nested
-// StringInterp as a single Part for every interpolation after the first
-// (see parseStringInterp in warp/pkg/jq/parse.go), so the round-tripper has
-// to flatten and re-render as a single `"..."` literal — otherwise
-// tryJqStagePushdown can't express the residual and bails on the whole
-// pushdown, leaving the select predicate unpushed. That was the user-visible
-// bug: `explain` showed ShardSQL without the select.
+// TestTryJqStagePushdown_StringInterp pins that a select(...) prefix
+// pushes down whatever follows it, here string interpolation. It used
+// to bail when the tail couldn't be re-rendered (the user-visible bug:
+// `explain` showed ShardSQL without the select); the tail is never
+// re-rendered now, since the stage runs whole in compute.
 func TestTryJqStagePushdown_StringInterp(t *testing.T) {
 	tests := []struct {
 		name          string
 		expression    string
 		wantPredicate string
-		wantCompute   string
 	}{
 		{
 			name:          "two interpolations, literal in between",
 			expression:    `select(.type == "disk") | "\(.host) \(.used_gb)"`,
-			wantPredicate: `json_extract_string(payload, '$.type') = 'disk'`,
-			wantCompute:   `jq '"\(.host) \(.used_gb)"'`,
+			wantPredicate: `(COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
 		},
 		{
 			name:          "leading literal then interpolation",
 			expression:    `select(.type == "disk") | "host: \(.host)"`,
-			wantPredicate: `json_extract_string(payload, '$.type') = 'disk'`,
-			wantCompute:   `jq '"host: \(.host)"'`,
+			wantPredicate: `(COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
 		},
 		{
 			name:          "single interpolation, no literals",
 			expression:    `select(.type == "disk") | "\(.host)"`,
-			wantPredicate: `json_extract_string(payload, '$.type') = 'disk'`,
-			wantCompute:   `jq '"\(.host)"'`,
+			wantPredicate: `(COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
 		},
 	}
 
@@ -51,15 +44,15 @@ func TestTryJqStagePushdown_StringInterp(t *testing.T) {
 			} else {
 				t.Logf("parsed as %T", expr)
 			}
-			got := tryJqStagePushdown(tt.expression, nil)
+			got := tryJqStagePushdown([]string{tt.expression})
 			if !got.pushed {
 				t.Fatalf("expected pushed=true (predicate %q should extract), got pushdownResult{}", tt.wantPredicate)
 			}
 			if got.predicate != tt.wantPredicate {
 				t.Errorf("predicate\n got: %s\nwant: %s", got.predicate, tt.wantPredicate)
 			}
-			if got.compute != tt.wantCompute {
-				t.Errorf("compute\n got: %s\nwant: %s", got.compute, tt.wantCompute)
+			if !got.keep {
+				t.Errorf("a jq select is a prefilter: the stage must still run")
 			}
 		})
 	}

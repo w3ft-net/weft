@@ -93,3 +93,18 @@ func runFilterCase(t *testing.T, pipeline string, row *pb.LogRow, want []string)
 		}
 	}
 }
+
+// A jq first stage reads the live row's payload, as in the batch: a
+// select chain keeps the raw line, and anything else is jq's compact
+// output over the payload.
+func TestLiveFilter_JqReadsPayload(t *testing.T) {
+	failed := &pb.LogRow{Namespace: "vimgym", Level: "ERROR", Raw: "12:00 api login failed", PayloadJson: []byte(`{"status":500,"user":"u1"}`)}
+	ok := &pb.LogRow{Namespace: "vimgym", Level: "INFO", Raw: "12:01 api login ok", PayloadJson: []byte(`{"status":200,"user":"u2"}`)}
+
+	filter := `tail -f vimgym.log | jq 'select(.status == 500)'`
+	runFilterCase(t, filter, failed, []string{"12:00 api login failed"})
+	runFilterCase(t, filter, ok, nil)
+
+	runFilterCase(t, `tail -f vimgym.log | jq 'select(._level == "ERROR")' | wc -l`, failed, []string{"1"})
+	runFilterCase(t, `tail -f vimgym.log | jq '{u: .user}'`, ok, []string{`{"u":"u2"}`})
+}

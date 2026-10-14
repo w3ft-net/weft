@@ -106,7 +106,13 @@ func jqCondToSQL(cond jq.Expr) string {
 	return ""
 }
 
-// jqComparisonToSQL converts a jq comparison (field op literal) to SQL.
+// jqComparisonToSQL lowers `field op literal` exactly as jq evaluates
+// it. jq compares values of different types by a total order,
+// null < false < true < numbers < strings < arrays < objects, and a
+// missing field is null; so `.n < 100` holds for a row without .n, and
+// `.n == 500` doesn't for the string "500". Both sides here are
+// literal-typed except the field, so the SQL picks the branch by the
+// field's JSON type.
 func jqComparisonToSQL(left, right jq.Expr, op string) string {
 	field, ok := left.(jq.FieldExpr)
 	if !ok {
@@ -116,96 +122,241 @@ func jqComparisonToSQL(left, right jq.Expr, op string) string {
 	if !ok {
 		return ""
 	}
-
-	// Check for meta-variable.
 	if col, isMeta := JQMetaVars[field.Name]; isMeta {
-		return fmt.Sprintf("%s %s '%s'", col, op, escapeSQLString(lit.Value.Str))
+		return jqMetaComparisonToSQL(col, lit.Value, op)
 	}
 
-	// Regular JSON field.
+	path := fmt.Sprintf("'$.%s'", escapeSQLString(field.Name))
+	var rank int
+	var value, sqlLit string
 	switch lit.Value.Type {
-	case jq.TypeNumber:
-		n := lit.Value.Num
-		isEquality := op == "=" || op == "!="
-		castType := "DOUBLE"
-		valStr := fmt.Sprintf("%g", n)
-		if isEquality && n == float64(int(n)) {
-			castType = "INT"
-			valStr = fmt.Sprintf("%d", int(n))
-		}
-		if !isEquality && n == float64(int(n)) {
-			valStr = fmt.Sprintf("%d", int(n))
-		}
-		return fmt.Sprintf("CAST(json_extract(payload, '$.%s') AS %s) %s %s",
-			field.Name, castType, op, valStr)
-
-	case jq.TypeString:
-		return fmt.Sprintf("json_extract_string(payload, '$.%s') %s '%s'",
-			field.Name, op, escapeSQLString(lit.Value.Str))
-
+	case jq.TypeNull:
+		rank = jqRankNull
 	case jq.TypeBool:
-		valStr := "false"
-		if lit.Value.Bool {
-			valStr = "true"
-		}
-		return fmt.Sprintf("CAST(json_extract(payload, '$.%s') AS BOOL) %s %s",
-			field.Name, op, valStr)
+		rank = jqRankBool
+		value = fmt.Sprintf("CAST(json_extract(payload, %s) AS BOOLEAN)", path)
+		sqlLit = strconv.FormatBool(lit.Value.Bool)
+	case jq.TypeNumber:
+		rank = jqRankNumber
+		value = fmt.Sprintf("CAST(json_extract(payload, %s) AS DOUBLE)", path)
+		sqlLit = strconv.FormatFloat(lit.Value.Num, 'g', -1, 64)
+	case jq.TypeString:
+		rank = jqRankString
+		value = fmt.Sprintf("json_extract_string(payload, %s)", path)
+		sqlLit = "'" + escapeSQLString(lit.Value.Str) + "'"
+	default:
+		return ""
 	}
 
+	typ := fmt.Sprintf("COALESCE(json_type(payload, %s), 'NULL')", path)
+	in := func(ranks []int) string {
+		var names []string
+		for _, r := range ranks {
+			names = append(names, jqRankTypes[r]...)
+		}
+		return fmt.Sprintf("%s IN ('%s')", typ, strings.Join(names, "', '"))
+	}
+	same := in([]int{rank})
+	if value != "" {
+		// Null has one value, so the type test alone decides equality.
+		same = fmt.Sprintf("(%s AND %s %s %s)", same, value, "=", sqlLit)
+	}
+	var lower, higher []int
+	for r := range jqRankTypes {
+		if r < rank {
+			lower = append(lower, r)
+		} else if r > rank {
+			higher = append(higher, r)
+		}
+	}
+	sameCmp := func(cmp string) string {
+		if value == "" {
+			// Null only equals null, so < and > within the rank are false.
+			if cmp == "<=" || cmp == ">=" {
+				return in([]int{rank})
+			}
+			return ""
+		}
+		return fmt.Sprintf("(%s AND %s %s %s)", in([]int{rank}), value, cmp, sqlLit)
+	}
+	or := func(parts ...string) string {
+		var keep []string
+		for _, p := range parts {
+			if p != "" {
+				keep = append(keep, p)
+			}
+		}
+		switch len(keep) {
+		case 0:
+			return "false" // nothing sorts below null
+		case 1:
+			return keep[0]
+		}
+		return "(" + strings.Join(keep, " OR ") + ")"
+	}
+	orIn := func(ranks []int) string {
+		if len(ranks) == 0 {
+			return ""
+		}
+		return in(ranks)
+	}
+	switch op {
+	case "=":
+		return same
+	case "!=":
+		return "NOT " + same
+	case "<", "<=":
+		return or(orIn(lower), sameCmp(op))
+	case ">", ">=":
+		return or(orIn(higher), sameCmp(op))
+	}
 	return ""
 }
 
-// tryJqStagePushdown analyzes a jq expression for pushdown, supporting partial
-// pushdown. If the expression is a pipe chain starting with selects followed by
-// non-pushable expressions, the selects become SQL predicates and the rest
-// becomes a compute stage. flags are preserved on any residual compute stage so
-// command-line options like -r stick across partial pushdown.
-func tryJqStagePushdown(expression string, flags []string) pushdownResult {
-	expr, err := jq.Parse(expression)
-	if err != nil {
-		return pushdownResult{}
+// jq's cross-type order, and the DuckDB json_type names of each rank.
+const (
+	jqRankNull = iota
+	jqRankBool
+	jqRankNumber
+	jqRankString
+	jqRankArray
+	jqRankObject
+)
+
+var jqRankTypes = [][]string{
+	jqRankNull:   {"NULL"},
+	jqRankBool:   {"BOOLEAN"},
+	jqRankNumber: {"BIGINT", "UBIGINT", "DOUBLE", "HUGEINT"},
+	jqRankString: {"VARCHAR"},
+	jqRankArray:  {"ARRAY"},
+	jqRankObject: {"OBJECT"},
+}
+
+// jqMetaComparisonToSQL lowers a meta-variable comparison. jq reads a
+// meta-variable as the string compute splices in (the column's text),
+// or null when the column is NULL; only string literals lower.
+func jqMetaComparisonToSQL(col string, lit jq.Value, op string) string {
+	if lit.Type != jq.TypeString {
+		return ""
 	}
+	if col == "ts" || col == "duration_ns" {
+		col = fmt.Sprintf("CAST(%s AS VARCHAR)", col)
+	}
+	cmp := fmt.Sprintf("%s %s '%s'", col, op, escapeSQLString(lit.Str))
+	switch op {
+	case "!=", "<", "<=":
+		// null sorts below every string.
+		return fmt.Sprintf("(%s IS NULL OR %s)", col, cmp)
+	}
+	return cmp
+}
 
-	// Flatten the pipe chain into a list of expressions.
-	nodes := jqFlattenPipe(expr)
+// jqProgram is a jq stage split the way weft's jq dialect reads it (see
+// docs/plans/planner-ir.md, "jq"): leading select(...)s, then a tail.
+//
+// A jq stage reading shard rows sees each row's payload. A program made
+// only of selects is a row filter: it keeps or drops the row, which
+// stays its raw line. Anything with a tail emits jq's output over the
+// payload.
+type jqProgram struct {
+	src string // the expression argument, as written
+	// selects is the SQL for each leading select that lowers, stopping
+	// at the first that doesn't.
+	selects []string
+	// allLower is true when every leading select lowered.
+	allLower bool
+	// tail is what follows the leading selects; nil for a select chain.
+	tail  jq.Expr
+	raw   bool // -r
+	slurp bool // -s: the whole stream is one input, so no select is per-row
+}
 
-	// Walk from left, collecting pushable selects.
-	var predicates []string
-	splitAt := 0
-	for i, node := range nodes {
-		if sel, ok := node.(jq.SelectExpr); ok {
-			pred := jqCondToSQL(sel.Cond)
-			if pred == "" {
-				break
+// analyzeJq parses a jq stage's argv. ok is false for an expression
+// that doesn't parse or a flag the planner doesn't know, which leaves
+// the stage to run as written.
+func analyzeJq(args []string) (*jqProgram, bool) {
+	p := &jqProgram{}
+	for _, a := range args {
+		switch a {
+		case "-r", "--raw-output":
+			p.raw = true
+		case "-c", "--compact-output":
+		case "-s", "--slurp":
+			p.slurp = true
+		default:
+			if strings.HasPrefix(a, "-") || p.src != "" {
+				return nil, false
 			}
-			predicates = append(predicates, pred)
-			splitAt = i + 1
-		} else {
-			break
+			p.src = a
 		}
 	}
+	if p.src == "" {
+		return nil, false
+	}
+	expr, err := jq.Parse(p.src)
+	if err != nil {
+		return nil, false
+	}
+	nodes := jqFlattenPipe(expr)
+	n := 0
+	p.allLower = true
+	for n < len(nodes) {
+		sel, ok := nodes[n].(jq.SelectExpr)
+		if !ok {
+			break
+		}
+		if p.allLower {
+			if pred := jqCondToSQL(sel.Cond); pred != "" {
+				p.selects = append(p.selects, pred)
+			} else {
+				p.allLower = false
+			}
+		}
+		n++
+	}
+	if n < len(nodes) {
+		p.tail = nodes[n]
+		for _, rest := range nodes[n+1:] {
+			p.tail = jq.PipeExpr{Left: p.tail, Right: rest}
+		}
+	}
+	return p, true
+}
 
-	if len(predicates) == 0 {
+// selectChain reports whether the program is a row filter.
+func (p *jqProgram) selectChain() bool { return p.tail == nil && !p.slurp }
+
+// tryJqStagePushdown pushes a jq stage's leading selects into SQL. A
+// select chain whose selects all lower is exact: the stage is a row
+// filter SQL computes, so it drops out. Otherwise they're a prefilter
+// and the stage still runs, unchanged.
+func tryJqStagePushdown(args []string) pushdownResult {
+	p, ok := analyzeJq(args)
+	if !ok || p.slurp || len(p.selects) == 0 {
 		return pushdownResult{}
 	}
-
-	pred := strings.Join(predicates, " AND ")
-
-	// If everything was pushable, full pushdown.
-	if splitAt == len(nodes) {
-		return pushdownResult{pushed: true, predicate: pred}
+	return pushdownResult{
+		pushed:    true,
+		predicate: strings.Join(p.selects, " AND "),
+		keep:      !(p.selectChain() && p.allLower),
 	}
+}
 
-	// Partial: remaining nodes become compute. If we can't round-trip any of
-	// them back to source, bail on partial pushdown — better to keep the
-	// whole stage in compute than to ship a corrupted jq command.
-	rendered := jqRenderPipe(nodes[splitAt:])
-	if rendered == "" {
-		return pushdownResult{}
+// lowerFirstJqStage returns the SQL projection that computes a jq
+// stage reading shard rows, or "" when it must run, over the payload.
+// selectsPushed says its leading selects are already in the WHERE
+// clause. (A select chain never gets here: it's a row stage.)
+func lowerFirstJqStage(stage stageInfo, selectsPushed bool) string {
+	p, ok := analyzeJq(stage.args)
+	// -r prints strings unquoted, which json_extract doesn't.
+	if !ok || p.raw || p.slurp || p.tail == nil || !p.allLower || (len(p.selects) > 0 && !selectsPushed) {
+		return ""
 	}
-	args := append([]string{}, flags...)
-	args = append(args, rendered)
-	return pushdownResult{pushed: true, predicate: pred, compute: formatToolStage("jq", args)}
+	sql, ok := jqValueToSQL(p.tail)
+	if !ok {
+		return ""
+	}
+	return wrapJqProjection(sql)
 }
 
 // splitJqArgs separates jq's command-line flags from its expression argument.
@@ -240,204 +391,4 @@ func jqFlattenPipe(expr jq.Expr) []jq.Expr {
 		return append(jqFlattenPipe(p.Left), jqFlattenPipe(p.Right)...)
 	}
 	return []jq.Expr{expr}
-}
-
-// formatJqExpr formats a jq AST node back to source-like form. Returns ""
-// for unsupported nodes; callers that round-trip residuals must check this
-// and fall back rather than emit a corrupted jq command.
-func formatJqExpr(expr jq.Expr) string {
-	switch e := expr.(type) {
-	case jq.SelectExpr:
-		inner := formatJqExpr(e.Cond)
-		if inner == "" {
-			return ""
-		}
-		return fmt.Sprintf("select(%s)", inner)
-	case jq.FieldExpr:
-		return "." + e.Name
-	case jq.LiteralExpr:
-		switch e.Value.Type {
-		case jq.TypeNumber:
-			n := e.Value.Num
-			if n == float64(int(n)) {
-				return fmt.Sprintf("%d", int(n))
-			}
-			return fmt.Sprintf("%g", n)
-		case jq.TypeString:
-			return fmt.Sprintf("%q", e.Value.Str)
-		case jq.TypeBool:
-			if e.Value.Bool {
-				return "true"
-			}
-			return "false"
-		case jq.TypeNull:
-			return "null"
-		}
-	case jq.EqExpr:
-		return formatJqBinOp(e.Left, e.Right, " == ")
-	case jq.NeExpr:
-		return formatJqBinOp(e.Left, e.Right, " != ")
-	case jq.LtExpr:
-		return formatJqBinOp(e.Left, e.Right, " < ")
-	case jq.GtExpr:
-		return formatJqBinOp(e.Left, e.Right, " > ")
-	case jq.LeExpr:
-		return formatJqBinOp(e.Left, e.Right, " <= ")
-	case jq.GeExpr:
-		return formatJqBinOp(e.Left, e.Right, " >= ")
-	case jq.AndExpr:
-		return formatJqBinOp(e.Left, e.Right, " and ")
-	case jq.OrExpr:
-		return formatJqBinOp(e.Left, e.Right, " or ")
-	case jq.NotExpr:
-		inner := formatJqExpr(e.Operand)
-		if inner == "" {
-			return ""
-		}
-		return inner + " | not"
-	case jq.PipeExpr:
-		return formatJqBinOp(e.Left, e.Right, " | ")
-	case jq.CommaExpr:
-		return formatJqBinOp(e.Left, e.Right, ", ")
-	case jq.StringInterp:
-		// warp's parser emits a nested StringInterp as a single Part for
-		// every interpolation after the first (see parseStringInterp), so
-		// flatten before rendering so we get a single "..." literal back
-		// instead of quote-in-quote garbage.
-		parts := flattenStringInterp(e)
-		var b strings.Builder
-		b.WriteByte('"')
-		for _, p := range parts {
-			if lit, ok := p.(jq.LiteralExpr); ok && lit.Value.Type == jq.TypeString {
-				q := strconv.Quote(lit.Value.Str)
-				b.WriteString(q[1 : len(q)-1])
-				continue
-			}
-			inner := formatJqExpr(p)
-			if inner == "" {
-				return ""
-			}
-			b.WriteString(`\(`)
-			b.WriteString(inner)
-			b.WriteByte(')')
-		}
-		b.WriteByte('"')
-		return b.String()
-	case jq.ObjectExpr:
-		var pairs []string
-		for _, p := range e.Pairs {
-			key := formatJqObjKey(p.Key)
-			val := formatJqExpr(p.Value)
-			if key == "" || val == "" {
-				return ""
-			}
-			pairs = append(pairs, key+": "+val)
-		}
-		return "{" + strings.Join(pairs, ", ") + "}"
-	case jq.ArrayExpr:
-		inner := formatJqExpr(e.Elems)
-		if inner == "" {
-			return ""
-		}
-		return "[" + inner + "]"
-	case jq.IndexExpr:
-		idx := formatJqExpr(e.Index)
-		if idx == "" {
-			return ""
-		}
-		return "[" + idx + "]"
-	case jq.IterExpr:
-		// Standalone iter — `.[]` so it can be re-attached after a pipe.
-		return ".[]"
-	case jq.IdentityExpr:
-		return "."
-	case jq.RecurseExpr:
-		return ".."
-	case jq.LengthExpr:
-		return "length"
-	case jq.KeysExpr:
-		return "keys"
-	case jq.ValuesExpr:
-		return "values"
-	case jq.TypeExpr:
-		return "type"
-	case jq.ToStringExpr:
-		return "tostring"
-	case jq.ToNumberExpr:
-		return "tonumber"
-	case jq.AsciiUpExpr:
-		return "ascii_upcase"
-	case jq.AsciiDownExpr:
-		return "ascii_downcase"
-	case jq.SortExpr:
-		return "sort"
-	case jq.SortByExpr:
-		key := formatJqExpr(e.Key)
-		if key == "" {
-			return ""
-		}
-		return "sort_by(" + key + ")"
-	case jq.GroupByExpr:
-		key := formatJqExpr(e.Key)
-		if key == "" {
-			return ""
-		}
-		return "group_by(" + key + ")"
-	case jq.UniqueExpr:
-		return "unique"
-	case jq.UniqueByExpr:
-		key := formatJqExpr(e.Key)
-		if key == "" {
-			return ""
-		}
-		return "unique_by(" + key + ")"
-	case jq.ReverseExpr:
-		return "reverse"
-	case jq.MapExpr:
-		body := formatJqExpr(e.Body)
-		if body == "" {
-			return ""
-		}
-		return "map(" + body + ")"
-	case jq.MapValuesExpr:
-		body := formatJqExpr(e.Body)
-		if body == "" {
-			return ""
-		}
-		return "map_values(" + body + ")"
-	}
-	return ""
-}
-
-// formatJqBinOp renders a binary jq op, propagating empty-string failure
-// from either operand.
-func formatJqBinOp(l, r jq.Expr, op string) string {
-	left := formatJqExpr(l)
-	right := formatJqExpr(r)
-	if left == "" || right == "" {
-		return ""
-	}
-	return left + op + right
-}
-
-// flattenStringInterp splices nested StringInterp parts into a single flat
-// slice so the rendered literal doesn't contain nested quotes.
-func flattenStringInterp(e jq.StringInterp) []jq.Expr {
-	var out []jq.Expr
-	for _, p := range e.Parts {
-		if nested, ok := p.(jq.StringInterp); ok {
-			out = append(out, flattenStringInterp(nested)...)
-			continue
-		}
-		out = append(out, p)
-	}
-	return out
-}
-
-// formatJqObjKey formats an object key — bare identifier for string literals.
-func formatJqObjKey(expr jq.Expr) string {
-	if lit, ok := expr.(jq.LiteralExpr); ok && lit.Value.Type == jq.TypeString {
-		return lit.Value.Str
-	}
-	return formatJqExpr(expr)
 }

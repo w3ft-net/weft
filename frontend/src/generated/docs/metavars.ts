@@ -179,7 +179,8 @@ query-time dimensions.</p>
 (<code>awk 'ENV == &quot;prod&quot;'</code>, <code>awk 'POD ~ &quot;api-7f9b&quot;'</code>) and in jq
 (<code>jq 'select(._level == &quot;ERROR&quot;)'</code>). A filter on any other field, such
 as <code>jq 'select(.feature_flag == &quot;abc&quot;)'</code>, reads and parses every row in
-the time range. One pipeline can mix both: the meta-variable filters
+the time range. awk's numbered fields (<code>awk '$3 == &quot;POST&quot;'</code>) also run
+against every row. One pipeline can mix both: the meta-variable filters
 narrow the data first and the rest runs on what remains.</p>
 <p>A hard line count (<code>head -n N</code> or <code>tail -n N</code>) stops later filters from
 narrowing the read: <code>tail -n 500 | awk 'LEVEL == &quot;ERROR&quot;' | wc -l</code>

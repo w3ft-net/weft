@@ -43,7 +43,15 @@ type Query struct {
 	// includeMetaVars detection and docs/known-issues.md's (fixed) jq
 	// meta-variable entry.
 	includeMetaVars bool
+	// includePayload appends the row's payload as a PayloadColumn
+	// column, for a jq row stage or a stage reading the payload.
+	includePayload bool
 }
+
+// PayloadColumn names the extra column carrying a row's payload JSON
+// text when a row stage or the first stage reads it. Shards return
+// extra columns in ResultRow.MetaVars, keyed by name.
+const PayloadColumn = "payload"
 
 // From identifies the SELECT's source — either a base table ("logs")
 // or a nested *Query rendered as a subquery with an alias. Exactly
@@ -193,6 +201,7 @@ func (q *Query) Wrap(orderBy string) *Query {
 		from:            From{Subquery: q, Alias: "t"},
 		orderBy:         orderBy,
 		includeMetaVars: q.includeMetaVars,
+		includePayload:  q.includePayload,
 	}
 }
 
@@ -280,6 +289,13 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 		for _, col := range MetaVarColumns {
 			b.WriteString(", ")
 			b.WriteString(col)
+		}
+	}
+	if q.includePayload {
+		if q.from.Subquery != nil {
+			b.WriteString(", " + PayloadColumn)
+		} else {
+			b.WriteString(", CAST(payload AS VARCHAR) AS " + PayloadColumn)
 		}
 	}
 	b.WriteString(" FROM ")

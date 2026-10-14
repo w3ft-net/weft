@@ -118,6 +118,44 @@ cat /log/myco/prod/api/main.log | jq 'select(.feature_flag == "abc")'
 weft reads and parses every row in the time range for this filter. For
 dimensions you query constantly, use the indexed columns.
 
+## How jq reads a row
+
+jq reads each row's JSON payload: the whole line for a JSON log, or the
+JSON part of a line that has text around it (a timestamp prefix, a
+CloudWatch envelope, Heroku's `key=value` metrics). The meta-variables
+(`._level`, `._host`, `._ts`, ...) are there too.
+
+A jq program made only of `select(...)` filters rows, and prints the log
+lines it keeps, exactly as they were:
+
+```
+# The matching log lines, timestamp prefix and all
+cat /log/myco/prod/api/main.log | jq 'select(.status == 500)'
+
+# The payload JSON of those lines instead
+cat /log/myco/prod/api/main.log | jq 'select(.status == 500) | .'
+```
+
+Anything else prints jq's own output, one value per line. Objects and
+arrays print on a single line, so the output stays one row per line for
+`grep`, `wc -l` and `alert`.
+
+The payload stays attached to a row while stages only filter rows or
+count them (`grep`, an awk pattern, `head`, `tail`), so this works the
+same:
+
+```
+tail -n 500 /log/myco/prod/api/main.log | grep checkout | jq '.latency_ms'
+```
+
+Once a stage changes the text (`sort`, `awk '{ print ... }'`, `sed s/.../`),
+the next stage reads that text, as in any shell.
+
+jq compares values the way jq does: `select(.status == 500)` doesn't
+match the string `"500"`, and a row without the field has `null` there,
+which sorts below every number, so `select(.latency_ms < 100)` also
+keeps rows that have no `latency_ms`.
+
 ## Per-tag values over time
 
 Indexed dimensions, a frequent cron and the multi-row alert form

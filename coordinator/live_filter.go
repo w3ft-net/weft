@@ -3,9 +3,11 @@ package coordinator
 import (
 	"bytes"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -39,8 +41,35 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 		Kind:      plan.SourceKind,
 	}
 
+	// Leading row stages keep or drop the live row (LiveRowStages), and
+	// a jq after them reads its payload (LiveReadsPayload). Same rule
+	// the compute engine applies to the batch; see planner.QueryPlan.
+	var rowStages *compute.RowStages
+	if len(plan.LiveRowStages) > 0 {
+		rs, err := compute.NewRowStages(plan.LiveRowStages)
+		if err != nil {
+			// Plan only emits row stages it parsed; see the parse
+			// error note below.
+			return func(*pb.LogRow) []string { return nil }
+		}
+		rowStages = rs
+	}
+	admit := func(row *pb.LogRow) bool {
+		return gate.Match(row) && (rowStages == nil || rowStages.Keep(row.Raw, string(row.PayloadJson), liveMetaVars(row)))
+	}
+	input := func(row *pb.LogRow) string {
+		if plan.LiveReadsPayload {
+			payload := string(row.PayloadJson)
+			if payload == "" {
+				payload = "{}"
+			}
+			return compute.MergeMetaVars(payload, liveMetaVars(row))
+		}
+		return row.Raw
+	}
+
 	passthrough := func(row *pb.LogRow) []string {
-		if !gate.Match(row) {
+		if !admit(row) {
 			return nil
 		}
 		return []string{row.Raw}
@@ -63,10 +92,37 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 	}
 
 	return func(row *pb.LogRow) []string {
-		if !gate.Match(row) {
+		if !admit(row) {
 			return nil
 		}
-		return runStages(row.Raw, ast)
+		return runStages(input(row), ast)
+	}
+}
+
+// liveMetaVars is a live row's meta-variable columns, ts included, in
+// the shape compute builds them for a batch row, so jq sees the same
+// meta-variables live as in the batch.
+func liveMetaVars(row *pb.LogRow) map[string]string {
+	return map[string]string{
+		"namespace":     row.Namespace,
+		"service":       row.Service,
+		"kind":          row.Kind,
+		"level":         row.Level,
+		"instance":      row.Instance,
+		"deployment":    row.Deployment,
+		"env":           row.Env,
+		"version":       row.Version,
+		"region":        row.Region,
+		"cluster":       row.Cluster,
+		"k8s_namespace": row.K8SNamespace,
+		"pod":           row.Pod,
+		"container":     row.Container,
+		"node":          row.Node,
+		"trace_id":      row.TraceId,
+		"span_name":     row.SpanName,
+		"span_id":       row.SpanId,
+		"duration_ns":   strconv.FormatInt(row.DurationNs, 10),
+		"ts":            compute.FormatTS(row.TsUnixNs),
 	}
 }
 
@@ -77,6 +133,7 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 // per-row cost bites.
 func runStages(raw string, ast *bash.Script) []string {
 	interp := bash.NewInterpreter()
+	interp.JqCompact = true // as in compute; see compute/engine.go
 	bash.RegisterToolCommands(interp)
 	interp.SetStdin(strings.NewReader(raw + "\n"))
 	var out bytes.Buffer

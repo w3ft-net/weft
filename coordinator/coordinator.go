@@ -827,13 +827,15 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 		}
 	}
 	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
-		Sql:      lp.DirectShardSQL,
-		Args:     argStrs,
-		Shards:   descs,
-		Stages:   lp.ComputeStages,
-		MergeKey: lp.MergeKey,
-		Limit:    int32(lp.Limit),
-		KeepLast: lp.TailMode,
+		Sql:               lp.DirectShardSQL,
+		Args:              argStrs,
+		Shards:            descs,
+		Stages:            lp.ComputeStages,
+		RowStages:         lp.RowStages,
+		StagesReadPayload: lp.StagesReadPayload,
+		MergeKey:          lp.MergeKey,
+		Limit:             int32(lp.Limit),
+		KeepLast:          lp.TailMode,
 		// TraceTag is never set here: this path only ever serves a
 		// cron/watch/dashboard fire (dispatchLoweredWithTier is only
 		// reachable via ExecuteForWatch's lowered-plan hot path), never
@@ -1190,12 +1192,14 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 		}
 	}
 	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
-		Sql:      directSQL,
-		Args:     argStrs,
-		Shards:   descs,
-		Stages:   plan.ComputeStages,
-		MergeKey: plan.ShardOrderBy,
-		Limit:    int32(plan.Limit),
+		Sql:               directSQL,
+		Args:              argStrs,
+		Shards:            descs,
+		Stages:            plan.ComputeStages,
+		RowStages:         plan.RowStages,
+		StagesReadPayload: plan.StagesReadPayload,
+		MergeKey:          plan.ShardOrderBy,
+		Limit:             int32(plan.Limit),
 		// tail-mode: shard SQL wraps to ASC; compute must retain
 		// last-N instead of stopping after first-N emitted.
 		KeepLast: plan.TailMode,

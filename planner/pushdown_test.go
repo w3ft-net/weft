@@ -40,29 +40,7 @@ func TestPushdown_SingleStage_Awk(t *testing.T) {
 		{
 			name:     "level not equal",
 			pipeline: `cat vimgym.log | awk 'LEVEL != "DEBUG"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level != 'DEBUG'`,
-		},
-
-		// Positional field comparison (numeric)
-		{
-			name:     "field greater than int",
-			pipeline: `cat vimgym.log | awk '$3 > 100'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(list_extract(fields, 3) AS DOUBLE) > 100`,
-		},
-		{
-			name:     "field less than int",
-			pipeline: `cat vimgym.log | awk '$3 < 50'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(list_extract(fields, 3) AS DOUBLE) < 50`,
-		},
-		{
-			name:     "field greater than or equal",
-			pipeline: `cat vimgym.log | awk '$3 >= 100'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(list_extract(fields, 3) AS DOUBLE) >= 100`,
-		},
-		{
-			name:     "field equals string",
-			pipeline: `cat vimgym.log | awk '$2 == "POST"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND list_extract(fields, 2) = 'POST'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND COALESCE(level, '') != 'DEBUG'`,
 		},
 
 		// Regex match
@@ -102,76 +80,12 @@ func TestPushdown_SingleStage_Awk(t *testing.T) {
 			pipeline: `cat vimgym.log | awk 'LEVEL == "ERROR" || LEVEL == "WARN"'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND (level = 'ERROR' OR level = 'WARN')`,
 		},
-		{
-			name:     "mixed AND with field and meta-var",
-			pipeline: `cat vimgym.log | awk 'LEVEL == "ERROR" && $3 > 100'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND CAST(list_extract(fields, 3) AS DOUBLE) > 100`,
-		},
 
 		// NR (row number) ranges → LIMIT/OFFSET
 		{
 			name:     "NR range",
 			pipeline: `cat vimgym.log | awk 'NR >= 10 && NR <= 50'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? LIMIT 41 OFFSET 9`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
-			if err != nil {
-				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
-			}
-			if plan.ShardSQL != tt.wantSQL {
-				t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, tt.wantSQL)
-			}
-			if len(plan.ComputeStages) != 0 {
-				t.Errorf("expected no compute stages, got %v", plan.ComputeStages)
-			}
-		})
-	}
-}
-
-func TestPushdown_SingleStage_Jq(t *testing.T) {
-	tests := []struct {
-		name     string
-		pipeline string
-		wantSQL  string
-	}{
-		{
-			name:     "select on json field equality",
-			pipeline: `cat vimgym.log | jq 'select(.status == 500)'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
-		},
-		{
-			name:     "select on json field string",
-			pipeline: `cat vimgym.log | jq 'select(.action == "login")'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND json_extract_string(payload, '$.action') = 'login'`,
-		},
-		{
-			name:     "select on meta _app",
-			pipeline: `cat warp.log | jq 'select(._namespace == "vimgym")'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'vimgym'`,
-		},
-		{
-			name:     "select on meta _level",
-			pipeline: `cat vimgym.log | jq 'select(._level == "ERROR")'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-		},
-		{
-			name:     "select with numeric comparison",
-			pipeline: `cat vimgym.log | jq 'select(.duration_ms > 1000)'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.duration_ms') AS DOUBLE) > 1000`,
-		},
-		{
-			name:     "select not equal",
-			pipeline: `cat vimgym.log | jq 'select(.status != 200)'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) != 200`,
-		},
-		{
-			name:     "chained selects inside jq",
-			pipeline: `cat vimgym.log | jq 'select(.status == 500) | select(.action == "login")'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND json_extract_string(payload, '$.action') = 'login'`,
 		},
 	}
 
@@ -383,20 +297,6 @@ func TestPushdown_MergedStages(t *testing.T) {
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout') AND level = 'ERROR'`,
 		},
 
-		// awk | awk → AND merge
-		{
-			name:     "two awk filters",
-			pipeline: `cat vimgym.log | awk 'LEVEL == "ERROR"' | awk '$3 > 100'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND CAST(list_extract(fields, 3) AS DOUBLE) > 100`,
-		},
-
-		// jq select | jq select → AND merge
-		{
-			name:     "two jq selects",
-			pipeline: `cat vimgym.log | jq 'select(.status == 500)' | jq 'select(.action == "login")'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND json_extract_string(payload, '$.action') = 'login'`,
-		},
-
 		// grep | grep → AND merge
 		{
 			name:     "two greps",
@@ -416,13 +316,6 @@ func TestPushdown_MergedStages(t *testing.T) {
 			name:     "awk filter then case-insensitive grep",
 			pipeline: `cat vimgym.log | awk 'LEVEL == "ERROR"' | grep -i timeout`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND regexp_matches(raw, 'timeout', 'i')`,
-		},
-
-		// jq select | grep → AND merge
-		{
-			name:     "jq select then grep",
-			pipeline: `cat vimgym.log | jq 'select(.status == 500)' | grep timeout`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND regexp_matches(raw, 'timeout')`,
 		},
 
 		// awk filter | head → WHERE + LIMIT
@@ -520,15 +413,15 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter then awk print",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | awk '{ print $2, $1 }'`,
-			wantSQL:     `SELECT concat_ws(' ', list_extract(fields, 2), list_extract(fields, 1)) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: nil, // simple $N print is fully pushed down as projection
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantCompute: []string{`awk '{ print $2, $1 }'`},
 		},
 
 		// awk print with bare metavar — projects the column directly.
 		{
 			name:        "awk print bare metavar",
 			pipeline:    `cat vimgym.log | awk '{ print HOST }'`,
-			wantSQL:     `SELECT instance as raw, ts FROM logs WHERE namespace = ?`,
+			wantSQL:     `SELECT COALESCE(CAST(instance AS VARCHAR), '') as raw, ts FROM logs WHERE namespace = ?`,
 			wantCompute: nil,
 		},
 
@@ -536,8 +429,8 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk print metavar with positional fields",
 			pipeline:    `cat vimgym.log | awk '{ print HOST, $1, $4 }'`,
-			wantSQL:     `SELECT concat_ws(' ', instance, list_extract(fields, 1), list_extract(fields, 4)) as raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: nil,
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ?`,
+			wantCompute: []string{`awk '{ print HOST, $1, $4 }'`},
 		},
 
 		// awk print concatenating a metavar with a positional field — exercises
@@ -545,8 +438,8 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk print concat metavar and field",
 			pipeline:    `cat vimgym.log | awk '{ print HOST "/" $1 }'`,
-			wantSQL:     `SELECT concat(concat(instance, '/'), list_extract(fields, 1)) as raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: nil,
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ?`,
+			wantCompute: []string{`awk '{ print HOST "/" $1 }'`},
 		},
 
 		// Unknown $IDENT (not a known metavar) bails — the awk stage stays in
@@ -563,7 +456,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter then jq construction",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | jq '{ts: ._ts, msg: .message}'`,
-			wantSQL:     `SELECT CAST(json_object('ts', ts, 'msg', json_extract(payload, '$.message')) AS VARCHAR) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR)), 'msg', json_extract(payload, '$.message')) AS VARCHAR), 'null') as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: nil,
 		},
 
@@ -586,8 +479,8 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "jq select then sort",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500)' | sort`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
-			wantCompute: []string{"sort"},
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantCompute: []string{`sort`},
 		},
 
 		// grep then awk END — grep pushes down, awk END doesn't
@@ -617,10 +510,10 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		// Awk with filter AND print action — both predicate and projection
 		// fold; the metavar in the print body resolves to its column.
 		{
-			name:        "awk filter + metavar projection fully folds",
+			name:        "awk filter with positional print prefilters",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { print $3, INSTANCE }'`,
-			wantSQL:     `SELECT concat_ws(' ', list_extract(fields, 3), instance) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: nil,
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantCompute: []string{`awk 'LEVEL == "ERROR" { print $3, INSTANCE }'`},
 		},
 
 		// Pushable stage after a non-pushable stage stays in compute
@@ -636,7 +529,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "jq select piped to object construction",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | {ts: ._ts, msg: .message}'`,
-			wantSQL:     `SELECT CAST(json_object('ts', ts, 'msg', json_extract(payload, '$.message')) AS VARCHAR) as raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR)), 'msg', json_extract(payload, '$.message')) AS VARCHAR), 'null') as raw, ts FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
 			wantCompute: nil,
 		},
 	}

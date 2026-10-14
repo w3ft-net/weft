@@ -136,8 +136,8 @@ func TestEdge_Awk_NonPushable(t *testing.T) {
 		{
 			name:        "unconditional print action",
 			pipeline:    `cat vimgym.log | awk '{ print $2 }'`,
-			wantSQL:     `SELECT list_extract(fields, 2) as raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: nil, // simple $N print fully pushed down as projection
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
+			wantCompute: []string{`awk '{ print $2 }'`},
 		},
 		// User-defined function
 		{
@@ -289,41 +289,11 @@ func TestEdge_Awk_Pushable(t *testing.T) {
 			pipeline: `cat vimgym.log | awk '$0 == "exact match"'`,
 			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND raw = 'exact match'`,
 		},
-		// Deeply nested boolean logic
-		{
-			name:     "nested AND inside OR",
-			pipeline: `cat vimgym.log | awk '(LEVEL == "ERROR" && $3 > 100) || LEVEL == "FATAL"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND ((level = 'ERROR' AND CAST(list_extract(fields, 3) AS DOUBLE) > 100) OR level = 'FATAL')`,
-		},
-		// Large positional field number
-		{
-			name:     "high positional field",
-			pipeline: `cat vimgym.log | awk '$15 == "value"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND list_extract(fields, 15) = 'value'`,
-		},
-		// Field 1
-		{
-			name:     "field 1",
-			pipeline: `cat vimgym.log | awk '$1 == "2026-03-28"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND list_extract(fields, 1) = '2026-03-28'`,
-		},
-		// Numeric equality (not just comparison)
-		{
-			name:     "field numeric equality",
-			pipeline: `cat vimgym.log | awk '$3 == 200'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(list_extract(fields, 3) AS DOUBLE) = 200`,
-		},
-		// Numeric not-equal
-		{
-			name:     "field numeric not equal",
-			pipeline: `cat vimgym.log | awk '$3 != 0'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(list_extract(fields, 3) AS DOUBLE) != 0`,
-		},
 		// Meta-var less-than (non-standard but expressible)
 		{
 			name:     "meta-var less than string",
 			pipeline: `cat vimgym.log | awk 'LEVEL < "WARN"'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level < 'WARN'`,
+			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND COALESCE(level, '') < 'WARN'`,
 		},
 	}
 
@@ -358,15 +328,15 @@ func TestEdge_Awk_PartialPushdown(t *testing.T) {
 		{
 			name:        "filter with printf action",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { printf "%s %s\n", $1, $2 }'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: []string{`awk '{ printf "%s %s\n", $1, $2 }'`},
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantCompute: []string{`awk 'LEVEL == "ERROR" { printf "%s %s\n", $1, $2 }'`},
 		},
 		// Regex pattern + non-default action
 		{
 			name:        "regex pattern with print action",
 			pipeline:    `cat vimgym.log | awk '/timeout/ { print $1, $2 }'`,
-			wantSQL:     `SELECT concat_ws(' ', list_extract(fields, 1), list_extract(fields, 2)) as raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout')`,
-			wantCompute: nil, // simple $N print fully pushed down as projection
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout')`,
+			wantCompute: []string{`awk '/timeout/ { print $1, $2 }'`},
 		},
 		// Filter + increment + END (count errors)
 		{
@@ -425,7 +395,7 @@ func TestEdge_Jq_MetaVarOutputRead(t *testing.T) {
 		{
 			name:        "host read inside string interpolation",
 			pipeline:    `cat vimgym.log | jq -r 'select(._level == "INFO") | "\(._host) \(.pct)"'`,
-			wantCompute: []string{`jq -r '"\(._host) \(.pct)"'`},
+			wantCompute: []string{`jq -r 'select(._level == "INFO") | "\(._host) \(.pct)"'`},
 		},
 	}
 
@@ -550,7 +520,7 @@ func TestEdge_Jq_NonPushable(t *testing.T) {
 		{
 			name:        "identity",
 			pipeline:    `cat vimgym.log | jq '.'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
+			wantSQL:     `SELECT CAST(payload AS VARCHAR) as raw, ts FROM logs WHERE namespace = ?`,
 			wantCompute: []string{`jq '.'`},
 		},
 		// Bare field access, object construction, and array construction all
@@ -561,49 +531,21 @@ func TestEdge_Jq_NonPushable(t *testing.T) {
 		{
 			name:        "keys builtin",
 			pipeline:    `cat vimgym.log | jq 'keys'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
+			wantSQL:     `SELECT CAST(payload AS VARCHAR) as raw, ts FROM logs WHERE namespace = ?`,
 			wantCompute: []string{`jq 'keys'`},
 		},
 		{
 			name:        "length builtin",
 			pipeline:    `cat vimgym.log | jq 'length'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
+			wantSQL:     `SELECT CAST(payload AS VARCHAR) as raw, ts FROM logs WHERE namespace = ?`,
 			wantCompute: []string{`jq 'length'`},
 		},
 		// map
 		{
 			name:        "map expression",
 			pipeline:    `cat vimgym.log | jq 'map(.status)'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
+			wantSQL:     `SELECT CAST(payload AS VARCHAR) as raw, ts FROM logs WHERE namespace = ?`,
 			wantCompute: []string{`jq 'map(.status)'`},
-		},
-		// select with non-comparison condition (has, contains, test)
-		{
-			name:        "select with has",
-			pipeline:    `cat vimgym.log | jq 'select(has("error"))'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`jq 'select(has("error"))'`},
-		},
-		// select with arithmetic in condition
-		{
-			name:        "select with arithmetic",
-			pipeline:    `cat vimgym.log | jq 'select((.x + .y) > 100)'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`jq 'select((.x + .y) > 100)'`},
-		},
-		// select comparing two fields (no literal)
-		{
-			name:        "select comparing two fields",
-			pipeline:    `cat vimgym.log | jq 'select(.start < .end)'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`jq 'select(.start < .end)'`},
-		},
-		// Literal on the left side of comparison
-		{
-			name:        "literal on left side",
-			pipeline:    `cat vimgym.log | jq 'select(500 == .status)'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`jq 'select(500 == .status)'`},
 		},
 	}
 
@@ -634,32 +576,7 @@ func TestEdge_Jq_Pushable(t *testing.T) {
 		name     string
 		pipeline string
 		wantSQL  string
-	}{
-		// Boolean field comparison
-		{
-			name:     "select boolean true",
-			pipeline: `cat vimgym.log | jq 'select(.success == true)'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.success') AS BOOL) = true`,
-		},
-		// Less-than on json field
-		{
-			name:     "select less than",
-			pipeline: `cat vimgym.log | jq 'select(.duration_ms < 100)'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.duration_ms') AS DOUBLE) < 100`,
-		},
-		// Greater-than-or-equal
-		{
-			name:     "select gte",
-			pipeline: `cat vimgym.log | jq 'select(.retries >= 3)'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.retries') AS DOUBLE) >= 3`,
-		},
-		// Three chained selects
-		{
-			name:     "three chained selects",
-			pipeline: `cat vimgym.log | jq 'select(._level == "ERROR") | select(.status == 500) | select(.action == "login")'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND json_extract_string(payload, '$.action') = 'login'`,
-		},
-	}
+	}{}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -688,7 +605,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select then field access",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | .payload'`,
-			wantSQL:     `SELECT CAST(json_extract(payload, '$.payload') AS VARCHAR) as raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT COALESCE(CAST(json_extract(payload, '$.payload') AS VARCHAR), 'null') as raw, ts FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
 			wantCompute: nil,
 		},
 		// select | select | object construction — both selects push as
@@ -697,7 +614,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "two selects then construction",
 			pipeline:    `cat vimgym.log | jq 'select(._level == "ERROR") | select(.status == 500) | {ts: ._ts}'`,
-			wantSQL:     `SELECT CAST(json_object('ts', ts) AS VARCHAR) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR))) AS VARCHAR), 'null') as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
 			wantCompute: nil,
 		},
 		// select | string-interpolation — the select pushes as a predicate
@@ -709,22 +626,22 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select then string interpolation",
 			pipeline:    `cat vimgym.log | jq 'select(.type == "disk") | "\(.host) \(.used_gb)"'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND json_extract_string(payload, '$.type') = 'disk'`,
-			wantCompute: []string{`jq '"\(.host) \(.used_gb)"'`},
+			wantSQL:     `SELECT CAST(payload AS VARCHAR) as raw, ts FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
+			wantCompute: []string{`jq 'select(.type == "disk") | "\(.host) \(.used_gb)"'`},
 		},
 		// -r flag must not prevent predicate pushdown, and must be preserved
 		// on any residual compute stage so raw-output semantics stick.
 		{
 			name:        "select with -r, full pushdown",
 			pipeline:    `cat vimgym.log | jq -r 'select(.status == 500)'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
 			wantCompute: nil,
 		},
 		{
 			name:        "select with -r then string interpolation",
 			pipeline:    `cat vimgym.log | jq -r 'select(.type == "disk") | "\(.host) \(.used_gb)"'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND json_extract_string(payload, '$.type') = 'disk'`,
-			wantCompute: []string{`jq -r '"\(.host) \(.used_gb)"'`},
+			wantSQL:     `SELECT CAST(payload AS VARCHAR) as raw, ts FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
+			wantCompute: []string{`jq -r 'select(.type == "disk") | "\(.host) \(.used_gb)"'`},
 		},
 		// --raw-output (long spelling) with a field projection. The projection
 		// must NOT fold into SELECT: json_extract returns JSON-quoted strings,
@@ -733,8 +650,8 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select with --raw-output long spelling",
 			pipeline:    `cat vimgym.log | jq --raw-output 'select(.status == 500) | .payload'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
-			wantCompute: []string{`jq --raw-output '.payload'`},
+			wantSQL:     `SELECT CAST(payload AS VARCHAR) as raw, ts FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantCompute: []string{`jq --raw-output 'select(.status == 500) | .payload'`},
 		},
 	}
 
@@ -1004,16 +921,16 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 		{
 			name:        "partial awk then sort",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { print $3 }' | sort`,
-			wantSQL:     `SELECT list_extract(fields, 3) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: []string{"sort"}, // simple $N print pushed down, sort remains
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantCompute: []string{`awk 'LEVEL == "ERROR" { print $3 }'`, `sort`},
 		},
 		// Partial jq pushdown followed by more compute — .payload folds into the
 		// SELECT, leaving only sort to run downstream.
 		{
 			name:        "partial jq then sort",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | .payload' | sort`,
-			wantSQL:     `SELECT CAST(json_extract(payload, '$.payload') AS VARCHAR) as raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
-			wantCompute: []string{"sort"},
+			wantSQL:     `SELECT COALESCE(CAST(json_extract(payload, '$.payload') AS VARCHAR), 'null') as raw, ts FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantCompute: []string{`sort`},
 		},
 		// wc without -l flag — not pushable
 		{
@@ -1075,21 +992,21 @@ func TestEdge_CrossTool(t *testing.T) {
 		{
 			name:        "jq select then awk print",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500)' | awk '{ print $1 }'`,
-			wantSQL:     `SELECT list_extract(fields, 1) as raw, ts FROM logs WHERE namespace = ? AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
-			wantCompute: nil, // simple $N print fully pushed down as projection
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantCompute: []string{`awk '{ print $1 }'`},
 		},
 		// grep then jq select then sort
 		{
 			name:        "grep then jq select then sort",
 			pipeline:    `cat vimgym.log | grep error | jq 'select(.status == 500)' | sort`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'error') AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
-			wantCompute: []string{"sort"},
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND regexp_matches(raw, 'error') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantCompute: []string{`sort`},
 		},
 		// awk filter then jq select — both push
 		{
 			name:        "awk filter then jq select",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | jq 'select(.status == 500)'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND CAST(json_extract(payload, '$.status') AS INT) = 500`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
 			wantCompute: nil,
 		},
 		// sed filter then grep — both push
@@ -1103,7 +1020,7 @@ func TestEdge_CrossTool(t *testing.T) {
 		{
 			name:        "four tools all pushable",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | grep timeout | jq 'select(.status == 500)' | sed -n '/fatal/p'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND regexp_matches(raw, 'timeout') AND CAST(json_extract(payload, '$.status') AS INT) = 500 AND regexp_matches(raw, 'fatal')`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND regexp_matches(raw, 'timeout') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500) AND regexp_matches(raw, 'fatal')`,
 			wantCompute: nil,
 		},
 	}
@@ -1219,9 +1136,10 @@ func TestEdge_WarpLog(t *testing.T) {
 			wantSQL:  `SELECT raw, ts FROM logs WHERE regexp_matches(raw, 'timeout')`,
 		},
 		{
-			name:     "warp.log with jq meta app filter",
-			pipeline: `cat warp.log | jq 'select(._namespace == "callbox")'`,
-			wantSQL:  `SELECT raw, ts FROM logs WHERE namespace = 'callbox'`,
+			name:        "warp.log with jq meta app filter",
+			pipeline:    `cat warp.log | jq 'select(._namespace == "callbox")'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = 'callbox'`,
+			wantCompute: nil,
 		},
 		{
 			name:        "warp.log head with sort",
@@ -1293,8 +1211,8 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 		{
 			name:        "partial printf then awk print",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { printf "%s=%s\n", $1, $2 }' | awk '{print $1}'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: []string{`awk '{ printf "%s=%s\n", $1, $2 }'`, `awk '{print $1}'`},
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantCompute: []string{`awk 'LEVEL == "ERROR" { printf "%s=%s\n", $1, $2 }'`, `awk '{print $1}'`},
 		},
 		// END block produces entirely different output — cannot project past it.
 		{
@@ -1308,16 +1226,16 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 		{
 			name:        "awk print chain",
 			pipeline:    `cat vimgym.log | awk '{print $3, $4}' | awk '{print $1}'`,
-			wantSQL:     `SELECT concat_ws(' ', list_extract(fields, 3), list_extract(fields, 4)) as raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk '{print $1}'`},
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
+			wantCompute: []string{`awk '{print $3, $4}'`, `awk '{print $1}'`},
 		},
 		// Partial pushdown with simple print + sort — print projects, sort computes.
 		// This IS safe because the print is the first compute operation.
 		{
 			name:        "partial print then sort is safe",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { print $3 }' | sort`,
-			wantSQL:     `SELECT list_extract(fields, 3) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: []string{"sort"},
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantCompute: []string{`awk 'LEVEL == "ERROR" { print $3 }'`, `sort`},
 		},
 	}
 

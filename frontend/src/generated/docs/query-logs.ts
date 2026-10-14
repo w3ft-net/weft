@@ -10,6 +10,7 @@ const queryLogs = {
     { level: 2, id: "meta-variables", text: "Meta-variables" },
     { level: 3, id: "why-two-naming-styles", text: "Why two naming styles" },
     { level: 3, id: "custom-fields-fall-through-to-json-extract", text: "Custom fields fall through to JSON-extract" },
+    { level: 2, id: "how-jq-reads-a-row", text: "How jq reads a row" },
     { level: 2, id: "per-tag-values-over-time", text: "Per-tag values over time" },
     { level: 2, id: "charting-a-query", text: "Charting a query" },
     { level: 2, id: "saving-a-result-set", text: "Saving a result set" },
@@ -188,6 +189,33 @@ and is queryable at lower speed:</p>
 </code></pre>
 <p>weft reads and parses every row in the time range for this filter. For
 dimensions you query constantly, use the indexed columns.</p>
+<h2 id="how-jq-reads-a-row">How jq reads a row</h2>
+<p>jq reads each row's JSON payload: the whole line for a JSON log, or the
+JSON part of a line that has text around it (a timestamp prefix, a
+CloudWatch envelope, Heroku's <code>key=value</code> metrics). The meta-variables
+(<code>._level</code>, <code>._host</code>, <code>._ts</code>, ...) are there too.</p>
+<p>A jq program made only of <code>select(...)</code> filters rows, and prints the log
+lines it keeps, exactly as they were:</p>
+<pre><code># The matching log lines, timestamp prefix and all
+cat /log/myco/prod/api/main.log | jq 'select(.status == 500)'
+
+# The payload JSON of those lines instead
+cat /log/myco/prod/api/main.log | jq 'select(.status == 500) | .'
+</code></pre>
+<p>Anything else prints jq's own output, one value per line. Objects and
+arrays print on a single line, so the output stays one row per line for
+<code>grep</code>, <code>wc -l</code> and <code>alert</code>.</p>
+<p>The payload stays attached to a row while stages only filter rows or
+count them (<code>grep</code>, an awk pattern, <code>head</code>, <code>tail</code>), so this works the
+same:</p>
+<pre><code>tail -n 500 /log/myco/prod/api/main.log | grep checkout | jq '.latency_ms'
+</code></pre>
+<p>Once a stage changes the text (<code>sort</code>, <code>awk '{ print ... }'</code>, <code>sed s/.../</code>),
+the next stage reads that text, as in any shell.</p>
+<p>jq compares values the way jq does: <code>select(.status == 500)</code> doesn't
+match the string <code>&quot;500&quot;</code>, and a row without the field has <code>null</code> there,
+which sorts below every number, so <code>select(.latency_ms &lt; 100)</code> also
+keeps rows that have no <code>latency_ms</code>.</p>
 <h2 id="per-tag-values-over-time">Per-tag values over time</h2>
 <p>Indexed dimensions, a frequent cron and the multi-row alert form
 together produce &quot;value by host (or service / region / pod) over

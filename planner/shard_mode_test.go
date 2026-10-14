@@ -106,8 +106,8 @@ func TestClassifyShardMode_B_PlainSortIsFirstCompute(t *testing.T) {
 			wantOrd:  "raw",
 		},
 		{
-			name:     "jq select pushes down, sort is first compute stage",
-			pipeline: `cat vimgym.log | jq 'select(.status == 500)' | sort`,
+			name:     "awk filter pushes down, sort is first compute stage",
+			pipeline: `cat vimgym.log | awk 'LEVEL == "ERROR"' | sort`,
 			wantOrd:  "raw",
 		},
 	}
@@ -222,8 +222,8 @@ func TestDirectShardSQL(t *testing.T) {
 			// The shard emits pre-projected raw values so ORDER BY
 			// raw produces the same global order `awk | sort` would.
 			name:     "mode B after projection fold — sort-as-first stage",
-			pipeline: `cat vimgym.log | awk '{ print $3 }' | sort`,
-			want:     `SELECT list_extract(fields, 3) as raw, ts FROM logs WHERE namespace = ? ORDER BY raw`,
+			pipeline: `cat vimgym.log | awk '{ print LEVEL }' | sort`,
+			want:     `SELECT COALESCE(CAST(level AS VARCHAR), '') as raw, ts FROM logs WHERE namespace = ? ORDER BY raw`,
 		},
 		{
 			// awk END block is a genuine compute-side transform that

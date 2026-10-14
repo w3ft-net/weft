@@ -234,6 +234,16 @@ message ExecuteQueryRequest {
   // merged stream, emit a synthetic summary line, and prefix each row with
   // a colored [namespace/service] badge. See docs/plans/request-tracing.md.
   bool trace_tag = 9;
+  // row_stages run on each merged row after the limit and before
+  // stages: stages that pass rows through unchanged (filters,
+  // head/tail -n N), run per row so the rows reach the next stage whole,
+  // payload and meta-variables included. See
+  // planner.QueryPlan.RowStages and docs/plans/planner-ir.md, "Row
+  // identity".
+  repeated string row_stages = 10;
+  // stages_read_payload feeds the first stage, a jq, each row's payload
+  // (the `payload` column) instead of its raw line.
+  bool stages_read_payload = 11;
 }
 
 message ExecuteQueryStreamResponse {
