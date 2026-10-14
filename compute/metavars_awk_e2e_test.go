@@ -132,3 +132,51 @@ func TestJob_MetaVarsSpliceOnlyForAJqFirstStage(t *testing.T) {
 		}
 	}
 }
+
+// awk reads a record per line, so a row holding several lines feeds it
+// several records, each reading its row's meta-variables. One set per
+// row would leave the second line's record waiting on the next row's,
+// which the writer only sends once awk reads that row: a deadlock.
+func TestJob_AwkMetaVarsPerLineOfAMultiLineRow(t *testing.T) {
+	job := (&Engine{}).NewJob([]string{`awk '{ print LEVEL, $0 }'`}, 1, "ts", 0, false, false)
+	done := make(chan string, 1)
+	go func() {
+		out, _ := job.Result()
+		done <- out
+	}()
+	for i, r := range []struct{ raw, level string }{
+		{"a\nb", "ERROR"}, {"c", "INFO"}, {"d\n", "WARN"}, {"", "DEBUG"},
+	} {
+		job.SendRow(&pb.ResultRow{TsUnixNs: int64(i), Raw: r.raw, MetaVars: map[string]string{"level": r.level}}, "a")
+	}
+	job.SendSentinel("a")
+	select {
+	case out := <-done:
+		if want := "ERROR a\nERROR b\nINFO c\nWARN d\nWARN \nDEBUG \n"; out != want {
+			t.Errorf("got %q, want %q", out, want)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("job deadlocked")
+	}
+}
+
+// A row with more lines than awkVarsCh holds still runs to completion.
+func TestJob_AwkMetaVarsRowLongerThanTheQueue(t *testing.T) {
+	job := (&Engine{}).NewJob([]string{`awk '{ print LEVEL }'`}, 1, "ts", 0, false, false)
+	done := make(chan string, 1)
+	go func() {
+		out, _ := job.Result()
+		done <- out
+	}()
+	job.SendRow(&pb.ResultRow{TsUnixNs: 1, Raw: strings.Repeat("x\n", 2999) + "x", MetaVars: map[string]string{"level": "ERROR"}}, "a")
+	job.SendRow(&pb.ResultRow{TsUnixNs: 2, Raw: "y", MetaVars: map[string]string{"level": "INFO"}}, "a")
+	job.SendSentinel("a")
+	select {
+	case out := <-done:
+		if want := strings.Repeat("ERROR\n", 3000) + "INFO\n"; out != want {
+			t.Errorf("got %d bytes, want %d", len(out), len(want))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("job deadlocked")
+	}
+}

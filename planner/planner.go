@@ -68,11 +68,18 @@ type QueryPlan struct {
 	AlertArgs        []string // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
 
 	// Direct-to-compute mode (see docs/plans/direct-to-compute.md §3).
-	// Populated from classifyShardMode walking ComputeStages for the
+	// Populated by sort/limit fusion (passes.go) from the compute stages'
 	// terminal sort. Consumed by compute's merge_key and by the
 	// coordinator when taking the direct-to-compute path.
 	ShardOrderBy string // "", "ts[ DESC]", or "raw[ DESC]"
 	ShardLimit   int    // per-shard LIMIT; 0 when pushdown is unsafe
+
+	// Aggregate, when set, says the shard SQL groups the rows (wc -l,
+	// sort -u, sort | uniq [-c]): each shard row is a distinct line with
+	// its CountColumn, merged on ShardOrderBy. Compute sums the counts
+	// across shards and prints the aggregated stages' output, which
+	// ComputeStages then read. One of the Aggregate* constants.
+	Aggregate string
 
 	// DirectShardSQL is the SQL compute sends to shards on the
 	// coordinator's behalf — same body as ShardSQL but with ShardOrderBy +
@@ -92,29 +99,23 @@ type QueryPlan struct {
 	RedirectAppend bool
 }
 
+// The aggregates a shard can compute (QueryPlan.Aggregate), named for
+// what compute prints from the summed counts.
+const (
+	// AggregateLines is `wc -l`: the total.
+	AggregateLines = "lines"
+	// AggregateDistinct is `sort -u` or `sort | uniq`: each line once.
+	AggregateDistinct = "distinct"
+	// AggregateCountDistinct is `sort | uniq -c`: each line with its
+	// count, as uniq -c prints it.
+	AggregateCountDistinct = "count_distinct"
+)
+
 // GrepPattern captures a grep filter for live tail matching.
 type GrepPattern struct {
 	Pattern    string
 	IgnoreCase bool
 	Invert     bool
-}
-
-// pushdownResult is the outcome of attempting to push a stage into SQL.
-// predicate is a raw SQL fragment with literals baked in — the per-
-// stage emitters (grep, awk, sed, jq, project) still produce string
-// predicates and rely on escapeSQLString for safety. Step 8b (a
-// follow-on) migrates them to Predicate{SQL, Args}. The pre-stage
-// adders in Plan() (customer/timestamps/namespace/env/service) DO use
-// placeholders today — they're the highest-value parameterization
-// targets (customer is the row-level security boundary; ts shifts
-// every request and is the biggest plan-cache miss).
-type pushdownResult struct {
-	pushed    bool   // true if at least a predicate was extracted
-	predicate string // SQL WHERE fragment (may be "" even if pushed, e.g. head/tail)
-	// keep marks predicate as a prefilter: the stage still runs,
-	// verbatim, in compute. Without it the predicate is exact and the
-	// stage is dropped.
-	keep bool
 }
 
 // ErrNotPlannable is the typed sentinel Plan returns when a pipeline
@@ -126,13 +127,20 @@ type pushdownResult struct {
 var ErrNotPlannable = errors.New("not a plannable log query")
 
 func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (*QueryPlan, error) {
+	plan, _, err := compile(pipeline, customerID, cwd, start, end)
+	return plan, err
+}
+
+// compile plans a pipeline and also returns its IR, which Explain shows.
+// The IR is nil for an alert-only pipeline.
+func compile(pipeline string, customerID int64, cwd string, start, end time.Time) (*QueryPlan, *compiled, error) {
 	queryPart, alertArgs := SplitAlertStage(pipeline)
 
 	// Alert-only pipeline (`alert ...` with nothing in front). Return
 	// a plan that carries only the alert args; the empty ShardSQL is
 	// the caller's signal to short-circuit shard execution.
 	if queryPart == "" && alertArgs != nil {
-		return &QueryPlan{AlertArgs: alertArgs}, nil
+		return &QueryPlan{AlertArgs: alertArgs}, nil, nil
 	}
 
 	// Strip a trailing `> /tmp/...` (or other shellfs namespace)
@@ -142,7 +150,7 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 	// target and rebuild queryPart from the surviving AST.
 	queryPart, redirTarget, redirAppend, err := extractTrailingFSRedirect(queryPart)
 	if err != nil {
-		return nil, fmt.Errorf("plan: %w", err)
+		return nil, nil, fmt.Errorf("plan: %w", err)
 	}
 
 	info, err := parsePipeline(queryPart, cwd)
@@ -151,80 +159,201 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 		// source command. Caller (Coordinator.Execute) routes these
 		// to warp via runLocal; ErrNotPlannable is the typed signal.
 		if strings.Contains(err.Error(), "unknown source command") || errors.Is(err, errLocalSourcePath) {
-			return nil, ErrNotPlannable
+			return nil, nil, ErrNotPlannable
 		}
-		return nil, fmt.Errorf("plan: %w", err)
+		return nil, nil, fmt.Errorf("plan: %w", err)
 	}
 
 	if info.source.follow && redirTarget != "" {
-		return nil, fmt.Errorf("plan: %w", FollowRedirectError(redirTarget))
+		return nil, nil, fmt.Errorf("plan: %w", FollowRedirectError(redirTarget))
 	}
 
+	// Frontends: every stage lowers to IR nodes, after the source's own
+	// head/tail line count.
+	c := &compiled{source: info.source}
+	switch info.source.cmd {
+	case "head":
+		c.nodes = append(c.nodes, &limitNode{n: info.source.limit, order: "ts ASC"})
+	case "tail":
+		c.nodes = append(c.nodes, &limitNode{n: info.source.limit, order: "ts DESC"})
+	}
+	for i, st := range info.stages {
+		ls := lowerStage(st, i+1)
+		c.stages = append(c.stages, ls)
+		c.nodes = append(c.nodes, ls.nodes...)
+	}
+
+	// Passes. Aggregate recognition and sort/limit fusion run below,
+	// once the SQL holds the pushed line count.
+	c.pushFilters()
+	c.splitCompute()
+	c.pushProjection()
+	c.hoistFilters()
+	for _, s := range append(c.rowStages, c.compute...) {
+		c.readsMeta = c.readsMeta || s.readsMeta
+	}
+
+	// SQL backend: the source, then every node the shard runs.
 	sql := newSQLBuilder()
 	// Customer + time bounds first so they sit at the head of the
 	// WHERE clause regardless of subsequent app/source/stage pushdowns.
 	// addCustomer/addTimeBounds are no-ops on empty/zero values.
 	sql.addCustomer(customerID)
 	sql.addTimeBounds(start, end)
+	addSourcePredicates(sql, info.source)
 
-	// Snapshot the user's post-source stages before pushdown rewrites
-	// them. LiveStages is a faithful reconstruction of "everything that
-	// followed the source" — coordinator.BuildLiveFilter re-runs these
-	// per row on the live-tail broker stream so the transformations
-	// stay consistent with the historical batch.
-	liveStages := formatComputeStages(info.stages)
-	// Live rows follow the same rule, one row at a time: leading row
-	// stages keep or drop the row, and a jq after them reads its
-	// payload. There's no SQL projection to fold into on the live path.
-	liveRows, liveRest := splitRowStages(info.stages)
-	liveRowStages := formatComputeStages(liveRows)
-	liveReadsPayload := len(liveRest) > 0 && liveRest[0].cmd == "jq"
+	var grepPatterns []GrepPattern // collected for follow mode
+	var linePreds []Predicate      // hoisted filters, on each line
+	for _, n := range c.nodes[:c.shard] {
+		switch n := n.(type) {
+		case *filterNode:
+			if n.hoisted {
+				linePreds = append(linePreds, Predicate{SQL: n.pred})
+				continue
+			}
+			sql.addPredicate(n.pred)
+			if n.follow != nil {
+				grepPatterns = append(grepPatterns, *n.follow)
+			}
+		case *limitNode:
+			if n.order != "" {
+				sql.setOrderLimit(n.order, n.n)
+			} else {
+				sql.setLimitOffset(n.n, n.offset)
+			}
+		}
+	}
+
+	switch {
+	case c.selected != nil:
+		sql.setSelect(c.selected.expr)
+	case len(c.rowStages) > 0:
+		sql.includePayload = c.readsPayload
+		for _, rs := range c.rowStages {
+			sql.includePayload = sql.includePayload || rs.cmd == "jq"
+		}
+	case c.readsPayload:
+		sql.setSelect("CAST(payload AS VARCHAR)")
+	}
+	// A compute stage reading a meta-variable (`jq -r '._host'`, awk's
+	// `HOST`) gets it from the row: the shard projects every
+	// MetaVarColumns column alongside raw, and compute (compute/
+	// metavars.go) hands the values to the stage.
+	if c.readsMeta {
+		sql.includeMetaVars = true
+	}
+
+	orderDesc := sql.orderBy == "ts DESC"
+	c.fuseAggregate(sql.limit > 0 || sql.offset > 0)
+	if c.aggregate == "" {
+		c.fuseSort(orderDesc, sql.limit)
+	}
+
+	// tail wraps its inner DESC + LIMIT pushdown in an outer ASC re-emit
+	// so the user-visible rows arrive in chronological order. The inner
+	// keeps doing the cheap per-shard top-N work; the outer flip is a
+	// bounded re-sort. ShardSQL preserves the head/tail-derived inner
+	// ordering verbatim, so we wrap iff the inner is "ts DESC". The
+	// DirectShardSQL path's inner uses the order from sort/limit fusion
+	// — wrap whenever that's "ts DESC" (Mode A with tail). Other DESC
+	// keys (raw DESC from sort -r) are explicit user intent and not
+	// wrapped.
+	// Hoisted filters keep lines, so the shard returns those; a pushed
+	// line count declines hoisting, so there's no ts DESC to wrap.
+	rows := sql
+	if len(linePreds) > 0 {
+		rows = sql.Lines(linePreds)
+	}
+	shardQuery := rows
+	if sql.orderBy == "ts DESC" {
+		shardQuery = sql.Wrap("ts ASC")
+	}
+	shardSQL, shardArgs, shardArgSources := shardQuery.ToSQLWithSources()
+
+	directInner := rows.WithOrderLimit(c.shardOrderBy, c.shardLimit)
+	directQuery := directInner
+	if c.shardOrderBy == "ts DESC" {
+		directQuery = directInner.Wrap("ts ASC")
+	}
+	if c.aggregate != "" {
+		// No line count to keep apart: both paths group.
+		shardQuery = sql.Aggregate(c.aggregate, c.shardOrderBy, linePreds)
+		directQuery = shardQuery
+		shardSQL, shardArgs, shardArgSources = shardQuery.ToSQLWithSources()
+	}
+	directShardSQL, _ := directQuery.ToSQL()
+	// ShardSQL and DirectShardSQL render identical WHERE clauses (only
+	// order/limit differ), so their args slices match — Args lives once
+	// on the plan rather than duplicating per build path.
+
+	// After the wrap, rows reach compute in ts ASC even though the
+	// inner pushdown was DESC. Reflect that in the merge-key the
+	// coordinator forwards to compute, otherwise the k-way merge
+	// walks the per-shard streams in the wrong direction.
+	mergeOrderBy := c.shardOrderBy
+	if c.shardOrderBy == "ts DESC" {
+		mergeOrderBy = "ts"
+	}
+
+	// Live tail re-runs the user's post-source stages, verbatim, on each
+	// live row, so its rows go through the same transformations as the
+	// historical batch. Leading row stages keep or drop the row, and a
+	// jq after them reads its payload; there's no SQL projection to fold
+	// into on the live path.
+	liveRows, liveRest := splitRowStages(c.stages)
+	liveStages := stageTexts(c.stages)
 	if len(liveRows) > 0 {
-		liveStages = formatComputeStages(liveRest)
+		liveStages = stageTexts(liveRest)
 	}
 
-	// Apply source filters from the pseudofile path. Each path segment
-	// maps to a column: namespace, env, service, kind. These are
-	// customer-supplied identifiers, so they go through positional
-	// placeholders rather than string interpolation — defense in depth
-	// against an adversarial namespace name even though the
-	// coordinator's CustomerHasSource allowlist gates the source up
-	// front.
-	if info.source.env != "" {
-		sql.addPredicate("env = ?", info.source.env)
-	}
-	switch len(info.source.namespaces) {
-	case 0:
-		// warp.log — no namespace/service/kind filter.
-	case 1:
-		sql.addPredicate("namespace = ?", info.source.namespaces[0])
-	default:
-		placeholders := strings.Repeat("?, ", len(info.source.namespaces)-1) + "?"
-		sql.addPredicate("namespace IN ("+placeholders+")", info.source.namespaces...)
-	}
-	switch len(info.source.services) {
-	case 0:
-		// No service filter (namespace-level wildcard or warp.log).
-	case 1:
-		sql.addPredicate("service = ?", info.source.services[0])
-	default:
-		placeholders := strings.Repeat("?, ", len(info.source.services)-1) + "?"
-		sql.addPredicate("service IN ("+placeholders+")", info.source.services...)
-	}
-	switch len(info.source.kinds) {
-	case 0:
-		// No kind filter (namespace wildcard or warp.log).
-	case 1:
-		sql.addPredicate("kind = ?", info.source.kinds[0])
-	default:
-		placeholders := strings.Repeat("?, ", len(info.source.kinds)-1) + "?"
-		sql.addPredicate("kind IN ("+placeholders+")", info.source.kinds...)
-	}
+	return &QueryPlan{
+		ShardSQL:          shardSQL,
+		Args:              shardArgs,
+		ArgSources:        shardArgSources,
+		DirectShardSQL:    directShardSQL,
+		ComputeStages:     stageTexts(c.compute),
+		RowStages:         stageTexts(c.rowStages),
+		StagesReadPayload: len(c.rowStages) > 0 && c.readsPayload,
+		Limit:             sql.limit,
+		TailMode:          orderDesc,
+		Follow:            info.source.follow,
+		FollowPatterns:    grepPatterns,
+		LiveStages:        liveStages,
+		LiveRowStages:     stageTexts(liveRows),
+		LiveReadsPayload:  len(liveRest) > 0 && liveRest[0].cmd == "jq",
+		SourceCmd:         info.source.cmd,
+		SourceCustomerID:  customerID,
+		SourceNamespace:   firstOrEmpty(info.source.namespaces),
+		SourceService:     firstOrEmpty(info.source.services),
+		SourceKind:        firstOrEmpty(info.source.kinds),
+		AlertArgs:         alertArgs,
+		ShardOrderBy:      mergeOrderBy,
+		ShardLimit:        c.shardLimit,
+		Aggregate:         c.aggregate,
+		RedirectTarget:    redirTarget,
+		RedirectAppend:    redirAppend,
+	}, c, nil
+}
 
-	if info.source.cmd == "trace" && info.source.traceID != "" {
-		sql.addPredicate("trace_id = ?", info.source.traceID)
+// addSourcePredicates applies the source's filters: each pseudofile
+// path segment maps to a column (namespace, env, service, kind), and a
+// trace source to its trace or span columns. The path values are
+// customer-supplied identifiers, so they go through positional
+// placeholders rather than string interpolation — defense in depth
+// against an adversarial namespace name even though the coordinator's
+// CustomerHasSource allowlist gates the source up front.
+func addSourcePredicates(sql *Query, src sourceInfo) {
+	if src.env != "" {
+		sql.addPredicate("env = ?", src.env)
 	}
-	if info.source.cmd == "trace_spans" {
+	addInPredicate(sql, "namespace", src.namespaces)
+	addInPredicate(sql, "service", src.services)
+	addInPredicate(sql, "kind", src.kinds)
+
+	if src.cmd == "trace" && src.traceID != "" {
+		sql.addPredicate("trace_id = ?", src.traceID)
+	}
+	if src.cmd == "trace_spans" {
 		// Cross-trace aggregation (docs/plans/span-display.md, Phase
 		// 2): no trace_id to anchor on — every "span done" (has a real
 		// duration_ns) or "span error" (matched off raw, the only
@@ -237,11 +366,11 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 		// .../span error ..." text, which theme.RenderSpanRollup
 		// already knows how to parse (both phases share one parser).
 		sql.addPredicate("(duration_ns > 0 OR raw LIKE 'span error%')")
-		if info.source.spanName != "" {
-			sql.addPredicate("span_name = ?", info.source.spanName)
+		if src.spanName != "" {
+			sql.addPredicate("span_name = ?", src.spanName)
 		}
 	}
-	if info.source.cmd == "trace" || info.source.cmd == "trace_spans" {
+	if src.cmd == "trace" || src.cmd == "trace_spans" {
 		// A trace (or a cross-trace span aggregation) fans out across
 		// every service a request touched, with no shared context to
 		// identify which service produced which line — unlike cat/tail
@@ -253,209 +382,19 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 		// every row (SpanOccurrence.Label).
 		sql.includeMetaVars = true
 	}
+}
 
-	switch info.source.cmd {
-	case "head":
-		sql.setOrderLimit("ts ASC", info.source.limit)
-	case "tail":
-		sql.setOrderLimit("ts DESC", info.source.limit)
+// addInPredicate filters col to values: nothing for none (warp.log, or
+// a namespace-level wildcard), = for one, IN for several.
+func addInPredicate(sql *Query, col string, values []string) {
+	switch len(values) {
+	case 0:
+	case 1:
+		sql.addPredicate(col+" = ?", values[0])
+	default:
+		placeholders := strings.Repeat("?, ", len(values)-1) + "?"
+		sql.addPredicate(col+" IN ("+placeholders+")", values...)
 	}
-
-	// Walk stages left-to-right, pushing down as many as possible.
-	// Keep raw stageInfo for compute stages so we can extract projections.
-	var computeStages []stageInfo
-	var grepPatterns []GrepPattern // collected for follow mode
-	pushing := true
-
-	for _, stage := range info.stages {
-		if !pushing {
-			computeStages = append(computeStages, stage)
-			continue
-		}
-
-		// Once a head/tail line count (or awk NR-window) bounds the
-		// source, every later stage runs in compute on the globally
-		// merged stream — no later predicate is pushed into shard SQL,
-		// selective or not. `tail -n N | filter` means "the last N rows,
-		// then filter", so `tail -n 500 | awk 'LEVEL == "ERROR"' | wc -l`
-		// counts errors among 500 rows instead of returning the last 500
-		// errors (which can never fall below 500 and breaks alert
-		// recipes). A head/tail stage after the freeze lands here too,
-		// so it can't overwrite the LIMIT. Pre-limit filters
-		// (filter | tail) are unaffected: the freeze is set by the LIMIT
-		// pushdown itself, not by entering the loop. See
-		// docs/completed/cross-shard-post-limit-filter.md.
-		if sql.limitFrozen {
-			pushing = false
-			computeStages = append(computeStages, stage)
-			continue
-		}
-
-		r := tryPushdown(stage, sql)
-		if r.pushed {
-			if r.predicate != "" {
-				sql.addPredicate(r.predicate)
-			}
-			// Collect grep patterns for follow mode (only if successfully pushed down).
-			if stage.cmd == "grep" {
-				if pattern, ignoreCase, invert := parseGrepArgs(stage.args); pattern != "" {
-					grepPatterns = append(grepPatterns, GrepPattern{
-						Pattern:    pattern,
-						IgnoreCase: ignoreCase,
-						Invert:     invert,
-					})
-				}
-			}
-			if r.keep {
-				pushing = false
-				stage.prefiltered = true
-				computeStages = append(computeStages, stage)
-			}
-		} else {
-			pushing = false
-			computeStages = append(computeStages, stage)
-		}
-	}
-
-	// Compute's first stage reads shard rows rather than text, and so
-	// does every stage after row stages that pass rows through. When
-	// row stages are followed by a stage that reads row metadata, they
-	// run per row in the engine (RowStages) and the rows reach the next
-	// stage whole; a jq there reads the payload (StagesReadPayload).
-	// Otherwise the first stage may be exactly a projection SQL computes
-	// (awk '{ print LEVEL }', jq '.a'), which becomes the SELECT, or a
-	// jq reading the payload, which SQL selects in raw's place.
-	rowStages, computeStages := splitRowStages(computeStages)
-	rawExpr := "raw"
-	var stagesReadPayload bool
-	if len(rowStages) > 0 {
-		stagesReadPayload = len(computeStages) > 0 && computeStages[0].cmd == "jq"
-		sql.includePayload = stagesReadPayload
-		for _, rs := range rowStages {
-			sql.includePayload = sql.includePayload || rs.cmd == "jq"
-		}
-	} else if len(computeStages) > 0 {
-		first := computeStages[0]
-		if first.cmd == "jq" {
-			if expr := lowerFirstJqStage(first, first.prefiltered); expr != "" {
-				rawExpr = expr
-				computeStages = computeStages[1:]
-			} else {
-				rawExpr = "CAST(payload AS VARCHAR)"
-			}
-		} else if expr, ok := extractRawExpr(first); ok {
-			rawExpr = expr
-			computeStages = computeStages[1:]
-		}
-	}
-	compute := formatComputeStages(computeStages)
-
-	// A remaining jq stage might read a bare "._"-prefixed meta-variable
-	// for output (e.g. `jq -r '._host'`) rather than only inside a
-	// pushed-down select() predicate — the case jqComparisonToSQL/
-	// jqValueToSQL already handle. Project every MetaVarColumns column
-	// alongside raw so compute (compute/metavars.go) can splice the
-	// values into each row's JSON body before the jq stage runs.
-	//
-	// Textual substring check on the jq stage's own source, not an AST
-	// walk: a meta-variable reference can only ever appear in a jq
-	// program as the literal token "._name" (there's no aliasing or
-	// indirection in this expression language), so this has no false
-	// negatives — and a false positive (e.g. the sequence happening to
-	// appear inside a string literal) only costs a few extra, often-NULL
-	// columns per row, not a correctness bug. Deliberately not a full
-	// AST-recognizer layer for what's still a bounded-size feature.
-	// A remaining awk stage might read a bare reserved meta-variable
-	// (e.g. `HOST`) for output the same way — see docs/known-issues.md's
-	// now-fixed awk entry. Unlike jq's "._name" token, a bare
-	// identifier has no distinguishing prefix, so this uses a
-	// word-bounded regex (awkMetaVarPattern) rather than a plain
-	// substring check, to avoid matching inside an unrelated longer
-	// identifier (e.g. "MYHOST"). Same bounded-feature tradeoff as the
-	// jq check: a false positive (the reserved name happening to be the
-	// user's own unrelated awk variable) only costs a few extra columns.
-	metaReaders := append(formatComputeStages(rowStages), compute...)
-	for _, s := range metaReaders {
-		if strings.HasPrefix(s, "jq") {
-			for metaVar := range JQMetaVars {
-				if strings.Contains(s, "."+metaVar) {
-					sql.includeMetaVars = true
-					break
-				}
-			}
-		} else if strings.HasPrefix(s, "awk") && awkMetaVarPattern.MatchString(s) {
-			sql.includeMetaVars = true
-		}
-		if sql.includeMetaVars {
-			break
-		}
-	}
-
-	sql.setSelect(rawExpr)
-
-	orderDesc := sql.orderBy == "ts DESC"
-	shardOrderBy, shardLimit := classifyShardMode(compute, orderDesc, sql.limit)
-
-	// tail wraps its inner DESC + LIMIT pushdown in an outer ASC re-emit
-	// so the user-visible rows arrive in chronological order. The inner
-	// keeps doing the cheap per-shard top-N work; the outer flip is a
-	// bounded re-sort. ShardSQL preserves the head/tail-derived inner
-	// ordering verbatim, so we wrap iff the inner is "ts DESC". The
-	// DirectShardSQL path's inner uses the mode-classified order from
-	// classifyShardMode — wrap whenever that's "ts DESC" (Mode A with
-	// tail). Other DESC keys (raw DESC from sort -r) are explicit user
-	// intent and not wrapped.
-	shardQuery := sql
-	if sql.orderBy == "ts DESC" {
-		shardQuery = sql.Wrap("ts ASC")
-	}
-	shardSQL, shardArgs, shardArgSources := shardQuery.ToSQLWithSources()
-
-	directInner := sql.WithOrderLimit(shardOrderBy, shardLimit)
-	directQuery := directInner
-	if shardOrderBy == "ts DESC" {
-		directQuery = directInner.Wrap("ts ASC")
-	}
-	directShardSQL, _ := directQuery.ToSQL()
-	// ShardSQL and DirectShardSQL render identical WHERE clauses (only
-	// order/limit differ), so their args slices match — Args lives once
-	// on the plan rather than duplicating per build path.
-
-	// After the wrap, rows reach compute in ts ASC even though the
-	// inner pushdown was DESC. Reflect that in the merge-key the
-	// coordinator forwards to compute, otherwise the k-way merge
-	// walks the per-shard streams in the wrong direction.
-	mergeOrderBy := shardOrderBy
-	if shardOrderBy == "ts DESC" {
-		mergeOrderBy = "ts"
-	}
-
-	return &QueryPlan{
-		ShardSQL:          shardSQL,
-		Args:              shardArgs,
-		ArgSources:        shardArgSources,
-		DirectShardSQL:    directShardSQL,
-		ComputeStages:     compute,
-		RowStages:         formatComputeStages(rowStages),
-		StagesReadPayload: stagesReadPayload,
-		Limit:             sql.limit,
-		TailMode:          orderDesc,
-		Follow:            info.source.follow,
-		FollowPatterns:    grepPatterns,
-		LiveStages:        liveStages,
-		LiveRowStages:     liveRowStages,
-		LiveReadsPayload:  liveReadsPayload,
-		SourceCmd:         info.source.cmd,
-		SourceCustomerID:  customerID,
-		SourceNamespace:   firstOrEmpty(info.source.namespaces),
-		SourceService:     firstOrEmpty(info.source.services),
-		SourceKind:        firstOrEmpty(info.source.kinds),
-		AlertArgs:         alertArgs,
-		ShardOrderBy:      mergeOrderBy,
-		ShardLimit:        shardLimit,
-		RedirectTarget:    redirTarget,
-		RedirectAppend:    redirAppend,
-	}, nil
 }
 
 // FollowRedirectError is the refusal for `tail -f ... > target`: follow
@@ -527,71 +466,8 @@ func extractTrailingFSRedirect(pipeline string) (string, string, bool, error) {
 	return pipeline, "", false, nil
 }
 
-// tryPushdown attempts to push a single stage into the SQL builder.
-func tryPushdown(stage stageInfo, sql *Query) pushdownResult {
-	switch stage.cmd {
-	case "awk":
-		// Flags (-F, -v) change how awk splits and what its variables
-		// hold, so only a bare program is analyzed.
-		if len(stage.args) != 1 || strings.HasPrefix(stage.args[0], "-") {
-			return pushdownResult{}
-		}
-		pd := tryAwkPushdown(stage.args[0])
-		if pd == nil {
-			return pushdownResult{}
-		}
-		if pd.limit > 0 || pd.offset > 0 {
-			sql.setLimitOffset(pd.limit, pd.offset)
-			return pushdownResult{pushed: true}
-		}
-		return pushdownResult{
-			pushed:    true,
-			predicate: pd.predicate,
-			keep:      !pd.exact,
-		}
-
-	case "jq":
-		if len(stage.args) == 0 {
-			return pushdownResult{}
-		}
-		return tryJqStagePushdown(stage.args)
-
-	case "grep":
-		pred := tryGrepPushdown(stage.args)
-		if pred == "" {
-			return pushdownResult{}
-		}
-		return pushdownResult{
-			pushed:    true,
-			predicate: pred,
-		}
-
-	case "sed":
-		pred := trySedPushdown(stage.args)
-		if pred == "" {
-			return pushdownResult{}
-		}
-		return pushdownResult{
-			pushed:    true,
-			predicate: pred,
-		}
-
-	case "head":
-		n := parseLineCount(stage.args)
-		sql.setOrderLimit("ts ASC", n)
-		return pushdownResult{pushed: true}
-
-	case "tail":
-		n := parseLineCount(stage.args)
-		sql.setOrderLimit("ts DESC", n)
-		return pushdownResult{pushed: true}
-	}
-
-	return pushdownResult{}
-}
-
-// formatComputeStages returns each stage's own source text.
-func formatComputeStages(stages []stageInfo) []string {
+// stageTexts returns each stage's own source text.
+func stageTexts(stages []*loweredStage) []string {
 	var out []string
 	for _, s := range stages {
 		out = append(out, s.src)

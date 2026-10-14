@@ -51,3 +51,21 @@ func TestJob_JqMetaVarOutputRead_NoMetaVarsIsNull(t *testing.T) {
 		t.Errorf("jq -r '._host' with no MetaVars = %q, want %q", got, "null")
 	}
 }
+
+// A jq stage that names no meta-variable sees the row as it is: no
+// "_"-prefixed keys, not even _ts, which every row carries. Otherwise
+// `jq -c .` and `keys` would show them (docs/plans/planner-ir.md, "jq").
+func TestJob_JqWithoutMetaVarSeesNoSplicedKeys(t *testing.T) {
+	pool := &Engine{}
+	job := pool.NewJob([]string{`jq -c '.'`}, 1, "ts", 0, false, false)
+	job.SendRow(&pb.ResultRow{TsUnixNs: 1000, Raw: `{"pct":42}`}, "a")
+	job.SendSentinel("a")
+
+	out, err := job.Result()
+	if err != nil {
+		t.Fatalf("Result: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != `{"pct":42}` {
+		t.Errorf("jq -c '.' = %q, want the row unchanged", got)
+	}
+}

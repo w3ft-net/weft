@@ -125,6 +125,5 @@ func generateRow(app string) *pb.LogRow {
 		TsUnixNs:    now.UnixNano(),
 		Instance:    instance,
 		PayloadJson: payload,
-		Fields:      []string{now.Format("2006-01-02T15:04:05"), level, app, instance, action},
 	}
 }

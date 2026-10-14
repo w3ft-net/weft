@@ -24,11 +24,19 @@ The planner is greedy — it attempts to push down as much as possible. Pushable
 
 ### awk
 
+`$N` reads the shard's `fields` column, which ingest splits from `raw` the
+way awk splits `$0` (runs of spaces, tabs, newlines, carriage returns),
+whatever the source's schema. Rows ingested before 2026-10-13 hold an
+older, schema-dependent split, so a `$N` query reaching them may disagree
+with awk.
+
 | Expression | SQL |
 |-----------|-----|
 | `LEVEL == "ERROR"` | `WHERE level = 'ERROR'` |
 | `SERVICE == "coordinator"` | `WHERE service = 'coordinator'` |
-| `$3 > 100` | `WHERE CAST(list_extract(fields, 3) AS DOUBLE) > 100` |
+| `$4 == "ERROR"` | `WHERE list_extract(fields, 4) = 'ERROR'` |
+| `$3 > 100` | Prefilter: `WHERE (TRY_CAST(list_extract(fields, 3) AS DOUBLE) > 100 OR list_extract(fields, 3) > '100' OR …)`; awk still runs, since it compares as numbers or as strings by the value |
+| `{ print $2, $1 }` | `SELECT concat_ws(' ', list_extract(fields, 2), list_extract(fields, 1))` (missing fields as `''`) |
 | `/timeout/` | `WHERE raw LIKE '%timeout%'` |
 | `NR >= 10 && NR <= 50` | `LIMIT/OFFSET` |
 | Compound `&&` / `\|\|` | `AND` / `OR` |
@@ -40,6 +48,8 @@ The planner is greedy — it attempts to push down as much as possible. Pushable
 | `select(.status == 500)` | `WHERE CAST(json_extract(payload, '$.status') AS INT) = 500` |
 | `select(._service == "coordinator")` | `WHERE service = 'coordinator'` |
 | `select(._level == "ERROR")` | `WHERE level = 'ERROR'` |
+| `.a.b`, `{k: .x}`, `[.a, .b]` | `SELECT` the JSON text jq prints (compact; `null` when missing) |
+| `-r .a` | The same, with a string printed as its unescaped text |
 
 ### grep/sed
 
@@ -49,13 +59,57 @@ The planner is greedy — it attempts to push down as much as possible. Pushable
 | `grep -i error` | `WHERE raw ILIKE '%error%'` |
 | `sed '/pattern/...'` | Address pushdown: `WHERE raw LIKE '%pattern%'` |
 
+### cut
+
+`cut [-d D] -f LIST` splits `raw` on each `D` (a tab by default), which
+isn't how `fields` splits, so it lowers to its own `SELECT`:
+`string_split(raw, D)`, the listed fields in list order (`N`, `N-M`,
+`N-`), joined by `D`. Any other flag (`-c`, `-s`) runs in compute.
+
+### Aggregates
+
+When nothing ahead of them in compute needs the rows, the shard computes
+these and returns one row per distinct line with its count, instead of
+the rows:
+
+| Stages | Shard SQL | Compute prints |
+|--------|-----------|----------------|
+| `wc -l` | `count(*)` | the total |
+| `sort -u`, `sort \| uniq` | `GROUP BY raw ORDER BY raw` | each line once |
+| `sort \| uniq -c` | `GROUP BY raw ORDER BY raw`, `count(*)` | `uniq -c`'s `%7d %s` |
+
+`sort -r` orders by `raw DESC`. The lines grouped are the row's `raw`, or
+the projection before it (`jq -r .action | sort | uniq -c`), split on
+newlines the way compute would feed them to the stage. Compute merges the
+shards' rows on the line and sums the counts for each line, then runs the
+stages after the aggregate (`sort -rn | head`) as usual. It doesn't
+apply after a pushed line count (`tail -n 500 | wc -l` counts the merged
+500 rows, not 500 per shard), after row stages, in follow mode, or when
+the stage after it names a meta-variable.
+
+### Filters after a sort or a projection
+
+A `grep` or `sed -n '/re/p'` after a plain `sort` (`-r` and `-u` too)
+moves ahead of it into the shard: sort only reorders lines, so
+`sort | grep x` prints what `grep x | sort` does. After a projection the
+shard computes (`jq -r .action | grep login`), the filter reads the
+projected text, which is the SELECT's `raw`. Because compute splits
+each row into lines before `sort` reads them, the shard does the same
+(`unnest(string_split(raw, chr(10)))`) and filters each line, so a
+multi-line row keeps only its matching lines. A keyed sort (`-n`, `-k`, a
+file operand) keeps the filter in compute, as do a pushed line count
+(`tail -n 50 | sort | grep x` greps the last 50 rows), follow mode and
+trace sources, and so does a filter whose removal would leave a stage
+naming a meta-variable right after the projection. A filter after a
+`uniq` stays put: dropping a line can make two equal lines adjacent.
+
 ### Non-pushable stages
 
 These become gpipe compute stages:
 
-- `sort`, `uniq`, `wc` — aggregation/reordering
+- `sort` with a key (`-n`, `-k`), `uniq` without a `sort` right before it, `wc` other than `-l`
 - `sed 's/foo/bar/'` — substitution (modifies output, not a filter)
-- `awk '{ print $2, $1 }'` — output formatting
+- `awk '{ print $NF }'` — a field by a computed index
 - `jq '{ ts: ._ts, msg: .message }'` — object construction
 - `awk` with `END` blocks — requires seeing all rows before producing output
 
@@ -149,5 +203,4 @@ message LogRow {
 
 - **Multi-source pipelines:** `cat vimgym.log callbox.log | ...` — should this be supported as a union query, or should users use `warp.log` with meta-variable filters? Multi-arg cat is natural Unix but adds planner complexity.
 - **Pushdown verification:** should we log/display what was pushed down vs. what runs as gpipe? Useful for debugging and for users understanding query performance.
-- **Cross-shard aggregation:** `sort` and `uniq -c` across multiple shards require a merge step. For `sort`, merge-sort on the coordinator is straightforward. For `uniq -c`, partial counts from each shard need summing. How far do we take distributed aggregation vs. just collecting all rows at the coordinator?
 - **Query cancellation:** user hits ctrl-c mid-query. Coordinator sends cancel to shards via gRPC context cancellation — straightforward, but need to make sure shard-side cleanup is correct.

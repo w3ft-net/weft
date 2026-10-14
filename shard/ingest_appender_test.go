@@ -27,7 +27,6 @@ func TestIngest_AppenderRoundTrip(t *testing.T) {
 
 	row := &pb.LogRow{
 		Raw:         rawWithSpecials,
-		Fields:      []string{"a", "b,c", "d"},
 		TsUnixNs:    tsUs,
 		Level:       "INFO",
 		Namespace:   "test",
@@ -55,15 +54,15 @@ func TestIngest_AppenderRoundTrip(t *testing.T) {
 		t.Fatalf("payload round-trip: want alice/42, got %q/%d", user, n)
 	}
 
-	// fields TEXT[] — list length and 1-indexed elements (including the one with
-	// an embedded comma, which must remain a single element).
+	// fields TEXT[] is raw split the way awk splits $0 — list length and
+	// 1-indexed elements, including ones with an embedded quote or comma.
 	var flen int
-	var f1, f2 string
-	if err := ds.db.QueryRow(`SELECT len(fields), fields[1], fields[2] FROM logs`).Scan(&flen, &f1, &f2); err != nil {
+	var f3, f5 string
+	if err := ds.db.QueryRow(`SELECT len(fields), fields[3], fields[5] FROM logs`).Scan(&flen, &f3, &f5); err != nil {
 		t.Fatalf("scan fields: %v", err)
 	}
-	if flen != 3 || f1 != "a" || f2 != "b,c" {
-		t.Fatalf("fields round-trip: want 3/a/b,c, got %d/%q/%q", flen, f1, f2)
+	if flen != 10 || f3 != "'quotes'," || f5 != "a" {
+		t.Fatalf("fields round-trip: want 10/'quotes',/a, got %d/%q/%q", flen, f3, f5)
 	}
 
 	// raw verbatim, kind defaulted, ts at microsecond granularity.

@@ -2,39 +2,18 @@ package planner
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/awk"
 	"github.com/graybeardcorp/warp/pkg/jq"
 )
 
-// extractRawExpr reports whether a compute stage is exactly a per-row
-// projection SQL can compute, and if so returns the SQL expression for
-// the raw column. ok means the stage is fully covered and the caller
-// drops it from compute; anything partial stays in compute unchanged.
-// jq is decided by lowerFirstJqStage, since what jq reads depends on
-// its position.
-//
-// cut isn't here: it splits raw on tabs (or -d), and the shard's fields
-// column is split differently (see awkColumnToSQL), so no cut projection
-// is exact.
-func extractRawExpr(stage stageInfo) (rawExpr string, ok bool) {
-	switch stage.cmd {
-	case "awk":
-		return extractAwkRawExpr(stage.args)
-	}
-	return "", false
-}
-
-// extractAwkRawExpr handles a program that's a single unpatterned
-// `{ print ... }`. Flags (-F, -v OFS=...) change what print emits, so
-// any flag disqualifies it.
-func extractAwkRawExpr(args []string) (string, bool) {
-	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
-		return "", false
-	}
-	prog, err := awk.Parse(args[0])
-	if err != nil || len(prog.Functions) > 0 || len(prog.Rules) != 1 {
+// awkProjection reports whether an awk program is exactly a per-row
+// projection SQL computes, a single unpatterned `{ print ... }`, and if
+// so returns the SQL expression for the raw column.
+func awkProjection(prog *awk.Program) (string, bool) {
+	if len(prog.Functions) > 0 || len(prog.Rules) != 1 {
 		return "", false
 	}
 	rule := &prog.Rules[0]
@@ -75,12 +54,16 @@ func awkPrintToSQL(ps *awk.PrintStmt) (string, bool) {
 func awkPrintArgToSQL(expr awk.Expr) (string, bool) {
 	switch e := expr.(type) {
 	case *awk.FieldExpr:
-		// Only $0. Positional fields don't match the shard's fields
-		// column; see awkColumnToSQL.
-		if idx, ok := e.Index.(*awk.NumberLit); ok && idx.Value == 0 {
-			return "raw", true
+		// $0 is raw and $N is fields[N], which prints as "" when the
+		// line has fewer fields; see awkColumnToSQL.
+		c, ok := awkColumnToSQL(e)
+		if !ok {
+			return "", false
 		}
-		return "", false
+		if c.nullable {
+			return fmt.Sprintf("COALESCE(%s, '')", c.sql), true
+		}
+		return c.sql, true
 
 	case *awk.StringLit:
 		return fmt.Sprintf("'%s'", escapeSQLString(e.Value)), true
@@ -117,9 +100,14 @@ func awkPrintArgToSQL(expr awk.Expr) (string, bool) {
 // wrapJqProjection renders a JSON-valued SQL expression as the text jq
 // prints for it: compact JSON, and `null` for a missing value. The cast
 // also keeps the driver from returning json_object/json_array as Go
-// maps and stripping the quotes off string scalars.
-func wrapJqProjection(sql string) string {
-	return "COALESCE(CAST(" + sql + " AS VARCHAR), 'null')"
+// maps and stripping the quotes off string scalars. With -r (raw), a
+// string prints as its unescaped text.
+func wrapJqProjection(sql string, raw bool) string {
+	json := "COALESCE(CAST(" + sql + " AS VARCHAR), 'null')"
+	if !raw {
+		return json
+	}
+	return "CASE WHEN json_type(" + sql + ") = 'VARCHAR' THEN json_extract_string(" + sql + ", '$') ELSE " + json + " END"
 }
 
 // jqValueToSQL converts a jq expression into a SQL value expression IF the
@@ -248,4 +236,66 @@ func jqFlattenComma(expr jq.Expr) []jq.Expr {
 		return append(jqFlattenComma(c.Left), jqFlattenComma(c.Right)...)
 	}
 	return []jq.Expr{expr}
+}
+
+// cutProjection lowers `cut [-d D] -f LIST` to the SQL expression for
+// the line it prints, the way warp's cut does: split raw on each D (a
+// tab by default), print the listed fields, in list order and repeats
+// included, joined by D, skipping fields past the last. A line without
+// D is one field. Any other flag stays opaque.
+func cutProjection(args []string) (string, reason) {
+	delim, spec := "\t", ""
+	for i := 0; i < len(args); i++ {
+		switch arg := args[i]; {
+		case (arg == "-d" || arg == "-f") && i+1 < len(args):
+			i++
+			if arg == "-d" {
+				delim = args[i]
+			} else {
+				spec = args[i]
+			}
+		case strings.HasPrefix(arg, "-d") && len(arg) > 2:
+			delim = arg[2:]
+		case strings.HasPrefix(arg, "-f") && len(arg) > 2:
+			spec = arg[2:]
+		default:
+			return "", because(reasonCutArgs)
+		}
+	}
+	if spec == "" {
+		return "", because(reasonCutArgs)
+	}
+	if delim == "" {
+		return "", because(reasonCutDelimiter)
+	}
+	d := "'" + escapeSQLString(delim) + "'"
+	parts := "string_split(raw, " + d + ")"
+	var lists []string
+	for _, item := range strings.Split(spec, ",") {
+		from, to, isRange := strings.Cut(item, "-")
+		lo, err := strconv.Atoi(from)
+		if err != nil || lo < 1 {
+			return "", because(reasonCutFields)
+		}
+		switch {
+		case !isRange:
+			lists = append(lists, fmt.Sprintf("[%s[%d]]", parts, lo))
+		case to == "":
+			lists = append(lists, fmt.Sprintf("%s[%d:]", parts, lo))
+		default:
+			// N-M with N > M lists nothing, in warp and in the slice.
+			hi, err := strconv.Atoi(to)
+			if err != nil {
+				return "", because(reasonCutFields)
+			}
+			lists = append(lists, fmt.Sprintf("%s[%d:%d]", parts, lo, hi))
+		}
+	}
+	list := lists[0]
+	if len(lists) > 1 {
+		list = "flatten([" + strings.Join(lists, ", ") + "])"
+	}
+	// array_to_string skips the NULLs a field past the last reads as,
+	// and returns NULL when every field is past it.
+	return "COALESCE(array_to_string(" + list + ", " + d + "), '')", reason{}
 }

@@ -6,6 +6,57 @@ a fix. Not a bug tracker; keep entries here only once root-caused, with
 enough detail that fixing them later doesn't require re-discovery. Move an
 entry to `docs/completed/` (or delete it) once fixed.
 
+## cut and awk projections run once per row, not once per line
+
+**Where:** projection pushdown (`planner/passes.go` `pushProjection`) for
+`cut` (`cutProjection`) and awk `print` (`awkProjection`), versus the
+stages themselves in compute.
+
+**What:** compute feeds a row's raw to a stage followed by a newline, so a
+row holding several lines (a stack trace) is several lines to `cut` and
+several records to awk. The shard's projection reads the whole raw once:
+`cut -d i -f 1` over `multi\nline\nrow` returns `mult`, where cut prints
+`mult`, `l` and `row`; awk `{ print $1 }` returns the row's first field
+(`fields`, split from the whole row) once instead of each line's;
+`{ print LEVEL }` prints the level once instead of once per line. jq
+projections are unaffected: jq reads the row's payload, once. Found by
+multi-line probes in `TestDifferentialLineSplits` (2026-10-14).
+
+**Fix shape:** split the lines under the projection
+(`SELECT * REPLACE (unnest(string_split(raw, chr(10))) AS raw, …)`), with
+awk's `$N` read from a per-line split matching warp's (space, tab,
+newline) instead of `fields`. That costs an unnest on every shard row of
+a cut/awk projection query, which is the decision left open.
+
+## Shard aggregates keep a trailing `\r` that warp's line readers drop
+
+**Where:** `planner.Query.Aggregate` (the shard half of `wc -l`, `sort -u`,
+`sort | uniq [-c]`; docs/plans/planner-ir.md, Phase 3) versus warp's
+`sort`, `uniq`, `cut` and the compute engine's stdout reader, which all read
+lines with Go's `bufio.ScanLines`.
+
+`bufio.ScanLines` drops one carriage return before each newline, so every
+line reader on a line's path strips one more trailing `\r`: in compute,
+`cat x | sort -u` turns `cr\r` into `cr` (sort's reader), and
+`cat x | sort | uniq -c` turns `cr\r\r` into `cr` (sort's, uniq's, then the
+engine's). The shard's `GROUP BY` keeps the line as stored, as GNU sort and
+uniq would, so a row ending in `\r` groups and prints differently from the
+same pipeline run in compute. Verified with the differential harness: rows
+`cr\r` under `sort -u` and `sort | uniq -c` (plan `cr\r`, reference `cr`).
+
+Row filters agree either way (a leading grep keeps or drops the whole row on
+both paths), and so does `wc -l`, which counts newlines.
+
+**Why not emulated in SQL:** the number of `\r`s dropped depends on how many
+readers the line passes through, and sort orders by the once-stripped line
+while uniq groups the twice-stripped one, so no single strip in the shard
+reproduces both. The fix is in warp: line readers that split on `\n` only,
+keeping `\r` as data, as GNU tools do. Then compute and the shard agree with
+no change here. Until then, CRLF-terminated log lines are the exposure; weft
+ingests mostly from Linux sources.
+
+**Status:** open.
+
 ## `GracefulStop()` doesn't drain within systemd's 90s `TimeoutStopSec`
 
 **Where:** `cmd/coordinator/main.go`'s SIGTERM handler (calls

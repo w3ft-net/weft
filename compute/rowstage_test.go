@@ -63,6 +63,16 @@ func TestRowStages_JqReadsMetaVars(t *testing.T) {
 	}
 }
 
+// A select that names no meta-variable reads the payload as it is, so
+// `keys` sees only the payload's own.
+func TestRowStages_JqWithoutMetaVarSeesNoSplicedKeys(t *testing.T) {
+	got := runRowFilterJob(t, nil, 0, false, `select(keys == ["status"])`)
+	want := "10:00 api login failed\n10:01 api login ok\n10:02 api search failed\n10:04 api update failed"
+	if got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
 // `head -n 2 | jq 'select(...)'` filters the first two rows; the limit
 // counts rows before the filter, not survivors.
 func TestRowStages_JqRunsAfterTheHeadLimit(t *testing.T) {

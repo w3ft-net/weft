@@ -30,10 +30,74 @@ import (
 )
 
 // TestDifferential runs the corpus against generated rows on two shards.
+// Every aggregate the planner computes in the shard must appear in it.
 func TestDifferential(t *testing.T) {
 	h := newHarness(t, generateRows(400), 2)
+	aggregates := map[string]int{}
 	for _, p := range corpus(t) {
-		t.Run(p, func(t *testing.T) { h.check(t, p) })
+		t.Run(p, func(t *testing.T) {
+			if plan := h.check(t, p); plan != nil {
+				aggregates[plan.Aggregate]++
+			}
+		})
+	}
+	for _, fn := range []string{planner.AggregateLines, planner.AggregateDistinct, planner.AggregateCountDistinct} {
+		if aggregates[fn] == 0 {
+			t.Errorf("no pipeline in the corpus aggregates %s in the shard", fn)
+		}
+	}
+}
+
+// TestDifferentialLineSplits checks the stages that read lines, not
+// rows, over rows holding several lines or nothing: an aggregate counts
+// what compute would have fed the stage, and a hoisted filter keeps the
+// lines grep would. (A trailing carriage return
+// is docs/known-issues.md's.)
+func TestDifferentialLineSplits(t *testing.T) {
+	var rows []*pb.LogRow
+	base := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for i, raw := range []string{
+		"a", "b\nc", "", "c\n", "b", "\n", "a", "multi\nline\nrow", "b", "line\n\n",
+	} {
+		rows = append(rows, &pb.LogRow{
+			Raw: raw, TsUnixNs: base.Add(time.Duration(i) * time.Second).UnixNano(),
+			Namespace: "acme", Service: "api", Kind: "main", CustomerId: 1, PayloadJson: []byte("{}"),
+		})
+	}
+	h := newHarness(t, rows, 2)
+	for _, p := range []string{
+		`cat /log/acme/api/main.log | wc -l`,
+		`cat /log/acme/api/main.log | sort | uniq -c`,
+		`cat /log/acme/api/main.log | sort -r | uniq`,
+		`cat /log/acme/api/main.log | sort -u`,
+		`cat /log/acme/api/main.log | grep nothing-matches | wc -l`,
+		`cat /log/acme/api/main.log | grep nothing-matches | sort | uniq -c`,
+		`cat /log/acme/api/main.log | sort | grep -v b | uniq -c`,
+	} {
+		t.Run(p, func(t *testing.T) {
+			if plan := h.check(t, p); plan != nil && plan.Aggregate == "" {
+				t.Errorf("didn't aggregate in the shard:\n%s", planner.Explain(p))
+			}
+		})
+	}
+	for _, p := range []string{
+		`cat /log/acme/api/main.log | sort | grep b`,
+		`cat /log/acme/api/main.log | sort -r | grep -v b`,
+		`cat /log/acme/api/main.log | sort | grep '^$'`,
+		`cat /log/acme/api/main.log | grep line | sort -u | sed -n '/^l/p'`,
+		`cat /log/acme/api/main.log | cut -d x -f 1 | grep -v b`,
+	} {
+		t.Run(p, func(t *testing.T) {
+			plan := h.check(t, p)
+			if plan == nil {
+				return
+			}
+			for _, s := range plan.ComputeStages {
+				if strings.HasPrefix(s, "grep") || strings.HasPrefix(s, "sed") {
+					t.Errorf("%q runs in compute, want it hoisted:\n%s", s, planner.Explain(p))
+				}
+			}
+		})
 	}
 }
 
@@ -114,10 +178,13 @@ func newHarness(t *testing.T, rows []*pb.LogRow, nShards int) *harness {
 	return h
 }
 
-func (h *harness) check(t *testing.T, pipeline string) {
+// check runs a pipeline both ways and compares them. It returns the plan
+// under test, or nil when the pipeline isn't plannable.
+func (h *harness) check(t *testing.T, pipeline string) *planner.QueryPlan {
 	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
 	if err != nil {
-		t.Skipf("not plannable: %v", err)
+		t.Logf("not plannable: %v", err)
+		return nil
 	}
 	source, stages := splitSource(t, pipeline)
 	got, gotErr := h.runPlan(plan)
@@ -125,7 +192,7 @@ func (h *harness) check(t *testing.T, pipeline string) {
 	switch {
 	case gotErr != nil && wantErr != nil:
 		// Both fail, e.g. a stage warp doesn't support. Same behavior.
-		return
+		return plan
 	case gotErr != nil:
 		t.Fatalf("plan fails, reference doesn't: %v\n%s", gotErr, planner.Explain(pipeline))
 	case wantErr != nil:
@@ -140,6 +207,7 @@ func (h *harness) check(t *testing.T, pipeline string) {
 	if got != want {
 		t.Errorf("plan and reference differ: %s\n%s", firstDiff(got, want), planner.Explain(pipeline))
 	}
+	return plan
 }
 
 func sortedLines(s string) string {
@@ -175,6 +243,7 @@ func (h *harness) runPlan(plan *planner.QueryPlan) (string, error) {
 		RowStages:         plan.RowStages,
 		StagesReadPayload: plan.StagesReadPayload,
 		MergeKey:          plan.ShardOrderBy,
+		Aggregate:         plan.Aggregate,
 		Limit:             int32(plan.Limit),
 		KeepLast:          plan.TailMode,
 	})
@@ -328,7 +397,120 @@ func corpus(t *testing.T) []string {
 	for _, p := range extraCorpus {
 		add(p)
 	}
+	for _, p := range docsCorpus(t) {
+		add(p)
+	}
+	for _, p := range generatedCorpus(300) {
+		add(p)
+	}
 	sort.Strings(out)
+	return out
+}
+
+// docsCorpus is every one-line pipeline in the shell help and the
+// manual, its source pointed at a generated source so the stages see
+// rows.
+func docsCorpus(t *testing.T) []string {
+	t.Helper()
+	var files []string
+	for _, dir := range []string{"../../docs/shell", "../../docs/manual"} {
+		fs, err := filepath.Glob(dir + "/*.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, fs...)
+	}
+	if len(files) == 0 {
+		t.Fatal("no docs found")
+	}
+	line := regexp.MustCompile("(?m)(?:^|`|\\$ )((?:cat|head|tail) [^`\n]*\\|[^`\n]*)")
+	var out []string
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range line.FindAllStringSubmatch(string(src), -1) {
+			p := strings.TrimSpace(m[1])
+			if strings.HasSuffix(p, "\\") {
+				continue // continues on the next line
+			}
+			if p = pointAtGeneratedSource(p); p != "" {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// pointAtGeneratedSource replaces a pipeline's source paths with one the
+// generated rows fill, or returns "" when its source names none.
+func pointAtGeneratedSource(pipeline string) string {
+	script, err := bash.Parse(pipeline)
+	if err != nil || len(script.Commands) != 1 {
+		return ""
+	}
+	cmds := script.Commands[0].First.Commands
+	sc, ok := cmds[0].(*bash.SimpleCommand)
+	if !ok {
+		return ""
+	}
+	replaced := false
+	for i := 1; i < len(sc.Words); i++ {
+		w := sc.Words[i].Literal()
+		if strings.Contains(w, "$") {
+			return ""
+		}
+		if strings.HasSuffix(w, ".log") || strings.HasPrefix(w, "/log/") {
+			sc.Words[i] = bash.Word{Parts: []bash.WordPart{&bash.LiteralPart{Value: "/log/acme/api/main.log"}}}
+			replaced = true
+		}
+	}
+	if !replaced {
+		return ""
+	}
+	return bash.Unparse(script)
+}
+
+// generatedCorpus composes pipelines of one to three stages from the
+// constructs the frontends lower, and from ones they don't, so every
+// rule meets its neighbors. Seeded, so the corpus is stable.
+func generatedCorpus(n int) []string {
+	sources := []string{
+		"cat /log/acme/api/main.log", "cat vimgym.log", "cat warp.log",
+		"head -n 50 /log/acme/web/main.log", "tail -n 60 callbox.log",
+	}
+	stages := []string{
+		// filters
+		`grep timeout`, `grep -v login`, `grep -i error`, `grep -E 'it.s|café'`,
+		`sed -n '/ok/p'`, `awk 'LEVEL == "ERROR"'`, `awk '/timeout/'`,
+		`awk 'LEVEL != "INFO" && $0 ~ /a/'`, `awk 'LEVEL == "WARN" { print "W" }'`,
+		`awk '$2 == "ERROR"'`, `awk 'HOST == "i-001" || LEVEL == ""'`,
+		`awk '$5 > 100'`, `awk '$1 ~ /^[0-9]/'`,
+		`jq 'select(.status == 500)'`, `jq 'select(.status >= 200)'`,
+		`jq 'select(.action == "it'\''s")'`, `jq 'select(.status == 500 and .action == "login")'`,
+		`jq 'select(._level == "ERROR")'`,
+		// projections and transforms
+		`awk '{ print LEVEL }'`, `awk '{ print NAMESPACE, $0 }'`, `awk '{ print $2 }'`,
+		`awk '{ print $3, $1 }'`,
+		`jq '.action'`, `jq -r '.action'`, `jq '{a: .action, s: .status}'`, `jq -c '.foo'`,
+		`jq -r '._level'`, `jq 'select(.status == 500) | .action'`, `cut -c 1-12`,
+		`jq -r '.status'`, `jq -r '.foo'`, `cut -d ' ' -f 2`, `cut -d, -f1,3-`, `cut -d'"' -f4,2`,
+		`sed 's/o/0/g'`, `tr a-z A-Z`,
+		// line counts
+		`head -n 3`, `tail -n 4`, `head -2`, `awk 'NR >= 2 && NR <= 6'`, `awk 'NR > 1'`,
+		// order and aggregates
+		`sort`, `sort -r`, `uniq -c`, `wc -l`, `sort -rn`, `uniq`, `sort -u`,
+	}
+	r := rand.New(rand.NewSource(2))
+	var out []string
+	for len(out) < n {
+		p := sources[r.Intn(len(sources))]
+		for k := 1 + r.Intn(3); k > 0; k-- {
+			p += " | " + stages[r.Intn(len(stages))]
+		}
+		out = append(out, p)
+	}
 	return out
 }
 
@@ -361,6 +543,71 @@ var extraCorpus = []string{
 	`tail -n 40 /log/acme/api/main.log | awk 'LEVEL == "ERROR"' | wc -l`,
 	`cat /log/acme/api/main.log | grep -v timeout | sort | uniq -c`,
 	`cat /log/acme/api/main.log | sed -n '/login/p'`,
+	// awk compares numerically when both sides look numeric, a string
+	// constant included: "500.0" == "500".
+	`cat /log/acme/api/main.log | awk 'LEVEL == "500"'`,
+	// $N is fields[N], split at ingest the way awk splits.
+	`cat /log/acme/api/main.log | awk '$2 == "ERROR"'`,
+	`cat /log/acme/api/main.log | awk '$4 == "warmed"' | wc -l`,
+	`cat /log/acme/api/main.log | awk '$5 > 1000'`,
+	`cat /log/acme/api/main.log | awk '$5 >= "2500"'`,
+	`cat /log/acme/api/main.log | awk '$7 < 3'`,
+	`cat /log/acme/api/main.log | awk '$9 == ""'`,
+	`cat /log/acme/api/main.log | awk '$1 ~ /^\[/ && $3 !~ /^\[i-00[12]/'`,
+	`cat /log/acme/api/main.log | awk '{ print $2, $1 }'`,
+	`cat /log/acme/api/main.log | awk '{ print $3 "|" HOST }' | sort | uniq -c`,
+	// Aggregates the shard computes: compute sums the shards' counts.
+	`cat /log/acme/api/main.log | wc -l`,
+	`cat /log/acme/api/main.log | grep no-such-line | wc -l`,
+	`cat /log/acme/api/main.log | grep no-such-line | sort | uniq -c`,
+	`cat /log/acme/api/main.log | awk '{ print $5 }' | wc -l`,
+	`cat vimgym.log | awk '{ print $2 }' | sort | uniq -c`,
+	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rn`,
+	`cat /log/acme/api/main.log | jq '.status' | sort -u`,
+	`cat /log/acme/api/main.log | jq -r '.status' | sort -r | uniq`,
+	`cat /log/acme/api/main.log | cut -d ' ' -f 2 | sort | uniq -c`,
+	`cat /log/acme/api/main.log | jq -c '{a: .action}' | sort | uniq -c | head -3`,
+	`cat /log/acme/api/main.log | sort -u | uniq -c`,
+	`cat /log/acme/api/main.log | awk '{ print LEVEL }' | sort | uniq -c | awk '{ print $2 }'`,
+	// Declined: the stage after names a meta-variable; a pushed line
+	// count; row stages first.
+	`cat /log/acme/api/main.log | sort | uniq -c | awk '{ print LEVEL, $0 }'`,
+	`tail -n 60 /log/acme/api/main.log | sort | uniq -c`,
+	`cat /log/acme/api/main.log | grep -E 'it.s' | jq 'select(._level == "ERROR")' | wc -l`,
+	// Projections: cut and jq -r.
+	`cat /log/acme/api/main.log | cut -d ' ' -f 3,1`,
+	`cat /log/acme/api/main.log | cut -d ' ' -f 2-4`,
+	`cat /log/acme/api/main.log | cut -d: -f2-`,
+	`cat /log/acme/api/main.log | cut -d'"' -f4,2,9-`,
+	`cat /log/acme/api/main.log | cut -f1`,
+	`cat /log/acme/api/main.log | cut -d ' ' -f 3-2`,
+	`cat /log/acme/api/main.log | jq -r '{a: .action}'`,
+	`cat /log/acme/api/main.log | jq -r '.items'`,
+	`cat /log/acme/api/main.log | jq -r '.nothing'`,
+	`cat /log/acme/api/main.log | jq -r '.success'`,
+	`cat /log/acme/api/main.log | jq -r '.duration_ms'`,
+	`cat /log/acme/api/main.log | jq -r '[.action, .status]'`,
+	`tail -n 40 /log/acme/api/main.log | awk '$2 == "INFO" { print $NF }'`,
+	// Filter hoisting: grep and sed below a sort, on each line.
+	`cat /log/acme/api/main.log | sort | grep login`,
+	`cat /log/acme/api/main.log | sort -r | grep -v INFO | head -5`,
+	`cat /log/acme/api/main.log | sort -u | grep -i error | sort -r | grep -v warmed`,
+	`cat /log/acme/api/main.log | grep a | sort | sed -n '/login/p' | uniq -c`,
+	`cat /log/acme/api/main.log | sort | grep ERROR | wc -l`,
+	`cat /log/acme/api/main.log | jq -r .action | sort | grep -v login`,
+	// ... and below the SELECT's projection.
+	`cat /log/acme/api/main.log | jq -r .action | grep login`,
+	`cat /log/acme/api/main.log | jq -r '.action' | grep -v login | sort | uniq -c`,
+	`cat /log/acme/api/main.log | jq '.status' | grep 500 | wc -l`,
+	`cat /log/acme/api/main.log | cut -d ' ' -f 2 | grep -i info`,
+	`cat /log/acme/api/main.log | awk '{ print $2, $3 }' | sed -n '/ERROR/p' | head -4`,
+	`cat /log/acme/api/main.log | jq -r .action | grep o | sort -u | grep -v login`,
+	`cat /log/acme/api/main.log | grep a | awk '{ print LEVEL }' | grep -v INFO`,
+	`cat /log/acme/api/main.log | jq -r '.action' | grep login | awk '{ print LEVEL, $0 }'`,
+	// Declined: a keyed sort, a pushed line count, a filter after uniq.
+	`cat /log/acme/api/main.log | sort -n | grep login`,
+	`tail -n 50 /log/acme/api/main.log | sort | grep login`,
+	`cat /log/acme/api/main.log | sort | uniq | grep login`,
 }
 
 // generateRows builds a deterministic mix of the line shapes weft
@@ -377,7 +624,7 @@ func generateRows(n int) []*pb.LogRow {
 	var rows []*pb.LogRow
 	for i := 0; i < n; i++ {
 		src := sources[r.Intn(len(sources))]
-		level := pick("ERROR", "WARN", "INFO", "DEBUG", "")
+		level := pick("ERROR", "WARN", "INFO", "DEBUG", "", "500.0")
 		ts := base.Add(time.Duration(i) * 7 * time.Second)
 		if i%3 == 0 {
 			ts = ts.Add(time.Duration(r.Intn(1000)) * time.Millisecond)
@@ -439,7 +686,6 @@ func generateRows(n int) []*pb.LogRow {
 		}
 		rows = append(rows, &pb.LogRow{
 			Raw:         raw,
-			Fields:      strings.Fields(raw),
 			TsUnixNs:    ts.UnixNano(),
 			Level:       level,
 			Namespace:   src.ns,

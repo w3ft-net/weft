@@ -24,6 +24,7 @@ type RowStages struct {
 
 type rowStage struct {
 	jq     jq.Expr      // a select chain, over the payload
+	meta   bool         // the select chain names a meta-variable
 	script *bash.Script // a filter over the raw line
 	head   int          // head -n N: keep the first N (when > -1)
 	tail   int          // tail -n N: keep the last N (when > -1)
@@ -61,6 +62,7 @@ func parseRowStage(src string) (rowStage, error) {
 		for _, a := range argv[1:] {
 			if !strings.HasPrefix(a, "-") {
 				st.jq, err = jq.Parse(a)
+				st.meta = planner.StageReadsMetaVars(src)
 				return st, err
 			}
 		}
@@ -113,7 +115,10 @@ func (st *rowStage) keep(raw, payload string, meta map[string]string) bool {
 		if payload == "" {
 			payload = "{}"
 		}
-		v, err := jq.ParseValue(MergeMetaVars(payload, meta))
+		if st.meta {
+			payload = MergeMetaVars(payload, meta)
+		}
+		v, err := jq.ParseValue(payload)
 		if err != nil {
 			return false
 		}

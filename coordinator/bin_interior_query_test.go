@@ -86,7 +86,6 @@ func logRow(app, level string, customerID int64, ts time.Time) *pb.LogRow {
 	ns, svc, kind := shard.SplitApp(app)
 	return &pb.LogRow{
 		Raw:        level + " " + app + " line",
-		Fields:     []string{level, app, "line"},
 		TsUnixNs:   ts.UnixNano(),
 		Level:      level,
 		Namespace:  ns,

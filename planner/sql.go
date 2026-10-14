@@ -24,19 +24,13 @@ import (
 // and ToSQL's output is byte-identical to the old string-concat
 // sqlBuilder — the 252 pinned wantSQL assertions across the planner
 // tests are the parity gate.
-//
-// limitFrozen mirrors the old sqlBuilder flag: once any LIMIT pushdown
-// lands (source head/tail, stage head/tail, or awk NR-window), the
-// planner stops pushing further predicates shard-side and routes them
-// to compute. See docs/plans/cross-shard-post-limit-filter.md.
 type Query struct {
-	rawExpr     string
-	from        From
-	predicates  []Predicate
-	orderBy     string
-	limit       int
-	offset      int
-	limitFrozen bool
+	rawExpr    string
+	from       From
+	predicates []Predicate
+	orderBy    string
+	limit      int
+	offset     int
 	// includeMetaVars appends MetaVarColumns to the SELECT list — set by
 	// Plan when a remaining jq compute stage might read a bare
 	// "._"-prefixed meta-variable for output. See planner.go's
@@ -46,12 +40,20 @@ type Query struct {
 	// includePayload appends the row's payload as a PayloadColumn
 	// column, for a jq row stage or a stage reading the payload.
 	includePayload bool
+	// aggregate makes this the shard half of a QueryPlan.Aggregate: it
+	// groups the lines of its subquery's raw (see Aggregate).
+	aggregate string
 }
 
 // PayloadColumn names the extra column carrying a row's payload JSON
 // text when a row stage or the first stage reads it. Shards return
 // extra columns in ResultRow.MetaVars, keyed by name.
 const PayloadColumn = "payload"
+
+// CountColumn names the extra column carrying an aggregate's count: the
+// lines a shard saw of each distinct raw (or of all of them, for
+// AggregateLines).
+const CountColumn = "count"
 
 // From identifies the SELECT's source — either a base table ("logs")
 // or a nested *Query rendered as a subquery with an alias. Exactly
@@ -179,13 +181,11 @@ func formatTS(t time.Time) string {
 func (q *Query) setOrderLimit(order string, limit int) {
 	q.orderBy = order
 	q.limit = limit
-	q.limitFrozen = true
 }
 
 func (q *Query) setLimitOffset(limit, offset int) {
 	q.limit = limit
 	q.offset = offset
-	q.limitFrozen = true
 }
 
 // Wrap returns a new outer Query that selects from q as a subquery
@@ -205,11 +205,48 @@ func (q *Query) Wrap(orderBy string) *Query {
 	}
 }
 
+// Lines returns q's rows split into the lines compute would feed a stage
+// (each row's raw, or q's projection, split on newlines), keeping the
+// lines where every pred holds. Each line keeps its row's ts and columns.
+// q must have no limit.
+func (q *Query) Lines(preds []Predicate) *Query {
+	return &Query{
+		rawExpr:         "raw",
+		from:            From{Subquery: q.lineSplit(), Alias: "t"},
+		predicates:      preds,
+		includeMetaVars: q.includeMetaVars,
+		includePayload:  q.includePayload,
+	}
+}
+
+// Aggregate returns the shard half of an aggregate over q's lines, as
+// Lines splits and filters them. It selects each line with its
+// CountColumn (AggregateLines: one row, an empty line with the total),
+// in the order compute merges on. q must have no limit; its
+// meta-variable and payload columns are dropped.
+func (q *Query) Aggregate(fn, orderBy string, preds []Predicate) *Query {
+	inner := q.lineSplit()
+	inner.includeMetaVars, inner.includePayload = false, false
+	return &Query{
+		from:       From{Subquery: inner, Alias: "t"},
+		predicates: preds,
+		orderBy:    orderBy,
+		aggregate:  fn,
+	}
+}
+
+// lineSplit is q selecting one row per line of its raw.
+func (q *Query) lineSplit() *Query {
+	inner := *q
+	inner.rawExpr = "unnest(string_split(" + q.rawExpr + ", chr(10)))"
+	return &inner
+}
+
 // WithOrderLimit returns a shallow clone of q with the orderBy and
 // limit fields overridden. The predicate slice is shared (safe — neither
 // caller mutates predicates after this point). Used by the direct-to-
 // compute path so the same WHERE clause can be rendered with the mode-
-// classified ORDER BY/LIMIT from classifyShardMode rather than the
+// classified ORDER BY/LIMIT from sort/limit fusion rather than the
 // head/tail-derived values stored on the original builder.
 func (q *Query) WithOrderLimit(order string, limit int) *Query {
 	clone := *q
@@ -280,6 +317,26 @@ func (q *Query) ToSQLWithSources() (sql string, args []any, sources []ArgSource)
 // arg they need.
 func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 	b.WriteString("SELECT ")
+	if q.aggregate != "" {
+		key := "raw"
+		if q.aggregate == AggregateLines {
+			key = "'' AS raw"
+		}
+		fmt.Fprintf(b, "%s, min(ts) AS ts, count(*) AS %s FROM (", key, CountColumn)
+		q.from.Subquery.renderInto(b, onArg)
+		b.WriteString(") AS " + q.from.Alias)
+		q.renderWhere(b, onArg)
+		if q.aggregate == AggregateLines {
+			// No row without lines: ts can't be NULL.
+			b.WriteString(" HAVING count(*) > 0")
+		} else {
+			b.WriteString(" GROUP BY raw")
+		}
+		if q.orderBy != "" {
+			fmt.Fprintf(b, " ORDER BY %s", q.orderBy)
+		}
+		return
+	}
 	if q.rawExpr == "" || q.rawExpr == "raw" {
 		b.WriteString("raw, ts")
 	} else {
@@ -307,18 +364,7 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 	} else {
 		b.WriteString(q.from.Table)
 	}
-	if len(q.predicates) > 0 {
-		b.WriteString(" WHERE ")
-		for i, p := range q.predicates {
-			if i > 0 {
-				b.WriteString(" AND ")
-			}
-			b.WriteString(p.SQL)
-			for _, a := range p.Args {
-				onArg(a)
-			}
-		}
-	}
+	q.renderWhere(b, onArg)
 	if q.orderBy != "" {
 		fmt.Fprintf(b, " ORDER BY %s", q.orderBy)
 	}
@@ -327,5 +373,21 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 	}
 	if q.offset > 0 {
 		fmt.Fprintf(b, " OFFSET %d", q.offset)
+	}
+}
+
+func (q *Query) renderWhere(b *strings.Builder, onArg func(ArgSource)) {
+	if len(q.predicates) == 0 {
+		return
+	}
+	b.WriteString(" WHERE ")
+	for i, p := range q.predicates {
+		if i > 0 {
+			b.WriteString(" AND ")
+		}
+		b.WriteString(p.SQL)
+		for _, a := range p.Args {
+			onArg(a)
+		}
 	}
 }

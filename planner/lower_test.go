@@ -192,16 +192,10 @@ func TestLower_InlinesBinScript(t *testing.T) {
 		t.Errorf("BinDep hash diverges from HashBinSource(body)")
 	}
 
-	// The trailing `| wc -l` from the outer pipeline survives as a
-	// compute stage.
-	foundWc := false
-	for _, s := range lp.ComputeStages {
-		if s == "wc -l" {
-			foundWc = true
-		}
-	}
-	if !foundWc {
-		t.Errorf("outer pipeline's `wc -l` lost during inlining; got compute stages: %v", lp.ComputeStages)
+	// The trailing `| wc -l` from the outer pipeline survives, as the
+	// shard's line count.
+	if lp.Aggregate != AggregateLines {
+		t.Errorf("outer pipeline's `wc -l` lost during inlining; got aggregate %q, compute stages %v", lp.Aggregate, lp.ComputeStages)
 	}
 }
 

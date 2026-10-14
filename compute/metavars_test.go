@@ -43,6 +43,10 @@ func TestMergeMetaVars_NonObjectRawReturnsUnchanged(t *testing.T) {
 		`[1,2,3]`,
 		`"a bare string"`,
 		`42`,
+		// null unmarshals into a map without an error, leaving it nil. A
+		// jq projection the shard computes prints null for a missing
+		// field, so a jq stage after it reads this.
+		`null`,
 	} {
 		if got := MergeMetaVars(raw, meta); got != raw {
 			t.Errorf("MergeMetaVars(%q, meta) = %q, want unchanged", raw, got)

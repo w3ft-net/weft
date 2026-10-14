@@ -57,13 +57,17 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 	admit := func(row *pb.LogRow) bool {
 		return gate.Match(row) && (rowStages == nil || rowStages.Keep(row.Raw, string(row.PayloadJson), liveMetaVars(row)))
 	}
+	spliceMeta := len(plan.LiveStages) > 0 && planner.StageReadsMetaVars(plan.LiveStages[0])
 	input := func(row *pb.LogRow) string {
 		if plan.LiveReadsPayload {
 			payload := string(row.PayloadJson)
 			if payload == "" {
 				payload = "{}"
 			}
-			return compute.MergeMetaVars(payload, liveMetaVars(row))
+			if spliceMeta {
+				return compute.MergeMetaVars(payload, liveMetaVars(row))
+			}
+			return payload
 		}
 		return row.Raw
 	}

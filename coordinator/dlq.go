@@ -81,7 +81,6 @@ func (d *DLQ) Write(rows []*pb.LogRow) string {
 			"level":       r.Level,
 			"instance":    r.Instance,
 			"ts_ns":       r.TsUnixNs,
-			"fields":      r.Fields,
 			"payload":     string(r.PayloadJson),
 			"deployment":  r.Deployment,
 		})

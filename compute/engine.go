@@ -130,6 +130,14 @@ func (p *Engine) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) 
 		job.rowStages = rs
 	}
 	job.stagesReadPayload = req.StagesReadPayload
+	if req.Aggregate != "" {
+		// Check the name now, so an aggregate this engine doesn't know
+		// fails the query instead of passing the shards' rows through.
+		if _, err := newAggregator(req.Aggregate, nil); err != nil {
+			return nil, err
+		}
+		job.aggregate = req.Aggregate
+	}
 	go FanOutToShards(ctx, req, job, p.resolveShard)
 	return job.Stream(), nil
 }
@@ -155,6 +163,7 @@ func (p *Engine) NewJob(stages []string, shardCount int, mergeKey string, limit 
 		limit:      limit,
 		keepLast:   keepLast,
 		traceTag:   traceTag,
+		spliceMeta: len(stages) > 0 && planner.StageReadsMetaVars(stages[0]),
 		ch:         make(chan ComputeMessage, 1024),
 		streamCh:   make(chan Line, 1024),
 	}
@@ -181,6 +190,13 @@ type Job struct {
 	// stagesReadPayload feeds the first stage each row's payload instead
 	// of its raw line (planner.QueryPlan.StagesReadPayload).
 	stagesReadPayload bool
+	// spliceMeta: the first stage names a meta-variable, so a jq there
+	// reads them spliced into its input.
+	spliceMeta bool
+	// aggregate finishes the shards' aggregate (planner.QueryPlan.
+	// Aggregate) on the merged rows; feedErr is its failure.
+	aggregate string
+	feedErr   error
 
 	ch        chan ComputeMessage // shards push rows + sentinels here
 	streamCh  chan Line           // consume() pushes output here
@@ -378,23 +394,45 @@ func (j *Job) emitTraceTagged() {
 	}
 }
 
-// stageInput is the text a row feeds the first stage. A jq first stage
-// reads meta-variables as "_"-prefixed keys spliced into the JSON;
-// every other stage sees the row as it is.
+// stageInput is the text a row feeds the first stage: its payload when
+// the stage reads it, else its raw line. A jq first stage naming a
+// meta-variable reads them as "_"-prefixed keys spliced into the JSON.
 func (j *Job) stageInput(row *pb.ResultRow) string {
-	switch {
-	case j.stagesReadPayload:
-		return MergeMetaVars(row.MetaVars[planner.PayloadColumn], rowMetaVars(row))
-	case strings.HasPrefix(j.stages[0], "jq "):
-		return MergeMetaVars(row.Raw, rowMetaVars(row))
+	in := row.Raw
+	if j.stagesReadPayload {
+		in = row.MetaVars[planner.PayloadColumn]
 	}
-	return row.Raw
+	if j.spliceMeta && strings.HasPrefix(j.stages[0], "jq ") {
+		return MergeMetaVars(in, rowMetaVars(row))
+	}
+	return in
 }
 
-// feed drives the merged rows, cut to the limit, through the row stages
-// into sink, which returns false to stop. The limit counts rows before
-// the row stages, as the head/tail it came from ran first.
+// rowAwkVars is a row's meta-variables for awk, for each of the records
+// (lines) awk reads from it.
+type rowAwkVars struct {
+	vars    map[string]string
+	records int
+}
+
+// feed drives the merged rows, cut to the limit, through the aggregate
+// or the row stages into sink, which returns false to stop. The limit
+// counts rows before the row stages, as the head/tail it came from ran
+// first. A plan never has both a limit and an aggregate, or row stages
+// and an aggregate.
 func (j *Job) feed(sink func(*pb.ResultRow) bool) {
+	if j.aggregate != "" {
+		a, err := newAggregator(j.aggregate, sink)
+		if err != nil {
+			j.feedErr = err
+			return
+		}
+		defer func() {
+			a.flush()
+			j.feedErr = a.err
+		}()
+		sink = a.push
+	}
 	if j.rowStages != nil {
 		r := j.rowStages.runner(sink)
 		defer r.flush()
@@ -434,6 +472,7 @@ func (j *Job) consume() {
 			j.streamCh <- Line{Raw: row.Raw, LineNum: int64(emitted)}
 			return true
 		})
+		j.streamErr = j.feedErr
 		return
 	}
 
@@ -451,14 +490,15 @@ func (j *Job) consume() {
 	// Runner goroutine installs — awk has no per-row side channel like
 	// jq's JSON-body splice (a bare reserved name is just an ordinary
 	// awk global, unrelated to the record's own text), so this queue is
-	// the correlation mechanism instead: one send per row written, one
-	// receive per record the awk stage reads, both in the same order.
+	// the correlation mechanism instead: one send per row written, with
+	// the records awk reads from it (a record per line), in the same
+	// order.
 	// Only allocated when a stage is actually awk — the common case (no
 	// awk stage) skips it entirely, since nothing would ever drain it
 	// (a full buffer would then wedge the writer goroutine).
-	var awkVarsCh chan map[string]string
+	var awkVarsCh chan rowAwkVars
 	if firstStageIsAwk(j.stages) {
-		awkVarsCh = make(chan map[string]string, 1024)
+		awkVarsCh = make(chan rowAwkVars, 1024)
 	}
 
 	// Writer: pump merged rows into warp's stdin. Closing stdinW
@@ -477,14 +517,18 @@ func (j *Job) consume() {
 			defer close(awkVarsCh)
 		}
 		j.feed(func(row *pb.ResultRow) bool {
-			if _, err := io.WriteString(stdinW, j.stageInput(row)); err != nil {
+			in := j.stageInput(row)
+			if awkVarsCh != nil {
+				// Queued before awk can read the row: a record waiting
+				// on its set while the writer waits on awk would
+				// deadlock.
+				awkVarsCh <- rowAwkVars{vars: awkVarsFromMeta(rowMetaVars(row)), records: strings.Count(in, "\n") + 1}
+			}
+			if _, err := io.WriteString(stdinW, in); err != nil {
 				return false
 			}
 			if _, err := stdinW.Write([]byte{'\n'}); err != nil {
 				return false
-			}
-			if awkVarsCh != nil {
-				awkVarsCh <- awkVarsFromMeta(rowMetaVars(row))
 			}
 			return true
 		})
@@ -504,8 +548,13 @@ func (j *Job) consume() {
 		// projection SQL computes. See docs/plans/planner-ir.md, "jq".
 		opts := bash.StreamingOptions{JqCompact: true}
 		if awkVarsCh != nil {
+			var cur rowAwkVars
 			opts.AwkPerRecordVars = func(string) map[string]string {
-				return <-awkVarsCh
+				if cur.records == 0 {
+					cur = <-awkVarsCh
+				}
+				cur.records--
+				return cur.vars
 			}
 		}
 		exitCode, err = bash.RunStreamingWithOptions(pipeline, stdinR, stdoutW, &stderrBuf, opts)
@@ -533,5 +582,10 @@ func (j *Job) consume() {
 	}
 	if err := <-runErrCh; err != nil {
 		j.streamErr = err
+	}
+	// The writer set feedErr before closing the pipeline's stdin, which
+	// the pipeline read to EOF before finishing.
+	if j.feedErr != nil {
+		j.streamErr = j.feedErr
 	}
 }

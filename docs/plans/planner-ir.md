@@ -5,8 +5,17 @@
 🟡 Phase 1 landed 2026-10-13: compute stages are the user's text, jq and
 row-identity semantics are defined (see "jq" and "Row identity"), and the
 differential harness (`planner/difftest`) passes on 307 pipelines. Needs the
-matching warp commit (`StreamingOptions`, awk hook scope). Phase 2 is next;
-Phase 3 not started.
+matching warp commit (`StreamingOptions`, awk hook scope).
+
+Phase 2 landed 2026-10-13 (`planner/ir.go`, `frontend.go`, `passes.go`):
+frontends, passes, IR-rendering `Explain`, `$N` lowering (ingest splits
+`fields` the way awk does), and a harness corpus of ~640 pipelines (docs + a
+generator). Needs the matching warp commit (`Value.String`).
+
+Phase 3 landed 2026-10-13: `cut` and `jq -r` project in the shard, and
+`wc -l`, `sort -u` and `sort | uniq [-c]` aggregate there
+(`QueryPlan.Aggregate`); the harness covers each. Perf hints (rule 1) are
+not built.
 
 ## Problem
 
@@ -152,7 +161,8 @@ Passes are rewrites on the IR, each with an explicit precondition:
    compute strings are scanned.
 4. **Aggregate recognition (Phase 3).** `Sort(raw) → Aggregate(uniq -c)` and
    friends become `GROUP BY`, and the shard returns counts instead of rows.
-   This is where the big data-transfer wins are.
+   This is where the big data-transfer wins are. Built as `fuseAggregate`
+   (see Phase 3).
 
 ### Backends
 
@@ -229,30 +239,30 @@ Compute stages:
 
 ### awk semantics the lowering must respect
 
-- **Positional fields don't match the shard's `fields` column.** Ingest
-  builds `fields` from the line *after* the envelope is stripped, split by
-  the schema's `FieldSeparator` with Go's `strings.Fields` (all Unicode
-  whitespace). awk in compute splits the whole `raw` line on space, tab and
-  newline. So `list_extract(fields, N)` is not awk's `$N`, not even as a
-  prefilter: for `a\u00a0b x`, `fields[2]` is `b` but awk's `$2` is `x`.
-  Until `Scan` can prove they agree, any `$N` with N>0 makes the stage
-  `Opaque`, in patterns and in `print` projections alike. `cut -f` is the
-  same (cut splits `raw` on tabs). `$0` and meta-variables still lower.
-  Making `$N` lowerable needs:
-  - `Scan` carrying schema facts for every source the query can read
-    (wildcards and multi-file sources span several schemas, and some
-    sources have none),
-  - over the whole time range, since `fields` was split by whatever schema
-    was active at ingest,
-  - a plan-staleness rule so a saved cron plan recompiles after a schema
-    edit,
-  - and ingest splitting the way awk does first, so new rows agree even
-    when there's no envelope and the separator is the default.
-- **String vs number comparison.** `$3 > 10` is numeric only when `$3` looks
-  like a number ("strnum"); otherwise it's a string comparison. The current
-  `CAST(... AS DOUBLE)` is fine as a **prefilter** only if non-numeric fields
-  can't satisfy the awk comparison. As exact lowering it needs a `CASE` on
-  numeric-looking fields, or it stays a prefilter.
+- **Positional fields are `fields[N]`.** Decided 2026-10-13: the shard
+  splits each row's `raw` into `fields` the way warp's awk splits `$0` with
+  the default `FS` (runs of space, tab, newline, carriage return;
+  `shard.awkFields`, pinned against warp by a test), whatever the source's
+  schema. The schema keeps its own split for its positional extractors, in
+  memory. Senders no longer send a split (`LogRow` tag 8 is reserved). So
+  `$N` with a constant `N` lowers to `list_extract(fields, N)`, which is
+  NULL past the last field, where awk reads an unset value: `""` as a
+  string, 0 as a number. `$NF`, `$i` and other computed indexes stay
+  `Opaque`, as does any awk with `-F` or a `BEGIN`. `cut -f` still doesn't
+  lower: cut splits on each tab, not on runs of blanks.
+  - Rows ingested before the change hold the old schema-dependent split.
+    We don't reconcile them: a `$N` query that reaches them may disagree
+    with awk until retention ages them out. No schema history.
+- **String vs number comparison.** awk compares as numbers when both sides
+  look numeric (warp: `strconv.ParseFloat`), a string constant included, so
+  `$3 == "500"` matches `500.0`; otherwise as strings. Against a string
+  that doesn't look numeric, a comparison is a string comparison, exact.
+  Against a number (or a numeric-looking string) SQL can't tell which
+  reading applies, so it lowers to a prefilter that holds under either:
+  `TRY_CAST(f AS DOUBLE) op n OR f op 'n' OR` a field DuckDB doesn't parse
+  as a number but Go does (`inf`, `nan`, hex), plus `f IS NULL` when an
+  unset 0 satisfies it. The same rule covers `$0` and meta-variables
+  (`LEVEL == "500"` was wrongly exact before).
 - **`$0` modification and `NF`** in the pattern → `Opaque`.
 - **Regex dialects.** awk ERE vs DuckDB RE2: the constructs that differ
   (back-references, POSIX classes) → `Opaque`.
@@ -324,12 +334,16 @@ pipeline's stdin.
   Identical errors on both sides count as agreement.
 - `TestRowStagesAreRowwise` checks the row-stage classifier: a text filter
   it accepts keeps, row by row, exactly what it keeps over the stream.
-- The corpus today: every finite pipeline in the planner's tests, plus
-  `extraCorpus`. Still to add:
-  - every pipeline in `docs/shell` and `docs/manual`
-  - pipelines exported from the dogfood account's crons and dashboards,
-    plus shell history (kept outside git, per the no-account-config rule)
-  - a generator that composes stages from the supported constructs
+- The corpus today:
+  - every finite pipeline in the planner's tests, plus `extraCorpus`;
+  - every one-line pipeline in `docs/shell` and `docs/manual`, its source
+    pointed at a generated source (`docsCorpus`);
+  - 300 seeded pipelines of one to three stages, composed from constructs
+    the frontends lower and ones they don't (`generatedCorpus`).
+
+  Still to add: pipelines exported from the dogfood account's crons and
+  dashboards, plus shell history (kept outside git, per the
+  no-account-config rule).
 
 The harness runs in CI. A new rewrite rule ships with corpus entries that
 exercise it.
@@ -359,22 +373,73 @@ exercise it.
      missing-field comparisons; meta-variable keys spliced into the text of
      every stage, not just jq's; `._ts`/`TS` never set in compute; adjacent
      awk stages deadlocking on the meta-variable channel.
-2. **IR with `Scan`/`Filter`/`Limit`/`Opaque`** (~4–5d). Move grep, awk, jq
-   and sed onto frontends, replace the `tryPushdown` loop and `limitFrozen`
-   with passes, and re-express `classifyShardMode` and meta-variable
-   projection on nodes.
-   - Schema-aware `$N`: `Scan` carries schema facts, and the awk frontend
-     lowers `$N` only when they prove `fields` matches awk's split.
-     Otherwise the `Opaque` reason names the source and why.
-   - `Explain` renders the IR, with spans, Opaque/prefilter reasons and the
-     pass log (see "Explain"). Phase 1 only added the row-stage list.
-   - Exit criteria: no planner code reads a compute string, and the harness
-     is green on the full corpus.
-3. **Exact lowering** (~4d). `Project` (`cut`, awk `print $n`, jq `.path`)
-   and `Aggregate` (`uniq -c` chains, `wc -l`), each behind the harness. Also
-   gives [perf-hints](perf-hints.md) rule 1 (pipeline reordering) a natural
-   home: hints become IR rewrites that are legal but change the meaning, so
-   they're offered to the user, never applied.
+2. **IR with `Scan`/`Filter`/`Limit`/`Opaque`**. ✅ Landed 2026-10-13.
+   - ✅ grep, awk, jq, sed, head/tail and sort lower through frontends
+     (`frontend.go`) into `filterNode`/`limitNode`/`projectNode`/
+     `sortNode`/`opaqueNode`, each with its span and a typed `reason`. The
+     `Project` and `Sort` nodes cover what the planner already lowered
+     (awk `print` of meta-variables, jq paths; Mode B); Phase 3 adds new
+     constructs.
+   - ✅ Passes (`passes.go`): filter pushdown replaces the `tryPushdown`
+     loop and `limitFrozen`; projection pushdown and sort/limit fusion
+     replace `extractRawExpr` at the boundary and `classifyShardMode`.
+     Meta-variable projection comes from each stage's syntax tree, not a
+     regex over its text. Every pipeline in the old corpus compiled to the
+     same `QueryPlan` before and after.
+   - ✅ `Explain` renders the IR, with spans, opaque/prefilter reasons and
+     the pass log.
+   - ✅ Exit criteria: no query-planning code reads a compute string
+     (`LintTruncationRisk` still scans a saved plan's stages, which are now
+     always the user's text), and the harness is green on the full corpus.
+   - Bugs the wider corpus found, fixed with `PlannerVersion` 5:
+     - folding a projection into the SELECT promoted the next stage to
+       first, so an awk after it got the row's `LEVEL` instead of the
+       projection's text. A projection now stays in compute when the stage
+       after it names a meta-variable;
+     - compute spliced `_ts` (and any projected meta-variables) into every
+       jq that read rows, so `jq -c .` and `keys` showed them. Compute now
+       splices only for a stage that names one, by
+       `planner.StageReadsMetaVars`;
+     - `MergeMetaVars` panicked on a `null` line, which a jq projection the
+       shard computes prints for a missing field.
+   - ✅ `$N` lowers (`PlannerVersion` 6), by changing what ingest writes
+     rather than by schema facts on `Scan`: see "awk semantics". Bugs the
+     harness found on the way: warp printed a numeric meta-variable
+     (`500.0`) as `500` (`Value.String`, fixed in warp), and numeric-looking
+     string constants were lowered as exact string comparisons.
+3. **Exact lowering**. ✅ Landed 2026-10-13 (`PlannerVersion` 7).
+   - ✅ `Project`: `cut [-d D] -f LIST` (`string_split(raw, D)`, fields in
+     list order, `N`, `N-M`, `N-`), and `jq -r` on whatever `jq` already
+     projected (a string prints unescaped, anything else as compact JSON).
+   - ✅ `Aggregate`: frontends lower `uniq`/`uniq -c` to `uniqNode` and
+     `wc -l` to `countNode`, and `sort` records `-u`. The `aggregate` pass
+     (`fuseAggregate`) turns the first compute stages into the shard's
+     `GROUP BY` when they're `wc -l`, `sort -u` or `sort [-r] | uniq [-c]`:
+     each shard returns its distinct lines with a `count` column, merged
+     on `raw`; compute (`compute/aggregate.go`) sums the counts and feeds
+     the next stage what the aggregated stages would have printed
+     (`ExecuteQueryRequest.aggregate`). The grouped lines are the input
+     split on newlines, as compute feeds a stage. Declined after a pushed
+     line count, after row stages, in follow mode, for trace sources, and
+     when the next stage names a meta-variable; the pass log says which.
+     The engine refuses an aggregate name it doesn't know, so a compute
+     older than its coordinator fails the query instead of printing the
+     shards' grouped rows.
+   - Harness: corpus entries for each aggregate and projection, a check
+     that the corpus aggregates every kind in the shard, and
+     `TestDifferentialLineSplits` over rows of several lines.
+   - Found on the way: warp's line readers drop a trailing `\r` per reader,
+     so CR-terminated lines aggregate differently in the shard
+     (`docs/known-issues.md`).
+   - Perf-hints rule 1 (pipeline reordering) is a pass, not a hint: the
+     planner can prove the reorder exact, so it does it. Filter hoisting
+     (`hoistFilters`, `PlannerVersion` 8, 2026-10-14) moves grep and
+     `sed -n` filters above plain sorts, or the SELECT's projection, into
+     the shard, filtering each line (`Query.Lines`). Its multi-line probes
+     found compute's awk meta-variable queue deadlocking on multi-line
+     rows (fixed) and cut/awk projections running per row
+     (`docs/known-issues.md`). Hints are left for rewrites the planner can't
+     prove (constructs that don't lower, narrowing the source).
 
 ## Open questions
 

@@ -35,7 +35,7 @@ func setupIngestOrg(t *testing.T, s *store.Store) (token string, ns *store.Names
 
 // TestIngestHandler_EnrichesConfiguredService is the case the
 // api-server-should-parse-like-weftd discussion was about: a service
-// with a configured schema gets Level/Fields/TraceId/PayloadJson filled
+// with a configured schema gets Level/TraceId/PayloadJson filled
 // in by enrichRows before the row ever reaches the coordinator's
 // IngestStream — matching what weftd does client-side and what the
 // CloudWatch poller does before shard.Ingest, neither of which
@@ -78,9 +78,6 @@ func TestIngestHandler_EnrichesConfiguredService(t *testing.T) {
 	}
 	if row.TraceId != "req-42" {
 		t.Errorf("TraceId = %q, want req-42", row.TraceId)
-	}
-	if len(row.Fields) == 0 {
-		t.Error("Fields is empty; enrichRows should have populated it from the schema")
 	}
 	// The adapter's own syslog-derived Instance must survive enrichment
 	// unclobbered — the schema has no envelope config, so ParseLine's

@@ -6,12 +6,12 @@ import (
 	"github.com/graybeardcorp/warp/pkg/jq"
 )
 
-// TestTryJqStagePushdown_StringInterp pins that a select(...) prefix
-// pushes down whatever follows it, here string interpolation. It used
+// TestJqFrontend_StringInterp pins that a select(...) prefix lowers to
+// a prefilter whatever follows it, here string interpolation. It used
 // to bail when the tail couldn't be re-rendered (the user-visible bug:
 // `explain` showed ShardSQL without the select); the tail is never
 // re-rendered now, since the stage runs whole in compute.
-func TestTryJqStagePushdown_StringInterp(t *testing.T) {
+func TestJqFrontend_StringInterp(t *testing.T) {
 	tests := []struct {
 		name          string
 		expression    string
@@ -44,15 +44,19 @@ func TestTryJqStagePushdown_StringInterp(t *testing.T) {
 			} else {
 				t.Logf("parsed as %T", expr)
 			}
-			got := tryJqStagePushdown([]string{tt.expression})
-			if !got.pushed {
-				t.Fatalf("expected pushed=true (predicate %q should extract), got pushdownResult{}", tt.wantPredicate)
+			ls := lowerStage(stageInfo{cmd: "jq", args: []string{tt.expression}}, 1)
+			if len(ls.nodes) != 2 {
+				t.Fatalf("want a prefilter and an opaque stage, got %#v", ls.nodes)
 			}
-			if got.predicate != tt.wantPredicate {
-				t.Errorf("predicate\n got: %s\nwant: %s", got.predicate, tt.wantPredicate)
+			f, ok := ls.nodes[0].(*filterNode)
+			if !ok || f.exact {
+				t.Fatalf("a jq select before a tail is a prefilter, got %#v", ls.nodes[0])
 			}
-			if !got.keep {
-				t.Errorf("a jq select is a prefilter: the stage must still run")
+			if f.pred != tt.wantPredicate {
+				t.Errorf("predicate\n got: %s\nwant: %s", f.pred, tt.wantPredicate)
+			}
+			if op, ok := ls.nodes[1].(*opaqueNode); !ok || op.why.code != reasonJqTail {
+				t.Errorf("the stage must still run, opaque for its tail: %#v", ls.nodes[1])
 			}
 		})
 	}

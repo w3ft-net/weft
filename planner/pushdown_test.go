@@ -395,10 +395,9 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 
 		// wc -l — aggregation
 		{
-			name:        "awk filter then wc -l",
-			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | wc -l`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: []string{"wc -l"},
+			name:     "awk filter then wc -l",
+			pipeline: `cat vimgym.log | awk 'LEVEL == "ERROR"' | wc -l`,
+			wantSQL:  `SELECT '' AS raw, min(ts) AS ts, count(*) AS count FROM (SELECT unnest(string_split(raw, chr(10))) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR') AS t HAVING count(*) > 0`,
 		},
 
 		// sed substitution — modifies output, not a filter
@@ -413,8 +412,8 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter then awk print",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | awk '{ print $2, $1 }'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: []string{`awk '{ print $2, $1 }'`},
+			wantSQL:     `SELECT concat_ws(' ', COALESCE(list_extract(fields, 2), ''), COALESCE(list_extract(fields, 1), '')) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantCompute: nil,
 		},
 
 		// awk print with bare metavar — projects the column directly.
@@ -429,8 +428,8 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk print metavar with positional fields",
 			pipeline:    `cat vimgym.log | awk '{ print HOST, $1, $4 }'`,
-			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk '{ print HOST, $1, $4 }'`},
+			wantSQL:     `SELECT concat_ws(' ', COALESCE(CAST(instance AS VARCHAR), ''), COALESCE(list_extract(fields, 1), ''), COALESCE(list_extract(fields, 4), '')) as raw, ts FROM logs WHERE namespace = ?`,
+			wantCompute: nil,
 		},
 
 		// awk print concatenating a metavar with a positional field — exercises
@@ -438,8 +437,8 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk print concat metavar and field",
 			pipeline:    `cat vimgym.log | awk '{ print HOST "/" $1 }'`,
-			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk '{ print HOST "/" $1 }'`},
+			wantSQL:     `SELECT concat(concat(COALESCE(CAST(instance AS VARCHAR), ''), '/'), COALESCE(list_extract(fields, 1), '')) as raw, ts FROM logs WHERE namespace = ?`,
+			wantCompute: nil,
 		},
 
 		// Unknown $IDENT (not a known metavar) bails — the awk stage stays in
@@ -493,10 +492,9 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 
 		// sort | uniq -c — both are compute, sort comes first
 		{
-			name:        "awk filter then sort then uniq -c",
-			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | sort | uniq -c`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: []string{"sort", "uniq -c"},
+			name:     "awk filter then sort then uniq -c",
+			pipeline: `cat vimgym.log | awk 'LEVEL == "ERROR"' | sort | uniq -c`,
+			wantSQL:  `SELECT raw, min(ts) AS ts, count(*) AS count FROM (SELECT unnest(string_split(raw, chr(10))) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR') AS t GROUP BY raw ORDER BY raw`,
 		},
 
 		// Multiple compute stages after pushdown
@@ -516,12 +514,19 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 			wantCompute: []string{`awk 'LEVEL == "ERROR" { print $3, INSTANCE }'`},
 		},
 
-		// Pushable stage after a non-pushable stage stays in compute
+		// A grep after a sort hoists below it and filters each line.
 		{
 			name:        "sort between two pushable stages",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | sort | grep timeout`,
+			wantSQL:     `SELECT raw, ts FROM (SELECT unnest(string_split(raw, chr(10))) as raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR') AS t WHERE regexp_matches(raw, 'timeout')`,
+			wantCompute: []string{"sort"},
+		},
+		// A pushable stage after one that isn't stays in compute.
+		{
+			name:        "grep after uniq",
+			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | uniq | grep timeout`,
 			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: []string{"sort", "grep timeout"},
+			wantCompute: []string{"uniq", "grep timeout"},
 		},
 
 		// jq pipe from select to construction — select pushes as predicate,

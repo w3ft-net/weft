@@ -2,74 +2,34 @@ package planner
 
 import "fmt"
 
-// parseGrepArgs extracts grep flags and pattern from arguments.
-func parseGrepArgs(args []string) (pattern string, ignoreCase, invert bool) {
-	for _, arg := range args {
-		if arg == "-v" {
-			invert = true
-		} else if arg == "-i" {
-			ignoreCase = true
-		} else if arg == "-iv" || arg == "-vi" {
-			invert = true
-			ignoreCase = true
-		} else if len(arg) > 1 && arg[0] == '-' {
-			for _, c := range arg[1:] {
-				switch c {
-				case 'i':
-					ignoreCase = true
-				case 'v':
-					invert = true
-				}
-			}
-		} else {
-			pattern = arg
-		}
-	}
-	return
-}
-
-// tryGrepPushdown extracts a SQL predicate from grep arguments.
-// Returns the SQL WHERE fragment, or "" if not pushable.
+// grepFilter lowers a grep stage to a SQL predicate, with the pattern
+// live tail applies to the same stage. pred is "" when it doesn't lower,
+// and why says why.
 //
 // grep patterns are real regex (BRE/ERE depending on flags); we map
-// them to DuckDB's `~` operator (RE2). For typical patterns the
+// them to DuckDB's regexp_matches (RE2). For typical patterns the
 // flavors agree; for BRE-specific shapes (e.g. `\(...\)` for groups)
 // the pushdown is best-effort and may differ — operators reaching
 // for those edges should use grep -E or awk for semantic clarity.
-//
-// The previous LIKE-substring encoding silently mismatched any
-// pattern with regex specials (`^ERROR` was matched as the literal
-// string `^ERROR`, never appearing in real text).
-func tryGrepPushdown(args []string) string {
-	pattern := ""
-	ignoreCase := false
-	invert := false
-
+func grepFilter(args []string) (pred string, pat GrepPattern, why reason) {
 	for _, arg := range args {
-		if arg == "-v" {
-			invert = true
-		} else if arg == "-i" {
-			ignoreCase = true
-		} else if arg == "-iv" || arg == "-vi" {
-			invert = true
-			ignoreCase = true
-		} else if len(arg) > 1 && arg[0] == '-' {
+		if len(arg) > 1 && arg[0] == '-' {
 			for _, c := range arg[1:] {
 				switch c {
 				case 'i':
-					ignoreCase = true
+					pat.IgnoreCase = true
 				case 'v':
-					invert = true
+					pat.Invert = true
 				default:
-					return "" // unknown flag — can't push down
+					return "", pat, reason{code: reasonFlag, detail: arg}
 				}
 			}
 		} else {
-			pattern = arg
+			pat.Pattern = arg
 		}
 	}
-	if pattern == "" {
-		return ""
+	if pat.Pattern == "" {
+		return "", pat, because(reasonGrepPattern)
 	}
 
 	// DuckDB's `~` operator is whole-string regex match (SIMILAR TO
@@ -77,12 +37,12 @@ func tryGrepPushdown(args []string) string {
 	// `!~*` don't exist as scalar functions at all. Use regexp_matches
 	// which is the substring/find form the user expects from grep.
 	// Third arg "i" enables case-insensitive matching.
-	expr := fmt.Sprintf("regexp_matches(raw, '%s')", escapeSQLString(pattern))
-	if ignoreCase {
-		expr = fmt.Sprintf("regexp_matches(raw, '%s', 'i')", escapeSQLString(pattern))
+	pred = fmt.Sprintf("regexp_matches(raw, '%s')", escapeSQLString(pat.Pattern))
+	if pat.IgnoreCase {
+		pred = fmt.Sprintf("regexp_matches(raw, '%s', 'i')", escapeSQLString(pat.Pattern))
 	}
-	if invert {
-		expr = "NOT " + expr
+	if pat.Invert {
+		pred = "NOT " + pred
 	}
-	return expr
+	return pred, pat, reason{}
 }

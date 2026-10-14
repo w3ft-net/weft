@@ -15,19 +15,19 @@ func TestPrefilter_StageStillRuns(t *testing.T) {
 		{
 			name:        "nested AND inside OR",
 			pipeline:    `cat vimgym.log | awk '(LEVEL == "ERROR" && $3 > 100) || LEVEL == "FATAL"'`,
-			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND (level = 'ERROR' OR level = 'FATAL')`,
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND ((level = 'ERROR' AND (TRY_CAST(list_extract(fields, 3) AS DOUBLE) > 100 OR list_extract(fields, 3) > '100' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))) OR level = 'FATAL')`,
 			wantCompute: []string{`awk '(LEVEL == "ERROR" && $3 > 100) || LEVEL == "FATAL"'`},
 		},
 		{
 			name:        "mixed AND with field and meta-var",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" && $3 > 100'`,
-			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR' AND (TRY_CAST(list_extract(fields, 3) AS DOUBLE) > 100 OR list_extract(fields, 3) > '100' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))`,
 			wantCompute: []string{`awk 'LEVEL == "ERROR" && $3 > 100'`},
 		},
 		{
 			name:        "two awk filters",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | awk '$3 > 100'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND level = 'ERROR' AND (TRY_CAST(list_extract(fields, 3) AS DOUBLE) > 100 OR list_extract(fields, 3) > '100' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))`,
 			wantCompute: []string{`awk '$3 > 100'`},
 		},
 	})
@@ -177,72 +177,85 @@ func TestJq_RowFilter(t *testing.T) {
 	})
 }
 
-// TestPrefilter_PositionalFieldsNeverPush pins that awk's $N (N>0) never
-// lowers. The shard's fields column is split from the line after its
-// envelope is stripped, by the schema's separator, so fields[N] isn't
-// awk's $N; not even as a prefilter. See docs/plans/planner-ir.md,
-// "awk semantics".
-func TestPrefilter_PositionalFieldsNeverPush(t *testing.T) {
+// TestPrefilter_PositionalFields pins $N lowering. Ingest splits the
+// fields column the way awk splits $0, so $N is fields[N] (NULL past the
+// last field, which awk reads as unset). A string constant compares as
+// a string, exactly; a number compares as a number or a string by the
+// field's value, so that lowers to a prefilter covering both.
+func TestPrefilter_PositionalFields(t *testing.T) {
 	runPlanCases(t, []planCase{
 		{
 			name:        "high positional field",
 			pipeline:    `cat vimgym.log | awk '$15 == "value"'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk '$15 == "value"'`},
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND list_extract(fields, 15) = 'value'`,
+			wantCompute: nil,
 		},
 		{
 			name:        "field 1",
 			pipeline:    `cat vimgym.log | awk '$1 == "2026-03-28"'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk '$1 == "2026-03-28"'`},
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND list_extract(fields, 1) = '2026-03-28'`,
+			wantCompute: nil,
+		},
+		{
+			name:        "missing field equals empty string",
+			pipeline:    `cat vimgym.log | awk '$9 == ""'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND COALESCE(list_extract(fields, 9), '') = ''`,
+			wantCompute: nil,
+		},
+		{
+			name:        "field matches regex",
+			pipeline:    `cat vimgym.log | awk '$2 !~ /^GET/'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND NOT regexp_matches(COALESCE(list_extract(fields, 2), ''), '^GET')`,
+			wantCompute: nil,
 		},
 		{
 			name:        "field numeric equality",
 			pipeline:    `cat vimgym.log | awk '$3 == 200'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND (TRY_CAST(list_extract(fields, 3) AS DOUBLE) = 200 OR list_extract(fields, 3) = '200' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))`,
 			wantCompute: []string{`awk '$3 == 200'`},
 		},
 		{
 			name:        "field numeric not equal",
 			pipeline:    `cat vimgym.log | awk '$3 != 0'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND (TRY_CAST(list_extract(fields, 3) AS DOUBLE) != 0 OR list_extract(fields, 3) != '0' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))`,
 			wantCompute: []string{`awk '$3 != 0'`},
 		},
 		{
 			name:        "field greater than int",
 			pipeline:    `cat vimgym.log | awk '$3 > 100'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND (TRY_CAST(list_extract(fields, 3) AS DOUBLE) > 100 OR list_extract(fields, 3) > '100' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))`,
 			wantCompute: []string{`awk '$3 > 100'`},
 		},
 		{
-			name:        "field less than int",
+			name:        "field less than int: a missing field is 0",
 			pipeline:    `cat vimgym.log | awk '$3 < 50'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND (list_extract(fields, 3) IS NULL OR TRY_CAST(list_extract(fields, 3) AS DOUBLE) < 50 OR list_extract(fields, 3) < '50' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))`,
 			wantCompute: []string{`awk '$3 < 50'`},
 		},
 		{
-			name:        "field greater than or equal",
-			pipeline:    `cat vimgym.log | awk '$3 >= 100'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk '$3 >= 100'`},
+			name:        "numeric-looking string constant compares as a number",
+			pipeline:    `cat vimgym.log | awk '$3 == "200"'`,
+			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ? AND (TRY_CAST(list_extract(fields, 3) AS DOUBLE) = 200 OR list_extract(fields, 3) = '200' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))`,
+			wantCompute: []string{`awk '$3 == "200"'`},
 		},
 		{
-			name:        "field equals string",
-			pipeline:    `cat vimgym.log | awk '$2 == "POST"'`,
+			name:        "computed field never pushes",
+			pipeline:    `cat vimgym.log | awk '$NF == "x"'`,
 			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk '$2 == "POST"'`},
+			wantCompute: []string{`awk '$NF == "x"'`},
 		},
 		{
-			name:        "cut never projects",
-			pipeline:    `cat vimgym.log | cut -f3`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`cut -f3`},
+			// cut splits on each tab, not on runs of blanks like
+			// fields, so it splits raw itself.
+			name:     "cut splits raw",
+			pipeline: `cat vimgym.log | cut -f3`,
+			wantSQL:  "SELECT COALESCE(array_to_string([string_split(raw, '\t')[3]], '\t'), '') as raw, ts FROM logs WHERE namespace = ?",
 		},
 		{
-			name:        "print of positional fields never projects",
+			name:        "print of positional fields projects",
 			pipeline:    `cat vimgym.log | awk '{ print $2, $3 }'`,
-			wantSQL:     `SELECT raw, ts FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk '{ print $2, $3 }'`},
+			wantSQL:     `SELECT concat_ws(' ', COALESCE(list_extract(fields, 2), ''), COALESCE(list_extract(fields, 3), '')) as raw, ts FROM logs WHERE namespace = ?`,
+			wantCompute: nil,
 		},
 	})
 }

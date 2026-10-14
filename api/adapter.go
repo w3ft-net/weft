@@ -156,10 +156,10 @@ func (s *Server) IngestHandler(a Adapter) http.Handler {
 		// HTTP-pushed rows arrive here Raw-only (adapters set only what
 		// their own wire format hands them for free — Service/Kind/
 		// Instance/TsUnixNs). Nothing downstream of this point ever
-		// re-parses (IngestStream trusts Level/Fields as sent, by
-		// design — see weftd-client-side-parsing.md), so this is the
-		// only place an HTTP-pushed row can pick up Level/Fields/
-		// TraceId/PayloadJson from its configured schema, the way the
+		// re-parses (IngestStream trusts Level as sent, by design —
+		// see weftd-client-side-parsing.md), so this is the only
+		// place an HTTP-pushed row can pick up Level/TraceId/
+		// PayloadJson from its configured schema, the way the
 		// CloudWatch poller and weftd already do for their own paths.
 		enrichRows(s.store, auth.Organization.ID, namespace, rows)
 
@@ -221,7 +221,7 @@ func resolveParser(st *store.Store, orgID store.OrgID, namespace string, service
 }
 
 // applyParsed re-parses row.Raw against parser and overlays only the
-// schema-derived fields — Level, Fields, TraceId, PayloadJson, TsUnixNs
+// schema-derived fields — Level, TraceId, PayloadJson, TsUnixNs
 // — onto row in place. Service/Kind/Instance set by the adapter/producer
 // itself are left alone: those come from the wire format directly (more
 // specific than the schema's own generic defaults) and must not be
@@ -235,7 +235,6 @@ func applyParsed(row *pb.LogRow, parser *ingest.Parser) {
 		return
 	}
 	row.Level = parsed.Level
-	row.Fields = parsed.Fields
 	row.TraceId = parsed.TraceId
 	row.PayloadJson = parsed.PayloadJson
 	row.TsUnixNs = parsed.TsUnixNs

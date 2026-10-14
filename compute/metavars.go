@@ -35,7 +35,8 @@ func MergeMetaVars(raw string, meta map[string]string) string {
 		return raw
 	}
 	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil || obj == nil {
+		// obj is nil for `null`, which unmarshals without an error.
 		return raw
 	}
 	for alias, col := range planner.JQMetaVars {

@@ -110,9 +110,9 @@ func (p *Parser) ParseLine(raw string, ingestTime time.Time) (*pb.LogRow, error)
 	body, instance := p.stripEnvelope(raw)
 	row.Instance = instance
 
-	// Split into fields.
+	// Split into fields, for the schema's positional extractors. The
+	// shard stores its own split, awk's, in the fields column.
 	fields := p.splitFields(body)
-	row.Fields = fields
 
 	// Parse the JSON body (if any) once and share it across every
 	// JSON-path extractor below, instead of each one re-unmarshaling the

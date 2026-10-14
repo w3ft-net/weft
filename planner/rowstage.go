@@ -17,39 +17,6 @@ import (
 // metadata, the engine runs them per row (QueryPlan.RowStages) instead
 // of as a text pipe. See docs/plans/planner-ir.md, "Row identity".
 
-// isRowStage reports whether a stage passes rows through unchanged.
-func isRowStage(s stageInfo) bool {
-	switch s.cmd {
-	case "grep":
-		return grepIsRowFilter(s.args)
-	case "awk":
-		return awkIsRowFilter(s.args)
-	case "sed":
-		_, ok := sedAddressPrint(s.args)
-		return ok
-	case "jq":
-		p, ok := analyzeJq(s.args)
-		return ok && p.selectChain()
-	case "head", "tail":
-		_, ok := rowStageLineCount(s.args)
-		return ok
-	}
-	return false
-}
-
-// readsRowMetadata reports whether a stage reads a row's payload or
-// meta-variables: any jq (it reads the payload), or an awk naming a
-// meta-variable.
-func readsRowMetadata(s stageInfo) bool {
-	switch s.cmd {
-	case "jq":
-		return true
-	case "awk":
-		return awkMetaVarPattern.MatchString(s.src)
-	}
-	return false
-}
-
 // grepIsRowFilter accepts one pattern and only the flags that keep a
 // matching line as it is: -i, -v, -E.
 func grepIsRowFilter(args []string) bool {
@@ -70,12 +37,8 @@ func grepIsRowFilter(args []string) bool {
 // print, evaluated on each record alone: no BEGIN/END, no record
 // counters, no getline, and a pattern without side effects, so running
 // it on one row at a time means what running it on the stream does.
-func awkIsRowFilter(args []string) bool {
-	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
-		return false
-	}
-	prog, err := awk.Parse(args[0])
-	if err != nil || len(prog.Functions) > 0 || len(prog.Rules) != 1 {
+func awkIsRowFilter(prog *awk.Program) bool {
+	if len(prog.Functions) > 0 || len(prog.Rules) != 1 {
 		return false
 	}
 	r := &prog.Rules[0]
@@ -87,7 +50,7 @@ func awkIsRowFilter(args []string) bool {
 	if r.Action != nil && !isDefaultPrintAction(r.Action) {
 		return false
 	}
-	return !awkContains(r.Pattern, func(n any) bool {
+	return !astContains(r.Pattern, func(n any) bool {
 		switch e := n.(type) {
 		case *awk.AssignExpr, *awk.IncDecExpr, *awk.GetlineExpr:
 			return true
@@ -158,9 +121,9 @@ func rowStageLineCount(args []string) (int, bool) {
 // the rows they pass along still matter: a stage among them, or the
 // first stage after them, reads row metadata. Otherwise there's nothing
 // to carry and every stage runs as a plain text pipe.
-func splitRowStages(stages []stageInfo) (rows, rest []stageInfo) {
+func splitRowStages(stages []*loweredStage) (rows, rest []*loweredStage) {
 	n := 0
-	for n < len(stages) && isRowStage(stages[n]) {
+	for n < len(stages) && stages[n].rowwise {
 		n++
 	}
 	if n == 0 {
@@ -172,7 +135,7 @@ func splitRowStages(stages []stageInfo) (rows, rest []stageInfo) {
 	// needs the rows carried.
 	needed := false
 	for i, s := range stages[:min(n+1, len(stages))] {
-		if readsRowMetadata(s) && !(i == 0 && s.cmd == "awk") {
+		if s.readsRowMetadata() && !(i == 0 && s.cmd == "awk") {
 			needed = true
 		}
 	}
@@ -182,13 +145,28 @@ func splitRowStages(stages []stageInfo) (rows, rest []stageInfo) {
 	return stages[:n], stages[n:]
 }
 
+// StageReadsMetaVars reports whether a stage, as written, names a
+// meta-variable (an awk's HOST, a jq's ._host). Compute splices
+// meta-variables into a jq's input only then, so `jq -c .` and `keys`
+// don't show them (docs/plans/planner-ir.md, "jq").
+func StageReadsMetaVars(stage string) bool {
+	sc, ok := parseOneStage(stage)
+	return ok && lowerStage(parseStage(sc), 1).readsMeta
+}
+
 // IsRowStage reports whether a stage, as written, passes rows through
 // unchanged. The differential harness builds its reference plan from it.
 func IsRowStage(stage string) bool {
+	sc, ok := parseOneStage(stage)
+	return ok && lowerStage(parseStage(sc), 1).rowwise
+}
+
+// parseOneStage parses a stage's text as the one command it is.
+func parseOneStage(stage string) (*bash.SimpleCommand, bool) {
 	script, err := bash.Parse(stage)
 	if err != nil || len(script.Commands) != 1 || len(script.Commands[0].First.Commands) != 1 {
-		return false
+		return nil, false
 	}
 	sc, ok := script.Commands[0].First.Commands[0].(*bash.SimpleCommand)
-	return ok && isRowStage(parseStage(sc))
+	return sc, ok
 }

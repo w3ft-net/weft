@@ -25,7 +25,16 @@ import (
 // v4: compute stages are the user's stages verbatim (no synthesized awk/jq
 // remainders); awk $N and cut -f no longer push down; a jq stage reads
 // the payload; row stages run per row (RowStages).
-const PlannerVersion = 4
+// v5: a projection stays in compute when the stage after it names a
+// meta-variable (folding it would hand that stage the row's instead).
+// v6: awk's $N lowers to fields[N] (ingest splits fields like awk), and a
+// comparison with a number, or a numeric-looking string, is a prefilter.
+// v7: wc -l, sort -u and sort | uniq [-c] aggregate in the shard
+// (Aggregate); cut and jq -r project.
+// v8: grep and sed after a plain sort or the SELECT's projection filter
+// each line in the shard; sort with an operand no longer orders or
+// aggregates there.
+const PlannerVersion = 8
 
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to
@@ -68,6 +77,7 @@ type LoweredPlan struct {
 	StagesReadPayload bool          `json:"stages_read_payload,omitempty"`
 	LiveStages        []string      `json:"live_stages,omitempty"`
 	MergeKey          string        `json:"merge_key,omitempty"`
+	Aggregate         string        `json:"aggregate,omitempty"`
 	Limit             int           `json:"limit,omitempty"`
 	ShardLimit        int           `json:"shard_limit,omitempty"`
 	TailMode          bool          `json:"tail_mode,omitempty"`
@@ -176,6 +186,7 @@ func Lower(pipeline string, customerID int64, tier string, resolveBin BinResolve
 		StagesReadPayload: plan.StagesReadPayload,
 		LiveStages:        plan.LiveStages,
 		MergeKey:          plan.ShardOrderBy,
+		Aggregate:         plan.Aggregate,
 		Limit:             plan.Limit,
 		ShardLimit:        plan.ShardLimit,
 		TailMode:          plan.TailMode,

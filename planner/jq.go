@@ -52,41 +52,6 @@ var MetaVarColumns = []string{
 	"container", "node", "trace_id", "span_name", "span_id", "duration_ns",
 }
 
-// tryJqPushdown attempts to extract a pushable predicate from a jq expression string.
-// Returns the SQL WHERE fragment, or "" if not pushable.
-func tryJqPushdown(expression string) string {
-	expr, err := jq.Parse(expression)
-	if err != nil {
-		return ""
-	}
-	return jqExprToSQL(expr)
-}
-
-// jqExprToSQL recursively walks a jq expression and extracts pushable predicates.
-func jqExprToSQL(expr jq.Expr) string {
-	switch e := expr.(type) {
-	case jq.SelectExpr:
-		return jqCondToSQL(e.Cond)
-	case jq.PipeExpr:
-		return jqPipeToSQL(e)
-	}
-	return ""
-}
-
-// jqPipeToSQL handles chained jq expressions (a | b).
-func jqPipeToSQL(e jq.PipeExpr) string {
-	left := jqExprToSQL(e.Left)
-	right := jqExprToSQL(e.Right)
-
-	if left != "" && right != "" {
-		return left + " AND " + right
-	}
-	if left != "" {
-		return left
-	}
-	return right
-}
-
 // jqCondToSQL converts a jq comparison condition to a SQL fragment.
 func jqCondToSQL(cond jq.Expr) string {
 	switch e := cond.(type) {
@@ -267,14 +232,15 @@ type jqProgram struct {
 	allLower bool
 	// tail is what follows the leading selects; nil for a select chain.
 	tail  jq.Expr
-	raw   bool // -r
-	slurp bool // -s: the whole stream is one input, so no select is per-row
+	expr  jq.Expr // the whole program
+	raw   bool    // -r
+	slurp bool    // -s: the whole stream is one input, so no select is per-row
 }
 
-// analyzeJq parses a jq stage's argv. ok is false for an expression
-// that doesn't parse or a flag the planner doesn't know, which leaves
-// the stage to run as written.
-func analyzeJq(args []string) (*jqProgram, bool) {
+// analyzeJq parses a jq stage's argv. The reason is set for an
+// expression that doesn't parse or a flag the planner doesn't know,
+// which leaves the stage to run as written.
+func analyzeJq(args []string) (*jqProgram, reason) {
 	p := &jqProgram{}
 	for _, a := range args {
 		switch a {
@@ -284,19 +250,23 @@ func analyzeJq(args []string) (*jqProgram, bool) {
 		case "-s", "--slurp":
 			p.slurp = true
 		default:
-			if strings.HasPrefix(a, "-") || p.src != "" {
-				return nil, false
+			if strings.HasPrefix(a, "-") {
+				return nil, reason{code: reasonFlag, detail: a}
+			}
+			if p.src != "" {
+				return nil, reason{code: reasonFlag, detail: "a second program argument"}
 			}
 			p.src = a
 		}
 	}
 	if p.src == "" {
-		return nil, false
+		return nil, because(reasonParse)
 	}
 	expr, err := jq.Parse(p.src)
 	if err != nil {
-		return nil, false
+		return nil, because(reasonParse)
 	}
+	p.expr = expr
 	nodes := jqFlattenPipe(expr)
 	n := 0
 	p.allLower = true
@@ -320,69 +290,27 @@ func analyzeJq(args []string) (*jqProgram, bool) {
 			p.tail = jq.PipeExpr{Left: p.tail, Right: rest}
 		}
 	}
-	return p, true
+	return p, reason{}
 }
 
 // selectChain reports whether the program is a row filter.
 func (p *jqProgram) selectChain() bool { return p.tail == nil && !p.slurp }
 
-// tryJqStagePushdown pushes a jq stage's leading selects into SQL. A
-// select chain whose selects all lower is exact: the stage is a row
-// filter SQL computes, so it drops out. Otherwise they're a prefilter
-// and the stage still runs, unchanged.
-func tryJqStagePushdown(args []string) pushdownResult {
-	p, ok := analyzeJq(args)
-	if !ok || p.slurp || len(p.selects) == 0 {
-		return pushdownResult{}
-	}
-	return pushdownResult{
-		pushed:    true,
-		predicate: strings.Join(p.selects, " AND "),
-		keep:      !(p.selectChain() && p.allLower),
-	}
-}
-
-// lowerFirstJqStage returns the SQL projection that computes a jq
-// stage reading shard rows, or "" when it must run, over the payload.
-// selectsPushed says its leading selects are already in the WHERE
-// clause. (A select chain never gets here: it's a row stage.)
-func lowerFirstJqStage(stage stageInfo, selectsPushed bool) string {
-	p, ok := analyzeJq(stage.args)
-	// -r prints strings unquoted, which json_extract doesn't.
-	if !ok || p.raw || p.slurp || p.tail == nil || !p.allLower || (len(p.selects) > 0 && !selectsPushed) {
-		return ""
-	}
-	sql, ok := jqValueToSQL(p.tail)
-	if !ok {
-		return ""
-	}
-	return wrapJqProjection(sql)
-}
-
-// splitJqArgs separates jq's command-line flags from its expression argument.
-// Any arg beginning with "-" is a flag; the first non-flag arg is the
-// expression. Trailing positional args are ignored (jq only takes one).
-func splitJqArgs(args []string) (flags []string, expr string) {
-	for _, a := range args {
-		if strings.HasPrefix(a, "-") {
-			flags = append(flags, a)
-			continue
+// readsJqMetaVar reports whether a jq program names a "_"-prefixed
+// meta-variable: as a field (._host), or as a string (.["_host"],
+// has("_host")).
+func readsJqMetaVar(expr jq.Expr) bool {
+	return astContains(expr, func(n any) bool {
+		switch e := n.(type) {
+		case jq.FieldExpr:
+			_, ok := JQMetaVars[e.Name]
+			return ok
+		case jq.LiteralExpr:
+			_, ok := JQMetaVars[e.Value.Str]
+			return ok && e.Value.Type == jq.TypeString
 		}
-		if expr == "" {
-			expr = a
-		}
-	}
-	return flags, expr
-}
-
-// jqFlagsHaveRaw reports whether the flag slice includes -r / --raw-output.
-func jqFlagsHaveRaw(flags []string) bool {
-	for _, f := range flags {
-		if f == "-r" || f == "--raw-output" {
-			return true
-		}
-	}
-	return false
+		return false
+	})
 }
 
 // jqFlattenPipe flattens a left-associative PipeExpr chain into a slice.

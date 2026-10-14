@@ -112,9 +112,10 @@ message LogRow {
   int64 ts_unix_ns = 5;
   string instance = 6;       // hostname of the emitting machine
   bytes payload_json = 7;
-  repeated string fields = 8;
-  reserved 9;
-  reserved "customer";
+  // fields was the sender's positional split; shards now split raw the
+  // way awk does at ingest (shard.awkFields), so senders don't send it.
+  reserved 8, 9;
+  reserved "fields", "customer";
   // customer_id is the owning org's id, stamped by the coordinator from the
   // authenticated token (row-level security). Senders never set it.
   int64 customer_id = 26;
@@ -244,6 +245,13 @@ message ExecuteQueryRequest {
   // stages_read_payload feeds the first stage, a jq, each row's payload
   // (the `payload` column) instead of its raw line.
   bool stages_read_payload = 11;
+  // aggregate, when set, says the sql groups each shard's rows: every
+  // row is a distinct line with its count (the `count` column), merged
+  // on merge_key. Compute sums the counts across shards and feeds the
+  // stages what the aggregated stages print: "lines" (wc -l), "distinct"
+  // (sort -u, sort | uniq) or "count_distinct" (sort | uniq -c). See
+  // planner.QueryPlan.Aggregate.
+  string aggregate = 12;
 }
 
 message ExecuteQueryStreamResponse {

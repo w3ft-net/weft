@@ -1230,7 +1230,6 @@ func buildLogRow(line, instance, app, traceID string) *pb.LogRow {
 		Version:    versionForService(app),
 		Raw:        line,
 		TsUnixNs:   now.UnixNano(),
-		Fields:     strings.Fields(line),
 		TraceId:    traceID,
 	}
 	stampDimensions(row)

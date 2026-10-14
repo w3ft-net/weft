@@ -336,6 +336,17 @@ var logColumns = []string{
 	"trace_id", "span_name", "span_id", "parent_span_id", "duration_ns",
 }
 
+// awkFields splits a line into the fields column the way awk's default
+// field separator splits $0, so the planner can lower awk's $N to
+// fields[N]: on runs of spaces, tabs, newlines and carriage returns, as
+// the awk compute runs (warp's) does. Rows ingested before this held a
+// schema-dependent split; queries over them may disagree with awk.
+func awkFields(raw string) []string {
+	return strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+}
+
 // Ingest bulk-loads rows into the logs table via DuckDB's Appender — the
 // driver's fastest write path: it streams values straight into columnar chunks,
 // skipping the SQL parse/bind a multi-row INSERT pays per batch. On error it
@@ -373,7 +384,7 @@ func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
 			}
 			if rerr := appender.AppendRow(
 				r.Raw,
-				r.Fields,
+				awkFields(r.Raw),
 				time.Unix(0, r.TsUnixNs),
 				r.Level,
 				r.Namespace,

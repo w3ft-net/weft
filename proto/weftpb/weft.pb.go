@@ -499,12 +499,11 @@ type LogRow struct {
 	// Bare service name within the sender's namespace (e.g. "coordinator").
 	// The coordinator derives the namespace from the agent/poller token —
 	// this is NOT a "namespace/service" composite.
-	Service     string   `protobuf:"bytes,3,opt,name=service,proto3" json:"service,omitempty"`
-	Level       string   `protobuf:"bytes,4,opt,name=level,proto3" json:"level,omitempty"`
-	TsUnixNs    int64    `protobuf:"varint,5,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`
-	Instance    string   `protobuf:"bytes,6,opt,name=instance,proto3" json:"instance,omitempty"` // hostname of the emitting machine
-	PayloadJson []byte   `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
-	Fields      []string `protobuf:"bytes,8,rep,name=fields,proto3" json:"fields,omitempty"`
+	Service     string `protobuf:"bytes,3,opt,name=service,proto3" json:"service,omitempty"`
+	Level       string `protobuf:"bytes,4,opt,name=level,proto3" json:"level,omitempty"`
+	TsUnixNs    int64  `protobuf:"varint,5,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`
+	Instance    string `protobuf:"bytes,6,opt,name=instance,proto3" json:"instance,omitempty"` // hostname of the emitting machine
+	PayloadJson []byte `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
 	// customer_id is the owning org's id, stamped by the coordinator from the
 	// authenticated token (row-level security). Senders never set it.
 	CustomerId   int64  `protobuf:"varint,26,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
@@ -619,13 +618,6 @@ func (x *LogRow) GetInstance() string {
 func (x *LogRow) GetPayloadJson() []byte {
 	if x != nil {
 		return x.PayloadJson
-	}
-	return nil
-}
-
-func (x *LogRow) GetFields() []string {
-	if x != nil {
-		return x.Fields
 	}
 	return nil
 }
@@ -976,8 +968,15 @@ type ExecuteQueryRequest struct {
 	// stages_read_payload feeds the first stage, a jq, each row's payload
 	// (the `payload` column) instead of its raw line.
 	StagesReadPayload bool `protobuf:"varint,11,opt,name=stages_read_payload,json=stagesReadPayload,proto3" json:"stages_read_payload,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// aggregate, when set, says the sql groups each shard's rows: every
+	// row is a distinct line with its count (the `count` column), merged
+	// on merge_key. Compute sums the counts across shards and feeds the
+	// stages what the aggregated stages print: "lines" (wc -l), "distinct"
+	// (sort -u, sort | uniq) or "count_distinct" (sort | uniq -c). See
+	// planner.QueryPlan.Aggregate.
+	Aggregate     string `protobuf:"bytes,12,opt,name=aggregate,proto3" json:"aggregate,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExecuteQueryRequest) Reset() {
@@ -1078,6 +1077,13 @@ func (x *ExecuteQueryRequest) GetStagesReadPayload() bool {
 		return x.StagesReadPayload
 	}
 	return false
+}
+
+func (x *ExecuteQueryRequest) GetAggregate() string {
+	if x != nil {
+		return x.Aggregate
+	}
+	return ""
 }
 
 type ExecuteQueryStreamResponse struct {
@@ -4694,7 +4700,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\tmeta_vars\x18\x04 \x03(\v2\x1d.weft.ResultRow.MetaVarsEntryR\bmetaVars\x1a;\n" +
 	"\rMetaVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc0\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb6\x05\n" +
 	"\x06LogRow\x12\x1d\n" +
 	"\bline_num\x18\x01 \x01(\x03B\x02\x18\x01R\alineNum\x12\x10\n" +
 	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x18\n" +
@@ -4703,8 +4709,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"ts_unix_ns\x18\x05 \x01(\x03R\btsUnixNs\x12\x1a\n" +
 	"\binstance\x18\x06 \x01(\tR\binstance\x12!\n" +
-	"\fpayload_json\x18\a \x01(\fR\vpayloadJson\x12\x16\n" +
-	"\x06fields\x18\b \x03(\tR\x06fields\x12\x1f\n" +
+	"\fpayload_json\x18\a \x01(\fR\vpayloadJson\x12\x1f\n" +
 	"\vcustomer_id\x18\x1a \x01(\x03R\n" +
 	"customerId\x12\x1e\n" +
 	"\n" +
@@ -4726,8 +4731,8 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\aspan_id\x18\x17 \x01(\tR\x06spanId\x12$\n" +
 	"\x0eparent_span_id\x18\x18 \x01(\tR\fparentSpanId\x12\x1f\n" +
 	"\vduration_ns\x18\x19 \x01(\x03R\n" +
-	"durationNsJ\x04\b\t\x10\n" +
-	"R\bcustomer\"1\n" +
+	"durationNsJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"R\x06fieldsR\bcustomer\"1\n" +
 	"\rIngestRequest\x12 \n" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +
 	"\x0eIngestResponse\x12#\n" +
@@ -4738,7 +4743,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"lambda_url\x18\x03 \x01(\tR\tlambdaUrl\x12!\n" +
 	"\fparquet_path\x18\x04 \x01(\tR\vparquetPath\x12\x1a\n" +
-	"\bservices\x18\x05 \x03(\tR\bservices\"\xd2\x02\n" +
+	"\bservices\x18\x05 \x03(\tR\bservices\"\xf0\x02\n" +
 	"\x13ExecuteQueryRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12-\n" +
 	"\x06shards\x18\x02 \x03(\v2\x15.weft.ShardDescriptorR\x06shards\x12\x16\n" +
@@ -4751,7 +4756,8 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"row_stages\x18\n" +
 	" \x03(\tR\trowStages\x12.\n" +
-	"\x13stages_read_payload\x18\v \x01(\bR\x11stagesReadPayloadJ\x04\b\x06\x10\aR\fshard_secret\"H\n" +
+	"\x13stages_read_payload\x18\v \x01(\bR\x11stagesReadPayload\x12\x1c\n" +
+	"\taggregate\x18\f \x01(\tR\taggregateJ\x04\b\x06\x10\aR\fshard_secret\"H\n" +
 	"\x1aExecuteQueryStreamResponse\x12\x14\n" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\xd8\x01\n" +
