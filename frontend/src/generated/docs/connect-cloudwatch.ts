@@ -72,9 +72,9 @@ soon as you approve it.</p>
 <pre><code># And in the shell
 cat /log/myco/my-app/main.log | head
 </code></pre>
-<p>That 3-segment path reads the service across every env. If the token you
-deployed carries an env, the rows live under
-<code>/log/myco/&lt;env&gt;/my-app/main.log</code>; see <strong>Namespaces</strong>.</p>
+<p>That path reads the service across every env. If the token you deployed
+carries an env, the rows live under <code>/log/myco/&lt;env&gt;/my-app/main.log</code>; see
+<a href="/manual/introduction#paths">Paths</a>.</p>
 <h3 id="troubleshooting">Troubleshooting</h3>
 <ul>
 <li><strong>No rows appearing</strong> — check the Firehose delivery stream's own

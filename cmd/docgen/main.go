@@ -46,12 +46,17 @@ func main() {
 	}
 
 	all = withManualShellPages(all)
+	links = newLinkIndex(all)
 
 	if err := writeShell(*shellOut, all); err != nil {
 		log.Fatalf("write shell: %v", err)
 	}
 	if err := writeWeb(*webOut, all); err != nil {
 		log.Fatalf("write web: %v", err)
+	}
+
+	if len(links.errs) > 0 {
+		log.Fatalf("broken doc links:\n  %s", strings.Join(links.errs, "\n  "))
 	}
 
 	fmt.Printf("docgen: %d topics → %s, %s\n", len(all), *shellOut, *webOut)

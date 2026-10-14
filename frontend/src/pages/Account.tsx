@@ -444,7 +444,7 @@ function IntegrationsCard({ integrations, onRefresh }: { integrations: Integrati
 
 // ── Team Members Card ──────────────────────────────────────────────────────
 
-function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null; onRefresh: () => void; currentEmail: string }) {
+export function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null; onRefresh: () => void; currentEmail: string }) {
   const [showInvite, setShowInvite] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviting, setInviting] = useState(false)
@@ -458,7 +458,7 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
   const seatsUsed = team?.seats_used ?? 0
   const seatsLimit = team?.seats_limit ?? 1
   const atLimit = seatsUsed >= seatsLimit
-  const isOwner = members.some(m => m.Email === currentEmail && m.Role === 'admin')
+  const isOwner = members.some(m => m.email === currentEmail && m.role === 'admin')
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault()
@@ -590,37 +590,37 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
             </thead>
             <tbody>
               {members.map(m => (
-                <tr key={m.ID} data-testid={`account-team-row-${m.ID}`}>
-                  <td className="token-label">{m.Email}</td>
+                <tr key={m.id} data-testid={`account-team-row-${m.id}`}>
+                  <td className="token-label">{m.email}</td>
                   <td>
-                    <span className={`token-status ${m.Role === 'admin' ? 'token-status-active' : ''}`}>
-                      {m.Role}
+                    <span className={`token-status ${m.role === 'admin' ? 'token-status-active' : ''}`}>
+                      {m.role}
                     </span>
                   </td>
                   <td>
-                    <span className={`token-status ${m.Status === 'active' ? 'token-status-active' : 'token-status-revoked'}`}>
-                      {m.Status === 'pending' ? 'invited' : m.Status}
+                    <span className={`token-status ${m.status === 'active' ? 'token-status-active' : 'token-status-revoked'}`}>
+                      {m.status === 'pending' ? 'invited' : m.status}
                     </span>
                   </td>
                   <td className="token-date">
-                    {m.AcceptedAt ? formatDate(m.AcceptedAt) : m.Status === 'pending' ? formatDate(m.InvitedAt) : '—'}
+                    {m.acceptedAt ? formatDate(m.acceptedAt) : m.status === 'pending' && m.invitedAt ? formatDate(m.invitedAt) : '—'}
                   </td>
                   <td>
-                    {isOwner && m.Role !== 'admin' && (
-                      confirmRemove === m.ID ? (
+                    {isOwner && m.role !== 'admin' && (
+                      confirmRemove === m.id ? (
                         <div className="form-actions">
                           <button
                             className="btn-action btn-action-danger"
-                            onClick={() => handleRemove(m.ID)}
-                            disabled={removing === m.ID}
-                            data-testid={`account-team-confirm-remove-${m.ID}`}
+                            onClick={() => handleRemove(m.id)}
+                            disabled={removing === m.id}
+                            data-testid={`account-team-confirm-remove-${m.id}`}
                           >
-                            {removing === m.ID ? '...' : 'confirm'}
+                            {removing === m.id ? '...' : 'confirm'}
                           </button>
                           <button
                             className="btn-action"
                             onClick={() => setConfirmRemove(null)}
-                            data-testid={`account-team-cancel-remove-${m.ID}`}
+                            data-testid={`account-team-cancel-remove-${m.id}`}
                           >
                             cancel
                           </button>
@@ -628,8 +628,8 @@ function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse | null
                       ) : (
                         <button
                           className="btn-action btn-action-danger"
-                          onClick={() => setConfirmRemove(m.ID)}
-                          data-testid={`account-team-remove-${m.ID}`}
+                          onClick={() => setConfirmRemove(m.id)}
+                          data-testid={`account-team-remove-${m.id}`}
                         >
                           remove
                         </button>
@@ -668,7 +668,7 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
   }, [])
 
   if (!team || !doc) return null
-  const nonOwners = (team.members ?? []).filter(m => m.Role !== 'admin' && m.Status === 'active' && m.UserID)
+  const nonOwners = (team.members ?? []).filter(m => m.role !== 'admin' && m.status === 'active' && m.userId)
   if (nonOwners.length === 0) return null
 
   function permsFor(email: string): MemberPerms {
@@ -747,36 +747,36 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
           </thead>
           <tbody>
             {nonOwners.map(m => {
-              const p = permsFor(m.Email)
+              const p = permsFor(m.email)
               const nsSummary = summarizeNs(p)
-              const isExpanded = expanded === m.Email
+              const isExpanded = expanded === m.email
               return (
-                <Fragment key={m.ID}>
-                  <tr data-testid={`account-permissions-row-${m.ID}`}>
-                    <td className="token-label">{m.Email}{m.Email === currentEmail && ' (you)'}</td>
-                    <PermCheckCell isOwner={isOwner} level={p.bin} testIdBase={`account-permissions-${m.ID}-bin`} onFlip={() => flip(m.Email, 'bin')} />
-                    <PermCheckCell isOwner={isOwner} level={p.cron} testIdBase={`account-permissions-${m.ID}-cron`} onFlip={() => flip(m.Email, 'cron')} />
-                    <PermCheckCell isOwner={isOwner} level={p.etc} testIdBase={`account-permissions-${m.ID}-etc`} onFlip={() => flip(m.Email, 'etc')} />
+                <Fragment key={m.id}>
+                  <tr data-testid={`account-permissions-row-${m.id}`}>
+                    <td className="token-label">{m.email}{m.email === currentEmail && ' (you)'}</td>
+                    <PermCheckCell isOwner={isOwner} level={p.bin} testIdBase={`account-permissions-${m.id}-bin`} onFlip={() => flip(m.email, 'bin')} />
+                    <PermCheckCell isOwner={isOwner} level={p.cron} testIdBase={`account-permissions-${m.id}-cron`} onFlip={() => flip(m.email, 'cron')} />
+                    <PermCheckCell isOwner={isOwner} level={p.etc} testIdBase={`account-permissions-${m.id}-etc`} onFlip={() => flip(m.email, 'etc')} />
                     <td>
                       <button
                         className="btn-action"
-                        onClick={() => setExpanded(isExpanded ? null : m.Email)}
+                        onClick={() => setExpanded(isExpanded ? null : m.email)}
                         title={nsSummary.title}
-                        data-testid={`account-permissions-${m.ID}-ns-toggle`}
+                        data-testid={`account-permissions-${m.id}-ns-toggle`}
                       >
                         {nsSummary.short} {isExpanded ? '▾' : '▸'}
                       </button>
                     </td>
                   </tr>
                   {isExpanded && (
-                    <tr className="dash-table-subrow" data-testid={`account-permissions-${m.ID}-ns-panel`}>
+                    <tr className="dash-table-subrow" data-testid={`account-permissions-${m.id}-ns-panel`}>
                       <td colSpan={5}>
                         <NamespaceGrants
-                          memberId={m.ID}
+                          memberId={m.id}
                           isOwner={isOwner}
                           namespaces={namespaces}
                           perms={p}
-                          onFlip={(ns, facet) => flipNs(m.Email, ns, facet)}
+                          onFlip={(ns, facet) => flipNs(m.email, ns, facet)}
                         />
                       </td>
                     </tr>
@@ -893,7 +893,7 @@ export default function Account() {
           <TeamCard team={team} onRefresh={loadData} currentEmail={user?.email ?? ''} />
           <PermissionsCard
             team={team}
-            isOwner={(team?.members ?? []).some(m => m.Email === user?.email && m.Role === 'admin')}
+            isOwner={(team?.members ?? []).some(m => m.email === user?.email && m.role === 'admin')}
             currentEmail={user?.email ?? ''}
           />
         </div>

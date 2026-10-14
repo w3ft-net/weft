@@ -7,97 +7,59 @@ shell:
     - "help builtins"
 web:
   section: builtins
-  category: query
-  order: 60
+  category: weft-shell
+  order: 56
 ---
 
-## Querying logs
+Commands that exist in a Unix shell. Everything here behaves as it does in
+bash/coreutils except where a note says otherwise.
 
-- `cat /log/<ns>/<env>/<svc>/main.log` — stream all lines for a service (`/log/<ns>/<svc>/<kind>.log` reads it across every env)
-- `head /log/<ns>/<env>/<svc>/main.log` — first N lines (oldest)
-- `tail /log/<ns>/<env>/<svc>/main.log` — last N lines; `tail -f` follows
-- `ls /log` — browse the namespace tree; `ls /log/<ns>/<svc>` lists a service's kinds
+## Reading logs
+
+- `cat`, `head`, `tail` — read `/log/...` pseudofiles; `tail -f` follows. `head` is the oldest rows, `tail` the newest, within the current `range`. In a cron, omit `-n`: a line count can silently truncate the cron's time window.
+- `ls [-l] [-a] [-h]` — lists `/bin`, `/cron.d`, `/etc`, `/log`, `/tmp`. `-l` shows size and mtime (a sparkline on `/cron.d`).
+- `cd` — changes the virtual working directory.
+- `less` — pages output; also automatic for long output (`man less`).
 
 ## Text pipeline
 
-- `grep` — filter lines by pattern
-- `awk` — field-oriented extraction / predicates
-- `sed` — stream substitution
-- `jq` — JSON filtering and projection (implies JSON source)
-- `cut`, `paste` — column slicing and joining
-- `sort`, `uniq` — ordering and de-duplication
-- `wc` — line/word/byte counts
-- `rev`, `tac` — reverse chars / reverse line order
-- `tee`, `tr` — duplicate to file / translate chars
-- `xargs` — build commands from stdin
-- `less` — page the final output (see `man less`)
+- `grep` — filter lines by pattern.
+- `awk` — field predicates and extraction; meta-variables (`ENV`, `LEVEL`, ...) are bare globals, not `$NAME`.
+- `sed` — stream substitution.
+- `jq` — reads each row's JSON payload (the JSON part of a line with text around it). A program of only `select(...)` filters rows and prints the original lines; anything else prints jq's output, compact, one value per line. Meta-variables are `$level`, `$host`, `$ts`, ...; a missing field is `null`, so `select(.n < 100)` keeps rows without `n`.
+- `cut`, `paste`, `sort`, `uniq`, `wc`, `rev`, `tac`, `tr`, `tee`, `xargs`.
 
-## Filesystem
+Once a stage changes the text (`sort`, `awk '{ print ... }'`, `sed s/.../`), the next stage reads that text, as in any shell; the JSON payload stays attached only through stages that merely filter or count rows (`grep`, an awk pattern, `head`, `tail`).
 
-- `ls [-l] [-a] [-h] [path]` — list `/bin`, `/cron.d`, `/etc`, `/log`, `/tmp`; `ls -l /cron.d/` adds a sparkline
-- `cat /bin/<fn>` — view a saved function
-- `cat /cron.d/<name>` — view a cron definition
-- `chart <cron>` / `... | chart [-x COL|.path] [-y COL|.path]` — render a saved cron or a pipeline as an in-terminal chart (`man chart`)
-- `>` / `>>` — redirect pipeline output into `/tmp`
-- `mkdir /tmp/<dir>` — group scratch files into folders
-- `cp <src> <dst>` / `mv <src> <dst>` — duplicate / rename (both sides must be inside `/tmp`; `cat <src> > <dst>` writes elsewhere)
-- `touch <path>` — create empty / reset the 48h clock on a `/tmp` file (`>`, `>>`, `cp` and `mv` reset it too)
-- `rm <path>` / `rm -rf <dir>` — delete a file or directory
-- `vi <path>` — edit (vim keys)
-- `cd <path>` — change the virtual cwd
+## Files in /tmp
 
-## Working on saved results
+`/tmp` is the only writable scratch area. Expiry, size limits and how files cross into `/bin` are in [Scratch space](../manual/tmp.md#lifetime-and-limits).
 
-- `diff <a> <b>` — line-level differences between two files
-- `comm <a> <b>` — sorted-set merge: only-in-a, only-in-b, in-both
-- `join <a> <b>` — relational join on a key column (`-t` / `-1` / `-2`, with a space before the value: `-t ,`)
-- `paste <a> <b> [...]` — column-merge files line-by-line (`-d`)
-- `wc <files>` — `-l` lines, `-w` words, `-c` bytes, `-m` chars, `-L` longest line
-
-## Version history (git)
-
-`git` is a subset of git over `/bin`, `/cron.d`, `/etc/dashboards` and `/etc/notify.yaml`; HEAD is the org's latest change.
-
-- `git log [-p] [--oneline] [-- <path>]` — list versions; `-p` includes diffs
-- `git show <rev>[:<path>]` — a commit, or a file's content at that revision (path without a leading slash: `git show HEAD:bin/<name>`)
-- `git diff <a> <b> [-- <path>]` — unified diff between two revisions
-- `git blame <path>` — who last changed each line
-- `git restore --source=<rev> <path>` — make a past version current (a new commit)
-- `git revert <rev>` — undo one commit with a new commit
-- `git commit --amend -m MSG` — reword the latest commit
-
-Revisions: `HEAD`, `HEAD~N`, `<a>..<b>`, or a hash prefix (≥4 hex chars).
-Tracked: `/bin`, `/cron.d`, `/etc/dashboards` and `/etc/notify.yaml`; last 5 past versions retained.
-`git status` works; other git commands are refused as unsupported.
-
-## Sharing
-
-- `clipboard /bin/<name>` — copy a short link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (`man clipboard`)
-
-## Team (admins)
-
-- `cat /etc/passwd` — the team roster: each member's role, status, and groups (read-only)
-- `adduser <email>` — invite someone to the org (sends an invite email)
-- `adduser <email> <group>` — add a member to a group; `deluser <email> <group>` removes them from it
-- `deluser <email>` — remove a member from the org
-- `groups <email>` / `id <email>` — show a member's groups
-
-Groups are the permission model: `binmgr` / `cronmgr` / `configmgr`
-(edit `/bin`, `/cron.d`, `/etc`), `nsmgr` (create and manage namespaces),
-a namespace name (read its logs), or `<ns>+tokens` (mint producer tokens
-for it). Admins have implicit full access. See `man passwd`.
-
-## Alerting
-
-- `<pipeline> | alert above <N> --notify=<alias>` — fire a notification when the pipeline's final number exceeds N; `alert` must be the last command of a script. See `help alerts` or `man alert`
+- `>` / `>>` — redirect into `/tmp`.
+- `mkdir`, `rm [-rf]`, `vi`, `touch`, `cp`, `mv` — as usual, within `/tmp`.
+- `diff`, `comm` (sorted input), `join` (`-t ,`, `-1`, `-2` take a space before the value), `paste -d`, `wc -l -w -c -m -L`.
 
 ## Shell
 
-- `range [<start>..<end>]` — show or set the query window, e.g. `range 2h..`
-- `which <name>` — show where a command lives
-- `type <name>` — identify a command
-- `history` — past commands
-- `clear` — clear the screen
-- `exit` — quit the shell
+- `which`, `type`, `history`, `clear`, `exit`.
 
-> Each entry above is a command — `man <name>` where a page exists.
+## Partial implementations
+
+Real commands with a reduced or weft-specific meaning.
+
+- `git` — a subset over `/bin`, `/cron.d`, `/etc/dashboards` and `/etc/notify.yaml`: `log`, `show`, `diff`, `blame`, `restore --source`, `revert`, `commit --amend`, `status`. Other subcommands are refused. Last 5 past versions retained (`man git`).
+- `adduser`, `deluser`, `groups`, `id` — manage org members and groups, not OS accounts; `adduser <email>` sends an invite. `/etc/passwd` is a read-only team roster (`man passwd`).
+
+## Shell extensions
+
+Commands with no Unix counterpart.
+
+- `range [<start>..<end>]` — show or set the query window; it governs every read (`man range`).
+- `chart` — render a pipeline or cron in the terminal (`man chart`).
+- `alert` — fire a notification from a pipeline's final number (`man alert`).
+- `clipboard` — copy a short link to a `/bin` script (`man clipboard`).
+- `dashboard` — dashboard YAML grammar and tiles (`man dashboard`).
+
+`help cron` and `help alerts` cover scheduling and notification.
+
+> `man <name>` where a page exists.

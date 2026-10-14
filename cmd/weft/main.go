@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -1115,11 +1114,15 @@ func runTokenList(client *shell.HTTPCoordinator) {
 		fmt.Println("No tokens configured.")
 		return
 	}
-	// Raw token isn't available after creation — show ID for revoke and
-	// Prefix so humans can distinguish tokens at a glance.
-	fmt.Printf("%-6s %-14s %-15s %-25s %-10s %s\n", "ID", "PREFIX", "NAMESPACE", "LABEL", "STATUS", "CREATED")
+	// The raw token isn't available after creation; the opaque ID is what
+	// `weft token revoke --id` takes.
+	fmt.Printf("%-20s %-15s %-15s %-25s %-10s %s\n", "ID", "NAMESPACE", "ENV", "LABEL", "STATUS", "CREATED")
 	for _, t := range tokens {
-		fmt.Printf("%-6d %-14s %-15s %-25s %-10s %s\n", t.ID, t.Prefix+"…", t.Namespace, t.Label, t.Status, t.CreatedAt)
+		env := t.Env
+		if env == "" {
+			env = "-"
+		}
+		fmt.Printf("%-20s %-15s %-15s %-25s %-10s %s\n", t.ID, t.Namespace, env, t.Label, t.Status, t.CreatedAt)
 	}
 }
 
@@ -1136,16 +1139,11 @@ func runTokenRevoke(client *shell.HTTPCoordinator) {
 		fmt.Fprintln(os.Stderr, "usage: weft token revoke --id ID   (see `weft token list`)")
 		os.Exit(1)
 	}
-	id, err := strconv.ParseUint(idStr, 10, 64)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "invalid id: %v\n", err)
-		os.Exit(1)
-	}
-	if err := client.RevokeToken(uint(id)); err != nil {
+	if err := client.RevokeToken(idStr); err != nil {
 		fmt.Fprintf(os.Stderr, "revoke token: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Revoked token id %d\n", id)
+	fmt.Printf("Revoked token %s\n", idStr)
 }
 
 // --- Integration subcommand ---

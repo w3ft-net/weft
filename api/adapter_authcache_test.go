@@ -1,12 +1,14 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // ingestControl posts a Firehose CONTROL_MESSAGE, which authenticates and
@@ -81,10 +83,19 @@ func TestIngestHandler_RevokeTakesEffectImmediatelyInAPI(t *testing.T) {
 		t.Fatalf("pre-revoke status = %d", code)
 	}
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/tokens/x", nil)
-	req.SetPathValue("id", fmt.Sprint(tok.ID))
+	user, err := s.CreateVerifiedUser("revoke-immediate@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
+	jwt, err := auth.Generate(user, "test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodDelete, "/api/tokens/"+tok.PublicID, nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
 	w := httptest.NewRecorder()
-	srv.handleRevokeToken(w, req)
+	srv.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("revoke status = %d", w.Code)
 	}

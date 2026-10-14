@@ -135,8 +135,9 @@ func TestConfigureCore_HelpBuiltinsServesWeftCorpus(t *testing.T) {
 
 	visible := stripANSI(output.String())
 	for _, marker := range []string{
-		"Querying logs",
-		"cat /log/",
+		"Reading logs",
+		"/log/",
+		"Shell extensions",
 		"git",
 		"chart",
 	} {

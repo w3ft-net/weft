@@ -91,9 +91,9 @@ soon as you approve it.
 cat /log/myco/my-app/main.log | head
 ```
 
-That 3-segment path reads the service across every env. If the token you
-deployed carries an env, the rows live under
-`/log/myco/<env>/my-app/main.log`; see **Namespaces**.
+That path reads the service across every env. If the token you deployed
+carries an env, the rows live under `/log/myco/<env>/my-app/main.log`; see
+[Paths](query-logs.md#paths).
 
 ### Troubleshooting
 

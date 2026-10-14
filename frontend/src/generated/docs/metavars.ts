@@ -4,24 +4,17 @@ const metavars = {
   id: "manual-metavars",
   section: "metavars",
   title: "Meta-variables",
-  category: "query",
-  order: 60,
+  category: "weft-shell",
+  order: 57,
   headings: [
-    { level: 2, id: "reserved-set", text: "Reserved set" },
-    { level: 3, id: "naming-convention", text: "Naming convention" },
-    { level: 2, id: "path-layout", text: "Path layout" },
+    { level: 2, id: "semantics", text: "Semantics" },
+    { level: 2, id: "naming", text: "Naming" },
     { level: 2, id: "speed", text: "Speed" },
-    { level: 2, id: "recipes", text: "Recipes" },
-    { level: 3, id: "per-host-average-over-a-window", text: "Per-host average over a window" },
-    { level: 3, id: "filter-by-env-across-deployments", text: "Filter by env across deployments" },
-    { level: 3, id: "compare-a-single-deployment-across-regions", text: "Compare a single deployment across regions" },
   ],
   html: `<h1 id="meta-variables">Meta-variables</h1>
-<p>Meta-variables expose row-level dimensions as fast filters in awk and
-jq pipelines. Filtering on a meta-variable is much faster than filtering
-on a field inside the row's JSON payload, because weft can skip data
-that can't match.</p>
-<h2 id="reserved-set">Reserved set</h2>
+<p>Each stored row carries a fixed set of indexed columns beside its text and JSON
+payload. Meta-variables expose them in awk and jq. Filtering on one is the
+fast path: weft skips data that can't match instead of parsing every row.</p>
 <table>
 <thead>
 <tr>
@@ -120,7 +113,7 @@ that can't match.</p>
 <td><code>NODE</code></td>
 <td><code>$node</code></td>
 <td><code>node</code></td>
-<td>weftd <code>dimensions.node:</code> (file-sourced)</td>
+<td>weftd <code>dimensions.node:</code> (file-sourced, never auto-derived)</td>
 </tr>
 <tr>
 <td><code>EVENT_ID</code></td>
@@ -136,104 +129,34 @@ that can't match.</p>
 </tr>
 </tbody>
 </table>
-<p><code>EVENT_ID</code> and <code>LINE_NO</code> tie together the lines of a multi-line event
-(a stack trace, a Python traceback): each line is its own row, and they
-share an <code>EVENT_ID</code>. A one-line event is line 0 and has an empty
-<code>EVENT_ID</code>, so <code>LINE_NO == 0</code> selects the first line of every event and
-<code>EVENT_ID != &quot;&quot;</code> selects only lines that belong to a multi-line event.
-In jq <code>$line_no</code> and <code>$duration_ns</code> are numbers (<code>$duration_ns</code> is null on a row without one); the other meta-variables are strings.</p>
-<p>A row without a given dimension carries an empty string. <code>ENV == &quot;prod&quot;</code> does not match it, but <code>ENV != &quot;prod&quot;</code> does.</p>
-<h3 id="naming-convention">Naming convention</h3>
-<p>awk meta-variables are all-caps short flat names — <code>ENV</code>, <code>POD</code>,
-<code>DEPLOYMENT</code>, <code>LEVEL</code>, <code>SERVICE</code>, <code>INSTANCE</code>. The source coordinates
-are three columns — <code>NAMESPACE</code>, <code>SERVICE</code>, <code>KIND</code> — each addressed
-directly.</p>
-<p>Meta-variables are written bare, without a <code>$</code> prefix: <code>$NAME</code> in awk is
-field-by-variable-index syntax (<code>$n</code> where <code>n</code> is <code>NAME</code>'s value) and
-cannot carry a string like <code>&quot;web-1&quot;</code>. A bare <code>HOST</code> is an ordinary awk
-global, like awk's built-in <code>NR</code>/<code>NF</code>/<code>FILENAME</code>.</p>
-<p>jq meta-variables are lowercase jq variables — <code>$env</code>, <code>$pod</code>. A
-variable can't be mistaken for a payload key: <code>.pod</code> is whatever the
-producer wrote into the row body; <code>$pod</code> is the column. Real JSONL
-sometimes carries <code>Pod</code> / <code>PoD</code> / <code>POD</code> keys, so the <code>$</code> marks the
-column reliably in any case. A program that rebinds one of the names
-(<code>. as $env | ...</code>) reads its own value.</p>
-<p><code>NAMESPACE</code> is weft's logical token grouping — the <code>&lt;namespace&gt;</code>
-segment in the path (<code>/log/&lt;namespace&gt;/...</code>). The Kubernetes
-namespace is a distinct dimension named <code>K8S_NAMESPACE</code>
-(<code>$k8s_namespace</code>).</p>
-<h2 id="path-layout">Path layout</h2>
-<p>The pseudofile path encodes the namespace, service, and stream
-kind, plus the env when the producing token carries one:</p>
-<pre><code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log          env-less token
-/log/&lt;namespace&gt;/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log    env-bearing token
-</code></pre>
-<p><code>&lt;kind&gt;</code> is the stream: <code>main</code> for ordinary application logs (the
-default a producer ships unless it says otherwise), plus
-<code>heartbeats</code>, <code>metrics</code>, and <code>runtime</code> for services that emit
-telemetry. Every segment is always present; segment count alone
-distinguishes the env-less form from the env-bearing one.</p>
-<p>Tokens minted with <code>weft token create --namespace foo --env prod</code>
-produce rows that resolve to the 4-segment path; tokens without
-<code>--env</code> produce rows at the 3-segment path. A namespace can hold both
-layouts side by side, depending on how each token was minted.</p>
-<pre><code>ls /log/myco
-</code></pre>
-<p>lists the env directories (<code>prod/</code>, <code>staging/</code>) next to any env-less
-service directories (<code>api/</code>).</p>
-<p><code>cat /log/myco/prod/api/main.log</code> reads one env. The three-segment
-<code>cat /log/myco/api/main.log</code> reads that service across every env,
-including the env-less stream, and <code>ls /log/myco/api</code> lists the kinds
-it carries. To read a whole namespace, use <code>cat myco.log</code> and filter
-on <code>ENV</code>: <code>cat myco.log | awk 'ENV == &quot;prod&quot;'</code>. A glob that would
-read across services or envs, such as <code>/log/myco/*/api/main.log</code>,
-<code>/log/myco/prod/*.log</code> or <code>cat *.log</code>, is refused with an error;
-globs are allowed only to pick kinds inside one service
-(<code>/log/myco/prod/api/*.log</code>).</p>
-<p>Region is a query-time filter (<code>awk 'REGION == &quot;us-east-2&quot;'</code>) and is
-absent from the path layout. Deployment, host, cluster and pod are also
-query-time dimensions.</p>
+<h2 id="semantics">Semantics</h2>
+<ul>
+<li>A row without a dimension carries an empty string: <code>ENV == &quot;prod&quot;</code> does not
+match it, <code>ENV != &quot;prod&quot;</code> does. In jq <code>$line_no</code> and <code>$duration_ns</code> are
+numbers (<code>$duration_ns</code> is null on a row without one); the rest are strings.</li>
+<li><code>EVENT_ID</code> / <code>LINE_NO</code> tie together the lines of a multi-line event (a stack
+trace): each line is its own row, sharing an <code>EVENT_ID</code>. A one-line event is
+line 0 with an empty <code>EVENT_ID</code>, so <code>LINE_NO == 0</code> selects the first line of
+every event and <code>EVENT_ID != &quot;&quot;</code> only lines of multi-line events.</li>
+<li><code>NAMESPACE</code> is weft's token grouping (the <code>/log/&lt;namespace&gt;/...</code> segment).
+The Kubernetes namespace is <code>K8S_NAMESPACE</code>.</li>
+<li><code>REGION</code>, <code>DEPLOYMENT</code>, <code>HOST</code>, <code>CLUSTER</code> and <code>POD</code> are query-time
+dimensions, not path segments. For which dimensions appear in the path, see
+<a href="/manual/introduction#paths">Paths</a>.</li>
+</ul>
+<h2 id="naming">Naming</h2>
+<p>awk names are bare uppercase globals (<code>ENV</code>, <code>POD</code>) — never <code>$ENV</code>, which in
+awk means &quot;field number ENV&quot;. jq names are lowercase variables (<code>$env</code>,
+<code>$pod</code>). <code>$pod</code> is always the indexed column and <code>.pod</code> always a key in the
+row's JSON payload, even when a producer writes <code>Pod</code> or <code>POD</code>. A jq program
+that rebinds a name (<code>. as $env | ...</code>) reads its own value.</p>
 <h2 id="speed">Speed</h2>
-<p>Filtering on a reserved meta-variable is the fast path, in awk
-(<code>awk 'ENV == &quot;prod&quot;'</code>, <code>awk 'POD ~ &quot;api-7f9b&quot;'</code>) and in jq
-(<code>jq 'select($level == &quot;ERROR&quot;)'</code>). A filter on any other field, such
-as <code>jq 'select(.feature_flag == &quot;abc&quot;)'</code>, reads and parses every row in
-the time range. awk's numbered fields (<code>awk '$3 == &quot;POST&quot;'</code>) also run
-against every row. One pipeline can mix both: the meta-variable filters
-narrow the data first and the rest runs on what remains.</p>
-<p>A hard line count (<code>head -n N</code> or <code>tail -n N</code>) stops later filters from
-narrowing the read: <code>tail -n 500 | awk 'LEVEL == &quot;ERROR&quot;' | wc -l</code>
-counts the errors among the last 500 rows, while
-<code>awk 'LEVEL == &quot;ERROR&quot;' | tail -n 5</code> gives the last 5 errors.</p>
-<h2 id="recipes">Recipes</h2>
-<h3 id="per-host-average-over-a-window">Per-host average over a window</h3>
-<p>A cron in <code>/cron.d</code> that emits the host next to each value produces
-&quot;avg memory pct by host&quot;. A cron reads its own time range,
-so omit <code>-n</code> here: a line count can silently truncate the window.</p>
-<pre><code># /cron.d/memory-per-host
-# schedule: */1 * * * *
-cat /log/myco/prod/api/metrics.log \\
-  | jq -r 'select($level == &quot;INFO&quot; and .type == &quot;memory&quot;) | &quot;\\($host) \\(.pct)&quot;'
-</code></pre>
-<p>Each tick emits one <code>&lt;host&gt; &lt;pct&gt;</code> row per memory sample. Multi-row
-alerts (<code>alert above 80 -k 2 -t 1</code>) page per host independently
-because <code>-t 1</code> tags each row by its first field (the host).</p>
-<h3 id="filter-by-env-across-deployments">Filter by env across deployments</h3>
-<pre><code>cat myco.log \\
-  | awk 'ENV == &quot;prod&quot; &amp;&amp; LEVEL == &quot;ERROR&quot; &amp;&amp; DEPLOYMENT == &quot;api&quot;' \\
-  | head -50
-</code></pre>
-<p>The <code>ENV</code> and <code>DEPLOYMENT</code> filters are fast-path filters, so weft
-narrows to env=prod and deployment=api without parsing each row's
-JSON. For JSON log streams the same filter reads
-<code>jq 'select($env == &quot;prod&quot; and $deployment == &quot;api&quot;)'</code>.</p>
-<h3 id="compare-a-single-deployment-across-regions">Compare a single deployment across regions</h3>
-<pre><code>cat /log/myco/prod/api/main.log \\
-  | awk 'DEPLOYMENT == &quot;api&quot; {print REGION, LEVEL}' \\
-  | sort | uniq -c
-</code></pre>
-<p><code>REGION</code> is populated from cloud metadata at agent startup; the
-rollup gives a level-by-region histogram for the deployment.</p>
+<p>Meta-variable filters are fast: <code>awk 'ENV == &quot;prod&quot;'</code>, <code>awk 'POD ~ &quot;api-7f9b&quot;'</code>,
+<code>jq 'select($level == &quot;ERROR&quot;)'</code>. Anything else reads and parses every row in
+the time range: <code>jq 'select(.feature_flag == &quot;abc&quot;)'</code>, awk's numbered fields
+(<code>$3 == &quot;POST&quot;</code>). A pipeline can mix both; the meta-variable filters narrow the
+data first and the rest runs on what remains. For a dimension you query
+constantly, ask for it to be indexed rather than filtering on the payload.</p>
 `,
 } as const;
 

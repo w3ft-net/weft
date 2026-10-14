@@ -1,13 +1,13 @@
 ---
 id: manual-tmp
-title: Saving results to /tmp
+title: Scratch space and cookbook
 web:
   section: tmp
-  category: query
-  order: 57
+  category: weft-shell
+  order: 58
 ---
 
-## Saving results to /tmp
+## Scratch space (/tmp)
 
 Every weft account has a scratch area at `/tmp`. Use it to save the output
 of a pipeline, take notes during an incident, or hold a filtered result
@@ -54,88 +54,85 @@ touch /tmp/incident-errs               # reset the 48h clock
 rm -rf /tmp/incident-2026-04-22
 ```
 
-### Files expire after 48 hours
+### Lifetime and limits
 
-/tmp is durable storage — your files survive logouts and are visible
-from every session. Every file is deleted
-48 hours after it was last edited. Any of `>`, `>>`, `cp`, `mv`, or
-`touch` resets the clock; the mtime shown in `ls -l` is the source of
-truth.
+- **48 hours.** `/tmp` is durable across logouts and shared by every member of
+  your account (no other account sees it), but a file is deleted 48 hours after
+  its last write. `>`, `>>`, `cp`, `mv` and `touch` reset the clock; `ls -l`
+  shows the mtime. For long-term results, save the pipeline as a cron instead
+  (see **Crons**); cron results keep your plan's full history.
+- **Size.** A per-file cap and a total allowance, both set by your plan (see
+  the **Account** page). A write that would exceed either fails and writes
+  nothing. `ls -lh /tmp` shows sizes.
+- **Not scripts.** Files in `/tmp` are never executed; scripts live in `/bin`.
+- **No follow.** `tail -f ... > /tmp/x` is refused; drop `-f`.
+- **Crossing out.** `cp` and `mv` work only inside `/tmp`. Use
+  `cat /tmp/x > /bin/y` to move a file out and `cat /bin/y > /tmp/x` to edit
+  a copy.
 
-`touch /tmp/foo` extends a file's life and leaves its content
-unchanged. Use it when an investigation runs long and you want to keep
-your scratch past the original 48h.
+The Unix tools for comparing saved files (`diff`, `comm`, `join`, `paste`,
+`wc`) are listed in [Builtins](../shell/help-builtins.md#files-in-tmp).
 
-/tmp holds the data for the investigation you are running now. For
-long-term storage of a pipeline's output, save the pipeline itself as a
-cron (see **Crons**). Cron results are retained for the full history
-your plan covers.
+## Cookbook
 
-### Storage limits
-
-/tmp has a total allowance and a per-file cap, both set by your plan;
-see the Account page for your plan's limits. Use /tmp for filtered result
-sets and notes. Writes that would exceed
-either limit fail with an error; the partial output is not written.
-
-Check what you're using from the shell. `ls -lh` shows each file's
-size:
+### Triage a spike
 
 ```
-ls -lh /tmp
+cat /log/myco/api/main.log | awk 'LEVEL == "ERROR"' > /tmp/errs
+awk '{ print SERVICE, HOST }' /tmp/errs | sort | uniq -c | sort -rn | head
 ```
 
-`cat /etc/usage` reports your log-ingest quota.
-
-### Limits
-
-- **Scripts.** Files in /tmp are never treated as scripts.
-  `vi /tmp/foo` opens a text file; typing `foo` at the prompt
-  afterwards does nothing. Scripts live in `/bin` — see
-  **Custom scripts**.
-- **Follow mode.** Redirect the output of a finished query into /tmp.
-  `tail -f /log/myco/api/main.log > /tmp/stream` is refused with an
-  error, because a follow never finishes and the file would hold only
-  a truncated read. Drop `-f` to save a finished query.
-- **Sharing.** /tmp is per-customer. Every member of your account
-  sees the same /tmp; users from other accounts see none of it.
-
-### Working on saved results
-
-Once you have a couple of saved result sets, the standard Unix
-analysis kit is available for comparing and combining them:
-
-| Command            | What it does                                                              |
-|--------------------|--------------------------------------------------------------------------|
-| `cp a b`           | Duplicate a file                                                          |
-| `mv a b`           | Rename a file                                                             |
-| `touch a`          | Reset the 48h clock without otherwise changing the file                   |
-| `diff a b`         | Show line-level differences between two files                             |
-| `comm a b`         | Three-column merge of two sorted files: only-in-A, only-in-B, in-both    |
-| `join a b`         | Relational join on a key column (default: whitespace, column 1 each side) |
-| `paste a b`        | Column-merge two files line-by-line (default delimiter: tab)              |
-| `wc a`             | Lines, words and bytes; `-l -w -c -m -L` pick columns and combine freely  |
-
-`cp` and `mv` work only inside /tmp, on both sides. /bin, /cron.d and
-/etc each have their own save path (permissions and validation), so
-copying or moving into or out of them is refused. To put a file there,
-use `cat /tmp/x > /bin/y`; to copy one out for editing, use
-`cat /bin/y > /tmp/x`.
-
-### Listing with `ls -l`
-
-`ls` accepts the usual flags — `-l` for long format, `-a` to include
-dotfiles, `-h` for human-readable sizes. Long format shows size and
-last-modified time, which is how you can tell how much of your 48h
-window a file has left:
+### Level histogram by region for one deployment
 
 ```
-weft> ls -lh /tmp
--rw-r--r--  Alice Chen  2.1K  2026-04-24 09:42  errs
-drwxr-xr-x  Alice Chen     -  2026-04-22 17:03  incident-2026-04-22/
--rw-r--r--  Alice Chen   312  2026-04-24 10:15  scratch
+cat /log/myco/prod/api/main.log \
+  | awk 'DEPLOYMENT == "api" {print REGION, LEVEL}' \
+  | sort | uniq -c
 ```
 
-The same flags work anywhere in the filesystem — `ls -l /bin` shows
-when you last edited each of your scripts, `ls -l /cron.d` shows when
-each cron was last modified.
+### Prod errors for one deployment, across the namespace
+
+```
+cat myco.log \
+  | awk 'ENV == "prod" && LEVEL == "ERROR" && DEPLOYMENT == "api"' \
+  | head -50
+```
+
+`ENV` and `DEPLOYMENT` narrow the read before any row is parsed. The jq form
+is `jq 'select($env == "prod" and $deployment == "api")'`.
+
+### Whole stack traces for matching errors
+
+```
+cat /log/myco/api/main.log | awk 'LINE_NO == 0 && /timeout/' > /tmp/first-lines
+```
+
+Lines of one multi-line event share `EVENT_ID`; `LINE_NO == 0` is the first.
+
+### What's new since an hour ago
+
+```
+cp /tmp/errs /tmp/errs.bak
+tail -n 1000 /log/myco/api/main.log | awk 'LEVEL == "ERROR"' > /tmp/errs
+diff /tmp/errs.bak /tmp/errs
+```
+
+For `comm`, sort first: `sort /tmp/a > /tmp/a.s`.
+
+### Relate two saved files
+
+```
+printf 'api 3\nweb 1\n' > /tmp/errs-by-service
+printf 'api oncall-a\nweb oncall-b\n' > /tmp/owners
+join /tmp/errs-by-service /tmp/owners     # api 3 oncall-a / web 1 oncall-b
+```
+
+### Organise an incident
+
+```
+mkdir /tmp/incident-2026-04-22
+cat /log/myco/api/main.log | grep 'req_id=abc123' > /tmp/incident-2026-04-22/trace
+vi /tmp/incident-2026-04-22/notes
+touch /tmp/incident-2026-04-22/trace      # keep it past 48h
+rm -rf /tmp/incident-2026-04-22           # when done
+```

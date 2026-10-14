@@ -25,7 +25,7 @@ func TestAllShellDocsRender(t *testing.T) {
 		if d.Shell.Const == "" {
 			t.Errorf("%s: shell.const empty", d.path)
 		}
-		body := renderShell(d.body, d.Shell.Banner)
+		body := renderShell(d.body, d.Shell.Banner, nil)
 		if strings.TrimSpace(body) == "" {
 			t.Errorf("%s: renders empty", d.path)
 		}
@@ -44,7 +44,7 @@ func TestHelpCronPreservesTierSentinel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := renderShell(body, "")
+	out := renderShell(body, "", nil)
 	if !strings.Contains(out, "{{TIER_LIMITS}}") {
 		t.Errorf("{{TIER_LIMITS}} sentinel was altered by renderer\n%s", out)
 	}
@@ -65,7 +65,7 @@ func TestManPagesHaveBanner(t *testing.T) {
 			t.Errorf("%s: man-* doc missing shell.banner", d.path)
 			continue
 		}
-		out := renderShell(d.body, d.Shell.Banner)
+		out := renderShell(d.body, d.Shell.Banner, nil)
 		first := strings.SplitN(out, "\n", 2)[0]
 		if !strings.Contains(first, "Weft Commands") {
 			t.Errorf("%s: first line lacks banner: %q", d.path, first)
@@ -78,7 +78,7 @@ func TestManPagesHaveBanner(t *testing.T) {
 // literal "| a | b |" paragraphs in the browser.
 func TestManualTablesRenderAsHTMLTables(t *testing.T) {
 	body := []byte("## Things\n\n| Name | Meaning |\n|------|---------|\n| a | first |\n| b | second |\n")
-	html, _, err := renderTopic(body, "unrelated")
+	html, _, err := renderTopic(body, "unrelated", nil)
 	if err != nil {
 		t.Fatalf("renderTopic: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestManualTablesRenderAsHTMLTables(t *testing.T) {
 // recursed forever) and GFM tables (which rendered as raw pipes).
 func TestShellRendersLinksAndTables(t *testing.T) {
 	body := []byte("See [the docs](https://example.com/x) now.\n\n| Name | Meaning |\n|------|---------|\n| a | first |\n| bb | second |\n")
-	out := renderShell(body, "")
+	out := renderShell(body, "", nil)
 	for _, want := range []string{"the docs (https://example.com/x)", "Name", "a     first", "bb    second"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("shell output missing %q:\n%s", want, out)
@@ -102,5 +102,41 @@ func TestShellRendersLinksAndTables(t *testing.T) {
 	}
 	if strings.Contains(out, "|") {
 		t.Errorf("shell output still has raw pipes:\n%s", out)
+	}
+}
+
+// TestInternalLinksResolve covers relative-file links between docs: the
+// web gets /manual/<section>#frag, the shell gets "label (man topic)",
+// a link to a shell-only doc is unlinked on the web, and a bad target or
+// heading is recorded as an error.
+func TestInternalLinksResolve(t *testing.T) {
+	src := &doc{
+		path: "docs/manual/a.md",
+		body: []byte("See [Builtins](../shell/b.md#files) and [alert](../shell/c.md) and [bad](nope.md).\n"),
+	}
+	b := &doc{
+		path: "docs/shell/b.md", Web: &webConfig{Section: "builtins"},
+		Shell: &shellConfig{Topics: []string{"help builtins"}},
+		body:  []byte("## Files\n\ntext\n"),
+	}
+	c := &doc{path: "docs/shell/c.md", Shell: &shellConfig{Topics: []string{"man alert"}}, body: []byte("## X\n")}
+	idx := newLinkIndex([]*doc{src, b, c})
+
+	html, _, err := renderTopic(src.body, "t", linkCtxFor(idx, src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(html, `href="/manual/builtins#files"`) {
+		t.Errorf("web link not rewritten:\n%s", html)
+	}
+	if strings.Contains(html, "c.md") || !strings.Contains(html, "alert") {
+		t.Errorf("shell-only link should drop to its label:\n%s", html)
+	}
+	out := renderShell(src.body, "", linkCtxFor(idx, src))
+	if !strings.Contains(out, "Builtins (help builtins)") || !strings.Contains(out, "alert (man alert)") {
+		t.Errorf("shell links wrong:\n%s", out)
+	}
+	if len(idx.errs) == 0 || !strings.Contains(idx.errs[0], "nope.md") {
+		t.Errorf("want error for nope.md, got %v", idx.errs)
 	}
 }

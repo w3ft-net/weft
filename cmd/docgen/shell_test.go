@@ -34,7 +34,7 @@ ops:
 ` + "```" + `
 `)
 
-	out := renderShell(src, "")
+	out := renderShell(src, "", nil)
 
 	// Section headings should be orange-wrapped. The exact escape is
 	// the ANSI 256-color code 208 (orange), same as shellcore's
@@ -97,7 +97,7 @@ ops:
 // body comes out dim-gray-wrapped so intro lines in the help index
 // stay visually quiet.
 func TestRenderShell_Blockquote(t *testing.T) {
-	out := renderShell([]byte("> weft shell\n\n## Topics\n\nbody\n"), "")
+	out := renderShell([]byte("> weft shell\n\n## Topics\n\nbody\n"), "", nil)
 	if !strings.Contains(out, "\x1b[38;5;8mweft shell\x1b[0m") {
 		t.Errorf("blockquote not rendered as dim text\n--- output ---\n%s", out)
 	}
@@ -107,7 +107,7 @@ func TestRenderShell_Blockquote(t *testing.T) {
 // across 78 columns with "Weft Commands" between two copies of the
 // name — matching the hand-authored ALERT(1) / LESS(1) banners.
 func TestRenderShell_Banner(t *testing.T) {
-	out := renderShell([]byte("## Name\n\nbody\n"), "ALERT(1)")
+	out := renderShell([]byte("## Name\n\nbody\n"), "ALERT(1)", nil)
 	first := strings.SplitN(out, "\n", 2)[0]
 	if !strings.HasPrefix(first, "ALERT(1)") || !strings.HasSuffix(first, "ALERT(1)") {
 		t.Errorf("banner doesn't wrap the name: %q", first)

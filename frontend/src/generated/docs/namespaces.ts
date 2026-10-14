@@ -3,91 +3,49 @@
 const namespaces = {
   id: "manual-namespaces",
   section: "namespaces",
-  title: "Namespaces",
+  title: "Namespaces & tokens",
   category: "getting-started",
   order: 10,
   headings: [
-    { level: 2, id: "create-a-namespace", text: "Create a namespace" },
-    { level: 2, id: "log-path-layout", text: "Log path layout" },
-    { level: 3, id: "where-the-service-name-comes-from", text: "Where the service name comes from" },
+    { level: 2, id: "namespaces", text: "Namespaces" },
+    { level: 2, id: "creating-a-namespace", text: "Creating a namespace" },
+    { level: 2, id: "tokens", text: "Tokens" },
+    { level: 2, id: "creating-a-token", text: "Creating a token" },
   ],
-  html: `<h2 id="create-a-namespace">Create a namespace</h2>
-<p>Namespaces group related log sources. A typical setup has one namespace per
-environment (e.g. <code>production</code>, <code>staging</code>) or per team.</p>
-<p>Go to <strong>Namespaces</strong> in the sidebar and click <strong>new</strong>. Choose a
-short, lowercase name — it is used to scope tokens, sources, and log paths.
-A name can't contain a comma, whitespace, <code>/</code>, <code>+</code>, <code>*</code>, <code>?</code> or <code>[</code>, and
-can't start with <code>-</code>.</p>
-<pre><code># From your terminal
-weft namespace create --name production
+  html: `<h2 id="namespaces">Namespaces</h2>
+<p>Namespaces group related log sources. We usually think if namespaces as buckets
+for a single application, but it's your bucket, so do what you want. Namespaces
+are as granular as permission grants get, so keep that in mind when laying out
+your log sources.</p>
+<h2 id="creating-a-namespace">Creating a namespace</h2>
+<p>To create a new namespace in your browser, go to <strong>Namespaces</strong> in the sidebar
+and click <strong>new</strong>. Choose something easy to type for the name — it'll be in
+the path of every log file you configure under it.</p>
+<p>Or, from the CLI:</p>
+<pre><code>weft namespace create --name babbage
 </code></pre>
-<h2 id="log-path-layout">Log path layout</h2>
-<p>Every log stream is addressed by a pseudofile path under <code>/log/</code>.
-The namespace is the first segment; the rest of the path names the
-service and stream kind, with an optional env segment for tokens
-that carry one:</p>
-<pre><code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log          env-less token
-/log/&lt;namespace&gt;/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log    env-bearing token
+<h2 id="tokens">Tokens</h2>
+<p>Weft uses a simple token-based authentication for all log producers, whether
+that be weftd, Render, Heroku, or Kinesis.  Each token is scoped to exactly one
+namespace, but you can have as many as you like within a namespace. In fact, we
+encourage it! You can optionally tag your tokens with an environment name,
+allowing you to keep a staging, sandbox, and prod environment under the same
+namespace but keep their logs separate.</p>
+<p>You can always view your amassed sea of tokens under each namespace in the
+browser, or in your terminal with <code>weft token list</code>.</p>
+<h2 id="creating-a-token">Creating a token</h2>
+<p>To create a token in the browser, go to <strong>Namespaces</strong>, select the namespace
+you want the token to be in, and click <strong>new token</strong>. You can optionally bind a
+environment tag (<code>prod</code>, <code>staging</code>, <code>qa</code>, etc.) and a label. What's the label
+for? You tell me! It's nice to have options. The environment will have log file
+path significance, whereas the label does not (but you can still filter on it).</p>
+<p>From the CLI:</p>
+<pre><code>weft token create --namespace babbage --label api-prod --env prod
 </code></pre>
-<ul>
-<li><strong><code>&lt;namespace&gt;</code></strong> — the grouping you created above.
-<code>/log/&lt;namespace&gt;.log</code> is a namespace-wide wildcard (every
-service and kind under it).</li>
-<li><strong><code>&lt;service&gt;</code></strong> — the source name a producer reports for itself;
-surfaces as <code>SERVICE</code> in queries.</li>
-<li><strong><code>&lt;env&gt;</code></strong> — present only for tokens minted with <code>--env</code>. It
-slots in immediately after the namespace, so an env-bearing path
-has four segments and an env-less one has three. A four-segment
-path reads exactly one env. A three-segment path reads that
-service across every env, the env-less stream included, and
-<code>ls /log/&lt;namespace&gt;/&lt;service&gt;</code> lists the kinds any of them
-carry.</li>
-<li><strong><code>&lt;kind&gt;</code></strong> — the stream: <code>main</code> for ordinary application logs
-(the default a producer ships unless it says otherwise), plus
-<code>heartbeats</code>, <code>metrics</code>, and <code>runtime</code> for services that emit
-telemetry. It is always present.</li>
-</ul>
-<h3 id="where-the-service-name-comes-from">Where the service name comes from</h3>
-<p>Each producer decides the service name, and weft uses it as reported.</p>
-<table>
-<thead>
-<tr>
-<th>Producer</th>
-<th><code>&lt;service&gt;</code></th>
-<th><code>&lt;kind&gt;</code></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>weftd</td>
-<td>The source's <code>service:</code> setting. If omitted: the systemd <code>unit:</code> name without <code>.service</code>, else the log file's name without its extension.</td>
-<td><code>main</code> unless the source sets a kind</td>
-</tr>
-<tr>
-<td>Heroku</td>
-<td>The Heroku app name</td>
-<td>The dyno process type (<code>web</code>, <code>worker</code>, ...); platform events go to <code>platform</code></td>
-</tr>
-<tr>
-<td>Render</td>
-<td>The Render service slug</td>
-<td>The process type (<code>web</code>, <code>cron</code>, <code>bld</code>, ...)</td>
-</tr>
-<tr>
-<td>CloudWatch</td>
-<td>The service you registered for the log group with <code>weft source add --service</code>. Events from unregistered log groups are dropped.</td>
-<td><code>main</code></td>
-</tr>
-</tbody>
-</table>
-<p>A namespace can hold both env-less and env-bearing streams,
-depending on how each token was minted. To read across services, use
-<code>cat &lt;namespace&gt;.log</code>; a glob such as <code>cat /log/&lt;namespace&gt;/*/&lt;service&gt;/main.log</code>
-or <code>cat /log/&lt;namespace&gt;/&lt;env&gt;/*.log</code> is refused, because globs may
-only pick kinds inside one service (<code>/log/&lt;namespace&gt;/&lt;env&gt;/&lt;service&gt;/*.log</code>).
-Env, region, deployment,
-host, and pod are query-time dimensions (<code>awk 'ENV == &quot;prod&quot;'</code>).
-See <strong>Meta-variables</strong> for the full set.</p>
+<p>The token is only shown once regardless of where you create it, so put it
+somewhere safe! If you lose it, revoke it and create a new one -- either by
+clicking &quot;revoke&quot; in the browser or with <code>weft token revoke --id &lt;id&gt;</code> on the
+command line.</p>
 `,
 } as const;
 

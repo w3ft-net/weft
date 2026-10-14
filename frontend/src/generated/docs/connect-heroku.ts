@@ -89,7 +89,7 @@ dyno at once.</p>
 </table>
 <p>The <code>&lt;env&gt;</code> segment is present because the token in step 1 was minted with
 <code>--env prod</code>. A token minted without <code>--env</code> gives the shorter form,
-<code>/log/&lt;ns&gt;/myapp/web.log</code>. See <strong>Namespaces</strong> for the layout rules.</p>
+<code>/log/&lt;ns&gt;/myapp/web.log</code>. See <a href="/manual/introduction#paths">Paths</a> for the layout rules.</p>
 <h3 id="metric-lines-auto-route-to-metricslog">Metric lines auto-route to <code>metrics.log</code></h3>
 <p>Heroku's <code>runtime-heroku-metrics</code> labs feature (and most add-ons) emit
 l2met-shaped lines like:</p>

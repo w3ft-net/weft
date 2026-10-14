@@ -37,9 +37,9 @@ var manualCategories = []manualCategory{
 		Summary: "Wire up logs from a host agent (weftd), an AWS CloudWatch log group, a Heroku app, or any custom line format.",
 	},
 	{
-		ID:      "query",
-		Label:   "Query",
-		Summary: "Read pseudofiles in the interactive shell, filter with awk/sed/jq, reach for meta-variables, and stash intermediates in /tmp.",
+		ID:      "weft-shell",
+		Label:   "Weft shell",
+		Summary: "A bash-like shell over your logs: the Unix builtins that carry over and where they differ, meta-variables, and /tmp scratch space with a cookbook.",
 	},
 	{
 		ID:      "alert-visualize",
@@ -73,7 +73,7 @@ type headingEntry struct {
 // renderTopic parses a doc body, extracts h2/h3 headings (with their
 // auto-assigned IDs), strips a redundant title-H2 if present, and
 // returns the rendered HTML alongside the heading list.
-func renderTopic(body []byte, title string) (string, []headingEntry, error) {
+func renderTopic(body []byte, title string, lc *linkCtx) (string, []headingEntry, error) {
 	md := goldmark.New(
 		goldmark.WithExtensions(extension.Table),
 		goldmark.WithParserOptions(parser.WithAutoHeadingID()),
@@ -81,6 +81,9 @@ func renderTopic(body []byte, title string) (string, []headingEntry, error) {
 	)
 	reader := gmtext.NewReader(body)
 	root := md.Parser().Parse(reader)
+	if lc != nil {
+		lc.rewriteWeb(root)
+	}
 
 	// If the first block is an H2 whose plain text equals the
 	// frontmatter title, drop it from the tree before rendering. The
@@ -157,7 +160,7 @@ func writeWeb(dir string, docs []*doc) error {
 		if _, ok := categoryOrder(d.Web.Category); !ok {
 			return fmt.Errorf("%s: web.category %q is not in cmd/docgen's known set", d.path, d.Web.Category)
 		}
-		htmlBody, headings, err := renderTopic(d.body, d.Title)
+		htmlBody, headings, err := renderTopic(d.body, d.Title, linkCtxFor(links, d))
 		if err != nil {
 			return fmt.Errorf("%s: render html: %w", d.path, err)
 		}

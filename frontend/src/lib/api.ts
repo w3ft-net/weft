@@ -126,7 +126,7 @@ export function createToken(label: string, namespace: string, env: string): Prom
   })
 }
 
-export function revokeToken(id: number): Promise<void> {
+export function revokeToken(id: string): Promise<void> {
   return apiFetch(`/api/tokens/${id}`, { method: 'DELETE' })
 }
 
@@ -337,8 +337,7 @@ export interface Usage {
 }
 
 export interface AgentToken {
-  id: number
-  prefix: string
+  id: string
   label: string
   namespace: string
   env: string
@@ -388,14 +387,16 @@ export interface CronResult {
 
 // Team
 export interface TeamMember {
-  ID: string
-  CustomerName: string
-  Email: string
-  UserID: string | null
-  Role: 'admin' | 'member'   // 'admin' is the org's owner
-  Status: 'pending' | 'active' | 'removed'
-  InvitedAt: string
-  AcceptedAt: string | null
+  id: string
+  orgId: string
+  email: string   // always set by weft (saaskit marks it omitempty)
+  userId?: string
+  role: 'admin' | 'member'   // 'admin' is the org's owner
+  status: 'pending' | 'active' | 'removed'
+  invitedBy?: string
+  invitedAt?: string
+  acceptedAt?: string
+  seated: boolean
 }
 
 export interface TeamResponse {

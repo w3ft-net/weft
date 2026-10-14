@@ -26,8 +26,11 @@ const (
 // renderShell converts a markdown body to the plain-text-plus-ANSI form
 // that the in-shell `less` pager renders. The document's H1 is skipped
 // (the title is already in the help index / banner).
-func renderShell(body []byte, banner string) string {
+func renderShell(body []byte, banner string, lc *linkCtx) string {
 	root := goldmark.New(goldmark.WithExtensions(extension.Table)).Parser().Parse(gmtext.NewReader(body))
+	if lc != nil {
+		lc.rewriteShell(root)
+	}
 
 	r := shellRenderer{src: body}
 	if banner != "" {
@@ -319,7 +322,7 @@ func writeShell(path string, docs []*doc) error {
 		if d.Shell.Const == "" {
 			return fmt.Errorf("%s: shell.const is required", d.path)
 		}
-		text := renderShell(d.body, d.Shell.Banner)
+		text := renderShell(d.body, d.Shell.Banner, linkCtxFor(links, d))
 
 		fmt.Fprintf(&buf, "// %s — %s (generated from %s).\n",
 			d.Shell.Const, d.Title, d.path)

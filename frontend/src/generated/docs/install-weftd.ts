@@ -80,9 +80,9 @@ injector can provide the token without templating the YAML. It is the
 only setting with an environment source; all other settings live in the
 file.</p>
 <p>The <code>deployment</code>, <code>region</code>, and per-source <code>version</code> values
-become first-class query dimensions — see the <strong>Meta-variables</strong>
-section in <strong>Query your logs</strong> for the full list and how they
-appear in awk and jq.</p>
+become first-class query dimensions — see
+<a href="/manual/metavars">Meta-variables</a> for the full list and how they appear in awk
+and jq.</p>
 <h3 id="file-sourced-dimensions">File-sourced dimensions</h3>
 <p>Each entry under <code>dimensions:</code> is <code>&lt;column&gt;: &lt;path&gt;</code> or
 <code>&lt;column&gt;: &lt;path&gt;:.&lt;json.path&gt;</code>. The reader stamps the resulting

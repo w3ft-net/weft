@@ -79,7 +79,7 @@ dyno at once.
 
 The `<env>` segment is present because the token in step 1 was minted with
 `--env prod`. A token minted without `--env` gives the shorter form,
-`/log/<ns>/myapp/web.log`. See **Namespaces** for the layout rules.
+`/log/<ns>/myapp/web.log`. See [Paths](query-logs.md#paths) for the layout rules.
 
 ### Metric lines auto-route to `metrics.log`
 

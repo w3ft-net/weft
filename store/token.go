@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -22,18 +23,22 @@ import (
 // docs/plans/ingest-dimensions.md.
 type AgentToken struct {
 	gorm.Model
-	OrgID             OrgID        `gorm:"not null"`
-	Organization      Organization `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
-	NamespaceID       uint         `gorm:"not null"`
-	Namespace         Namespace    `gorm:"foreignKey:NamespaceID;constraint:OnDelete:CASCADE"`
-	TokenHash         string       `gorm:"column:token_hash;uniqueIndex;not null"`
-	Prefix            string       `gorm:"not null"` // e.g. "wft_a1b2" — safe to display
-	Label             string       // human-readable label (e.g., "prod-coordinator")
-	Env               string       // optional deployment-environment dimension stamped on every row
-	Revoked           bool         `gorm:"not null;default:false"`
-	MetricsEnabled    bool         `gorm:"not null;default:false"`
-	MetricsInterval   string       // e.g., "30s"
-	MetricsCollectors string       // JSON array, e.g., `["cpu","memory","disk"]`
+	OrgID        OrgID        `gorm:"not null"`
+	Organization Organization `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+	NamespaceID  uint         `gorm:"not null"`
+	Namespace    Namespace    `gorm:"foreignKey:NamespaceID;constraint:OnDelete:CASCADE"`
+	TokenHash    string       `gorm:"column:token_hash;uniqueIndex;not null"`
+	// PublicID (tok_<16 hex>) is the only identifier that leaves the store:
+	// the API, CLI, and web UI name a token by it for revoke. The bigint
+	// primary key stays internal — it is enumerable.
+	PublicID          string `gorm:"column:public_id;uniqueIndex;not null"`
+	Prefix            string `gorm:"not null"` // e.g. "wft_a1b2" — safe to display
+	Label             string // human-readable label (e.g., "prod-coordinator")
+	Env               string // optional deployment-environment dimension stamped on every row
+	Revoked           bool   `gorm:"not null;default:false"`
+	MetricsEnabled    bool   `gorm:"not null;default:false"`
+	MetricsInterval   string // e.g., "30s"
+	MetricsCollectors string // JSON array, e.g., `["cpu","memory","disk"]`
 	// LastSeenVersion is the weft-client identifier the coordinator
 	// read off the most recent gRPC connection from this token. Used
 	// to decide when an old wire-shape parser branch can be deleted
@@ -77,7 +82,12 @@ func (s *Store) CreateAgentToken(orgID OrgID, namespaceID uint, label, env strin
 	if err != nil {
 		return "", nil, err
 	}
+	publicID, err := generateTokenPublicID()
+	if err != nil {
+		return "", nil, err
+	}
 	t := AgentToken{
+		PublicID:    publicID,
 		OrgID:       orgID,
 		NamespaceID: namespaceID,
 		TokenHash:   hashAgentToken(raw),
@@ -126,14 +136,28 @@ const (
 	authCacheMaxEntries = 10_000
 )
 
-// RevokeAgentToken marks a token revoked and drops it from this process's
-// auth cache so the revoke takes effect here immediately.
-func (s *Store) RevokeAgentToken(id uint) error {
-	if err := s.crossTenant().Model(&AgentToken{}).Where("id = ?", id).Update("revoked", true).Error; err != nil {
+// ErrTokenNotFound is returned by RevokeAgentToken when no token with that
+// public id exists in the caller's org. Another org's token is
+// indistinguishable from a missing one.
+var ErrTokenNotFound = errors.New("token not found")
+
+// RevokeAgentToken marks the org's token with the given public id revoked and
+// drops it from this process's auth cache so the revoke takes effect here
+// immediately.
+func (s *Store) RevokeAgentToken(orgID OrgID, publicID string) error {
+	var t AgentToken
+	err := s.scoped(orgID).Where("public_id = ?", publicID).First(&t).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrTokenNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.scoped(orgID).Model(&AgentToken{}).Where("id = ?", t.ID).Update("revoked", true).Error; err != nil {
 		return err
 	}
 	if s.authCache != nil {
-		s.authCache.invalidateTokenID(id)
+		s.authCache.invalidateTokenID(t.ID)
 	}
 	return nil
 }
@@ -253,6 +277,14 @@ func generateToken() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("wft_%x", b), nil
+}
+
+func generateTokenPublicID() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("tok_%x", b), nil
 }
 
 // AgentVersionSighting summarises one token's recent connection state.

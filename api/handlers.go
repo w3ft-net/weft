@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1329,11 +1328,11 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The raw token is never returned from this endpoint — only on
-	// the one-time create response. Callers identify tokens by ID for
-	// revoke and render Prefix for display.
+	// the one-time create response. Callers identify tokens by their
+	// opaque public id; the primary key and the raw-token prefix stay
+	// server-side.
 	type tokenResult struct {
-		ID        uint   `json:"id"`
-		Prefix    string `json:"prefix"`
+		ID        string `json:"id"`
 		Label     string `json:"label"`
 		Namespace string `json:"namespace"`
 		Env       string `json:"env"`
@@ -1347,8 +1346,7 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 			status = "revoked"
 		}
 		tr := tokenResult{
-			ID:        t.ID,
-			Prefix:    t.Prefix,
+			ID:        t.PublicID,
 			Label:     t.Label,
 			Namespace: t.Namespace.Name,
 			Env:       t.Env,
@@ -1418,10 +1416,10 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	// capture it in this response or the user creates a new one.
 	resp := map[string]any{
 		"token":      raw,
-		"id":         tok.ID,
-		"prefix":     tok.Prefix,
+		"id":         tok.PublicID,
 		"label":      tok.Label,
 		"namespace":  nsObj.Name,
+		"env":        tok.Env,
 		"status":     "active",
 		"created_at": tok.CreatedAt.Format(time.RFC3339),
 	}
@@ -1430,18 +1428,23 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
-	idStr := r.PathValue("id")
-	if idStr == "" {
+	session := GetSession(r)
+	custID, ok := activeOrg(w, session)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
 		http.Error(w, "id required", http.StatusBadRequest)
 		return
 	}
-	id, err := strconv.ParseUint(idStr, 10, 64)
-	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+
+	err := s.store.RevokeAgentToken(custID, id)
+	if errors.Is(err, store.ErrTokenNotFound) {
+		http.Error(w, "token not found", http.StatusNotFound)
 		return
 	}
-
-	if err := s.store.RevokeAgentToken(uint(id)); err != nil {
+	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

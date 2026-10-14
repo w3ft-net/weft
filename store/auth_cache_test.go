@@ -160,7 +160,7 @@ func TestAuthCache_RevokeInvalidatesImmediately(t *testing.T) {
 	if got, _ := db.ValidateAgentToken(raw); got == nil {
 		t.Fatal("token should validate before revoke")
 	}
-	if err := db.RevokeAgentToken(tok.ID); err != nil {
+	if err := db.RevokeAgentToken(cust.ID, tok.PublicID); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := db.ValidateAgentToken(raw); err != nil || got != nil {

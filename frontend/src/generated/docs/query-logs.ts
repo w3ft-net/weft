@@ -3,280 +3,90 @@
 const queryLogs = {
   id: "manual-query-logs",
   section: "query-logs",
-  title: "Query your logs",
-  category: "query",
+  title: "The weft shell",
+  category: "weft-shell",
   order: 55,
   headings: [
-    { level: 2, id: "meta-variables", text: "Meta-variables" },
-    { level: 3, id: "why-two-naming-styles", text: "Why two naming styles" },
-    { level: 3, id: "custom-fields-fall-through-to-json-extract", text: "Custom fields fall through to JSON-extract" },
-    { level: 2, id: "how-jq-reads-a-row", text: "How jq reads a row" },
-    { level: 2, id: "per-tag-values-over-time", text: "Per-tag values over time" },
-    { level: 2, id: "charting-a-query", text: "Charting a query" },
-    { level: 2, id: "saving-a-result-set", text: "Saving a result set" },
-    { level: 2, id: "plan-retention-and-the-archive", text: "Plan retention and the archive" },
+    { level: 3, id: "whats-different-in-one-paragraph", text: "What's different, in one paragraph" },
+    { level: 2, id: "examples", text: "Examples" },
+    { level: 2, id: "paths", text: "Paths" },
+    { level: 2, id: "how-filters-narrow-the-read", text: "How filters narrow the read" },
+    { level: 2, id: "retention", text: "Retention" },
   ],
-  html: `<p>Open the <strong>Shell</strong> or use the <code>weft</code> CLI. Log sources appear as
-pseudofiles — use standard Unix pipeline idioms:</p>
+  html: `<p>Open the <strong>Shell</strong> or run the <code>weft</code> CLI. It is a small bash: logs look like
+files, and you query them with the tools you already know — <code>cat</code>, <code>grep</code>,
+<code>awk</code>, <code>sed</code>, <code>jq</code>, <code>sort</code>, <code>uniq</code>, <code>wc</code>, pipes and redirects.</p>
+<p>The goal is parity. If you can write the pipeline against a log file on a
+server, you can write it here, against every host, deployment and region at
+once. Where weft differs from a real Unix shell the difference is listed in
+<strong>Builtins</strong>; everything not listed behaves the way you expect.</p>
+<h3 id="whats-different-in-one-paragraph">What's different, in one paragraph</h3>
+<p>Logs are read-only pseudofiles under <code>/log</code>, selected by a time window
+(<code>range</code>, default the last day). weft reads the whole pipeline before running
+it and folds your filters into the storage query, so <code>awk 'LEVEL == &quot;ERROR&quot;'</code>
+skips data instead of scanning it. Row-level dimensions (<code>ENV</code>, <code>HOST</code>,
+<code>LEVEL</code>, ...) are exposed as variables — see <strong>Meta-variables</strong>. Nothing you
+type can write outside <code>/tmp</code>, <code>/bin</code>, <code>/cron.d</code> or <code>/etc</code>.</p>
+<h2 id="examples">Examples</h2>
 <pre><code># Tail logs in real time
 tail -f myapp.log
 
-# Search for errors in the default range (the last day; narrow it with \`range 1h..\`)
+# Errors in the default range (narrow it with \`range 1h..\`)
 cat myapp.log | awk 'LEVEL == &quot;ERROR&quot;'
 
-# Count requests by status code
+# Requests by status code
 cat nginx.log | jq '.status' | sort | uniq -c | sort -rn
 
-# Grep every source in a namespace
-cat myapp.log | grep &quot;connection refused&quot;
+# Everything in a namespace mentioning a failure
+cat myco.log | grep &quot;connection refused&quot;
 
-# Most recent N lines (cheap)
+# Most recent 100 lines (cheap)
 tail -n 100 myapp.log
-</code></pre>
-<p>weft analyzes the full pipeline and uses its filters to narrow what it
-reads.</p>
-<p>A hard line count (<code>head -n N</code>, <code>tail -n N</code>) ends that narrowing for
-the filters after it. <code>tail -n 500 | awk 'LEVEL == &quot;ERROR&quot;' | wc -l</code>
-counts the errors among the last 500 rows (at most 500), while
-<code>grep ERROR | tail -n 5</code> filters first and gives the last 5 matches.
-Crons read a time range, and a line count can silently truncate it, so
-omit <code>-n</code> in a cron.</p>
-<p>Globs are allowed only to pick log kinds inside one service:
-<code>cat /log/myco/prod/api/*.log</code>. A glob that would read across services
-or namespaces — <code>cat *.log</code>, <code>cat /log/myco/prod/*.log</code>,
-<code>/log/myco/*/api/main.log</code> — is refused with an error. To read
-everything in a namespace, use <code>cat &lt;namespace&gt;.log</code>.</p>
-<p><code>cat /log/myco/api/main.log</code> (three segments) reads that service across
-every env, and <code>ls /log/myco/api</code> lists its kinds;
-<code>cat /log/myco/prod/api/main.log</code> (four segments) reads one env.</p>
-<h2 id="meta-variables">Meta-variables</h2>
-<p>Each row weft stores has a fixed set of indexed columns alongside
-its raw text and JSON payload. Filtering on these columns is the
-fastest path through the planner, because weft can skip data that
-can't match. Anything not in the table below still works in awk/jq,
-but is slower.</p>
-<table>
-<thead>
-<tr>
-<th>awk</th>
-<th>jq</th>
-<th>Column</th>
-<th>Source</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>NAMESPACE</code></td>
-<td><code>$namespace</code></td>
-<td><code>namespace</code></td>
-<td>the <code>&lt;namespace&gt;</code> segment in <code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code></td>
-</tr>
-<tr>
-<td><code>SERVICE</code></td>
-<td><code>$service</code></td>
-<td><code>service</code></td>
-<td>the log file's source name (the <code>&lt;service&gt;</code> in <code>/log/&lt;ns&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>)</td>
-</tr>
-<tr>
-<td><code>KIND</code></td>
-<td><code>$kind</code></td>
-<td><code>kind</code></td>
-<td>the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>)</td>
-</tr>
-<tr>
-<td><code>HOST</code> (alias <code>INSTANCE</code>)</td>
-<td><code>$host</code> (alias <code>$instance</code>)</td>
-<td><code>instance</code></td>
-<td>the agent's hostname</td>
-</tr>
-<tr>
-<td><code>LEVEL</code></td>
-<td><code>$level</code></td>
-<td><code>level</code></td>
-<td>parsed from the line per the source's schema</td>
-</tr>
-<tr>
-<td><code>TS</code></td>
-<td><code>$ts</code></td>
-<td><code>ts</code></td>
-<td>row timestamp</td>
-</tr>
-<tr>
-<td><code>DEPLOYMENT</code></td>
-<td><code>$deployment</code></td>
-<td><code>deployment</code></td>
-<td>weftd config <code>deployment:</code> value (k8s Deployment, AWS ASG, etc.)</td>
-</tr>
-<tr>
-<td><code>ENV</code></td>
-<td><code>$env</code></td>
-<td><code>env</code></td>
-<td>bound to the agent token at mint time (<code>weft token create --env prod</code>)</td>
-</tr>
-<tr>
-<td><code>VERSION</code></td>
-<td><code>$version</code></td>
-<td><code>version</code></td>
-<td>weftd <code>version.file:</code> (live) or <code>version.env:</code> (snapshot)</td>
-</tr>
-<tr>
-<td><code>REGION</code></td>
-<td><code>$region</code></td>
-<td><code>region</code></td>
-<td>detected from cloud metadata at agent startup</td>
-</tr>
-<tr>
-<td><code>CLUSTER</code></td>
-<td><code>$cluster</code></td>
-<td><code>cluster</code></td>
-<td>k8s mode only: cluster name from the DaemonSet config</td>
-</tr>
-<tr>
-<td><code>K8S_NAMESPACE</code></td>
-<td><code>$k8s_namespace</code></td>
-<td><code>k8s_namespace</code></td>
-<td>k8s mode only: pod's k8s namespace</td>
-</tr>
-<tr>
-<td><code>POD</code></td>
-<td><code>$pod</code></td>
-<td><code>pod</code></td>
-<td>k8s mode only: pod name</td>
-</tr>
-<tr>
-<td><code>CONTAINER</code></td>
-<td><code>$container</code></td>
-<td><code>container</code></td>
-<td>k8s mode only: container name</td>
-</tr>
-<tr>
-<td><code>NODE</code></td>
-<td><code>$node</code></td>
-<td><code>node</code></td>
-<td>stable workload identity (e.g. a workload ID) — file-sourced via the agent's <code>dimensions:</code> config; never auto-derived</td>
-</tr>
-</tbody>
-</table>
-<p>A few examples:</p>
-<pre><code># Errors in production for one specific deployment
-cat /log/myco/prod/api/main.log | awk 'LEVEL == &quot;ERROR&quot; &amp;&amp; DEPLOYMENT == &quot;api-east&quot;'
 
-# Same query in jq form against a JSON source
-cat /log/myco/prod/api/main.log | jq 'select($level == &quot;ERROR&quot; and $deployment == &quot;api-east&quot;)'
+# Production errors for one deployment, JSON form
+cat /log/myco/prod/api/main.log \\
+  | jq 'select($level == &quot;ERROR&quot; and $deployment == &quot;api-east&quot;)'
 
-# Per-host memory metrics
-tail /log/myco/prod/api/metrics.log | jq 'select($host == &quot;web-3&quot; and .type == &quot;memory&quot;) | .pct'
-
-# Region-scoped grep
-cat /log/myco/prod/api/main.log | awk 'REGION == &quot;us-east-2&quot;' | grep &quot;timeout&quot;
-</code></pre>
-<h3 id="why-two-naming-styles">Why two naming styles</h3>
-<p>awk meta-variables are uppercase short names (<code>SERVICE</code>, <code>ENV</code>); jq
-uses lowercase variables (<code>$service</code>, <code>$env</code>). jq is case-sensitive
-and real JSONL sometimes carries keys like <code>Pod</code> or <code>pod</code>, so
-<code>$pod</code> always means &quot;the indexed column&quot; and <code>.pod</code> always means
-&quot;a key in this row's JSON payload.&quot;</p>
-<p>The source coordinates address three separate columns —
-<code>NAMESPACE</code>, <code>SERVICE</code>, <code>KIND</code> — mirroring the path layout
-<code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>. <code>HOST</code> / <code>$host</code> is an
-alias for <code>INSTANCE</code> / <code>$instance</code> — use whichever name fits your
-team's vocabulary.</p>
-<h3 id="custom-fields-fall-through-to-json-extract">Custom fields fall through to JSON-extract</h3>
-<p>Anything not in the table above lives in the row's JSON payload
-and is queryable at lower speed:</p>
-<pre><code>cat /log/myco/prod/api/main.log | jq 'select(.feature_flag == &quot;abc&quot;)'
-</code></pre>
-<p>weft reads and parses every row in the time range for this filter. For
-dimensions you query constantly, use the indexed columns.</p>
-<h2 id="how-jq-reads-a-row">How jq reads a row</h2>
-<p>jq reads each row's JSON payload: the whole line for a JSON log, or the
-JSON part of a line that has text around it (a timestamp prefix, a
-CloudWatch envelope, Heroku's <code>key=value</code> metrics). The meta-variables
-(<code>$level</code>, <code>$host</code>, <code>$ts</code>, ...) are there too.</p>
-<p>A jq program made only of <code>select(...)</code> filters rows, and prints the log
-lines it keeps, exactly as they were:</p>
-<pre><code># The matching log lines, timestamp prefix and all
-cat /log/myco/prod/api/main.log | jq 'select(.status == 500)'
-
-# The payload JSON of those lines instead
-cat /log/myco/prod/api/main.log | jq 'select(.status == 500) | .'
-</code></pre>
-<p>Anything else prints jq's own output, one value per line. Objects and
-arrays print on a single line, so the output stays one row per line for
-<code>grep</code>, <code>wc -l</code> and <code>alert</code>.</p>
-<p>The payload stays attached to a row while stages only filter rows or
-count them (<code>grep</code>, an awk pattern, <code>head</code>, <code>tail</code>), so this works the
-same:</p>
-<pre><code>tail -n 500 /log/myco/prod/api/main.log | grep checkout | jq '.latency_ms'
-</code></pre>
-<p>Once a stage changes the text (<code>sort</code>, <code>awk '{ print ... }'</code>, <code>sed s/.../</code>),
-the next stage reads that text, as in any shell.</p>
-<p>jq compares values the way jq does: <code>select(.status == 500)</code> doesn't
-match the string <code>&quot;500&quot;</code>, and a row without the field has <code>null</code> there,
-which sorts below every number, so <code>select(.latency_ms &lt; 100)</code> also
-keeps rows that have no <code>latency_ms</code>.</p>
-<h2 id="per-tag-values-over-time">Per-tag values over time</h2>
-<p>Indexed dimensions, a frequent cron and the multi-row alert form
-together produce &quot;value by host (or service / region / pod) over
-time&quot;. The full recipe — including
-per-tag incident dedup with <code>-k</code>/<code>-t</code> and per-tag debouncing — is
-in <strong>Alerting strategies</strong>.</p>
-<p>In short: write a cron whose body emits one line per tag (e.g.
-<code>&quot;\\($host) \\(.pct)&quot;</code> from <code>jq -r</code>) and pipe it through
-<code>alert above N -k 2 -t 1 --notify=ops</code>. Each host opens and closes
-incidents independently against its tag.</p>
-<p>Window aggregates (<code>weft::avg</code>, <code>weft::max</code>, etc.) summarize the
-whole run's stdout as one number. The recipe produces per-bucket,
-per-tag values; for a rolling average across buckets, point a second
-cron at it via <code>weft::latest</code>.</p>
-<h2 id="charting-a-query">Charting a query</h2>
-<p>Pipe any pipeline into <code>chart</code> to render the result as a chart in
-the terminal. The chart is the terminal stage of the pipeline; no
-commands follow it.</p>
-<pre><code># Time-bucketed p95 latency over the current range
-cat /log/myco/api/main.log \\
-  | chart -x .ts -y .latency_ms --bucket 1m -a p95
-
-# Distribution of total latency by path
-cat /log/myco/api/main.log | jq '{path, latency}' \\
-  | chart -x .path -y .latency -a sum
-
-# Plot a stream of numbers from jq
-cat /log/myco/api/main.log | jq '.cpu_pct' | chart
-
-# Lines per minute from a plain-text log, to spot a gap
-cat /log/myco/api/main.log \\
-  | chart -x '1-2::time(%Y/%m/%d %H:%M:%S)' --bucket 1m
-</code></pre>
-<p><code>-x</code> and <code>-y</code> accept either a 1-indexed whitespace column (<code>-x 1</code>)
-or a <code>.</code>-prefixed JSON path (<code>-x .ts</code>). With no flags, x is the
-row sequence and y is the last whitespace field of each line — so
-something like <code>wc -l | chart</code> plots a single value, and a
-multi-line stream of bare numbers from <code>jq</code> plots one point per
-line. An RFC3339 <code>-x</code> is read as a time on its own; for epoch
-seconds or any other stamp, cast it: <code>-x 1::time</code>, or
-<code>-x '1-2::time(%Y/%m/%d %H:%M:%S)'</code> with strftime codes, where <code>1-2</code>
-joins two columns. With <code>--bucket</code>, minutes with no rows chart as 0.
-See <code>man chart</code> for the full flag surface (aggregation, bucketing,
-<code>--type</code>, title).</p>
-<h2 id="saving-a-result-set">Saving a result set</h2>
-<p>Redirect a pipeline into <code>/tmp</code> to keep the output and query it
-several ways:</p>
-<pre><code>cat api.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
+# Keep a result set and slice it several ways
+cat api.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
 grep timeout /tmp/errs | sort | uniq -c | sort -rn
+
+# Chart it
+cat /log/myco/api/main.log | chart -x .ts -y .latency_ms --bucket 1m -a p95
 </code></pre>
-<p>Files in <code>/tmp</code> live for 48 hours. See the <strong>Saving results to /tmp</strong>
-section for storage limits and the full set of operations.</p>
-<h2 id="plan-retention-and-the-archive">Plan retention and the archive</h2>
-<p>Your plan determines how far back queries can read. See the
-<strong>Account</strong> page for your plan's limits; data older than that is
-filtered out of every query, even if it is still stored.</p>
-<p>Older data is archived and queried transparently. A <code>range 180d..</code>
-query reads recent and archived data in one pass with the
-same syntax. The only user-visible effect is a small extra latency
-on the cold side.</p>
-<p>See <code>help builtins</code> in the shell for the full command list, and
-<code>man range</code> for time-window syntax.</p>
+<h2 id="paths">Paths</h2>
+<pre><code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log          3 segments: all envs
+/log/&lt;namespace&gt;/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log    4 segments: one env
+</code></pre>
+<p><code>&lt;kind&gt;</code> is the stream: <code>main</code> for ordinary logs, plus <code>heartbeats</code>,
+<code>metrics</code> and <code>runtime</code> for services that emit telemetry. Which form a
+service has depends on whether its producer token was minted with <code>--env</code>;
+<code>ls /log/myco</code> shows env directories next to env-less services.</p>
+<ul>
+<li><code>cat /log/myco/prod/api/main.log</code> reads one env.</li>
+<li><code>cat /log/myco/api/main.log</code> reads that service across every env.</li>
+<li><code>cat myco.log</code> reads the whole namespace; filter with <code>ENV == &quot;prod&quot;</code>.</li>
+<li><code>ls /log/myco/api</code> lists a service's kinds.</li>
+<li>Globs only pick kinds inside one service: <code>/log/myco/prod/api/*.log</code>.
+Globs that cross services or namespaces (<code>cat *.log</code>,
+<code>/log/myco/*/api/main.log</code>) are refused.</li>
+</ul>
+<h2 id="how-filters-narrow-the-read">How filters narrow the read</h2>
+<p>weft pushes <code>grep</code>, awk patterns and <code>jq select(...)</code> on meta-variables into
+the storage query. A hard line count (<code>head -n N</code>, <code>tail -n N</code>) ends that
+narrowing for the stages after it:</p>
+<pre><code>tail -n 500 | awk 'LEVEL == &quot;ERROR&quot;' | wc -l   # errors among the last 500 rows
+awk 'LEVEL == &quot;ERROR&quot;' | tail -n 5             # the last 5 errors
+</code></pre>
+<p>Crons read a time range and a line count can silently truncate it, so omit
+<code>-n</code> in a cron.</p>
+<h2 id="retention">Retention</h2>
+<p>Your plan sets how far back queries can read (see the <strong>Account</strong> page); older
+data is filtered out of every query. Archived data is queried transparently —
+<code>range 180d..</code> reads recent and archived data in one pass, with a little extra
+latency on the cold side.</p>
+<p>See <strong>Builtins</strong> for the command list, <strong>Meta-variables</strong> for the indexed
+columns, and <strong>Scratch space and cookbook</strong> for <code>/tmp</code> and worked recipes.</p>
 `,
 } as const;
 

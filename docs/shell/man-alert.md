@@ -159,10 +159,7 @@ cat /log/myco/prod/api/metrics.log | jq -c 'select(.type=="disk")' \
 ```
 
 In a cron, count over the cron's own time range. A row limit with
-`head -n` or `tail -n` can silently truncate the window. At the
-prompt, `tail -n 500 | awk 'LEVEL == "ERROR"' | wc -l` counts errors among
-the last 500 rows, and `grep ERROR | tail -n 5` returns the last five
-matches.
+`head -n` or `tail -n` can silently truncate the window.
 
 ## SEE ALSO
 

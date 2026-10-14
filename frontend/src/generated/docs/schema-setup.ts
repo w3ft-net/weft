@@ -19,12 +19,9 @@ schema. Review the sample lines and approve.</p>
 <li><code>TS</code> — timestamp</li>
 <li><code>LEVEL</code> — log level (ERROR, WARN, INFO, DEBUG)</li>
 </ul>
-<p>Other fields (<code>SERVICE</code>, <code>HOST</code>, <code>DEPLOYMENT</code>, <code>ENV</code>, <code>VERSION</code>,
-<code>REGION</code> (empty when not configured), <code>CLUSTER</code>, <code>K8S_NAMESPACE</code>, <code>POD</code>,
-<code>CONTAINER</code> (k8s mode), and <code>NODE</code>) are stamped by weftd, the agent
-token, or cloud metadata — see
-<strong>Meta-variables</strong> (<code>man metavars</code>) for the full table and how each is
-sourced.</p>
+<p>Every other dimension (<code>SERVICE</code>, <code>HOST</code>, <code>ENV</code>, <code>REGION</code>, ...) is stamped by
+weftd, the agent token, or cloud metadata rather than parsed from the line;
+<a href="/manual/metavars">Meta-variables</a> has the full table and how each is sourced.</p>
 `,
 } as const;
 

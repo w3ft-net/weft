@@ -4,107 +4,63 @@ const builtins = {
   id: "help-builtins",
   section: "builtins",
   title: "Builtins",
-  category: "query",
-  order: 60,
+  category: "weft-shell",
+  order: 56,
   headings: [
-    { level: 2, id: "querying-logs", text: "Querying logs" },
+    { level: 2, id: "reading-logs", text: "Reading logs" },
     { level: 2, id: "text-pipeline", text: "Text pipeline" },
-    { level: 2, id: "filesystem", text: "Filesystem" },
-    { level: 2, id: "working-on-saved-results", text: "Working on saved results" },
-    { level: 2, id: "version-history-git", text: "Version history (git)" },
-    { level: 2, id: "sharing", text: "Sharing" },
-    { level: 2, id: "team-admins", text: "Team (admins)" },
-    { level: 2, id: "alerting", text: "Alerting" },
+    { level: 2, id: "files-in-tmp", text: "Files in /tmp" },
     { level: 2, id: "shell", text: "Shell" },
+    { level: 2, id: "partial-implementations", text: "Partial implementations" },
+    { level: 2, id: "shell-extensions", text: "Shell extensions" },
   ],
-  html: `<h2 id="querying-logs">Querying logs</h2>
+  html: `<p>Commands that exist in a Unix shell. Everything here behaves as it does in
+bash/coreutils except where a note says otherwise.</p>
+<h2 id="reading-logs">Reading logs</h2>
 <ul>
-<li><code>cat /log/&lt;ns&gt;/&lt;env&gt;/&lt;svc&gt;/main.log</code> — stream all lines for a service (<code>/log/&lt;ns&gt;/&lt;svc&gt;/&lt;kind&gt;.log</code> reads it across every env)</li>
-<li><code>head /log/&lt;ns&gt;/&lt;env&gt;/&lt;svc&gt;/main.log</code> — first N lines (oldest)</li>
-<li><code>tail /log/&lt;ns&gt;/&lt;env&gt;/&lt;svc&gt;/main.log</code> — last N lines; <code>tail -f</code> follows</li>
-<li><code>ls /log</code> — browse the namespace tree; <code>ls /log/&lt;ns&gt;/&lt;svc&gt;</code> lists a service's kinds</li>
+<li><code>cat</code>, <code>head</code>, <code>tail</code> — read <code>/log/...</code> pseudofiles; <code>tail -f</code> follows. <code>head</code> is the oldest rows, <code>tail</code> the newest, within the current <code>range</code>. In a cron, omit <code>-n</code>: a line count can silently truncate the cron's time window.</li>
+<li><code>ls [-l] [-a] [-h]</code> — lists <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>, <code>/log</code>, <code>/tmp</code>. <code>-l</code> shows size and mtime (a sparkline on <code>/cron.d</code>).</li>
+<li><code>cd</code> — changes the virtual working directory.</li>
+<li><code>less</code> — pages output; also automatic for long output (<code>man less</code>).</li>
 </ul>
 <h2 id="text-pipeline">Text pipeline</h2>
 <ul>
-<li><code>grep</code> — filter lines by pattern</li>
-<li><code>awk</code> — field-oriented extraction / predicates</li>
-<li><code>sed</code> — stream substitution</li>
-<li><code>jq</code> — JSON filtering and projection (implies JSON source)</li>
-<li><code>cut</code>, <code>paste</code> — column slicing and joining</li>
-<li><code>sort</code>, <code>uniq</code> — ordering and de-duplication</li>
-<li><code>wc</code> — line/word/byte counts</li>
-<li><code>rev</code>, <code>tac</code> — reverse chars / reverse line order</li>
-<li><code>tee</code>, <code>tr</code> — duplicate to file / translate chars</li>
-<li><code>xargs</code> — build commands from stdin</li>
-<li><code>less</code> — page the final output (see <code>man less</code>)</li>
+<li><code>grep</code> — filter lines by pattern.</li>
+<li><code>awk</code> — field predicates and extraction; meta-variables (<code>ENV</code>, <code>LEVEL</code>, ...) are bare globals, not <code>$NAME</code>.</li>
+<li><code>sed</code> — stream substitution.</li>
+<li><code>jq</code> — reads each row's JSON payload (the JSON part of a line with text around it). A program of only <code>select(...)</code> filters rows and prints the original lines; anything else prints jq's output, compact, one value per line. Meta-variables are <code>$level</code>, <code>$host</code>, <code>$ts</code>, ...; a missing field is <code>null</code>, so <code>select(.n &lt; 100)</code> keeps rows without <code>n</code>.</li>
+<li><code>cut</code>, <code>paste</code>, <code>sort</code>, <code>uniq</code>, <code>wc</code>, <code>rev</code>, <code>tac</code>, <code>tr</code>, <code>tee</code>, <code>xargs</code>.</li>
 </ul>
-<h2 id="filesystem">Filesystem</h2>
+<p>Once a stage changes the text (<code>sort</code>, <code>awk '{ print ... }'</code>, <code>sed s/.../</code>), the next stage reads that text, as in any shell; the JSON payload stays attached only through stages that merely filter or count rows (<code>grep</code>, an awk pattern, <code>head</code>, <code>tail</code>).</p>
+<h2 id="files-in-tmp">Files in /tmp</h2>
+<p><code>/tmp</code> is the only writable scratch area. Expiry, size limits and how files cross into <code>/bin</code> are in <a href="/manual/tmp#lifetime-and-limits">Scratch space</a>.</p>
 <ul>
-<li><code>ls [-l] [-a] [-h] [path]</code> — list <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>, <code>/log</code>, <code>/tmp</code>; <code>ls -l /cron.d/</code> adds a sparkline</li>
-<li><code>cat /bin/&lt;fn&gt;</code> — view a saved function</li>
-<li><code>cat /cron.d/&lt;name&gt;</code> — view a cron definition</li>
-<li><code>chart &lt;cron&gt;</code> / <code>... | chart [-x COL|.path] [-y COL|.path]</code> — render a saved cron or a pipeline as an in-terminal chart (<code>man chart</code>)</li>
-<li><code>&gt;</code> / <code>&gt;&gt;</code> — redirect pipeline output into <code>/tmp</code></li>
-<li><code>mkdir /tmp/&lt;dir&gt;</code> — group scratch files into folders</li>
-<li><code>cp &lt;src&gt; &lt;dst&gt;</code> / <code>mv &lt;src&gt; &lt;dst&gt;</code> — duplicate / rename (both sides must be inside <code>/tmp</code>; <code>cat &lt;src&gt; &gt; &lt;dst&gt;</code> writes elsewhere)</li>
-<li><code>touch &lt;path&gt;</code> — create empty / reset the 48h clock on a <code>/tmp</code> file (<code>&gt;</code>, <code>&gt;&gt;</code>, <code>cp</code> and <code>mv</code> reset it too)</li>
-<li><code>rm &lt;path&gt;</code> / <code>rm -rf &lt;dir&gt;</code> — delete a file or directory</li>
-<li><code>vi &lt;path&gt;</code> — edit (vim keys)</li>
-<li><code>cd &lt;path&gt;</code> — change the virtual cwd</li>
-</ul>
-<h2 id="working-on-saved-results">Working on saved results</h2>
-<ul>
-<li><code>diff &lt;a&gt; &lt;b&gt;</code> — line-level differences between two files</li>
-<li><code>comm &lt;a&gt; &lt;b&gt;</code> — sorted-set merge: only-in-a, only-in-b, in-both</li>
-<li><code>join &lt;a&gt; &lt;b&gt;</code> — relational join on a key column (<code>-t</code> / <code>-1</code> / <code>-2</code>, with a space before the value: <code>-t ,</code>)</li>
-<li><code>paste &lt;a&gt; &lt;b&gt; [...]</code> — column-merge files line-by-line (<code>-d</code>)</li>
-<li><code>wc &lt;files&gt;</code> — <code>-l</code> lines, <code>-w</code> words, <code>-c</code> bytes, <code>-m</code> chars, <code>-L</code> longest line</li>
-</ul>
-<h2 id="version-history-git">Version history (git)</h2>
-<p><code>git</code> is a subset of git over <code>/bin</code>, <code>/cron.d</code>, <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code>; HEAD is the org's latest change.</p>
-<ul>
-<li><code>git log [-p] [--oneline] [-- &lt;path&gt;]</code> — list versions; <code>-p</code> includes diffs</li>
-<li><code>git show &lt;rev&gt;[:&lt;path&gt;]</code> — a commit, or a file's content at that revision (path without a leading slash: <code>git show HEAD:bin/&lt;name&gt;</code>)</li>
-<li><code>git diff &lt;a&gt; &lt;b&gt; [-- &lt;path&gt;]</code> — unified diff between two revisions</li>
-<li><code>git blame &lt;path&gt;</code> — who last changed each line</li>
-<li><code>git restore --source=&lt;rev&gt; &lt;path&gt;</code> — make a past version current (a new commit)</li>
-<li><code>git revert &lt;rev&gt;</code> — undo one commit with a new commit</li>
-<li><code>git commit --amend -m MSG</code> — reword the latest commit</li>
-</ul>
-<p>Revisions: <code>HEAD</code>, <code>HEAD~N</code>, <code>&lt;a&gt;..&lt;b&gt;</code>, or a hash prefix (≥4 hex chars).
-Tracked: <code>/bin</code>, <code>/cron.d</code>, <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code>; last 5 past versions retained.
-<code>git status</code> works; other git commands are refused as unsupported.</p>
-<h2 id="sharing">Sharing</h2>
-<ul>
-<li><code>clipboard /bin/&lt;name&gt;</code> — copy a short link to the script (current range + args) to the system clipboard; teammates open it in their shell pre-filled (<code>man clipboard</code>)</li>
-</ul>
-<h2 id="team-admins">Team (admins)</h2>
-<ul>
-<li><code>cat /etc/passwd</code> — the team roster: each member's role, status, and groups (read-only)</li>
-<li><code>adduser &lt;email&gt;</code> — invite someone to the org (sends an invite email)</li>
-<li><code>adduser &lt;email&gt; &lt;group&gt;</code> — add a member to a group; <code>deluser &lt;email&gt; &lt;group&gt;</code> removes them from it</li>
-<li><code>deluser &lt;email&gt;</code> — remove a member from the org</li>
-<li><code>groups &lt;email&gt;</code> / <code>id &lt;email&gt;</code> — show a member's groups</li>
-</ul>
-<p>Groups are the permission model: <code>binmgr</code> / <code>cronmgr</code> / <code>configmgr</code>
-(edit <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>), <code>nsmgr</code> (create and manage namespaces),
-a namespace name (read its logs), or <code>&lt;ns&gt;+tokens</code> (mint producer tokens
-for it). Admins have implicit full access. See <code>man passwd</code>.</p>
-<h2 id="alerting">Alerting</h2>
-<ul>
-<li><code>&lt;pipeline&gt; | alert above &lt;N&gt; --notify=&lt;alias&gt;</code> — fire a notification when the pipeline's final number exceeds N; <code>alert</code> must be the last command of a script. See <code>help alerts</code> or <code>man alert</code></li>
+<li><code>&gt;</code> / <code>&gt;&gt;</code> — redirect into <code>/tmp</code>.</li>
+<li><code>mkdir</code>, <code>rm [-rf]</code>, <code>vi</code>, <code>touch</code>, <code>cp</code>, <code>mv</code> — as usual, within <code>/tmp</code>.</li>
+<li><code>diff</code>, <code>comm</code> (sorted input), <code>join</code> (<code>-t ,</code>, <code>-1</code>, <code>-2</code> take a space before the value), <code>paste -d</code>, <code>wc -l -w -c -m -L</code>.</li>
 </ul>
 <h2 id="shell">Shell</h2>
 <ul>
-<li><code>range [&lt;start&gt;..&lt;end&gt;]</code> — show or set the query window, e.g. <code>range 2h..</code></li>
-<li><code>which &lt;name&gt;</code> — show where a command lives</li>
-<li><code>type &lt;name&gt;</code> — identify a command</li>
-<li><code>history</code> — past commands</li>
-<li><code>clear</code> — clear the screen</li>
-<li><code>exit</code> — quit the shell</li>
+<li><code>which</code>, <code>type</code>, <code>history</code>, <code>clear</code>, <code>exit</code>.</li>
 </ul>
+<h2 id="partial-implementations">Partial implementations</h2>
+<p>Real commands with a reduced or weft-specific meaning.</p>
+<ul>
+<li><code>git</code> — a subset over <code>/bin</code>, <code>/cron.d</code>, <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code>: <code>log</code>, <code>show</code>, <code>diff</code>, <code>blame</code>, <code>restore --source</code>, <code>revert</code>, <code>commit --amend</code>, <code>status</code>. Other subcommands are refused. Last 5 past versions retained (<code>man git</code>).</li>
+<li><code>adduser</code>, <code>deluser</code>, <code>groups</code>, <code>id</code> — manage org members and groups, not OS accounts; <code>adduser &lt;email&gt;</code> sends an invite. <code>/etc/passwd</code> is a read-only team roster (<code>man passwd</code>).</li>
+</ul>
+<h2 id="shell-extensions">Shell extensions</h2>
+<p>Commands with no Unix counterpart.</p>
+<ul>
+<li><code>range [&lt;start&gt;..&lt;end&gt;]</code> — show or set the query window; it governs every read (<code>man range</code>).</li>
+<li><code>chart</code> — render a pipeline or cron in the terminal (<code>man chart</code>).</li>
+<li><code>alert</code> — fire a notification from a pipeline's final number (<code>man alert</code>).</li>
+<li><code>clipboard</code> — copy a short link to a <code>/bin</code> script (<code>man clipboard</code>).</li>
+<li><code>dashboard</code> — dashboard YAML grammar and tiles (<code>man dashboard</code>).</li>
+</ul>
+<p><code>help cron</code> and <code>help alerts</code> cover scheduling and notification.</p>
 <blockquote>
-<p>Each entry above is a command — <code>man &lt;name&gt;</code> where a page exists.</p>
+<p><code>man &lt;name&gt;</code> where a page exists.</p>
 </blockquote>
 `,
 } as const;

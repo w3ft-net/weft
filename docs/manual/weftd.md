@@ -85,9 +85,9 @@ only setting with an environment source; all other settings live in the
 file.
 
 The `deployment`, `region`, and per-source `version` values
-become first-class query dimensions — see the **Meta-variables**
-section in **Query your logs** for the full list and how they
-appear in awk and jq.
+become first-class query dimensions — see
+[Meta-variables](metavars.md) for the full list and how they appear in awk
+and jq.
 
 ### File-sourced dimensions
 

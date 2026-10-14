@@ -33,15 +33,10 @@ cannot change it, so a token bound to <code>prod</code> always writes rows tagge
 <p>The token-create form has an Env field; from the CLI:</p>
 <pre><code>weft token create --namespace myco --label api-prod --env prod
 </code></pre>
-<p>Rows from an env-bound token land at the four-segment path
-<code>/log/myco/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>, for example
-<code>/log/myco/prod/api/main.log</code>. A token with no env lands at the
-three-segment path <code>/log/myco/&lt;service&gt;/&lt;kind&gt;.log</code>. Reading the
-three-segment path <code>/log/myco/api/main.log</code> covers that service across
-every env. The <code>&lt;kind&gt;</code> segment is always present and defaults to
-<code>main</code>; telemetry streams use other kinds (<code>metrics.log</code>, and
-<code>heartbeats.log</code> or <code>runtime.log</code> when the agent emits them). See <strong>Query your logs</strong> for
-how <code>ENV</code> surfaces in awk and jq.</p>
+<p>Rows from an env-bound token land at <code>/log/myco/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>; a
+token with no env lands one segment shorter. <a href="/manual/introduction#paths">Paths</a> covers
+the layout and how to read it, and <a href="/manual/metavars">Meta-variables</a> covers how
+<code>ENV</code> surfaces in awk and jq.</p>
 `,
 } as const;
 

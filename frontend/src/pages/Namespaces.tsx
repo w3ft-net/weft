@@ -99,7 +99,7 @@ export default function Namespaces() {
     }
   }
 
-  async function handleRevoke(id: number) {
+  async function handleRevoke(id: string) {
     await revokeToken(id).catch(() => {})
     loadData()
   }
@@ -249,7 +249,7 @@ export default function Namespaces() {
 
                           {/* Tokens for this namespace.
                               The raw token is no longer retrievable after
-                              creation (hashed at rest). Show prefix + label
+                              creation (hashed at rest). Show the public id + label
                               so humans can identify tokens; revoke by id. */}
                           <Pane
                             title="tokens"
@@ -267,12 +267,12 @@ export default function Namespaces() {
                               <div className="ns-table-wrap">
                                 <table className="tui-table" data-testid={`namespace-tokens-${ns.name}`}>
                                   <thead>
-                                    <tr><th>prefix</th><th>label</th><th>env</th><th>status</th><th>created</th><th></th></tr>
+                                    <tr><th>id</th><th>label</th><th>env</th><th>status</th><th>created</th><th></th></tr>
                                   </thead>
                                   <tbody>
                                     {nsTokens.map(t => (
                                       <tr key={t.id} className={t.status === 'revoked' ? 'ns-token-revoked' : undefined} data-testid={`namespace-token-row-${t.id}`}>
-                                        <td className="ns-token-prefix">{t.prefix}…</td>
+                                        <td className="ns-token-prefix">{t.id}</td>
                                         <td className="ns-token-label">{t.label}</td>
                                         <td>{t.env || <span className="tui-dim">-</span>}</td>
                                         <td>

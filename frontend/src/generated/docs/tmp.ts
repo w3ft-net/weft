@@ -3,17 +3,23 @@
 const tmp = {
   id: "manual-tmp",
   section: "tmp",
-  title: "Saving results to /tmp",
-  category: "query",
-  order: 57,
+  title: "Scratch space and cookbook",
+  category: "weft-shell",
+  order: 58,
   headings: [
-    { level: 3, id: "files-expire-after-48-hours", text: "Files expire after 48 hours" },
-    { level: 3, id: "storage-limits", text: "Storage limits" },
-    { level: 3, id: "limits", text: "Limits" },
-    { level: 3, id: "working-on-saved-results", text: "Working on saved results" },
-    { level: 3, id: "listing-with-ls--l", text: "Listing with ls -l" },
+    { level: 2, id: "scratch-space-tmp", text: "Scratch space (/tmp)" },
+    { level: 3, id: "lifetime-and-limits", text: "Lifetime and limits" },
+    { level: 2, id: "cookbook", text: "Cookbook" },
+    { level: 3, id: "triage-a-spike", text: "Triage a spike" },
+    { level: 3, id: "level-histogram-by-region-for-one-deployment", text: "Level histogram by region for one deployment" },
+    { level: 3, id: "prod-errors-for-one-deployment-across-the-namespace", text: "Prod errors for one deployment, across the namespace" },
+    { level: 3, id: "whole-stack-traces-for-matching-errors", text: "Whole stack traces for matching errors" },
+    { level: 3, id: "whats-new-since-an-hour-ago", text: "What's new since an hour ago" },
+    { level: 3, id: "relate-two-saved-files", text: "Relate two saved files" },
+    { level: 3, id: "organise-an-incident", text: "Organise an incident" },
   ],
-  html: `<p>Every weft account has a scratch area at <code>/tmp</code>. Use it to save the output
+  html: `<h2 id="scratch-space-tmp">Scratch space (/tmp)</h2>
+<p>Every weft account has a scratch area at <code>/tmp</code>. Use it to save the output
 of a pipeline, take notes during an incident, or hold a filtered result
 set long enough to slice it a few different ways. Write with <code>&gt;</code>, append
 with <code>&gt;&gt;</code>, edit with <code>vi</code>, list with <code>ls</code>, remove with <code>rm</code>.</p>
@@ -55,105 +61,63 @@ touch /tmp/incident-errs               # reset the 48h clock
 # Clean up when you're done
 rm -rf /tmp/incident-2026-04-22
 </code></pre>
-<h3 id="files-expire-after-48-hours">Files expire after 48 hours</h3>
-<p>/tmp is durable storage — your files survive logouts and are visible
-from every session. Every file is deleted
-48 hours after it was last edited. Any of <code>&gt;</code>, <code>&gt;&gt;</code>, <code>cp</code>, <code>mv</code>, or
-<code>touch</code> resets the clock; the mtime shown in <code>ls -l</code> is the source of
-truth.</p>
-<p><code>touch /tmp/foo</code> extends a file's life and leaves its content
-unchanged. Use it when an investigation runs long and you want to keep
-your scratch past the original 48h.</p>
-<p>/tmp holds the data for the investigation you are running now. For
-long-term storage of a pipeline's output, save the pipeline itself as a
-cron (see <strong>Crons</strong>). Cron results are retained for the full history
-your plan covers.</p>
-<h3 id="storage-limits">Storage limits</h3>
-<p>/tmp has a total allowance and a per-file cap, both set by your plan;
-see the Account page for your plan's limits. Use /tmp for filtered result
-sets and notes. Writes that would exceed
-either limit fail with an error; the partial output is not written.</p>
-<p>Check what you're using from the shell. <code>ls -lh</code> shows each file's
-size:</p>
-<pre><code>ls -lh /tmp
-</code></pre>
-<p><code>cat /etc/usage</code> reports your log-ingest quota.</p>
-<h3 id="limits">Limits</h3>
+<h3 id="lifetime-and-limits">Lifetime and limits</h3>
 <ul>
-<li><strong>Scripts.</strong> Files in /tmp are never treated as scripts.
-<code>vi /tmp/foo</code> opens a text file; typing <code>foo</code> at the prompt
-afterwards does nothing. Scripts live in <code>/bin</code> — see
-<strong>Custom scripts</strong>.</li>
-<li><strong>Follow mode.</strong> Redirect the output of a finished query into /tmp.
-<code>tail -f /log/myco/api/main.log &gt; /tmp/stream</code> is refused with an
-error, because a follow never finishes and the file would hold only
-a truncated read. Drop <code>-f</code> to save a finished query.</li>
-<li><strong>Sharing.</strong> /tmp is per-customer. Every member of your account
-sees the same /tmp; users from other accounts see none of it.</li>
+<li><strong>48 hours.</strong> <code>/tmp</code> is durable across logouts and shared by every member of
+your account (no other account sees it), but a file is deleted 48 hours after
+its last write. <code>&gt;</code>, <code>&gt;&gt;</code>, <code>cp</code>, <code>mv</code> and <code>touch</code> reset the clock; <code>ls -l</code>
+shows the mtime. For long-term results, save the pipeline as a cron instead
+(see <strong>Crons</strong>); cron results keep your plan's full history.</li>
+<li><strong>Size.</strong> A per-file cap and a total allowance, both set by your plan (see
+the <strong>Account</strong> page). A write that would exceed either fails and writes
+nothing. <code>ls -lh /tmp</code> shows sizes.</li>
+<li><strong>Not scripts.</strong> Files in <code>/tmp</code> are never executed; scripts live in <code>/bin</code>.</li>
+<li><strong>No follow.</strong> <code>tail -f ... &gt; /tmp/x</code> is refused; drop <code>-f</code>.</li>
+<li><strong>Crossing out.</strong> <code>cp</code> and <code>mv</code> work only inside <code>/tmp</code>. Use
+<code>cat /tmp/x &gt; /bin/y</code> to move a file out and <code>cat /bin/y &gt; /tmp/x</code> to edit
+a copy.</li>
 </ul>
-<h3 id="working-on-saved-results">Working on saved results</h3>
-<p>Once you have a couple of saved result sets, the standard Unix
-analysis kit is available for comparing and combining them:</p>
-<table>
-<thead>
-<tr>
-<th>Command</th>
-<th>What it does</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>cp a b</code></td>
-<td>Duplicate a file</td>
-</tr>
-<tr>
-<td><code>mv a b</code></td>
-<td>Rename a file</td>
-</tr>
-<tr>
-<td><code>touch a</code></td>
-<td>Reset the 48h clock without otherwise changing the file</td>
-</tr>
-<tr>
-<td><code>diff a b</code></td>
-<td>Show line-level differences between two files</td>
-</tr>
-<tr>
-<td><code>comm a b</code></td>
-<td>Three-column merge of two sorted files: only-in-A, only-in-B, in-both</td>
-</tr>
-<tr>
-<td><code>join a b</code></td>
-<td>Relational join on a key column (default: whitespace, column 1 each side)</td>
-</tr>
-<tr>
-<td><code>paste a b</code></td>
-<td>Column-merge two files line-by-line (default delimiter: tab)</td>
-</tr>
-<tr>
-<td><code>wc a</code></td>
-<td>Lines, words and bytes; <code>-l -w -c -m -L</code> pick columns and combine freely</td>
-</tr>
-</tbody>
-</table>
-<p><code>cp</code> and <code>mv</code> work only inside /tmp, on both sides. /bin, /cron.d and
-/etc each have their own save path (permissions and validation), so
-copying or moving into or out of them is refused. To put a file there,
-use <code>cat /tmp/x &gt; /bin/y</code>; to copy one out for editing, use
-<code>cat /bin/y &gt; /tmp/x</code>.</p>
-<h3 id="listing-with-ls--l">Listing with <code>ls -l</code></h3>
-<p><code>ls</code> accepts the usual flags — <code>-l</code> for long format, <code>-a</code> to include
-dotfiles, <code>-h</code> for human-readable sizes. Long format shows size and
-last-modified time, which is how you can tell how much of your 48h
-window a file has left:</p>
-<pre><code>weft&gt; ls -lh /tmp
--rw-r--r--  Alice Chen  2.1K  2026-04-24 09:42  errs
-drwxr-xr-x  Alice Chen     -  2026-04-22 17:03  incident-2026-04-22/
--rw-r--r--  Alice Chen   312  2026-04-24 10:15  scratch
+<p>The Unix tools for comparing saved files (<code>diff</code>, <code>comm</code>, <code>join</code>, <code>paste</code>,
+<code>wc</code>) are listed in <a href="/manual/builtins#files-in-tmp">Builtins</a>.</p>
+<h2 id="cookbook">Cookbook</h2>
+<h3 id="triage-a-spike">Triage a spike</h3>
+<pre><code>cat /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
+awk '{ print SERVICE, HOST }' /tmp/errs | sort | uniq -c | sort -rn | head
 </code></pre>
-<p>The same flags work anywhere in the filesystem — <code>ls -l /bin</code> shows
-when you last edited each of your scripts, <code>ls -l /cron.d</code> shows when
-each cron was last modified.</p>
+<h3 id="level-histogram-by-region-for-one-deployment">Level histogram by region for one deployment</h3>
+<pre><code>cat /log/myco/prod/api/main.log \\
+  | awk 'DEPLOYMENT == &quot;api&quot; {print REGION, LEVEL}' \\
+  | sort | uniq -c
+</code></pre>
+<h3 id="prod-errors-for-one-deployment-across-the-namespace">Prod errors for one deployment, across the namespace</h3>
+<pre><code>cat myco.log \\
+  | awk 'ENV == &quot;prod&quot; &amp;&amp; LEVEL == &quot;ERROR&quot; &amp;&amp; DEPLOYMENT == &quot;api&quot;' \\
+  | head -50
+</code></pre>
+<p><code>ENV</code> and <code>DEPLOYMENT</code> narrow the read before any row is parsed. The jq form
+is <code>jq 'select($env == &quot;prod&quot; and $deployment == &quot;api&quot;)'</code>.</p>
+<h3 id="whole-stack-traces-for-matching-errors">Whole stack traces for matching errors</h3>
+<pre><code>cat /log/myco/api/main.log | awk 'LINE_NO == 0 &amp;&amp; /timeout/' &gt; /tmp/first-lines
+</code></pre>
+<p>Lines of one multi-line event share <code>EVENT_ID</code>; <code>LINE_NO == 0</code> is the first.</p>
+<h3 id="whats-new-since-an-hour-ago">What's new since an hour ago</h3>
+<pre><code>cp /tmp/errs /tmp/errs.bak
+tail -n 1000 /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
+diff /tmp/errs.bak /tmp/errs
+</code></pre>
+<p>For <code>comm</code>, sort first: <code>sort /tmp/a &gt; /tmp/a.s</code>.</p>
+<h3 id="relate-two-saved-files">Relate two saved files</h3>
+<pre><code>printf 'api 3\\nweb 1\\n' &gt; /tmp/errs-by-service
+printf 'api oncall-a\\nweb oncall-b\\n' &gt; /tmp/owners
+join /tmp/errs-by-service /tmp/owners     # api 3 oncall-a / web 1 oncall-b
+</code></pre>
+<h3 id="organise-an-incident">Organise an incident</h3>
+<pre><code>mkdir /tmp/incident-2026-04-22
+cat /log/myco/api/main.log | grep 'req_id=abc123' &gt; /tmp/incident-2026-04-22/trace
+vi /tmp/incident-2026-04-22/notes
+touch /tmp/incident-2026-04-22/trace      # keep it past 48h
+rm -rf /tmp/incident-2026-04-22           # when done
+</code></pre>
 `,
 } as const;
 

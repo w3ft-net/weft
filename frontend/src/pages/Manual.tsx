@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Link, Navigate, useLocation, useParams } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
 import ManualSidebar from '../components/ManualSidebar'
 import { manualCategories, manualSections } from '../generated/docs'
@@ -89,6 +89,7 @@ function ManHeader({ left = 'weft(1)', center }: { left?: string; center: string
 export function ManualTopic() {
   const { slug } = useParams<{ slug: string }>()
   const { hash, pathname } = useLocation()
+  const navigate = useNavigate()
   const topic = manualSections.find(s => s.section === slug)
   const mainRef = useRef<HTMLElement>(null)
 
@@ -153,6 +154,16 @@ export function ManualTopic() {
 
             <div
               className="manual-section"
+              data-testid="manual-section-body"
+              onClick={e => {
+                // docgen rewrites doc-to-doc links to /manual/<section>#<anchor>;
+                // route them client-side instead of reloading the app.
+                const a = (e.target as HTMLElement).closest('a')
+                const href = a?.getAttribute('href')
+                if (!href || !href.startsWith('/manual') || e.metaKey || e.ctrlKey || e.shiftKey) return
+                e.preventDefault()
+                navigate(href)
+              }}
               dangerouslySetInnerHTML={{ __html: topic.html }}
             />
 
