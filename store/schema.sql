@@ -11,7 +11,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict HM1FYywopcbBrqph62FyAFVxT2lbVhFyTMMZobsAHBJR3mYImpV5wMWR6hl84je
+\restrict nGZPeVRlP8WNaVnKDbG1OzoG7dqkUgeqt7B3RW0Qeg5rrGphE0LxkiAghnrtbd6
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -89,8 +89,13 @@ DECLARE
     last_history_id BIGINT;
     captured_by     TEXT;
     history_count   INT;
+    revived         BOOLEAN;
 BEGIN
-    IF OLD.content_hash = NEW.content_hash THEN
+    -- No-op save (open/close in :w without editing): the row content
+    -- is unchanged, so don't pollute history with a duplicate hash. A revive
+    -- (deleted_at cleared) is never a no-op: the deletion has to be kept.
+    revived := OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL;
+    IF OLD.content_hash = NEW.content_hash AND NOT revived THEN
         RETURN NEW;
     END IF;
 
@@ -107,12 +112,19 @@ BEGIN
 
     INSERT INTO cron_watch_history (
         watch_id, org_id, name, schedule, pipeline, content_hash,
-        message, captured_by_user_id, authored_by_user_id, predecessor_id
+        message, captured_by_user_id, authored_by_user_id, predecessor_id,
+        version_id, authored_at, deleted_at
     ) VALUES (
         OLD.id, OLD.org_id, OLD.name, OLD.schedule, OLD.pipeline,
         OLD.content_hash, OLD.message, captured_by,
-        OLD.created_by_user_id, last_history_id
+        OLD.authored_by_user_id, last_history_id,
+        OLD.version_id, OLD.authored_at, OLD.deleted_at
     );
+
+    NEW.version_id := nextval('public.object_version_seq');
+    NEW.authored_at := clock_timestamp();
+    NEW.authored_by_user_id := captured_by;
+    NEW.message := '';
 
     SELECT count(*) INTO history_count
     FROM cron_watch_history
@@ -134,6 +146,92 @@ $$;
 
 
 --
+-- Name: capture_dashboard_history(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.capture_dashboard_history() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    last_history_id BIGINT;
+    captured_by     TEXT;
+BEGIN
+    IF OLD.yaml_body = NEW.yaml_body THEN
+        RETURN NEW;
+    END IF;
+
+    captured_by := NULLIF(current_setting('weft.acting_user_id', true), '');
+
+    SELECT id INTO last_history_id FROM dashboard_history
+     WHERE dashboard_id = OLD.id ORDER BY captured_at DESC, id DESC LIMIT 1;
+
+    INSERT INTO dashboard_history (
+        dashboard_id, org_id, name, yaml_body, message, captured_by_user_id,
+        authored_by_user_id, predecessor_id, version_id, authored_at
+    ) VALUES (
+        OLD.id, OLD.org_id, OLD.name, OLD.yaml_body, OLD.message, captured_by,
+        OLD.authored_by_user_id, last_history_id, OLD.version_id, OLD.authored_at
+    );
+
+    NEW.version_id := nextval('public.object_version_seq');
+    NEW.authored_at := clock_timestamp();
+    NEW.authored_by_user_id := captured_by;
+    NEW.message := '';
+
+    IF (SELECT count(*) FROM dashboard_history WHERE dashboard_id = OLD.id) > 5 THEN
+        DELETE FROM dashboard_history WHERE id = (
+            SELECT id FROM dashboard_history WHERE dashboard_id = OLD.id
+             ORDER BY captured_at ASC, id ASC LIMIT 1);
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: capture_notify_config_history(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.capture_notify_config_history() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    last_history_id BIGINT;
+    captured_by     TEXT;
+BEGIN
+    IF OLD.aliases_yaml = NEW.aliases_yaml THEN
+        RETURN NEW;
+    END IF;
+
+    captured_by := NULLIF(current_setting('weft.acting_user_id', true), '');
+
+    SELECT id INTO last_history_id FROM notify_config_history
+     WHERE notify_config_id = OLD.id ORDER BY captured_at DESC, id DESC LIMIT 1;
+
+    INSERT INTO notify_config_history (
+        notify_config_id, org_id, aliases_yaml, message, captured_by_user_id,
+        authored_by_user_id, predecessor_id, version_id, authored_at
+    ) VALUES (
+        OLD.id, OLD.org_id, OLD.aliases_yaml, OLD.message, captured_by,
+        OLD.authored_by_user_id, last_history_id, OLD.version_id, OLD.authored_at
+    );
+
+    NEW.version_id := nextval('public.object_version_seq');
+    NEW.authored_at := clock_timestamp();
+    NEW.authored_by_user_id := captured_by;
+    NEW.message := '';
+
+    IF (SELECT count(*) FROM notify_config_history WHERE notify_config_id = OLD.id) > 5 THEN
+        DELETE FROM notify_config_history WHERE id = (
+            SELECT id FROM notify_config_history WHERE notify_config_id = OLD.id
+             ORDER BY captured_at ASC, id ASC LIMIT 1);
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+
+--
 -- Name: capture_shell_function_history(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -144,10 +242,13 @@ DECLARE
     last_history_id BIGINT;
     captured_by     TEXT;
     history_count   INT;
+    revived         BOOLEAN;
 BEGIN
     -- No-op save (open/close in :w without editing): the row content
-    -- is unchanged, so don't pollute history with a duplicate hash.
-    IF OLD.content_hash = NEW.content_hash THEN
+    -- is unchanged, so don't pollute history with a duplicate hash. A revive
+    -- (deleted_at cleared) is never a no-op: the deletion has to be kept.
+    revived := OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL;
+    IF OLD.content_hash = NEW.content_hash AND NOT revived THEN
         RETURN NEW;
     END IF;
 
@@ -164,12 +265,19 @@ BEGIN
 
     INSERT INTO shell_function_history (
         function_id, org_id, name, source, language, content_hash,
-        message, captured_by_user_id, authored_by_user_id, predecessor_id
+        message, captured_by_user_id, authored_by_user_id, predecessor_id,
+        version_id, authored_at, deleted_at
     ) VALUES (
         OLD.id, OLD.org_id, OLD.name, OLD.source, OLD.language,
         OLD.content_hash, OLD.message, captured_by,
-        OLD.created_by_user_id, last_history_id
+        OLD.authored_by_user_id, last_history_id,
+        OLD.version_id, OLD.authored_at, OLD.deleted_at
     );
+
+    NEW.version_id := nextval('public.object_version_seq');
+    NEW.authored_at := clock_timestamp();
+    NEW.authored_by_user_id := captured_by;
+    NEW.message := '';
 
     SELECT count(*) INTO history_count
     FROM shell_function_history
@@ -185,6 +293,21 @@ BEGIN
         );
     END IF;
 
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: etc_set_origin_on_insert(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.etc_set_origin_on_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    NEW.origin_version_id := NEW.version_id;
+    NEW.authored_by_user_id := NULLIF(current_setting('weft.acting_user_id', true), '');
     RETURN NEW;
 END;
 $$;
@@ -348,6 +471,24 @@ CREATE PROCEDURE public.rollup_usage_daily()
     GROUP BY org_id, date_trunc('day', hour)::date
     ON CONFLICT (org_id, day) DO UPDATE SET
         bytes_ingested = EXCLUDED.bytes_ingested;
+
+    DELETE FROM public.usage_hourly
+    WHERE hour < date_trunc('day', now()) - INTERVAL '14 days';
+$$;
+
+
+--
+-- Name: set_authored_by_on_insert(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.set_authored_by_on_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    NEW.authored_by_user_id := NEW.created_by_user_id;
+    NEW.origin_version_id := NEW.version_id;
+    RETURN NEW;
+END;
 $$;
 
 
@@ -566,28 +707,6 @@ CREATE TABLE partman.template_public_tmp_files (
 
 
 --
--- Name: template_public_usage_daily; Type: TABLE; Schema: partman; Owner: -
---
-
-CREATE TABLE partman.template_public_usage_daily (
-    customer_name text NOT NULL,
-    day date NOT NULL,
-    bytes_ingested bigint NOT NULL
-);
-
-
---
--- Name: template_public_usage_hourly; Type: TABLE; Schema: partman; Owner: -
---
-
-CREATE TABLE partman.template_public_usage_hourly (
-    customer_name text NOT NULL,
-    hour timestamp with time zone NOT NULL,
-    bytes_ingested bigint NOT NULL
-);
-
-
---
 -- Name: agent_tokens; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -608,7 +727,7 @@ CREATE TABLE public.agent_tokens (
     last_seen_version text DEFAULT ''::text NOT NULL,
     last_seen_at timestamp with time zone,
     org_id bigint NOT NULL,
-    producer text DEFAULT ''::text NOT NULL
+    public_id text NOT NULL
 );
 
 
@@ -916,7 +1035,10 @@ CREATE TABLE public.cron_watch_history (
     captured_by_user_id text,
     authored_by_user_id text,
     predecessor_id bigint,
-    org_id bigint NOT NULL
+    org_id bigint NOT NULL,
+    version_id bigint NOT NULL,
+    authored_at timestamp with time zone NOT NULL,
+    deleted_at timestamp with time zone
 );
 
 
@@ -937,6 +1059,18 @@ CREATE SEQUENCE public.cron_watch_history_id_seq
 --
 
 ALTER SEQUENCE public.cron_watch_history_id_seq OWNED BY public.cron_watch_history.id;
+
+
+--
+-- Name: object_version_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.object_version_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
 
 
 --
@@ -962,7 +1096,11 @@ CREATE TABLE public.cron_watches (
     content_hash text DEFAULT ''::text NOT NULL,
     message text DEFAULT ''::text NOT NULL,
     lowered_plan jsonb,
-    org_id bigint NOT NULL
+    org_id bigint NOT NULL,
+    version_id bigint DEFAULT nextval('public.object_version_seq'::regclass) NOT NULL,
+    authored_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    authored_by_user_id text,
+    origin_version_id bigint
 );
 
 
@@ -986,6 +1124,45 @@ ALTER SEQUENCE public.cron_watches_id_seq OWNED BY public.cron_watches.id;
 
 
 --
+-- Name: dashboard_history; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.dashboard_history (
+    id bigint NOT NULL,
+    dashboard_id bigint NOT NULL,
+    org_id bigint NOT NULL,
+    name text NOT NULL,
+    yaml_body text NOT NULL,
+    message text DEFAULT ''::text NOT NULL,
+    captured_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    captured_by_user_id text,
+    authored_by_user_id text,
+    predecessor_id bigint,
+    version_id bigint NOT NULL,
+    authored_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: dashboard_history_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.dashboard_history_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: dashboard_history_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.dashboard_history_id_seq OWNED BY public.dashboard_history.id;
+
+
+--
 -- Name: dashboards; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -997,7 +1174,12 @@ CREATE TABLE public.dashboards (
     name text NOT NULL,
     yaml_body text NOT NULL,
     created_by_user_id text,
-    org_id bigint NOT NULL
+    org_id bigint NOT NULL,
+    version_id bigint DEFAULT nextval('public.object_version_seq'::regclass) NOT NULL,
+    authored_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    authored_by_user_id text,
+    origin_version_id bigint NOT NULL,
+    message text DEFAULT ''::text NOT NULL
 );
 
 
@@ -1129,6 +1311,18 @@ CREATE TABLE public.leases (
 
 
 --
+-- Name: log_group_agents; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.log_group_agents (
+    log_group_id bigint NOT NULL,
+    instance text NOT NULL,
+    version text NOT NULL,
+    seen_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: log_groups; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1153,6 +1347,7 @@ CREATE TABLE public.log_groups (
     sample_collected integer,
     bucket_id bigint,
     org_id bigint NOT NULL,
+    sample_updated_at timestamp with time zone,
     CONSTRAINT log_groups_status_check CHECK ((status = ANY (ARRAY['sampling'::text, 'pending'::text, 'configured'::text])))
 );
 
@@ -1298,6 +1493,44 @@ ALTER SEQUENCE public.namespaces_id_seq OWNED BY public.namespaces.id;
 
 
 --
+-- Name: notify_config_history; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.notify_config_history (
+    id bigint NOT NULL,
+    notify_config_id bigint NOT NULL,
+    org_id bigint NOT NULL,
+    aliases_yaml text NOT NULL,
+    message text DEFAULT ''::text NOT NULL,
+    captured_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    captured_by_user_id text,
+    authored_by_user_id text,
+    predecessor_id bigint,
+    version_id bigint NOT NULL,
+    authored_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: notify_config_history_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.notify_config_history_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: notify_config_history_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.notify_config_history_id_seq OWNED BY public.notify_config_history.id;
+
+
+--
 -- Name: notify_configs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1311,7 +1544,12 @@ CREATE TABLE public.notify_configs (
     slack_team_name text,
     configured_at timestamp with time zone,
     aliases_yaml text DEFAULT ''::text NOT NULL,
-    org_id bigint NOT NULL
+    org_id bigint NOT NULL,
+    version_id bigint DEFAULT nextval('public.object_version_seq'::regclass) NOT NULL,
+    authored_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    authored_by_user_id text,
+    origin_version_id bigint NOT NULL,
+    message text DEFAULT ''::text NOT NULL
 );
 
 
@@ -1496,7 +1734,8 @@ CREATE TABLE public.shard_heartbeats (
     row_count bigint DEFAULT 0 NOT NULL,
     disk_bytes bigint DEFAULT 0 NOT NULL,
     beat_at timestamp with time zone NOT NULL
-);
+)
+WITH (fillfactor='50');
 
 
 --
@@ -1573,6 +1812,21 @@ ALTER TABLE public.shard_services ALTER COLUMN id ADD GENERATED BY DEFAULT AS ID
 
 
 --
+-- Name: shared_links; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.shared_links (
+    org_id bigint NOT NULL,
+    slug text NOT NULL,
+    bin text NOT NULL,
+    range_spec text NOT NULL,
+    args text DEFAULT ''::text NOT NULL,
+    created_by_user_id text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: shell_function_history; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1588,7 +1842,10 @@ CREATE TABLE public.shell_function_history (
     captured_by_user_id text,
     authored_by_user_id text,
     predecessor_id bigint,
-    org_id bigint NOT NULL
+    org_id bigint NOT NULL,
+    version_id bigint NOT NULL,
+    authored_at timestamp with time zone NOT NULL,
+    deleted_at timestamp with time zone
 );
 
 
@@ -1626,7 +1883,11 @@ CREATE TABLE public.shell_functions (
     created_by_user_id text,
     content_hash text DEFAULT ''::text NOT NULL,
     message text DEFAULT ''::text NOT NULL,
-    org_id bigint NOT NULL
+    org_id bigint NOT NULL,
+    version_id bigint DEFAULT nextval('public.object_version_seq'::regclass) NOT NULL,
+    authored_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    authored_by_user_id text,
+    origin_version_id bigint
 );
 
 
@@ -1964,6 +2225,13 @@ ALTER TABLE ONLY public.cron_watches ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
+-- Name: dashboard_history id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dashboard_history ALTER COLUMN id SET DEFAULT nextval('public.dashboard_history_id_seq'::regclass);
+
+
+--
 -- Name: dashboards id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2010,6 +2278,13 @@ ALTER TABLE ONLY public.namespace_permissions ALTER COLUMN id SET DEFAULT nextva
 --
 
 ALTER TABLE ONLY public.namespaces ALTER COLUMN id SET DEFAULT nextval('public.namespaces_id_seq'::regclass);
+
+
+--
+-- Name: notify_config_history id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notify_config_history ALTER COLUMN id SET DEFAULT nextval('public.notify_config_history_id_seq'::regclass);
 
 
 --
@@ -2196,6 +2471,14 @@ ALTER TABLE ONLY public.organizations
 
 
 --
+-- Name: dashboard_history dashboard_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dashboard_history
+    ADD CONSTRAINT dashboard_history_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: dashboards dashboards_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2236,6 +2519,14 @@ ALTER TABLE ONLY public.leases
 
 
 --
+-- Name: log_group_agents log_group_agents_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.log_group_agents
+    ADD CONSTRAINT log_group_agents_pkey PRIMARY KEY (log_group_id, instance);
+
+
+--
 -- Name: log_groups log_groups_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2265,6 +2556,14 @@ ALTER TABLE ONLY public.namespace_permissions
 
 ALTER TABLE ONLY public.namespaces
     ADD CONSTRAINT namespaces_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: notify_config_history notify_config_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notify_config_history
+    ADD CONSTRAINT notify_config_history_pkey PRIMARY KEY (id);
 
 
 --
@@ -2337,6 +2636,14 @@ ALTER TABLE ONLY public.shard_services
 
 ALTER TABLE ONLY public.shard_services
     ADD CONSTRAINT shard_services_shard_id_namespace_id_service_key UNIQUE (shard_id, namespace_id, service);
+
+
+--
+-- Name: shared_links shared_links_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shared_links
+    ADD CONSTRAINT shared_links_pkey PRIMARY KEY (org_id, slug);
 
 
 --
@@ -2452,6 +2759,13 @@ ALTER TABLE ONLY public.users
 
 
 --
+-- Name: agent_tokens_public_id_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX agent_tokens_public_id_key ON public.agent_tokens USING btree (public_id);
+
+
+--
 -- Name: buckets_label_key; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2564,10 +2878,24 @@ CREATE UNIQUE INDEX idx_cron_org_name ON public.cron_watches USING btree (org_id
 
 
 --
+-- Name: idx_cron_watch_history_version_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_cron_watch_history_version_id ON public.cron_watch_history USING btree (version_id);
+
+
+--
 -- Name: idx_cron_watches_deleted_at; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_cron_watches_deleted_at ON public.cron_watches USING btree (deleted_at);
+
+
+--
+-- Name: idx_cron_watches_version_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_cron_watches_version_id ON public.cron_watches USING btree (version_id);
 
 
 --
@@ -2620,6 +2948,13 @@ CREATE UNIQUE INDEX idx_dashboards_org_name ON public.dashboards USING btree (or
 
 
 --
+-- Name: idx_dashboards_version_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_dashboards_version_id ON public.dashboards USING btree (version_id);
+
+
+--
 -- Name: idx_device_codes_device_code; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2631,6 +2966,20 @@ CREATE UNIQUE INDEX idx_device_codes_device_code ON public.device_codes USING bt
 --
 
 CREATE UNIQUE INDEX idx_device_codes_user_code ON public.device_codes USING btree (user_code);
+
+
+--
+-- Name: idx_dh_dashboard_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_dh_dashboard_id ON public.dashboard_history USING btree (dashboard_id, captured_at DESC);
+
+
+--
+-- Name: idx_dh_version_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_dh_version_id ON public.dashboard_history USING btree (version_id);
 
 
 --
@@ -2718,6 +3067,20 @@ CREATE INDEX idx_namespaces_deleted_at ON public.namespaces USING btree (deleted
 
 
 --
+-- Name: idx_nch_config_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_nch_config_id ON public.notify_config_history USING btree (notify_config_id, captured_at DESC);
+
+
+--
+-- Name: idx_nch_version_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_nch_version_id ON public.notify_config_history USING btree (version_id);
+
+
+--
 -- Name: idx_notify_configs_deleted_at; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2729,6 +3092,13 @@ CREATE INDEX idx_notify_configs_deleted_at ON public.notify_configs USING btree 
 --
 
 CREATE UNIQUE INDEX idx_notify_configs_org_id ON public.notify_configs USING btree (org_id);
+
+
+--
+-- Name: idx_notify_configs_version_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_notify_configs_version_id ON public.notify_configs USING btree (version_id);
 
 
 --
@@ -2830,10 +3200,24 @@ CREATE INDEX idx_shard_services_ns_service ON public.shard_services USING btree 
 
 
 --
+-- Name: idx_shell_function_history_version_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_shell_function_history_version_id ON public.shell_function_history USING btree (version_id);
+
+
+--
 -- Name: idx_shell_functions_deleted_at; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_shell_functions_deleted_at ON public.shell_functions USING btree (deleted_at);
+
+
+--
+-- Name: idx_shell_functions_version_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_shell_functions_version_id ON public.shell_functions USING btree (version_id);
 
 
 --
@@ -2872,6 +3256,13 @@ CREATE INDEX idx_usage_hourly_customer_hour ON ONLY public.usage_hourly USING bt
 
 
 --
+-- Name: idx_usage_hourly_hour_brin; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_usage_hourly_hour_brin ON ONLY public.usage_hourly USING brin (hour);
+
+
+--
 -- Name: idx_user_notices_pending; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2900,13 +3291,6 @@ CREATE INDEX shard_archive_stats_org_idx ON public.shard_archive_stats USING btr
 
 
 --
--- Name: shard_heartbeats_beat_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX shard_heartbeats_beat_at_idx ON public.shard_heartbeats USING btree (beat_at);
-
-
---
 -- Name: tmp_file_lines_default_file_id_line_num_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2918,6 +3302,13 @@ CREATE INDEX tmp_file_lines_default_file_id_line_num_idx ON public.tmp_file_line
 --
 
 CREATE INDEX tmp_files_default_org_id_path_idx ON public.tmp_files_default USING btree (org_id, path);
+
+
+--
+-- Name: usage_hourly_default_hour_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX usage_hourly_default_hour_idx ON public.usage_hourly_default USING brin (hour);
 
 
 --
@@ -3026,6 +3417,13 @@ ALTER INDEX public.usage_daily_pkey ATTACH PARTITION public.usage_daily_default_
 
 
 --
+-- Name: usage_hourly_default_hour_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.idx_usage_hourly_hour_brin ATTACH PARTITION public.usage_hourly_default_hour_idx;
+
+
+--
 -- Name: usage_hourly_default_org_id_hour_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -3036,14 +3434,42 @@ ALTER INDEX public.idx_usage_hourly_customer_hour ATTACH PARTITION public.usage_
 -- Name: cron_watches capture_cron_watch_history_trg; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER capture_cron_watch_history_trg BEFORE UPDATE OF schedule, pipeline ON public.cron_watches FOR EACH ROW EXECUTE FUNCTION public.capture_cron_watch_history();
+CREATE TRIGGER capture_cron_watch_history_trg BEFORE UPDATE OF schedule, pipeline, deleted_at ON public.cron_watches FOR EACH ROW EXECUTE FUNCTION public.capture_cron_watch_history();
+
+
+--
+-- Name: dashboards capture_dashboard_history_trg; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER capture_dashboard_history_trg BEFORE UPDATE OF yaml_body ON public.dashboards FOR EACH ROW EXECUTE FUNCTION public.capture_dashboard_history();
+
+
+--
+-- Name: notify_configs capture_notify_config_history_trg; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER capture_notify_config_history_trg BEFORE UPDATE OF aliases_yaml ON public.notify_configs FOR EACH ROW EXECUTE FUNCTION public.capture_notify_config_history();
 
 
 --
 -- Name: shell_functions capture_shell_function_history_trg; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER capture_shell_function_history_trg BEFORE UPDATE OF source, language ON public.shell_functions FOR EACH ROW EXECUTE FUNCTION public.capture_shell_function_history();
+CREATE TRIGGER capture_shell_function_history_trg BEFORE UPDATE OF source, language, deleted_at ON public.shell_functions FOR EACH ROW EXECUTE FUNCTION public.capture_shell_function_history();
+
+
+--
+-- Name: cron_watches cron_watches_authored_by_trg; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cron_watches_authored_by_trg BEFORE INSERT ON public.cron_watches FOR EACH ROW EXECUTE FUNCTION public.set_authored_by_on_insert();
+
+
+--
+-- Name: dashboards dashboards_origin_trg; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER dashboards_origin_trg BEFORE INSERT ON public.dashboards FOR EACH ROW EXECUTE FUNCTION public.etc_set_origin_on_insert();
 
 
 --
@@ -3051,6 +3477,13 @@ CREATE TRIGGER capture_shell_function_history_trg BEFORE UPDATE OF source, langu
 --
 
 CREATE TRIGGER log_groups_fill_org_id_bi BEFORE INSERT OR UPDATE ON public.log_groups FOR EACH ROW EXECUTE FUNCTION public.log_groups_fill_org_id();
+
+
+--
+-- Name: notify_configs notify_configs_origin_trg; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER notify_configs_origin_trg BEFORE INSERT ON public.notify_configs FOR EACH ROW EXECUTE FUNCTION public.etc_set_origin_on_insert();
 
 
 --
@@ -3068,6 +3501,13 @@ CREATE TRIGGER shard_records_audit_state AFTER UPDATE ON public.shard_records FO
 
 
 --
+-- Name: shell_functions shell_functions_authored_by_trg; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER shell_functions_authored_by_trg BEFORE INSERT ON public.shell_functions FOR EACH ROW EXECUTE FUNCTION public.set_authored_by_on_insert();
+
+
+--
 -- Name: memberships sync_membership_org_permissions; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -3080,6 +3520,14 @@ CREATE TRIGGER sync_membership_org_permissions AFTER INSERT OR UPDATE OF role, s
 
 ALTER TABLE ONLY public.cron_watch_history
     ADD CONSTRAINT cron_watch_history_predecessor_id_fkey FOREIGN KEY (predecessor_id) REFERENCES public.cron_watch_history(id) ON DELETE SET NULL;
+
+
+--
+-- Name: dashboard_history dashboard_history_predecessor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dashboard_history
+    ADD CONSTRAINT dashboard_history_predecessor_id_fkey FOREIGN KEY (predecessor_id) REFERENCES public.dashboard_history(id) ON DELETE SET NULL;
 
 
 --
@@ -3139,6 +3587,14 @@ ALTER TABLE ONLY public.memberships
 
 
 --
+-- Name: log_group_agents log_group_agents_log_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.log_group_agents
+    ADD CONSTRAINT log_group_agents_log_group_id_fkey FOREIGN KEY (log_group_id) REFERENCES public.log_groups(id) ON DELETE CASCADE;
+
+
+--
 -- Name: log_groups log_groups_bucket_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3152,6 +3608,14 @@ ALTER TABLE ONLY public.log_groups
 
 ALTER TABLE ONLY public.log_groups
     ADD CONSTRAINT log_groups_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES public.namespaces(id) ON DELETE CASCADE;
+
+
+--
+-- Name: notify_config_history notify_config_history_predecessor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notify_config_history
+    ADD CONSTRAINT notify_config_history_predecessor_id_fkey FOREIGN KEY (predecessor_id) REFERENCES public.notify_config_history(id) ON DELETE SET NULL;
 
 
 --
@@ -3214,13 +3678,13 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict HM1FYywopcbBrqph62FyAFVxT2lbVhFyTMMZobsAHBJR3mYImpV5wMWR6hl84je
+\unrestrict nGZPeVRlP8WNaVnKDbG1OzoG7dqkUgeqt7B3RW0Qeg5rrGphE0LxkiAghnrtbd6
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict 3M7qITwrJiXg7Wrv216VBNJUMZiOieWQYk75tNe9WSj2sTa4xncdRx1YPKRbTbJ
+\restrict KwgKlNCZcUZdGUs23LbvyRkPEW9UIzS8pB2MJf3G14XBWiTY1drnntVYn1GE5C7
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -3254,13 +3718,13 @@ SELECT pg_catalog.setval('public.buckets_new_id_seq', 1, true);
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 3M7qITwrJiXg7Wrv216VBNJUMZiOieWQYk75tNe9WSj2sTa4xncdRx1YPKRbTbJ
+\unrestrict KwgKlNCZcUZdGUs23LbvyRkPEW9UIzS8pB2MJf3G14XBWiTY1drnntVYn1GE5C7
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict CQVO4rgg8ExsQEwm7snVXoZUgO4tvwpAB3ND33X5xyfy0EGy3qduoZpyEZlhiDO
+\restrict peINh9SGmTJxCdB3i4FuLvUqtSkuZ0rjSsXJl3drrJZDBxJ8cL2rXOiNhJauCbf
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -3361,20 +3825,33 @@ INSERT INTO public.goose_db_version VALUES (78, 79, true, '2026-10-05 01:04:59.8
 INSERT INTO public.goose_db_version VALUES (79, 80, true, '2026-10-06 21:54:55.931878');
 INSERT INTO public.goose_db_version VALUES (80, 81, true, '2026-10-08 22:12:06.185391');
 INSERT INTO public.goose_db_version VALUES (81, 82, true, '2026-10-08 22:12:06.201991');
+INSERT INTO public.goose_db_version VALUES (82, 83, true, '2026-10-15 17:52:30.1272');
+INSERT INTO public.goose_db_version VALUES (83, 84, true, '2026-10-15 17:52:30.129667');
+INSERT INTO public.goose_db_version VALUES (84, 85, true, '2026-10-15 17:52:30.13407');
+INSERT INTO public.goose_db_version VALUES (85, 86, true, '2026-10-15 17:52:30.156876');
+INSERT INTO public.goose_db_version VALUES (86, 87, true, '2026-10-15 17:52:30.160416');
+INSERT INTO public.goose_db_version VALUES (87, 88, true, '2026-10-15 17:52:30.164138');
+INSERT INTO public.goose_db_version VALUES (88, 89, true, '2026-10-15 17:52:30.166165');
+INSERT INTO public.goose_db_version VALUES (89, 90, true, '2026-10-15 17:52:30.183388');
+INSERT INTO public.goose_db_version VALUES (90, 91, true, '2026-10-15 17:52:30.186472');
+INSERT INTO public.goose_db_version VALUES (91, 92, true, '2026-10-15 17:52:30.188701');
+INSERT INTO public.goose_db_version VALUES (92, 93, true, '2026-10-15 17:52:30.189959');
+INSERT INTO public.goose_db_version VALUES (93, 94, true, '2026-10-15 17:52:30.192752');
+INSERT INTO public.goose_db_version VALUES (94, 95, true, '2026-10-15 17:52:30.193813');
 
 
 --
 -- Name: goose_db_version_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.goose_db_version_id_seq', 81, true);
+SELECT pg_catalog.setval('public.goose_db_version_id_seq', 94, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict CQVO4rgg8ExsQEwm7snVXoZUgO4tvwpAB3ND33X5xyfy0EGy3qduoZpyEZlhiDO
+\unrestrict peINh9SGmTJxCdB3i4FuLvUqtSkuZ0rjSsXJl3drrJZDBxJ8cL2rXOiNhJauCbf
 
 
 -- +weft partman/cron reconstruction (generated by scripts/collapse-migrations.sh; do not hand-edit)
