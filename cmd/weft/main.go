@@ -22,6 +22,7 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shell"
 	"golang.org/x/term"
+	"gopkg.in/yaml.v3"
 )
 
 // orgOverride is the active org chosen via --org / WEFT_ORG, applied
@@ -768,6 +769,13 @@ func loadSchemaNonInteractive(path string) (*ingest.Schema, error) {
 			return nil, fmt.Errorf("read schema from stdin: %w", err)
 		}
 	}
+	// An empty document parses to a blank schema that validates, and
+	// configuring that replaces a working schema with nothing (stdin at
+	// /dev/null, a truncated file). Refuse it rather than apply it.
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err == nil && len(doc) == 0 {
+		return nil, fmt.Errorf("schema document is empty — refusing to configure a blank schema")
+	}
 	schema, err := ingest.LoadSchemaFromBytes(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse schema YAML: %w", err)
@@ -1016,9 +1024,23 @@ func runSourceList(client *shell.HTTPCoordinator) {
 	// sources, or the agent-reported path for weftd. Region/last-poll are
 	// CloudWatch-poller concepts and meaningless for pushed weftd sources, so
 	// they're not shown here — `source schema <ns/svc>` has the per-source detail.
-	fmt.Printf("%-15s %-20s %-12s %-10s %-26s %s\n", "NAMESPACE", "SERVICE", "STATUS", "TYPE", "AGENTS", "SOURCE")
+	fmt.Printf("%-15s %-20s %-17s %-10s %-26s %s\n", "NAMESPACE", "SERVICE", "STATUS", "TYPE", "AGENTS", "SOURCE")
 	for _, s := range sources {
-		fmt.Printf("%-15s %-20s %-12s %-10s %-26s %s\n", s.Namespace, s.Service, s.Status, s.SourceType, agentsText(s), s.LogGroup)
+		fmt.Printf("%-15s %-20s %-17s %-10s %-26s %s\n", s.Namespace, s.Service, statusText(s), s.SourceType, agentsText(s), s.LogGroup)
+	}
+}
+
+// statusText is the STATUS column: the source's status, or what its resample
+// is up to, since a source being re-sampled stays "configured" while it
+// keeps ingesting.
+func statusText(s shell.SourceInfo) string {
+	switch r := s.Resample; {
+	case r == nil:
+		return s.Status
+	case r.Ready:
+		return "resampled"
+	default:
+		return fmt.Sprintf("resampling %d/%d", r.Collected, r.Target)
 	}
 }
 

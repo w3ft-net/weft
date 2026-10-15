@@ -240,11 +240,45 @@ func formatSampleUpdatedAt(t *time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
+// resampleInfo is a configured source's resample progress: lines collected so
+// far, and Ready once the fresh sample is complete and waiting to be
+// configured.
+type resampleInfo struct {
+	Collected int  `json:"collected"`
+	Target    int  `json:"target"`
+	Ready     bool `json:"ready"`
+}
+
+// resampleOf reports the resample state of a configured source with a schema,
+// or nil when it has none in flight or waiting. A schemaless source collecting
+// its first sample is not a resample.
+func resampleOf(lg store.LogGroup) *resampleInfo {
+	if lg.Status != store.StatusConfigured || lg.SchemaYAML == "" {
+		return nil
+	}
+	if lg.ResampleRequestedAt != nil {
+		return &resampleInfo{Collected: lg.SampleCollected, Target: store.SampleTarget}
+	}
+	if lg.Sample != "" && lg.Sample != "[]" && lg.Sample != "null" {
+		return &resampleInfo{Collected: lg.SampleCollected, Target: store.SampleTarget, Ready: true}
+	}
+	return nil
+}
+
 // pendingStatus is the status the pending list reports. A raw-push source
 // is live (configured) while its sample fills, so its list status comes
 // from sample progress instead of the row's own.
 func pendingStatus(lg store.LogGroup) string {
 	if lg.Status == store.StatusConfigured {
+		// A source with a schema is only listed because of a resample: it is
+		// collecting while the flag is set, and ready to configure once the
+		// final sample clears it.
+		if lg.SchemaYAML != "" {
+			if lg.ResampleRequestedAt != nil {
+				return string(store.StatusSampling)
+			}
+			return string(store.StatusPending)
+		}
 		if lg.SampleCollected < store.SampleTarget {
 			return string(store.StatusSampling)
 		}
@@ -437,6 +471,10 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		// reported, and the oldest and newest weftd versions among them.
 		// Only weftd sources have agents.
 		Agents *agentFleet `json:"agents,omitempty"`
+		// Resample is set on a configured source that is being (or has just
+		// been) re-sampled: its status stays "configured" because it keeps
+		// ingesting, so this is how a list shows the resample at all.
+		Resample *resampleInfo `json:"resample,omitempty"`
 	}
 	out := []sourceResp{}
 	var shown []store.LogGroupJoined
@@ -465,6 +503,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, sourceResp{
 			Agents:     fleet,
+			Resample:   resampleOf(lg.LogGroup),
 			Namespace:  lg.NamespaceName,
 			Service:    lg.Service,
 			Status:     string(lg.Status),

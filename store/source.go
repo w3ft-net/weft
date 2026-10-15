@@ -339,13 +339,21 @@ func (s *Store) allLogGroups(statuses ...LogGroupStatus) ([]LogGroupJoined, erro
 
 // AwaitingSchema scopes a log_groups query to sources a human still has to
 // give a schema: weftd/kinesis rows that are sampling or pending, plus
-// raw-push rows that are already live (configured) but schemaless and have
-// collected lines (or had their sample reset by a resample request) — their
-// sample accumulates while they keep ingesting. A
-// source with a schema never matches, so a weftd resample of a configured
-// source doesn't re-raise the notification.
+// configured rows that are collecting or holding a sample for review:
+//   - raw-push rows that are live but schemaless and have collected lines
+//     (or had their sample reset by a resample request) — their sample
+//     accumulates while they keep ingesting;
+//   - a configured row that has a schema and a resample in flight (flag
+//     set), or a fresh sample left by a finished resample. Configuring clears
+//     both, so such a row is one the user asked to re-sample and has not yet
+//     re-configured. (A schemaless row's flag only means "still collecting",
+//     which the rule above already covers.)
 func AwaitingSchema(q *gorm.DB) *gorm.DB {
-	return q.Where(`log_groups.status IN ? OR (log_groups.status = ? AND COALESCE(log_groups.schema_yaml, '') = '' AND (log_groups.sample_collected > 0 OR log_groups.sample_updated_at IS NOT NULL))`,
+	return q.Where(`log_groups.status IN ? OR (log_groups.status = ? AND (
+		(COALESCE(log_groups.schema_yaml, '') = '' AND (log_groups.sample_collected > 0 OR log_groups.sample_updated_at IS NOT NULL))
+		OR (COALESCE(log_groups.schema_yaml, '') <> '' AND (
+			log_groups.resample_requested_at IS NOT NULL
+			OR COALESCE(log_groups.sample, '') NOT IN ('', '[]', 'null')))))`,
 		[]LogGroupStatus{StatusSampling, StatusPending}, StatusConfigured)
 }
 

@@ -52,6 +52,16 @@ type SourceInfo struct {
 	// Agents is who has been reading a weftd source lately; nil if no agent
 	// has reported (or the source is not a weftd one).
 	Agents *AgentFleet `json:"agents,omitempty"`
+	// Resample is set while a configured source is being re-sampled, or once
+	// the fresh sample is waiting for review.
+	Resample *ResampleInfo `json:"resample,omitempty"`
+}
+
+// ResampleInfo is a configured source's resample progress.
+type ResampleInfo struct {
+	Collected int  `json:"collected"`
+	Target    int  `json:"target"`
+	Ready     bool `json:"ready"`
 }
 
 // AgentFleet summarizes the agents reading a source.

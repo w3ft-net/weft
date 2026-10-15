@@ -279,3 +279,56 @@ func TestRequestResampleWhileCollectingConflicts(t *testing.T) {
 		t.Fatalf("resample after a full sample: %v", err)
 	}
 }
+
+// A configured weftd source with a schema that is being resampled is awaiting
+// the user: it must be listed while the sample fills (flag set) and after it
+// completes (flag cleared, fresh sample waiting for review), and drop off the
+// moment the user reconfigures it. Without this, a resample is invisible in
+// `weft source pending`.
+func TestAwaitingSchemaListsResampledConfiguredSource(t *testing.T) {
+	db, nsID, custID, _, _, fullApp := setupSource(t, "awaiting-resampled")
+	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["x"]`, "{}", 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := configureLogGroup(db, nsID, fullApp, "schema-v1"); err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		n, err := db.CountPendingLogGroups(custID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := count(); n != 0 {
+		t.Fatalf("configured source with no resample listed: count=%d", n)
+	}
+
+	if err := db.RequestResample(nsID, fullApp); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Errorf("resample requested, nothing collected yet: count=%d, want 1", n)
+	}
+
+	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["f1"]`, "{}", 1, true); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Errorf("resample partway: count=%d, want 1", n)
+	}
+
+	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["f1","f2"]`, "{}", 2, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Errorf("resample complete, awaiting review: count=%d, want 1", n)
+	}
+
+	if err := configureLogGroup(db, nsID, fullApp, "schema-v2"); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 0 {
+		t.Errorf("reconfigured: count=%d, want 0", n)
+	}
+}
