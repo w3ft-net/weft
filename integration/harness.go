@@ -198,10 +198,12 @@ func seedFixtures() error {
 
 	if _, err := conn.Exec(`
 		INSERT INTO agent_tokens (
-			org_id, namespace_id, token_hash, prefix, label,
+			org_id, namespace_id, token_hash, prefix, label, public_id,
 			revoked, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, 'dev-agent', false, now(), now())
+		VALUES ($1, $2, $3, $4, 'dev-agent',
+			'tok_' || substr(md5(random()::text || clock_timestamp()::text), 1, 16),
+			false, now(), now())
 		ON CONFLICT (token_hash) DO UPDATE SET
 			org_id = EXCLUDED.org_id,
 			namespace_id = EXCLUDED.namespace_id,

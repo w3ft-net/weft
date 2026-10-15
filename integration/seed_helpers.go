@@ -149,10 +149,12 @@ func seedAgentToken(t *testing.T, custID store.OrgID, nsID int64, label string) 
 	defer conn.Close()
 	if _, err := conn.Exec(`
 		INSERT INTO agent_tokens (
-			org_id, namespace_id, token_hash, prefix, label,
+			org_id, namespace_id, token_hash, prefix, label, public_id,
 			revoked, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, false, now(), now())
+		VALUES ($1, $2, $3, $4, $5,
+			'tok_' || substr(md5(random()::text || clock_timestamp()::text), 1, 16),
+			false, now(), now())
 	`, custID, nsID, tokenHash, prefix, label); err != nil {
 		t.Fatalf("seed agent token: %v", err)
 	}
