@@ -10,7 +10,9 @@ web:
 ## Install weftd
 
 weftd is a Go binary that tails log files and ships structured
-lines to weft over gRPC. Download it from the **Downloads** page.
+lines to weft over gRPC. Download it from the **Downloads** page. The steps
+every source shares (tokens, confirming rows, approving a schema) are in
+[Connect a log source](connect-source.md).
 
 ```
 # Download and install
@@ -77,7 +79,8 @@ host metrics fan out.
 
 ### Token
 
-Put `token:` in the config file, **or** supply it via the
+Create the token as described in
+[Connect a log source](namespaces.md#creating-a-token). Put `token:` in the config file, **or** supply it via the
 `WEFTD_TOKEN` environment variable (e.g. in `/etc/default/weftd`).
 The environment value takes precedence over the file value, so a secret
 injector can provide the token without templating the YAML. It is the

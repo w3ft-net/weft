@@ -3,7 +3,6 @@ package store
 import (
 	"errors"
 	"testing"
-	"time"
 
 	"gorm.io/gorm"
 )
@@ -80,35 +79,6 @@ func TestSamplingThenPendingProgression(t *testing.T) {
 	}
 }
 
-// TestRequestResampleOnlyConfigured: resample is allowed on a configured
-// source and rejected (ErrRecordNotFound) on a non-configured one.
-func TestRequestResampleOnlyConfigured(t *testing.T) {
-	db, nsID, custID, nsName, app, fullApp := setupSource(t, "resample-guard")
-
-	// Pending source cannot be resampled (it's already producing a sample).
-	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["x"]`, "{}", 1, false); err != nil {
-		t.Fatalf("upsert pending: %v", err)
-	}
-	if err := requestResample(db, nsID, fullApp); !errors.Is(err, gorm.ErrRecordNotFound) {
-		t.Fatalf("RequestResample on pending: want ErrRecordNotFound, got %v", err)
-	}
-
-	// Configure it, then resample succeeds and sets the flag.
-	if err := configureLogGroup(db, nsID, fullApp, "schema-v1"); err != nil {
-		t.Fatalf("ConfigureLogGroup: %v", err)
-	}
-	if err := requestResample(db, nsID, fullApp); err != nil {
-		t.Fatalf("RequestResample on configured: %v", err)
-	}
-	lg, _ := db.FindLogGroup(custID, nsName, app)
-	if lg.Status != StatusConfigured {
-		t.Fatalf("resample must not change status; got %q", lg.Status)
-	}
-	if lg.ResampleRequestedAt == nil {
-		t.Fatal("expected ResampleRequestedAt to be set")
-	}
-}
-
 // TestResampleKeepsConfiguredAndSwaps: the core requirement. A resample
 // on a live configured source keeps it configured (ingestion uninterrupted)
 // while a fresh sample lands; a no-resample sample is a no-op; the final
@@ -136,7 +106,7 @@ func TestResampleKeepsConfiguredAndSwaps(t *testing.T) {
 
 	// Request resample, then a partial submit: sample stored, still
 	// configured + still ingesting, flag still set.
-	if err := requestResample(db, nsID, fullApp); err != nil {
+	if err := db.RequestResample(nsID, fullApp); err != nil {
 		t.Fatalf("RequestResample: %v", err)
 	}
 	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["fresh1"]`, "{}", 1, true); err != nil {
@@ -212,18 +182,100 @@ func configureLogGroup(db *Store, namespaceID uint, app, schemaYAML string) erro
 	return nil
 }
 
-// requestResample mirrors the former Store.RequestResample.
-func requestResample(db *Store, namespaceID uint, app string) error {
-	now := time.Now()
-	res := db.db.Model(&LogGroup{}).
-		Where("namespace_id = ? AND app = ? AND status = ?",
-			namespaceID, app, StatusConfigured).
-		Update("resample_requested_at", now)
-	if res.Error != nil {
-		return res.Error
+// A pending source can be resampled: the first batch (startup chatter) may
+// not show every value worth extracting. The row goes back to sampling with
+// an empty sample, and the flag tells a waiting agent to collect fresh lines.
+func TestRequestResampleOnPendingRestartsSampling(t *testing.T) {
+	db, nsID, custID, nsName, app, fullApp := setupSource(t, "resample-pending")
+	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["boot 1","boot 2"]`, `{"x":1}`, 50, false); err != nil {
+		t.Fatal(err)
 	}
-	if res.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
+	if err := db.RequestResample(nsID, fullApp); err != nil {
+		t.Fatalf("RequestResample on pending: %v", err)
 	}
-	return nil
+	lg, _ := db.FindLogGroup(custID, nsName, app)
+	if lg.Status != StatusSampling {
+		t.Errorf("status = %q, want sampling", lg.Status)
+	}
+	if lg.Sample != "" || lg.Detection != "" || lg.SampleCollected != 0 {
+		t.Errorf("sample not cleared: sample=%q detection=%q collected=%d", lg.Sample, lg.Detection, lg.SampleCollected)
+	}
+	if lg.ResampleRequestedAt == nil {
+		t.Error("ResampleRequestedAt not set")
+	}
+
+	// The fresh final sample ends the resample and is pending again.
+	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["fresh"]`, "{}", 1, false); err != nil {
+		t.Fatal(err)
+	}
+	lg, _ = db.FindLogGroup(custID, nsName, app)
+	if lg.Status != StatusPending || lg.ResampleRequestedAt != nil {
+		t.Errorf("after final sample: status=%q flag=%v, want pending and cleared", lg.Status, lg.ResampleRequestedAt)
+	}
+}
+
+// A source that is still filling its first sample is already collecting, and
+// a missing one has nothing to resample.
+func TestRequestResampleGuards(t *testing.T) {
+	db, nsID, _, _, _, fullApp := setupSource(t, "resample-guards")
+	if err := db.RequestResample(nsID, fullApp); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("missing source: want ErrRecordNotFound, got %v", err)
+	}
+	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["x"]`, "{}", 1, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RequestResample(nsID, fullApp); !errors.Is(err, ErrAlreadySampling) {
+		t.Fatalf("sampling source: want ErrAlreadySampling, got %v", err)
+	}
+}
+
+// A direct (Heroku/Render) source that already holds a full sample must have
+// its count reset on resample, or the ingest path (which stops at the target)
+// never collects a new one.
+func TestRequestResampleResetsDirectSample(t *testing.T) {
+	db, nsID, custID, nsName, app, _ := setupSource(t, "resample-direct")
+	if err := db.EnsureServiceLogGroup(nsID, app); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertPendingLogGroup(nsID, app, "", "", `["a"]`, "{}", SampleTarget, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RequestResample(nsID, app); err != nil {
+		t.Fatal(err)
+	}
+	lg, _ := db.FindLogGroup(custID, nsName, app)
+	if lg.Status != StatusConfigured {
+		t.Errorf("status = %q, want configured (ingestion never pauses)", lg.Status)
+	}
+	if lg.SampleCollected != 0 || lg.Sample != "" || lg.ResampleRequestedAt == nil {
+		t.Errorf("collected=%d sample=%q flag=%v, want reset and flagged", lg.SampleCollected, lg.Sample, lg.ResampleRequestedAt)
+	}
+}
+
+// A resample already collecting must not be restarted by a second request:
+// for a direct source the row is "configured" the whole time, so the guard
+// has to look at the flag, not just the status.
+func TestRequestResampleWhileCollectingConflicts(t *testing.T) {
+	db, nsID, custID, nsName, app, _ := setupSource(t, "resample-inflight")
+	if err := db.EnsureServiceLogGroup(nsID, app); err != nil { // created collecting
+		t.Fatal(err)
+	}
+	if err := db.UpsertPendingLogGroup(nsID, app, "", "", `["a","b"]`, "{}", 2, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RequestResample(nsID, app); !errors.Is(err, ErrAlreadySampling) {
+		t.Fatalf("resample while collecting = %v, want ErrAlreadySampling", err)
+	}
+	lg, _ := db.FindLogGroup(custID, nsName, app)
+	if lg.SampleCollected != 2 {
+		t.Errorf("collected = %d, want 2: a refused request must not reset progress", lg.SampleCollected)
+	}
+
+	// Once the sample is full the flag clears and a new resample is accepted.
+	if err := db.UpsertPendingLogGroup(nsID, app, "", "", `["a","b"]`, "{}", SampleTarget, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RequestResample(nsID, app); err != nil {
+		t.Fatalf("resample after a full sample: %v", err)
+	}
 }

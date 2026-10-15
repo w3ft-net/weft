@@ -16,7 +16,9 @@ const installWeftd = {
     { level: 3, id: "app-api-emit-events-and-heartbeats-from-your-services", text: "App API: emit events and heartbeats from your services" },
   ],
   html: `<p>weftd is a Go binary that tails log files and ships structured
-lines to weft over gRPC. Download it from the <strong>Downloads</strong> page.</p>
+lines to weft over gRPC. Download it from the <strong>Downloads</strong> page. The steps
+every source shares (tokens, confirming rows, approving a schema) are in
+<a href="/manual/overview">Connect a log source</a>.</p>
 <pre><code># Download and install
 curl -fsSL https://w3ft.net/install.sh | sh
 
@@ -73,7 +75,8 @@ several files should share one service, or when you want a name other
 than the derived one. The top-level <code>services:</code> list above controls how
 host metrics fan out.</p>
 <h3 id="token">Token</h3>
-<p>Put <code>token:</code> in the config file, <strong>or</strong> supply it via the
+<p>Create the token as described in
+<a href="/manual/namespaces#creating-a-token">Connect a log source</a>. Put <code>token:</code> in the config file, <strong>or</strong> supply it via the
 <code>WEFTD_TOKEN</code> environment variable (e.g. in <code>/etc/default/weftd</code>).
 The environment value takes precedence over the file value, so a secret
 injector can provide the token without templating the YAML. It is the

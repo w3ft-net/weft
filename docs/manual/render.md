@@ -10,20 +10,14 @@ web:
 ## Connect a Render service
 
 Weft accepts logs directly from Render's built-in **Log Streams** feature using
-syslog over TLS. Here's how to start receiving those logs:
+syslog over TLS. This page covers the Render-specific parts; the steps every
+source shares are in [Connect a log source](connect-source.md).
 
-### 1. Creating a token
+### 1. Create a token
 
-From the dashboard, go to **Namespaces** and create a namespace (or use an
-existing one), then **Create token** within that namespace. The token is
-shown only once, so copy it now. Render tokens are ordinary namespace tokens,
-the same kind you use for any other source.
-
-Or, from the CLI:
-
-```
-weft token create --namespace myco --label render
-```
+Create a namespace token as described in
+[Connect a log source](namespaces.md#creating-a-token). Render tokens are
+ordinary namespace tokens, the same kind you use for any other source.
 
 ### 2. Add the log stream in Render
 
@@ -32,19 +26,15 @@ Scroll down to **Log Streams**, add a stream, and configure a generic/custom
 syslog destination. Paste in the token from Step 1, along with the endpoint
 (`render.syslog.w3ft.net:6514`).
 
-Render starts streaming within a few seconds. 
+Render starts streaming within a few seconds. If you want parsed fields,
+approve a schema ([step 4](connect-source.md#sampling-logs-for-a-schema) of
+the shared steps). The schema is per Render service, so it covers the web,
+cron and build files under it.
 
 ## Reading your logs
 
-To confirm rows are landing:
-
-```
-weft sh -c 'ls /log/<your namespace>'
-```
-
-You should see the name of your service as a directory.
-
-Weft maps Render services to log files as follows:
+To confirm rows are landing, see
+[Connect a log source](connect-source.md#sampling-logs-for-a-schema). Weft maps Render services to log files as follows:
 
 | Render source                       | weft file                                  | metavariables |
 |---|---|---|

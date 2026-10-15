@@ -572,13 +572,21 @@ func runSourcePending(cfg *shell.Config) {
 	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
 
 	var namespace string
+	var watch bool
 	args := os.Args[3:]
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--namespace" || args[i] == "-n" {
+		switch args[i] {
+		case "--namespace", "-n":
 			if i+1 < len(args) {
 				namespace = args[i+1]
 			}
+		case "--watch", "-w":
+			watch = true
 		}
+	}
+	if watch {
+		runSourcePendingWatch(remote, namespace)
+		return
 	}
 
 	sources, err := remote.ListPendingSources(namespace)
@@ -592,10 +600,11 @@ func runSourcePending(cfg *shell.Config) {
 		return
 	}
 
-	fmt.Printf("%-20s %-15s %-20s %-15s %s\n", "SERVICE", "NAMESPACE", "INSTANCE", "DEPLOYMENT", "AGE")
-	for _, s := range sources {
-		fmt.Printf("%-20s %-15s %-20s %-15s %s\n", s.Service, s.Namespace, s.Instance, s.Deployment, s.CreatedAt)
+	width, _, _ := term.GetSize(int(os.Stdout.Fd()))
+	if width <= 0 {
+		width = 100
 	}
+	renderPending(os.Stdout, sources, time.Now(), width)
 }
 
 func runSourceConfigure(cfg *shell.Config) {
@@ -654,7 +663,8 @@ func runSourceConfigure(cfg *shell.Config) {
 			os.Exit(1)
 		}
 	case "pending":
-		// First-time configure; the sample is on the response.
+		// First-time configure; the sample is on the response. If it turns
+		// out to be the wrong lines, `weft source resample` collects new ones.
 	default:
 		fmt.Fprintf(os.Stderr, "%s/%s: unexpected status %q\n", namespace, service, sch.Status)
 		os.Exit(1)
@@ -713,7 +723,17 @@ func runSourceConfigure(cfg *shell.Config) {
 		}
 
 		// Run the interactive setup wizard with the remote sample.
-		schema, err = setup.RunSetupFromLines(namespace+"/"+service, lines, det)
+		// Probes run on the server, against the stored sample, so the CLI
+		// gets the same rule-building and model help as the browser.
+		probe := func(req ingest.ProbeRequest) (*ingest.ProbeResult, error) {
+			body := map[string]any{"field": req.Field, "base": req.Base, "marks": req.Marks, "previous": req.Previous}
+			var res ingest.ProbeResult
+			if err := remote.ProbeSource(namespace, service, body, &res); err != nil {
+				return nil, err
+			}
+			return &res, nil
+		}
+		schema, err = setup.RunSetupFromLines(namespace+"/"+service, lines, det, probe)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "setup: %v\n", err)
 			os.Exit(1)
@@ -768,6 +788,7 @@ func schemaConfigMap(schema *ingest.Schema) map[string]any {
 		"timestamp_field":        schema.TimestampField,
 		"timestamp_format":       schema.TimestampFormat,
 		"timestamp_fields":       schema.TimestampFields,
+		"extract":                schema.Extract,
 		"level_field":            schema.LevelField,
 		"level_pattern":          schema.LevelPattern,
 		"trace_id_field":         schema.TraceIDField,
@@ -785,10 +806,11 @@ func schemaConfigMap(schema *ingest.Schema) map[string]any {
 	}
 }
 
-// runSourceResample asks the agent for a fresh sample of an
-// already-configured source. Ingestion keeps running on the current
-// schema; the new sample shows up for review once the agent has
-// accumulated a full one.
+// runSourceResample asks for a fresh sample of a pending or configured
+// source — for when the lines sampled so far (process startup, say) don't
+// show the values a schema needs. A configured source keeps ingesting on its
+// current schema; the new sample shows up for review once a full one has
+// accumulated.
 func runSourceResample(cfg *shell.Config) {
 	if len(os.Args) < 4 {
 		fmt.Fprintln(os.Stderr, "usage: weft source resample <namespace>/<service>")
@@ -812,8 +834,8 @@ func runSourceResample(cfg *shell.Config) {
 		fmt.Fprintf(os.Stderr, "resample: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Resample requested for %s/%s. The agent will collect a fresh sample; ingestion continues on the current schema meanwhile.\n", namespace, service)
-	fmt.Printf("Track progress with: weft source schema %s/%s\n", namespace, service)
+	fmt.Printf("Resample requested for %s/%s. A fresh sample of new lines will be collected; a configured source keeps ingesting on its current schema meanwhile.\n", namespace, service)
+	fmt.Printf("Track progress with: weft source pending --watch\n")
 }
 
 // runSourceSchema prints the live schema for a configured source, or — if
@@ -867,7 +889,7 @@ func dimText(s string) string {
 
 func runSource() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: weft source {add|list|remove|pending|configure|resample|schema}")
+		fmt.Fprintln(os.Stderr, "usage: weft source {add|list|remove|pending|configure|resample|migrate|schema}")
 		os.Exit(1)
 	}
 
@@ -895,6 +917,8 @@ func runSource() {
 		runSourceConfigure(cfg)
 	case "resample":
 		runSourceResample(cfg)
+	case "migrate":
+		runSourceMigrate(cfg)
 	case "schema":
 		runSourceSchema(cfg)
 	default:
@@ -992,10 +1016,30 @@ func runSourceList(client *shell.HTTPCoordinator) {
 	// sources, or the agent-reported path for weftd. Region/last-poll are
 	// CloudWatch-poller concepts and meaningless for pushed weftd sources, so
 	// they're not shown here — `source schema <ns/svc>` has the per-source detail.
-	fmt.Printf("%-15s %-20s %-12s %-10s %s\n", "NAMESPACE", "SERVICE", "STATUS", "TYPE", "SOURCE")
+	fmt.Printf("%-15s %-20s %-12s %-10s %-26s %s\n", "NAMESPACE", "SERVICE", "STATUS", "TYPE", "AGENTS", "SOURCE")
 	for _, s := range sources {
-		fmt.Printf("%-15s %-20s %-12s %-10s %s\n", s.Namespace, s.Service, s.Status, s.SourceType, s.LogGroup)
+		fmt.Printf("%-15s %-20s %-12s %-10s %-26s %s\n", s.Namespace, s.Service, s.Status, s.SourceType, agentsText(s), s.LogGroup)
 	}
+}
+
+// agentsText is the AGENTS column: the weftd versions reading a source and
+// how many hosts, "unknown" for a weftd source no agent has reported for, and
+// "-" for sources that have no agent (they are pushed, and parsed by the API).
+func agentsText(s shell.SourceInfo) string {
+	if s.SourceType != "weftd" {
+		return "-"
+	}
+	if s.Agents == nil || s.Agents.Count == 0 {
+		return "unknown"
+	}
+	hosts := fmt.Sprintf("%d hosts", s.Agents.Count)
+	if s.Agents.Count == 1 {
+		hosts = "1 host"
+	}
+	if s.Agents.Oldest == s.Agents.Newest {
+		return fmt.Sprintf("%s (%s)", s.Agents.Oldest, hosts)
+	}
+	return fmt.Sprintf("%s-%s (%s)", s.Agents.Oldest, s.Agents.Newest, hosts)
 }
 
 func runSourceRemove(client *shell.HTTPCoordinator) {

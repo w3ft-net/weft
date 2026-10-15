@@ -49,6 +49,16 @@ type SourceInfo struct {
 	LogGroup   string `json:"log_group"`
 	Region     string `json:"region"`
 	Enabled    bool   `json:"enabled"`
+	// Agents is who has been reading a weftd source lately; nil if no agent
+	// has reported (or the source is not a weftd one).
+	Agents *AgentFleet `json:"agents,omitempty"`
+}
+
+// AgentFleet summarizes the agents reading a source.
+type AgentFleet struct {
+	Count  int    `json:"count"`
+	Oldest string `json:"oldest"`
+	Newest string `json:"newest"`
 }
 
 // TokenInfo describes an agent token as returned by GET /api/tokens.
@@ -592,6 +602,13 @@ type PendingSource struct {
 	Sample     json.RawMessage `json:"sample"`
 	Detection  json.RawMessage `json:"detection"`
 	CreatedAt  string          `json:"created_at"`
+	// Status is "sampling" or "pending"; SampleCollected/SampleTarget are
+	// the fill progress and SampleUpdatedAt (RFC3339) when the newest
+	// lines arrived.
+	Status          string `json:"status"`
+	SampleCollected int    `json:"sample_collected"`
+	SampleTarget    int    `json:"sample_target"`
+	SampleUpdatedAt string `json:"sample_updated_at"`
 }
 
 // ListPendingSources returns all pending sources for the authenticated customer.
@@ -732,6 +749,7 @@ type SourceSchema struct {
 	ResampleRequested bool   `json:"resample_requested"`
 	SampleCollected   int    `json:"sample_collected"`
 	SampleTarget      int    `json:"sample_target"`
+	SampleUpdatedAt   string `json:"sample_updated_at"`
 	// Sample carries the sample lines (a JSON array of strings) when the
 	// source is ready to (re)configure: a pending first-time sample, or a
 	// fresh sample left by a completed resample. Empty otherwise.
@@ -764,6 +782,30 @@ func (h *HTTPCoordinator) GetSourceSchema(namespace, service string) (*SourceSch
 		return nil, err
 	}
 	return &sch, nil
+}
+
+// ProbeSource posts a schema-extraction probe request for a source and
+// decodes the response into out. The server evaluates it against the source's
+// stored sample (see api/sources_probe.go), so in and out are the caller's
+// types; this package stays free of the ingest dependency.
+func (h *HTTPCoordinator) ProbeSource(namespace, service string, in, out any) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/api/sources/%s/%s/probe", h.baseURL, namespace, service)
+	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h.setAuthHeaders(req)
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return httpError(resp)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 // ResampleSource asks the agent for a fresh sample of an already-configured

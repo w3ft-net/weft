@@ -122,3 +122,128 @@ func TestIngestHandler_PassthroughWhenServiceNotConfigured(t *testing.T) {
 		t.Errorf("Raw = %q, want %q", rows[0].Raw, "plain message")
 	}
 }
+
+// herokuLines builds n single-frame-per-line Heroku body frames for service.
+func herokuLines(service string, n int) string {
+	frames := make([]string, n)
+	for i := range frames {
+		msg := fmt.Sprintf(`<134>1 2026-04-30T12:00:00.000000+00:00 host %s web.1 - - INFO req-%d hello`, service, i)
+		frames[i] = herokuFrame(msg)
+	}
+	return hbody(frames...)
+}
+
+func postHeroku(t *testing.T, srv *Server, token, body string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/ingest/heroku/"+token, strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.IngestHandler(HerokuAdapter{}).ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body = %q", w.Code, w.Body.String())
+	}
+}
+
+// TestIngestHandler_Heroku_SamplesSchemalessService: a raw-push service
+// the coordinator auto-onboarded (configured, no schema) accumulates a
+// sample from live traffic — same bootstrap weftd and kinesis get — while
+// its rows keep flowing. A full sample ends the resample and surfaces the
+// source for schema review.
+func TestIngestHandler_Heroku_SamplesSchemalessService(t *testing.T) {
+	srv, s := testServer(t)
+	fake, coordClient := startFakeCoord(t)
+	srv.coordClient = coordClient
+
+	token, ns := setupIngestOrg(t, s)
+	if err := s.EnsureServiceLogGroup(ns.ID, "myapp"); err != nil {
+		t.Fatal(err)
+	}
+
+	postHeroku(t, srv, token, herokuLines("myapp", 3))
+	waitForRows(t, fake, 3)
+
+	lg, err := s.FindLogGroup(ns.OrgID, ns.Name, "myapp")
+	if err != nil || lg == nil {
+		t.Fatalf("FindLogGroup = %v, %v", lg, err)
+	}
+	if lg.Status != store.StatusConfigured {
+		t.Errorf("Status = %q, want configured — sampling must not gate ingest", lg.Status)
+	}
+	if lg.SampleCollected != 3 {
+		t.Errorf("SampleCollected = %d, want 3", lg.SampleCollected)
+	}
+	if lg.ResampleRequestedAt == nil {
+		t.Error("resample flag cleared early, want it held until the sample is full")
+	}
+
+	postHeroku(t, srv, token, herokuLines("myapp", store.SampleTarget))
+	waitForRows(t, fake, 3+store.SampleTarget)
+
+	lg, err = s.FindLogGroup(ns.OrgID, ns.Name, "myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lg.SampleCollected != store.SampleTarget {
+		t.Errorf("SampleCollected = %d, want %d (capped)", lg.SampleCollected, store.SampleTarget)
+	}
+	if lg.ResampleRequestedAt != nil {
+		t.Error("resample flag still set after a full sample")
+	}
+	if n, _ := s.CountPendingLogGroups(ns.OrgID); n != 1 {
+		t.Errorf("pending count = %d, want 1 — a full schemaless sample awaits review", n)
+	}
+}
+
+// TestIngestHandler_Heroku_ConfiguredServiceNotSampled: a service with a
+// schema and no resample request must not touch its sample.
+func TestIngestHandler_Heroku_ConfiguredServiceNotSampled(t *testing.T) {
+	srv, s := testServer(t)
+	fake, coordClient := startFakeCoord(t)
+	srv.coordClient = coordClient
+
+	token, ns := setupIngestOrg(t, s)
+	if err := s.AddLogGroup(ns.ID, store.SourceTypeDirect, "myapp", "", "us-east-2", "app: myapp\nformat: text\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	postHeroku(t, srv, token, herokuLines("myapp", 3))
+	waitForRows(t, fake, 3)
+
+	lg, err := s.FindLogGroup(ns.OrgID, ns.Name, "myapp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lg.SampleCollected != 0 || lg.Sample != "" {
+		t.Errorf("sample = %q (%d), want none for a configured source", lg.Sample, lg.SampleCollected)
+	}
+}
+
+// A brand-new push service has no log_group row when its first batch is
+// ingested (the provisioner creates it after the rows are forwarded), so the
+// first batch must create it rather than being dropped from the sample:
+// otherwise a service that pushes exactly one sample's worth of lines in
+// batches ends up with only the later batches.
+func TestIngestHandler_Heroku_FirstBatchOfNewServiceIsSampled(t *testing.T) {
+	srv, s := testServer(t)
+	fake, coordClient := startFakeCoord(t)
+	srv.coordClient = coordClient
+
+	token, ns := setupIngestOrg(t, s)
+
+	postHeroku(t, srv, token, herokuLines("brandnew", 25))
+	waitForRows(t, fake, 25)
+
+	lg, err := s.FindLogGroup(ns.OrgID, ns.Name, "brandnew")
+	if err != nil || lg == nil {
+		t.Fatalf("FindLogGroup = %v, %v: the first batch must create the service's row", lg, err)
+	}
+	if lg.SampleCollected != 25 {
+		t.Errorf("after the first batch SampleCollected = %d, want 25", lg.SampleCollected)
+	}
+
+	postHeroku(t, srv, token, herokuLines("brandnew", 25))
+	waitForRows(t, fake, 50)
+	lg, _ = s.FindLogGroup(ns.OrgID, ns.Name, "brandnew")
+	if lg.SampleCollected != store.SampleTarget {
+		t.Errorf("after two batches SampleCollected = %d, want %d", lg.SampleCollected, store.SampleTarget)
+	}
+}

@@ -27,7 +27,23 @@ never know you aren't on an old-school log server. And hopefully when you run
 into that surprise, we've got nice clear error messages. But like us, weft is a
 work in progress.
 
-## Examples
+## Key differences
+
+### Sandboxness
+
+Weft is a log shell, and although it allows a certain amount of scripting for those purposes, it is not an operating system, a general purpose programming environment, or a VPS you control. There may be things you would like to do that you cannot. The veneer of Unix is only as thick as we needed it to be.
+
+### Range
+
+The timerange of logs you are working with is displayed in your PS1. How far back in time you can set it depends on your plan. Spoiler, if you ship a lot of logs and you wanna query 3 months, it's gonna be slower. You can change it with the `range` command.
+
+### Metavariables
+
+We inject some preset variables into invocations of AWK and jq that are helpful in narrowing down the lines you need; these are all indexed nicely so including them in an AWK pattern or a jq `select()` should get you your log lines faster. See the [full reference](#FIXME) for more details.
+
+### 
+
+## Some Examples
 
 ```
 # Tail logs in real time

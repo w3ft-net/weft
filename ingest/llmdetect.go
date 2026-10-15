@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,52 +97,44 @@ const classifyToolName = "classify_log_fields"
 // (validateClassification) — a model claim that doesn't hold up is
 // dropped, never passed through as if confirmed.
 func (c *BedrockClassifier) Classify(ctx context.Context, det *Detection) (*ClassifierResult, error) {
-	lines := det.StrippedLines
-	if len(lines) == 0 {
-		lines = det.Lines
+	out, lines, err := c.classifyRaw(ctx, det)
+	if err != nil {
+		return nil, err
 	}
+	if out == nil {
+		return &ClassifierResult{}, nil
+	}
+	return validateClassification(out, lines), nil
+}
+
+// classifyRaw is the model call alone: its unverified proposals and the
+// lines they were made against. Split from Classify so tests can see what the
+// model said before verification decided what to keep.
+func (c *BedrockClassifier) classifyRaw(ctx context.Context, det *Detection) (*classifyToolResponse, []string, error) {
+	lines := det.Lines
 	if len(lines) > 30 {
 		lines = lines[:30]
 	}
 	if len(lines) == 0 {
-		return &ClassifierResult{}, nil
+		return nil, nil, nil
 	}
 
-	resp, err := c.client.Converse(ctx, &bedrockruntime.ConverseInput{
-		ModelId: aws.String(c.modelID),
-		Messages: []brtypes.Message{
-			{
-				Role:    brtypes.ConversationRoleUser,
-				Content: []brtypes.ContentBlock{&brtypes.ContentBlockMemberText{Value: buildClassifyPrompt(det, lines)}},
-			},
-		},
-		System: []brtypes.SystemContentBlock{
-			&brtypes.SystemContentBlockMemberText{Value: classifySystemPrompt},
-		},
-		ToolConfig: &brtypes.ToolConfiguration{
-			Tools:      []brtypes.Tool{&brtypes.ToolMemberToolSpec{Value: classifyToolSpec()}},
-			ToolChoice: &brtypes.ToolChoiceMemberAny{},
-		},
-		InferenceConfig: &brtypes.InferenceConfiguration{
-			Temperature: aws.Float32(0),
-			MaxTokens:   aws.Int32(2048),
-		},
-	})
+	resp, err := c.client.Converse(ctx, classifyConverseInput(c.modelID, det, lines))
 	if err != nil {
-		return nil, fmt.Errorf("bedrock converse: %w", err)
+		return nil, nil, fmt.Errorf("bedrock converse: %w", err)
 	}
 
 	raw, err := extractToolUseInput(resp)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var out classifyToolResponse
-	if err := raw.UnmarshalSmithyDocument(&out); err != nil {
-		return nil, fmt.Errorf("decode classifier tool response: %w", err)
+	if err := decodeToolInput(raw, &out); err != nil {
+		return nil, nil, fmt.Errorf("decode classifier tool response: %w", err)
 	}
 
-	return validateClassification(&out, lines), nil
+	return &out, lines, nil
 }
 
 // extractToolUseInput pulls the tool_use content block's Input document
@@ -160,6 +152,18 @@ func extractToolUseInput(resp *bedrockruntime.ConverseOutput) (brdoc.Interface, 
 		}
 	}
 	return nil, fmt.Errorf("model response had no tool_use block (stop reason %s)", resp.StopReason)
+}
+
+// decodeToolInput decodes a tool-use input document into out through its JSON
+// form. The document's own UnmarshalSmithyDocument is not used: it ignores
+// `json` struct tags, so a multi-word key like field_index never reached its
+// field and every proposal came back with nothing to locate it by.
+func decodeToolInput(raw interface{ MarshalSmithyDocument() ([]byte, error) }, out any) error {
+	b, err := raw.MarshalSmithyDocument()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, out)
 }
 
 // classifyToolResponse mirrors classifyToolSpec's JSON schema.
@@ -222,7 +226,7 @@ func validateClassification(t *classifyToolResponse, lines []string) *Classifier
 	result := &ClassifierResult{}
 
 	if t.Timestamp != nil && t.Timestamp.Present {
-		if c := validateTimestampField(t.Timestamp, lines); c != nil {
+		if c := verifyTimestampProposal(t.Timestamp, lines); c != nil {
 			result.Timestamp = c
 		}
 	}
@@ -231,7 +235,7 @@ func validateClassification(t *classifyToolResponse, lines []string) *Classifier
 		if role.src == nil || !role.src.Present {
 			continue
 		}
-		if c := validateTagField(role.src, lines); c != nil {
+		if c := verifyTagProposal(role.src, ProbeField(role.name), lines); c != nil {
 			*role.dst = c
 		} else {
 			log.Printf("classify: dropping unverified %s candidate: %+v", role.name, role.src)
@@ -242,8 +246,8 @@ func validateClassification(t *classifyToolResponse, lines []string) *Classifier
 }
 
 // minVerifyHits/minVerifyRatio: a candidate must resolve on at least this
-// many lines, and on this fraction of the lines it was even eligible to
-// match (positional: line has enough fields; JSON path: line parses as
+// many lines, and (for timestamp and level; see tagMinRatio) on this fraction
+// of the lines it was even eligible to match (positional: line has enough fields; JSON path: line parses as
 // JSON; whole-line search: always eligible). Mirrors the heuristic
 // detectors' own thresholds (detect.go's >50% timestamp / >1/3 level).
 const (
@@ -251,7 +255,11 @@ const (
 	minVerifyRatio = 0.5
 )
 
-func validateTimestampField(f *timestampField, lines []string) *TimestampCandidate {
+// verifyTimestampProposal checks a model's timestamp proposal by running it
+// through the real parser (evalExtractor) over the sample, exactly as the
+// probe checks a user-built rule: a proposal is only as good as what the
+// parser extracts with it. Returns nil if it doesn't verify.
+func verifyTimestampProposal(f *timestampField, lines []string) *TimestampCandidate {
 	if f.Strftime == "" {
 		return nil
 	}
@@ -261,161 +269,115 @@ func validateTimestampField(f *timestampField, lines []string) *TimestampCandida
 		return nil
 	}
 
-	if f.JSONPath != "" {
-		segs, err := compileJSONPath(f.JSONPath)
-		if err != nil {
-			log.Printf("classify: dropping timestamp candidate, bad json_path %q: %v", f.JSONPath, err)
-			return nil
-		}
-		hits, eligible := 0, 0
-		for _, line := range lines {
-			body, ok := parseJSONBody(line)
-			if !ok {
-				continue
-			}
-			eligible++
-			val, ok := evalJSONPath(body, segs)
-			if !ok {
-				continue
-			}
-			str, ok := val.(string)
-			if !ok {
-				continue
-			}
-			if _, err := time.Parse(layout, str); err == nil {
-				hits++
-			}
-		}
-		if !verifies(hits, eligible) {
-			return nil
-		}
-		return &TimestampCandidate{JSONPath: f.JSONPath, Format: layout, Sample: f.SampleValue}
-	}
-
-	if f.FieldIndex < 1 {
+	ex := ProbeExtractor{TimestampFormat: layout}
+	cand := &TimestampCandidate{Format: layout, Sample: f.SampleValue}
+	switch {
+	case f.JSONPath != "":
+		ex.Field = f.JSONPath
+		cand.JSONPath = f.JSONPath
+	case f.FieldIndex >= 1:
+		spans := max(f.SpanFields, 1)
+		ex.Field, ex.TimestampFields = strconv.Itoa(f.FieldIndex), spans
+		ex.Spec = derivedFrame(lines, f.FieldIndex, spans)
+		cand.FieldIndex, cand.SpanFields = f.FieldIndex, spans
+	default:
 		return nil
 	}
-	spans := f.SpanFields
-	if spans < 1 {
-		spans = 1
+	if !proposalVerifies(ProbeTimestamp, lines, ex, minVerifyRatio) {
+		return nil
 	}
-	hits, eligible := 0, 0
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if f.FieldIndex-1+spans > len(fields) {
-			continue
-		}
-		eligible++
-		val := strings.Join(fields[f.FieldIndex-1:f.FieldIndex-1+spans], " ")
-		val = strings.TrimPrefix(val, "[")
-		val = strings.TrimRight(val, "]:")
-		if _, err := time.Parse(layout, val); err == nil {
+	return cand
+}
+
+// verifyTagProposal is verifyTimestampProposal for level, trace and span
+// fields. A JSON-path proposal's pattern is dropped: the parser never
+// applies a pattern to a JSON path, so keeping it would describe an
+// extraction ingest doesn't perform.
+func verifyTagProposal(f *tagField, field ProbeField, lines []string) *FieldCandidate {
+	ex, ok := tagExtractor(lines, f.FieldIndex, f.JSONPath, f.ExtractPattern)
+	if !ok {
+		return nil
+	}
+	if !proposalVerifies(field, lines, ex, tagMinRatio(string(field))) {
+		return nil
+	}
+	// The candidate mirrors the extractor: a JSON-path proposal carries no
+	// pattern (the parser never applies one to a JSON path).
+	cand := &FieldCandidate{Sample: f.SampleValue, JSONPath: f.JSONPath, Pattern: ex.Pattern}
+	if ex.Field != "none" && f.JSONPath == "" {
+		cand.FieldIndex = f.FieldIndex
+	}
+	return cand
+}
+
+// tagExtractor turns a model's (field index | JSON path | whole-line pattern)
+// proposal for a level/trace/span value into the extractor it describes, in
+// the schema's own vocabulary. It is the one place that mapping lives, for
+// detection-time proposals and for retry proposals alike. A JSON path drops
+// any pattern: the parser never applies one to a JSON path, so keeping it
+// would describe an extraction ingest does not perform.
+func tagExtractor(lines []string, fieldIndex int, jsonPath, pattern string) (ProbeExtractor, bool) {
+	switch {
+	case jsonPath != "":
+		return ProbeExtractor{Field: jsonPath}, true
+	case fieldIndex != 0:
+		return ProbeExtractor{Field: strconv.Itoa(fieldIndex), Pattern: pattern, Spec: derivedFrame(lines, fieldIndex, 1)}, true
+	case pattern != "":
+		// Whole-line search: no field to anchor on (schema.go's TraceIDPattern convention).
+		return ProbeExtractor{Field: "none", Pattern: pattern}, true
+	}
+	return ProbeExtractor{}, false
+}
+
+// proposalVerifies applies ex with the real parser (strict about level
+// patterns) and reports whether it extracts a value on enough of the lines.
+func proposalVerifies(f ProbeField, lines []string, ex ProbeExtractor, minRatio float64) bool {
+	vals, err := evalExtractor(f, ProbeBase{}, lines, ex, true)
+	if err != nil {
+		return false // bad regex or JSON path
+	}
+	hits := 0
+	for _, v := range vals {
+		if v != "" {
 			hits++
 		}
 	}
-	if !verifies(hits, eligible) {
-		return nil
-	}
-	return &TimestampCandidate{FieldIndex: f.FieldIndex, SpanFields: spans, Format: layout, Sample: f.SampleValue}
+	return verifies(hits, len(lines), minRatio)
 }
 
-func validateTagField(f *tagField, lines []string) *FieldCandidate {
-	var pat *regexp.Regexp
-	if f.ExtractPattern != "" {
-		re, err := regexp.Compile(f.ExtractPattern)
-		if err != nil {
-			log.Printf("classify: dropping candidate, bad extract_pattern %q: %v", f.ExtractPattern, err)
-			return nil
-		}
-		pat = re
-	}
-
-	switch {
-	case f.JSONPath != "":
-		segs, err := compileJSONPath(f.JSONPath)
-		if err != nil {
-			log.Printf("classify: dropping candidate, bad json_path %q: %v", f.JSONPath, err)
-			return nil
-		}
-		hits, eligible := 0, 0
-		for _, line := range lines {
-			body, ok := parseJSONBody(line)
-			if !ok {
-				continue
-			}
-			eligible++
-			if str, ok := jsonStringAt(body, true, segs); ok && matchesPattern(pat, str) {
-				hits++
-			}
-		}
-		if !verifies(hits, eligible) {
-			return nil
-		}
-		return &FieldCandidate{JSONPath: f.JSONPath, Pattern: f.ExtractPattern, Sample: f.SampleValue}
-
-	case f.FieldIndex >= 1:
-		hits, eligible := 0, 0
-		for _, line := range lines {
-			fields := strings.Fields(line)
-			if f.FieldIndex > len(fields) {
-				continue
-			}
-			eligible++
-			val := strings.Trim(fields[f.FieldIndex-1], "[]():")
-			if matchesPattern(pat, val) {
-				hits++
-			}
-		}
-		if !verifies(hits, eligible) {
-			return nil
-		}
-		return &FieldCandidate{FieldIndex: f.FieldIndex, Pattern: f.ExtractPattern, Sample: f.SampleValue}
-
-	case pat != nil:
-		// Whole-line search: no field to anchor on, the pattern alone
-		// has to find the value somewhere in the line — schema.go's
-		// documented TraceIDPattern convention.
-		hits := 0
-		for _, line := range lines {
-			if m := pat.FindStringSubmatch(line); len(m) > 1 {
-				hits++
-			}
-		}
-		if !verifies(hits, len(lines)) {
-			return nil
-		}
-		return &FieldCandidate{Pattern: f.ExtractPattern, Sample: f.SampleValue}
-	}
-
-	return nil
+func verifies(hits, eligible int, minRatio float64) bool {
+	return hits >= minVerifyHits && eligible > 0 && float64(hits)/float64(eligible) >= minRatio
 }
 
-func matchesPattern(pat *regexp.Regexp, val string) bool {
-	if pat == nil {
-		return val != ""
+// tagMinRatio is the fraction of eligible lines a candidate must resolve on.
+// Every line has a level, so a level that shows up on a minority of lines is
+// a coincidence. Trace and span fields are different: they appear only on the
+// lines that belong to a request or span (health checks and startup chatter
+// carry none), so a handful of hits is what a real one looks like, and the
+// user reviews the result (with its hit count) before accepting it.
+func tagMinRatio(role string) float64 {
+	if role == "level" {
+		return minVerifyRatio
 	}
-	m := pat.FindStringSubmatch(val)
-	return len(m) > 1
-}
-
-func verifies(hits, eligible int) bool {
-	return hits >= minVerifyHits && eligible > 0 && float64(hits)/float64(eligible) >= minVerifyRatio
+	return 0
 }
 
 // classifySystemPrompt explains the task once; buildClassifyPrompt adds
 // the per-sample specifics (format, JSON examples, raw lines).
-const classifySystemPrompt = `You classify a sample of application/server log lines to help configure a log parser. For each of seven fields (timestamp, level, trace_id, span_name, span_id, parent_span_id, duration_ns), decide whether it's present in the sample and, if so, how to extract it.
+const classifySystemPrompt = `You classify a sample of application/server log lines to help configure a log parser. For each of seven fields (timestamp, level, trace_id, span_name, span_id, parent_span_id, duration_ns), decide whether it's present in the sample and, if so, how to extract it. A field need not be on every line: trace_id and the span fields typically appear only on request or span lines, not on health checks or startup output, so propose one whenever at least two lines carry it, even if most lines don't. The level, by contrast, is on essentially every line.
 
 Two ways to locate a field:
-  - Positional: field_index is the 1-based index of the whitespace-delimited field (after any leading envelope has already been stripped for you).
+  - Positional: field_index is the 1-based index of the whitespace-delimited field.
   - JSON path: json_path like ".context.trace_id" or ".tags[0].value" — use this whenever the line (or its JSON tail) is JSON and the value lives inside it, including nested objects and arrays. Leave field_index at 0 when using json_path.
 
-For trace_id/span_name/span_id/parent_span_id/duration_ns, if the value isn't cleanly at one field index or JSON path but appears as a trailing "key=value" tag whose position varies line to line (e.g. "... trace_id=abc123" at the end of a variable-length line), leave field_index at 0 and json_path empty, and give extract_pattern as a regex with exactly one capture group that finds it anywhere in the line (e.g. "trace_id=(\\S+)"). extract_pattern may also be used to refine a specific field_index/json_path (e.g. a Celery-style "INFO/MainProcess" field where the pattern "^(\\w+)/" pulls out just "INFO").
+For trace_id/span_name/span_id/parent_span_id/duration_ns, if the value isn't cleanly at one field index or JSON path but appears as a trailing "key=value" tag whose position varies line to line (e.g. "... key=abc123" at the end of a variable-length line), leave field_index at 0 and json_path empty, and give extract_pattern as a regex with exactly one capture group that finds it anywhere in the line (e.g. "key=(\\S+)"). extract_pattern may also be used to refine a specific field_index/json_path (e.g. a field holding "VALUE/other" where the pattern "^(\\w+)/" pulls out just "VALUE").
 
-These are examples of conventions you might see, not the only ones — look at the actual sample:
-  - trace/correlation IDs: trace_id=, X-Request-Id, request_id, otel.trace_id, nested context.trace.id
-  - span fields: span_name=/operation=, span_id=, parent_span_id=/parent_id=, duration_ns=/duration_ms=/took_ms=
-  - levels: not just DEBUG/INFO/WARN/ERROR — also SEVERE, NOTICE, numeric severities, framework-specific values like "INFO/MainProcess"
+Every regex is Go (RE2) syntax with exactly ONE capturing group, around the value; any other grouping, alternation included, must be non-capturing, written (?:...).
+
+What each value is, whatever the format of the log:
+  - trace_id: a token that is the same on every line belonging to one request or operation, so those lines can be correlated. It may be a field of its own, a key=value tag, or a nested JSON field.
+  - span fields: the name, id, parent id and duration of a unit of work, if the lines describe such units.
+  - level: the severity of the message, in whatever words or numbers this log uses. The field may hold more than the level (the level, a delimiter, then unrelated text): then give extract_pattern, a regex with one capture group that captures only the level.
 
 For timestamp, give field_index or json_path the same way, plus a strftime pattern (e.g. "%Y-%m-%d %H:%M:%S,%f", "%Y-%m-%dT%H:%M:%S%z") describing the value's format. Use %f for a fractional-second field written as exactly 6 digits (microseconds); use %3f for exactly 3 digits (milliseconds, the common case for comma-separated fractional seconds like "10:15:03,102"); use %9f for 9 digits (nanoseconds). sample_value should be the literal value you found for every present field, for traceability.
 
@@ -434,13 +396,13 @@ func classifyToolSpec() brtypes.ToolSpecification {
 var tagFieldSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
-		"present":         map[string]any{"type": "boolean"},
-		"field_index":     map[string]any{"type": "integer"},
-		"json_path":       map[string]any{"type": "string"},
-		"extract_pattern": map[string]any{"type": "string"},
-		"sample_value":    map[string]any{"type": "string"},
+		"present":         map[string]any{"type": "boolean", "description": "true if this value appears on at least two lines of the sample"},
+		"field_index":     map[string]any{"type": "integer", "description": "1-based index of the whitespace-delimited field that holds the value; 0 when the value is located by json_path or by extract_pattern across the whole line"},
+		"json_path":       map[string]any{"type": "string", "description": "JSON path such as .a.b.c when the line (or its JSON tail) is JSON; empty otherwise"},
+		"extract_pattern": map[string]any{"type": "string", "description": "Go (RE2) regex whose ONLY capturing group yields the value, e.g. key=(\\S+) (other groups must be non-capturing, (?:...)); empty if the whole field is the value"},
+		"sample_value":    map[string]any{"type": "string", "description": "the actual value found on one sample line"},
 	},
-	"required": []string{"present"},
+	"required": []string{"present", "field_index", "json_path", "extract_pattern", "sample_value"},
 }
 
 var classifyJSONSchema = map[string]any{
@@ -449,14 +411,14 @@ var classifyJSONSchema = map[string]any{
 		"timestamp": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"present":      map[string]any{"type": "boolean"},
-				"field_index":  map[string]any{"type": "integer"},
-				"span_fields":  map[string]any{"type": "integer"},
-				"json_path":    map[string]any{"type": "string"},
-				"strftime":     map[string]any{"type": "string"},
-				"sample_value": map[string]any{"type": "string"},
+				"present":      map[string]any{"type": "boolean", "description": "true if the lines carry a timestamp"},
+				"field_index":  map[string]any{"type": "integer", "description": "1-based index of the whitespace-delimited field where the timestamp starts; 0 when json_path is used"},
+				"span_fields":  map[string]any{"type": "integer", "description": "how many whitespace-delimited fields the timestamp covers (2 for \"2026-10-15 12:00:01\")"},
+				"json_path":    map[string]any{"type": "string", "description": "JSON path such as .ts when the line is JSON; empty otherwise"},
+				"strftime":     map[string]any{"type": "string", "description": "strftime pattern of the timestamp, e.g. %Y-%m-%d %H:%M:%S,%3f"},
+				"sample_value": map[string]any{"type": "string", "description": "the actual timestamp text from one line"},
 			},
-			"required": []string{"present"},
+			"required": []string{"present", "field_index", "span_fields", "json_path", "strftime", "sample_value"},
 		},
 		"level":          tagFieldSchema,
 		"trace_id":       tagFieldSchema,
@@ -497,6 +459,17 @@ func buildClassifyPrompt(det *Detection, lines []string) string {
 		}
 	}
 
+	if format != "json" {
+		b.WriteString("Field numbering for the first lines (whitespace-delimited, 1-based; use these numbers for field_index and span_fields):\n")
+		for i, line := range lines {
+			if i == 3 {
+				break
+			}
+			b.WriteString(fieldTable(line) + "\n")
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString("Raw sample lines:\n")
 	for _, line := range lines {
 		if len(line) > 300 {
@@ -506,6 +479,19 @@ func buildClassifyPrompt(det *Detection, lines []string) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// fieldTable numbers a line's whitespace-delimited fields ("1=a 2=b ..."), so
+// the model reads indexes off the page instead of counting them.
+func fieldTable(line string) string {
+	var parts []string
+	for i, f := range strings.Fields(line) {
+		if len(f) > 40 {
+			f = f[:37] + "..."
+		}
+		parts = append(parts, fmt.Sprintf("%d=%s", i+1, f))
+	}
+	return strings.Join(parts, " ")
 }
 
 // strftimeToGoLayout translates a (near-)POSIX strftime pattern into a Go
@@ -617,8 +603,8 @@ func ClassifyAsync(classifier Classifier, lines []string, final bool, onComplete
 			// how to find. Envelope/JSON detection is already in det;
 			// running detectTimestamps/detectLevels again fills in what
 			// the LLM would have replaced.
-			det.detectTimestamps(det.effectiveLines())
-			det.detectLevels(det.effectiveLines())
+			det.detectTimestamps(det.Lines)
+			det.detectCategorical(det.Lines)
 			onComplete(det)
 			return
 		}
@@ -628,18 +614,6 @@ func ClassifyAsync(classifier Classifier, lines []string, final bool, onComplete
 	}()
 
 	return det
-}
-
-// effectiveLines is the lines detectTimestamps/detectLevels/etc. were
-// always meant to run against — StrippedLines when an envelope was
-// stripped, otherwise the cleaned raw lines. Matches Detect's own
-// "stripped := d.StrippedLines; if len(stripped) == 0 { stripped =
-// d.Lines }" convention (detect.go).
-func (d *Detection) effectiveLines() []string {
-	if len(d.StrippedLines) > 0 {
-		return d.StrippedLines
-	}
-	return d.Lines
 }
 
 func applyClassification(det *Detection, r *ClassifierResult) {
@@ -663,5 +637,191 @@ func applyClassification(det *Detection, r *ClassifierResult) {
 	}
 	if r.DurationNs != nil {
 		det.DurationNsCandidates = []FieldCandidate{*r.DurationNs}
+	}
+}
+
+// --- retry proposals --------------------------------------------------------
+
+// maxProposals caps how many candidates one retry call may return; each is
+// verified in turn, and the first that fits the user's marks wins.
+const maxProposals = 3
+
+// proposedExtractor is one candidate in the model's reply: a union of the
+// shapes tagField and timestampField use for detection.
+type proposedExtractor struct {
+	FieldIndex     int    `json:"field_index"`
+	SpanFields     int    `json:"span_fields"`
+	JSONPath       string `json:"json_path"`
+	ExtractPattern string `json:"extract_pattern"`
+	Strftime       string `json:"strftime"`
+}
+
+type proposeToolResponse struct {
+	Candidates []proposedExtractor `json:"candidates"`
+}
+
+// proposalsToExtractors converts the model's candidates into extractors for
+// f, dropping any that are unusable (nothing to locate the value by, or an
+// unsupported timestamp format) and capping the list. They are still
+// unverified; Probe checks each against the user's marks.
+func proposalsToExtractors(lines []string, resp *proposeToolResponse, f ProbeField) []ProbeExtractor {
+	var out []ProbeExtractor
+	for _, c := range resp.Candidates {
+		if len(out) == maxProposals {
+			break
+		}
+		if f == ProbeTimestamp {
+			layout, err := strftimeToGoLayout(c.Strftime)
+			if err != nil || c.Strftime == "" {
+				continue
+			}
+			switch {
+			case c.JSONPath != "":
+				out = append(out, ProbeExtractor{Field: c.JSONPath, TimestampFormat: layout})
+			case c.FieldIndex >= 1:
+				out = append(out, ProbeExtractor{Field: strconv.Itoa(c.FieldIndex), TimestampFormat: layout, TimestampFields: max(c.SpanFields, 1), Spec: derivedFrame(lines, c.FieldIndex, max(c.SpanFields, 1))})
+			}
+			continue
+		}
+		if ex, ok := tagExtractor(lines, c.FieldIndex, c.JSONPath, c.ExtractPattern); ok {
+			out = append(out, ex)
+		}
+	}
+	return out
+}
+
+const proposeToolName = "propose_extractors"
+
+var proposeJSONSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"candidates": map[string]any{
+			"type":     "array",
+			"maxItems": maxProposals,
+			"items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"field_index":     map[string]any{"type": "integer", "description": "1-based index of the whitespace-delimited field holding the value; 0 when json_path or a whole-line extract_pattern locates it"},
+					"span_fields":     map[string]any{"type": "integer", "description": "timestamps only: how many whitespace-delimited fields it covers"},
+					"json_path":       map[string]any{"type": "string", "description": "JSON path such as .a.b.c; empty if the line is not JSON"},
+					"extract_pattern": map[string]any{"type": "string", "description": "Go (RE2) regex whose ONLY capturing group yields the value (other groups must be non-capturing, (?:...)); may use alternation or optional parts; empty if not needed"},
+					"strftime":        map[string]any{"type": "string", "description": "timestamps only: strftime pattern; empty otherwise"},
+				},
+				"required": []string{"field_index", "span_fields", "json_path", "extract_pattern", "strftime"},
+			},
+		},
+	},
+	"required": []string{"candidates"},
+}
+
+const proposeSystemPrompt = `You help configure a log parser. A person has marked, on a sample of log lines, where one value is (and on which lines it is absent). A simple rule did not fit all their marks. Propose up to 3 different extraction rules, best first.
+
+A rule locates the value one of three ways:
+  - field_index: the 1-based index of the whitespace-delimited field, optionally refined by extract_pattern, a Go (RE2) regex with exactly one capture group applied to that field's text. Use this for levels, which cannot be searched for across the line.
+  - json_path: like ".context.trace.id", when the line (or its JSON tail) is JSON.
+  - extract_pattern alone (field_index 0): a Go (RE2) regex with exactly one capture group, searched across the whole line. Use alternation or optional parts when the same value is written in more than one way on different lines (for example key=abc on some lines and KEY: abc on others). The value must be in the ONLY capturing group: any other grouping, alternation included, must be non-capturing, written (?:...). RE2 has no lookahead or backreferences.
+
+For a timestamp, also give strftime (e.g. "%Y-%m-%d %H:%M:%S,%3f"; %3f is milliseconds) and span_fields when it covers more than one whitespace-delimited field.
+
+Every rule must give exactly the marked value on every line marked with one, and nothing on every line marked as having none. Prefer simple, readable rules.`
+
+// buildProposePrompt describes the sample and the user's marks.
+func buildProposePrompt(in ProposeInput) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Value to extract: %s.\n\nSample lines (numbered from 1):\n", probeFieldLabels[in.Field])
+	for i, line := range in.Lines {
+		if len(line) > 300 {
+			line = line[:300] + "..."
+		}
+		fmt.Fprintf(&b, "%d: %s\n", i+1, line)
+	}
+	b.WriteString("\nWhat the person marked:\n")
+	for _, m := range in.Examples {
+		fmt.Fprintf(&b, "  line %d: the value is %q\n", m.Line+1, m.Text)
+	}
+	for _, l := range in.NoValueLines {
+		fmt.Fprintf(&b, "  line %d has no value\n", l+1)
+	}
+	if in.Previous != nil {
+		fmt.Fprintf(&b, "\nThe rule tried before, which did not fit: field=%q pattern=`%s`\n", in.Previous.Field, in.Previous.Pattern)
+	}
+	return b.String()
+}
+
+var probeFieldLabels = map[ProbeField]string{
+	ProbeTimestamp: "timestamp", ProbeLevel: "log level", ProbeTraceID: "trace ID",
+	ProbeSpanName: "span name", ProbeSpanID: "span ID", ProbeParentSpanID: "parent span ID",
+	ProbeDurationNs: "span duration in nanoseconds (an integer)",
+}
+
+// ProposeExtractors asks the model for candidate extractors that fit the
+// user's marks. Its answer is untrusted; Probe verifies every candidate.
+func (c *BedrockClassifier) ProposeExtractors(ctx context.Context, in ProposeInput) ([]ProbeExtractor, error) {
+	out, err := c.proposeRaw(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return proposalsToExtractors(in.Lines, out, in.Field), nil
+}
+
+// proposeRaw is the model call alone (see classifyRaw).
+func (c *BedrockClassifier) proposeRaw(ctx context.Context, in ProposeInput) (*proposeToolResponse, error) {
+	lines := in.Lines
+	if len(lines) > 50 {
+		lines = lines[:50]
+	}
+	in.Lines = lines
+	resp, err := c.client.Converse(ctx, &bedrockruntime.ConverseInput{
+		ModelId: aws.String(c.modelID),
+		Messages: []brtypes.Message{{
+			Role:    brtypes.ConversationRoleUser,
+			Content: []brtypes.ContentBlock{&brtypes.ContentBlockMemberText{Value: buildProposePrompt(in)}},
+		}},
+		System: []brtypes.SystemContentBlock{&brtypes.SystemContentBlockMemberText{Value: proposeSystemPrompt}},
+		ToolConfig: &brtypes.ToolConfiguration{
+			Tools: []brtypes.Tool{&brtypes.ToolMemberToolSpec{Value: brtypes.ToolSpecification{
+				Name:        aws.String(proposeToolName),
+				Description: aws.String("Report candidate extraction rules for the marked value."),
+				InputSchema: &brtypes.ToolInputSchemaMemberJson{Value: brdoc.NewLazyDocument(proposeJSONSchema)},
+			}}},
+			ToolChoice: &brtypes.ToolChoiceMemberAny{},
+		},
+		InferenceConfig: &brtypes.InferenceConfiguration{Temperature: aws.Float32(0), MaxTokens: aws.Int32(1024)},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bedrock converse: %w", err)
+	}
+	raw, err := extractToolUseInput(resp)
+	if err != nil {
+		return nil, err
+	}
+	var out proposeToolResponse
+	if err := decodeToolInput(raw, &out); err != nil {
+		return nil, fmt.Errorf("decode proposer tool response: %w", err)
+	}
+	return &out, nil
+}
+
+// classifyConverseInput is the classification request for a sample.
+func classifyConverseInput(modelID string, det *Detection, lines []string) *bedrockruntime.ConverseInput {
+	return &bedrockruntime.ConverseInput{
+		ModelId: aws.String(modelID),
+		Messages: []brtypes.Message{
+			{
+				Role:    brtypes.ConversationRoleUser,
+				Content: []brtypes.ContentBlock{&brtypes.ContentBlockMemberText{Value: buildClassifyPrompt(det, lines)}},
+			},
+		},
+		System: []brtypes.SystemContentBlock{
+			&brtypes.SystemContentBlockMemberText{Value: classifySystemPrompt},
+		},
+		ToolConfig: &brtypes.ToolConfiguration{
+			Tools:      []brtypes.Tool{&brtypes.ToolMemberToolSpec{Value: classifyToolSpec()}},
+			ToolChoice: &brtypes.ToolChoiceMemberAny{},
+		},
+		InferenceConfig: &brtypes.InferenceConfiguration{
+			Temperature: aws.Float32(0),
+			MaxTokens:   aws.Int32(2048),
+		},
 	}
 }

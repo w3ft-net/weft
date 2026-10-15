@@ -247,3 +247,49 @@ func TestSyslogServer_RejectsMissingTokenPrefix(t *testing.T) {
 		t.Errorf("coordinator IngestStream should never have been called, got %d calls", calls)
 	}
 }
+
+// TestSyslogServer_SamplesSchemalessService: Render services get the same
+// sample bootstrap as Heroku — frames still forward, and the service's
+// auto-onboarded row accumulates them.
+func TestSyslogServer_SamplesSchemalessService(t *testing.T) {
+	srv, s := testServer(t)
+	fake, coordClient := startFakeCoord(t)
+	srv.coordClient = coordClient
+
+	cust, err := s.FindOrCreateOrg(fmt.Sprintf("syslog-sample-%d-%d", os.Getpid(), time.Now().UnixNano()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns, err := s.FindOrCreateNamespace(cust.ID, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _, err := s.CreateAgentToken(cust.ID, ns.ID, "syslog-token", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnsureServiceLogGroup(ns.ID, "sampled-svc"); err != nil {
+		t.Fatal(err)
+	}
+	_, addr := startTestSyslogServer(t, srv)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		fmt.Fprintf(conn, "%s <6>1 2026-09-02T14:08:2%d.000000Z sampled-svc web-9nk6q 1 web-9nk6q - line %d\n", raw, i, i)
+	}
+	conn.Close()
+
+	waitForRows(t, fake, 3)
+	// The connection goroutine accumulates synchronously before each
+	// send, so by the time rows land the sample is written.
+	lg, err := s.FindLogGroup(cust.ID, "test", "sampled-svc")
+	if err != nil || lg == nil {
+		t.Fatalf("FindLogGroup = %v, %v", lg, err)
+	}
+	if lg.SampleCollected != 3 {
+		t.Errorf("SampleCollected = %d, want 3", lg.SampleCollected)
+	}
+}

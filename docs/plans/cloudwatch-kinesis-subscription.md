@@ -602,7 +602,7 @@ burden (see Components to build item 1).
     `req.SourceType` — kinesis calls `CreatePendingKinesisSource`
     directly (no `AWSAccount` row, no role assumption); every other
     value keeps the existing poll-mode path byte-for-byte.
-  - `api/adapter.go`: new `accumulatePendingKinesisSamples`, called
+  - `api/adapter.go`: new `accumulatePendingSamples`, called
     from `IngestHandler` right after `enrichRows`. This is the
     "Schema bootstrap" piece the plan called for above — since there's
     no agent to decide when a sample is "done" (unlike weftd's
@@ -661,7 +661,7 @@ burden (see Components to build item 1).
   counterpart, deliberately smaller: no role/account/external-ID/poll-
   interval fields (nothing of ours to assume a role into — Firehose
   pushes to us) and no "pull sample" step (there's nothing to poll on
-  demand; `accumulatePendingKinesisSamples` fills the sample
+  demand; `accumulatePendingSamples` fills the sample
   asynchronously from the customer's real Firehose deliveries once their
   CFN stack is live). It only collects service/log_group/region and
   calls the already-existing `POST /api/sources/kinesis`

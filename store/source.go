@@ -93,6 +93,10 @@ type LogGroup struct {
 	// Status == StatusSampling, so the UI/CLI can report
 	// "<source> hasn't emitted enough lines to sample yet (N/50)".
 	SampleCollected int
+	// SampleUpdatedAt is when the sample last changed (server clock): the
+	// latest lines arriving, or a resample request resetting it. A
+	// still-filling sample shows how live it is from this.
+	SampleUpdatedAt *time.Time
 	// ResampleRequestedAt is set when a user asks for a fresh sample of
 	// an already-configured source. The row stays StatusConfigured and
 	// keeps ingesting on its current schema; the agent re-samples
@@ -333,16 +337,28 @@ func (s *Store) allLogGroups(statuses ...LogGroupStatus) ([]LogGroupJoined, erro
 	return results, err
 }
 
-// CountPendingLogGroups counts an org's sources that are still sampling or
-// awaiting configuration — the same set the pending list returns, without
-// loading the rows (and their sample/detection blobs).
+// AwaitingSchema scopes a log_groups query to sources a human still has to
+// give a schema: weftd/kinesis rows that are sampling or pending, plus
+// raw-push rows that are already live (configured) but schemaless and have
+// collected lines (or had their sample reset by a resample request) — their
+// sample accumulates while they keep ingesting. A
+// source with a schema never matches, so a weftd resample of a configured
+// source doesn't re-raise the notification.
+func AwaitingSchema(q *gorm.DB) *gorm.DB {
+	return q.Where(`log_groups.status IN ? OR (log_groups.status = ? AND COALESCE(log_groups.schema_yaml, '') = '' AND (log_groups.sample_collected > 0 OR log_groups.sample_updated_at IS NOT NULL))`,
+		[]LogGroupStatus{StatusSampling, StatusPending}, StatusConfigured)
+}
+
+// CountPendingLogGroups counts an org's sources awaiting a schema — the same
+// set the pending list returns, without loading the rows (and their
+// sample/detection blobs).
 func (s *Store) CountPendingLogGroups(orgID OrgID) (int, error) {
 	var n int64
 	err := s.db.
 		Table("log_groups").
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
-		Where("namespaces.org_id = ? AND log_groups.status IN ?",
-			orgID, []LogGroupStatus{StatusSampling, StatusPending}).
+		Where("namespaces.org_id = ?", orgID).
+		Scopes(AwaitingSchema).
 		Count(&n).Error
 	return int(n), err
 }
@@ -380,10 +396,13 @@ func (s *Store) CountPendingLogGroups(orgID OrgID) (int, error) {
 // NULL → default via ServicesForBucket's COALESCE). It's the auto-onboard
 // path for raw producers that never sample: the row is the canonical
 // (namespace, service) mapping shards inherit at christen, created
-// already-configured (no parsing handshake — raw lines are queryable as
-// is). No-op if a log_group for (namespaceID, service) already exists, so
-// a weftd/cloudwatch source that later also pushes directly isn't
-// clobbered.
+// already-configured (ingest never waits on a schema — raw lines are
+// queryable as is). It is created with a resample requested, which is how a
+// schemaless source gets its sample: the ingest path accumulates live lines
+// into the row (accumulatePendingSamples) while it keeps ingesting, and the
+// full sample surfaces it for schema review (AwaitingSchema). No-op if a
+// log_group for (namespaceID, service) already exists, so a
+// weftd/cloudwatch source that later also pushes directly isn't clobbered.
 func (s *Store) EnsureServiceLogGroup(namespaceID uint, service string) error {
 	var lg LogGroup
 	err := s.db.Where("namespace_id = ? AND app = ?", namespaceID, service).First(&lg).Error
@@ -393,18 +412,21 @@ func (s *Store) EnsureServiceLogGroup(namespaceID uint, service string) error {
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
+	now := time.Now()
 	return s.db.Create(&LogGroup{
-		NamespaceID:  namespaceID,
-		Service:      service,
-		Status:       StatusConfigured,
-		SourceType:   SourceTypeDirect,
-		LogGroupName: service,
-		Region:       "local",
-		Enabled:      true,
+		NamespaceID:         namespaceID,
+		Service:             service,
+		Status:              StatusConfigured,
+		SourceType:          SourceTypeDirect,
+		LogGroupName:        service,
+		Region:              "local",
+		Enabled:             true,
+		ResampleRequestedAt: &now,
 	}).Error
 }
 
 func (s *Store) UpsertPendingLogGroup(namespaceID uint, service, instance, deployment, sampleJSON, detectionJSON string, collected int, partial bool) error {
+	now := time.Now()
 	status := StatusPending
 	if partial {
 		status = StatusSampling
@@ -425,6 +447,7 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, service, instance, deplo
 			Sample:          sampleJSON,
 			Detection:       detectionJSON,
 			SampleCollected: collected,
+			SampleUpdatedAt: &now,
 		}
 		return s.db.Create(&lg).Error
 	}
@@ -439,25 +462,76 @@ func (s *Store) UpsertPendingLogGroup(namespaceID uint, service, instance, deplo
 		// disturbing status/schema (ingestion continues). The final
 		// submit clears the flag so the new sample surfaces for review.
 		updates := map[string]any{
-			"instance":         instance,
-			"deployment":       deployment,
-			"sample":           sampleJSON,
-			"detection":        detectionJSON,
-			"sample_collected": collected,
+			"instance":          instance,
+			"deployment":        deployment,
+			"sample":            sampleJSON,
+			"detection":         detectionJSON,
+			"sample_collected":  collected,
+			"sample_updated_at": now,
 		}
 		if !partial {
 			updates["resample_requested_at"] = nil
 		}
 		return s.db.Model(&lg).Updates(updates).Error
 	}
-	return s.db.Model(&lg).Updates(map[string]any{
-		"status":           status,
-		"instance":         instance,
-		"deployment":       deployment,
-		"sample":           sampleJSON,
-		"detection":        detectionJSON,
-		"sample_collected": collected,
-	}).Error
+	updates := map[string]any{
+		"status":            status,
+		"instance":          instance,
+		"deployment":        deployment,
+		"sample":            sampleJSON,
+		"detection":         detectionJSON,
+		"sample_collected":  collected,
+		"sample_updated_at": now,
+	}
+	if !partial {
+		updates["resample_requested_at"] = nil // a final sample ends any resample
+	}
+	return s.db.Model(&lg).Updates(updates).Error
+}
+
+// ErrAlreadySampling is RequestResample's answer for a source still filling
+// its first sample: it is already collecting, so there is nothing to restart.
+var ErrAlreadySampling = errors.New("a sample is already being collected")
+
+// RequestResample asks for a fresh sample of (namespaceID, service), for when
+// the lines sampled so far (process startup, say) don't show the values a
+// schema needs to extract. It works on pending and configured sources:
+//
+//   - A pending source goes back to StatusSampling with its sample cleared.
+//   - A configured source keeps ingesting on its current schema.
+//
+// Either way ResampleRequestedAt is set, which is what a waiting weftd agent
+// polls for. Kinesis and direct sources have no agent to sample for them: the
+// ingest path fills their sample from live rows (accumulateSample) and stops
+// at SampleTarget, so their old sample and count are reset here too.
+//
+// Returns gorm.ErrRecordNotFound for a missing source and ErrAlreadySampling
+// for one that is already collecting a sample (its first, or a resample).
+func (s *Store) RequestResample(namespaceID uint, service string) error {
+	var lg LogGroup
+	err := s.db.Where("namespace_id = ? AND app = ?", namespaceID, service).First(&lg).Error
+	if err != nil {
+		return err
+	}
+	// Already collecting: still on the first sample, or a resample is in
+	// flight (flag set; a direct source stays "configured" throughout).
+	if lg.Status == StatusSampling || (lg.Status == StatusConfigured && lg.ResampleRequestedAt != nil) {
+		return ErrAlreadySampling
+	}
+	updates := map[string]any{"resample_requested_at": time.Now()}
+	if lg.Status == StatusPending {
+		updates["status"] = StatusSampling
+	}
+	if lg.Status == StatusPending || lg.SourceType == SourceTypeKinesis || lg.SourceType == SourceTypeDirect {
+		updates["sample"] = nil
+		updates["detection"] = nil
+		updates["sample_collected"] = 0
+		// Stamped, not cleared: "the sample changed (was reset) now". This is
+		// also what keeps a schemaless direct source listed (AwaitingSchema)
+		// while it has collected nothing yet.
+		updates["sample_updated_at"] = time.Now()
+	}
+	return s.db.Model(&lg).Updates(updates).Error
 }
 
 // UpdateLogGroupDetection writes a freshly (LLM-)classified Detection for

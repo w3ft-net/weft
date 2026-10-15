@@ -118,15 +118,19 @@ creates CloudWatch push sources (weftd sources register themselves the
 first time the agent connects; there is no `weft source add` equivalent
 for them). See `docs/ingestion-weftd.md` for the sampling → pending →
 configured lifecycle both source types share, and
-`docs/ingestion-cloudwatch.md` for the CloudWatch push design.
+`docs/ingestion-cloudwatch.md` for the CloudWatch push design. Direct
+sources (Heroku, Render) are created automatically on first ingest and
+sample live traffic while staying configured and ingesting raw; they appear
+in `weft source pending` once they have lines and no schema.
 
 - `weft source add --namespace N --service NAME --log-group GROUP [--region REGION]` — register a CloudWatch log group→service mapping, `StatusPending`. This only records the mapping; it does not deploy anything in your AWS account — see `docs/manual/cloudwatch.md` for the CloudFormation stack that actually forwards events. `--region` defaults to `us-east-2`.
-- `weft source list` — list every configured and pending source for the caller's customer, with type (`weftd`/`kinesis`/`direct`), status, and the underlying log group / agent path.
+- `weft source list` — list every configured and pending source for the caller's customer, with type (`weftd`/`kinesis`/`direct`), status, the weftd versions reading it (`AGENTS`: a range and host count, `unknown` for a weftd source no agent has reported on, `-` for pushed sources), and the underlying log group / agent path.
+- `weft source migrate <ns/service> --lines FILE|- [--apply --backup-dir DIR]` — rewrite a source's legacy-form schema (a positional field with no `extract` entry) to the explicit one. It replays the lines in FILE (raw lines; export recent ones with `weft sh -c 'tail -n 500 /log/<ns>/<service>/<kind>.log' > lines.txt`) through both schemas and reports whether they read identically; it applies only if at least 20 lines agree on every value. `--apply` saves the old schema in `--backup-dir` first (required; keep it out of git) and stores the new one through the normal configure path, so the agent-version guard applies. A schema that names an envelope is reported as blocked.
 - `weft source remove --namespace N --service NAME` — delete a source. Already-ingested rows stay in the shards; only future ingestion stops.
-- `weft source pending [--namespace N]` — list sources awaiting configuration. A source still accumulating its sample shows as `sampling` with an `N/target` count.
-- `weft source configure <ns/service>` — review the sample and approve a schema (interactive). Also used to swap the schema after a resample — the source keeps ingesting until the new schema is approved.
+- `weft source pending [--namespace N] [--watch]` — list sources awaiting configuration. A source still accumulating its sample shows as `sampling` with a progress meter, an `N/target` count, how long ago its newest line arrived, and a preview of that line. `--watch` refreshes every 2s until every sample is full.
+- `weft source configure <ns/service>` — review the sample and approve a schema (interactive). For each value (timestamp, level, trace ID, and optionally the span fields) the wizard shows detection's guess highlighted on the sample; if you reject it, it asks whether you expect the value on lines like these, lets you move through the lines to find one that has it, and has you highlight it with a vim-style cursor (`h l w b e 0 $` to move, `v` to select, `enter` to accept, `j` for "not on this line"). It builds an extraction rule from the highlight, applies it to the whole sample, and lets you flag lines it missed (`m`) or got wrong (`x`) until it is right. Also used to swap the schema after a resample — the source keeps ingesting until the new schema is approved.
 - `weft source schema <ns/service>` — print the live schema for a configured source. For a source still sampling, prints `<source> hasn't emitted enough lines to sample yet (N/target)` instead.
-- `weft source resample <ns/service>` — request a fresh sample of an already-configured source. Ingestion continues on the current schema while the agent re-samples; the new sample appears for review when it's ready.
+- `weft source resample <ns/service>` — request a fresh sample of a pending or configured source, for when the lines sampled so far (process startup, say) don't show the values a schema needs. The new sample is drawn from lines written after the request, not the head of the file. A configured source keeps ingesting on its current schema meanwhile; a pending one goes back to `sampling`. Refused with a conflict while a source is still filling its first sample.
 
 ## Open questions
 

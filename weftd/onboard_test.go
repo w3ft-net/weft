@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc"
+
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // TestSampleLinesAccumulatesToTarget pins the "1 line each" bug: a slow
@@ -35,7 +39,7 @@ func TestSampleLinesAccumulatesToTarget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	lines, err := SampleLines(ctx, logPath, 5, nil)
+	lines, err := SampleLines(ctx, logPath, 5, false, nil)
 	if err != nil {
 		t.Fatalf("SampleLines: %v", err)
 	}
@@ -59,7 +63,7 @@ func TestSampleUnitLines(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	lines, err := SampleUnitLines(context.Background(), "django.service", 50, nil)
+	lines, err := SampleUnitLines(context.Background(), "django.service", 50, false, nil)
 	if err != nil {
 		t.Fatalf("SampleUnitLines: %v", err)
 	}
@@ -81,11 +85,66 @@ func TestSampleUnitLinesCap(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	lines, err := SampleUnitLines(context.Background(), "x.service", 2, nil)
+	lines, err := SampleUnitLines(context.Background(), "x.service", 2, false, nil)
 	if err != nil {
 		t.Fatalf("SampleUnitLines: %v", err)
 	}
 	if len(lines) != 2 {
 		t.Fatalf("expected cap of 2, got %d: %v", len(lines), lines)
+	}
+}
+
+// A fresh (re)sample must skip what is already in the file: the head holds
+// the startup chatter whose absence of useful fields is why a resample was
+// asked for in the first place.
+func TestSampleLinesFreshSkipsExistingContent(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "app.log")
+	if err := os.WriteFile(logPath, []byte("boot 1\nboot 2\nboot 3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		f.WriteString("req 1 trace_id=a\nreq 2 trace_id=b\n")
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	lines, err := SampleLines(ctx, logPath, 2, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 || lines[0] != "req 1 trace_id=a" || lines[1] != "req 2 trace_id=b" {
+		t.Fatalf("fresh sample = %v, want only the lines written after sampling began", lines)
+	}
+}
+
+// versionRecorder captures the request weftd sends when it checks a source.
+type versionRecorder struct {
+	pb.WeftCoordinatorClient
+	got *pb.GetSourceStatusRequest
+}
+
+func (r *versionRecorder) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusRequest, _ ...grpc.CallOption) (*pb.GetSourceStatusResponse, error) {
+	r.got = req
+	return &pb.GetSourceStatusResponse{Status: "unknown"}, nil
+}
+
+// The agent says what it is every time it polls a source, so the server can
+// tell which agents are reading a schema.
+func TestCheckSourceStatusReportsAgentVersionAndHost(t *testing.T) {
+	AgentVersion, AgentInstance = "0.28.0", "web-1"
+	defer func() { AgentVersion, AgentInstance = "", "" }()
+	rec := &versionRecorder{}
+	if _, err := CheckSourceStatus(context.Background(), rec, "wft_x", "api"); err != nil {
+		t.Fatal(err)
+	}
+	if rec.got.AgentVersion != "0.28.0" || rec.got.Instance != "web-1" || rec.got.Service != "api" {
+		t.Errorf("request = %+v, want the agent's version and host alongside the service", rec.got)
 	}
 }

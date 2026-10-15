@@ -2,8 +2,9 @@
 
 import namespaces from './namespaces';
 import teams from './teams';
+import overview from './overview';
 import installWeftd from './install-weftd';
-import connectHeroku from './connect-heroku';
+import heroku from './heroku';
 import connectRender from './connect-render';
 import connectCloudwatch from './connect-cloudwatch';
 import schemaSetup from './schema-setup';
@@ -54,8 +55,9 @@ export const manualCategories: readonly ManualCategory[] = [
 export const manualSections: readonly ManualSection[] = [
   namespaces,
   teams,
+  overview,
   installWeftd,
-  connectHeroku,
+  heroku,
   connectRender,
   connectCloudwatch,
   schemaSetup,

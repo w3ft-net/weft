@@ -65,7 +65,7 @@ func TestIngestHandler_CloudWatch_AccumulatesPendingSample(t *testing.T) {
 		t.Errorf("Sample = %v, want [line one, line two]", sample)
 	}
 	if lg.Detection == "" {
-		t.Error("Detection is empty; accumulatePendingKinesisSamples should run ingest.Detect on the accumulated sample")
+		t.Error("Detection is empty; accumulatePendingSamples should run ingest.Detect on the accumulated sample")
 	}
 
 	// A second batch appends rather than overwriting.
@@ -91,7 +91,7 @@ func TestIngestHandler_CloudWatch_AccumulatesPendingSample(t *testing.T) {
 
 // TestIngestHandler_CloudWatch_ConfiguredSourceNotResampled: once a
 // source is StatusConfigured, ingest traffic must not touch its
-// Sample/Detection at all — accumulatePendingKinesisSamples is
+// Sample/Detection at all — accumulatePendingSamples is
 // bootstrap-only, not a resample mechanism (resample is its own
 // explicit, human-requested flow elsewhere).
 func TestIngestHandler_CloudWatch_ConfiguredSourceNotResampled(t *testing.T) {

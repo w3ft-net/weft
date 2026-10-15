@@ -12,6 +12,7 @@ import (
 
 	"google.golang.org/grpc/metadata"
 
+	"github.com/graybeardcorp/weft/ingest"
 	ingsyslog "github.com/graybeardcorp/weft/ingest/syslog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
@@ -24,6 +25,12 @@ import (
 // vanished without a FIN) in bounded time. Reset on every frame, not
 // just at connect.
 const syslogIdleTimeout = 5 * time.Minute
+
+// syslogSampleRecheck is how long a connection waits before asking again
+// whether a service that wasn't collecting a schema sample has started
+// (a new service is only onboarded once the coordinator sees its first
+// row; a resample can be requested at any time).
+const syslogSampleRecheck = 10 * time.Second
 
 // SyslogServer is a TCP syslog listener for exactly one
 // ingest/syslog.Producer. TLS terminates upstream at the NLB (see
@@ -38,6 +45,7 @@ type SyslogServer struct {
 	store       *store.Store
 	coordClient pb.WeftCoordinatorClient
 	producer    ingsyslog.Producer
+	classifier  ingest.Classifier
 	port        int
 
 	mu    sync.Mutex
@@ -54,6 +62,7 @@ func (s *Server) NewSyslogServer(producer ingsyslog.Producer, port int) *SyslogS
 		store:       s.store,
 		coordClient: s.coordClient,
 		producer:    producer,
+		classifier:  s.classifier,
 		port:        port,
 		conns:       make(map[net.Conn]struct{}),
 	}
@@ -185,6 +194,7 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 		pending: append(trimmed[sp+1:], '\n'),
 	}
 	streamBroken := false
+	sampleRecheck := make(map[string]time.Time) // service → don't re-check sampling before this
 	ingsyslog.ParseStream(r, ingsyslog.NonTransparent, ingsyslog.DefaultMaxFrame, func(f ingsyslog.Frame, ferr error) {
 		if streamBroken {
 			return
@@ -213,6 +223,17 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 		// (store.FindLogGroupSchema) is what keeps this affordable per
 		// frame across a connection that can live for hours.
 		enrichRow(ss.store, auth.Organization.ID, auth.Namespace, row)
+		// Schema-bootstrap sample, same as the HTTP adapters get in
+		// IngestHandler. Per frame rather than per batch, so a service
+		// that isn't collecting one is only re-checked every
+		// syslogSampleRecheck instead of costing a lookup per line.
+		if until, ok := sampleRecheck[service]; !ok || time.Now().After(until) {
+			if accumulateSample(ss.store, ss.classifier, auth.Organization.ID, auth.Namespace, service, []string{row.Raw}) {
+				delete(sampleRecheck, service)
+			} else {
+				sampleRecheck[service] = time.Now().Add(syslogSampleRecheck)
+			}
+		}
 		if err := stream.Send(row); err != nil {
 			log.Printf("syslog[%s]: send row for %s: %v", name, auth.Namespace, err)
 			streamBroken = true

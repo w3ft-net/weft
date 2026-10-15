@@ -14,12 +14,10 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	lines := readSampleLines(t, "../sample-logs/grantcentral_worker_logs.txt")
 
 	// Detect schema.
-	det := Detect(lines)
-	if !det.HasKevconsEnvelope {
-		t.Fatal("expected kevcons envelope")
-	}
+	_ = Detect(lines)
 
-	// Build schema from detection results (simulating what the wizard would do).
+	// A schema stored before the wizard stopped naming envelopes still parses:
+	// this is the legacy reader's coverage, not detection's.
 	schema := &Schema{
 		Service:         "grantcentral-worker",
 		CustomerID:      1,

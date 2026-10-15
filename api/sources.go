@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/ingest"
+	"github.com/graybeardcorp/weft/internal/release"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -169,8 +171,8 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 		        namespaces.name as namespace_name`).
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
 		Joins("JOIN organizations ON namespaces.org_id = organizations.id").
-		Where("log_groups.status IN ? AND organizations.id = ?",
-			[]store.LogGroupStatus{store.StatusSampling, store.StatusPending}, session.ActiveOrgID)
+		Where("organizations.id = ?", session.ActiveOrgID).
+		Scopes(store.AwaitingSchema)
 	if namespace != "" {
 		q = q.Where("namespaces.name = ?", namespace)
 	}
@@ -194,6 +196,9 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 		Status          string `json:"status"`
 		SampleCollected int    `json:"sample_collected"`
 		SampleTarget    int    `json:"sample_target"`
+		// SampleUpdatedAt is when the newest sample lines arrived (RFC3339,
+		// empty if none yet).
+		SampleUpdatedAt string `json:"sample_updated_at"`
 	}
 
 	resp := make([]pendingResp, 0, len(sources))
@@ -217,14 +222,35 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 			Sample:          json.RawMessage(sample),
 			Detection:       json.RawMessage(detection),
 			CreatedAt:       lg.CreatedAt.Format("2006-01-02T15:04:05Z"),
-			Status:          string(lg.Status),
+			Status:          pendingStatus(lg.LogGroup),
 			SampleCollected: lg.SampleCollected,
 			SampleTarget:    store.SampleTarget,
+			SampleUpdatedAt: formatSampleUpdatedAt(lg.SampleUpdatedAt),
 		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func formatSampleUpdatedAt(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// pendingStatus is the status the pending list reports. A raw-push source
+// is live (configured) while its sample fills, so its list status comes
+// from sample progress instead of the row's own.
+func pendingStatus(lg store.LogGroup) string {
+	if lg.Status == store.StatusConfigured {
+		if lg.SampleCollected < store.SampleTarget {
+			return string(store.StatusSampling)
+		}
+		return string(store.StatusPending)
+	}
+	return string(lg.Status)
 }
 
 // handleConfigureSource confirms the schema for a pending source.
@@ -291,6 +317,9 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		DurationNsPattern   string             `json:"duration_ns_pattern"`
 		JSONStartField      int                `json:"json_start_field"`
 		ExpandKeys          []ingest.ExpandKey `json:"expand_keys"`
+		// Extract is how each value is read out of its field (what to strip,
+		// where to cut, a fallback regex); see ingest.ExtractSpec.
+		Extract map[string]ingest.ExtractSpec `json:"extract"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -321,6 +350,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		DurationNsPattern:   req.DurationNsPattern,
 		JSONStartField:      req.JSONStartField,
 		ExpandKeys:          req.ExpandKeys,
+		Extract:             req.Extract,
 	}
 
 	// Defense in depth: the CLI validates before ever sending this
@@ -331,6 +361,15 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	if problems := schema.Validate(); len(problems) > 0 {
 		http.Error(w, "invalid schema:\n"+strings.Join(problems, "\n"), http.StatusBadRequest)
 		return
+	}
+
+	// weftd reads the schema on the agent. One that cannot interpret this
+	// schema would ignore it silently, so refuse it now, naming what is needed.
+	if schema.UsesExtract() && lg.SourceType == store.SourceTypeWeftd {
+		if msg := s.agentsCannotReadExtract(lg.ID); msg != "" {
+			http.Error(w, msg, http.StatusConflict)
+			return
+		}
 	}
 
 	schemaYAML, err := schema.ToYAML()
@@ -394,8 +433,14 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		LogGroup   string `json:"log_group"`
 		Region     string `json:"region"`
 		Enabled    bool   `json:"enabled"`
+		// Agents is who has been reading this source lately: how many hosts
+		// reported, and the oldest and newest weftd versions among them.
+		// Only weftd sources have agents.
+		Agents *agentFleet `json:"agents,omitempty"`
 	}
 	out := []sourceResp{}
+	var shown []store.LogGroupJoined
+	var weftdIDs []uint
 	for _, lg := range all {
 		if lg.CustomerName != customer.Name {
 			continue
@@ -403,7 +448,23 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		if nsFilter != "" && lg.NamespaceName != nsFilter {
 			continue
 		}
+		shown = append(shown, lg)
+		if lg.SourceType == store.SourceTypeWeftd {
+			weftdIDs = append(weftdIDs, lg.ID)
+		}
+	}
+	fleets, err := s.store.RecentAgentsFor(weftdIDs, agentWindow)
+	if err != nil {
+		log.Printf("list sources: recent agents: %v", err)
+	}
+	for _, lg := range shown {
+		var fleet *agentFleet
+		if agents := fleets[lg.ID]; len(agents) > 0 {
+			oldest, n := store.OldestAgentVersion(agents)
+			fleet = &agentFleet{Count: n, Oldest: oldest, Newest: store.NewestAgentVersion(agents)}
+		}
 		out = append(out, sourceResp{
+			Agents:     fleet,
 			Namespace:  lg.NamespaceName,
 			Service:    lg.Service,
 			Status:     string(lg.Status),
@@ -420,7 +481,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 // handleAddKinesisSource registers the AWS-log-group→service mapping for
 // a Firehose push source: no cross-account role to verify and no schema
 // to build server-side. The source is created StatusPending; enrichRows/
-// accumulatePendingKinesisSamples (api/adapter.go) accumulate a sample
+// accumulatePendingSamples (api/adapter.go) accumulate a sample
 // from the customer's real Firehose deliveries once their CloudFormation
 // stack is live, and `weft source configure` (unmodified — already
 // source-type-agnostic) finishes onboarding once a human has something
@@ -490,8 +551,8 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleResampleSource asks the agent for a fresh sample of an
-// already-configured source. POST /api/sources/{namespace}/{app}/resample
+// handleResampleSource asks for a fresh sample of a pending or
+// configured source. POST /api/sources/{namespace}/{app}/resample
 //
 // The source stays configured and keeps ingesting on its current schema;
 // the agent picks up the flag on its next status poll and re-samples
@@ -519,26 +580,16 @@ func (s *Server) handleResampleSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := func() error {
-		now := time.Now()
-		res := s.store.DB().Model(&store.LogGroup{}).
-			Where("namespace_id = ? AND app = ? AND status = ?",
-				ns.ID, app, store.StatusConfigured).
-			Update("resample_requested_at", now)
-		if res.Error != nil {
-			return res.Error
+	if err := s.store.RequestResample(ns.ID, app); err != nil {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			http.Error(w, "no source found", http.StatusNotFound)
+		case errors.Is(err, store.ErrAlreadySampling):
+			http.Error(w, "a sample is already being collected for this source", http.StatusConflict)
+		default:
+			log.Printf("resample source %s/%s: RequestResample: %v", namespace, app, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
-		if res.RowsAffected == 0 {
-			return gorm.ErrRecordNotFound
-		}
-		return nil
-	}(); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			http.Error(w, "source is not configured — nothing to resample", http.StatusConflict)
-			return
-		}
-		log.Printf("resample source %s/%s: RequestResample: %v", namespace, app, err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -597,13 +648,20 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 		if lg.ResampleRequestedAt != nil {
 			resp["sample_collected"] = lg.SampleCollected
 			resp["sample_target"] = store.SampleTarget
+			resp["sample_updated_at"] = formatSampleUpdatedAt(lg.SampleUpdatedAt)
 		}
 		json.NewEncoder(w).Encode(resp)
 	case store.StatusSampling:
+		sample := lg.Sample
+		if sample == "" {
+			sample = "[]"
+		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"status":           "sampling",
-			"sample_collected": lg.SampleCollected,
-			"sample_target":    store.SampleTarget,
+			"status":            "sampling",
+			"sample_collected":  lg.SampleCollected,
+			"sample_target":     store.SampleTarget,
+			"sample":            json.RawMessage(sample),
+			"sample_updated_at": formatSampleUpdatedAt(lg.SampleUpdatedAt),
 		})
 	default: // pending
 		sample := lg.Sample
@@ -611,11 +669,12 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 			sample = "[]"
 		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"status":           "pending",
-			"sample_collected": lg.SampleCollected,
-			"sample_target":    store.SampleTarget,
-			"sample":           json.RawMessage(sample),
-			"detection":        json.RawMessage(lg.Detection),
+			"status":            "pending",
+			"sample_collected":  lg.SampleCollected,
+			"sample_target":     store.SampleTarget,
+			"sample":            json.RawMessage(sample),
+			"detection":         json.RawMessage(lg.Detection),
+			"sample_updated_at": formatSampleUpdatedAt(lg.SampleUpdatedAt),
 		})
 	}
 }
@@ -644,3 +703,37 @@ type forbiddenError string
 
 func (e forbiddenError) Error() string { return string(e) }
 func errForbidden(msg string) error    { return forbiddenError(msg) }
+
+// agentWindow is how recently an agent must have polled to count as reading a
+// source: a host retired weeks ago should not block a schema forever.
+const agentWindow = 7 * 24 * time.Hour
+
+// agentsCannotReadExtract says why the agents reading the source cannot be
+// trusted with an extract-form schema, or "" if all of them can. An agent
+// that has never reported a version (one from before the field existed) counts
+// as unknown, not as capable.
+func (s *Server) agentsCannotReadExtract(logGroupID uint) string {
+	agents, err := s.store.RecentAgents(logGroupID, agentWindow)
+	if err != nil {
+		log.Printf("recent agents for log group %d: %v", logGroupID, err)
+		return "could not check which agent versions read this source; try again"
+	}
+	oldest, n := store.OldestAgentVersion(agents)
+	switch {
+	case n == 0:
+		return fmt.Sprintf("no agent has reported for this source in the last %d days, so its weftd version is unknown; "+
+			"this schema needs weftd %s or newer. Upgrade weftd on the hosts shipping this source (they report their version "+
+			"as they run), then configure again.", int(agentWindow.Hours()/24), ingest.MinAgentVersionForExtract)
+	case release.VersionNewer(ingest.MinAgentVersionForExtract, oldest):
+		return fmt.Sprintf("the oldest agent reading this source is weftd %s (%d host(s) reporting); this schema needs weftd %s or newer. "+
+			"Upgrade weftd on those hosts, then configure again.", oldest, n, ingest.MinAgentVersionForExtract)
+	}
+	return ""
+}
+
+// agentFleet summarizes the agents reading a source.
+type agentFleet struct {
+	Count  int    `json:"count"`
+	Oldest string `json:"oldest"`
+	Newest string `json:"newest"`
+}

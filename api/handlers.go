@@ -80,7 +80,7 @@ type Server struct {
 	limiter *limiter
 
 	// classifier drives LLM-based schema-field classification for
-	// pending sources (handleAgentSample, accumulatePendingKinesisSamples
+	// pending sources (handleAgentSample, accumulatePendingSamples
 	// — see ingest/llmdetect.go). Nil means disabled: ClassifyAsync
 	// falls back to the deterministic envelope/JSON detection only, same
 	// as before this existed. Populated via SetClassifier.
@@ -324,6 +324,7 @@ func (s *Server) Handler() http.Handler {
 	auth.HandleFunc("GET /api/sources/pending/count", s.handlePendingSourcesCount)
 	auth.Handle("POST /api/sources/{namespace}/{app}/configure", protected(s.handleConfigureSource))
 	auth.Handle("POST /api/sources/{namespace}/{app}/resample", protected(s.handleResampleSource))
+	auth.Handle("POST /api/sources/{namespace}/{app}/probe", protected(s.handleProbeSource))
 	auth.HandleFunc("GET /api/sources/{namespace}/{app}/schema", s.handleSourceSchema)
 
 	// Source management (dashboard-authenticated).

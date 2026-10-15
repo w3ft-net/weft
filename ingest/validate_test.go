@@ -37,7 +37,7 @@ func TestSchema_Validate(t *testing.T) {
 		{
 			name:    "bad envelope",
 			schema:  Schema{Envelope: "nginx"},
-			wantErr: []string{`envelope: "nginx" is not one of none, kevcons`},
+			wantErr: []string{`envelope: "nginx" is not a known legacy envelope`},
 		},
 		{
 			name:    "timestamp_field without timestamp_format",
@@ -112,7 +112,7 @@ func TestSchema_Validate(t *testing.T) {
 			schema: Schema{Format: "bogus", Envelope: "bogus", TimestampFields: -5},
 			wantErr: []string{
 				`format: "bogus" is not one of text, json, prefix_json`,
-				`envelope: "bogus" is not one of none, kevcons`,
+				`envelope: "bogus" is not a known legacy envelope`,
 				"timestamp_fields: must be >= 0",
 			},
 		},

@@ -1,6 +1,8 @@
 package ingest
 
 import (
+	"strings"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -17,7 +19,8 @@ type Schema struct {
 	CustomerID int64 `yaml:"-"`
 
 	// Envelope is the outer wrapper applied by the transport layer.
-	// "kevcons" strips the [timestamp] [instance] prefix.
+	// A legacy envelope name (see legacy.go) strips a fixed prefix; new
+	// schemas do not use one, a prefix being just fields read by position.
 	// "none" means no envelope.
 	Envelope string `yaml:"envelope"`
 
@@ -50,7 +53,7 @@ type Schema struct {
 	LevelField string `yaml:"level_field,omitempty"`
 
 	// LevelPattern is an optional regex to extract the level from the field
-	// value. E.g., for Celery's "INFO/MainProcess", pattern "^(\\w+)/"
+	// value. E.g., for a field "VALUE/other", pattern "^(\\w+)/"
 	// extracts "INFO". If empty, the entire field value is the level.
 	LevelPattern string `yaml:"level_pattern,omitempty"`
 
@@ -112,6 +115,17 @@ type Schema struct {
 	DurationNsField   string `yaml:"duration_ns_field,omitempty"`
 	DurationNsPattern string `yaml:"duration_ns_pattern,omitempty"`
 
+	// Extract holds, per value ("timestamp", "level", "trace_id", "span_name",
+	// "span_id", "parent_span_id", "duration_ns"), how to read it out of its
+	// field. A value with an entry here is read by the span-reporting
+	// extractor (extract.go) and is stripped of exactly what its spec says:
+	// the parser assumes nothing about brackets or colons. A value without an
+	// entry is read the legacy way (parse.go), with that code's built-in
+	// trims, so schemas stored before this existed behave exactly as before.
+	// A value's *_field may then also be negative, counting fields from the
+	// end of the line.
+	Extract map[string]ExtractSpec `yaml:"extract,omitempty"`
+
 	// JSONStartField is the 1-based field index where JSON begins (for
 	// prefix_json format). Fields before this are positional text fields.
 	// Fields from this position onward are parsed as a single JSON object.
@@ -145,4 +159,86 @@ func (s *Schema) ToYAML() (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// ExtractSpec says how one value is read out of the field(s) a schema points
+// at. Steps apply in this order: the literal Prefix and Suffix, then the
+// Chars set at both ends, then CutAt.
+type ExtractSpec struct {
+	// Prefix and Suffix are literal text the field must start and end with
+	// ("[" in "[2026-10-15", "trace_id=" in "trace_id=abc", ":" in
+	// "12:00:03,425:"); they are removed, and a field lacking them has no
+	// value, so a value present on only some lines is not read from the
+	// fields of the others.
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+	Suffix string `yaml:"suffix,omitempty" json:"suffix,omitempty"`
+	// Chars are ASCII characters stripped, however many, from both ends
+	// (like strings.Trim). For text with a varying number of brackets or
+	// parentheses around it; a literal Prefix/Suffix is safer for anything
+	// that could also begin a value.
+	Chars string `yaml:"chars,omitempty" json:"chars,omitempty"`
+	// CutAt keeps only the text before its first occurrence ("/" turns
+	// VALUE/other into VALUE).
+	CutAt string `yaml:"cut_at,omitempty" json:"cut_at,omitempty"`
+	// Fallback is a regex with one capture group, searched across the whole
+	// line, tried only when the field-based read yields nothing.
+	Fallback string `yaml:"fallback,omitempty" json:"fallback,omitempty"`
+}
+
+// valueNames are the keys of Schema.Extract, in valueID order.
+var valueNames = [numValues]string{"timestamp", "level", "trace_id", "span_name", "span_id", "parent_span_id", "duration_ns"}
+
+type valueID int
+
+const (
+	vTimestamp valueID = iota
+	vLevel
+	vTrace
+	vSpanName
+	vSpanID
+	vParentSpanID
+	vDuration
+	numValues
+)
+
+// valueRef returns the schema's field reference and pattern for a value.
+func (s *Schema) valueRef(id valueID) (field, pattern string) {
+	switch id {
+	case vTimestamp:
+		return s.TimestampField, ""
+	case vLevel:
+		return s.LevelField, s.LevelPattern
+	case vTrace:
+		return s.TraceIDField, s.TraceIDPattern
+	case vSpanName:
+		return s.SpanNameField, s.SpanNamePattern
+	case vSpanID:
+		return s.SpanIDField, s.SpanIDPattern
+	case vParentSpanID:
+		return s.ParentSpanIDField, s.ParentSpanIDPattern
+	case vDuration:
+		return s.DurationNsField, s.DurationNsPattern
+	}
+	return "", ""
+}
+
+// MinAgentVersionForExtract is the first weftd release that can read a schema
+// written with extract specs. weftd parses client-side; an older one ignores an
+// `extract` section and reads a negative field index as nothing, so the values
+// come out empty without any error. Schemas that use them are refused for
+// sources whose agents are older (api: handleConfigureSource).
+const MinAgentVersionForExtract = "0.28.0"
+
+// UsesExtract reports whether the schema needs a parser that understands
+// extract specs: it has an extract section, or counts a field from the end.
+func (s *Schema) UsesExtract() bool {
+	if len(s.Extract) > 0 {
+		return true
+	}
+	for id := valueID(0); id < numValues; id++ {
+		if field, _ := s.valueRef(id); strings.HasPrefix(field, "-") && field != "-" {
+			return true
+		}
+	}
+	return false
 }

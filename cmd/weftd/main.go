@@ -389,6 +389,9 @@ func main() {
 	}()
 
 	hostname, _ := os.Hostname()
+	// Tell the coordinator which agent is asking whenever it polls a source,
+	// so schemas are only stored if every agent reading them can interpret them.
+	weftd.AgentVersion, weftd.AgentInstance = Version, hostname
 	globalDeployment = cfg.Deployment
 	globalRegion = weftd.DetectRegion(ctx, cfg.Region)
 	if globalRegion != "" {
@@ -538,10 +541,10 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	// the file otherwise.
 	if unit != "" {
 		log.Printf("[%s] new source — sampling unit %s", fullApp, unit)
-		err = weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment)
+		err = weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment, false)
 	} else {
 		log.Printf("[%s] new source — sampling %s", fullApp, path)
-		err = weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment)
+		err = weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment, false)
 	}
 	if err != nil {
 		return err
@@ -549,7 +552,12 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	log.Printf("[%s] sample submitted — waiting for configuration", fullApp)
 
 	// Poll until configured.
-	schemaYAML, err := weftd.WaitForConfiguration(ctx, client, token, app)
+	schemaYAML, err := weftd.WaitForConfiguration(ctx, client, token, app, func(ctx context.Context) error {
+		if unit != "" {
+			return weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment, true)
+		}
+		return weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment, true)
+	})
 	if err != nil {
 		return err
 	}
@@ -661,9 +669,9 @@ func startResample(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 		}()
 		var err error
 		if rs.unit != "" {
-			err = weftd.SubmitUnitSample(ctx, client, token, bareService, rs.unit, rs.instance, globalDeployment)
+			err = weftd.SubmitUnitSample(ctx, client, token, bareService, rs.unit, rs.instance, globalDeployment, true)
 		} else {
-			err = weftd.SubmitSample(ctx, client, token, bareService, rs.path, rs.instance, globalDeployment)
+			err = weftd.SubmitSample(ctx, client, token, bareService, rs.path, rs.instance, globalDeployment, true)
 		}
 		if err != nil {
 			log.Printf("[%s] resample failed: %v", fullApp, err)

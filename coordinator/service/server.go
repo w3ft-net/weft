@@ -1197,6 +1197,14 @@ func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusReque
 		return &pb.GetSourceStatusResponse{Status: "unknown"}, nil
 	}
 
+	// Note which agent is asking, so the API knows what is reading this
+	// source's schema. An agent from before the field reports nothing.
+	if req.AgentVersion != "" {
+		if err := s.Store.RecordAgentSeen(lg.ID, req.Instance, req.AgentVersion); err != nil {
+			log.Printf("source status: record agent %s@%s for %s: %v", req.AgentVersion, req.Instance, req.Service, err)
+		}
+	}
+
 	switch lg.Status {
 	case store.StatusConfigured:
 		sum := sha256.Sum256([]byte(lg.SchemaYAML))
@@ -1208,15 +1216,17 @@ func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusReque
 		}, nil
 	case store.StatusSampling:
 		return &pb.GetSourceStatusResponse{
-			Status:          "sampling",
-			SampleCollected: int32(lg.SampleCollected),
-			SampleTarget:    store.SampleTarget,
+			Status:            "sampling",
+			SampleCollected:   int32(lg.SampleCollected),
+			SampleTarget:      store.SampleTarget,
+			ResampleRequested: lg.ResampleRequestedAt != nil,
 		}, nil
 	case store.StatusPending:
 		return &pb.GetSourceStatusResponse{
-			Status:          "pending",
-			SampleCollected: int32(lg.SampleCollected),
-			SampleTarget:    store.SampleTarget,
+			Status:            "pending",
+			SampleCollected:   int32(lg.SampleCollected),
+			SampleTarget:      store.SampleTarget,
+			ResampleRequested: lg.ResampleRequestedAt != nil,
 		}, nil
 	default:
 		return &pb.GetSourceStatusResponse{Status: "unknown"}, nil

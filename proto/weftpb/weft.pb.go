@@ -3737,9 +3737,15 @@ func (x *SubmitSampleResponse) GetStatus() string {
 }
 
 type GetSourceStatusRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`     // agent token (wft_...) for auth
-	Service       string                 `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"` // bare service name within namespace
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Token   string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`     // agent token (wft_...) for auth
+	Service string                 `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"` // bare service name within namespace
+	// The polling agent's own version (e.g. "0.28.0") and host. The coordinator
+	// records them per source so the API can tell, before storing a schema, whether
+	// every agent reading it can interpret it. Agents that predate these fields send
+	// neither, which reads as "unknown".
+	AgentVersion  string `protobuf:"bytes,3,opt,name=agent_version,json=agentVersion,proto3" json:"agent_version,omitempty"`
+	Instance      string `protobuf:"bytes,4,opt,name=instance,proto3" json:"instance,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3784,6 +3790,20 @@ func (x *GetSourceStatusRequest) GetToken() string {
 func (x *GetSourceStatusRequest) GetService() string {
 	if x != nil {
 		return x.Service
+	}
+	return ""
+}
+
+func (x *GetSourceStatusRequest) GetAgentVersion() string {
+	if x != nil {
+		return x.AgentVersion
+	}
+	return ""
+}
+
+func (x *GetSourceStatusRequest) GetInstance() string {
+	if x != nil {
+		return x.Instance
 	}
 	return ""
 }
@@ -4968,10 +4988,12 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x05lines\x18\x05 \x03(\tR\x05lines\x12\x18\n" +
 	"\apartial\x18\x06 \x01(\bR\apartial\".\n" +
 	"\x14SubmitSampleResponse\x12\x16\n" +
-	"\x06status\x18\x01 \x01(\tR\x06status\"H\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\"\x89\x01\n" +
 	"\x16GetSourceStatusRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x18\n" +
-	"\aservice\x18\x02 \x01(\tR\aservice\"\xf2\x01\n" +
+	"\aservice\x18\x02 \x01(\tR\aservice\x12#\n" +
+	"\ragent_version\x18\x03 \x01(\tR\fagentVersion\x12\x1a\n" +
+	"\binstance\x18\x04 \x01(\tR\binstance\"\xf2\x01\n" +
 	"\x17GetSourceStatusResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1f\n" +
 	"\vschema_yaml\x18\x02 \x01(\tR\n" +

@@ -114,3 +114,101 @@ func TestCreatePendingKinesisSource_PendingThenConfigure(t *testing.T) {
 		t.Errorf("SourceType after configure = %q, want it to stay %q", lg.SourceType, SourceTypeKinesis)
 	}
 }
+
+// TestEnsureServiceLogGroup_StartsSampling: raw producers (Heroku,
+// Render) have no agent to sample for them, so the auto-onboarded row
+// must come up already asking for a sample (the resample flag) while
+// staying configured — rows keep flowing raw, ingestion never waits on
+// a schema.
+func TestEnsureServiceLogGroup_StartsSampling(t *testing.T) {
+	db := testOpen(t)
+
+	cust, err := db.FindOrCreateOrg("ensure-sampling-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns, err := db.FindOrCreateNamespace(cust.ID, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.EnsureServiceLogGroup(ns.ID, "myapp"); err != nil {
+		t.Fatalf("EnsureServiceLogGroup: %v", err)
+	}
+	lg, err := db.FindLogGroup(cust.ID, "ops", "myapp")
+	if err != nil || lg == nil {
+		t.Fatalf("FindLogGroup = %v, %v", lg, err)
+	}
+	if lg.Status != StatusConfigured {
+		t.Errorf("Status = %q, want %q (ingest must not wait on a schema)", lg.Status, StatusConfigured)
+	}
+	if lg.ResampleRequestedAt == nil {
+		t.Error("ResampleRequestedAt is nil, want set so sample accumulation starts")
+	}
+}
+
+// TestCountPendingLogGroups_SchemalessDirect: a direct source that has
+// collected lines but has no schema yet is awaiting review exactly like
+// a pending weftd source; one with a schema, or one that hasn't
+// collected anything, is not.
+func TestCountPendingLogGroups_SchemalessDirect(t *testing.T) {
+	db := testOpen(t)
+
+	cust, err := db.FindOrCreateOrg("count-schemaless-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns, err := db.FindOrCreateNamespace(cust.ID, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.EnsureServiceLogGroup(ns.ID, "myapp"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := db.CountPendingLogGroups(cust.ID); err != nil || n != 0 {
+		t.Fatalf("before any sample: count = %d, err = %v, want 0", n, err)
+	}
+
+	if err := db.UpsertPendingLogGroup(ns.ID, "myapp", "", "", `["a","b"]`, `{}`, 2, true); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := db.CountPendingLogGroups(cust.ID); n != 1 {
+		t.Errorf("with a partial sample: count = %d, want 1", n)
+	}
+
+	if err := db.ConfigureLogGroup(ns.ID, "myapp", "app: myapp\nformat: text\n"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := db.CountPendingLogGroups(cust.ID); n != 0 {
+		t.Errorf("after configure: count = %d, want 0", n)
+	}
+}
+
+// A user-initiated resample of a schemaless direct source resets its sample
+// to zero lines. It must stay listed (as sampling) so the user sees their
+// request took effect, even if the service is quiet; a brand-new service
+// that has not yet received a line stays unlisted (test above).
+func TestCountPendingLogGroups_ResampledDirectStaysListedAtZero(t *testing.T) {
+	db := testOpen(t)
+	cust, err := db.FindOrCreateOrg("count-resampled-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns, err := db.FindOrCreateNamespace(cust.ID, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.EnsureServiceLogGroup(ns.ID, "myapp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertPendingLogGroup(ns.ID, "myapp", "", "", `["a"]`, `{}`, SampleTarget, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RequestResample(ns.ID, "myapp"); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := db.CountPendingLogGroups(cust.ID); n != 1 {
+		t.Errorf("after resample (0 lines collected): count = %d, want 1", n)
+	}
+}

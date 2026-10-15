@@ -55,6 +55,16 @@ export default function Namespaces() {
     })
   }, [])
 
+  // Keep a filling sample live: re-poll while any source is still sampling.
+  const anySampling = pendingSources.some(p => p.status === 'sampling')
+  useEffect(() => {
+    if (!anySampling) return
+    const id = setInterval(() => {
+      getPendingSources().then(setPendingSources).catch(() => {})
+    }, 3000)
+    return () => clearInterval(id)
+  }, [anySampling])
+
   // Auto-expand any namespace that has pending sources so the user sees
   // the prompt on first load without having to click around.
   useEffect(() => {

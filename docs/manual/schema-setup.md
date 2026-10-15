@@ -9,8 +9,10 @@ web:
 
 ## Check schema setup
 
-Once weftd is shipping logs, weft auto-detects the schema from the
-first batch of lines. Go to **Namespaces** to see detected apps and
+Once logs are arriving, weft auto-detects the schema from the first
+batch of lines. With weftd, logs wait for you to approve it; with
+push sources (Heroku, Render, CloudWatch) logs flow raw while the sample
+fills and gain parsed fields once you approve. Go to **Namespaces** to see detected apps and
 their field schemas.
 
 If you see a **pending source** notification on the dashboard, weft

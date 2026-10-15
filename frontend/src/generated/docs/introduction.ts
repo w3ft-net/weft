@@ -8,7 +8,12 @@ const introduction = {
   order: 55,
   headings: [
     { level: 2, id: "the-weft-shell", text: "The weft shell" },
-    { level: 2, id: "examples", text: "Examples" },
+    { level: 2, id: "key-differences", text: "Key differences" },
+    { level: 3, id: "sandboxness", text: "Sandboxness" },
+    { level: 3, id: "range", text: "Range" },
+    { level: 3, id: "metavariables", text: "Metavariables" },
+    { level: 3, id: "heading", text: "" },
+    { level: 2, id: "some-examples", text: "Some Examples" },
     { level: 2, id: "paths", text: "Paths" },
     { level: 2, id: "retention", text: "Retention" },
   ],
@@ -28,7 +33,15 @@ release.</p>
 never know you aren't on an old-school log server. And hopefully when you run
 into that surprise, we've got nice clear error messages. But like us, weft is a
 work in progress.</p>
-<h2 id="examples">Examples</h2>
+<h2 id="key-differences">Key differences</h2>
+<h3 id="sandboxness">Sandboxness</h3>
+<p>Weft is a log shell, and although it allows a certain amount of scripting for those purposes, it is not an operating system, a general purpose programming environment, or a VPS you control. There may be things you would like to do that you cannot. The veneer of Unix is only as thick as we needed it to be.</p>
+<h3 id="range">Range</h3>
+<p>The timerange of logs you are working with is displayed in your PS1. How far back in time you can set it depends on your plan. Spoiler, if you ship a lot of logs and you wanna query 3 months, it's gonna be slower. You can change it with the <code>range</code> command.</p>
+<h3 id="metavariables">Metavariables</h3>
+<p>We inject some preset variables into invocations of AWK and jq that are helpful in narrowing down the lines you need; these are all indexed nicely so including them in an AWK pattern or a jq <code>select()</code> should get you your log lines faster. See the <a href="#FIXME">full reference</a> for more details.</p>
+<h3 id="heading"></h3>
+<h2 id="some-examples">Some Examples</h2>
 <pre><code># Tail logs in real time
 tail -f myapp.log
 

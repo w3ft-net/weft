@@ -60,7 +60,7 @@ aws cloudformation create-stack \
   --capabilities CAPABILITY_IAM
 ```
 
-`WeftToken` is a namespace token (`weft token create --namespace myco`,
+`WeftToken` is a namespace token ([create one](namespaces.md#creating-a-token)
 for a namespace that already exists). It authenticates Firehose's deliveries
 to weft the same way any other push source authenticates. `LogGroupNames` is
 a comma-separated list, so one stack can subscribe several log groups in the
@@ -69,22 +69,19 @@ same account/region.
 To add or remove log groups, update the stack's `LogGroupNames` parameter and
 redeploy. The Firehose stream and IAM roles stay unchanged.
 
-### 3. Configure the schema
+### 3. Approve a schema
 
-Once your log group starts emitting events, weft accumulates a sample
-from that traffic as your app logs. Once enough lines have accumulated:
+Once your log group starts emitting events, weft accumulates a sample from
+that traffic and the source goes from `sampling` to `pending`; approve it as
+described in [Connect a log source](connect-source.md#sampling-logs-for-a-schema):
 
 ```
 weft source configure myco/my-app
 ```
 
-This runs an interactive schema wizard: it shows real lines and asks
-where the timestamp is, which field holds the log level, and whether the
-tail is a JSON payload. It detects the common shapes automatically —
-CloudWatch-flavored text (`2026-04-18 14:32:01 INFO {"user":"alice"}`) or
-JSON Lambda logs — so you usually confirm its suggestions. The
-schema it produces is stored server-side. The source starts ingesting as
-soon as you approve it.
+The wizard detects CloudWatch-flavored text
+(`2026-04-18 14:32:01 INFO {"user":"alice"}`) and JSON Lambda logs
+automatically, so you usually confirm its suggestions.
 
 ```
 # And in the shell
@@ -104,10 +101,9 @@ carries an env, the rows live under `/log/myco/<env>/my-app/main.log`; see
   subscription filter attached — CloudWatch allows at most 2
   subscription filters per log group, so if you already forward this log
   group elsewhere (Datadog, Splunk) you may be out of slots.
-- **Nothing to configure yet** — `weft source configure` needs a sample.
-  A low-traffic log group can take a while to accumulate one.
-  `weft source schema <namespace>/<service>` shows accumulation progress.
+- **Nothing to configure yet** — a low-traffic log group can take a while to
+  accumulate a sample; `weft source pending --watch` shows its progress.
 - **Rows appearing but fields look wrong** — your schema's
   `timestamp_format` is off. Check against Go's reference time
-  (`Mon Jan 2 15:04:05 MST 2006`), then `weft source resample <namespace>/<service>` to
-  collect a fresh sample, then re-run the wizard once it completes.
+  (`Mon Jan 2 15:04:05 MST 2006`), then resample and re-run the wizard (see
+  [Connect a log source](connect-source.md#sampling-logs-for-a-schema)).

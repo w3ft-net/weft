@@ -8,8 +8,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -150,5 +152,79 @@ func TestConfigureSource_RejectsInvalidSchema(t *testing.T) {
 	}
 	if lg.Status != "pending" {
 		t.Errorf("expected source to remain pending after rejected configure, got %q", lg.Status)
+	}
+}
+
+// A schema built by the wizard carries extract specs (what to strip around a
+// value, where to cut it, a fallback); configure must persist them, or the
+// saved schema silently reads values the legacy way.
+func TestConfigureSource_PersistsExtractSpecs(t *testing.T) {
+	srv, s := testServer(t)
+	handler := srv.Handler()
+
+	name := fmt.Sprintf("cfgextract-%d", os.Getpid())
+	cust, _ := s.FindOrCreateOrg(name)
+	user, _ := s.CreateVerifiedUser(name + "@example.com")
+	dashTeamMember(s, cust, user, name)
+	jwt, _ := auth.Generate(user, "test-secret")
+	seedPendingSource(t, srv, cust.ID, "ns1", "worker")
+	// The source's agent is capable of reading extract specs (a weftd source
+	// with no reporting agent is refused; see sources_agent_guard_test.go).
+	if lg, _ := s.FindLogGroup(cust.ID, "ns1", "worker"); lg != nil {
+		if err := s.RecordAgentSeen(lg.ID, "web-1", ingest.MinAgentVersionForExtract); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	post := func(body map[string]any) (int, string) {
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/api/sources/ns1/worker/configure", bytes.NewReader(b))
+		req.Header.Set("Authorization", "Bearer "+jwt)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+
+	code, out := post(map[string]any{
+		"format":           "text",
+		"timestamp_field":  "1",
+		"timestamp_fields": 2,
+		"timestamp_format": "2006-01-02 15:04:05,000",
+		"level_field":      "3",
+		"trace_id_field":   "-1",
+		"extract": map[string]any{
+			"timestamp": map[string]any{"prefix": "[", "suffix": ":"},
+			"level":     map[string]any{"cut_at": "/", "suffix": "]"},
+			"trace_id":  map[string]any{"prefix": "trace_id=", "fallback": `id[=:](\w+)`},
+		},
+	})
+	if code != 200 {
+		t.Fatalf("configure = %d: %s", code, out)
+	}
+	lg, _ := s.FindLogGroup(cust.ID, "ns1", "worker")
+	for _, want := range []string{"extract:", "cut_at: /", "prefix: trace_id=", "trace_id_field: \"-1\""} {
+		if !strings.Contains(lg.SchemaYAML, want) {
+			t.Errorf("stored schema missing %q:\n%s", want, lg.SchemaYAML)
+		}
+	}
+
+	// The stored schema parses with the spans the wizard showed.
+	schema, err := ingest.LoadSchemaFromBytes([]byte(lg.SchemaYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := ingest.NewParser(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, _ := p.ParseLine("[2026-10-15 12:00:03,425: INFO/MainProcess] hello trace_id=abc123", time.Unix(0, 1))
+	if row.Level != "INFO" || row.TraceId != "abc123" || row.TsUnixNs == 1 {
+		t.Errorf("row = level %q trace %q ts %d", row.Level, row.TraceId, row.TsUnixNs)
+	}
+
+	// An invalid spec is rejected like any other bad schema.
+	if code, _ := post(map[string]any{"format": "text", "extract": map[string]any{"colour": map[string]any{}}}); code != 400 {
+		t.Errorf("unknown extract value = %d, want 400", code)
 	}
 }

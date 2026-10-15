@@ -26,16 +26,23 @@ type SourceStatus struct {
 	Status            string // "unknown", "sampling", "pending", "configured"
 	SchemaYAML        string // populated when Status == "configured"
 	SchemaHash        string // SHA-256 hex of the YAML; empty when not configured
-	ResampleRequested bool   // user asked for a fresh sample of a configured source
+	ResampleRequested bool   // user asked for a fresh sample (configured, or waiting on a schema)
 	SampleCollected   int32  // accumulation progress while Status == "sampling"
 	SampleTarget      int32
 }
 
+// AgentVersion and AgentInstance identify this agent (its release and its
+// host) to the coordinator on every status poll. Set once at startup; the
+// coordinator uses them to tell which agents can read a given schema.
+var AgentVersion, AgentInstance string
+
 // CheckSourceStatus queries the coordinator for the configuration status of a source.
 func CheckSourceStatus(ctx context.Context, client pb.WeftCoordinatorClient, token, app string) (*SourceStatus, error) {
 	resp, err := client.GetSourceStatus(ctx, &pb.GetSourceStatusRequest{
-		Token:   token,
-		Service: app,
+		Token:        token,
+		Service:      app,
+		AgentVersion: AgentVersion,
+		Instance:     AgentInstance,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get source status: %w", err)
@@ -53,13 +60,15 @@ func CheckSourceStatus(ctx context.Context, client pb.WeftCoordinatorClient, tok
 // SubmitSample accumulates a full sample from a file and sends it to the
 // coordinator. While still short of the target it ships throttled partial
 // progress pings so the source surfaces as "sampling (N/target)" rather
-// than stalling invisibly on a low-volume source.
-func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, path, instance, deployment string) error {
+// than stalling invisibly on a low-volume source. fresh skips the file's
+// existing content and samples only lines written from now on (a resample
+// wants current traffic, not the startup chatter at the head of the file).
+func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, path, instance, deployment string, fresh bool) error {
 	progress := func(lines []string) {
 		// Best-effort: a dropped progress ping just delays the UI update.
 		_ = submitSampleLines(ctx, client, token, app, instance, deployment, lines, true)
 	}
-	lines, err := SampleLines(ctx, path, sampleLineCount, progress)
+	lines, err := SampleLines(ctx, path, sampleLineCount, fresh, progress)
 	if err != nil {
 		return fmt.Errorf("sample %s: %w", path, err)
 	}
@@ -74,11 +83,11 @@ func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, a
 // SubmitUnitSample is the journald (unit:) counterpart of SubmitSample.
 // Journald sources have no file path, so the file sampler cannot serve
 // them — it would open("") and fail with ENOENT.
-func SubmitUnitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, unit, instance, deployment string) error {
+func SubmitUnitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, unit, instance, deployment string, fresh bool) error {
 	progress := func(lines []string) {
 		_ = submitSampleLines(ctx, client, token, app, instance, deployment, lines, true)
 	}
-	lines, err := SampleUnitLines(ctx, unit, sampleLineCount, progress)
+	lines, err := SampleUnitLines(ctx, unit, sampleLineCount, fresh, progress)
 	if err != nil {
 		return fmt.Errorf("sample unit %s: %w", unit, err)
 	}
@@ -114,8 +123,12 @@ func submitSampleLines(ctx context.Context, client pb.WeftCoordinatorClient, tok
 // the optional progress callback. On ctx cancellation, or if journalctl
 // exits early (e.g. the unit has very little history), it returns the lines
 // collected so far with no error.
-func SampleUnitLines(ctx context.Context, unit string, target int, progress func([]string)) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "journalctl", "-u", unit, "-n", strconv.Itoa(target), "--no-pager", "-o", "cat", "-f")
+func SampleUnitLines(ctx context.Context, unit string, target int, fresh bool, progress func([]string)) ([]string, error) {
+	backlog := target
+	if fresh {
+		backlog = 0
+	}
+	cmd := exec.CommandContext(ctx, "journalctl", "-u", unit, "-n", strconv.Itoa(backlog), "--no-pager", "-o", "cat", "-f")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("journalctl -u %s: %w", unit, err)
@@ -151,8 +164,9 @@ func SampleUnitLines(ctx context.Context, unit string, target int, progress func
 // target lines or ctx is done. A low-volume file blocks (per design: wait
 // for a full sample) but reports progress via the optional progress
 // callback. On ctx cancellation it returns the lines collected so far with
-// no error.
-func SampleLines(ctx context.Context, path string, target int, progress func([]string)) ([]string, error) {
+// no error. With fresh set the existing content is skipped and only lines
+// written after the call are sampled.
+func SampleLines(ctx context.Context, path string, target int, fresh bool, progress func([]string)) ([]string, error) {
 	// Wait for the file to exist (it may be created after the agent starts).
 	var f *os.File
 	for {
@@ -168,12 +182,14 @@ func SampleLines(ctx context.Context, path string, target int, progress func([]s
 		}
 	}
 
-	// Read whatever is already there.
+	// Read whatever is already there, unless a fresh sample was asked for.
 	var lines []string
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() && len(lines) < target {
-		if line := scanner.Text(); line != "" {
-			lines = append(lines, line)
+	if !fresh {
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() && len(lines) < target {
+			if line := scanner.Text(); line != "" {
+				lines = append(lines, line)
+			}
 		}
 	}
 	f.Close()
@@ -232,13 +248,23 @@ func accumulate(ctx context.Context, target int, progress func([]string), ch <-c
 
 // WaitForConfiguration polls the coordinator until a source is configured,
 // then returns the schema YAML. Blocks until configured or context is cancelled.
-func WaitForConfiguration(ctx context.Context, client pb.WeftCoordinatorClient, token, app string) (string, error) {
+// If the user asks for a fresh sample while the source waits (the first
+// batch didn't show what the schema needs), resample is called to collect
+// and submit one; the wait then continues.
+func WaitForConfiguration(ctx context.Context, client pb.WeftCoordinatorClient, token, app string, resample func(context.Context) error) (string, error) {
 	for {
 		status, err := CheckSourceStatus(ctx, client, token, app)
 		if err != nil {
 			log.Printf("[%s] poll error: %v — retrying", app, err)
 		} else if status.Status == "configured" {
 			return status.SchemaYAML, nil
+		} else if status.ResampleRequested && resample != nil {
+			log.Printf("[%s] resample requested — sampling fresh lines", app)
+			if err := resample(ctx); err != nil {
+				return "", err
+			}
+			log.Printf("[%s] fresh sample submitted — waiting for configuration", app)
+			continue
 		} else {
 			log.Printf("[%s] status: %s — waiting for configuration", app, status.Status)
 		}

@@ -702,6 +702,12 @@ message SubmitSampleResponse {
 message GetSourceStatusRequest {
   string token = 1; // agent token (wft_...) for auth
   string service = 2;   // bare service name within namespace
+  // The polling agent's own version (e.g. "0.28.0") and host. The coordinator
+  // records them per source so the API can tell, before storing a schema, whether
+  // every agent reading it can interpret it. Agents that predate these fields send
+  // neither, which reads as "unknown".
+  string agent_version = 3;
+  string instance = 4;
 }
 
 message GetSourceStatusResponse {

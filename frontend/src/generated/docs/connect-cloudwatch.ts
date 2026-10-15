@@ -9,7 +9,7 @@ const connectCloudwatch = {
   headings: [
     { level: 3, id: "1-register-the-source", text: "1. Register the source" },
     { level: 3, id: "2-deploy-the-cloudformation-stack", text: "2. Deploy the CloudFormation stack" },
-    { level: 3, id: "3-configure-the-schema", text: "3. Configure the schema" },
+    { level: 3, id: "3-approve-a-schema", text: "3. Approve a schema" },
     { level: 3, id: "troubleshooting", text: "Troubleshooting" },
   ],
   html: `<p>If your logs already land in AWS CloudWatch Logs — Lambda, ECS/Fargate,
@@ -50,25 +50,22 @@ required S3 bucket for any events Firehose can't deliver (30-day expiry).</p>
                ParameterKey=LogGroupNames,ParameterValue=&quot;/aws/lambda/my-fn&quot; \\
   --capabilities CAPABILITY_IAM
 </code></pre>
-<p><code>WeftToken</code> is a namespace token (<code>weft token create --namespace myco</code>,
+<p><code>WeftToken</code> is a namespace token (<a href="/manual/namespaces#creating-a-token">create one</a>
 for a namespace that already exists). It authenticates Firehose's deliveries
 to weft the same way any other push source authenticates. <code>LogGroupNames</code> is
 a comma-separated list, so one stack can subscribe several log groups in the
 same account/region.</p>
 <p>To add or remove log groups, update the stack's <code>LogGroupNames</code> parameter and
 redeploy. The Firehose stream and IAM roles stay unchanged.</p>
-<h3 id="3-configure-the-schema">3. Configure the schema</h3>
-<p>Once your log group starts emitting events, weft accumulates a sample
-from that traffic as your app logs. Once enough lines have accumulated:</p>
+<h3 id="3-approve-a-schema">3. Approve a schema</h3>
+<p>Once your log group starts emitting events, weft accumulates a sample from
+that traffic and the source goes from <code>sampling</code> to <code>pending</code>; approve it as
+described in <a href="/manual/overview#sampling-logs-for-a-schema">Connect a log source</a>:</p>
 <pre><code>weft source configure myco/my-app
 </code></pre>
-<p>This runs an interactive schema wizard: it shows real lines and asks
-where the timestamp is, which field holds the log level, and whether the
-tail is a JSON payload. It detects the common shapes automatically —
-CloudWatch-flavored text (<code>2026-04-18 14:32:01 INFO {&quot;user&quot;:&quot;alice&quot;}</code>) or
-JSON Lambda logs — so you usually confirm its suggestions. The
-schema it produces is stored server-side. The source starts ingesting as
-soon as you approve it.</p>
+<p>The wizard detects CloudWatch-flavored text
+(<code>2026-04-18 14:32:01 INFO {&quot;user&quot;:&quot;alice&quot;}</code>) and JSON Lambda logs
+automatically, so you usually confirm its suggestions.</p>
 <pre><code># And in the shell
 cat /log/myco/my-app/main.log | head
 </code></pre>
@@ -84,13 +81,12 @@ parameter not matching a live namespace token. Also confirm the
 subscription filter attached — CloudWatch allows at most 2
 subscription filters per log group, so if you already forward this log
 group elsewhere (Datadog, Splunk) you may be out of slots.</li>
-<li><strong>Nothing to configure yet</strong> — <code>weft source configure</code> needs a sample.
-A low-traffic log group can take a while to accumulate one.
-<code>weft source schema &lt;namespace&gt;/&lt;service&gt;</code> shows accumulation progress.</li>
+<li><strong>Nothing to configure yet</strong> — a low-traffic log group can take a while to
+accumulate a sample; <code>weft source pending --watch</code> shows its progress.</li>
 <li><strong>Rows appearing but fields look wrong</strong> — your schema's
 <code>timestamp_format</code> is off. Check against Go's reference time
-(<code>Mon Jan 2 15:04:05 MST 2006</code>), then <code>weft source resample &lt;namespace&gt;/&lt;service&gt;</code> to
-collect a fresh sample, then re-run the wizard once it completes.</li>
+(<code>Mon Jan 2 15:04:05 MST 2006</code>), then resample and re-run the wizard (see
+<a href="/manual/overview#sampling-logs-for-a-schema">Connect a log source</a>).</li>
 </ul>
 `,
 } as const;

@@ -8,8 +8,10 @@ const schemaSetup = {
   order: 45,
   headings: [
   ],
-  html: `<p>Once weftd is shipping logs, weft auto-detects the schema from the
-first batch of lines. Go to <strong>Namespaces</strong> to see detected apps and
+  html: `<p>Once logs are arriving, weft auto-detects the schema from the first
+batch of lines. With weftd, logs wait for you to approve it; with
+push sources (Heroku, Render, CloudWatch) logs flow raw while the sample
+fills and gain parsed fields once you approve. Go to <strong>Namespaces</strong> to see detected apps and
 their field schemas.</p>
 <p>If you see a <strong>pending source</strong> notification on the dashboard, weft
 has received data and needs you to confirm the detected

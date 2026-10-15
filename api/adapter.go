@@ -163,12 +163,10 @@ func (s *Server) IngestHandler(a Adapter) http.Handler {
 		// CloudWatch poller and weftd already do for their own paths.
 		enrichRows(s.store, auth.Organization.ID, namespace, rows)
 
-		// Bootstrap schema detection for any pending kinesis (Firehose
-		// push) source still awaiting `weft source configure` — see
-		// accumulatePendingKinesisSamples. A no-op for every other
-		// adapter/status, so this costs nothing once a source is
-		// configured or for adapters that never produce pending rows.
-		accumulatePendingKinesisSamples(s.store, s.classifier, auth.Organization.ID, namespace, rows)
+		// Bootstrap schema detection for any push source still awaiting
+		// `weft source configure` (pending kinesis, schemaless direct) —
+		// see accumulatePendingSamples. A no-op for every other source.
+		accumulatePendingSamples(s.store, s.classifier, auth.Organization.ID, namespace, rows)
 
 		// Forward to coordinator via the existing gRPC IngestStream.
 		// Same bearer token in metadata so authenticateStream's path
@@ -277,75 +275,113 @@ func enrichRows(st *store.Store, orgID store.OrgID, namespace string, rows []*pb
 	}
 }
 
-// accumulatePendingKinesisSamples bootstraps schema-detection UX for
-// pending kinesis (Firehose push) sources — the CloudWatch-push
-// equivalent of weftd's agent-driven SubmitSample/handleAgentSample. A
-// customer only registers the AWS-log-group→service mapping up front
-// (CreatePendingKinesisSource, via `weft source add --type kinesis`);
-// there's no agent to decide when a sample is "done," so this runs on
-// every live-ingested batch instead, accumulating raw lines into the
-// row's Sample until SampleTarget is reached, exactly mirroring what
-// handleAgentSample does per weftd sample submission. See
-// docs/plans/cloudwatch-kinesis-subscription.md, "Schema bootstrap."
+// accumulatePendingSamples bootstraps schema-detection UX for push sources
+// that have no agent to sample for them. Two kinds qualify:
+//
+//   - pending kinesis (Firehose push) sources — the CloudWatch-push
+//     equivalent of weftd's agent-driven SubmitSample/handleAgentSample. A
+//     customer only registers the AWS-log-group→service mapping up front
+//     (CreatePendingKinesisSource, via `weft source add --type kinesis`),
+//     so this runs on every live-ingested batch, accumulating raw lines
+//     into the row's Sample until SampleTarget is reached, exactly
+//     mirroring handleAgentSample. See
+//     docs/plans/cloudwatch-kinesis-subscription.md, "Schema bootstrap."
+//   - direct sources (Heroku, Render, bare IngestStream) the coordinator
+//     auto-onboarded: already configured and ingesting raw, with a resample
+//     requested (store.EnsureServiceLogGroup). The sample fills while rows
+//     keep flowing, then surfaces the source for review (store.AwaitingSchema).
 //
 // A full sample does not auto-configure anything — a human still runs
 // `weft source configure` (unmodified: ConfigureLogGroup is already
-// source-type-agnostic) to approve a schema. A no-op for any row that
-// isn't SourceTypeKinesis and still bootstrapping (StatusPending on the
-// first call, StatusSampling on every call after — UpsertPendingLogGroup
-// sets StatusSampling once `partial` first flips true — so both count):
+// source-type-agnostic) to approve a schema. A no-op for every other row:
 // weftd's own pending rows never reach this path (its rows arrive via
-// IngestStream directly, not IngestHandler/enrichRows), and every other
-// source type either commits a schema immediately (poll-mode CloudWatch)
-// or has no configure step at all (SourceTypeDirect).
-func accumulatePendingKinesisSamples(st *store.Store, classifier ingest.Classifier, orgID store.OrgID, namespace string, rows []*pb.LogRow) {
+// IngestStream directly, not IngestHandler/enrichRows), and poll-mode
+// CloudWatch commits a schema immediately.
+func accumulatePendingSamples(st *store.Store, classifier ingest.Classifier, orgID store.OrgID, namespace string, rows []*pb.LogRow) {
 	byService := make(map[string][]string)
 	for _, row := range rows {
 		byService[row.Service] = append(byService[row.Service], row.Raw)
 	}
 	for service, lines := range byService {
-		lg, err := st.FindLogGroup(orgID, namespace, service)
-		if err != nil || lg == nil {
-			continue
-		}
-		if lg.SourceType != store.SourceTypeKinesis {
-			continue
-		}
-		if lg.Status != store.StatusPending && lg.Status != store.StatusSampling {
-			continue
-		}
-		if lg.SampleCollected >= store.SampleTarget {
-			continue
-		}
-		var existing []string
-		if lg.Sample != "" {
-			_ = json.Unmarshal([]byte(lg.Sample), &existing)
-		}
-		combined := append(existing, lines...)
-		partial := true
-		if len(combined) >= store.SampleTarget {
-			combined = combined[:store.SampleTarget]
-			partial = false
-		}
-		sampleJSON, err := json.Marshal(combined)
-		if err != nil {
-			continue
-		}
-		namespaceID, svc := lg.NamespaceID, service
-		detection := ingest.ClassifyAsync(classifier, combined, !partial, func(d *ingest.Detection) {
-			detectionJSON, err := json.Marshal(d)
-			if err != nil {
-				return
-			}
-			if err := st.UpdateLogGroupDetection(namespaceID, svc, string(detectionJSON)); err != nil {
-				log.Printf("classify: update detection for kinesis source %s/%s: %v", namespace, svc, err)
-			}
-		})
-		detectionJSON, err := json.Marshal(detection)
-		if err != nil {
-			continue
-		}
-		_ = st.UpsertPendingLogGroup(lg.NamespaceID, service, "", "",
-			string(sampleJSON), string(detectionJSON), len(combined), partial)
+		accumulateSample(st, classifier, orgID, namespace, service, lines)
 	}
+}
+
+// accumulateSample appends lines to service's sample if the service is still
+// collecting one, and reports whether it was. SyslogServer calls it per frame
+// and uses the answer to stop asking for services that aren't sampling.
+func accumulateSample(st *store.Store, classifier ingest.Classifier, orgID store.OrgID, namespace, service string, lines []string) (collecting bool) {
+	lg, err := st.FindLogGroup(orgID, namespace, service)
+	if err != nil {
+		return false
+	}
+	if lg == nil {
+		// A new push service has no row yet: the coordinator's provisioner
+		// creates it only after these rows are forwarded, which is after
+		// this runs. Create it now (the same idempotent call the
+		// provisioner makes, so its later one is a no-op) rather than
+		// dropping the service's first batch from its sample.
+		ns, err := st.GetNamespace(orgID, namespace)
+		if err != nil {
+			return false
+		}
+		if err := st.EnsureServiceLogGroup(ns.ID, service); err != nil {
+			return false
+		}
+		if lg, err = st.FindLogGroup(orgID, namespace, service); err != nil || lg == nil {
+			return false
+		}
+	}
+	switch lg.SourceType {
+	case store.SourceTypeKinesis:
+		// Pending/sampling is the first-time bootstrap; a configured
+		// source collects only when a resample was requested.
+		bootstrapping := lg.Status == store.StatusPending || lg.Status == store.StatusSampling
+		resampling := lg.Status == store.StatusConfigured && lg.ResampleRequestedAt != nil
+		if !bootstrapping && !resampling {
+			return false
+		}
+	case store.SourceTypeDirect:
+		if lg.Status != store.StatusConfigured || lg.ResampleRequestedAt == nil {
+			return false
+		}
+	default:
+		return false
+	}
+	if lg.SampleCollected >= store.SampleTarget {
+		return false
+	}
+	var existing []string
+	if lg.Sample != "" {
+		_ = json.Unmarshal([]byte(lg.Sample), &existing)
+	}
+	combined := append(existing, lines...)
+	partial := true
+	if len(combined) >= store.SampleTarget {
+		combined = combined[:store.SampleTarget]
+		partial = false
+	}
+	sampleJSON, err := json.Marshal(combined)
+	if err != nil {
+		return false
+	}
+	namespaceID := lg.NamespaceID
+	detection := ingest.ClassifyAsync(classifier, combined, !partial, func(d *ingest.Detection) {
+		detectionJSON, err := json.Marshal(d)
+		if err != nil {
+			return
+		}
+		if err := st.UpdateLogGroupDetection(namespaceID, service, string(detectionJSON)); err != nil {
+			log.Printf("classify: update detection for source %s/%s: %v", namespace, service, err)
+		}
+	})
+	detectionJSON, err := json.Marshal(detection)
+	if err != nil {
+		return false
+	}
+	if err := st.UpsertPendingLogGroup(namespaceID, service, "", "",
+		string(sampleJSON), string(detectionJSON), len(combined), partial); err != nil {
+		return false
+	}
+	return true
 }

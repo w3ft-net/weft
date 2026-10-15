@@ -2,28 +2,15 @@ package ingest
 
 import (
 	"encoding/json"
-	"regexp"
+	"sort"
 	"strings"
-	"time"
 	"unicode"
 )
-
-// kevcons envelope pattern: [YYYY-MM-DD HH:MM:SS] [i-xxxxx]
-var kevconsEnvelopeRe = regexp.MustCompile(`^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] \[(i-[a-f0-9]+)\] `)
 
 // Detection holds the results of analyzing a sample of log lines.
 type Detection struct {
 	// Lines is the sample after stripping the first header line (if present).
 	Lines []string
-
-	// HasKevconsEnvelope is true if most lines start with [ts] [instance].
-	HasKevconsEnvelope bool
-
-	// StrippedLines are the lines with the kevcons envelope removed.
-	StrippedLines []string
-
-	// Instances are the unique instance IDs found in the envelope.
-	Instances []string
 
 	// JSONCoverage is the fraction of lines that are valid JSON (after stripping).
 	JSONCoverage float64
@@ -48,7 +35,6 @@ type Detection struct {
 	// TraceIDField/SpanNameField/etc. in schema.go). Populated by the LLM
 	// classifier (ingest/llmdetect.go) — the heuristic Detect never sets
 	// these; there's no fixed-vocabulary equivalent for them the way
-	// levelStrings/timestampFormats are for level/timestamp.
 	TraceIDCandidates      []FieldCandidate
 	SpanNameCandidates     []FieldCandidate
 	SpanIDCandidates       []FieldCandidate
@@ -63,6 +49,11 @@ type TimestampCandidate struct {
 	Format     string // Go time.Parse layout
 	JSONPath   string // JSON path (format=json, or the JSON tail of prefix_json); "" = positional
 	Sample     string // example value
+	// Prefix and Suffix are the punctuation that opens and closes the text on
+	// every line ("[" and ":" around 2026-10-15 12:00:01,123:), to strip
+	// before the layout applies.
+	Prefix string
+	Suffix string
 }
 
 // FieldCandidate is a field that might hold a log level, trace ID, or one
@@ -76,32 +67,13 @@ type FieldCandidate struct {
 	JSONPath   string // JSON path; "" = not JSON-based
 	Sample     string // example value
 	Pattern    string // regex to extract the value, or "" for the whole field/path value
+	// CutAt, for a positional field, keeps only the text before its first
+	// occurrence ("/" for "VALUE/other"): the field's head is the value.
+	CutAt string
+	// Values are the distinct values seen at that position (for a categorical
+	// field), so a person can judge what it is.
+	Values []string
 }
-
-// known log level strings
-var levelStrings = map[string]bool{
-	"DEBUG": true, "INFO": true, "WARN": true, "WARNING": true,
-	"ERROR": true, "FATAL": true, "CRITICAL": true, "TRACE": true,
-}
-
-// common timestamp formats to try
-var timestampFormats = []struct {
-	layout string
-	spans  int // how many whitespace-delimited fields it covers
-}{
-	{"2006-01-02T15:04:05Z07:00", 1},     // ISO 8601
-	{"2006-01-02T15:04:05.000Z07:00", 1}, // ISO 8601 with millis
-	{"2006-01-02T15:04:05", 1},           // ISO 8601 no tz
-	{"2006/01/02 15:04:05", 2},           // Go default
-	{"2006-01-02 15:04:05,000", 2},       // Python with millis (comma)
-	{"2006-01-02 15:04:05.000", 2},       // Python with millis (dot)
-	{"2006-01-02 15:04:05", 2},           // YYYY-MM-DD HH:MM:SS
-	{"02/Jan/2006:15:04:05 -0700", 2},    // CLF (inside brackets)
-	{"Jan 02 15:04:05", 3},               // syslog
-}
-
-// celery level pattern: "INFO/MainProcess" → extract "INFO"
-var celeryLevelRe = regexp.MustCompile(`^(\w+)/\w+\]?$`)
 
 // Detect analyzes a sample of raw log lines and returns detection results.
 func Detect(lines []string) *Detection {
@@ -118,51 +90,11 @@ func Detect(lines []string) *Detection {
 	}
 	d.Lines = cleanLines
 
-	// Check for kevcons envelope.
-	d.detectEnvelope()
-
-	// Analyze the stripped lines.
-	stripped := d.StrippedLines
-	if len(stripped) == 0 {
-		stripped = d.Lines
-	}
-
-	d.detectJSON(stripped)
-	d.detectTimestamps(stripped)
-	d.detectLevels(stripped)
+	d.detectJSON(d.Lines)
+	d.detectTimestamps(d.Lines)
+	d.detectCategorical(d.Lines)
 
 	return d
-}
-
-func (d *Detection) detectEnvelope() {
-	matches := 0
-	eligible := 0 // lines that could potentially have an envelope (non-blank, non-continuation)
-	instanceSet := map[string]bool{}
-
-	for _, line := range d.Lines {
-		// Continuation lines (indented, or not starting with [) don't count against the ratio.
-		isContinuation := len(line) > 0 && (line[0] == ' ' || line[0] == '\t')
-
-		if m := kevconsEnvelopeRe.FindStringSubmatch(line); m != nil {
-			matches++
-			eligible++
-			instanceSet[m[2]] = true
-			stripped := line[len(m[0]):]
-			d.StrippedLines = append(d.StrippedLines, stripped)
-		} else {
-			if !isContinuation {
-				eligible++
-			}
-			d.StrippedLines = append(d.StrippedLines, line)
-		}
-	}
-
-	if eligible > 0 && float64(matches)/float64(eligible) > 0.5 {
-		d.HasKevconsEnvelope = true
-		for inst := range instanceSet {
-			d.Instances = append(d.Instances, inst)
-		}
-	}
 }
 
 func (d *Detection) detectJSON(lines []string) {
@@ -219,161 +151,189 @@ func (d *Detection) detectJSON(lines []string) {
 	}
 }
 
+// detectTimestamps looks for a timestamp by position: for each starting field
+// and each span of 1-4 fields, the lines' text is grouped by shape, a layout
+// is inferred from the majority shape (see inferLayouts), and the punctuation
+// common to those lines around it is reported as the frame. Nothing about any
+// particular format is known: a layout is offered only if time.Parse accepts
+// every line of the majority with it and it names a full date.
 func (d *Detection) detectTimestamps(lines []string) {
-	if len(lines) == 0 {
+	sample := make([][]string, 0, 20)
+	for _, line := range lines {
+		if len(sample) == 20 {
+			break
+		}
+		sample = append(sample, strings.Fields(line))
+	}
+	if len(sample) == 0 {
 		return
 	}
 
-	// Check each format against the first few fields of each line.
-	sample := lines
-	if len(sample) > 20 {
-		sample = sample[:20]
-	}
-
-	type candidate struct {
-		fieldIdx int
-		spans    int
-		format   string
-		hits     int
-		sample   string
-	}
-	var candidates []candidate
-
-	for _, tf := range timestampFormats {
-		hits := 0
-		var sampleVal string
-
-		for _, line := range sample {
-			fields := strings.Fields(line)
-			// Try each possible starting field position.
-			maxStart := len(fields) - tf.spans
-			if maxStart > 6 {
-				maxStart = 6 // don't look too deep
-			}
-			for fi := 0; fi < maxStart; fi++ {
-				val := strings.Join(fields[fi:fi+tf.spans], " ")
-				// Strip surrounding brackets for CLF-style timestamps.
-				val = strings.TrimPrefix(val, "[")
-				val = strings.TrimRight(val, "]:")
-				if _, err := time.Parse(tf.layout, val); err == nil {
-					hits++
-					if sampleVal == "" {
-						sampleVal = val
-					}
-					break
+	// Every window that yields a layout; where several yield the same layout
+	// for the same text, the tightest wins (extra fields that are only common
+	// punctuation widen a window without adding anything).
+	type key struct{ format, sample string }
+	tightest := map[key]TimestampCandidate{}
+	for start := 0; start < 6; start++ {
+		for span := 1; span <= 4; span++ {
+			for _, c := range timestampWindow(sample, start, span) {
+				k := key{c.Format, c.Sample}
+				if prev, ok := tightest[k]; !ok || c.SpanFields < prev.SpanFields ||
+					(c.SpanFields == prev.SpanFields && len(c.Prefix)+len(c.Suffix) < len(prev.Prefix)+len(prev.Suffix)) {
+					tightest[k] = c
 				}
 			}
 		}
+	}
 
-		if hits > len(sample)/2 {
-			// Find which field it matched most consistently.
-			fieldHits := map[int]int{}
-			for _, line := range sample {
-				fields := strings.Fields(line)
-				maxStart := len(fields) - tf.spans
-				if maxStart > 6 {
-					maxStart = 6
-				}
-				for fi := 0; fi < maxStart; fi++ {
-					val := strings.Join(fields[fi:fi+tf.spans], " ")
-					val = strings.TrimPrefix(val, "[")
-					val = strings.TrimSuffix(val, "]")
-					if _, err := time.Parse(tf.layout, val); err == nil {
-						fieldHits[fi+1]++
-						break
-					}
+	// Per starting field, the richest layout (the longest) is the candidate.
+	for start := 0; start < 6; start++ {
+		var best []TimestampCandidate
+		bestScore := 0
+		for span := 1; span <= 4; span++ {
+			var here []TimestampCandidate
+			for _, c := range timestampWindow(sample, start, span) {
+				if t := tightest[key{c.Format, c.Sample}]; t.FieldIndex == c.FieldIndex && t.SpanFields == c.SpanFields {
+					here = append(here, c)
 				}
 			}
-			bestField := 0
-			bestHits := 0
-			for f, h := range fieldHits {
-				if h > bestHits {
-					bestHits = h
-					bestField = f
-				}
+			if len(here) > 0 && len(here[0].Format) > bestScore {
+				best, bestScore = here, len(here[0].Format)
 			}
-			candidates = append(candidates, candidate{
-				fieldIdx: bestField,
-				spans:    tf.spans,
-				format:   tf.layout,
-				hits:     hits,
-				sample:   sampleVal,
-			})
+		}
+		d.TimestampCandidates = append(d.TimestampCandidates, best...)
+	}
+}
+
+// timestampWindow infers timestamp layouts for the span fields starting at
+// start (0-based), across the sample lines that have them.
+func timestampWindow(sample [][]string, start, span int) []TimestampCandidate {
+	var texts []string
+	for _, fields := range sample {
+		if len(fields) >= start+span {
+			texts = append(texts, strings.Join(fields[start:start+span], " "))
+		}
+	}
+	group := majorityShapeGroup(texts)
+	if len(group) <= len(sample)/2 {
+		return nil
+	}
+	prefix, suffix := commonFrame(group)
+	stripped := make([]string, len(group))
+	for i, t := range group {
+		stripped[i] = t[len(prefix) : len(t)-len(suffix)]
+	}
+	var out []TimestampCandidate
+	for _, layout := range inferLayouts(stripped) {
+		out = append(out, TimestampCandidate{
+			FieldIndex: start + 1, SpanFields: span, Format: layout,
+			Sample: stripped[0], Prefix: prefix, Suffix: suffix,
+		})
+	}
+	return out
+}
+
+// detectCategorical finds fields whose leading word comes from a small set that
+// keeps recurring: the shape of a severity, a method, a state. It cannot say
+// which of them is the severity (that is a judgment for the model or the person
+// looking at the lines), so it offers every one, left to right, in
+// LevelCandidates. What counts is structure only: the field's leading letters,
+// an optional delimiter after them (and anything after the delimiter is
+// ignored), between two and eight distinct values, and most lines carrying a
+// value seen elsewhere in the sample.
+func (d *Detection) detectCategorical(lines []string) {
+	var sample [][]string
+	for _, line := range lines {
+		if len(sample) == 30 {
+			break
+		}
+		sample = append(sample, strings.Fields(line))
+	}
+	if len(sample) == 0 {
+		return
+	}
+
+	const maxFields = 10
+	type seen struct {
+		counts map[string]int
+		first  string
+	}
+	byCut := make([]map[string]*seen, maxFields) // field -> delimiter -> values
+	for i := range byCut {
+		byCut[i] = map[string]*seen{}
+	}
+	for _, fields := range sample {
+		for fi := 0; fi < len(fields) && fi < maxFields; fi++ {
+			head, cut, ok := categoricalHead(fields[fi])
+			if !ok {
+				continue
+			}
+			sv := byCut[fi][cut]
+			if sv == nil {
+				sv = &seen{counts: map[string]int{}, first: fields[fi]}
+				byCut[fi][cut] = sv
+			}
+			sv.counts[head]++
 		}
 	}
 
-	for _, c := range candidates {
-		d.TimestampCandidates = append(d.TimestampCandidates, TimestampCandidate{
-			FieldIndex: c.fieldIdx,
-			SpanFields: c.spans,
-			Format:     c.format,
-			Sample:     c.sample,
+	for fi := 0; fi < maxFields; fi++ {
+		bestCut, n := "", 0
+		var best *seen
+		for cut, sv := range byCut[fi] {
+			total := 0
+			for _, c := range sv.counts {
+				total += c
+			}
+			if total > n || (total == n && cut < bestCut) {
+				bestCut, n, best = cut, total, sv
+			}
+		}
+		if best == nil || n <= len(sample)/3 {
+			continue
+		}
+		if k := len(best.counts); k < 2 || k > 8 {
+			continue
+		}
+		recurring := 0
+		values := make([]string, 0, len(best.counts))
+		for v, c := range best.counts {
+			values = append(values, v)
+			if c >= 2 {
+				recurring += c
+			}
+		}
+		if recurring*3 < n*2 {
+			continue // mostly one-off words: free text, not a set
+		}
+		sort.Strings(values)
+		d.LevelCandidates = append(d.LevelCandidates, FieldCandidate{
+			FieldIndex: fi + 1, Sample: best.first, CutAt: bestCut, Values: values,
 		})
 	}
 }
 
-func (d *Detection) detectLevels(lines []string) {
-	if len(lines) == 0 {
-		return
+// categoricalHead splits a field the way a categorical field is read: drop the
+// punctuation around it, take the leading letters, and report the delimiter
+// that follows them ("" if they are the whole field). ok is false when the
+// letters are followed by a digit or a non-ASCII byte, which would make it a
+// different word.
+func categoricalHead(field string) (head, cut string, ok bool) {
+	_, core, _ := frameOf(field)
+	k := 0
+	for k < len(core) && (core[k] >= 'a' && core[k] <= 'z' || core[k] >= 'A' && core[k] <= 'Z') {
+		k++
 	}
-
-	sample := lines
-	if len(sample) > 30 {
-		sample = sample[:30]
+	if k == 0 {
+		return "", "", false
 	}
-
-	// Check each field position for level-like values.
-	type levelHit struct {
-		fieldIdx int
-		pattern  string // "" for whole field, regex for partial
-		hits     int
-		sample   string
+	if k == len(core) {
+		return core, "", true
 	}
-
-	maxFields := 10
-	hits := make([]levelHit, maxFields)
-	for i := range hits {
-		hits[i].fieldIdx = i + 1
+	if c := core[k]; c >= '0' && c <= '9' || c >= 0x80 {
+		return "", "", false
 	}
-
-	for _, line := range sample {
-		fields := strings.Fields(line)
-		for fi := 0; fi < len(fields) && fi < maxFields; fi++ {
-			val := fields[fi]
-			// Strip brackets/colons.
-			cleaned := strings.Trim(val, "[]():")
-			upper := strings.ToUpper(cleaned)
-
-			if levelStrings[upper] {
-				hits[fi].hits++
-				if hits[fi].sample == "" {
-					hits[fi].sample = val
-				}
-				continue
-			}
-
-			// Check Celery-style "INFO/MainProcess" pattern.
-			if m := celeryLevelRe.FindStringSubmatch(cleaned); m != nil {
-				if levelStrings[strings.ToUpper(m[1])] {
-					hits[fi].hits++
-					hits[fi].pattern = `^(\w+)/`
-					if hits[fi].sample == "" {
-						hits[fi].sample = val
-					}
-				}
-			}
-		}
-	}
-
-	for _, h := range hits {
-		if h.hits > len(sample)/3 {
-			d.LevelCandidates = append(d.LevelCandidates, FieldCandidate{
-				FieldIndex: h.fieldIdx,
-				Sample:     h.sample,
-				Pattern:    h.pattern,
-			})
-		}
-	}
+	return core[:k], core[k : k+1], true
 }
 
 // SuggestFormat returns the best-guess format based on detection.

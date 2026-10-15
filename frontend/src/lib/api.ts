@@ -569,13 +569,15 @@ export interface FieldCandidate {
   JSONPath: string
   Sample: string
   Pattern: string
+  // Keep only the text before the first occurrence of this (e.g. "/" for
+  // INFO/MainProcess): the field's head is the value.
+  CutAt?: string
+  // The distinct values seen at this position (categorical fields).
+  Values?: string[] | null
 }
 
 export interface SourceDetection {
   Lines: string[] | null
-  HasKevconsEnvelope: boolean
-  StrippedLines: string[] | null
-  Instances: string[] | null
   JSONCoverage: number
   JSONTailCoverage: number
   JSONTailStartField: number
@@ -601,12 +603,31 @@ export interface PendingSource {
   status: 'sampling' | 'pending'
   sample_collected: number
   sample_target: number
+  // RFC3339 time the newest sample lines arrived ('' before the first).
+  sample_updated_at: string
+}
+
+// How one value is read out of its field (mirrors ingest.ExtractSpec): literal
+// text stripped from the front/back, characters stripped from both ends, a
+// delimiter to cut at, and a whole-line regex tried if the field gives nothing.
+export interface ExtractSpec {
+  prefix?: string
+  suffix?: string
+  chars?: string
+  cut_at?: string
+  fallback?: string
 }
 
 export interface ConfigureSourceRequest {
+  envelope?: string
+  // Per value ("level", "trace_id", ...): how to read it. A value with no
+  // entry is read the legacy way.
+  extract?: Record<string, ExtractSpec>
   format: string
+  json_start_field?: number
   timestamp_field: string
   timestamp_format: string
+  timestamp_fields?: number
   level_field: string
   level_pattern: string
   trace_id_field: string
@@ -648,53 +669,33 @@ export function configureSource(
   )
 }
 
-// fieldRef formats a FieldCandidate's location the way Schema's own
-// *Field strings expect: a JSON path, a 1-based positional index, or
-// "none" for a whole-line pattern search (FieldIndex 0 with no JSONPath —
-// NOT "0", which parse.go's extractors treat as a real, always-out-of-
-// range positional index and would silently never match).
-function fieldRef(c: FieldCandidate | undefined): { field: string; pattern: string } {
-  if (!c) return { field: '', pattern: '' }
-  if (c.JSONPath) return { field: c.JSONPath, pattern: c.Pattern }
-  if (c.FieldIndex >= 1) return { field: String(c.FieldIndex), pattern: c.Pattern }
-  return { field: 'none', pattern: c.Pattern }
-}
-
-// Best-guess defaults from the server's Detection. Level, trace ID, and
-// the span fields are now populated from the classifier's top candidate
-// the same way timestamp already is — earlier versions left them blank
-// because the old pattern-matching heuristic wasn't reliable enough to
-// trust blindly, but every candidate here has already been validated
-// against the real sample (see ingest/llmdetect.go's validateClassification)
-// before it ever reaches this response.
+// suggestFromDetection pre-fills the configure form from a source's detection:
+// the sample's format, and where a JSON tail starts. How each value (timestamp,
+// level, trace ID, ...) is read is deliberately left empty: the extraction
+// wizard fills it from the server, which learns it from the data, so the
+// browser carries no reading of detection (and no defaults) of its own.
 export function suggestFromDetection(d: SourceDetection): ConfigureSourceRequest {
   const format =
     d.JSONCoverage > 0.8 ? 'json'
       : d.JSONTailCoverage > 0.5 ? 'prefix_json'
         : 'text'
-  const ts = d.TimestampCandidates?.[0]
-  const level = fieldRef(d.LevelCandidates?.[0])
-  const traceID = fieldRef(d.TraceIDCandidates?.[0])
-  const spanName = fieldRef(d.SpanNameCandidates?.[0])
-  const spanID = fieldRef(d.SpanIDCandidates?.[0])
-  const parentSpanID = fieldRef(d.ParentSpanIDCandidates?.[0])
-  const durationNs = fieldRef(d.DurationNsCandidates?.[0])
   return {
     format,
-    timestamp_field: ts ? (ts.JSONPath || String(ts.FieldIndex)) : '',
-    timestamp_format: ts?.Format ?? '',
-    level_field: level.field,
-    level_pattern: level.pattern,
-    trace_id_field: traceID.field,
-    trace_id_pattern: traceID.pattern,
-    span_name_field: spanName.field,
-    span_name_pattern: spanName.pattern,
-    span_id_field: spanID.field,
-    span_id_pattern: spanID.pattern,
-    parent_span_id_field: parentSpanID.field,
-    parent_span_id_pattern: parentSpanID.pattern,
-    duration_ns_field: durationNs.field,
-    duration_ns_pattern: durationNs.pattern,
+    json_start_field: format === 'prefix_json' ? d.JSONTailStartField : 0,
+    timestamp_field: '',
+    timestamp_format: '',
+    level_field: '',
+    level_pattern: '',
+    trace_id_field: '',
+    trace_id_pattern: '',
+    span_name_field: '',
+    span_name_pattern: '',
+    span_id_field: '',
+    span_id_pattern: '',
+    parent_span_id_field: '',
+    parent_span_id_pattern: '',
+    duration_ns_field: '',
+    duration_ns_pattern: '',
   }
 }
 
@@ -742,6 +743,8 @@ export interface SourceSchema {
   resample_requested?: boolean
   sample_collected?: number
   sample_target?: number
+  sample?: string[]
+  sample_updated_at?: string
 }
 
 export function getSourceSchema(namespace: string, service: string): Promise<SourceSchema> {
@@ -1003,3 +1006,73 @@ export function adminDeleteShard(shardId: string, force?: boolean): Promise<void
 }
 
 export { apiFetch }
+
+// ── Schema extraction probe ────────────────────────────────────────────
+// The wizard's decision tree asks the server (POST …/probe) for an
+// extraction rule built from what the user highlighted, applied to the
+// source's stored sample. See ingest/probe.go.
+
+export type ProbeField =
+  | 'timestamp' | 'level' | 'trace_id' | 'span_name' | 'span_id' | 'parent_span_id' | 'duration_ns'
+
+// A user's statement about one sample line: this text is the value
+// (prefix = the line's text before it), or there is none (none: true).
+export interface ProbeMark {
+  line: number
+  prefix: string
+  text: string
+  none: boolean
+}
+
+export interface ProbeExtractor {
+  field: string
+  pattern: string
+  spec?: ExtractSpec
+  timestamp_format?: string
+  timestamp_fields?: number
+}
+
+export interface ProbeLineResult {
+  line: number
+  matched: boolean
+  value: string
+  text?: string
+  prefix?: string
+}
+
+export interface ProbeResult {
+  extractor: ProbeExtractor | null
+  // 'rule' = built from the marks, 'model' = proposed by the model and then
+  // verified against the sample.
+  source?: 'rule' | 'model'
+  results: ProbeLineResult[]
+  matched: number
+  total: number
+  message?: string
+  // With use_detected: how many candidates detection found for this field.
+  detected_total?: number
+  // The extractor in words, from the server (the single source of the wording).
+  description?: string
+  // ConfigureSourceRequest keys this extractor sets; `extract` maps a value's
+  // name to its spec (null clears it). Merge with lib/schemaPatch.
+  schema_patch?: Record<string, string | number | Record<string, ExtractSpec | null>>
+}
+
+export interface ProbeRequest {
+  field: ProbeField
+  base: { envelope: string; format: string; field_separator: string; json_start_field: number }
+  marks: ProbeMark[]
+  previous?: ProbeExtractor
+  use_detected?: boolean
+  // With use_detected: which detected candidate (0-based) to start from.
+  detected_index?: number
+}
+
+export type ProbeFn = (req: ProbeRequest) => Promise<ProbeResult>
+
+export function probeSource(namespace: string, service: string, req: ProbeRequest): Promise<ProbeResult> {
+  return apiFetch<ProbeResult>(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/probe`,
+    { method: 'POST', body: JSON.stringify(req) },
+  )
+}

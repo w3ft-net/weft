@@ -36,11 +36,11 @@ func (s *Schema) Validate() []string {
 		errs = append(errs, "json_start_field: required (must be >= 1) when format is prefix_json — see extractPayload in ingest/parse.go")
 	}
 
-	if s.Envelope != "" && s.Envelope != "none" && s.Envelope != "kevcons" {
-		errs = append(errs, fmt.Sprintf("envelope: %q is not one of none, kevcons — stripEnvelope only recognizes \"kevcons\"; anything else is silently treated as no envelope", s.Envelope))
+	if s.Envelope != "" && s.Envelope != "none" && legacyEnvelopes[s.Envelope] == nil {
+		errs = append(errs, fmt.Sprintf("envelope: %q is not a known legacy envelope; stripEnvelope would silently treat it as none (a prefix is read by field position, not named)", s.Envelope))
 	}
 
-	if err := validateFieldRef("timestamp_field", s.TimestampField); err != "" {
+	if err := validateFieldRef("timestamp_field", s.TimestampField, s.hasSpec("timestamp")); err != "" {
 		errs = append(errs, err)
 	} else if !fieldRefDisabled(s.TimestampField) && s.TimestampFormat == "" {
 		errs = append(errs, "timestamp_format: required when timestamp_field is set — extractTimestamp returns no timestamp at all without it, silently falling back to ingest time")
@@ -49,22 +49,22 @@ func (s *Schema) Validate() []string {
 		errs = append(errs, "timestamp_fields: must be >= 0")
 	}
 
-	if err := validateFieldRef("level_field", s.LevelField); err != "" {
+	if err := validateFieldRef("level_field", s.LevelField, s.hasSpec("level")); err != "" {
 		errs = append(errs, err)
 	}
-	if err := validateFieldRef("trace_id_field", s.TraceIDField); err != "" {
+	if err := validateFieldRef("trace_id_field", s.TraceIDField, s.hasSpec("trace_id")); err != "" {
 		errs = append(errs, err)
 	}
-	if err := validateFieldRef("span_name_field", s.SpanNameField); err != "" {
+	if err := validateFieldRef("span_name_field", s.SpanNameField, s.hasSpec("span_name")); err != "" {
 		errs = append(errs, err)
 	}
-	if err := validateFieldRef("span_id_field", s.SpanIDField); err != "" {
+	if err := validateFieldRef("span_id_field", s.SpanIDField, s.hasSpec("span_id")); err != "" {
 		errs = append(errs, err)
 	}
-	if err := validateFieldRef("parent_span_id_field", s.ParentSpanIDField); err != "" {
+	if err := validateFieldRef("parent_span_id_field", s.ParentSpanIDField, s.hasSpec("parent_span_id")); err != "" {
 		errs = append(errs, err)
 	}
-	if err := validateFieldRef("duration_ns_field", s.DurationNsField); err != "" {
+	if err := validateFieldRef("duration_ns_field", s.DurationNsField, s.hasSpec("duration_ns")); err != "" {
 		errs = append(errs, err)
 	}
 
@@ -99,6 +99,32 @@ func (s *Schema) Validate() []string {
 		}
 	}
 
+	for name, spec := range s.Extract {
+		known := false
+		for _, n := range valueNames {
+			known = known || n == name
+		}
+		if !known {
+			errs = append(errs, fmt.Sprintf("extract: %q is not one of %s", name, strings.Join(valueNames[:], ", ")))
+			continue
+		}
+		for i := 0; i < len(spec.Chars); i++ {
+			if spec.Chars[i] >= 0x80 {
+				errs = append(errs, fmt.Sprintf("extract.%s.chars: only ASCII characters can be stripped (they are matched bytewise)", name))
+				break
+			}
+		}
+		if spec.Fallback != "" {
+			re, err := regexp.Compile(spec.Fallback)
+			switch {
+			case err != nil:
+				errs = append(errs, fmt.Sprintf("extract.%s.fallback: %v", name, err))
+			case re.NumSubexp() < 1:
+				errs = append(errs, fmt.Sprintf("extract.%s.fallback: needs a capture group around the value", name))
+			}
+		}
+	}
+
 	for i, k := range s.ExpandKeys {
 		if strings.TrimSpace(k.Key) == "" {
 			errs = append(errs, fmt.Sprintf("expand_keys[%d]: key is required", i))
@@ -127,7 +153,7 @@ func fieldRefDisabled(value string) bool {
 // has no established meaning the way 0 does, so it's still flagged — most
 // likely a typo or an off-by-one bug, not a deliberate disable. Returns ""
 // when valid, a message identifying name otherwise.
-func validateFieldRef(name, value string) string {
+func validateFieldRef(name, value string, hasSpec bool) string {
 	if fieldRefDisabled(value) {
 		return ""
 	}
@@ -141,8 +167,19 @@ func validateFieldRef(name, value string) string {
 	if err != nil {
 		return fmt.Sprintf("%s: %q is neither a JSON path (starting with '.') nor a positional field index", name, value)
 	}
-	if idx < 1 {
-		return fmt.Sprintf("%s: field index must be >= 1 (1-based) or 0 to disable, got %d", name, idx)
+	if idx < 0 {
+		// Counting from the end exists only for values read by an extract
+		// spec; the legacy extractor would silently read nothing.
+		if !hasSpec {
+			return fmt.Sprintf("%s: field index must be >= 1 (1-based) or 0 to disable, got %d; counting from the end needs an extract entry for this value", name, idx)
+		}
+		return ""
 	}
 	return ""
+}
+
+// hasSpec reports whether the schema has an extract entry for the named value.
+func (s *Schema) hasSpec(name string) bool {
+	_, ok := s.Extract[name]
+	return ok
 }

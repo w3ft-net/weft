@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import type { ConfigureSourceRequest, SourceDetection } from '../lib/api'
+import type { ConfigureSourceRequest, ProbeFn, SourceDetection } from '../lib/api'
 import { suggestFromDetection } from '../lib/api'
+import ExtractionWizard from './ExtractionWizard'
+import { applyPatch, describeValue } from '../lib/schemaPatch'
 import './PendingSourceConfigure.css'
 
 const MAX_PREVIEW_LINES = 20
@@ -24,6 +26,16 @@ function Highlighted({ line, ts }: { line: string; ts?: string }) {
   )
 }
 
+const VALUE_ROWS: { key: string; label: string }[] = [
+  { key: 'timestamp', label: 'timestamp' },
+  { key: 'level', label: 'log level' },
+  { key: 'trace_id', label: 'trace ID' },
+  { key: 'span_name', label: 'span name' },
+  { key: 'span_id', label: 'span ID' },
+  { key: 'parent_span_id', label: 'parent span ID' },
+  { key: 'duration_ns', label: 'span duration' },
+]
+
 // SchemaEditor is the shared body of the "look at a sample and confirm the
 // schema" flow used by both the weftd pending-source onboarding and the
 // CloudWatch add-source form. Callers hand in the sample + detection and
@@ -34,6 +46,7 @@ export default function SchemaEditor({
   detection,
   submitLabel = 'looks good, configure',
   submittingLabel = 'configuring…',
+  probe,
   onSubmit,
 }: {
   testidPrefix: string
@@ -41,6 +54,9 @@ export default function SchemaEditor({
   detection: SourceDetection
   submitLabel?: string
   submittingLabel?: string
+  // When given, each extractable value is walked through the decision tree
+  // (ExtractionWizard) instead of being taken from detection's first guess.
+  probe?: ProbeFn
   onSubmit: (config: ConfigureSourceRequest) => Promise<void>
 }) {
   const suggested = suggestFromDetection(detection)
@@ -49,6 +65,8 @@ export default function SchemaEditor({
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [guided, setGuided] = useState(!!probe)
+  const [notes, setNotes] = useState<string[]>([])
 
   function update<K extends keyof ConfigureSourceRequest>(
     field: K,
@@ -76,8 +94,53 @@ export default function SchemaEditor({
   const hiddenCount = sample.length - visibleLines.length
   const formatLabel = FORMAT_DESCRIPTIONS[suggested.format] ?? suggested.format
 
+  if (guided && probe) {
+    const spansDetected = [
+      detection.SpanNameCandidates, detection.SpanIDCandidates,
+      detection.ParentSpanIDCandidates, detection.DurationNsCandidates,
+    ].some(c => (c?.length ?? 0) > 0)
+    return (
+      <div className="psc-body">
+        <ExtractionWizard
+          testidPrefix={testidPrefix}
+          sample={sample}
+          base={{
+            envelope: form.envelope ?? '',
+            format: form.format,
+            field_separator: '',
+            json_start_field: form.json_start_field ?? 0,
+          }}
+          probe={probe}
+          spansDetected={spansDetected}
+          onComplete={(patch, n) => {
+            setForm(f => applyPatch(f, patch))
+            setNotes(n)
+            setGuided(false)
+          }}
+          onCancel={() => setGuided(false)}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="psc-body">
+      {probe && (
+        <div className="psc-values" data-testid={`${testidPrefix}-values`}>
+          <div className="psc-sample-label">values to extract</div>
+          {VALUE_ROWS.map(r => (
+            <div key={r.key} className="psc-value-row" data-testid={`${testidPrefix}-value-${r.key}`}>
+              <span className="psc-label">{r.label}</span>
+              <span className="psc-value-rule">{describeValue(form, r.key)}</span>
+            </div>
+          ))}
+          {notes.map((n, i) => (
+            <div key={i} className="psc-wiz-notice" data-testid={`${testidPrefix}-note-${i}`}>{n}</div>
+          ))}
+          <button className="psc-textbtn" onClick={() => setGuided(true)}
+            data-testid={`${testidPrefix}-rewalk-button`}>walk through the values again</button>
+        </div>
+      )}
       <p className="psc-prose" data-testid={`${testidPrefix}-format-prose`}>
         These look like <strong>{formatLabel}</strong>.{' '}
         {hasTimestamp ? (
