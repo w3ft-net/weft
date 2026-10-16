@@ -545,13 +545,18 @@ func (s *Store) RequestResample(namespaceID uint, service string) error {
 // UpdateLogGroupDetection writes a freshly (LLM-)classified Detection for
 // (namespaceID, service) without touching sample/collected/status —
 // called from the background goroutine ClassifyAsync's callers kick off
-// after the synchronous sample-submit request has already returned. Scoped
-// to StatusPending/StatusSampling so it's a harmless no-op if the row was
-// approved or deleted while classification was still in flight, same
-// invariant UpsertPendingLogGroup documents above.
-func (s *Store) UpdateLogGroupDetection(namespaceID uint, service, detectionJSON string) error {
+// after the synchronous sample-submit request has already returned.
+//
+// sampleJSON is the sample the classification was computed for. The write only
+// applies while that is still the row's sample, so a late result never
+// overwrites the detection of a newer sample, and is a harmless no-op if the
+// row was deleted or its sample was never stored (a configured source with no
+// resample in flight ignores stray samples). Status is deliberately not part of
+// the test: a configured source whose resample just completed is waiting for
+// exactly this detection.
+func (s *Store) UpdateLogGroupDetection(namespaceID uint, service, sampleJSON, detectionJSON string) error {
 	return s.db.Model(&LogGroup{}).
-		Where("namespace_id = ? AND app = ? AND status IN ?", namespaceID, service, []LogGroupStatus{StatusPending, StatusSampling}).
+		Where("namespace_id = ? AND app = ? AND sample = ?", namespaceID, service, sampleJSON).
 		Update("detection", detectionJSON).Error
 }
 

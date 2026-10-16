@@ -1149,16 +1149,16 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 	// background — this RPC returns as soon as the sample is stored,
 	// never blocked on Bedrock. See ingest/llmdetect.go.
 	namespaceID := ns.ID
+	sampleJSON, _ := json.Marshal(req.Lines)
 	detection := ingest.ClassifyAsync(s.Classifier, req.Lines, !req.Partial, func(d *ingest.Detection) {
 		detectionJSON, err := json.Marshal(d)
 		if err != nil {
 			return
 		}
-		if err := s.Store.UpdateLogGroupDetection(namespaceID, service, string(detectionJSON)); err != nil {
+		if err := s.Store.UpdateLogGroupDetection(namespaceID, service, string(sampleJSON), string(detectionJSON)); err != nil {
 			log.Printf("classify: update detection for %s/%s: %v", auth.Namespace, service, err)
 		}
 	})
-	sampleJSON, _ := json.Marshal(req.Lines)
 	detectionJSON, _ := json.Marshal(detection)
 
 	if err := s.Store.UpsertPendingLogGroup(

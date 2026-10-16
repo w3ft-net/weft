@@ -332,3 +332,42 @@ func TestAwaitingSchemaListsResampledConfiguredSource(t *testing.T) {
 		t.Errorf("reconfigured: count=%d, want 0", n)
 	}
 }
+
+// The model's classification arrives after the sample is stored. It must land
+// on a configured source whose resample just finished (that is where the
+// wizard reads it from), and must never overwrite the detection of a newer
+// sample that replaced the one it was computed for.
+func TestUpdateLogGroupDetectionLandsOnResampledConfiguredSource(t *testing.T) {
+	db, nsID, custID, nsName, app, fullApp := setupSource(t, "resample-detect")
+	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["x"]`, "{}", 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := configureLogGroup(db, nsID, fullApp, "schema-v1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RequestResample(nsID, fullApp); err != nil {
+		t.Fatal(err)
+	}
+	const sample = `["a","b"]`
+	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", sample, `{"heuristic":true}`, 2, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// A classification for an older sample is dropped.
+	if err := db.UpdateLogGroupDetection(nsID, fullApp, `["old"]`, `{"stale":true}`); err != nil {
+		t.Fatal(err)
+	}
+	lg, _ := db.FindLogGroup(custID, nsName, app)
+	if lg.Detection != `{"heuristic":true}` {
+		t.Fatalf("a classification of a different sample overwrote detection: %q", lg.Detection)
+	}
+
+	// The classification of this sample lands, though the source is configured.
+	if err := db.UpdateLogGroupDetection(nsID, fullApp, sample, `{"classified":true}`); err != nil {
+		t.Fatal(err)
+	}
+	lg, _ = db.FindLogGroup(custID, nsName, app)
+	if lg.Status != StatusConfigured || lg.Detection != `{"classified":true}` {
+		t.Fatalf("status=%q detection=%q, want configured with the classified detection", lg.Status, lg.Detection)
+	}
+}

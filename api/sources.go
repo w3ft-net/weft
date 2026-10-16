@@ -64,16 +64,16 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 	// the sample itself is stored, never blocked on Bedrock. See
 	// ingest/llmdetect.go.
 	namespaceID, appName := ns.ID, req.App
+	sampleJSON, _ := json.Marshal(req.Lines)
 	detection := ingest.ClassifyAsync(s.classifier, req.Lines, !req.Partial, func(d *ingest.Detection) {
 		detectionJSON, err := json.Marshal(d)
 		if err != nil {
 			return
 		}
-		if err := s.store.UpdateLogGroupDetection(namespaceID, appName, string(detectionJSON)); err != nil {
+		if err := s.store.UpdateLogGroupDetection(namespaceID, appName, string(sampleJSON), string(detectionJSON)); err != nil {
 			log.Printf("classify: update detection for %s/%s: %v", agent.Namespace, appName, err)
 		}
 	})
-	sampleJSON, _ := json.Marshal(req.Lines)
 	detectionJSON, _ := json.Marshal(detection)
 
 	if err := s.store.UpsertPendingLogGroup(

@@ -371,7 +371,7 @@ func accumulateSample(st *store.Store, classifier ingest.Classifier, orgID store
 		if err != nil {
 			return
 		}
-		if err := st.UpdateLogGroupDetection(namespaceID, service, string(detectionJSON)); err != nil {
+		if err := st.UpdateLogGroupDetection(namespaceID, service, string(sampleJSON), string(detectionJSON)); err != nil {
 			log.Printf("classify: update detection for source %s/%s: %v", namespace, service, err)
 		}
 	})
