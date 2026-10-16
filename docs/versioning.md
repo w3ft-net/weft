@@ -51,7 +51,39 @@ Any change that affects what bytes are sent or received over the wire:
 Server-internal refactors that don't change the wire contract can opt
 out by including the literal token `no-wire-change` in a commit message.
 
-## CI tripwire
+## Auto-update
+
+Both binaries pull releases on their own; a release is how a fix ships.
+
+- **weftd**: daily checker, swaps the binary and restarts under systemd.
+  Opt out with `auto_update: false` in `/etc/weftd/config.yaml`.
+- **weft CLI**: at most once per 24h (stamp: `<user cache dir>/weft/update-check`),
+  before a command runs, it fetches the manifest (2s budget). If newer, it
+  installs and re-execs so that same command runs the new build. Failures are
+  silent apart from one stderr line and retry after the next interval. Skipped
+  for dev builds (no `GitSHA`), `weft update`/`version`, and when
+  `WEFT_NO_AUTO_UPDATE=1` or `auto_update: false` in `~/.weft.yaml`.
+  `weft update` still forces an immediate check.
+
+Because both only move to a *strictly newer* version, an unbumped change is
+never delivered.
+
+## CI tripwires
+
+`scripts/check-binary-bump.sh <weft|weftd> <base>` fails when any non-test
+source linked into the binary (the in-module packages from
+`go list -deps ./cmd/<binary>`, plus `go.mod`/`go.sum`) changed since `<base>`
+while `cmd/<binary>/version.go` still has the same `Version`. It runs:
+
+- on every PR (base = the target branch), and
+- at the end of `release.yml` (base = the binary's latest `<binary>/v*` tag),
+  which catches direct pushes to `main` that skipped the PR gate.
+
+Opt out with the token `no-binary-change` in a commit message when the change
+provably doesn't affect the binary. Note the closure is broad (the CLI links
+`shell`, `planner`, `store`, …), so such changes will often need a bump.
+
+### Wire tripwire
 
 `scripts/check-wire-bump.sh` (run by the `Wire-bump tripwire` job on
 every PR) compares the PR's changed files against the wire-affecting

@@ -58,8 +58,14 @@ func extractTopLevelFlags() {
 }
 
 func main() {
+	origArgs := append([]string(nil), os.Args...)
 	extractTopLevelFlags()
 	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "update", "--version", "-v", "version":
+		default:
+			maybeAutoUpdate(origArgs)
+		}
 		switch os.Args[1] {
 		case "sh":
 			// weft sh [--range <spec>] [-c 'pipeline']
@@ -735,7 +741,10 @@ func runSourceConfigure(cfg *shell.Config) {
 		// Probes run on the server, against the stored sample, so the CLI
 		// gets the same rule-building and model help as the browser.
 		probe := func(req ingest.ProbeRequest) (*ingest.ProbeResult, error) {
-			body := map[string]any{"field": req.Field, "base": req.Base, "marks": req.Marks, "previous": req.Previous}
+			body := map[string]any{
+				"field": req.Field, "base": req.Base, "marks": req.Marks, "previous": req.Previous,
+				"propose": req.Propose, "duration_unit": req.DurationUnit,
+			}
 			var res ingest.ProbeResult
 			if err := remote.ProbeSource(namespace, service, body, &res); err != nil {
 				return nil, err
@@ -817,6 +826,7 @@ func schemaConfigMap(schema *ingest.Schema) map[string]any {
 		"parent_span_id_pattern": schema.ParentSpanIDPattern,
 		"duration_ns_field":      schema.DurationNsField,
 		"duration_ns_pattern":    schema.DurationNsPattern,
+		"duration_unit":          schema.DurationUnit,
 		"json_start_field":       schema.JSONStartField,
 		"expand_keys":            schema.ExpandKeys,
 	}

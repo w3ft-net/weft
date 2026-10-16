@@ -61,6 +61,10 @@ type Config struct {
 	Endpoint string `yaml:"endpoint"` // api base URL, e.g. https://api.w3ft.net
 	Token    string `yaml:"token"`    // JWT from the device flow
 	Org      string `yaml:"org"`      // active org slug (sent as X-Active-Org)
+
+	// AutoUpdate=false opts this user out of the CLI's daily self-update
+	// (nil/true = on). WEFT_NO_AUTO_UPDATE=1 does the same per invocation.
+	AutoUpdate *bool `yaml:"auto_update,omitempty"`
 }
 
 // LoadConfig resolves configuration from the following chain (first wins):

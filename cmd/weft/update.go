@@ -21,10 +21,12 @@ import (
 // and a /latest/manifest.json that the release ext writes. The
 // download/verify/replace mechanics live in internal/release, shared
 // with the weftd self-updater.
-func runUpdate() {
-	const releaseBase = "https://releases.w3ft.net"
-	manifestURL := releaseBase + "/weft/latest/manifest.json"
+const (
+	releaseBase = "https://releases.w3ft.net"
+	manifestURL = releaseBase + "/weft/latest/manifest.json"
+)
 
+func runUpdate() {
 	m, err := release.FetchManifest(manifestURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fetch manifest: %v\n", err)
@@ -45,27 +47,34 @@ func runUpdate() {
 	}
 
 	fmt.Printf("downloading weft %s for %s/%s ...\n", m.Version, runtime.GOOS, runtime.GOARCH)
+	if err := installRelease(plat); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("weft updated %s → %s. Restart your shell to use the new version.\n", Version, m.Version)
+}
+
+// installRelease downloads plat's binary, verifies its sha256, and
+// atomically replaces the running executable. Shared by `weft update`
+// and the automatic updater.
+func installRelease(plat *release.Platform) error {
 	tmp, err := release.DownloadAndVerify(plat.URL, plat.SHA256)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "download: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("download: %w", err)
 	}
 	defer os.Remove(tmp)
 
 	dst, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "resolve running binary path: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("resolve running binary path: %w", err)
 	}
 	// Resolve symlinks so we replace the actual binary, not the link.
 	if real, err := filepath.EvalSymlinks(dst); err == nil {
 		dst = real
 	}
-
 	if err := release.ReplaceBinary(tmp, dst); err != nil {
-		fmt.Fprintf(os.Stderr, "install: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("install: %w", err)
 	}
-
-	fmt.Printf("weft updated %s → %s. Restart your shell to use the new version.\n", Version, m.Version)
+	return nil
 }

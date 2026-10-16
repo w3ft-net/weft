@@ -32,6 +32,20 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
           scripts/check-wire-bump.sh
+      # Self-update only reaches users when Version moves, so any change to
+      # code linked into a shipped binary must bump it. The linked set is
+      # computed from `go list -deps`, which needs a Go toolchain.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Check linked-source changes bump the binary version
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+        run: |
+          scripts/check-binary-bump.sh weft "$BASE_REF"
+          scripts/check-binary-bump.sh weftd "$BASE_REF"
 
   unit:
     name: Unit tests

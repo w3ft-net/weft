@@ -138,3 +138,21 @@ jobs:
     - name: Deploy compactor Lambda
       working-directory: weft
       run: kevcons ext release-lambda compactor
+
+    # Backstop for the PR gate: a direct push to main skips it. If code linked
+    # into a binary changed since its last release tag but Version didn't move,
+    # the release steps above silently skipped it and users never got the
+    # change — fail loudly here instead. `always()` so it still runs when an
+    # earlier step failed.
+    - name: Verify binaries with changes were version-bumped
+      if: always()
+      working-directory: weft
+      run: |
+        for bin in weft weftd; do
+          last="$(git tag --list "$bin/v*" --sort=-v:refname | head -n1)"
+          if [ -z "$last" ]; then
+            echo "no $bin/v* tag yet; skipping"
+            continue
+          fi
+          scripts/check-binary-bump.sh "$bin" "$last"
+        done
