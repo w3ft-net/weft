@@ -46,7 +46,7 @@ function fakeProbe(opts: { detectedTimestamp?: boolean } = {}): { probe: ProbeFn
   return { probe, calls }
 }
 
-function selectIn(testid: string, text: string) {
+function selectIn(testid: string, text: string, detail = 1) {
   const el = screen.getByTestId(testid)
   const node = el.firstChild as Text
   const i = node.data.indexOf(text)
@@ -56,7 +56,7 @@ function selectIn(testid: string, text: string) {
   const sel = window.getSelection()!
   sel.removeAllRanges()
   sel.addRange(range)
-  fireEvent.mouseUp(el)
+  fireEvent.mouseUp(el, { detail })
 }
 
 const T = 'p-wizard'
@@ -120,6 +120,56 @@ describe('ExtractionWizard decision tree', () => {
       trace_id_field: 'none', trace_id_pattern: 'trace_id=(\\w+)',
     })
     expect(notes).toEqual([])
+  })
+
+  // Same vocabulary as the CLI picker: your selection is drawn by us (it
+  // stays visible while you press buttons), and a double-click takes the whole
+  // identifier-like token, as `enter` does there.
+  it('draws the selection itself and double-click grabs the whole token', async () => {
+    const { probe, calls } = fakeProbe()
+    render(<ExtractionWizard testidPrefix="p" sample={sample} base={base} probe={probe}
+      spansDetected={false} onComplete={() => {}} onCancel={() => {}} />)
+    await press('expect-no-button') // timestamp
+    await press('expect-no-button') // level
+    await press('expect-yes-button') // trace id
+    await see('pick-line')
+    click('next-line-button')
+    await waitFor(() => expect(screen.getByTestId(`${T}-pick-line`).textContent).toBe(sample[1]))
+
+    // double-click landed on part of the id: the selection grows to the token
+    selectIn(`${T}-pick-line`, '9a1c0de4b2', 2)
+    const sel = screen.getByTestId(`${T}-pick-line-selection`)
+    expect(sel.textContent).toBe('3f9a1c0de4b2a871')
+    expect(sel.className).toBe('psc-sel')
+    expect(screen.getByTestId(`${T}-pick-line`).textContent).toBe(sample[1]) // text unchanged
+    expect(window.getSelection()!.isCollapsed).toBe(true) // native highlight cleared
+
+    click('use-selection-button')
+    await see('rows')
+    expect(calls[calls.length - 1].marks[0].text).toBe('3f9a1c0de4b2a871')
+    // your marked line is badged apart from lines the rule found by itself
+    expect(screen.getByTestId(`${T}-mark-1`).className).toContain('psc-mark-user')
+    expect(screen.getByTestId(`${T}-mark-3`).className).not.toContain('psc-mark-user')
+    expect(screen.getByTestId(`${T}-mark-2`).className).toContain('psc-mark-miss')
+    click('wrong-3-button')
+    await waitFor(() => expect(screen.getByTestId(`${T}-mark-3`).className).toContain('psc-mark-none'))
+  })
+
+  // The sample is never a blank panel: it is on screen from the first moment,
+  // and a guess shows up highlighted on it.
+  it('shows the sample from the start, with the guess highlighted on it', async () => {
+    const { probe } = fakeProbe({ detectedTimestamp: true })
+    render(<ExtractionWizard testidPrefix="p" sample={sample} base={base} probe={probe}
+      spansDetected={false} onComplete={() => {}} onCancel={() => {}} />)
+    const cand = await see('candidate')
+    expect(cand.textContent).toBe(sample.join(''))
+    const hits = [...cand.querySelectorAll('mark.psc-hit')].map(m => m.textContent)
+    expect(hits).toEqual(sample.map(l => l.slice(0, 8)))
+    click('confirm-yes-button')
+    // no guess left: still looking at the sample, now unhighlighted
+    await see('expect-yes-button') // level: nothing detected, so it asks
+    expect(screen.getByTestId(`${T}-preview`).textContent).toBe(sample.join(''))
+    expect(screen.getByTestId(`${T}-preview`).querySelector('mark')).toBeNull()
   })
 
   it('reports a value that is on none of the lines and moves on', async () => {

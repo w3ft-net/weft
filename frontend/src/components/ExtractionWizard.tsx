@@ -67,43 +67,87 @@ export function HighlightedLine({ line, result }: { line: string; result?: Probe
   return <>{line}</>
 }
 
+const PREVIEW_LINES = 12
+
+// SamplePreview is the sample as the CLI shows it at the start of each value:
+// the lines themselves, with the value the current rule (or guess) finds
+// highlighted in green. Without a result it is the plain sample, so the
+// person is never looking at a blank panel while a guess is being fetched.
+function SamplePreview({ sample, result, testid }: { sample: string[]; result?: ProbeResult | null; testid: string }) {
+  const lines = sample.slice(0, PREVIEW_LINES)
+  return (
+    <>
+      <pre className="psc-sample psc-wiz-preview" data-testid={testid}>
+        {lines.map((l, i) => (
+          <div key={i} className="psc-sample-line">
+            <HighlightedLine line={l} result={result?.results[i]} />
+          </div>
+        ))}
+      </pre>
+      {sample.length > lines.length && (
+        <div className="psc-sample-label">+{sample.length - lines.length} more lines</div>
+      )}
+    </>
+  )
+}
+
+// isIDRune is what an identifier-like value (hex id, uuid, request id) is made
+// of. It is the CLI picker's notion too (cmd/weft/setup/picker.go), so a
+// double-click grabs the same token that `enter` does there.
+const isIDRune = (c: string) => /[\p{L}\p{N}_.-]/u.test(c)
+
 // SelectableLine lets the user drag-select (or double-click) the value in a
 // line, and reports it as the line's text before it plus the text itself.
+// Like the CLI picker, the selection is drawn by us (purple), not left to the
+// browser's native highlight, so it stays visible while the buttons are used.
 function SelectableLine({
-  line, testid, onSelect,
+  line, testid, selection, onSelect,
 }: {
   line: string
   testid: string
+  selection: { prefix: string; text: string } | null
   onSelect: (sel: { prefix: string; text: string } | null) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
 
-  function read() {
+  function read(e: React.MouseEvent) {
     const el = ref.current
     const sel = window.getSelection()
-    if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed) { onSelect(null); return }
+    if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed) { return }
     const range = sel.getRangeAt(0)
     if (!el.contains(range.startContainer) || !el.contains(range.endContainer)) { onSelect(null); return }
     const pre = range.cloneRange()
     pre.selectNodeContents(el)
     pre.setEnd(range.startContainer, range.startOffset)
     let start = pre.toString().length
-    let text = range.toString()
-    const lead = text.length - text.trimStart().length
-    start += lead
-    text = text.trim()
-    onSelect(text ? { prefix: line.slice(0, start), text } : null)
+    let end = start + range.toString().length
+    if (e.detail >= 2) {
+      // Double-click: the whole identifier-like token, as `enter` takes in the CLI.
+      while (start > 0 && isIDRune(line[start - 1])) start--
+      while (end < line.length && isIDRune(line[end])) end++
+    }
+    while (start < end && /\s/.test(line[start])) start++
+    while (end > start && /\s/.test(line[end - 1])) end--
+    sel.removeAllRanges()
+    onSelect(end > start ? { prefix: line.slice(0, start), text: line.slice(start, end) } : null)
   }
 
+  const shown = selection && line.startsWith(selection.prefix) && line.startsWith(selection.text, selection.prefix.length)
   return (
     <div
       ref={ref}
       className="psc-wiz-line psc-wiz-selectable"
       onMouseUp={read}
-      onKeyUp={read}
+      onDoubleClick={read}
       data-testid={testid}
     >
-      {line}
+      {shown ? (
+        <>
+          {selection.prefix}
+          <mark className="psc-sel" data-testid={`${testid}-selection`}>{selection.text}</mark>
+          {line.slice(selection.prefix.length + selection.text.length)}
+        </>
+      ) : line}
     </div>
   )
 }
@@ -302,7 +346,14 @@ export default function ExtractionWizard({
   )
 
   if (stage === 'loading') {
-    return <div className="psc-wizard" data-testid={tp}>{header}<p className="psc-prose">looking…</p>{messages}</div>
+    return (
+      <div className="psc-wizard" data-testid={tp}>
+        {header}
+        <p className="psc-prose">looking…</p>
+        <SamplePreview sample={sample} testid={`${tp}-preview`} />
+        {messages}
+      </div>
+    )
   }
 
   if (stage === 'spans-gate') {
@@ -324,7 +375,6 @@ export default function ExtractionWizard({
   }
 
   if (stage === 'confirm' && result) {
-    const shown = result.results.filter(r => r.matched).slice(0, 5)
     const values = [...new Set(result.results.filter(r => r.matched).map(r => r.value))].slice(0, 8)
     return (
       <div className="psc-wizard" data-testid={tp}>
@@ -336,13 +386,7 @@ export default function ExtractionWizard({
         <div className="psc-wiz-rule" data-testid={`${tp}-candidate-values`}>
           sees: {values.join(', ')}
         </div>
-        <pre className="psc-sample" data-testid={`${tp}-candidate`}>
-          {shown.map(r => (
-            <div key={r.line} className="psc-sample-line">
-              <HighlightedLine line={sample[r.line]} result={r} />
-            </div>
-          ))}
-        </pre>
+        <SamplePreview sample={sample} result={result} testid={`${tp}-candidate`} />
         <div className="psc-actions">
           <button className="tui-btn tui-btn-primary" disabled={busy}
             onClick={() => advance(result.schema_patch ?? {})}
@@ -380,6 +424,7 @@ export default function ExtractionWizard({
       <div className="psc-wizard" data-testid={tp}>
         {header}
         <p className="psc-prose">Do you expect a {field.label} on lines like these?</p>
+        <SamplePreview sample={sample} testid={`${tp}-preview`} />
         <div className="psc-actions">
           <button className="tui-btn tui-btn-primary" onClick={() => { resetField(); setStage('pick') }}
             data-testid={`${tp}-expect-yes-button`}>yes, help me find it</button>
@@ -405,6 +450,7 @@ export default function ExtractionWizard({
         <SelectableLine
           line={sample[target]}
           testid={`${tp}-pick-line`}
+          selection={selection}
           onSelect={setSelection}
         />
         <div className="psc-actions">
@@ -456,7 +502,8 @@ export default function ExtractionWizard({
           return (
             <div key={i} className={`psc-wiz-row${r?.matched ? ' psc-wiz-row-hit' : ''}`}
               data-testid={`${tp}-row-${i}`}>
-              <span className="psc-wiz-mark">{mk ? (mk.none ? '✗' : '✓') : r?.matched ? '✓' : '·'}</span>
+              <span className={`psc-wiz-mark${mk ? (mk.none ? ' psc-mark-none' : ' psc-mark-user') : r?.matched ? '' : ' psc-mark-miss'}`}
+                data-testid={`${tp}-mark-${i}`}>{mk ? (mk.none ? '✗' : '✓') : r?.matched ? '✓' : '·'}</span>
               <span className="psc-wiz-text"><HighlightedLine line={l} result={r} /></span>
               <span className="psc-wiz-flags">
                 {!r?.matched && (
