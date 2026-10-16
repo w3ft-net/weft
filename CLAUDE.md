@@ -36,6 +36,10 @@ The project depends on `github.com/graybeardcorp/warp` via a local replace direc
 
 Inter-node protocol is gRPC (shard queries, weftd ingest, tail subscriptions). Coordinator-to-shard lifecycle commands use HTTP (`/health`, `/transition`, `/shutdown`).
 
+## Logging
+
+Server code logs with `weftlog.Infof/Warnf/Errorf(ctx, format, args...)` (`internal/weftlog`), never stdlib `log.Printf`. Pass the request's ctx: the weft SDK's slog handler appends `trace_id=<id>` from it, so don't spell the ID in the message. Use `context.Background()` only where there is truly no request (boot, tickers, cron). Each server `main` calls `weftlog.Init(os.Stderr)` first. Lines keep the stdlib shape (`2006/01/02 15:04:05 message`) because the weft/* sources' schemas are detected from it. `TestNoStdlibLogPrintsOutsideTerminalTools` enforces this; operator CLIs (`weft-admin`, `weft-demo-seed`, `docgen`, `loadtest`, `loom-producer`, `weft-migrate`) are exempt. In tests, assert on output with `weftlog.Capture`.
+
 ## Multi-tenancy
 
 `$CUSTOMER` is a system-level field injected unconditionally by the coordinator as a `WHERE customer = '...'` predicate on every shard query. It is never exposed as a user-facing meta-variable — it is a row-level security boundary.
