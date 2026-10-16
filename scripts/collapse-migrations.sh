@@ -42,14 +42,20 @@ docker run -d --rm --name "$PROJECT" \
   "$IMAGE" \
   postgres -c shared_preload_libraries=pg_cron -c cron.database_name=weft >/dev/null
 
+# Ready means the *final* server, not the image entrypoint's temporary one.
+# During first-boot init the entrypoint runs a throwaway server (unix socket
+# only, no TCP) that answers pg_isready before the weft database exists and is
+# then shut down and restarted. A TCP connection to the weft database only
+# succeeds against the real server.
 echo "==> waiting for postgres ready"
+pg_up() { docker exec "$PROJECT" psql -h 127.0.0.1 -U weft -d weft -tAXqc 'select 1' >/dev/null 2>&1; }
 for i in $(seq 1 60); do
-  if docker exec "$PROJECT" pg_isready -U weft >/dev/null 2>&1; then
+  if pg_up; then
     break
   fi
   sleep 1
 done
-docker exec "$PROJECT" pg_isready -U weft >/dev/null 2>&1 || {
+pg_up || {
   echo "postgres never became ready"
   exit 1
 }
