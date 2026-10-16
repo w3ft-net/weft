@@ -16,12 +16,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/graybeardcorp/weft/cmd/weft/runner"
 	"github.com/graybeardcorp/weft/cmd/weft/setup"
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/internal/timerange"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shell"
+	"github.com/muesli/termenv"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
@@ -32,7 +34,7 @@ import (
 // without threading the flag explicitly.
 var orgOverride string
 
-// extractTopLevelFlags pulls global flags (currently just --org) out of
+// extractTopLevelFlags pulls global flags (--org, --nocolor) out of
 // os.Args before subcommand dispatch. Supports both --org=NAME and
 // --org NAME forms, and the short -o variant. Removes them from
 // os.Args so subcommands' own arg parsing isn't tripped up.
@@ -50,6 +52,8 @@ func extractTopLevelFlags() {
 			orgOverride = strings.TrimPrefix(a, "--org=")
 		case strings.HasPrefix(a, "-o="):
 			orgOverride = strings.TrimPrefix(a, "-o=")
+		case a == "--nocolor" || a == "--no-color":
+			noColor = true
 		default:
 			out = append(out, a)
 		}
@@ -60,6 +64,10 @@ func extractTopLevelFlags() {
 func main() {
 	origArgs := append([]string(nil), os.Args...)
 	extractTopLevelFlags()
+	if noColor {
+		// Covers the lipgloss-rendered setup wizard too, not just our tables.
+		lipgloss.SetColorProfile(termenv.Ascii)
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "update", "--version", "-v", "version":
@@ -85,7 +93,7 @@ func main() {
 			}
 			if len(args) > 0 && args[0] == "-c" {
 				if len(args) < 2 {
-					fmt.Fprintln(os.Stderr, "usage: weft sh [--range <start>..<end>] -c 'pipeline'")
+					usageln("usage: weft sh [--range <start>..<end>] -c 'pipeline'")
 					os.Exit(1)
 				}
 				runOneShot(strings.Join(args[1:], " "), rangeSpec)
@@ -96,7 +104,7 @@ func main() {
 		case "-c":
 			// Legacy shorthand: weft -c 'pipeline'
 			if len(os.Args) < 3 {
-				fmt.Fprintln(os.Stderr, "usage: weft -c 'pipeline'")
+				usageln("usage: weft -c 'pipeline'")
 				os.Exit(1)
 			}
 			runOneShot(strings.Join(os.Args[2:], " "), "")
@@ -151,36 +159,45 @@ func effectiveOrg(cfg *shell.Config) string {
 }
 
 func printUsage() {
-	fmt.Println("weft — log analysis for your Unix heart")
+	st := outStyles()
+	fmt.Println(st.head.Render("weft") + " — log analysis for your Unix heart")
 	fmt.Println()
-	fmt.Println("Usage: weft <command> [options]")
+	fmt.Println(st.muted.Render("Usage:") + " weft [--org NAME] [--nocolor] <command> [options]")
 	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  sh              Start the interactive shell")
-	fmt.Println("  sh -c 'CMD'     Run a single pipeline and exit")
-	fmt.Println("  whoami          Show current user, team, and plan")
-	fmt.Println("  login           Authenticate via browser device flow")
-	fmt.Println("  org             List or switch active org (e.g. weft org switch demo-source)")
-	fmt.Println("  namespace       Manage namespaces (list, create)")
-	fmt.Println("  token           Manage agent tokens (create, list, revoke)")
-	fmt.Println("  source          Manage log sources (add, list, remove, pending, configure)")
-	fmt.Println("  mcp             Start an MCP server on stdio for LLM clients")
-	fmt.Println("  propose         Review or apply MCP-staged mutations (review|apply|clear)")
-	fmt.Println("  update          Replace this binary with the latest released weft")
+	fmt.Println(st.head.Render("Commands:"))
+	for _, c := range [][2]string{
+		{"sh", "Start the interactive shell"},
+		{"sh -c 'CMD'", "Run a single pipeline and exit"},
+		{"whoami", "Show current user, team, and plan"},
+		{"login", "Authenticate via browser device flow"},
+		{"org", "List or switch active org (e.g. weft org switch demo-source)"},
+		{"namespace", "Manage namespaces (list, create)"},
+		{"token", "Manage agent tokens (create, list, revoke)"},
+		{"source", "Manage log sources (add, list, remove, pending, configure)"},
+		{"mcp", "Start an MCP server on stdio for LLM clients"},
+		{"propose", "Review or apply MCP-staged mutations (review|apply|clear)"},
+		{"update", "Replace this binary with the latest released weft"},
+	} {
+		fmt.Printf("  %s %s\n", cell(st.name, c[0], 15), c[1])
+	}
 	fmt.Println()
-	fmt.Println("Run 'weft <command> --help' for details on a specific command.")
+	fmt.Println(st.head.Render("Global options:"))
+	fmt.Printf("  %s %s\n", cell(st.name, "--org NAME", 15), "Use this org instead of the saved one")
+	fmt.Printf("  %s %s\n", cell(st.name, "--nocolor", 15), "Disable colored output (also honors NO_COLOR; off when piped)")
+	fmt.Println()
+	fmt.Println(st.muted.Render("Run 'weft <command> --help' for details on a specific command."))
 }
 
 func runShellCmd() {
 	cfg, err := shell.LoadConfig()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Not logged in. Run 'weft login' to authenticate.")
+		errorln("Not logged in. Run 'weft login' to authenticate.")
 		os.Exit(1)
 	}
 
 	s, cleanup, err := connectRemote(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		errorf("%v\n", err)
 		os.Exit(1)
 	}
 	defer cleanup()
@@ -191,19 +208,19 @@ func runShellCmd() {
 func runWhoami() {
 	cfg, err := shell.LoadConfig()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Not logged in. Run 'weft login' to authenticate.")
+		errorln("Not logged in. Run 'weft login' to authenticate.")
 		os.Exit(1)
 	}
 
 	if cfg.Token == "" {
-		fmt.Fprintln(os.Stderr, "No token in ~/.weft.yaml. Run 'weft login' to authenticate.")
+		errorln("No token in ~/.weft.yaml. Run 'weft login' to authenticate.")
 		os.Exit(1)
 	}
 
 	// Token expiry comes from the JWT itself (no DB hit needed).
 	claims, err := shell.DecodeClaims(cfg.Token)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errorln(err)
 		os.Exit(1)
 	}
 	expires := time.Unix(claims.Expires, 0)
@@ -220,13 +237,13 @@ func runWhoami() {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "fetch identity: %v\n", err)
+		errorf("fetch identity: %v\n", err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "identity lookup failed (%d): %s\n", resp.StatusCode, string(body))
+		errorf("identity lookup failed (%d): %s\n", resp.StatusCode, string(body))
 		os.Exit(1)
 	}
 	var me struct {
@@ -235,18 +252,19 @@ func runWhoami() {
 		Tier     string `json:"tier"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
-		fmt.Fprintf(os.Stderr, "parse identity: %v\n", err)
+		errorf("parse identity: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Email:    %s\n", me.Email)
-	fmt.Printf("Team:     %s\n", me.Customer)
-	fmt.Printf("Plan:     %s\n", me.Tier)
-	fmt.Printf("Endpoint: %s\n", cfg.Endpoint)
+	st := outStyles()
+	fmt.Println(st.kv("Email", 9, st.name.Render(me.Email)))
+	fmt.Println(st.kv("Team", 9, me.Customer))
+	fmt.Println(st.kv("Plan", 9, me.Tier))
+	fmt.Println(st.kv("Endpoint", 9, cfg.Endpoint))
 	if expired {
-		fmt.Printf("Token:    expired (%s) — run 'weft login' to re-authenticate\n", expires.Format("2006-01-02"))
+		fmt.Println(st.kv("Token", 9, st.err.Render(fmt.Sprintf("expired (%s)", expires.Format("2006-01-02")))+" — run 'weft login' to re-authenticate"))
 	} else {
-		fmt.Printf("Token:    valid until %s\n", expires.Format("2006-01-02"))
+		fmt.Println(st.kv("Token", 9, st.ok.Render("valid until "+expires.Format("2006-01-02"))))
 	}
 }
 
@@ -310,14 +328,14 @@ func runShell(s *shell.Shell) {
 		for scanner.Scan() {
 			line := scanner.Text()
 			if err := s.ExecNonInteractive(line, os.Stdout); err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				errorf("error: %v\n", err)
 			}
 		}
 		return
 	}
 
 	if err := runner.Run(s); err != nil {
-		fmt.Fprintf(os.Stderr, "shell error: %v\n", err)
+		errorf("shell error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -325,13 +343,13 @@ func runShell(s *shell.Shell) {
 func runOneShot(pipeline, rangeSpec string) {
 	cfg, err := shell.LoadConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
+		errorf("no .weft.yaml: %v\n", err)
 		os.Exit(1)
 	}
 
 	s, cleanup, err := connectRemote(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		errorf("%v\n", err)
 		os.Exit(1)
 	}
 	defer cleanup()
@@ -340,7 +358,7 @@ func runOneShot(pipeline, rangeSpec string) {
 		// Validate locally so a typo errors out before we round-trip to
 		// the server. The server is the canonical resolver.
 		if _, _, err := timerange.ParseRange(rangeSpec); err != nil {
-			fmt.Fprintf(os.Stderr, "invalid --range: %v\n", err)
+			errorf("invalid --range: %v\n", err)
 			os.Exit(1)
 		}
 		s.Range = rangeSpec
@@ -355,7 +373,7 @@ func runOneShot(pipeline, rangeSpec string) {
 	}
 
 	if err := s.ExecNonInteractive(pipeline, os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		errorf("error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -369,13 +387,13 @@ func runLogin() {
 	// Request a device code.
 	resp, err := http.Post(baseURL+"/api/auth/device", "application/json", nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "request device code: %v\n", err)
+		errorf("request device code: %v\n", err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		fmt.Fprintf(os.Stderr, "request device code: HTTP %d: %s\n", resp.StatusCode, string(body))
+		errorf("request device code: HTTP %d: %s\n", resp.StatusCode, string(body))
 		os.Exit(1)
 	}
 
@@ -419,7 +437,7 @@ func runLogin() {
 		pollResp.Body.Close()
 
 		if pollResp.StatusCode == http.StatusGone {
-			fmt.Fprintf(os.Stderr, "\nDevice code expired.\n")
+			errorf("\nDevice code expired.\n")
 			os.Exit(1)
 		}
 
@@ -432,40 +450,40 @@ func runLogin() {
 		json.Unmarshal(pollData, &result)
 
 		if result.Status == "approved" {
-			fmt.Printf("\n\nLogged in as %s (%s)\n", result.Email, result.Customer)
+			successf("\n\nLogged in as %s (%s)\n", result.Email, result.Customer)
 
 			// Write config file.
 			home, _ := os.UserHomeDir()
 			configPath := filepath.Join(home, ".weft.yaml")
 			config := fmt.Sprintf("endpoint: %s\ntoken: %s\n", baseURL, result.Token)
 			if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", configPath, err)
+				warnf("warning: could not write %s: %v\n", configPath, err)
 				fmt.Printf("\nAdd this to your ~/.weft.yaml manually:\n\n  endpoint: %s\n  token: %s\n", baseURL, result.Token)
 			} else {
-				fmt.Printf("Config written to %s\n", configPath)
+				successf("Config written to %s\n", configPath)
 			}
 			return
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "\nTimed out waiting for authorization.\n")
+	errorf("\nTimed out waiting for authorization.\n")
 	os.Exit(1)
 }
 
 func runNamespace() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: weft namespace {list|create|remove}")
+		usageln("usage: weft namespace {list|create|remove}")
 		os.Exit(1)
 	}
 
 	cfg, err := shell.LoadConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
+		errorf("no .weft.yaml: %v\n", err)
 		os.Exit(1)
 	}
 
 	if !strings.HasPrefix(cfg.Endpoint, "http") {
-		fmt.Fprintln(os.Stderr, "namespace commands require HTTP endpoint")
+		errorln("namespace commands require HTTP endpoint")
 		os.Exit(1)
 	}
 
@@ -475,56 +493,56 @@ func runNamespace() {
 	case "list":
 		nss, err := remote.ListNamespaces()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "list namespaces: %v\n", err)
+			errorf("list namespaces: %v\n", err)
 			os.Exit(1)
 		}
 		if len(nss) == 0 {
-			fmt.Println("No namespaces. Create one with: weft namespace create <name>")
+			hintln("No namespaces. Create one with: weft namespace create <name>")
 			return
 		}
 		for _, ns := range nss {
-			fmt.Println(ns.Name)
+			fmt.Println(outStyles().name.Render(ns.Name))
 		}
 
 	case "create":
 		name, err := parseNamespaceCreateArgs(os.Args[3:])
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			errorln(err)
 			os.Exit(1)
 		}
 		ns, err := remote.CreateNamespace(name)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "create namespace: %v\n", err)
+			errorf("create namespace: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Created namespace: %s\n", ns.Name)
+		successf("Created namespace: %s\n", ns.Name)
 
 	case "remove":
 		a, err := parseNamespaceRemoveArgs(os.Args[3:])
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			errorln(err)
 			os.Exit(1)
 		}
 		if err := remote.RemoveNamespace(a.namespace, a.force); err != nil {
 			var notEmpty *shell.NamespaceNotEmptyError
 			if errors.As(err, &notEmpty) {
-				fmt.Fprintf(os.Stderr, "namespace %s is not empty:\n", a.namespace)
+				errorf("namespace %s is not empty:\n", a.namespace)
 				for _, s := range notEmpty.Sources {
-					fmt.Fprintf(os.Stderr, "  source %s/%s\n", a.namespace, s)
+					errorf("  source %s/%s\n", a.namespace, s)
 				}
 				if notEmpty.Tokens > 0 {
-					fmt.Fprintf(os.Stderr, "  %d live token(s)\n", notEmpty.Tokens)
+					errorf("  %d live token(s)\n", notEmpty.Tokens)
 				}
-				fmt.Fprintf(os.Stderr, "Remove them first, or re-run with --force to delete the namespace and all of it:\n    weft namespace remove %s --force\n", a.namespace)
+				errorf("Remove them first, or re-run with --force to delete the namespace and all of it:\n    weft namespace remove %s --force\n", a.namespace)
 				os.Exit(1)
 			}
-			fmt.Fprintf(os.Stderr, "remove namespace: %v\n", err)
+			errorf("remove namespace: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Removed namespace: %s\n", a.namespace)
+		successf("Removed namespace: %s\n", a.namespace)
 
 	default:
-		fmt.Fprintf(os.Stderr, "unknown namespace command: %s\n", os.Args[2])
+		errorf("unknown namespace command: %s\n", os.Args[2])
 		os.Exit(1)
 	}
 }
@@ -588,14 +606,14 @@ func connectRemote(cfg *shell.Config) (*shell.Shell, func(), error) {
 func runSourcePending(cfg *shell.Config) {
 	endpoint := cfg.Endpoint
 	if !strings.HasPrefix(endpoint, "http") {
-		fmt.Fprintln(os.Stderr, "source pending requires HTTP endpoint")
+		errorln("source pending requires HTTP endpoint")
 		os.Exit(1)
 	}
 	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
 
 	pa, err := parseSourcePendingArgs(os.Args[3:])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errorln(err)
 		os.Exit(1)
 	}
 	namespace, watch := pa.namespace, pa.watch
@@ -606,12 +624,12 @@ func runSourcePending(cfg *shell.Config) {
 
 	sources, err := remote.ListPendingSources(namespace)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "list pending: %v\n", err)
+		errorf("list pending: %v\n", err)
 		os.Exit(1)
 	}
 
 	if len(sources) == 0 {
-		fmt.Println("No pending sources.")
+		hintln("No pending sources.")
 		return
 	}
 
@@ -624,12 +642,12 @@ func runSourcePending(cfg *shell.Config) {
 
 func runSourceConfigure(cfg *shell.Config) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<service> [--file schema.yaml]")
+		usageln("usage: weft source configure <namespace>/<service> [--file schema.yaml]")
 		os.Exit(1)
 	}
 	endpoint := cfg.Endpoint
 	if !strings.HasPrefix(endpoint, "http") {
-		fmt.Fprintln(os.Stderr, "source configure requires HTTP endpoint")
+		errorln("source configure requires HTTP endpoint")
 		os.Exit(1)
 	}
 	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
@@ -647,7 +665,7 @@ func runSourceConfigure(cfg *shell.Config) {
 	}
 	parts := strings.SplitN(target, "/", 2)
 	if len(parts) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: weft source configure <namespace>/<service> [--file schema.yaml]")
+		usageln("usage: weft source configure <namespace>/<service> [--file schema.yaml]")
 		os.Exit(1)
 	}
 	namespace, service := parts[0], parts[1]
@@ -658,22 +676,22 @@ func runSourceConfigure(cfg *shell.Config) {
 	// schema endpoint; the configure endpoint itself accepts either status.
 	sch, err := remote.GetSourceSchema(namespace, service)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "schema: %v\n", err)
+		errorf("schema: %v\n", err)
 		os.Exit(1)
 	}
 	switch sch.Status {
 	case "sampling":
-		fmt.Fprintf(os.Stderr, "%s/%s hasn't collected a full sample yet (%d/%d lines). Try again once it has.\n",
+		errorf("%s/%s hasn't collected a full sample yet (%d/%d lines). Try again once it has.\n",
 			namespace, service, sch.SampleCollected, sch.SampleTarget)
 		os.Exit(1)
 	case "configured":
 		if sch.ResampleRequested {
-			fmt.Fprintf(os.Stderr, "resample of %s/%s in progress (%d/%d lines) — re-run configure once it completes.\n",
+			errorf("resample of %s/%s in progress (%d/%d lines) — re-run configure once it completes.\n",
 				namespace, service, sch.SampleCollected, sch.SampleTarget)
 			os.Exit(1)
 		}
 		if len(sch.Sample) == 0 || string(sch.Sample) == "[]" {
-			fmt.Fprintf(os.Stderr, "%s/%s is already configured. To change its schema, collect a fresh sample first:\n    weft source resample %s/%s\nthen re-run configure once it lands.\n",
+			errorf("%s/%s is already configured. To change its schema, collect a fresh sample first:\n    weft source resample %s/%s\nthen re-run configure once it lands.\n",
 				namespace, service, namespace, service)
 			os.Exit(1)
 		}
@@ -681,7 +699,7 @@ func runSourceConfigure(cfg *shell.Config) {
 		// First-time configure; the sample is on the response. If it turns
 		// out to be the wrong lines, `weft source resample` collects new ones.
 	default:
-		fmt.Fprintf(os.Stderr, "%s/%s: unexpected status %q\n", namespace, service, sch.Status)
+		errorf("%s/%s: unexpected status %q\n", namespace, service, sch.Status)
 		os.Exit(1)
 	}
 
@@ -694,7 +712,7 @@ func runSourceConfigure(cfg *shell.Config) {
 	if nonInteractive {
 		schema, err = loadSchemaNonInteractive(filePath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
+			errorf("%v\n", err)
 			os.Exit(1)
 		}
 		// Service is advisory in the YAML (see ingest.Schema's doc
@@ -703,9 +721,9 @@ func runSourceConfigure(cfg *shell.Config) {
 		schema.Service = service
 
 		if problems := schema.Validate(); len(problems) > 0 {
-			fmt.Fprintln(os.Stderr, "schema validation failed:")
+			errorln("schema validation failed:")
 			for _, p := range problems {
-				fmt.Fprintf(os.Stderr, "  - %s\n", p)
+				errorf("  - %s\n", p)
 			}
 			os.Exit(1)
 		}
@@ -713,11 +731,11 @@ func runSourceConfigure(cfg *shell.Config) {
 		// Parse sample lines from JSON.
 		var lines []string
 		if err := json.Unmarshal(sch.Sample, &lines); err != nil {
-			fmt.Fprintf(os.Stderr, "parse sample: %v\n", err)
+			errorf("parse sample: %v\n", err)
 			os.Exit(1)
 		}
 		if len(lines) == 0 {
-			fmt.Fprintf(os.Stderr, "no sample lines available for %s/%s\n", namespace, service)
+			errorf("no sample lines available for %s/%s\n", namespace, service)
 			os.Exit(1)
 		}
 
@@ -753,17 +771,17 @@ func runSourceConfigure(cfg *shell.Config) {
 		}
 		schema, err = setup.RunSetupFromLines(namespace+"/"+service, lines, det, probe)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "setup: %v\n", err)
+			errorf("setup: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
 	if err := remote.ConfigureSource(namespace, service, schemaConfigMap(schema)); err != nil {
-		fmt.Fprintf(os.Stderr, "configure: %v\n", err)
+		errorf("configure: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Source %s/%s configured.\n", namespace, service)
+	successf("Source %s/%s configured.\n", namespace, service)
 }
 
 // loadSchemaNonInteractive reads and parses a schema YAML document from
@@ -839,62 +857,62 @@ func schemaConfigMap(schema *ingest.Schema) map[string]any {
 // accumulated.
 func runSourceResample(cfg *shell.Config) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft source resample <namespace>/<service>")
+		usageln("usage: weft source resample <namespace>/<service>")
 		os.Exit(1)
 	}
 	endpoint := cfg.Endpoint
 	if !strings.HasPrefix(endpoint, "http") {
-		fmt.Fprintln(os.Stderr, "source resample requires HTTP endpoint")
+		errorln("source resample requires HTTP endpoint")
 		os.Exit(1)
 	}
 	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
 
 	parts := strings.SplitN(os.Args[3], "/", 2)
 	if len(parts) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: weft source resample <namespace>/<service>")
+		usageln("usage: weft source resample <namespace>/<service>")
 		os.Exit(1)
 	}
 	namespace, service := parts[0], parts[1]
 
 	if err := remote.ResampleSource(namespace, service); err != nil {
-		fmt.Fprintf(os.Stderr, "resample: %v\n", err)
+		errorf("resample: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Resample requested for %s/%s. A fresh sample of new lines will be collected; a configured source keeps ingesting on its current schema meanwhile.\n", namespace, service)
-	fmt.Printf("Track progress with: weft source pending --watch\n")
+	successf("Resample requested for %s/%s. A fresh sample of new lines will be collected; a configured source keeps ingesting on its current schema meanwhile.\n", namespace, service)
+	hintf("Track progress with: weft source pending --watch\n")
 }
 
 // runSourceSchema prints the live schema for a configured source, or — if
 // the source is still accumulating — how far along the sample is.
 func runSourceSchema(cfg *shell.Config) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft source schema <namespace>/<service>")
+		usageln("usage: weft source schema <namespace>/<service>")
 		os.Exit(1)
 	}
 	endpoint := cfg.Endpoint
 	if !strings.HasPrefix(endpoint, "http") {
-		fmt.Fprintln(os.Stderr, "source schema requires HTTP endpoint")
+		errorln("source schema requires HTTP endpoint")
 		os.Exit(1)
 	}
 	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
 
 	parts := strings.SplitN(os.Args[3], "/", 2)
 	if len(parts) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: weft source schema <namespace>/<service>")
+		usageln("usage: weft source schema <namespace>/<service>")
 		os.Exit(1)
 	}
 	namespace, service := parts[0], parts[1]
 
 	sch, err := remote.GetSourceSchema(namespace, service)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "schema: %v\n", err)
+		errorf("schema: %v\n", err)
 		os.Exit(1)
 	}
 
 	switch sch.Status {
 	case "configured":
 		if sch.ResampleRequested {
-			fmt.Fprintf(os.Stderr, "# resample in progress: %d/%d lines collected\n", sch.SampleCollected, sch.SampleTarget)
+			errorf("# resample in progress: %d/%d lines collected\n", sch.SampleCollected, sch.SampleTarget)
 		}
 		fmt.Print(sch.SchemaYAML)
 		if !strings.HasSuffix(sch.SchemaYAML, "\n") {
@@ -915,18 +933,18 @@ func dimText(s string) string {
 
 func runSource() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: weft source {add|list|remove|pending|configure|resample|migrate|schema}")
+		usageln("usage: weft source {add|list|remove|pending|configure|resample|migrate|schema}")
 		os.Exit(1)
 	}
 
 	cfg, err := shell.LoadConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
+		errorf("no .weft.yaml: %v\n", err)
 		os.Exit(1)
 	}
 	client, err := httpClient(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		errorf("%v\n", err)
 		os.Exit(1)
 	}
 
@@ -948,7 +966,7 @@ func runSource() {
 	case "schema":
 		runSourceSchema(cfg)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown source command: %s\n", os.Args[2])
+		errorf("unknown source command: %s\n", os.Args[2])
 		os.Exit(1)
 	}
 }
@@ -975,7 +993,7 @@ func httpClient(cfg *shell.Config) (*shell.HTTPCoordinator, error) {
 func runSourceAdd(client *shell.HTTPCoordinator) {
 	add, err := parseSourceAddArgs(os.Args[3:])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errorln(err)
 		os.Exit(1)
 	}
 	namespace, service, logGroup, region := add.namespace, add.service, add.logGroup, add.region
@@ -986,10 +1004,10 @@ func runSourceAdd(client *shell.HTTPCoordinator) {
 		LogGroup:  logGroup,
 		Region:    region,
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "add source: %v\n", err)
+		errorf("add source: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Added pending source: %s/%s → %s (kinesis push).\n"+
+	successf("Added pending source: %s/%s → %s (kinesis push).\n"+
 		"Waiting for the Firehose stream to deliver events and accumulate a sample —\n"+
 		"then run `weft source configure %s/%s` to approve a schema.\n",
 		namespace, service, logGroup, namespace, service)
@@ -998,21 +1016,26 @@ func runSourceAdd(client *shell.HTTPCoordinator) {
 func runSourceList(client *shell.HTTPCoordinator) {
 	sources, err := client.ListSources()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "list sources: %v\n", err)
+		errorf("list sources: %v\n", err)
 		os.Exit(1)
 	}
 	if len(sources) == 0 {
-		fmt.Println("No sources.")
+		hintln("No sources.")
 		return
 	}
 	// SOURCE is the underlying origin: the CloudWatch log group for cloudwatch
 	// sources, or the agent-reported path for weftd. Region/last-poll are
 	// CloudWatch-poller concepts and meaningless for pushed weftd sources, so
 	// they're not shown here — `source schema <ns/svc>` has the per-source detail.
-	fmt.Printf("%-15s %-20s %-17s %-10s %-26s %s\n", "NAMESPACE", "SERVICE", "STATUS", "TYPE", "AGENTS", "SOURCE")
+	rows := make([][]string, 0, len(sources))
 	for _, s := range sources {
-		fmt.Printf("%-15s %-20s %-17s %-10s %-26s %s\n", s.Namespace, s.Service, statusText(s), s.SourceType, agentsText(s), s.LogGroup)
+		rows = append(rows, []string{s.Namespace, s.Service, statusText(s), s.SourceType, agentsText(s), s.LogGroup})
 	}
+	writeTable(os.Stdout, outStyles(), "", []column{
+		mutedCol("NAMESPACE", 15), nameCol("SERVICE", 20), statusCol("STATUS", 17),
+		mutedCol("TYPE", 10), {title: "AGENTS", width: 26, style: func(s styles, _ string) lipgloss.Style { return s.count }},
+		{title: "SOURCE"},
+	}, rows)
 }
 
 // statusText is the STATUS column: the source's status, or what its resample
@@ -1052,30 +1075,30 @@ func agentsText(s shell.SourceInfo) string {
 func runSourceRemove(client *shell.HTTPCoordinator) {
 	namespace, app, err := parseSourceRemoveArgs(os.Args[3:])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errorln(err)
 		os.Exit(1)
 	}
 	if err := client.RemoveSource(namespace, app); err != nil {
-		fmt.Fprintf(os.Stderr, "remove source: %v\n", err)
+		errorf("remove source: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Removed source: %s/%s\n", namespace, app)
+	successf("Removed source: %s/%s\n", namespace, app)
 }
 
 func runToken() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: weft token {create|list|revoke}")
+		usageln("usage: weft token {create|list|revoke}")
 		os.Exit(1)
 	}
 
 	cfg, err := shell.LoadConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
+		errorf("no .weft.yaml: %v\n", err)
 		os.Exit(1)
 	}
 	client, err := httpClient(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		errorf("%v\n", err)
 		os.Exit(1)
 	}
 
@@ -1087,7 +1110,7 @@ func runToken() {
 	case "revoke":
 		runTokenRevoke(client)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown token command: %s\n", os.Args[2])
+		errorf("unknown token command: %s\n", os.Args[2])
 		os.Exit(1)
 	}
 }
@@ -1095,46 +1118,51 @@ func runToken() {
 func runTokenCreate(client *shell.HTTPCoordinator) {
 	ta, err := parseTokenCreateArgs(os.Args[3:])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errorln(err)
 		os.Exit(1)
 	}
 	label, namespace, env := ta.label, ta.namespace, ta.env
 
 	token, err := client.CreateToken("", label, namespace, env)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create token: %v\n", err)
+		errorf("create token: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Token created: %s\n", token)
+	st := outStyles()
+	fmt.Println(st.kv("Token created", 13, st.name.Render(token)))
 	if label != "" {
-		fmt.Printf("Label: %s\n", label)
+		fmt.Println(st.kv("Label", 13, label))
 	}
 	if env != "" {
-		fmt.Printf("Env:   %s (stamped on every row from this token)\n", env)
+		fmt.Println(st.kv("Env", 13, env+st.muted.Render(" (stamped on every row from this token)")))
 	}
-	fmt.Println("Store this token somewhere safe. It cannot be retrieved again.")
+	warnf("Store this token somewhere safe. It cannot be retrieved again.\n")
 }
 
 func runTokenList(client *shell.HTTPCoordinator) {
 	tokens, err := client.ListTokens("")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "list tokens: %v\n", err)
+		errorf("list tokens: %v\n", err)
 		os.Exit(1)
 	}
 	if len(tokens) == 0 {
-		fmt.Println("No tokens configured.")
+		hintln("No tokens configured.")
 		return
 	}
 	// The raw token isn't available after creation; the opaque ID is what
 	// `weft token revoke --id` takes.
-	fmt.Printf("%-20s %-15s %-15s %-25s %-10s %s\n", "ID", "NAMESPACE", "ENV", "LABEL", "STATUS", "CREATED")
+	rows := make([][]string, 0, len(tokens))
 	for _, t := range tokens {
 		env := t.Env
 		if env == "" {
 			env = "-"
 		}
-		fmt.Printf("%-20s %-15s %-15s %-25s %-10s %s\n", t.ID, t.Namespace, env, t.Label, t.Status, t.CreatedAt)
+		rows = append(rows, []string{t.ID, t.Namespace, env, t.Label, t.Status, t.CreatedAt})
 	}
+	writeTable(os.Stdout, outStyles(), "", []column{
+		mutedCol("ID", 20), mutedCol("NAMESPACE", 15), mutedCol("ENV", 15), nameCol("LABEL", 25),
+		statusCol("STATUS", 10), {title: "CREATED"},
+	}, rows)
 }
 
 func runTokenRevoke(client *shell.HTTPCoordinator) {
@@ -1147,32 +1175,32 @@ func runTokenRevoke(client *shell.HTTPCoordinator) {
 		}
 	}
 	if idStr == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft token revoke --id ID   (see `weft token list`)")
+		usageln("usage: weft token revoke --id ID   (see `weft token list`)")
 		os.Exit(1)
 	}
 	if err := client.RevokeToken(idStr); err != nil {
-		fmt.Fprintf(os.Stderr, "revoke token: %v\n", err)
+		errorf("revoke token: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Revoked token %s\n", idStr)
+	successf("Revoked token %s\n", idStr)
 }
 
 // --- Integration subcommand ---
 
 func runIntegration() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: weft integration {list|slack|pagerduty}")
+		usageln("usage: weft integration {list|slack|pagerduty}")
 		os.Exit(1)
 	}
 
 	cfg, err := shell.LoadConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "no .weft.yaml: %v\n", err)
+		errorf("no .weft.yaml: %v\n", err)
 		os.Exit(1)
 	}
 	client, err := httpClient(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		errorf("%v\n", err)
 		os.Exit(1)
 	}
 
@@ -1184,8 +1212,8 @@ func runIntegration() {
 	case "pagerduty", "pd":
 		runIntegrationPagerDuty(client)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown integration command: %s\n", os.Args[2])
-		fmt.Fprintln(os.Stderr, "usage: weft integration {list|slack|pagerduty}")
+		errorf("unknown integration command: %s\n", os.Args[2])
+		usageln("usage: weft integration {list|slack|pagerduty}")
 		os.Exit(1)
 	}
 }
@@ -1193,36 +1221,41 @@ func runIntegration() {
 func runIntegrationList(client *shell.HTTPCoordinator) {
 	status, err := client.ListIntegrations()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "list integrations: %v\n", err)
+		errorf("list integrations: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Slack")
+	st := outStyles()
+	fmt.Println(st.head.Render("Slack"))
 	if status.Slack.Connected {
 		name := status.Slack.TeamName
 		if name == "" {
 			name = "connected"
 		}
-		fmt.Printf("  connected: %s\n", name)
+		fmt.Printf("  %s %s\n", st.muted.Render("connected:"), st.ok.Render(name))
 	} else {
-		fmt.Println("  not connected — `weft integration slack connect`")
+		fmt.Println(st.muted.Render("  not connected — `weft integration slack connect`"))
 	}
 
-	fmt.Println("\nPagerDuty")
+	fmt.Println("\n" + st.head.Render("PagerDuty"))
 	if len(status.PagerDuty.Integrations) == 0 {
-		fmt.Println("  no integrations — `weft integration pagerduty add <name> --key <key>`")
+		fmt.Println(st.muted.Render("  no integrations — `weft integration pagerduty add <name> --key <key>`"))
 		return
 	}
-	fmt.Printf("  %-20s %-16s %s\n", "NAME", "KEY", "LAST ERROR")
+	rows := make([][]string, 0, len(status.PagerDuty.Integrations))
 	for _, it := range status.PagerDuty.Integrations {
-		fmt.Printf("  %-20s %-16s %s\n", it.Name, status.PagerDuty.Keys[it.Name], it.LastError)
+		rows = append(rows, []string{it.Name, status.PagerDuty.Keys[it.Name], it.LastError})
 	}
-	fmt.Println("\nReference these names from /etc/notify.yaml under `pagerduty:`.")
+	writeTable(os.Stdout, st, "  ", []column{
+		nameCol("NAME", 20), mutedCol("KEY", 16),
+		{title: "LAST ERROR", style: func(s styles, _ string) lipgloss.Style { return s.err }},
+	}, rows)
+	hintln("\nReference these names from /etc/notify.yaml under `pagerduty:`.")
 }
 
 func runIntegrationSlack(client *shell.HTTPCoordinator) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft integration slack {connect|rm}")
+		usageln("usage: weft integration slack {connect|rm}")
 		os.Exit(1)
 	}
 	switch os.Args[3] {
@@ -1230,12 +1263,12 @@ func runIntegrationSlack(client *shell.HTTPCoordinator) {
 		runSlackConnect(client)
 	case "rm", "disconnect":
 		if err := client.SlackDisconnect(); err != nil {
-			fmt.Fprintf(os.Stderr, "disconnect slack: %v\n", err)
+			errorf("disconnect slack: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("Slack disconnected.")
+		successf("Slack disconnected.\n")
 	default:
-		fmt.Fprintf(os.Stderr, "unknown slack command: %s\n", os.Args[3])
+		errorf("unknown slack command: %s\n", os.Args[3])
 		os.Exit(1)
 	}
 }
@@ -1248,7 +1281,7 @@ func runIntegrationSlack(client *shell.HTTPCoordinator) {
 func runSlackConnect(client *shell.HTTPCoordinator) {
 	authURL, err := client.SlackConnectURL()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "start slack connect: %v\n", err)
+		errorf("start slack connect: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -1269,18 +1302,18 @@ func runSlackConnect(client *shell.HTTPCoordinator) {
 			if name == "" {
 				name = "your workspace"
 			}
-			fmt.Printf("\n\nSlack connected to %s.\n", name)
+			successf("\n\nSlack connected to %s.\n", name)
 			fmt.Println("Route alerts to it from /etc/notify.yaml under `slack:`.")
 			return
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\nTimed out waiting for Slack authorization.\n")
+	errorf("\nTimed out waiting for Slack authorization.\n")
 	os.Exit(1)
 }
 
 func runIntegrationPagerDuty(client *shell.HTTPCoordinator) {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft integration pagerduty {add|rm} ...")
+		usageln("usage: weft integration pagerduty {add|rm} ...")
 		os.Exit(1)
 	}
 	switch os.Args[3] {
@@ -1301,27 +1334,27 @@ func runIntegrationPagerDuty(client *shell.HTTPCoordinator) {
 			}
 		}
 		if name == "" || key == "" {
-			fmt.Fprintln(os.Stderr, "usage: weft integration pagerduty add <name> --key <integration-key>")
+			usageln("usage: weft integration pagerduty add <name> --key <integration-key>")
 			os.Exit(1)
 		}
 		if err := client.SavePagerDuty(name, key); err != nil {
-			fmt.Fprintf(os.Stderr, "save pagerduty: %v\n", err)
+			errorf("save pagerduty: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("PagerDuty integration %q saved. Reference it from /etc/notify.yaml under `pagerduty:`.\n", name)
+		successf("PagerDuty integration %q saved. Reference it from /etc/notify.yaml under `pagerduty:`.\n", name)
 	case "rm", "delete":
 		if len(os.Args) < 5 {
-			fmt.Fprintln(os.Stderr, "usage: weft integration pagerduty rm <name>")
+			usageln("usage: weft integration pagerduty rm <name>")
 			os.Exit(1)
 		}
 		name := os.Args[4]
 		if err := client.DeletePagerDuty(name); err != nil {
-			fmt.Fprintf(os.Stderr, "delete pagerduty: %v\n", err)
+			errorf("delete pagerduty: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("PagerDuty integration %q removed.\n", name)
+		successf("PagerDuty integration %q removed.\n", name)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown pagerduty command: %s\n", os.Args[3])
+		errorf("unknown pagerduty command: %s\n", os.Args[3])
 		os.Exit(1)
 	}
 }
@@ -1347,12 +1380,12 @@ func runOrg() {
 		runOrgList()
 	case "switch", "use":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: weft org switch <name>")
+			usageln("usage: weft org switch <name>")
 			os.Exit(1)
 		}
 		runOrgSwitch(args[1])
 	default:
-		fmt.Fprintln(os.Stderr, "usage: weft org [list|switch <name>]")
+		usageln("usage: weft org [list|switch <name>]")
 		os.Exit(1)
 	}
 }
@@ -1388,39 +1421,43 @@ func fetchMe(cfg *shell.Config) (map[string]any, error) {
 func runOrgList() {
 	cfg, err := shell.LoadConfig()
 	if err != nil || cfg.Token == "" {
-		fmt.Fprintln(os.Stderr, "Not logged in. Run 'weft login' to authenticate.")
+		errorln("Not logged in. Run 'weft login' to authenticate.")
 		os.Exit(1)
 	}
 	me, err := fetchMe(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "fetch orgs: %v\n", err)
+		errorf("fetch orgs: %v\n", err)
 		os.Exit(1)
 	}
 	orgs, _ := me["orgs"].([]any)
 	if len(orgs) == 0 {
-		fmt.Println("No org memberships.")
+		hintln("No org memberships.")
 		return
 	}
-	fmt.Println("ACTIVE  NAME                 ROLE")
+	var rows [][]string
 	for _, o := range orgs {
 		m, _ := o.(map[string]any)
-		marker := "        "
+		marker := ""
 		if active, _ := m["active"].(bool); active {
-			marker = "  *     "
+			marker = "*"
 		}
-		fmt.Printf("%s%-20s %s\n", marker, m["name"], m["role"])
+		rows = append(rows, []string{marker, fmt.Sprint(m["name"]), fmt.Sprint(m["role"])})
 	}
+	writeTable(os.Stdout, outStyles(), "", []column{
+		{title: "ACTIVE", width: 6, style: func(s styles, _ string) lipgloss.Style { return s.ready }},
+		nameCol("NAME", 20), {title: "ROLE"},
+	}, rows)
 }
 
 func runOrgSwitch(name string) {
 	cfg, err := shell.LoadConfig()
 	if err != nil || cfg.Token == "" {
-		fmt.Fprintln(os.Stderr, "Not logged in. Run 'weft login' to authenticate.")
+		errorln("Not logged in. Run 'weft login' to authenticate.")
 		os.Exit(1)
 	}
 	me, err := fetchMe(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "fetch orgs: %v\n", err)
+		errorf("fetch orgs: %v\n", err)
 		os.Exit(1)
 	}
 	orgs, _ := me["orgs"].([]any)
@@ -1433,13 +1470,13 @@ func runOrgSwitch(name string) {
 		}
 	}
 	if !found {
-		fmt.Fprintf(os.Stderr, "not a member of %q. Run `weft org list` to see available orgs.\n", name)
+		errorf("not a member of %q. Run `weft org list` to see available orgs.\n", name)
 		os.Exit(1)
 	}
 	cfg.Org = name
 	if err := shell.SaveConfig(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "save config: %v\n", err)
+		errorf("save config: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Switched to org: %s\n", name)
+	successf("Switched to org: %s\n", name)
 }

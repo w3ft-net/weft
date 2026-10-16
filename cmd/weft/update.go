@@ -29,30 +29,30 @@ const (
 func runUpdate() {
 	m, err := release.FetchManifest(manifestURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "fetch manifest: %v\n", err)
+		errorf("fetch manifest: %v\n", err)
 		os.Exit(1)
 	}
 
 	if !release.VersionNewer(m.Version, Version) {
-		fmt.Printf("weft %s — already on latest\n", Version)
+		hintf("weft %s — already on latest\n", Version)
 		return
 	}
 
 	plat := release.FindPlatform(m, runtime.GOOS, runtime.GOARCH)
 	if plat == nil {
-		fmt.Fprintf(os.Stderr,
+		errorf(
 			"no published weft binary for %s/%s in manifest (latest=%s) — see %s\n",
 			runtime.GOOS, runtime.GOARCH, m.Version, releaseBase+"/weft/latest/")
 		os.Exit(1)
 	}
 
-	fmt.Printf("downloading weft %s for %s/%s ...\n", m.Version, runtime.GOOS, runtime.GOARCH)
+	hintf("downloading weft %s for %s/%s ...\n", m.Version, runtime.GOOS, runtime.GOARCH)
 	if err := installRelease(plat); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		errorf("%v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("weft updated %s → %s. Restart your shell to use the new version.\n", Version, m.Version)
+	successf("weft updated %s → %s. Restart your shell to use the new version.\n", Version, m.Version)
 }
 
 // installRelease downloads plat's binary, verifies its sha256, and

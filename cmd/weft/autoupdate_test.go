@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,5 +75,63 @@ func TestAutoUpdateSkipsWhenCurrent(t *testing.T) {
 	u.run("0.8.1", nil, nil)
 	if *installs != 0 {
 		t.Fatalf("installs=%d, want 0 when already on latest", *installs)
+	}
+}
+
+func withNotice(u *autoUpdater, t *testing.T) *bytes.Buffer {
+	u.LatestPath = filepath.Join(filepath.Dir(u.StampPath), "latest-version")
+	var buf bytes.Buffer
+	u.Notice = &buf
+	return &buf
+}
+
+// With auto-update opted out the CLI still tells you a release exists.
+func TestNoticeWhenAutoUpdateDisabled(t *testing.T) {
+	u, installs, _ := newTestUpdater(t, "0.9.0")
+	buf := withNotice(u, t)
+	u.InstallDisabled = true
+	u.run("0.8.1", nil, nil)
+	if *installs != 0 {
+		t.Fatalf("installs=%d, want 0 when disabled", *installs)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "new version available") || !strings.Contains(out, "0.8.1 → 0.9.0") || !strings.Contains(out, "weft update") {
+		t.Errorf("notice = %q", out)
+	}
+}
+
+// The notice shows on every invocation, not just the one that fetched: later
+// runs inside the throttle window read the cached latest version.
+func TestNoticeRepeatsFromCacheWithoutFetching(t *testing.T) {
+	u, _, _ := newTestUpdater(t, "0.9.0")
+	buf := withNotice(u, t)
+	u.InstallDisabled = true
+	u.run("0.8.1", nil, nil)
+	buf.Reset()
+	u.ManifestURL = "http://127.0.0.1:1/unreachable"
+	u.run("0.8.1", nil, nil)
+	if !strings.Contains(buf.String(), "0.9.0") {
+		t.Errorf("cached notice missing: %q", buf.String())
+	}
+}
+
+// A failed install must not leave the user unaware an update exists.
+func TestNoticeAfterFailedInstall(t *testing.T) {
+	u, _, _ := newTestUpdater(t, "0.9.0")
+	buf := withNotice(u, t)
+	u.Install = func(*release.Platform) error { return errors.New("read-only") }
+	u.run("0.8.1", nil, nil)
+	if !strings.Contains(buf.String(), "weft update") {
+		t.Errorf("notice = %q", buf.String())
+	}
+}
+
+func TestNoNoticeWhenCurrent(t *testing.T) {
+	u, _, _ := newTestUpdater(t, "0.8.1")
+	buf := withNotice(u, t)
+	u.InstallDisabled = true
+	u.run("0.8.1", nil, nil)
+	if buf.Len() != 0 {
+		t.Errorf("unexpected notice: %q", buf.String())
 	}
 }

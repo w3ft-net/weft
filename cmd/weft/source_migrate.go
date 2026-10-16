@@ -146,12 +146,12 @@ func runSourceMigrate(cfg *shell.Config) {
 	usage := "usage: weft source migrate <namespace>/<service> --lines FILE|- [--apply --backup-dir DIR]\n" +
 		"  produce LINES with: weft sh -c 'tail -n 500 /log/<ns>/<service>/<kind>.log' > lines.txt"
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, usage)
+		errorln(usage)
 		os.Exit(1)
 	}
 	parts := strings.SplitN(os.Args[3], "/", 2)
 	if len(parts) != 2 {
-		fmt.Fprintln(os.Stderr, usage)
+		errorln(usage)
 		os.Exit(1)
 	}
 	namespace, service := parts[0], parts[1]
@@ -174,32 +174,32 @@ func runSourceMigrate(cfg *shell.Config) {
 		}
 	}
 	if linesPath == "" {
-		fmt.Fprintln(os.Stderr, usage)
+		errorln(usage)
 		os.Exit(1)
 	}
 	if !strings.HasPrefix(cfg.Endpoint, "http") {
-		fmt.Fprintln(os.Stderr, "source migrate requires HTTP endpoint")
+		errorln("source migrate requires HTTP endpoint")
 		os.Exit(1)
 	}
 	remote := shell.NewHTTPCoordinator(cfg.Endpoint, cfg.Token, effectiveOrg(cfg))
 
 	sch, err := remote.GetSourceSchema(namespace, service)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "schema: %v\n", err)
+		errorf("schema: %v\n", err)
 		os.Exit(1)
 	}
 	if sch.Status != "configured" || sch.SchemaYAML == "" {
-		fmt.Fprintf(os.Stderr, "%s/%s has no stored schema to migrate (status %s); use `weft source configure`\n", namespace, service, sch.Status)
+		errorf("%s/%s has no stored schema to migrate (status %s); use `weft source configure`\n", namespace, service, sch.Status)
 		os.Exit(1)
 	}
 	lines, err := readLines(linesPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "read lines: %v\n", err)
+		errorf("read lines: %v\n", err)
 		os.Exit(1)
 	}
 	plan, err := planMigration(sch.SchemaYAML, lines)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "plan: %v\n", err)
+		errorf("plan: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Print(plan.Report(namespace + "/" + service))
@@ -211,17 +211,17 @@ func runSourceMigrate(cfg *shell.Config) {
 		return
 	}
 	if !plan.Safe() {
-		fmt.Fprintln(os.Stderr, "\nnot applying: the plan is not safe")
+		errorln("\nnot applying: the plan is not safe")
 		os.Exit(1)
 	}
 	saved, err := backupSchema(backupDir, namespace, service, sch.SchemaYAML)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\nnot applying: %v\n", err)
+		errorf("\nnot applying: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("\nold schema saved to %s\n", saved)
 	if err := remote.ConfigureSource(namespace, service, schemaConfigMap(plan.New)); err != nil {
-		fmt.Fprintf(os.Stderr, "configure: %v\n(the old schema is unchanged; the backup is still at %s)\n", err, saved)
+		errorf("configure: %v\n(the old schema is unchanged; the backup is still at %s)\n", err, saved)
 		os.Exit(1)
 	}
 	fmt.Printf("%s/%s now uses the explicit schema; roll back with: weft source configure %s/%s --file %s\n", namespace, service, namespace, service, saved)

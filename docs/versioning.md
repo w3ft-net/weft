@@ -64,6 +64,11 @@ Both binaries pull releases on their own; a release is how a fix ships.
   for dev builds (no `GitSHA`), `weft update`/`version`, and when
   `WEFT_NO_AUTO_UPDATE=1` or `auto_update: false` in `~/.weft.yaml`.
   `weft update` still forces an immediate check.
+- **Update notice**: whenever the cached latest version (`<user cache dir>/weft/latest-version`,
+  refreshed by the daily check even when auto-update is off) is newer than the
+  running CLI, every subcommand prints `new version available (X → Y), run
+  \`weft update\` to upgrade` to stderr. Terminal only, never for `mcp`,
+  `update`, `version`, or dev builds.
 
 Because both only move to a *strictly newer* version, an unbumped change is
 never delivered.

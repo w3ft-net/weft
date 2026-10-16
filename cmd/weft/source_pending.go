@@ -72,17 +72,40 @@ func lastSampleLine(sample json.RawMessage, width int) string {
 	return line
 }
 
+// coloredBar is progressBar with the filled run in gold and the rest muted.
+func (p styles) coloredBar(collected, target, width int) string {
+	if target <= 0 {
+		target = 1
+	}
+	if collected > target {
+		collected = target
+	}
+	filled := collected * width / target
+	return p.empty.Render("[") + p.filled.Render(strings.Repeat("#", filled)) +
+		p.empty.Render(strings.Repeat("-", width-filled)+"]")
+}
+
 // renderPending writes the pending-sources table: one row per source with a
 // fill meter and last-line age, and the newest sampled line beneath it.
+// Color follows w's terminal capability (none when piped).
 func renderPending(w io.Writer, sources []shell.PendingSource, now time.Time, width int) {
-	fmt.Fprintf(w, "%-20s %-15s %-*s %-8s %s\n", "SERVICE", "NAMESPACE", pendingBarWidth+9, "SAMPLE", "STATUS", "LAST LINE")
+	renderPendingStyled(newStyles(w), w, sources, now, width)
+}
+
+func renderPendingStyled(st styles, w io.Writer, sources []shell.PendingSource, now time.Time, width int) {
+	fmt.Fprintf(w, "%s %s %s %s %s\n",
+		cell(st.head, "SERVICE", 20), cell(st.head, "NAMESPACE", 15),
+		cell(st.head, "SAMPLE", pendingBarWidth+9), cell(st.head, "STATUS", 8), st.head.Render("LAST LINE"))
 	for _, s := range sources {
 		target := s.SampleTarget
-		fmt.Fprintf(w, "%-20s %-15s %s %3d/%-3d %-8s %s\n",
-			s.Service, s.Namespace, progressBar(s.SampleCollected, target, pendingBarWidth),
-			s.SampleCollected, target, s.Status, lastLineText(s, now))
+		status := st.statusStyle(s.Status)
+		fmt.Fprintf(w, "%s %s %s %s %s %s\n",
+			cell(st.name, s.Service, 20), cell(st.muted, s.Namespace, 15),
+			st.coloredBar(s.SampleCollected, target, pendingBarWidth),
+			cell(st.count, fmt.Sprintf("%3d/%-3d", s.SampleCollected, target), 7),
+			cell(status, s.Status, 8), st.muted.Render(lastLineText(s, now)))
 		if line := lastSampleLine(s.Sample, width-6); line != "" {
-			fmt.Fprintf(w, "  %s\n", dimText("› "+line))
+			fmt.Fprintf(w, "  %s\n", st.preview.Render("› "+line))
 		}
 	}
 }
