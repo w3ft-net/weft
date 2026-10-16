@@ -28,7 +28,7 @@ func exportFixtureDB(t *testing.T) string {
 		{Raw: "a2", CustomerId: 5, TsUnixNs: base + int64(time.Hour)},
 		{Raw: "g1", CustomerId: 6, TsUnixNs: base + int64(30*time.Minute)},
 	}
-	if err := s.Ingest(rows, nil); err != nil {
+	if err := s.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	if err := s.Close(); err != nil {
@@ -110,7 +110,7 @@ func TestRunExport_ReplaysWALFromCrashConsistentCopy(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		rows = append(rows, &pb.LogRow{Raw: "r", CustomerId: 5, TsUnixNs: base + int64(i)*int64(time.Second)})
 	}
-	if err := live.Ingest(rows, nil); err != nil {
+	if err := live.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatal(err)
 	}
 

@@ -16,7 +16,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"reflect"
 	"strconv"
 	"strings"
@@ -25,6 +24,7 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // Runtime is the full set of tunable limits for the coordinator, api,
@@ -203,7 +203,7 @@ func overlayInt(blob map[string]string, key string, dst *int) {
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil {
-		log.Printf("config: ignoring bad int for %s=%q: %v", key, v, err)
+		weftlog.Infof(context.Background(), "config: ignoring bad int for %s=%q: %v", key, v, err)
 		return
 	}
 	*dst = n
@@ -216,7 +216,7 @@ func overlayInt64(blob map[string]string, key string, dst *int64) {
 	}
 	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 	if err != nil {
-		log.Printf("config: ignoring bad int64 for %s=%q: %v", key, v, err)
+		weftlog.Infof(context.Background(), "config: ignoring bad int64 for %s=%q: %v", key, v, err)
 		return
 	}
 	*dst = n
@@ -246,7 +246,7 @@ func Load(ctx context.Context, appName, region string) *Runtime {
 	}
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
-		log.Printf("config: AWS config load failed, using defaults: %v", err)
+		weftlog.Errorf(ctx, "config: AWS config load failed, using defaults: %v", err)
 		return Defaults()
 	}
 	return loadWithClient(ctx, ssm.NewFromConfig(cfg), appName)
@@ -260,13 +260,13 @@ func loadWithClient(ctx context.Context, client ssmClient, appName string) *Runt
 		// Missing param is the common case pre-seed; don't noise the
 		// logs for it. Only log if AWS itself complains.
 		if err != nil && !isParamNotFound(err) {
-			log.Printf("config: SSM GetParameter %s failed, using defaults: %v", name, err)
+			weftlog.Errorf(ctx, "config: SSM GetParameter %s failed, using defaults: %v", name, err)
 		}
 		return r
 	}
 	var blob map[string]string
 	if err := json.Unmarshal([]byte(*out.Parameter.Value), &blob); err != nil {
-		log.Printf("config: %s is not valid JSON, using defaults: %v", name, err)
+		weftlog.Infof(ctx, "config: %s is not valid JSON, using defaults: %v", name, err)
 		return r
 	}
 	r.Overlay(blob)
@@ -296,7 +296,7 @@ func Watch(ctx context.Context, appName, region string, interval time.Duration) 
 				next := Load(ctx, appName, region)
 				cur := ptr.Load()
 				if !reflect.DeepEqual(cur, next) {
-					log.Printf("config: runtime config changed, applying new values")
+					weftlog.Infof(ctx, "config: runtime config changed, applying new values")
 					ptr.Store(next)
 				}
 			}

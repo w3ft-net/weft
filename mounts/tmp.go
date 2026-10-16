@@ -1,7 +1,6 @@
 package mounts
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -137,7 +136,7 @@ func (m *TmpMount) Remove(rel string) error {
 				return fmt.Errorf("tmp: %s: directory not empty", f.Path)
 			}
 		}
-		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
+		return m.cfg.Store.DB().WithContext(store.WithOrg(m.cfg.ctx(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
 			if err := tx.Where("file_id = ?", f.ID).Delete(&store.TmpFileLine{}).Error; err != nil {
 				return err
 			}
@@ -191,7 +190,7 @@ func (m *TmpMount) AppendFile(rel string, data []byte) error {
 		}
 
 		lines := store.SplitLines(data)
-		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
+		return m.cfg.Store.DB().WithContext(store.WithOrg(m.cfg.ctx(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
 			now := time.Now()
 			var fileID uint64
 			if existing != nil {
@@ -270,7 +269,7 @@ func (m *TmpMount) RemoveAll(rel string) error {
 		if err != nil {
 			return err
 		}
-		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
+		return m.cfg.Store.DB().WithContext(store.WithOrg(m.cfg.ctx(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
 			// Collect every row under this subtree so we can delete their
 			// line contents, then the rows themselves.
 			var files []store.TmpFile
@@ -331,7 +330,7 @@ func (m *TmpMount) CopyFile(srcRel, dstRel string) error {
 			return fmt.Errorf("%w (%d + %d > %d)", store.ErrTmpQuotaExceeded, used, src.ByteSize, allowance)
 		}
 
-		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
+		return m.cfg.Store.DB().WithContext(store.WithOrg(m.cfg.ctx(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
 			now := time.Now()
 			dstRow := store.TmpFile{
 				OrgID:     m.cfg.OrgID,
@@ -386,7 +385,7 @@ func (m *TmpMount) Rename(oldRel, newRel string) error {
 			return err
 		}
 		now := time.Now()
-		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Model(&store.TmpFile{}).
+		return m.cfg.Store.DB().WithContext(store.WithOrg(m.cfg.ctx(), m.cfg.OrgID)).Model(&store.TmpFile{}).
 			Where("id = ? AND updated_at = ?", src.ID, src.UpdatedAt).
 			Updates(map[string]any{
 				"path":       dstNorm,
@@ -417,7 +416,7 @@ func (m *TmpMount) Touch(rel string) error {
 			return err
 		}
 		now := time.Now()
-		return m.cfg.Store.DB().WithContext(store.WithOrg(context.Background(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
+		return m.cfg.Store.DB().WithContext(store.WithOrg(m.cfg.ctx(), m.cfg.OrgID)).Transaction(func(tx *gorm.DB) error {
 			if err := tx.Model(&store.TmpFile{}).
 				Where("id = ? AND updated_at = ?", existing.ID, existing.UpdatedAt).
 				Update("updated_at", now).Error; err != nil {
@@ -464,7 +463,7 @@ func (m *TmpMount) noteFileCreated(created bool) {
 	if err != nil || n != 1 {
 		return
 	}
-	m.cfg.NoticeQueue.Maybe(NoticeKeyTmpExpiry)
+	m.cfg.NoticeQueue.Maybe(m.cfg.ctx(), NoticeKeyTmpExpiry)
 }
 
 // --- helpers ---

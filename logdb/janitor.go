@@ -3,10 +3,10 @@ package logdb
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -422,11 +422,11 @@ func (s ShardStore) SweepTombstones(now time.Time, deleter ObjectDeleter) (int, 
 	deleted := 0
 	for _, t := range tombs {
 		if err := deleter.DeleteParquet(t.Path); err != nil {
-			log.Printf("janitor GC: delete %s (shard %s): %v", t.Path, t.ShardID, err)
+			weftlog.Infof(context.Background(), "janitor GC: delete %s (shard %s): %v", t.Path, t.ShardID, err)
 			continue
 		}
 		if err := s.db().Delete(&ParquetTombstone{}, t.ID).Error; err != nil {
-			log.Printf("janitor GC: drop tombstone %d: %v", t.ID, err)
+			weftlog.Infof(context.Background(), "janitor GC: drop tombstone %d: %v", t.ID, err)
 			continue
 		}
 		deleted++
@@ -503,7 +503,7 @@ func (j *Janitor) RunOnce(ctx context.Context) error {
 		}
 		res, err := j.Store.ExecutePurge(p, resolver, deps)
 		if err != nil {
-			log.Printf("janitor: purge %s (%s): %v", p.ShardID, p.Disposition, err)
+			weftlog.Infof(ctx, "janitor: purge %s (%s): %v", p.ShardID, p.Disposition, err)
 			continue
 		}
 		if res.Outcome == OutcomeRewritten && j.Refresh != nil {
@@ -511,7 +511,7 @@ func (j *Janitor) RunOnce(ctx context.Context) error {
 		}
 	}
 	if _, err := j.Store.SweepTombstones(now, j.Deleter); err != nil {
-		log.Printf("janitor: GC sweep: %v", err)
+		weftlog.Infof(ctx, "janitor: GC sweep: %v", err)
 	}
 	return nil
 }
@@ -529,7 +529,7 @@ func (j *Janitor) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				if err := j.RunOnce(ctx); err != nil {
-					log.Printf("janitor: run: %v", err)
+					weftlog.Infof(ctx, "janitor: run: %v", err)
 				}
 			}
 		}

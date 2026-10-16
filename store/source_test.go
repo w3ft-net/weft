@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 )
 
@@ -36,7 +37,7 @@ func TestRemoveAndReAddLogGroup(t *testing.T) {
 	const app = "apinamespace/api"
 
 	// First configure
-	if err := db.AddLogGroup(ns.ID, SourceTypeWeftd, app, app, "local", "schema-v1"); err != nil {
+	if err := db.AddLogGroup(context.Background(), ns.ID, SourceTypeWeftd, app, app, "local", "schema-v1"); err != nil {
 		t.Fatalf("first AddLogGroup: %v", err)
 	}
 
@@ -46,7 +47,7 @@ func TestRemoveAndReAddLogGroup(t *testing.T) {
 	}
 
 	// Re-configure (user picks the source up again from pending)
-	if err := db.AddLogGroup(ns.ID, SourceTypeWeftd, app, app, "local", "schema-v2"); err != nil {
+	if err := db.AddLogGroup(context.Background(), ns.ID, SourceTypeWeftd, app, app, "local", "schema-v2"); err != nil {
 		t.Fatalf("second AddLogGroup (after remove) should succeed; got: %v", err)
 	}
 }
@@ -100,7 +101,7 @@ func TestCreatePendingKinesisSource_PendingThenConfigure(t *testing.T) {
 
 	// ConfigureLogGroup is unmodified and source-type-agnostic — it must
 	// finish a kinesis pending row exactly like a weftd one.
-	if err := db.ConfigureLogGroup(ns.ID, "cold-shard", "app: cold-shard\nformat: text\n"); err != nil {
+	if err := db.ConfigureLogGroup(context.Background(), ns.ID, "cold-shard", "app: cold-shard\nformat: text\n"); err != nil {
 		t.Fatalf("ConfigureLogGroup: %v", err)
 	}
 	lg, err = db.FindLogGroup(cust.ID, "ops", "cold-shard")
@@ -177,7 +178,7 @@ func TestCountPendingLogGroups_SchemalessDirect(t *testing.T) {
 		t.Errorf("with a partial sample: count = %d, want 1", n)
 	}
 
-	if err := db.ConfigureLogGroup(ns.ID, "myapp", "app: myapp\nformat: text\n"); err != nil {
+	if err := db.ConfigureLogGroup(context.Background(), ns.ID, "myapp", "app: myapp\nformat: text\n"); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := db.CountPendingLogGroups(cust.ID); n != 0 {

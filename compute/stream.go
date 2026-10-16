@@ -89,12 +89,11 @@ func (s *sliceLineStream) Close() error { return nil }
 
 // DrainLineStream reads s to exhaustion and returns the lines plus
 // any terminal error.
-func DrainLineStream(s LineStream) ([]Line, error) {
-	return drainLineStream(s)
+func DrainLineStream(ctx context.Context, s LineStream) ([]Line, error) {
+	return drainLineStream(ctx, s)
 }
 
-func drainLineStream(s LineStream) ([]Line, error) {
-	ctx := context.Background()
+func drainLineStream(ctx context.Context, s LineStream) ([]Line, error) {
 	var out []Line
 	for {
 		line, ok, err := s.Next(ctx)

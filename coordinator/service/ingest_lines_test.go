@@ -30,7 +30,7 @@ func TestIngestBatch_SplitsMultiLineEvents(t *testing.T) {
 	_, ch := coord.TailFanout.Subscribe(ctx, &coordinator.RowMatcher{Namespace: "lines", Customer: int64(cust.ID)})
 
 	json := "{\n \"a\": 1\n}"
-	srv.ingestBatch([]*pb.LogRow{
+	srv.ingestBatch(context.Background(), []*pb.LogRow{
 		{Namespace: "lines", Service: "api", CustomerId: int64(cust.ID), Raw: "Traceback:\r\n  File x\r\nValueError\r\n", TsUnixNs: 5},
 		{Namespace: "lines", Service: "api", CustomerId: int64(cust.ID), Raw: json, PayloadJson: []byte(`{"a":1}`), TsUnixNs: 6},
 	})

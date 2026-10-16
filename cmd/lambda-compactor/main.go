@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 
 	"github.com/aws/aws-lambda-go/lambdaurl"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 func main() {
+	weftlog.Init(os.Stderr)
 	// AWS_LAMBDA_RUNTIME_API is set by the Lambda runtime automatically.
 	if os.Getenv("AWS_LAMBDA_RUNTIME_API") != "" {
 		lambdaurl.Start(http.HandlerFunc(ServeHTTP))
@@ -20,7 +23,7 @@ func main() {
 	if port == "" {
 		port = "9040"
 	}
-	log.Printf("lambda-compactor: listening on :%s", port)
+	weftlog.Infof(context.Background(), "lambda-compactor: listening on :%s", port)
 	http.HandleFunc("/", ServeHTTP)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

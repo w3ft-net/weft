@@ -1,6 +1,7 @@
 package logdb
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -49,7 +50,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ds.Ingest([]*pb.LogRow{{Raw: "persisted", Namespace: "vimgym", CustomerId: 1, TsUnixNs: t0.UnixNano()}}, nil)
+	ds.Ingest(context.Background(), []*pb.LogRow{{Raw: "persisted", Namespace: "vimgym", CustomerId: 1, TsUnixNs: t0.UnixNano()}}, nil)
 	ds.ExportToParquet(parquetPath)
 	ds.Close()
 
@@ -103,7 +104,7 @@ func TestRegistry_PersistAndRestore(t *testing.T) {
 	}
 
 	// Query should work on the restored ColdShard.
-	rows, err := entry.Live.Query("SELECT raw, ts FROM logs WHERE customer_id = 1")
+	rows, err := entry.Live.Query(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}

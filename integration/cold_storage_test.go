@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"testing"
@@ -39,7 +40,7 @@ func TestExportToS3_DirectWrite(t *testing.T) {
 		{Raw: "direct s3 export row 2", Namespace: "vimgym", Level: "ERROR", CustomerId: 1, TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
 		{Raw: "direct s3 export row 3", Namespace: "callbox", Level: "WARN", CustomerId: 1, TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 	}
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -83,7 +84,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dsVim.Ingest([]*pb.LogRow{
+	dsVim.Ingest(context.Background(), []*pb.LogRow{
 		{Raw: "vimgym log", Namespace: "vimgym", Level: "INFO", CustomerId: 1, TsUnixNs: t0.Add(1 * time.Second).UnixNano()},
 		{Raw: "vimgym error", Namespace: "vimgym", Level: "ERROR", CustomerId: 1, TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
 	}, nil)
@@ -98,7 +99,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dsCb.Ingest([]*pb.LogRow{
+	dsCb.Ingest(context.Background(), []*pb.LogRow{
 		{Raw: "callbox log", Namespace: "callbox", Level: "INFO", CustomerId: 1, TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 	}, nil)
 	cbPath := fmt.Sprintf("s3://%s/kevlar/callbox/2026/03/shard-callbox.parquet", ColdBucket)

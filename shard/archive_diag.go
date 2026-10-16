@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // ErrArchiveInFlight is returned by Archive when another attempt is still
@@ -117,7 +118,7 @@ func (s *DuckDBShard) sampleArchiveMemory(attempt int64, phase string, every tim
 			case <-done:
 				return
 			case <-t.C:
-				log.Printf("archive attempt=%d progress phase=%s elapsed=%s %s",
+				weftlog.Infof(context.Background(), "archive attempt=%d progress phase=%s elapsed=%s %s",
 					attempt, phase, time.Since(start).Round(time.Second), s.procMemDiag())
 			}
 		}

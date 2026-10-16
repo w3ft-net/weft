@@ -19,7 +19,7 @@ func archiveFixture(t *testing.T, rows []*pb.LogRow) (string, *DuckDBShard) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Ingest(rows, nil); err != nil {
+	if err := s.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	path, _, err := s.Archive(context.Background(), t.TempDir())
@@ -38,7 +38,7 @@ func survivorsByCustomer(t *testing.T, path string, customer int64) int {
 		t.Fatalf("cold shard: %v", err)
 	}
 	defer cold.Close()
-	rows, err := cold.Query("SELECT raw, ts FROM logs WHERE customer_id = ?", customer)
+	rows, err := cold.Query(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = ?", customer)
 	if err != nil {
 		t.Fatalf("verify query (%d): %v", customer, err)
 	}

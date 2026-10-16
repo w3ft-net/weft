@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -108,7 +109,7 @@ type LogGroup struct {
 // AddLogGroup creates or updates a configured log group source. Ownership
 // is keyed on (namespace_id, app). For weftd sources in the
 // pending→configured transition, use ConfigureLogGroup instead.
-func (s *Store) AddLogGroup(namespaceID uint, sourceType LogGroupSourceType, service, logGroupName, region, schemaYAML string) error {
+func (s *Store) AddLogGroup(ctx context.Context, namespaceID uint, sourceType LogGroupSourceType, service, logGroupName, region, schemaYAML string) error {
 	var lg LogGroup
 	result := s.db.Where("namespace_id = ? AND app = ?", namespaceID, service).First(&lg)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -125,7 +126,7 @@ func (s *Store) AddLogGroup(namespaceID uint, sourceType LogGroupSourceType, ser
 		if err := s.db.Create(&lg).Error; err != nil {
 			return err
 		}
-		s.invalidateSchemaCache(namespaceID, service)
+		s.invalidateSchemaCache(ctx, namespaceID, service)
 		return nil
 	}
 	if err := s.db.Model(&lg).Updates(map[string]any{
@@ -139,7 +140,7 @@ func (s *Store) AddLogGroup(namespaceID uint, sourceType LogGroupSourceType, ser
 	}).Error; err != nil {
 		return err
 	}
-	s.invalidateSchemaCache(namespaceID, service)
+	s.invalidateSchemaCache(ctx, namespaceID, service)
 	return nil
 }
 
@@ -187,7 +188,7 @@ func (s *Store) CreatePendingKinesisSource(namespaceID uint, service, logGroupNa
 // with a fresh sample; comment on api/sources.go's caller has the full
 // story). Both are the same write: a customer or agent producing a new
 // schema_yaml for a service the coordinator already knows about.
-func (s *Store) ConfigureLogGroup(namespaceID uint, service, schemaYAML string) error {
+func (s *Store) ConfigureLogGroup(ctx context.Context, namespaceID uint, service, schemaYAML string) error {
 	res := s.db.Model(&LogGroup{}).
 		Where("namespace_id = ? AND app = ? AND status IN ?",
 			namespaceID, service, []LogGroupStatus{StatusPending, StatusConfigured}).
@@ -209,7 +210,7 @@ func (s *Store) ConfigureLogGroup(namespaceID uint, service, schemaYAML string) 
 		// into a 409, same as before this was a dedicated method.
 		return gorm.ErrRecordNotFound
 	}
-	s.invalidateSchemaCache(namespaceID, service)
+	s.invalidateSchemaCache(ctx, namespaceID, service)
 	return nil
 }
 
@@ -232,7 +233,7 @@ func (s *Store) ConfigureLogGroup(namespaceID uint, service, schemaYAML string) 
 // Best-effort: SchemaCache.invalidate is nil-safe and never surfaces an
 // error to the write path, matching the cache's overall philosophy —
 // worst case a missed invalidation is caught by the cache's own TTL.
-func (s *Store) invalidateSchemaCache(namespaceID uint, service string) {
+func (s *Store) invalidateSchemaCache(ctx context.Context, namespaceID uint, service string) {
 	if s.schemaCache == nil {
 		return
 	}
@@ -240,7 +241,7 @@ func (s *Store) invalidateSchemaCache(namespaceID uint, service string) {
 	if err := s.crossTenant().First(&ns, namespaceID).Error; err != nil {
 		return
 	}
-	s.schemaCache.invalidate(ns.OrgID, ns.Name, service)
+	s.schemaCache.invalidate(ctx, ns.OrgID, ns.Name, service)
 }
 
 // FindLogGroupSchema resolves a service's configured schema for ingest-
@@ -249,8 +250,8 @@ func (s *Store) invalidateSchemaCache(namespaceID uint, service string) {
 // ok=false means "no configured schema" (never onboarded, still
 // pending, or schema_yaml empty), not an error; callers skip enrichment
 // and leave the row Raw-only, exactly the pre-cache behavior.
-func (s *Store) FindLogGroupSchema(orgID OrgID, namespace string, service string) (schemaYAML string, ok bool, err error) {
-	if entry, hit := s.schemaCache.get(orgID, namespace, service); hit {
+func (s *Store) FindLogGroupSchema(ctx context.Context, orgID OrgID, namespace string, service string) (schemaYAML string, ok bool, err error) {
+	if entry, hit := s.schemaCache.get(ctx, orgID, namespace, service); hit {
 		return entry.SchemaYAML, entry.Configured, nil
 	}
 	lg, err := s.FindLogGroup(orgID, namespace, service)
@@ -261,7 +262,7 @@ func (s *Store) FindLogGroupSchema(orgID OrgID, namespace string, service string
 	if lg != nil && lg.Status == StatusConfigured && lg.SchemaYAML != "" {
 		entry = cachedSchemaEntry{Configured: true, SchemaYAML: lg.SchemaYAML}
 	}
-	s.schemaCache.set(orgID, namespace, service, &entry)
+	s.schemaCache.set(ctx, orgID, namespace, service, &entry)
 	return entry.SchemaYAML, entry.Configured, nil
 }
 

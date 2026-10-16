@@ -1,15 +1,16 @@
 package planner
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strconv"
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // PlannerVersion stamps every LoweredPlan with the version of the
@@ -233,15 +234,15 @@ func HashBinSource(source string) string {
 // lowered_plan into SaveCronWatch — the watch saves cleanly and the
 // fire path falls back to inline Plan(). This is the canonical entry
 // point for save handlers; do NOT call Lower + Marshal directly.
-func LowerForStorage(pipeline string, customerID int64, tier string, resolveBin BinResolver) []byte {
+func LowerForStorage(ctx context.Context, pipeline string, customerID int64, tier string, resolveBin BinResolver) []byte {
 	lp, err := Lower(pipeline, customerID, tier, resolveBin)
 	if err != nil {
-		log.Printf("lower: skip save-time lowering for pipeline (customer=%d): %v", customerID, err)
+		weftlog.Infof(ctx, "lower: skip save-time lowering for pipeline (customer=%d): %v", customerID, err)
 		return nil
 	}
 	b, err := json.Marshal(lp)
 	if err != nil {
-		log.Printf("lower: marshal LoweredPlan (customer=%d): %v", customerID, err)
+		weftlog.Infof(ctx, "lower: marshal LoweredPlan (customer=%d): %v", customerID, err)
 		return nil
 	}
 	return b

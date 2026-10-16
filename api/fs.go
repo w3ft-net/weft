@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/mounts"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shellfs"
@@ -46,7 +46,7 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 		logServices = s.fetchLogServices(r)
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session)), shellfs.WithContext(r.Context())}
 	fs := shellfs.New(s.store, session.ActiveOrgID, logServices, opts...)
 
 	if r.URL.Query().Get("walk") == "1" {
@@ -82,7 +82,7 @@ func (s *Server) handleReadFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session)), shellfs.WithContext(r.Context())}
 	fs := shellfs.New(s.store, session.ActiveOrgID, nil, opts...)
 	data, err := fs.ReadFile(path)
 	if err != nil {
@@ -114,7 +114,7 @@ func (s *Server) handleWriteFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session)), shellfs.WithContext(r.Context())}
 	fs := shellfs.New(s.store, session.ActiveOrgID, nil, opts...)
 	// WriteFile's error may be a non-blocking store.Warning (e.g. a
 	// /cron.d save tripping the truncation lint) — the write already
@@ -139,7 +139,7 @@ func (s *Server) handleRemoveFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session))}
+	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session)), shellfs.WithContext(r.Context())}
 	fs := shellfs.New(s.store, session.ActiveOrgID, nil, opts...)
 	if err := fs.Remove(path); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -151,7 +151,7 @@ func (s *Server) handleRemoveFS(w http.ResponseWriter, r *http.Request) {
 func (s *Server) fetchLogServices(r *http.Request) []string {
 	resp, err := s.coordClient.ListServices(s.coordCtx(r), &pb.ListServicesRequest{})
 	if err != nil {
-		log.Printf("fetchLogServices: coordinator ListApps: %v", err)
+		weftlog.Infof(r.Context(), "fetchLogServices: coordinator ListApps: %v", err)
 		return nil
 	}
 	return resp.Services

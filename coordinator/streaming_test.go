@@ -153,12 +153,14 @@ type errShard struct {
 	id string
 }
 
-func (s *errShard) ID() string                                    { return s.id }
-func (s *errShard) Query(string, ...any) ([]*pb.ResultRow, error) { return nil, errSynthetic }
+func (s *errShard) ID() string { return s.id }
+func (s *errShard) Query(context.Context, string, ...any) ([]*pb.ResultRow, error) {
+	return nil, errSynthetic
+}
 func (s *errShard) QueryToSink(_ context.Context, _ string, _ []any, sink shard.RowSink) {
 	sink.SendSentinel(s.id)
 }
-func (s *errShard) Ingest([]*pb.LogRow, shard.IngestRecorder) error { return nil }
+func (s *errShard) Ingest(context.Context, []*pb.LogRow, shard.IngestRecorder) error { return nil }
 func (s *errShard) Archive(_ context.Context, _ string) (string, []shard.CustomerStat, error) {
 	return "", nil, nil
 }

@@ -25,7 +25,7 @@ func exportToParquet(t *testing.T, rows []*pb.LogRow) string {
 	}
 	defer ds.Close()
 
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
@@ -55,7 +55,7 @@ func TestColdShard_QueryParquet(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
+	rows, err := cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestColdShard_FiltersByApp(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1")
+	rows, err := cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestColdShard_ReadOnly(t *testing.T) {
 	}
 	defer cs.Close()
 
-	err = cs.Ingest([]*pb.LogRow{{Raw: "should fail", TsUnixNs: time.Now().UnixNano()}}, nil)
+	err = cs.Ingest(context.Background(), []*pb.LogRow{{Raw: "should fail", TsUnixNs: time.Now().UnixNano()}}, nil)
 	if err == nil {
 		t.Fatal("expected error on Ingest to cold shard")
 	}
@@ -150,7 +150,7 @@ func TestColdShard_EmptyResult(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'nonexistent'")
+	rows, err := cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE namespace = 'nonexistent'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func benchColdQuery(b *testing.B, n int) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		b.Fatal(err)
 	}
 
@@ -214,6 +214,6 @@ func benchColdQuery(b *testing.B, n int) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
+		cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
 	}
 }

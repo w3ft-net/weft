@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -86,7 +87,7 @@ func TestDeleteNamespaceIsHardAndFreesTheName(t *testing.T) {
 		}
 	}
 
-	if err := db.DeleteNamespace(cust.ID, "doomed"); err != nil {
+	if err := db.DeleteNamespace(context.Background(), cust.ID, "doomed"); err != nil {
 		t.Fatalf("DeleteNamespace: %v", err)
 	}
 
@@ -114,7 +115,7 @@ func TestDeleteNamespaceIsHardAndFreesTheName(t *testing.T) {
 		t.Errorf("recreating the name: id=%d err=%v, want a fresh namespace", again.ID, err)
 	}
 
-	if err := db.DeleteNamespace(cust.ID, "nope"); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := db.DeleteNamespace(context.Background(), cust.ID, "nope"); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Errorf("deleting a missing namespace = %v, want not found", err)
 	}
 }

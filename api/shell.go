@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/graybeardcorp/weft/coordinator/onboarding"
 	"github.com/graybeardcorp/weft/internal/timerange"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -107,7 +107,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	// in-process — they need the email sender, seat limits, and owner
 	// session that live here, not on the coordinator. Everything else
 	// forwards to the coordinator below.
-	if handled, out, cmdErr := s.maybeHandleTeamCommand(session, req.Pipeline); handled {
+	if handled, out, cmdErr := s.maybeHandleTeamCommand(r.Context(), session, req.Pipeline); handled {
 		if cmdErr != nil {
 			writeSSEEvent(w, map[string]any{"type": "stderr", "text": cmdErr.Error() + "\n"})
 		} else if out != "" {
@@ -192,7 +192,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 			// execution) every other lesson already uses; there's no
 			// way to distinguish a deliberate stop from an accidental
 			// disconnect, which is an accepted tradeoff here.
-			s.maybeAdvanceShellLesson(session, req.Pipeline, nil, trigger)
+			s.maybeAdvanceShellLesson(r.Context(), session, req.Pipeline, nil, trigger)
 			return
 
 		case <-ticker.C:
@@ -213,7 +213,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 				// the current lesson's predicate, advance the step
 				// and emit the next lesson's prompt so the UI banner
 				// can update without waiting for a /me poll.
-				if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline, nil, trigger); advanced {
+				if newStep, prompt, advanced := s.maybeAdvanceShellLesson(r.Context(), session, req.Pipeline, nil, trigger); advanced {
 					writeSSEEvent(w, map[string]any{
 						"type":   "tour_advance",
 						"step":   newStep,
@@ -243,7 +243,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 					// Client disconnected — not an error worth logging loudly.
 					return
 				}
-				log.Printf("shell exec stream error: %v", rr.err)
+				weftlog.Errorf(r.Context(), "shell exec stream error: %v", rr.err)
 				msg := rr.err.Error()
 				if s, ok := status.FromError(rr.err); ok {
 					// Strip the "rpc error: code = ... desc = " envelope.

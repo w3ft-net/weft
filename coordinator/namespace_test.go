@@ -82,7 +82,7 @@ func setupNamespaceCoordinator(t *testing.T) *Coordinator {
 		CustomerId: 1,
 	})
 
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 

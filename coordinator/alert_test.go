@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 func runAlert(args string, stdin string) (stdout, stderr string, exitCode int) {
 	var outBuf, errBuf bytes.Buffer
 	ctx := &AlertContext{Interactive: true}
-	code := AlertCommand(strings.Fields(args), strings.NewReader(stdin), &outBuf, &errBuf, ctx)
+	code := AlertCommand(context.Background(), strings.Fields(args), strings.NewReader(stdin), &outBuf, &errBuf, ctx)
 	return outBuf.String(), errBuf.String(), code
 }
 
@@ -304,7 +305,7 @@ func TestAlert_ParseArgs(t *testing.T) {
 func TestRunAlertStage(t *testing.T) {
 	t.Run("text above threshold", func(t *testing.T) {
 		result := &QueryResult{Text: "73\n"}
-		runAlertStage(result, []string{"above", "50"}, &AlertContext{Interactive: true})
+		runAlertStage(context.Background(), result, []string{"above", "50"}, &AlertContext{Interactive: true})
 		if result.Stderr == "" || !strings.Contains(result.Stderr, "73") {
 			t.Errorf("expected 'above' alert in Stderr, got %q", result.Stderr)
 		}
@@ -315,7 +316,7 @@ func TestRunAlertStage(t *testing.T) {
 
 	t.Run("rows multi-row tagged", func(t *testing.T) {
 		result := &QueryResult{Text: "shard-a 85\nshard-b 50\n"}
-		runAlertStage(result, []string{"above", "80", "-k", "2", "-t", "1"},
+		runAlertStage(context.Background(), result, []string{"above", "80", "-k", "2", "-t", "1"},
 			&AlertContext{Interactive: true})
 		if !strings.Contains(result.Stderr, "shard-a") {
 			t.Errorf("shard-a (85) should fire; stderr=%q", result.Stderr)
@@ -327,7 +328,7 @@ func TestRunAlertStage(t *testing.T) {
 
 	t.Run("below threshold silent", func(t *testing.T) {
 		result := &QueryResult{Text: "12\n"}
-		runAlertStage(result, []string{"above", "50"}, &AlertContext{Interactive: true})
+		runAlertStage(context.Background(), result, []string{"above", "50"}, &AlertContext{Interactive: true})
 		if result.Stderr != "" {
 			t.Errorf("below threshold should stay silent, got %q", result.Stderr)
 		}
@@ -338,7 +339,7 @@ func TestRunAlertStage(t *testing.T) {
 		// lines but single-row alert treats them as one scalar. The error
 		// message should make the mistake obvious.
 		result := &QueryResult{Text: "5.12\n5.13\n"}
-		runAlertStage(result, []string{"above", "5"}, &AlertContext{Interactive: true})
+		runAlertStage(context.Background(), result, []string{"above", "5"}, &AlertContext{Interactive: true})
 		if !strings.Contains(result.Stderr, "non-numeric") {
 			t.Errorf("expected non-numeric diagnostic, got %q", result.Stderr)
 		}

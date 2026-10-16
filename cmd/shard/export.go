@@ -4,11 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -38,17 +38,17 @@ func runExportCommand(args []string) int {
 
 	store, err := exportManifestStore(ctx, *prefix)
 	if err != nil {
-		log.Printf("export shard=%s attempt=%d: %v", *shardID, *attempt, err)
+		weftlog.Infof(ctx, "export shard=%s attempt=%d: %v", *shardID, *attempt, err)
 		return 1
 	}
 	m, err := shard.RunExport(ctx, shard.ExportConfig{
 		ShardID: *shardID, DBPath: *dbPath, S3Prefix: *prefix, Attempt: *attempt,
 	}, store)
 	if err != nil {
-		log.Printf("export shard=%s attempt=%d failed: %v", *shardID, *attempt, err)
+		weftlog.Errorf(ctx, "export shard=%s attempt=%d failed: %v", *shardID, *attempt, err)
 		return 1
 	}
-	log.Printf("export shard=%s attempt=%d done: path=%s rows=%d db_bytes=%d took=%s",
+	weftlog.Infof(ctx, "export shard=%s attempt=%d done: path=%s rows=%d db_bytes=%d took=%s",
 		m.ShardID, m.Attempt, m.ParquetPath, m.Rows, m.DBBytes, m.Finished.Sub(m.Started).Round(time.Second))
 	return 0
 }

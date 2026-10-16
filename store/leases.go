@@ -2,8 +2,9 @@ package store
 
 import (
 	"context"
-	"log"
 	"time"
+
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // LeaseTTL is how long an acquired lease stays valid without renewal.
@@ -63,7 +64,7 @@ func (s *Store) ReleaseLease(name, holder string) error {
 // those are the expected steady state and would dwarf the interesting
 // transitions in log volume.
 func LogLeaseEvent(name, holder, event string) {
-	log.Printf("lease_event lease=%s holder=%s event=%s", name, holder, event)
+	weftlog.Infof(context.Background(), "lease_event lease=%s holder=%s event=%s", name, holder, event)
 }
 
 // AcquireAndHold tries once to acquire the named lease for holder. On
@@ -80,7 +81,7 @@ func LogLeaseEvent(name, holder, event string) {
 func AcquireAndHold(ctx context.Context, s *Store, name, holder string) (leaseCtx context.Context, ok bool) {
 	acquired, err := s.AcquireLease(name, holder, LeaseTTL)
 	if err != nil {
-		log.Printf("lease[%s]: acquire error: %v", name, err)
+		weftlog.Errorf(ctx, "lease[%s]: acquire error: %v", name, err)
 		return nil, false
 	}
 	if !acquired {
@@ -101,12 +102,12 @@ func AcquireAndHold(ctx context.Context, s *Store, name, holder string) (leaseCt
 			case <-ticker.C:
 				renewed, err := s.AcquireLease(name, holder, LeaseTTL)
 				if err != nil {
-					log.Printf("lease[%s]: renew error, giving it up: %v", name, err)
+					weftlog.Errorf(ctx, "lease[%s]: renew error, giving it up: %v", name, err)
 					LogLeaseEvent(name, holder, "lost")
 					return
 				}
 				if !renewed {
-					log.Printf("lease[%s]: lost to another holder", name)
+					weftlog.Infof(ctx, "lease[%s]: lost to another holder", name)
 					LogLeaseEvent(name, holder, "lost")
 					return
 				}

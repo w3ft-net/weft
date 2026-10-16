@@ -29,6 +29,7 @@ import (
 	"github.com/graybeardcorp/weft/coordinator"
 	coordsvc "github.com/graybeardcorp/weft/coordinator/service"
 	"github.com/graybeardcorp/weft/ingest"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
@@ -52,10 +53,10 @@ func dumpGoroutines() {
 	}
 	const path = "/tmp/weft-coordinator-goroutines.txt"
 	if err := os.WriteFile(path, buf, 0o644); err != nil {
-		log.Printf("coordinator: SIGUSR1 goroutine dump failed: %v", err)
+		weftlog.Errorf(context.Background(), "coordinator: SIGUSR1 goroutine dump failed: %v", err)
 		return
 	}
-	log.Printf("coordinator: SIGUSR1 — wrote %d goroutines (%d bytes) to %s", runtime.NumGoroutine(), len(buf), path)
+	weftlog.Infof(context.Background(), "coordinator: SIGUSR1 — wrote %d goroutines (%d bytes) to %s", runtime.NumGoroutine(), len(buf), path)
 }
 
 // coordinatorHolder identifies this process for lease ownership (see
@@ -106,6 +107,7 @@ func imdsInstanceID() string {
 }
 
 func main() {
+	weftlog.Init(os.Stderr)
 	port := flag.Int("port", 9020, "gRPC listen port")
 	healthPort := flag.Int("health-port", 9021, "HTTP liveness listen port")
 	adminPort := flag.Int("admin-port", 9022, "gRPC listen port for the localhost-only WeftAdmin surface (weft-admin CLI)")
@@ -124,7 +126,7 @@ func main() {
 	// watching weft/coordinator can't self-trigger on the audit probe.
 	// On failure we keep the stderr fallback rather than fail to start.
 	if err := coordinator.SetQueryLog(*queryLogPath); err != nil {
-		log.Printf("warning: query-audit log to %s unavailable, using stderr: %v", *queryLogPath, err)
+		weftlog.Warnf(context.Background(), "warning: query-audit log to %s unavailable, using stderr: %v", *queryLogPath, err)
 	}
 
 	// Shared bearer token for coord ↔ shard gRPC. The query path no
@@ -146,7 +148,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("connect to compute at %s: %v", *computeAddr, err)
 	}
-	log.Printf("connected to compute at %s", *computeAddr)
+	weftlog.Infof(context.Background(), "connected to compute at %s", *computeAddr)
 
 	// Open the store before building the Coordinator so /bin lookup,
 	// alert dispatch, and weft.* all have a tenant-scoped backend from
@@ -159,7 +161,7 @@ func main() {
 	}
 	if dsn == "" {
 		dsn = "host=localhost dbname=weft user=weft password=weft sslmode=disable"
-		log.Println("WARNING: using default DB DSN — set --db-dsn or DB_DSN in production")
+		weftlog.Warnf(context.Background(), "using default DB DSN — set --db-dsn or DB_DSN in production")
 	}
 	if err := store.Migrate(store.MigrateDSN(dsn)); err != nil {
 		log.Fatalf("store.Migrate: %v", err)
@@ -298,12 +300,12 @@ func main() {
 			if routeTableID := os.Getenv("NAT_ROUTE_TABLE_ID"); routeTableID != "" {
 				awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(*awsRegion))
 				if err != nil {
-					log.Printf("nat: aws config load failed, not running NAT election: %v", err)
+					weftlog.Errorf(ctx, "nat: aws config load failed, not running NAT election: %v", err)
 				} else {
 					ec2Client := ec2.NewFromConfig(awsCfg)
 					eniID, err := coordinator.ResolveOwnENI(context.Background(), ec2Client, instanceID)
 					if err != nil {
-						log.Printf("nat: resolve own ENI failed, not running NAT election: %v", err)
+						weftlog.Errorf(ctx, "nat: resolve own ENI failed, not running NAT election: %v", err)
 					} else {
 						elector := coordinator.NewNATElector(db, ec2Client, routeTableID, eniID, holder)
 						elector.Start(ctx)
@@ -327,7 +329,7 @@ func main() {
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
 		jwtSecret = "dev-secret-change-in-production"
-		log.Println("WARNING: using default JWT secret — set JWT_SECRET in production")
+		weftlog.Warnf(context.Background(), "using default JWT secret — set JWT_SECRET in production")
 	}
 	skip := auth.SkipMethods{
 		"/weft.WeftCoordinator/IngestStream":    true,
@@ -350,9 +352,9 @@ func main() {
 			fmt.Fprintln(w, "ok")
 		})
 		addr := fmt.Sprintf(":%d", *healthPort)
-		log.Printf("coordinator health on %s", addr)
+		weftlog.Infof(context.Background(), "coordinator health on %s", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
-			log.Printf("health listener exited: %v", err)
+			weftlog.Infof(context.Background(), "health listener exited: %v", err)
 		}
 	}()
 
@@ -365,9 +367,9 @@ func main() {
 	if *debugPort != 0 {
 		go func() {
 			addr := fmt.Sprintf("127.0.0.1:%d", *debugPort)
-			log.Printf("coordinator pprof on %s (localhost only)", addr)
+			weftlog.Infof(context.Background(), "coordinator pprof on %s (localhost only)", addr)
 			if err := http.ListenAndServe(addr, nil); err != nil { // nil → DefaultServeMux, where net/http/pprof registered
-				log.Printf("pprof listener exited: %v", err)
+				weftlog.Infof(context.Background(), "pprof listener exited: %v", err)
 			}
 		}()
 	}
@@ -393,7 +395,7 @@ func main() {
 	// to start over.
 	classifier, err := ingest.NewBedrockClassifierFromEnv(context.Background())
 	if err != nil {
-		log.Printf("WARNING: bedrock classifier disabled: %v", err)
+		weftlog.Warnf(context.Background(), "WARNING: bedrock classifier disabled: %v", err)
 	}
 
 	coordSvc := &coordsvc.Server{
@@ -422,15 +424,15 @@ func main() {
 			log.Fatalf("admin listen on 127.0.0.1:%d: %v", *adminPort, err)
 		}
 		adminSrv := coordsvc.NewAdminGRPCServer(coordSvc, adminToken)
-		log.Printf("coordinator: WeftAdmin gRPC listening on 127.0.0.1:%d (SharedToken auth)", *adminPort)
+		weftlog.Infof(context.Background(), "coordinator: WeftAdmin gRPC listening on 127.0.0.1:%d (SharedToken auth)", *adminPort)
 		go func() {
 			if err := adminSrv.Serve(adminLis); err != nil {
-				log.Printf("admin serve error: %v", err)
+				weftlog.Errorf(context.Background(), "admin serve error: %v", err)
 			}
 		}()
 		defer adminSrv.GracefulStop()
 	} else {
-		log.Printf("coordinator: WEFT_ADMIN_TOKEN unset — WeftAdmin gRPC listener disabled; weft-admin CLI calls will not be served")
+		weftlog.Infof(context.Background(), "coordinator: WEFT_ADMIN_TOKEN unset — WeftAdmin gRPC listener disabled; weft-admin CLI calls will not be served")
 	}
 
 	wc, _ := weftsdk.New()
@@ -457,14 +459,14 @@ func main() {
 				dumpGoroutines()
 				continue
 			}
-			log.Printf("coordinator: received %s, gracefully stopping", s)
+			weftlog.Infof(context.Background(), "coordinator: received %s, gracefully stopping", s)
 			srv.GracefulStop()
 			return
 		}
 	}()
 
 	if err := srv.Serve(lis); err != nil {
-		log.Printf("serve error: %v", err)
+		weftlog.Errorf(context.Background(), "serve error: %v", err)
 		os.Exit(1)
 	}
 }

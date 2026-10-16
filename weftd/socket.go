@@ -2,11 +2,13 @@ package weftd
 
 import (
 	"bufio"
-	"log"
+	"context"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // SocketListener accepts log lines on a Unix socket.
@@ -89,7 +91,7 @@ func (s *SocketListener) accept() {
 			case <-s.done:
 				return
 			default:
-				log.Printf("socket: accept: %v", err)
+				weftlog.Infof(context.Background(), "socket: accept: %v", err)
 				return
 			}
 		}

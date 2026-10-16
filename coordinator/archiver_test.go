@@ -24,7 +24,7 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 		{Raw: "live row 1", Namespace: "vimgym", Level: "INFO", CustomerId: 1, TsUnixNs: t1.Add(1 * time.Second).UnixNano()},
 		{Raw: "live row 2", Namespace: "vimgym", Level: "ERROR", CustomerId: 1, TsUnixNs: t1.Add(2 * time.Second).UnixNano()},
 	}
-	if err := live.Ingest(liveRows, nil); err != nil {
+	if err := live.Ingest(context.Background(), liveRows, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -38,7 +38,7 @@ func TestCoordinator_QuerySpansLiveAndCold(t *testing.T) {
 		{Raw: "cold row 2", Namespace: "vimgym", Level: "ERROR", CustomerId: 1, TsUnixNs: t0.Add(2 * time.Second).UnixNano()},
 		{Raw: "cold row 3", Namespace: "vimgym", Level: "WARN", CustomerId: 1, TsUnixNs: t0.Add(3 * time.Second).UnixNano()},
 	}
-	if err := coldDS.Ingest(coldRows, nil); err != nil {
+	if err := coldDS.Ingest(context.Background(), coldRows, nil); err != nil {
 		t.Fatal(err)
 	}
 

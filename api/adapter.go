@@ -1,9 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
 	"time"
 
@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/graybeardcorp/weft/ingest"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -161,18 +162,18 @@ func (s *Server) IngestHandler(a Adapter) http.Handler {
 		// place an HTTP-pushed row can pick up Level/TraceId/
 		// PayloadJson from its configured schema, the way the
 		// CloudWatch poller and weftd already do for their own paths.
-		enrichRows(s.store, auth.Organization.ID, namespace, rows)
+		enrichRows(req.Context(), s.store, auth.Organization.ID, namespace, rows)
 
 		// Bootstrap schema detection for any push source still awaiting
 		// `weft source configure` (pending kinesis, schemaless direct) —
 		// see accumulatePendingSamples. A no-op for every other source.
-		accumulatePendingSamples(s.store, s.classifier, auth.Organization.ID, namespace, rows)
+		accumulatePendingSamples(req.Context(), s.store, s.classifier, auth.Organization.ID, namespace, rows)
 
 		// Forward to coordinator via the existing gRPC IngestStream.
 		// Same bearer token in metadata so authenticateStream's path
 		// is exactly the path weftd takes — customer/env stamping and
 		// SeenServices onboarding happen there, not here.
-		ctx := metadata.AppendToOutgoingContext(req.Context(), "authorization", "Bearer "+token)
+		ctx := withTraceMetadata(metadata.AppendToOutgoingContext(req.Context(), "authorization", "Bearer "+token))
 		stream, err := s.coordClient.IngestStream(ctx)
 		if err != nil {
 			http.Error(w, "open ingest stream: "+err.Error(), http.StatusBadGateway)
@@ -200,8 +201,8 @@ func (s *Server) IngestHandler(a Adapter) http.Handler {
 // and "schema failed to parse" alike: callers treat all three the same
 // way (skip enrichment, leave the row Raw-only), matching pre-cache
 // behavior for any not-yet-onboarded service.
-func resolveParser(st *store.Store, orgID store.OrgID, namespace string, service string) (*ingest.Parser, bool) {
-	schemaYAML, ok, err := st.FindLogGroupSchema(orgID, namespace, service)
+func resolveParser(ctx context.Context, st *store.Store, orgID store.OrgID, namespace string, service string) (*ingest.Parser, bool) {
+	schemaYAML, ok, err := st.FindLogGroupSchema(ctx, orgID, namespace, service)
 	if err != nil || !ok {
 		return nil, false
 	}
@@ -243,8 +244,8 @@ func applyParsed(row *pb.LogRow, parser *ingest.Parser) {
 // the way enrichRows does, but store.FindLogGroupSchema's Valkey cache-
 // aside is exactly what keeps this cheap across a syslog connection's
 // many frames for the same service (a connection can live for hours).
-func enrichRow(st *store.Store, orgID store.OrgID, namespace string, row *pb.LogRow) {
-	parser, ok := resolveParser(st, orgID, namespace, row.Service)
+func enrichRow(ctx context.Context, st *store.Store, orgID store.OrgID, namespace string, row *pb.LogRow) {
+	parser, ok := resolveParser(ctx, st, orgID, namespace, row.Service)
 	if !ok {
 		return
 	}
@@ -256,7 +257,7 @@ func enrichRow(st *store.Store, orgID store.OrgID, namespace string, row *pb.Log
 // resolveParser so a batch repeating one service many times (a
 // CloudWatch Firehose POST spanning one log group's events, a multi-
 // frame Heroku drain) doesn't re-hit the Valkey cache once per row.
-func enrichRows(st *store.Store, orgID store.OrgID, namespace string, rows []*pb.LogRow) {
+func enrichRows(ctx context.Context, st *store.Store, orgID store.OrgID, namespace string, rows []*pb.LogRow) {
 	type resolved struct {
 		parser *ingest.Parser
 		ok     bool
@@ -265,7 +266,7 @@ func enrichRows(st *store.Store, orgID store.OrgID, namespace string, rows []*pb
 	for _, row := range rows {
 		r, hit := cache[row.Service]
 		if !hit {
-			p, ok := resolveParser(st, orgID, namespace, row.Service)
+			p, ok := resolveParser(ctx, st, orgID, namespace, row.Service)
 			r = resolved{parser: p, ok: ok}
 			cache[row.Service] = r
 		}
@@ -297,20 +298,20 @@ func enrichRows(st *store.Store, orgID store.OrgID, namespace string, rows []*pb
 // weftd's own pending rows never reach this path (its rows arrive via
 // IngestStream directly, not IngestHandler/enrichRows), and poll-mode
 // CloudWatch commits a schema immediately.
-func accumulatePendingSamples(st *store.Store, classifier ingest.Classifier, orgID store.OrgID, namespace string, rows []*pb.LogRow) {
+func accumulatePendingSamples(ctx context.Context, st *store.Store, classifier ingest.Classifier, orgID store.OrgID, namespace string, rows []*pb.LogRow) {
 	byService := make(map[string][]string)
 	for _, row := range rows {
 		byService[row.Service] = append(byService[row.Service], row.Raw)
 	}
 	for service, lines := range byService {
-		accumulateSample(st, classifier, orgID, namespace, service, lines)
+		accumulateSample(ctx, st, classifier, orgID, namespace, service, lines)
 	}
 }
 
 // accumulateSample appends lines to service's sample if the service is still
 // collecting one, and reports whether it was. SyslogServer calls it per frame
 // and uses the answer to stop asking for services that aren't sampling.
-func accumulateSample(st *store.Store, classifier ingest.Classifier, orgID store.OrgID, namespace, service string, lines []string) (collecting bool) {
+func accumulateSample(ctx context.Context, st *store.Store, classifier ingest.Classifier, orgID store.OrgID, namespace, service string, lines []string) (collecting bool) {
 	lg, err := st.FindLogGroup(orgID, namespace, service)
 	if err != nil {
 		return false
@@ -366,13 +367,13 @@ func accumulateSample(st *store.Store, classifier ingest.Classifier, orgID store
 		return false
 	}
 	namespaceID := lg.NamespaceID
-	detection := ingest.ClassifyAsync(classifier, combined, !partial, func(d *ingest.Detection) {
+	detection := ingest.ClassifyAsync(ctx, classifier, combined, !partial, func(d *ingest.Detection) {
 		detectionJSON, err := json.Marshal(d)
 		if err != nil {
 			return
 		}
 		if err := st.UpdateLogGroupDetection(namespaceID, service, string(sampleJSON), string(detectionJSON)); err != nil {
-			log.Printf("classify: update detection for source %s/%s: %v", namespace, service, err)
+			weftlog.Infof(ctx, "classify: update detection for source %s/%s: %v", namespace, service, err)
 		}
 	})
 	detectionJSON, err := json.Marshal(detection)

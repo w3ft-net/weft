@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -26,13 +26,13 @@ type CronExecutor struct {
 	// Execute fires one run of a watch over tr. Nil means executeWatch;
 	// tests substitute it so scheduling can be exercised without a
 	// Coordinator.
-	Execute func(w store.CronWatch, tr TimeRange)
+	Execute func(ctx context.Context, w store.CronWatch, tr TimeRange)
 	// Claims is the slot-claim backend. Nil means Store; tests substitute it
 	// for fault injection.
 	Claims slotClaimer
 	// SendOverdue delivers an overdue page. Nil means Notifier.Send;
 	// tests substitute it.
-	SendOverdue func(orgID store.OrgID, alias, watchName, body string) error
+	SendOverdue func(ctx context.Context, orgID store.OrgID, alias, watchName, body string) error
 
 	mu      sync.Mutex
 	cancels map[uint]context.CancelFunc // watchID → cancel
@@ -46,7 +46,7 @@ func (ce *CronExecutor) Start(ctx context.Context) {
 	// Initial load.
 	ce.reconcile(ctx)
 	go ce.runOverdueGuard(ctx)
-	log.Printf("cron: started (%d watches)", len(ce.cancels))
+	weftlog.Infof(ctx, "cron: started (%d watches)", len(ce.cancels))
 
 	// Reconcile loop: pick up new/changed/deleted watches.
 	go func() {
@@ -62,7 +62,7 @@ func (ce *CronExecutor) Start(ctx context.Context) {
 			case <-ticker.C:
 				ce.reconcile(ctx)
 			case <-prune.C:
-				ce.pruneClaims()
+				ce.pruneClaims(ctx)
 			}
 		}
 	}()
@@ -72,9 +72,9 @@ func (ce *CronExecutor) Start(ctx context.Context) {
 // cron runs under per-slot claims (runClaims), whether or not it is new.
 func (ce *CronExecutor) reconcile(ctx context.Context) {
 	var watches []store.CronWatch
-	err := ce.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).Where("enabled = ?", true).Find(&watches).Error
+	err := ce.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Where("enabled = ?", true).Find(&watches).Error
 	if err != nil {
-		log.Printf("cron: failed to list watches: %v", err)
+		weftlog.Errorf(ctx, "cron: failed to list watches: %v", err)
 		return
 	}
 
@@ -127,9 +127,9 @@ func (ce *CronExecutor) intervalBelowMin(watch store.CronWatch, interval time.Du
 // intervalAllowed reports whether interval meets the minimum for the watch's
 // tier, logging when it does not. It is checked before any lease or claim is
 // taken, since there is no point squatting on a watch that will never run.
-func (ce *CronExecutor) intervalAllowed(watch store.CronWatch, interval time.Duration) bool {
+func (ce *CronExecutor) intervalAllowed(ctx context.Context, watch store.CronWatch, interval time.Duration) bool {
 	if tier, min, below := ce.intervalBelowMin(watch, interval); below {
-		log.Printf("cron[%s]: skipping — interval %s is below minimum %s for tier %s",
+		weftlog.Infof(ctx, "cron[%s]: skipping — interval %s is below minimum %s for tier %s",
 			watch.Name, interval, min, tier)
 		return false
 	}
@@ -147,16 +147,16 @@ func (ce *CronExecutor) resolvePipeline(watch store.CronWatch) string {
 	return strings.TrimSpace(watch.Pipeline)
 }
 
-func (ce *CronExecutor) fire(watch store.CronWatch, tr TimeRange) {
+func (ce *CronExecutor) fire(ctx context.Context, watch store.CronWatch, tr TimeRange) {
 	if ce.Execute != nil {
-		ce.Execute(watch, tr)
+		ce.Execute(ctx, watch, tr)
 		return
 	}
-	ce.executeWatch(watch, tr)
+	ce.executeWatch(ctx, watch, tr)
 }
 
 // executeWatch runs the watch's pipeline and records the result.
-func (ce *CronExecutor) executeWatch(watch store.CronWatch, tr TimeRange) {
+func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch, tr TimeRange) {
 	start := time.Now()
 
 	pipeline := ce.resolvePipeline(watch)
@@ -165,10 +165,9 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch, tr TimeRange) {
 	// evaluates the alert in the watch's AlertContext — incident dedup and
 	// notifier dispatch both key off the watch identity instead of an
 	// interactive-mode synthetic one.
-	// No inbound request to propagate a trace ID from — cron/alert
-	// firings aren't traced in this pass (see docs/plans/
-	// request-tracing.md's "Deferred, not precluded").
-	result, err := ce.Coord.ExecuteForWatch(context.Background(), pipeline, tr, &watch)
+	// ctx carries the trace ID minted when the slot claim was won (see
+	// claimTick), so everything this firing logs or calls out to shares it.
+	result, err := ce.Coord.ExecuteForWatch(ctx, pipeline, tr, &watch)
 
 	duration := time.Since(start)
 	status := "ok"
@@ -185,7 +184,7 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch, tr TimeRange) {
 		// the persistence path below. Buffered paths (alert, redirect,
 		// staged compute) short-circuit inside Drain when those fields
 		// are already set, so this is cheap in either case.
-		drained, drainErr := result.Drain(context.Background())
+		drained, drainErr := result.Drain(ctx)
 		if drainErr != nil {
 			status = "error"
 			stderr = drainErr.Error()
@@ -208,21 +207,21 @@ func (ce *CronExecutor) executeWatch(watch store.CronWatch, tr TimeRange) {
 	// field isn't numeric are persisted with Value=NULL so the debugging
 	// trail stays intact; aggregates ignore NULLs.
 	if saveErr := ce.persistResults(watch, start, stdout, stderr, exitCode, duration); saveErr != nil {
-		log.Printf("cron[%s]: failed to save result: %v", watch.Name, saveErr)
+		weftlog.Errorf(ctx, "cron[%s]: failed to save result: %v", watch.Name, saveErr)
 	}
 
 	// Update watch status.
 	if updateErr := func(id uint, status string) error {
 		now := time.Now()
-		return ce.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.CronWatch{}).Where("id = ?", id).Updates(map[string]any{
+		return ce.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Model(&store.CronWatch{}).Where("id = ?", id).Updates(map[string]any{
 			"last_run_at": &now,
 			"last_status": status,
 		}).Error
 	}(watch.ID, status); updateErr != nil {
-		log.Printf("cron[%s]: failed to update run status: %v", watch.Name, updateErr)
+		weftlog.Errorf(ctx, "cron[%s]: failed to update run status: %v", watch.Name, updateErr)
 	}
 
-	log.Printf("cron[%s]: %s (%dms, stdout=%d bytes, stderr=%d bytes)",
+	weftlog.Infof(ctx, "cron[%s]: %s (%dms, stdout=%d bytes, stderr=%d bytes)",
 		watch.Name, status, duration.Milliseconds(), len(stdout), len(stderr))
 }
 

@@ -42,7 +42,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s0.Close()
-	if err := s0.Ingest(shard0Rows(), nil); err != nil {
+	if err := s0.Ingest(context.Background(), shard0Rows(), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,7 +73,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s0.Close()
-	if err := s0.Ingest(shard0Rows(), nil); err != nil {
+	if err := s0.Ingest(context.Background(), shard0Rows(), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -100,7 +100,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s1.Close()
-	if err := s1.Ingest(shard1Rows(), nil); err != nil {
+	if err := s1.Ingest(context.Background(), shard1Rows(), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,7 +134,7 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s0.Close()
-	if err := s0.Ingest(shard0Rows(), nil); err != nil {
+	if err := s0.Ingest(context.Background(), shard0Rows(), nil); err != nil {
 		t.Fatal(err)
 	}
 

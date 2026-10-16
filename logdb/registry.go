@@ -1,13 +1,14 @@
 package logdb
 
 import (
-	"log"
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/qmuntal/stateless"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -247,7 +248,7 @@ func (r *ShardRegistry) persist(entry *Shard) {
 		return
 	}
 	if err := r.store.SaveShard(entry.persistedCopy()); err != nil {
-		log.Printf("registry: persist shard %s: %v", entry.ID, err)
+		weftlog.Infof(context.Background(), "registry: persist shard %s: %v", entry.ID, err)
 	}
 }
 
@@ -327,7 +328,7 @@ func (r *ShardRegistry) TouchHeartbeat(entry *Shard) {
 	disk := entry.DiskBytes
 	entry.mu.RUnlock()
 	if err := r.store.TouchHeartbeat(entry.ID, rowCount, at, sha, disk); err != nil {
-		log.Printf("registry: touch heartbeat %s: %v", entry.ID, err)
+		weftlog.Infof(context.Background(), "registry: touch heartbeat %s: %v", entry.ID, err)
 	}
 }
 
@@ -345,7 +346,7 @@ func (r *ShardRegistry) RefreshFromStore() {
 	}
 	fresh, err := r.store.ListShards()
 	if err != nil {
-		log.Printf("registry: RefreshFromStore: %v", err)
+		weftlog.Infof(context.Background(), "registry: RefreshFromStore: %v", err)
 		return
 	}
 	svcByShard, svcOK := r.servicesByShard()
@@ -418,7 +419,7 @@ func (r *ShardRegistry) servicesByShard() (map[string][]store.ShardService, bool
 	}
 	rows, err := r.store.ListShardServices()
 	if err != nil {
-		log.Printf("registry: ListShardServices: %v", err)
+		weftlog.Infof(context.Background(), "registry: ListShardServices: %v", err)
 		return out, false
 	}
 	for _, s := range rows {
@@ -497,7 +498,7 @@ func (r *ShardRegistry) Remove(id string) {
 func (r *ShardRegistry) RefreshArchivedPath(id, newPath, lambdaURL string) {
 	cold, err := shard.NewColdShard(id, nil, newPath, lambdaURL, nil)
 	if err != nil {
-		log.Printf("registry: refresh %s cold shard: %v", id, err)
+		weftlog.Infof(context.Background(), "registry: refresh %s cold shard: %v", id, err)
 	}
 	r.mu.RLock()
 	e := r.entries[id]
@@ -556,7 +557,7 @@ func (r *ShardRegistry) AddServiceToShard(id string, namespaceID uint, service s
 	})
 	if r.store != nil {
 		if err := r.store.AddShardService(id, namespaceID, service); err != nil {
-			log.Printf("registry: AddServiceToShard persist %s (%d/%s): %v", id, namespaceID, service, err)
+			weftlog.Infof(context.Background(), "registry: AddServiceToShard persist %s (%d/%s): %v", id, namespaceID, service, err)
 		}
 	}
 	return true, true
@@ -591,7 +592,7 @@ func (r *ShardRegistry) RecordIngestFailure(id string) (count, threshold int) {
 	// isn't a throughput concern the way it would be on every reset below.
 	if r.store != nil {
 		if err := r.store.SetShardIngestFailures(id, count); err != nil {
-			log.Printf("registry: persist ingest failures %s: %v", id, err)
+			weftlog.Infof(context.Background(), "registry: persist ingest failures %s: %v", id, err)
 		}
 	}
 	return count, SuspendFailureThreshold
@@ -615,7 +616,7 @@ func (r *ShardRegistry) ResetIngestFailures(id string) {
 	r.mu.Unlock()
 	if hadFailures && r.store != nil {
 		if err := r.store.SetShardIngestFailures(id, 0); err != nil {
-			log.Printf("registry: persist ingest failures reset %s: %v", id, err)
+			weftlog.Infof(context.Background(), "registry: persist ingest failures reset %s: %v", id, err)
 		}
 	}
 }

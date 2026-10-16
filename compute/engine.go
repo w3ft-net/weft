@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/graybeardcorp/warp/pkg/bash"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
@@ -76,7 +76,7 @@ func (p *Engine) RegisterResolver(r Resolver) {
 // cache hit with mismatching addr (rebind) closes the stale handle
 // and re-dials. The freshly-dialed handle is stored in the cache so
 // the next query for this id is a hit.
-func (p *Engine) resolveShard(d *pb.ShardDescriptor) (shard.Shard, error) {
+func (p *Engine) resolveShard(ctx context.Context, d *pb.ShardDescriptor) (shard.Shard, error) {
 	if v, ok := p.overrides.Load(d.ShardId); ok {
 		r := v.(Resolver)
 		// Overrides bypass the addr-based invalidation logic — their
@@ -104,7 +104,7 @@ func (p *Engine) resolveShard(d *pb.ShardDescriptor) (shard.Shard, error) {
 		// are logged but not propagated — the new dial below is the
 		// path that matters.
 		if err := c.sh.Close(); err != nil {
-			log.Printf("compute: close stale handle for %s (addr %s → %s): %v", d.ShardId, c.addr, d.GrpcAddr, err)
+			weftlog.Infof(ctx, "compute: close stale handle for %s (addr %s → %s): %v", d.ShardId, c.addr, d.GrpcAddr, err)
 		}
 	}
 

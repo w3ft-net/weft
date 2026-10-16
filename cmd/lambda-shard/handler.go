@@ -4,14 +4,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 )
@@ -135,6 +136,12 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The trace ID arrives in the body, not the request's context.
+	logCtx := r.Context()
+	if req.TraceId != "" {
+		logCtx = weftsdk.ContextWithTraceID(logCtx, req.TraceId)
+	}
+
 	s3cfg := shard.S3ConfigFromEnv()
 	start := time.Now()
 
@@ -165,16 +172,12 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// queryToSinkRemote logs the truncated stream on its side.
 	count, err := streamRows(w, rows)
 	if err != nil {
-		log.Printf("lambda-shard: mid-stream failure after header sent: %v", err)
+		weftlog.Infof(logCtx, "lambda-shard: mid-stream failure after header sent: %v", err)
 		return
 	}
 	// Unconditional completion log, matching the caller-side
 	// (shard.ColdShard.queryToSinkRemote) contract — no shard id is
 	// available on this side of the wire, so parquet path identifies
 	// which archive was read.
-	if req.TraceId != "" {
-		log.Printf("lambda-shard: query completed in %s parquet=%s (%d rows) trace_id=%s", time.Since(start), req.ParquetPath, count, req.TraceId)
-	} else {
-		log.Printf("lambda-shard: query completed in %s parquet=%s (%d rows)", time.Since(start), req.ParquetPath, count)
-	}
+	weftlog.Infof(logCtx, "lambda-shard: query completed in %s parquet=%s (%d rows)", time.Since(start), req.ParquetPath, count)
 }

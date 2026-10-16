@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -35,7 +36,7 @@ func TestStampShardServices(t *testing.T) {
 	// Three services: api + ingest in the default bucket (bucket_id
 	// NULL), worker moved to the dedicated bucket.
 	for _, app := range []string{"api", "ingest", "worker"} {
-		if err := db.AddLogGroup(ns.ID, SourceTypeWeftd, app, app, "local", ""); err != nil {
+		if err := db.AddLogGroup(context.Background(), ns.ID, SourceTypeWeftd, app, app, "local", ""); err != nil {
 			t.Fatalf("log group %s: %v", app, err)
 		}
 	}

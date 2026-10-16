@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // shardVolumeDevice is the block device the shard binary mounts for its
@@ -124,10 +124,10 @@ func NewEC2Provisioner(region string, subnets map[string]map[string]string, temp
 	// fatal: we log and fall back to the template AMI, preserving prior behavior.
 	imageID, err := resolveOwnImageID(context.Background())
 	if err != nil {
-		log.Printf("ec2-provisioner: could not resolve own AMI from IMDS (%v); shard launches will fall back to the launch template AMI", err)
+		weftlog.Infof(context.Background(), "ec2-provisioner: could not resolve own AMI from IMDS (%v); shard launches will fall back to the launch template AMI", err)
 		imageID = ""
 	} else {
-		log.Printf("ec2-provisioner: shards will launch from the coordinator's own AMI %s", imageID)
+		weftlog.Infof(context.Background(), "ec2-provisioner: shards will launch from the coordinator's own AMI %s", imageID)
 	}
 	return NewEC2ProvisionerWithClient(ec2.NewFromConfig(cfg), volumes, subnets, templates, imageID), nil
 }
@@ -224,7 +224,7 @@ func (p *EC2Provisioner) Launch(ctx context.Context, spec LaunchSpec) (LaunchRes
 		return LaunchResult{}, fmt.Errorf("launch %s: %w", spec.ShardID, err)
 	}
 	if instanceID != "" {
-		log.Printf("ec2-provisioner: adopting in-flight instance %s already tagged for %s (idempotent relaunch)", instanceID, spec.ShardID)
+		weftlog.Infof(ctx, "ec2-provisioner: adopting in-flight instance %s already tagged for %s (idempotent relaunch)", instanceID, spec.ShardID)
 	} else {
 		instanceID, err = p.runInstance(ctx, spec, subnet, templateID)
 		if err != nil {
@@ -266,7 +266,7 @@ func (p *EC2Provisioner) Launch(ctx context.Context, spec LaunchSpec) (LaunchRes
 		return LaunchResult{}, fmt.Errorf("launch %s: attach %s→%s: %w", spec.ShardID, volumeID, instanceID, err)
 	}
 
-	log.Printf("ec2-provisioner: launched %s (instance=%s vol=%s az=%s subnet=%s)",
+	weftlog.Infof(ctx, "ec2-provisioner: launched %s (instance=%s vol=%s az=%s subnet=%s)",
 		spec.ShardID, instanceID, volumeID, spec.AZ, subnet)
 	return LaunchResult{InstanceID: instanceID, VolumeID: volumeID, AZ: spec.AZ}, nil
 }
@@ -281,7 +281,7 @@ func (p *EC2Provisioner) Terminate(ctx context.Context, instanceID string) error
 		InstanceIds: []string{instanceID},
 	})
 	if err != nil && instanceAlreadyGone(err) {
-		log.Printf("ec2-provisioner: instance %s already gone, ignoring: %v", instanceID, err)
+		weftlog.Infof(ctx, "ec2-provisioner: instance %s already gone, ignoring: %v", instanceID, err)
 		return nil
 	}
 	return err

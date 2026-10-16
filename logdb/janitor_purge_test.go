@@ -19,7 +19,7 @@ func archivedParquet(t *testing.T, rows []*pb.LogRow) (string, []shard.CustomerS
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err := s.Ingest(rows, nil); err != nil {
+	if err := s.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	path, stats, err := s.Archive(context.Background(), t.TempDir())
@@ -125,7 +125,7 @@ func TestExecutePurge_Rewrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cold.Close()
-	rows, err := cold.Query("SELECT raw, ts FROM logs WHERE customer_id = 900001")
+	rows, err := cold.Query(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 900001")
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}

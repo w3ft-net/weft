@@ -4,12 +4,12 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"strconv"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -255,18 +255,18 @@ func WaitForConfiguration(ctx context.Context, client pb.WeftCoordinatorClient, 
 	for {
 		status, err := CheckSourceStatus(ctx, client, token, app)
 		if err != nil {
-			log.Printf("[%s] poll error: %v — retrying", app, err)
+			weftlog.Errorf(ctx, "[%s] poll error: %v — retrying", app, err)
 		} else if status.Status == "configured" {
 			return status.SchemaYAML, nil
 		} else if status.ResampleRequested && resample != nil {
-			log.Printf("[%s] resample requested — sampling fresh lines", app)
+			weftlog.Infof(ctx, "[%s] resample requested — sampling fresh lines", app)
 			if err := resample(ctx); err != nil {
 				return "", err
 			}
-			log.Printf("[%s] fresh sample submitted — waiting for configuration", app)
+			weftlog.Infof(ctx, "[%s] fresh sample submitted — waiting for configuration", app)
 			continue
 		} else {
-			log.Printf("[%s] status: %s — waiting for configuration", app, status.Status)
+			weftlog.Infof(ctx, "[%s] status: %s — waiting for configuration", app, status.Status)
 		}
 
 		select {

@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func TestIngest_AppenderRoundTrip(t *testing.T) {
 		PayloadJson: []byte(`{"user":"alice","n":42}`),
 		Region:      "us-east-2",
 	}
-	if err := ds.Ingest([]*pb.LogRow{row}, nil); err != nil {
+	if err := ds.Ingest(context.Background(), []*pb.LogRow{row}, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	if got := ds.RowCount(); got != 1 {
@@ -97,7 +98,7 @@ func TestIngest_TraceIDRoundTrip(t *testing.T) {
 		{Raw: "with trace", CustomerId: 1, TsUnixNs: 1, TraceId: "trace-abc-123"},
 		{Raw: "without trace", CustomerId: 1, TsUnixNs: 2},
 	}
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
@@ -137,7 +138,7 @@ func TestIngest_SpanColumnsRoundTrip(t *testing.T) {
 		},
 		{Raw: "without span", CustomerId: 1, TsUnixNs: 2},
 	}
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
@@ -184,7 +185,7 @@ func TestIngest_EmptyPayloadDefaults(t *testing.T) {
 	}
 	defer ds.Close()
 
-	if err := ds.Ingest([]*pb.LogRow{{Raw: "x", CustomerId: 1, TsUnixNs: 1}}, nil); err != nil {
+	if err := ds.Ingest(context.Background(), []*pb.LogRow{{Raw: "x", CustomerId: 1, TsUnixNs: 1}}, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	var typ string
@@ -227,7 +228,7 @@ func TestIngest_ColumnOrderIndependent(t *testing.T) {
 		Region:     "us-east-2",
 		TsUnixNs:   1,
 	}
-	if err := ds.Ingest([]*pb.LogRow{row}, nil); err != nil {
+	if err := ds.Ingest(context.Background(), []*pb.LogRow{row}, nil); err != nil {
 		t.Fatalf("ingest after reorder: %v", err)
 	}
 

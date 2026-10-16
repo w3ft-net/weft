@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -21,7 +22,7 @@ type recordingNotifier struct {
 	}
 }
 
-func (r *recordingNotifier) Send(orgID store.OrgID, alias, watch, body string) error {
+func (r *recordingNotifier) Send(_ context.Context, orgID store.OrgID, alias, watch, body string) error {
 	r.sent = append(r.sent, struct {
 		orgID store.OrgID
 		alias string
@@ -46,7 +47,7 @@ func TestAlertDispatch_BodyIsFormattedMessageNotRawRow(t *testing.T) {
 	}
 
 	var stdout, stderr strings.Builder
-	code := AlertCommand([]string{"above", "30", "--notify=foo"}, strings.NewReader("40\n"), &stdout, &stderr, ctx)
+	code := AlertCommand(context.Background(), []string{"above", "30", "--notify=foo"}, strings.NewReader("40\n"), &stdout, &stderr, ctx)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr=%q", code, stderr.String())
 	}
@@ -80,7 +81,7 @@ func TestAlertDispatch_BodyIncludesTagInMultiRowMode(t *testing.T) {
 	args := []string{"above", "5", "-k", "1", "-t", "2", "--notify=foo"}
 
 	var stdout, stderr strings.Builder
-	code := AlertCommand(args, strings.NewReader(input), &stdout, &stderr, ctx)
+	code := AlertCommand(context.Background(), args, strings.NewReader(input), &stdout, &stderr, ctx)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr=%q", code, stderr.String())
 	}

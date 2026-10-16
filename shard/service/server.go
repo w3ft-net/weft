@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +13,7 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	weftcfg "github.com/graybeardcorp/weft/config"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 )
@@ -136,7 +136,7 @@ func (s *Server) getShard() (*shard.DuckDBShard, error) {
 // Configure assigns an identity, opens the DuckDB, and persists the
 // identity to disk. Rejects reconfigure: once a shard has an id, it
 // keeps that id for life.
-func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
+func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -189,7 +189,7 @@ func (s *Server) Configure(_ context.Context, req *pb.ConfigureRequest) (*pb.Con
 	s.id = req.ShardId
 	s.apps = req.Services
 	s.heartbeatToken = req.HeartbeatToken
-	log.Printf("shard configured: id=%s apps=%v window=[%s, %s]",
+	weftlog.Infof(ctx, "shard configured: id=%s apps=%v window=[%s, %s]",
 		req.ShardId, req.Services, req.WindowStart, req.WindowEnd)
 
 	return &pb.ConfigureResponse{}, nil
@@ -207,7 +207,7 @@ func (s *Server) Archive(ctx context.Context, req *pb.ArchiveRequest) (*pb.Archi
 	if err != nil {
 		return nil, fmt.Errorf("archive shard %s: %w", s.id, err)
 	}
-	log.Printf("shard %s: archived to %s", s.id, path)
+	weftlog.Infof(ctx, "shard %s: archived to %s", s.id, path)
 	return &pb.ArchiveResponse{
 		ParquetPath:   path,
 		CustomerStats: shard.CustomerStatsToProto(stats),
@@ -263,14 +263,14 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 	// rather than replaced by it.
 	ctx, span := weftsdk.StartSpan(ctx, "shard.Query")
 	defer span.End()
-	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
-		log.Printf("shard %s: query trace_id=%s (sql=%s)", s.id, traceID, req.Sql)
+	if _, ok := weftsdk.TraceIDFromContext(ctx); ok {
+		weftlog.Infof(ctx, "shard %s: query (sql=%s)", s.id, req.Sql)
 	}
 
 	rows, err := ds.QueryContext(ctx, req.Sql, stringArgsToAny(req.Args)...)
 	if err != nil {
 		span.RecordError(err)
-		log.Printf("shard %s: query error: %v (sql=%s args=%v)", s.id, err, req.Sql, req.Args)
+		weftlog.Errorf(ctx, "shard %s: query error: %v (sql=%s args=%v)", s.id, err, req.Sql, req.Args)
 		return err
 	}
 
@@ -298,12 +298,12 @@ func stringArgsToAny(args []string) []any {
 }
 
 // Ingest accepts a batch of rows for insertion.
-func (s *Server) Ingest(_ context.Context, req *pb.IngestRequest) (*pb.IngestResponse, error) {
+func (s *Server) Ingest(ctx context.Context, req *pb.IngestRequest) (*pb.IngestResponse, error) {
 	ds, err := s.getShard()
 	if err != nil {
 		return nil, err
 	}
-	if err := ds.Ingest(req.Rows, nil); err != nil {
+	if err := ds.Ingest(ctx, req.Rows, nil); err != nil {
 		return nil, err
 	}
 	return &pb.IngestResponse{RowsIngested: int64(len(req.Rows))}, nil
@@ -332,19 +332,19 @@ func (s *Server) IngestStream(stream pb.ShardQuery_IngestStreamServer) error {
 		count++
 
 		if len(rows) >= 100 {
-			if err := ds.Ingest(rows, nil); err != nil {
-				log.Printf("ingest-stream: %v", err)
+			if err := ds.Ingest(stream.Context(), rows, nil); err != nil {
+				weftlog.Infof(stream.Context(), "ingest-stream: %v", err)
 			}
 			rows = rows[:0]
 		}
 	}
 
 	if len(rows) > 0 {
-		if err := ds.Ingest(rows, nil); err != nil {
-			log.Printf("ingest-stream flush: %v", err)
+		if err := ds.Ingest(stream.Context(), rows, nil); err != nil {
+			weftlog.Infof(stream.Context(), "ingest-stream flush: %v", err)
 		}
 	}
 
-	log.Printf("ingest-stream: received %d rows", count)
+	weftlog.Infof(stream.Context(), "ingest-stream: received %d rows", count)
 	return stream.SendAndClose(&pb.IngestStreamResponse{RowsReceived: count})
 }

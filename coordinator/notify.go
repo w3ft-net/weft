@@ -5,12 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/graybeardcorp/saaskit/email"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -41,7 +41,7 @@ func NewNotifier(s *store.Store, emailCfg *email.Config) *Notifier {
 // ad-hoc shell invocations should pass a fresh synthetic name (see
 // AlertContext.dispatchIdentity). body is the alert text; individual
 // channels may truncate further to satisfy per-service limits.
-func (n *Notifier) Send(orgID store.OrgID, aliasName, watchName, body string) error {
+func (n *Notifier) Send(ctx context.Context, orgID store.OrgID, aliasName, watchName, body string) error {
 	aliasName = strings.TrimSpace(aliasName)
 	if aliasName == "" {
 		return nil
@@ -62,32 +62,32 @@ func (n *Notifier) Send(orgID store.OrgID, aliasName, watchName, body string) er
 
 	var firstErr error
 	for _, t := range alias.Slack {
-		if err := n.sendSlack(nc, watchName, t, body); err != nil {
-			log.Printf("notify[%s]: slack %s: %v", watchName, t.Channel, err)
+		if err := n.sendSlack(ctx, nc, watchName, t, body); err != nil {
+			weftlog.Infof(ctx, "notify[%s]: slack %s: %v", watchName, t.Channel, err)
 			if firstErr == nil {
 				firstErr = err
 			}
 		}
 	}
 	for _, t := range alias.PagerDuty {
-		if err := n.sendPagerDuty(orgID, watchName, t, body); err != nil {
-			log.Printf("notify[%s]: pagerduty %s: %v", watchName, t.Name, err)
+		if err := n.sendPagerDuty(ctx, orgID, watchName, t, body); err != nil {
+			weftlog.Infof(ctx, "notify[%s]: pagerduty %s: %v", watchName, t.Name, err)
 			if firstErr == nil {
 				firstErr = err
 			}
 		}
 	}
 	for _, t := range alias.Webhook {
-		if err := n.sendWebhook(aliasName, watchName, t, body); err != nil {
-			log.Printf("notify[%s]: webhook %s: %v", watchName, t.URL, err)
+		if err := n.sendWebhook(ctx, aliasName, watchName, t, body); err != nil {
+			weftlog.Infof(ctx, "notify[%s]: webhook %s: %v", watchName, t.URL, err)
 			if firstErr == nil {
 				firstErr = err
 			}
 		}
 	}
 	for _, t := range alias.Email {
-		if err := n.sendEmail(watchName, t, body); err != nil {
-			log.Printf("notify[%s]: email %s: %v", watchName, t.Address, err)
+		if err := n.sendEmail(ctx, watchName, t, body); err != nil {
+			weftlog.Infof(ctx, "notify[%s]: email %s: %v", watchName, t.Address, err)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -98,28 +98,28 @@ func (n *Notifier) Send(orgID store.OrgID, aliasName, watchName, body string) er
 
 // ── Slack ─────────────────────────────────────────────
 
-func (n *Notifier) sendSlack(nc *store.NotifyConfig, watchName string, target store.SlackTarget, stderr string) error {
+func (n *Notifier) sendSlack(ctx context.Context, nc *store.NotifyConfig, watchName string, target store.SlackTarget, stderr string) error {
 	if len(stderr) > 1000 {
 		stderr = stderr[:1000] + "\n... (truncated)"
 	}
 	text := fmt.Sprintf(":rotating_light: *weft alert: %s*\n```\n%s\n```", watchName, stderr)
 
 	if nc.SlackBotToken != "" {
-		return n.postSlackMessage(nc.SlackBotToken, target.Channel, text, watchName)
+		return n.postSlackMessage(ctx, nc.SlackBotToken, target.Channel, text, watchName)
 	}
 	if nc.SlackWebhook != "" {
-		return n.postSlackWebhook(nc.SlackWebhook, target.Channel, text, watchName)
+		return n.postSlackWebhook(ctx, nc.SlackWebhook, target.Channel, text, watchName)
 	}
 	return fmt.Errorf("no Slack credentials configured (connect Slack under Account → Integrations)")
 }
 
-func (n *Notifier) postSlackMessage(botToken, channel, text, watchName string) error {
+func (n *Notifier) postSlackMessage(ctx context.Context, botToken, channel, text, watchName string) error {
 	payload, _ := json.Marshal(map[string]string{
 		"channel": channel,
 		"text":    text,
 	})
 
-	req, _ := http.NewRequest("POST", "https://slack.com/api/chat.postMessage", bytes.NewReader(payload))
+	req, _ := http.NewRequestWithContext(ctx, "POST", "https://slack.com/api/chat.postMessage", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	req.Header.Set("Authorization", "Bearer "+botToken)
 
@@ -138,17 +138,22 @@ func (n *Notifier) postSlackMessage(botToken, channel, text, watchName string) e
 		return fmt.Errorf("slack API error: %s", result.Error)
 	}
 
-	log.Printf("notify: sent Slack alert for watch %s to %s", watchName, channel)
+	weftlog.Infof(ctx, "notify: sent Slack alert for watch %s to %s", watchName, channel)
 	return nil
 }
 
-func (n *Notifier) postSlackWebhook(webhook, channel, text, watchName string) error {
+func (n *Notifier) postSlackWebhook(ctx context.Context, webhook, channel, text, watchName string) error {
 	payload, _ := json.Marshal(map[string]string{
 		"channel": channel,
 		"text":    text,
 	})
 
-	resp, err := n.client.Post(webhook, "application/json", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("slack webhook: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := n.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("slack webhook: %w", err)
 	}
@@ -158,7 +163,7 @@ func (n *Notifier) postSlackWebhook(webhook, channel, text, watchName string) er
 		return fmt.Errorf("slack webhook returned %d", resp.StatusCode)
 	}
 
-	log.Printf("notify: sent Slack alert for watch %s to %s (webhook)", watchName, channel)
+	weftlog.Infof(ctx, "notify: sent Slack alert for watch %s to %s (webhook)", watchName, channel)
 	return nil
 }
 
@@ -185,10 +190,10 @@ type pagerDutyPayload struct {
 	Details   map[string]any `json:"custom_details,omitempty"`
 }
 
-func (n *Notifier) sendPagerDuty(orgID store.OrgID, watchName string, target store.PDTarget, stderr string) error {
+func (n *Notifier) sendPagerDuty(ctx context.Context, orgID store.OrgID, watchName string, target store.PDTarget, stderr string) error {
 	integ, err := func() (*store.PagerDutyIntegration, error) {
 		var item store.PagerDutyIntegration
-		err := n.Store.DB().WithContext(store.WithOrg(context.Background(), orgID)).Where("name = ?", target.Name).First(&item).Error
+		err := n.Store.DB().WithContext(store.WithOrg(ctx, orgID)).Where("name = ?", target.Name).First(&item).Error
 		if err != nil {
 			return nil, err
 		}
@@ -228,7 +233,12 @@ func (n *Notifier) sendPagerDuty(orgID store.OrgID, watchName string, target sto
 	}
 
 	body, _ := json.Marshal(evt)
-	resp, err := n.client.Post(pdEventsURL, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pdEventsURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("pagerduty POST: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := n.client.Do(req)
 	if err != nil {
 		n.Store.RecordPagerDutySend(orgID, target.Name, err.Error())
 		return fmt.Errorf("pagerduty POST: %w", err)
@@ -240,7 +250,7 @@ func (n *Notifier) sendPagerDuty(orgID store.OrgID, watchName string, target sto
 		return fmt.Errorf("pagerduty returned %d", resp.StatusCode)
 	}
 	n.Store.RecordPagerDutySend(orgID, target.Name, "")
-	log.Printf("notify: sent PagerDuty alert for watch %s to integration %s (severity %s)",
+	weftlog.Infof(ctx, "notify: sent PagerDuty alert for watch %s to integration %s (severity %s)",
 		watchName, target.Name, target.Severity)
 	return nil
 }
@@ -257,7 +267,7 @@ type webhookPayload struct {
 	Body   string `json:"body"`
 }
 
-func (n *Notifier) sendWebhook(aliasName, watchName string, target store.WebhookTarget, body string) error {
+func (n *Notifier) sendWebhook(ctx context.Context, aliasName, watchName string, target store.WebhookTarget, body string) error {
 	payload, _ := json.Marshal(webhookPayload{
 		V:      2,
 		Watch:  watchName,
@@ -266,7 +276,7 @@ func (n *Notifier) sendWebhook(aliasName, watchName string, target store.Webhook
 		Body:   truncate(body, 4000),
 	})
 
-	req, err := http.NewRequest("POST", target.URL, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, "POST", target.URL, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("webhook: %w", err)
 	}
@@ -285,13 +295,13 @@ func (n *Notifier) sendWebhook(aliasName, watchName string, target store.Webhook
 		return fmt.Errorf("webhook returned %d", resp.StatusCode)
 	}
 
-	log.Printf("notify: sent webhook alert for watch %s to %s", watchName, target.URL)
+	weftlog.Infof(ctx, "notify: sent webhook alert for watch %s to %s", watchName, target.URL)
 	return nil
 }
 
 // ── Email ────────────────────────────────────────────
 
-func (n *Notifier) sendEmail(watchName string, target store.EmailTarget, body string) error {
+func (n *Notifier) sendEmail(ctx context.Context, watchName string, target store.EmailTarget, body string) error {
 	if n.Email == nil {
 		return fmt.Errorf("no SMTP configuration (set EMAIL_HOST_PASSWORD)")
 	}
@@ -299,7 +309,7 @@ func (n *Notifier) sendEmail(watchName string, target store.EmailTarget, body st
 	if err := email.SendPlain(n.Email, target.Address, subject, truncate(body, 4000)); err != nil {
 		return fmt.Errorf("email send: %w", err)
 	}
-	log.Printf("notify: sent email alert for watch %s to %s", watchName, target.Address)
+	weftlog.Infof(ctx, "notify: sent email alert for watch %s to %s", watchName, target.Address)
 	return nil
 }
 

@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/weftd"
 )
@@ -221,6 +222,7 @@ func tokenFromChain(envToken, fileToken string) string {
 }
 
 func main() {
+	weftlog.Init(os.Stderr)
 	configPath := flag.String("config", "/etc/weftd/config.yaml", "config file path")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
@@ -230,7 +232,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	log.Printf("%s starting", ClientID())
+	weftlog.Infof(context.Background(), "%s starting", ClientID())
 
 	data, err := os.ReadFile(*configPath)
 	if err != nil {
@@ -269,7 +271,7 @@ func main() {
 	case startupRescued:
 		// Restart=always brings the freshly-swapped binary up; it gets a
 		// clean parse of the same config.
-		log.Printf("config rejected by weftd %s (%s) — updated to a newer build, restarting into it", Version, reason)
+		weftlog.Infof(context.Background(), "config rejected by weftd %s (%s) — updated to a newer build, restarting into it", Version, reason)
 		os.Exit(0)
 	case startupFatal:
 		log.Fatal(reason)
@@ -338,7 +340,7 @@ func main() {
 		if err != nil {
 			switch status.Code(err) {
 			case codes.PermissionDenied:
-				log.Printf("subscription inactive: %v — retrying in 24h", status.Convert(err).Message())
+				weftlog.Infof(ctx, "subscription inactive: %v — retrying in 24h", status.Convert(err).Message())
 				select {
 				case <-ctx.Done():
 					os.Exit(0)
@@ -346,7 +348,7 @@ func main() {
 				}
 				continue
 			case codes.Unavailable:
-				log.Printf("coordinator unreachable, retrying in %v: %v", transportBackoff, err)
+				weftlog.Infof(ctx, "coordinator unreachable, retrying in %v: %v", transportBackoff, err)
 				select {
 				case <-ctx.Done():
 					os.Exit(0)
@@ -366,7 +368,7 @@ func main() {
 			customer = cfg.Customer
 		}
 		namespace = authResp.Namespace
-		log.Printf("authenticated as customer=%s namespace=%s", customer, namespace)
+		weftlog.Infof(ctx, "authenticated as customer=%s namespace=%s", customer, namespace)
 		break
 	}
 
@@ -395,7 +397,7 @@ func main() {
 	globalDeployment = cfg.Deployment
 	globalRegion = weftd.DetectRegion(ctx, cfg.Region)
 	if globalRegion != "" {
-		log.Printf("region detected: %s", globalRegion)
+		weftlog.Infof(ctx, "region detected: %s", globalRegion)
 	}
 
 	// Initialize file-sourced dimension readers. Each entry validates
@@ -411,7 +413,7 @@ func main() {
 			log.Fatalf("dimensions.%s: %v", col, err)
 		}
 		dimensionReaders[col] = weftd.NewFileValueReader(ctx, spec)
-		log.Printf("dimensions.%s: watching %s", col, spec.Path)
+		weftlog.Infof(ctx, "dimensions.%s: watching %s", col, spec.Path)
 	}
 
 	// A concrete file may be matched by a `*.log`-style glob source and
@@ -459,7 +461,7 @@ func main() {
 				if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, src.Unit, hostname, fullApp, func() {
 					runJournalTailer(ctx, coordClient, hostname, fullApp, src.Unit)
 				}); err != nil {
-					log.Printf("[%s] onboard failed: %v", fullApp, err)
+					weftlog.Errorf(ctx, "[%s] onboard failed: %v", fullApp, err)
 				}
 			}()
 		} else if src.Path != "" {
@@ -473,7 +475,7 @@ func main() {
 					if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, "", hostname, fullApp, func() {
 						runFileTailer(ctx, coordClient, hostname, fullApp, src.Path, true)
 					}); err != nil {
-						log.Printf("[%s] onboard failed: %v", fullApp, err)
+						weftlog.Errorf(ctx, "[%s] onboard failed: %v", fullApp, err)
 					}
 				}()
 			}
@@ -491,7 +493,7 @@ func main() {
 		}
 		defer sock.Close()
 		go runSocketIngester(ctx, coordClient, hostname, namespace, sock)
-		log.Printf("listening on socket %s", cfg.Socket)
+		weftlog.Infof(ctx, "listening on socket %s", cfg.Socket)
 	}
 
 	if parseClientSide {
@@ -499,18 +501,18 @@ func main() {
 		go runParseStatsReporter(ctx)
 	}
 
-	log.Printf("weftd started: %d sources, streaming to %s", len(cfg.Sources), cfg.Endpoint)
+	weftlog.Infof(ctx, "weftd started: %d sources, streaming to %s", len(cfg.Sources), cfg.Endpoint)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	log.Println("shutting down")
+	weftlog.Infof(ctx, "shutting down")
 	cancel()
 	// Let every file tailer deliver and ack what it has read, then persist
 	// the final offsets. Bounded by the shippers' shutdown timeout.
 	tailers.shutdown()
 	if err := checkpoints.Close(); err != nil {
-		log.Printf("checkpoint: final flush: %v", err)
+		weftlog.Infof(ctx, "checkpoint: final flush: %v", err)
 	}
 }
 
@@ -529,10 +531,10 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	// Check if already configured.
 	st, err := weftd.CheckSourceStatus(ctx, client, token, app)
 	if err != nil {
-		log.Printf("[%s] status check failed: %v — proceeding to sample", fullApp, err)
+		weftlog.Errorf(ctx, "[%s] status check failed: %v — proceeding to sample", fullApp, err)
 	} else if st.Status == "configured" {
 		installParser(fullApp, st.SchemaYAML)
-		log.Printf("[%s] already configured — starting", fullApp)
+		weftlog.Infof(ctx, "[%s] already configured — starting", fullApp)
 		run()
 		return nil
 	}
@@ -540,16 +542,16 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	// Submit sample — from the unit's journal for journald sources, from
 	// the file otherwise.
 	if unit != "" {
-		log.Printf("[%s] new source — sampling unit %s", fullApp, unit)
+		weftlog.Infof(ctx, "[%s] new source — sampling unit %s", fullApp, unit)
 		err = weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment, false)
 	} else {
-		log.Printf("[%s] new source — sampling %s", fullApp, path)
+		weftlog.Infof(ctx, "[%s] new source — sampling %s", fullApp, path)
 		err = weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment, false)
 	}
 	if err != nil {
 		return err
 	}
-	log.Printf("[%s] sample submitted — waiting for configuration", fullApp)
+	weftlog.Infof(ctx, "[%s] sample submitted — waiting for configuration", fullApp)
 
 	// Poll until configured.
 	schemaYAML, err := weftd.WaitForConfiguration(ctx, client, token, app, func(ctx context.Context) error {
@@ -562,7 +564,7 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 		return err
 	}
 	installParser(fullApp, schemaYAML)
-	log.Printf("[%s] configured — starting", fullApp)
+	weftlog.Infof(ctx, "[%s] configured — starting", fullApp)
 	run()
 	return nil
 }
@@ -576,7 +578,7 @@ func installParser(fullApp, schemaYAML string) {
 		return
 	}
 	if _, err := parserCache.Install(fullApp, schemaYAML); err != nil {
-		log.Printf("[%s] schema install failed, falling back to no-parse: %v", fullApp, err)
+		weftlog.Errorf(context.Background(), "[%s] schema install failed, falling back to no-parse: %v", fullApp, err)
 	}
 }
 
@@ -623,7 +625,7 @@ func refreshSource(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	}
 	st, err := weftd.CheckSourceStatus(ctx, client, token, service)
 	if err != nil {
-		log.Printf("[%s] schema refresh failed: %v", fullApp, err)
+		weftlog.Errorf(ctx, "[%s] schema refresh failed: %v", fullApp, err)
 		return
 	}
 	if st.Status == "configured" && st.ResampleRequested {
@@ -637,10 +639,10 @@ func refreshSource(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 		return
 	}
 	if _, err := parserCache.Install(fullApp, st.SchemaYAML); err != nil {
-		log.Printf("[%s] schema reinstall failed (keeping previous parser): %v", fullApp, err)
+		weftlog.Errorf(ctx, "[%s] schema reinstall failed (keeping previous parser): %v", fullApp, err)
 		return
 	}
-	log.Printf("[%s] schema updated (hash %s → %s)", fullApp, shortHash(cached), shortHash(st.SchemaHash))
+	weftlog.Infof(ctx, "[%s] schema updated (hash %s → %s)", fullApp, shortHash(cached), shortHash(st.SchemaHash))
 }
 
 // startResample re-runs the sampler for an already-configured source
@@ -660,7 +662,7 @@ func startResample(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	resampleActive[fullApp] = true
 	resampleMu.Unlock()
 
-	log.Printf("[%s] resample requested — sampling concurrently with tailer", fullApp)
+	weftlog.Infof(ctx, "[%s] resample requested — sampling concurrently with tailer", fullApp)
 	go func() {
 		defer func() {
 			resampleMu.Lock()
@@ -674,10 +676,10 @@ func startResample(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 			err = weftd.SubmitSample(ctx, client, token, bareService, rs.path, rs.instance, globalDeployment, true)
 		}
 		if err != nil {
-			log.Printf("[%s] resample failed: %v", fullApp, err)
+			weftlog.Errorf(ctx, "[%s] resample failed: %v", fullApp, err)
 			return
 		}
-		log.Printf("[%s] resample complete — fresh sample submitted for review", fullApp)
+		weftlog.Infof(ctx, "[%s] resample complete — fresh sample submitted for review", fullApp)
 	}()
 }
 
@@ -714,9 +716,9 @@ func runParseStatsReporter(ctx context.Context) {
 			}
 			pct := float64(missing) * 100 / float64(total)
 			if missing > 0 {
-				log.Printf("[%s] parse stats: %d ok, %d missing-level (%.1f%%)", app, ok, missing, pct)
+				weftlog.Infof(ctx, "[%s] parse stats: %d ok, %d missing-level (%.1f%%)", app, ok, missing, pct)
 			} else {
-				log.Printf("[%s] parse stats: %d ok", app, ok)
+				weftlog.Infof(ctx, "[%s] parse stats: %d ok", app, ok)
 			}
 		}
 	}
@@ -754,7 +756,7 @@ func openStream(ctx context.Context, client pb.WeftCoordinatorClient, label stri
 			return stream, nil
 		}
 
-		log.Printf("[%s] stream failed, retrying in %v: %v", label, backoff, err)
+		weftlog.Errorf(ctx, "[%s] stream failed, retrying in %v: %v", label, backoff, err)
 
 		select {
 		case <-ctx.Done():
@@ -775,11 +777,11 @@ func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, inst
 	cmd := exec.CommandContext(ctx, "journalctl", "-f", "-u", unit, "--no-pager", "-o", "cat", "-n", "0")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("[%s] journalctl pipe: %v", app, err)
+		weftlog.Infof(ctx, "[%s] journalctl pipe: %v", app, err)
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		log.Printf("[%s] journalctl start: %v", app, err)
+		weftlog.Infof(ctx, "[%s] journalctl start: %v", app, err)
 		return
 	}
 
@@ -963,7 +965,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, inst
 			return
 		}
 		if excluded[absClean(p)] {
-			log.Printf("[%s] %s claimed by an explicit source — glob skipping", namespace, p)
+			weftlog.Infof(ctx, "[%s] %s claimed by an explicit source — glob skipping", namespace, p)
 			return
 		}
 		tailing[p] = true
@@ -973,7 +975,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, inst
 			if err := onboardAndRun(ctx, client, token, app, p, "", instance, fullApp, func() {
 				runFileTailer(ctx, client, instance, fullApp, p, startup)
 			}); err != nil {
-				log.Printf("[%s] onboard failed: %v", fullApp, err)
+				weftlog.Errorf(ctx, "[%s] onboard failed: %v", fullApp, err)
 			}
 		}()
 	}
@@ -988,20 +990,20 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, inst
 
 	startMatching()
 	if len(tailing) > 0 {
-		log.Printf("[%s] tailing %d files matching %s", namespace, len(tailing), pattern)
+		weftlog.Infof(ctx, "[%s] tailing %d files matching %s", namespace, len(tailing), pattern)
 	}
 
 	// Watch directory for new files.
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Printf("[%s] watch %s: %v", namespace, watchDir, err)
+		weftlog.Infof(ctx, "[%s] watch %s: %v", namespace, watchDir, err)
 		return
 	}
 	defer watcher.Close()
 
 	if err := watcher.Add(watchDir); err != nil {
 		// Directory doesn't exist yet — wait for it.
-		log.Printf("[%s] directory %s not found, waiting...", namespace, watchDir)
+		weftlog.Infof(ctx, "[%s] directory %s not found, waiting...", namespace, watchDir)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -1010,7 +1012,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, inst
 				return
 			case <-ticker.C:
 				if err := watcher.Add(watchDir); err == nil {
-					log.Printf("[%s] directory %s appeared", namespace, watchDir)
+					weftlog.Infof(ctx, "[%s] directory %s appeared", namespace, watchDir)
 					startMatching()
 					goto watch
 				}
@@ -1030,7 +1032,7 @@ watch:
 			if event.Op&fsnotify.Create == fsnotify.Create {
 				matched, _ := matchPath(pattern, event.Name)
 				if matched {
-					log.Printf("[%s] new file %s", namespace, event.Name)
+					weftlog.Infof(ctx, "[%s] new file %s", namespace, event.Name)
 					// Brand new by construction: read from the top so lines written
 					// between creation and our open are not lost.
 					startFile(event.Name, false)
@@ -1040,7 +1042,7 @@ watch:
 			if !ok {
 				return
 			}
-			log.Printf("[%s] watch error: %v", namespace, err)
+			weftlog.Errorf(ctx, "[%s] watch error: %v", namespace, err)
 		}
 	}
 }
@@ -1259,7 +1261,7 @@ func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 			return nil
 		}
 		// Stream is broken — will reconnect below.
-		log.Printf("[%s] stream broken, reconnecting", app)
+		weftlog.Infof(ctx, "[%s] stream broken, reconnecting", app)
 		ss.stream = nil
 	}
 
@@ -1272,7 +1274,7 @@ func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 
 	// Retry the send on the fresh stream.
 	if err := ss.stream.Send(msg); err != nil {
-		log.Printf("[%s] send failed after reconnect: %v", app, err)
+		weftlog.Errorf(ctx, "[%s] send failed after reconnect: %v", app, err)
 		ss.stream = nil
 	}
 	return nil

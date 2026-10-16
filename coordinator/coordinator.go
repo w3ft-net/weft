@@ -5,18 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	weftsdk "github.com/w3ft-net/weft-go"
-
 	"github.com/graybeardcorp/warp/pkg/bash"
 	luapkg "github.com/graybeardcorp/warp/pkg/lua"
 	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/logdb"
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/notices"
@@ -139,7 +137,7 @@ func (r *ExecuteResult) Drain(ctx context.Context) (*DrainedResult, error) {
 	out.Text = textSb.String()
 	out.Stderr = stderrSb.String()
 	// After stream EOF, the runLocal goroutine has populated Notices
-	// (its program order: ExecScript → Notices = noticeQueue.Drain() →
+	// (its program order: ExecScript → Notices = noticeQueue.Drain(ctx) →
 	// pipes close → scanners EOF → channel close → consumer Next).
 	out.Notices = r.Notices
 	return out, nil
@@ -419,7 +417,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					if sh == nil {
 						dlqPath := c.DLQ.Write(rows)
 						c.Errors.Record("none", "no shard serves "+k.namespace+"/"+k.service, rows, dlqPath)
-						log.Printf("drain: DLQ'd %d rows for %s (no shard serves this service)", len(rows), k.namespace+"/"+k.service)
+						weftlog.Infof(ctx, "drain: DLQ'd %d rows for %s (no shard serves this service)", len(rows), k.namespace+"/"+k.service)
 						continue
 					}
 					// sh.Ingest reports its own outcome to the provisioner —
@@ -428,8 +426,8 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					// shard and the running failure count (N/M) for the log
 					// line. (Routing exclusion is the FSM's job now, not a
 					// per-failure ingest latch.)
-					if err := sh.Ingest(rows, c.Provisioner); err != nil {
-						log.Printf("drain: %v", err)
+					if err := sh.Ingest(ctx, rows, c.Provisioner); err != nil {
+						weftlog.Infof(ctx, "drain: %v", err)
 
 						// Retry once. IngestingShard round-robins, so a
 						// second call lands on a different candidate if any
@@ -438,7 +436,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 						// per-service candidate sets the two attempts are
 						// typically exhaustive.
 						if fallback := c.Provisioner.IngestingShard(nsID, service); fallback != nil {
-							if retryErr := fallback.Ingest(rows, c.Provisioner); retryErr == nil {
+							if retryErr := fallback.Ingest(ctx, rows, c.Provisioner); retryErr == nil {
 								c.Provisioner.Stats().Record(k.namespace+"/"+k.service, int64(len(rows)))
 								continue // retry succeeded
 							}
@@ -447,7 +445,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 						// All retries exhausted — DLQ.
 						dlqPath := c.DLQ.Write(rows)
 						c.Errors.Record(sh.ID(), err.Error(), rows, dlqPath)
-						log.Printf("drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(rows), k.namespace+"/"+k.service, sh.ID())
+						weftlog.Errorf(ctx, "drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(rows), k.namespace+"/"+k.service, sh.ID())
 						continue
 					}
 					c.Provisioner.Stats().Record(k.namespace+"/"+k.service, int64(len(rows)))
@@ -497,11 +495,11 @@ func (c *Coordinator) flushUsage(store *store.Store) {
 			INSERT INTO usage_hourly (org_id, hour, bytes_ingested)
 			VALUES (?, ?, ?)`,
 			e.CustomerID, e.Hour, e.Bytes).Error; err != nil {
-			log.Printf("usage flush error: customer=%d hour=%s: %v", e.CustomerID, e.Hour, err)
+			weftlog.Errorf(context.Background(), "usage flush error: customer=%d hour=%s: %v", e.CustomerID, e.Hour, err)
 		}
 	}
 	if len(entries) > 0 {
-		log.Printf("usage flush: wrote %d hourly entries", len(entries))
+		weftlog.Infof(context.Background(), "usage flush: wrote %d hourly entries", len(entries))
 	}
 }
 
@@ -687,7 +685,9 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 		return &brokerStream{
 			ch:     ch,
 			filter: filter,
-			unsub:  func() { c.TailFanout.Unsubscribe(id, matcher) },
+			// Cleanup runs as the request ends, so keep the trace but not
+			// the (possibly already cancelled) cancellation.
+			unsub: func() { c.TailFanout.Unsubscribe(context.WithoutCancel(ctx), id, matcher) },
 		}
 	}
 
@@ -739,7 +739,7 @@ func (c *Coordinator) ExecuteForWatch(ctx context.Context, pipeline string, tr T
 	// fire is already ~1ms, so an extra ~hundred-µs of refresh DB
 	// write doesn't move user-perceived latency. The next fire
 	// takes the hot path either way.
-	c.refreshLoweredSync(watch)
+	c.refreshLoweredSync(ctx, watch)
 	return c.execute(ctx, pipeline, tr, cust.Name, "", alertCtx, nil)
 }
 
@@ -753,12 +753,12 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 	if len(watch.LoweredPlan) == 0 {
 		return nil, false
 	}
-	lp, ok := c.loadLoweredPlan(watch)
+	lp, ok := c.loadLoweredPlan(ctx, watch)
 	if !ok {
 		return nil, false
 	}
 	if lp.PlannerVersion != planner.PlannerVersion {
-		log.Printf("watch %d: lowered_plan stamped at version %d, planner is at %d — recompiling",
+		weftlog.Infof(ctx, "watch %d: lowered_plan stamped at version %d, planner is at %d — recompiling",
 			watch.ID, lp.PlannerVersion, planner.PlannerVersion)
 		// Stale planner version invalidates the cache entry too.
 		c.loweredCache.Delete(watch.ID)
@@ -798,7 +798,7 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 	args := lp.Hydrate(resolveCtx)
 	res, err := c.dispatchLoweredWithTier(ctx, lp, args, tr, tier, alertCtx)
 	if err != nil {
-		log.Printf("watch %d: lowered dispatch failed: %v — falling back to inline Plan", watch.ID, err)
+		weftlog.Errorf(ctx, "watch %d: lowered dispatch failed: %v — falling back to inline Plan", watch.ID, err)
 		return nil, false
 	}
 	return res, true
@@ -814,7 +814,7 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 // is baked into LoweredPlan at save time).
 func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
 	nsID := c.resolveNamespaceID(store.OrgID(lp.CustomerID), lp.SourceNamespace)
-	descs := c.Provisioner.ShardDescriptorsFor(tr, nsID, lp.SourceService, tier)
+	descs := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, lp.SourceService, tier)
 	if len(descs) == 0 {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
@@ -859,7 +859,7 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 // content_hash) misses cleanly and we re-unmarshal. Returns (nil,
 // false) if the JSON can't be unmarshalled — the caller treats that
 // as cache miss + fallback.
-func (c *Coordinator) loadLoweredPlan(watch *store.CronWatch) (*planner.LoweredPlan, bool) {
+func (c *Coordinator) loadLoweredPlan(ctx context.Context, watch *store.CronWatch) (*planner.LoweredPlan, bool) {
 	if cached, ok := c.loweredCache.Load(watch.ID); ok {
 		entry := cached.(*loweredCacheEntry)
 		if entry.contentHash == watch.ContentHash {
@@ -868,7 +868,7 @@ func (c *Coordinator) loadLoweredPlan(watch *store.CronWatch) (*planner.LoweredP
 	}
 	var lp planner.LoweredPlan
 	if err := json.Unmarshal(watch.LoweredPlan, &lp); err != nil {
-		log.Printf("watch %d: lowered_plan unmarshal: %v — falling back to inline Plan", watch.ID, err)
+		weftlog.Infof(ctx, "watch %d: lowered_plan unmarshal: %v — falling back to inline Plan", watch.ID, err)
 		return nil, false
 	}
 	// Store by-value into the entry so concurrent fires share the
@@ -897,21 +897,21 @@ func (c *Coordinator) loadLoweredPlan(watch *store.CronWatch) (*planner.LoweredP
 // and a concurrent goroutine over that conn races the main fire's
 // own DB activity. The latency cost (~hundreds of µs of DB writes)
 // is paid once per slow-path fire; the next fire is on the hot path.
-func (c *Coordinator) refreshLoweredSync(watch *store.CronWatch) {
+func (c *Coordinator) refreshLoweredSync(ctx context.Context, watch *store.CronWatch) {
 	if watch.ID == 0 {
 		return
 	}
 	resolver := watchBinResolver{store: c.Store, orgID: watch.OrgID}
 	tier := string(c.Store.TierForOrg(watch.OrgID))
-	loweredJSON := planner.LowerForStorage(watch.Pipeline, int64(watch.OrgID), tier, resolver)
+	loweredJSON := planner.LowerForStorage(ctx, watch.Pipeline, int64(watch.OrgID), tier, resolver)
 	if loweredJSON == nil {
 		return
 	}
-	if err := c.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.CronWatch{}).
+	if err := c.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Model(&store.CronWatch{}).
 		Where("id = ?", watch.ID).
 		Update("lowered_plan", loweredJSON).
 		Error; err != nil {
-		log.Printf("watch %d: refresh lowered_plan: %v", watch.ID, err)
+		weftlog.Infof(ctx, "watch %d: refresh lowered_plan: %v", watch.ID, err)
 		return
 	}
 	// Refresh wrote a new lowered_plan; the next fire's loadLoweredPlan
@@ -975,7 +975,7 @@ func (c *Coordinator) execute(ctx context.Context, pipeline string, tr TimeRange
 
 	// Alert path: drain the live stream into the buffered shape,
 	// run the alert against it, return a buffered ExecuteResult.
-	drained, drainErr := res.Drain(context.Background())
+	drained, drainErr := res.Drain(ctx)
 	if drainErr != nil {
 		return nil, drainErr
 	}
@@ -999,7 +999,7 @@ func (c *Coordinator) execute(ctx context.Context, pipeline string, tr TimeRange
 		Stderr:  drained.Stderr,
 		Notices: drained.Notices,
 	}
-	runAlertStage(qr, alertArgs, alertCtx)
+	runAlertStage(ctx, qr, alertArgs, alertCtx)
 	return queryResultToExecuteResult(qr), nil
 }
 
@@ -1053,7 +1053,7 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 		// is on /log/..., which the planner accepts. ErrNotPlannable
 		// here would mean the pipeline shape changed between
 		// substitution and re-render — surface it.
-		log.Printf("rewriter callback: plan error: %v (pipeline=%q)", err, pipeline)
+		weftlog.Errorf(ctx, "rewriter callback: plan error: %v (pipeline=%q)", err, pipeline)
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
@@ -1067,7 +1067,7 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 	}
 
 	// Alert post-processing needs the full text — drain the stream.
-	drained, err := execResult.Drain(context.Background())
+	drained, err := execResult.Drain(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("drain for alert: %w", err)
 	}
@@ -1080,7 +1080,7 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 			Notifier:    c.Notifier,
 		}
 	}
-	runAlertStage(qr, plan.AlertArgs, alertCtx)
+	runAlertStage(ctx, qr, plan.AlertArgs, alertCtx)
 	return queryResultToExecuteResult(qr), nil
 }
 
@@ -1134,7 +1134,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	// pseudofile path, so this checks it directly.
 	if plan.SourceNamespace != "" {
 		var count int64
-		if err := c.Store.DB().WithContext(store.WithOrg(context.Background(), custID)).Model(&store.Namespace{}).
+		if err := c.Store.DB().WithContext(store.WithOrg(ctx, custID)).Model(&store.Namespace{}).
 			Where("name = ?", plan.SourceNamespace).
 			Count(&count).Error; err != nil {
 			return nil, fmt.Errorf("validate source: %w", err)
@@ -1162,22 +1162,17 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 		tier = c.Store.TierForOrg(custID)
 	}
 	nsID := c.resolveNamespaceID(custID, plan.SourceNamespace)
-	descs := c.Provisioner.ShardDescriptorsFor(tr, nsID, plan.SourceService, tier)
+	descs := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, plan.SourceService, tier)
 	if len(descs) == 0 {
-		logQuery("query: no matching shards (namespace=%s, service=%s, customer=%s)", plan.SourceNamespace, plan.SourceService, customer)
+		logQuery(ctx, "query: no matching shards (namespace=%s, service=%s, customer=%s)", plan.SourceNamespace, plan.SourceService, customer)
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
 	shardIDs := make([]string, len(descs))
 	for i, d := range descs {
 		shardIDs[i] = d.ShardId
 	}
-	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
-		logQuery("query: namespace=%s service=%s shards=%v compute=%v sql=%s trace_id=%s",
-			plan.SourceNamespace, plan.SourceService, shardIDs, plan.ComputeStages, directSQL, traceID)
-	} else {
-		logQuery("query: namespace=%s service=%s shards=%v compute=%v sql=%s",
-			plan.SourceNamespace, plan.SourceService, shardIDs, plan.ComputeStages, directSQL)
-	}
+	logQuery(ctx, "query: namespace=%s service=%s shards=%v compute=%v sql=%s",
+		plan.SourceNamespace, plan.SourceService, shardIDs, plan.ComputeStages, directSQL)
 
 	argStrs := make([]string, len(plan.Args))
 	for i, a := range plan.Args {
@@ -1189,7 +1184,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 			// as %v rendering — surface it as a typed bug if it ever
 			// happens rather than silent data loss.
 			argStrs[i] = fmt.Sprintf("%v", a)
-			logQuery("query: non-string arg at position %d (%T %v) — bound via fmt", i, a, a)
+			logQuery(ctx, "query: non-string arg at position %d (%T %v) — bound via fmt", i, a, a)
 		}
 	}
 	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
@@ -1219,7 +1214,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 		TraceTag: alertCtx == nil && (plan.SourceCmd == "trace" || plan.SourceCmd == "trace_spans") && len(plan.ComputeStages) == 0,
 	})
 	if err != nil {
-		logQuery("query: compute error: %v", err)
+		logQuery(ctx, "query: compute error: %v", err)
 		return nil, err
 	}
 	return &ExecuteResult{Stream: stream}, nil
@@ -1228,13 +1223,13 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 // runAlertStage feeds a QueryResult's text into AlertCommand and
 // merges its stderr into result.Stderr so the caller sees the alert
 // message.
-func runAlertStage(result *QueryResult, args []string, ctx *AlertContext) {
+func runAlertStage(ctx context.Context, result *QueryResult, args []string, ac *AlertContext) {
 	var out, errOut strings.Builder
-	AlertCommand(args, strings.NewReader(result.Text), &out, &errOut, ctx)
+	AlertCommand(ctx, args, strings.NewReader(result.Text), &out, &errOut, ac)
 	if errOut.Len() == 0 {
 		return
 	}
-	if ctx != nil && ctx.Interactive {
+	if ac != nil && ac.Interactive {
 		result.Text = ""
 	}
 	if result.Stderr != "" && !strings.HasSuffix(result.Stderr, "\n") {
@@ -1325,6 +1320,7 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 			shellfs.WithTier(tier),
 			shellfs.WithCustomerName(customer),
 			shellfs.WithNoticeQueue(noticeQueue),
+			shellfs.WithContext(context.WithoutCancel(ctx)),
 		}
 		if userID != "" {
 			// The coordinator runLocal path is reached by query
@@ -1357,7 +1353,7 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		// `cd` within the same pipeline is tracked too.
 		interp.SetFS(bash.NewCwdFS(shellfs.New(c.Store, custID, logServices, opts...), interp.DirStack().Cwd, ""))
 
-		wf := &WeftFuncs{Store: c.Store, OrgID: custID}
+		wf := &WeftFuncs{Store: c.Store, OrgID: custID, Ctx: context.WithoutCancel(ctx)}
 		RegisterWeftCommands(interp, wf)
 		RegisterWeftPredicates(interp, wf)
 		interp.LuaExtensions = []luapkg.Extension{wf.LuaExtension()}
@@ -1393,7 +1389,10 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		timeout = scriptExecutionTimeout
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		// The script outlives the request that started it (its stream
+		// is consumed after Execute returns), so cancellation is
+		// detached — but the values (trace ID) are kept.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		defer cancel()
 		// Watcher: on timeout, ask the interpreter to stop at the
 		// next AST boundary. ExecScript winds down cooperatively.
@@ -1408,7 +1407,7 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		interp.ExecScript(ast)
 		close(watchDone)
 
-		res.Notices = noticeQueue.Drain()
+		res.Notices = noticeQueue.Drain(ctx)
 		// Dirstack courier (out): publish the post-run dirstack on the
 		// same happens-before edge as Notices (write → pipe close →
 		// consumer's post-EOF read), so the caller can cache the cwd the

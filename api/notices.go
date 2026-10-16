@@ -2,10 +2,10 @@ package api
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strconv"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/notices"
 )
 
@@ -36,7 +36,7 @@ func (s *Server) handleListNotices(w http.ResponseWriter, r *http.Request) {
 
 	pending, err := s.store.PendingNotices(session.UserID)
 	if err != nil {
-		log.Printf("notices: list for %s: %v", session.UserID, err)
+		weftlog.Infof(r.Context(), "notices: list for %s: %v", session.UserID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -78,7 +78,7 @@ func (s *Server) handleNoticeSeen(w http.ResponseWriter, r *http.Request) {
 
 	pending, err := s.store.PendingNotices(session.UserID)
 	if err != nil {
-		log.Printf("notices: seen lookup for %s: %v", session.UserID, err)
+		weftlog.Infof(r.Context(), "notices: seen lookup for %s: %v", session.UserID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -95,7 +95,7 @@ func (s *Server) handleNoticeSeen(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.store.MarkNoticesSeen([]int64{id}); err != nil {
-		log.Printf("notices: mark %d seen for %s: %v", id, session.UserID, err)
+		weftlog.Infof(r.Context(), "notices: mark %d seen for %s: %v", id, session.UserID, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

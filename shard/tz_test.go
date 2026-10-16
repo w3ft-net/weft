@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -27,11 +28,11 @@ func TestIngestTsRoundTripIsUTC(t *testing.T) {
 
 	inst := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
 	ns := inst.UnixNano()
-	if err := s.Ingest([]*pb.LogRow{{Raw: "x", CustomerId: 10, TsUnixNs: ns}}, nil); err != nil {
+	if err := s.Ingest(context.Background(), []*pb.LogRow{{Raw: "x", CustomerId: 10, TsUnixNs: ns}}, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
-	rows, err := s.Query("SELECT raw, ts FROM logs WHERE customer_id = 10")
+	rows, err := s.Query(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 10")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -68,11 +69,11 @@ func TestTsPredicateMatchesUTCBounds(t *testing.T) {
 	defer s.Close()
 
 	inst := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC)
-	if err := s.Ingest([]*pb.LogRow{{Raw: "x", CustomerId: 10, TsUnixNs: inst.UnixNano()}}, nil); err != nil {
+	if err := s.Ingest(context.Background(), []*pb.LogRow{{Raw: "x", CustomerId: 10, TsUnixNs: inst.UnixNano()}}, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
-	rows, err := s.Query(
+	rows, err := s.Query(context.Background(),
 		"SELECT raw, ts FROM logs WHERE ts >= CAST(? AS TIMESTAMP) AND ts <= CAST(? AS TIMESTAMP)",
 		utcBound(inst.Add(-time.Hour)), utcBound(inst.Add(time.Hour)))
 	if err != nil {

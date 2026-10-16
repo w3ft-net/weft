@@ -65,7 +65,7 @@ func TestGRPCShard_Query_RetriesOnCanceled(t *testing.T) {
 	}
 	defer gs.Close()
 
-	rows, err := gs.Query("SELECT 1")
+	rows, err := gs.Query(context.Background(), "SELECT 1")
 	if err != nil {
 		t.Fatalf("Query after retry: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestGRPCShard_Query_RetriesOnUnavailable(t *testing.T) {
 	}
 	defer gs.Close()
 
-	rows, err := gs.Query("SELECT 1")
+	rows, err := gs.Query(context.Background(), "SELECT 1")
 	if err != nil {
 		t.Fatalf("Query after retry: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestGRPCShard_Query_DoesNotRetryNonTransient(t *testing.T) {
 	}
 	defer gs.Close()
 
-	_, err = gs.Query("BAD")
+	_, err = gs.Query(context.Background(), "BAD")
 	if err == nil {
 		t.Fatal("expected error for InvalidArgument, got nil")
 	}
@@ -153,7 +153,7 @@ func TestGRPCShard_Query_GivesUpAfterMaxAttempts(t *testing.T) {
 	}
 	defer gs.Close()
 
-	_, err = gs.Query("SELECT 1")
+	_, err = gs.Query(context.Background(), "SELECT 1")
 	if err == nil {
 		t.Fatal("expected error after exhausting retries")
 	}

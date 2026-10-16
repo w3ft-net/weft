@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -101,12 +102,12 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	}
 	defer ds.Close()
 
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	// Query: all rows for this app.
-	allRows, err := ds.Query("SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer_id = 1")
+	allRows, err := ds.Query(context.Background(), "SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	}
 
 	// Query: ERROR rows only.
-	errorRows, err := ds.Query("SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer_id = 1 AND level = 'ERROR'")
+	errorRows, err := ds.Query(context.Background(), "SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer_id = 1 AND level = 'ERROR'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +131,7 @@ func TestIngestRoundTrip_GrantCentralWorker(t *testing.T) {
 	}
 
 	// Query: grep for "timeout" in raw.
-	timeoutRows, err := ds.Query("SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer_id = 1 AND raw LIKE '%timeout%'")
+	timeoutRows, err := ds.Query(context.Background(), "SELECT raw, ts FROM logs WHERE service = 'grantcentral-worker' AND customer_id = 1 AND raw LIKE '%timeout%'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,11 +189,11 @@ func TestIngestRoundTrip_VimGym(t *testing.T) {
 	}
 	defer ds.Close()
 
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	allRows, err := ds.Query("SELECT raw, ts FROM logs WHERE service = 'vimgym'")
+	allRows, err := ds.Query(context.Background(), "SELECT raw, ts FROM logs WHERE service = 'vimgym'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +202,7 @@ func TestIngestRoundTrip_VimGym(t *testing.T) {
 	}
 
 	// Grep for "bot:" which appears in several vimgym lines.
-	botRows, err := ds.Query("SELECT raw, ts FROM logs WHERE service = 'vimgym' AND raw LIKE '%bot:%'")
+	botRows, err := ds.Query(context.Background(), "SELECT raw, ts FROM logs WHERE service = 'vimgym' AND raw LIKE '%bot:%'")
 	if err != nil {
 		t.Fatal(err)
 	}

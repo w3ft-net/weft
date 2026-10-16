@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -86,7 +88,7 @@ func newClaimEnv(t *testing.T, name string) *claimEnv {
 func (e *claimEnv) executor(holder string) *CronExecutor {
 	return &CronExecutor{
 		Store: e.db, Holder: holder, Claims: e.claims,
-		Execute: func(_ store.CronWatch, tr TimeRange) {
+		Execute: func(_ context.Context, _ store.CronWatch, tr TimeRange) {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			e.fired = append(e.fired, firedRun{holder, tr})
@@ -128,7 +130,7 @@ func TestClaimTicksRunEachSlotOnceAcrossCoordinators(t *testing.T) {
 			coords[0] = mk("a2")
 		}
 		for _, c := range coords {
-			c.ce.claimTick(c.st, now)
+			c.ce.claimTick(context.Background(), c.st, now)
 		}
 	}
 
@@ -164,15 +166,15 @@ func TestClaimTickFailsClosedAndRetries(t *testing.T) {
 
 	env.claims.err = errors.New("db down")
 	for i := 0; i < 3; i++ {
-		ce.claimTick(st, now.Add(time.Duration(i)*time.Second))
+		ce.claimTick(context.Background(), st, now.Add(time.Duration(i)*time.Second))
 	}
 	if n := len(env.runs()); n != 0 {
 		t.Fatalf("ran %d times with the claim store failing", n)
 	}
 
 	env.claims.err = nil
-	ce.claimTick(st, now.Add(4*time.Second))
-	ce.claimTick(st, now.Add(5*time.Second))
+	ce.claimTick(context.Background(), st, now.Add(4*time.Second))
+	ce.claimTick(context.Background(), st, now.Add(5*time.Second))
 	if n := len(env.runs()); n != 1 {
 		t.Fatalf("want exactly 1 run after the store recovered, got %d", n)
 	}
@@ -195,15 +197,33 @@ func TestClaimTickSkipsSlotsThatClosedBeforeTheCronWasCreated(t *testing.T) {
 	st := &cronClaimState{watch: w}
 
 	// 12:06: the latest due slot closed at 12:05, before the cron existed.
-	ce.claimTick(st, time.Date(2026, 10, 4, 12, 6, 0, 0, time.UTC))
+	ce.claimTick(context.Background(), st, time.Date(2026, 10, 4, 12, 6, 0, 0, time.UTC))
 	if n := len(env.runs()); n != 0 || len(env.claims.owners) != 0 {
 		t.Fatalf("pre-creation slot ran %d time(s), claimed %v", n, env.claims.owners)
 	}
 
 	// 12:11: the 12:10 slot closed after creation, so it runs once.
-	ce.claimTick(st, time.Date(2026, 10, 4, 12, 11, 5, 0, time.UTC))
-	ce.claimTick(st, time.Date(2026, 10, 4, 12, 11, 6, 0, time.UTC))
+	ce.claimTick(context.Background(), st, time.Date(2026, 10, 4, 12, 11, 5, 0, time.UTC))
+	ce.claimTick(context.Background(), st, time.Date(2026, 10, 4, 12, 11, 6, 0, time.UTC))
 	if n := len(env.runs()); n != 1 {
 		t.Fatalf("want exactly 1 run for the first post-creation slot, got %d", n)
+	}
+}
+
+// A won slot mints a fresh trace ID, and the firing receives a ctx
+// carrying it (cron firings have no inbound request to inherit one from).
+func TestClaimTickMintsTraceForFiring(t *testing.T) {
+	env := newClaimEnv(t, "claims-trace")
+	var got []string
+	ce := env.executor("a")
+	ce.Execute = func(ctx context.Context, _ store.CronWatch, _ TimeRange) {
+		id, _ := weftsdk.TraceIDFromContext(ctx)
+		got = append(got, id)
+	}
+	st := &cronClaimState{watch: env.watch}
+	ce.claimTick(context.Background(), st, time.Date(2026, 10, 4, 12, 6, 0, 0, time.UTC))
+	ce.claimTick(context.Background(), st, time.Date(2026, 10, 4, 12, 11, 6, 0, time.UTC))
+	if len(got) != 2 || got[0] == "" || got[1] == "" || got[0] == got[1] {
+		t.Fatalf("firings saw trace IDs %q, want two distinct non-empty IDs", got)
 	}
 }

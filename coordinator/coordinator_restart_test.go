@@ -36,7 +36,7 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 	rows := []*pb.LogRow{
 		{Raw: "important data", Namespace: "myapp", CustomerId: 7, Level: "INFO", TsUnixNs: DevT0.Add(time.Second).UnixNano()},
 	}
-	if err := s0.Ingest(rows, nil); err != nil {
+	if err := s0.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatal(err)
 	}
 

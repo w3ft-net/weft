@@ -21,7 +21,7 @@ func testParquet(t *testing.T, rows []*pb.LogRow) string {
 		t.Fatal(err)
 	}
 	defer ds.Close()
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatal(err)
 	}
 	path, _, err := ds.Archive(context.Background(), t.TempDir())

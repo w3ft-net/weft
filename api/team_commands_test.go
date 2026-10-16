@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -39,7 +40,7 @@ func TestMaybeHandleTeamCommand_Routing(t *testing.T) {
 		{"deluser bob@x.test payments", true, "only the owner"},
 	}
 	for _, c := range cases {
-		handled, _, err := s.maybeHandleTeamCommand(member, c.pipeline)
+		handled, _, err := s.maybeHandleTeamCommand(context.Background(), member, c.pipeline)
 		if handled != c.wantHandled {
 			t.Errorf("%q: handled=%v want %v", c.pipeline, handled, c.wantHandled)
 			continue
@@ -92,7 +93,7 @@ func TestTeamAddUser_GroupGrantInvitesAndReportsPending(t *testing.T) {
 	newbie := fmt.Sprintf("newbie-%d@x.test", os.Getpid())
 
 	// Granting to a non-member invites them; the grant is pending.
-	out, err := srv.teamAddUser(sess, []string{newbie, "payments"})
+	out, err := srv.teamAddUser(context.Background(), sess, []string{newbie, "payments"})
 	if err != nil {
 		t.Fatalf("adduser newbie payments: %v", err)
 	}
@@ -105,14 +106,14 @@ func TestTeamAddUser_GroupGrantInvitesAndReportsPending(t *testing.T) {
 	}
 
 	// Re-running before they accept errors clearly.
-	if _, err := srv.teamAddUser(sess, []string{newbie, "payments"}); err == nil ||
+	if _, err := srv.teamAddUser(context.Background(), sess, []string{newbie, "payments"}); err == nil ||
 		!strings.Contains(err.Error(), "hasn't accepted") {
 		t.Fatalf("expected hasn't-accepted error, got %v", err)
 	}
 
 	// A typo'd group is rejected with no side effect — nobody invited.
 	other := fmt.Sprintf("other-%d@x.test", os.Getpid())
-	if _, err := srv.teamAddUser(sess, []string{other, "nope"}); err == nil ||
+	if _, err := srv.teamAddUser(context.Background(), sess, []string{other, "nope"}); err == nil ||
 		!strings.Contains(err.Error(), "no such group") {
 		t.Fatalf("expected bad-group error, got %v", err)
 	}
@@ -146,7 +147,7 @@ func TestTeamCommands_NonOwnerDenied(t *testing.T) {
 	for _, sc := range nonOwners {
 		for _, cmd := range []string{"adduser bob@x.test", "deluser bob@x.test"} {
 			t.Run(sc.name+"/"+strings.Fields(cmd)[0], func(t *testing.T) {
-				handled, _, err := s.maybeHandleTeamCommand(sc.session, cmd)
+				handled, _, err := s.maybeHandleTeamCommand(context.Background(), sc.session, cmd)
 				if !handled {
 					t.Fatalf("%q should be claimed as a team command", cmd)
 				}
@@ -209,7 +210,7 @@ func TestTeamCommands_ArgumentChecks(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			handled, out, err := s.maybeHandleTeamCommand(c.session, c.pipeline)
+			handled, out, err := s.maybeHandleTeamCommand(context.Background(), c.session, c.pipeline)
 			if !handled {
 				t.Fatalf("%q was not claimed as a team command", c.pipeline)
 			}

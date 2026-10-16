@@ -4,12 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -47,7 +47,7 @@ func newRedisFanout(addr string, tlsEnabled bool, deliver func(rows []*pb.LogRow
 	// that is a reconnect following a drop. There's no separate reconnect
 	// callback in the client, so this is the only hook into that signal.
 	opts.OnConnect = func(ctx context.Context, cn *redis.Conn) error {
-		store.LogTailFanoutEvent("connect", nil)
+		store.LogTailFanoutEvent(ctx, "connect", nil)
 		return nil
 	}
 	client := redis.NewClient(opts)
@@ -61,8 +61,8 @@ func (r *redisFanout) recvLoop(deliver func(rows []*pb.LogRow)) {
 	for msg := range r.ps.Channel() {
 		row := &pb.LogRow{}
 		if err := proto.Unmarshal([]byte(msg.Payload), row); err != nil {
-			log.Printf("tailfanout: redis unmarshal row: %v", err)
-			store.LogTailFanoutEvent("unmarshal", err)
+			weftlog.Infof(context.Background(), "tailfanout: redis unmarshal row: %v", err)
+			store.LogTailFanoutEvent(context.Background(), "unmarshal", err)
 			continue
 		}
 		deliver([]*pb.LogRow{row})
@@ -96,16 +96,15 @@ func channelFor(row *pb.LogRow) string {
 	return fmt.Sprintf("tail:%d:%s:%s:%s", row.CustomerId, row.Namespace, row.Service, kind)
 }
 
-func (r *redisFanout) announceInterest(t tailTopic, add bool) {
+func (r *redisFanout) announceInterest(ctx context.Context, t tailTopic, add bool) {
 	p := pattern(t)
-	ctx := context.Background()
 	if add {
 		r.mu.Lock()
 		r.patterns[t] = p
 		r.mu.Unlock()
 		if err := r.ps.PSubscribe(ctx, p); err != nil {
-			log.Printf("tailfanout: redis psubscribe %s: %v", p, err)
-			store.LogTailFanoutEvent("psubscribe", err)
+			weftlog.Infof(ctx, "tailfanout: redis psubscribe %s: %v", p, err)
+			store.LogTailFanoutEvent(ctx, "psubscribe", err)
 		}
 		return
 	}
@@ -113,8 +112,8 @@ func (r *redisFanout) announceInterest(t tailTopic, add bool) {
 	delete(r.patterns, t)
 	r.mu.Unlock()
 	if err := r.ps.PUnsubscribe(ctx, p); err != nil {
-		log.Printf("tailfanout: redis punsubscribe %s: %v", p, err)
-		store.LogTailFanoutEvent("punsubscribe", err)
+		weftlog.Infof(ctx, "tailfanout: redis punsubscribe %s: %v", p, err)
+		store.LogTailFanoutEvent(ctx, "punsubscribe", err)
 	}
 }
 
@@ -129,14 +128,14 @@ func (r *redisFanout) publish(rows []*pb.LogRow) {
 	for _, row := range rows {
 		data, err := proto.Marshal(row)
 		if err != nil {
-			log.Printf("tailfanout: redis marshal row: %v", err)
-			store.LogTailFanoutEvent("marshal", err)
+			weftlog.Infof(ctx, "tailfanout: redis marshal row: %v", err)
+			store.LogTailFanoutEvent(ctx, "marshal", err)
 			continue
 		}
 		pipe.Publish(ctx, channelFor(row), data)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
-		log.Printf("tailfanout: redis publish: %v", err)
-		store.LogTailFanoutEvent("publish", err)
+		weftlog.Infof(ctx, "tailfanout: redis publish: %v", err)
+		store.LogTailFanoutEvent(ctx, "publish", err)
 	}
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -45,7 +46,7 @@ func TestMe_SelectingAnotherOrgAtGraduateLeavesLoom(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := srv.grantLoomMembership(user.ID, email); err != nil {
+	if err := srv.grantLoomMembership(context.Background(), user.ID, email); err != nil {
 		t.Fatal(err)
 	}
 	jwt, err := auth.Generate(user, "test-secret")

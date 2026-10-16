@@ -86,7 +86,7 @@ type failingShard struct {
 }
 
 func (s *failingShard) ID() string { return s.id }
-func (s *failingShard) Query(sql string, args ...any) ([]*pb.ResultRow, error) {
+func (s *failingShard) Query(_ context.Context, sql string, args ...any) ([]*pb.ResultRow, error) {
 	return nil, nil
 }
 func (s *failingShard) QueryToSink(ctx context.Context, sql string, args []any, sink shard.RowSink) {}
@@ -95,7 +95,7 @@ func (s *failingShard) Archive(_ context.Context, _ string) (string, []shard.Cus
 	return "", nil, nil
 }
 
-func (s *failingShard) Ingest(rows []*pb.LogRow, rec shard.IngestRecorder) error {
+func (s *failingShard) Ingest(_ context.Context, rows []*pb.LogRow, rec shard.IngestRecorder) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failing {

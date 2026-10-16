@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,6 +24,7 @@ import (
 	weftcfg "github.com/graybeardcorp/weft/config"
 	"github.com/graybeardcorp/weft/coordinator"
 	"github.com/graybeardcorp/weft/ingest"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/logdb"
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/notices"
@@ -194,7 +194,7 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	// function's own return value happens to be by the time it exits.
 	ctx, span := weftsdk.StartSpan(ctx, "coordinator.Execute")
 	defer span.End()
-	traceID, traced := weftsdk.TraceIDFromContext(ctx)
+	_, traced := weftsdk.TraceIDFromContext(ctx)
 	var lineCount int
 	var result *coordinator.ExecuteResult
 	if req.Follow && s.Coord.Tail != nil {
@@ -204,11 +204,7 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	}
 	if err != nil {
 		span.RecordError(err)
-		if traced {
-			log.Printf("query rpc: error for customer=%s pipeline=%q trace_id=%s: %v", customer, req.Pipeline, traceID, err)
-		} else {
-			log.Printf("query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
-		}
+		weftlog.Errorf(ctx, "query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
 		return err
 	}
 
@@ -320,7 +316,7 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 		return err
 	}
 	if traced {
-		log.Printf("query rpc: done customer=%s pipeline=%q lines=%d duration=%s trace_id=%s", customer, req.Pipeline, lineCount, time.Since(start), traceID)
+		weftlog.Infof(ctx, "query rpc: done customer=%s pipeline=%q lines=%d duration=%s", customer, req.Pipeline, lineCount, time.Since(start))
 	}
 	return nil
 }
@@ -388,7 +384,7 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 	// the client's AddSource on bucket trouble.
 	if s.Coord.Provisioner != nil {
 		if err := s.Coord.Provisioner.OnboardService(ns.ID, req.Service); err != nil {
-			log.Printf("AddSource: OnboardService %d/%q: %v", ns.ID, req.Service, err)
+			weftlog.Infof(ctx, "AddSource: OnboardService %d/%q: %v", ns.ID, req.Service, err)
 		}
 	}
 
@@ -440,7 +436,7 @@ func (s *Server) RemoveSource(ctx context.Context, req *pb.RemoveSourceRequest) 
 
 // Authenticate validates an agent token. Agents stream through the
 // coordinator via IngestStream — they never connect to shards directly.
-func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*pb.AuthenticateResponse, error) {
+func (s *Server) Authenticate(ctx context.Context, req *pb.AuthenticateRequest) (*pb.AuthenticateResponse, error) {
 	auth, err := s.Store.ValidateAgentToken(req.Token)
 	if err != nil {
 		return nil, fmt.Errorf("validate token: %w", err)
@@ -452,17 +448,17 @@ func (s *Server) Authenticate(_ context.Context, req *pb.AuthenticateRequest) (*
 	// Check for an active subscription.
 	sub, err := s.Store.ActiveSubscription(auth.Organization.ID)
 	if err != nil || sub == nil {
-		log.Printf("auth: customer=%s denied (no active subscription)", auth.Organization.Name)
+		weftlog.Infof(ctx, "auth: customer=%s denied (no active subscription)", auth.Organization.Name)
 		return nil, status.Errorf(codes.PermissionDenied,
 			"no active subscription — upgrade at w3ft.net/dashboard")
 	}
 
-	log.Printf("auth: customer=%s namespace=%s tier=%s", auth.Organization.Name, auth.Namespace, sub.Tier)
+	weftlog.Infof(ctx, "auth: customer=%s namespace=%s tier=%s", auth.Organization.Name, auth.Namespace, sub.Tier)
 
 	// If the agent reported a metrics config, persist it.
 	if mc := req.MetricsConfig; mc != nil {
 		if err := s.Store.UpdateAgentMetricsConfig(req.Token, mc.Enabled, mc.Interval, mc.Collectors); err != nil {
-			log.Printf("auth: failed to save metrics config for %s: %v", auth.Organization.Name, err)
+			weftlog.Errorf(ctx, "auth: failed to save metrics config for %s: %v", auth.Organization.Name, err)
 		}
 	}
 
@@ -564,7 +560,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 			case <-ticker.C:
 				mu.Lock()
 				if len(rows) > 0 {
-					s.ingestBatch(rows)
+					s.ingestBatch(stream.Context(), rows)
 					rows = rows[:0]
 				}
 				mu.Unlock()
@@ -618,7 +614,7 @@ recvLoop:
 		case <-stream.Context().Done():
 			return stream.Context().Err()
 		case <-idleC:
-			log.Printf("ingest-stream: customer=%s idle for %s, closing stream (agent should reconnect)",
+			weftlog.Infof(stream.Context(), "ingest-stream: customer=%s idle for %s, closing stream (agent should reconnect)",
 				authCustomer, idleTimeout)
 			return status.Errorf(codes.DeadlineExceeded,
 				"ingest stream idle for %s; reconnect", idleTimeout)
@@ -646,7 +642,7 @@ recvLoop:
 		if budget > 0 {
 			bytesThisStream += rowSize
 			if bytesThisStream > budget {
-				log.Printf("ingest-stream: customer=%s exceeded %d-byte budget, closing stream (agent should reconnect)",
+				weftlog.Infof(stream.Context(), "ingest-stream: customer=%s exceeded %d-byte budget, closing stream (agent should reconnect)",
 					authCustomer, budget)
 				return status.Errorf(codes.ResourceExhausted,
 					"ingest stream budget of %d bytes exceeded; reconnect", budget)
@@ -701,11 +697,11 @@ recvLoop:
 		mu.Lock()
 		if count == 0 {
 			firstService = svcPath
-			log.Printf("ingest-stream: first row from customer=%s service=%s", authCustomer, svcPath)
+			weftlog.Infof(stream.Context(), "ingest-stream: first row from customer=%s service=%s", authCustomer, svcPath)
 		}
 		if s.Coord.SeenServices != nil && row.Service != "" {
 			if s.Coord.SeenServices.Add(authCustomerID, svcPath, row.Env) {
-				log.Printf("ingest-stream: new service discovered: customer=%s service=%s", authCustomer, svcPath)
+				weftlog.Infof(stream.Context(), "ingest-stream: new service discovered: customer=%s service=%s", authCustomer, svcPath)
 				// Auto-onboard: raw producers (Heroku, custom POSTs, bare
 				// IngestStream) never sample, so there's no log_group until
 				// we make one here. OnboardService records the canonical
@@ -715,9 +711,9 @@ recvLoop:
 				// service) over the coordinator's lifetime.
 				if s.Coord.Provisioner != nil {
 					if ns, err := s.Store.GetNamespace(auth.Organization.ID, auth.Namespace); err != nil {
-						log.Printf("ingest-stream: onboard %q: namespace %s/%s: %v", row.Service, auth.Organization.Name, auth.Namespace, err)
+						weftlog.Infof(stream.Context(), "ingest-stream: onboard %q: namespace %s/%s: %v", row.Service, auth.Organization.Name, auth.Namespace, err)
 					} else if err := s.Coord.Provisioner.OnboardService(ns.ID, row.Service); err != nil {
-						log.Printf("ingest-stream: OnboardService %d/%q: %v", ns.ID, row.Service, err)
+						weftlog.Infof(stream.Context(), "ingest-stream: OnboardService %d/%q: %v", ns.ID, row.Service, err)
 					}
 				}
 			}
@@ -733,7 +729,7 @@ recvLoop:
 			flushNow = s.Coord.TailFanout.HasSubscriber(row)
 		}
 		if flushNow {
-			s.ingestBatch(rows)
+			s.ingestBatch(stream.Context(), rows)
 			rows = rows[:0]
 		}
 		mu.Unlock()
@@ -743,11 +739,11 @@ recvLoop:
 
 	mu.Lock()
 	if len(rows) > 0 {
-		s.ingestBatch(rows)
+		s.ingestBatch(stream.Context(), rows)
 	}
 	mu.Unlock()
 
-	log.Printf("ingest-stream: received %d rows from customer=%s", count, authCustomer)
+	weftlog.Infof(stream.Context(), "ingest-stream: received %d rows from customer=%s", count, authCustomer)
 	return stream.SendAndClose(&pb.IngestStreamResponse{RowsReceived: count})
 }
 
@@ -777,7 +773,7 @@ func (s *Server) authenticateStream(ctx context.Context) (*store.AgentAuthResult
 	return auth, nil
 }
 
-func (s *Server) ingestBatch(rows []*pb.LogRow) {
+func (s *Server) ingestBatch(ctx context.Context, rows []*pb.LogRow) {
 	// Store a multi-line text event as one row per line, here, so the
 	// shards' buffer and live tail see the same rows.
 	rows = ingest.SplitLines(rows)
@@ -787,7 +783,7 @@ func (s *Server) ingestBatch(rows []*pb.LogRow) {
 	s.Coord.Ingest.Write(rows)
 	pct := s.Coord.Ingest.UsagePct()
 	if pct > 80 && s.Coord.Provisioner.TotalIngesting() == 0 {
-		log.Printf("CRITICAL: ring buffer at %d%% with no ingesting shards — data will be lost", pct)
+		weftlog.Infof(ctx, "CRITICAL: ring buffer at %d%% with no ingesting shards — data will be lost", pct)
 	}
 
 	// Fan out to tail -f subscribers (local, plus any other coordinators
@@ -828,7 +824,7 @@ func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.Get
 	var dbBytes int64
 	dbBytes, err = s.Store.QueryUsage(orgID, periodStart, periodEnd)
 	if err != nil {
-		log.Printf("GetUsage DB query error: %v", err)
+		weftlog.Errorf(ctx, "GetUsage DB query error: %v", err)
 		// Continue with in-memory only.
 	}
 
@@ -928,7 +924,7 @@ func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.S
 	if cust, err := s.Store.GetOrgByID(custID); err == nil && cust != nil {
 		resolver := storeBinResolver{store: s.Store, orgID: custID}
 		tier := string(s.Store.TierForOrg(custID))
-		loweredJSON = planner.LowerForStorage(req.Pipeline, int64(custID), tier, resolver)
+		loweredJSON = planner.LowerForStorage(ctx, req.Pipeline, int64(custID), tier, resolver)
 	}
 	// SaveCronWatch's error may be a non-blocking store.Warning (the
 	// save already happened) — see store.Split's doc. SaveWatchResponse
@@ -1066,7 +1062,7 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 	// dispatches, it just doesn't keep a row.
 	if s.Store != nil {
 		if err := s.Store.RecordHeartbeat(&hb); err != nil {
-			log.Printf("heartbeat: failed to persist for %s: %v", req.ShardId, err)
+			weftlog.Errorf(ctx, "heartbeat: failed to persist for %s: %v", req.ShardId, err)
 		}
 	}
 	// Runs in a goroutine so the RPC returns within the shard's 5s
@@ -1116,7 +1112,7 @@ func (s *Server) authenticateToken(token string) (*store.AgentAuthResult, error)
 // submit is a progress ping while the agent is still accumulating (the
 // source surfaces as "sampling (N/target)"); the final non-partial submit
 // carries the complete sample and makes the source configurable.
-func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*pb.SubmitSampleResponse, error) {
+func (s *Server) SubmitSample(ctx context.Context, req *pb.SubmitSampleRequest) (*pb.SubmitSampleResponse, error) {
 	auth, err := s.authenticateToken(req.Token)
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
@@ -1150,13 +1146,13 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 	// never blocked on Bedrock. See ingest/llmdetect.go.
 	namespaceID := ns.ID
 	sampleJSON, _ := json.Marshal(req.Lines)
-	detection := ingest.ClassifyAsync(s.Classifier, req.Lines, !req.Partial, func(d *ingest.Detection) {
+	detection := ingest.ClassifyAsync(ctx, s.Classifier, req.Lines, !req.Partial, func(d *ingest.Detection) {
 		detectionJSON, err := json.Marshal(d)
 		if err != nil {
 			return
 		}
 		if err := s.Store.UpdateLogGroupDetection(namespaceID, service, string(sampleJSON), string(detectionJSON)); err != nil {
-			log.Printf("classify: update detection for %s/%s: %v", auth.Namespace, service, err)
+			weftlog.Infof(ctx, "classify: update detection for %s/%s: %v", auth.Namespace, service, err)
 		}
 	})
 	detectionJSON, _ := json.Marshal(detection)
@@ -1174,12 +1170,12 @@ func (s *Server) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest) (*
 	if req.Partial {
 		respStatus = "sampling"
 	}
-	log.Printf("sample: customer=%s namespace=%s app=%s lines=%d partial=%t", auth.Organization.Name, auth.Namespace, req.Service, len(req.Lines), req.Partial)
+	weftlog.Infof(ctx, "sample: customer=%s namespace=%s app=%s lines=%d partial=%t", auth.Organization.Name, auth.Namespace, req.Service, len(req.Lines), req.Partial)
 	return &pb.SubmitSampleResponse{Status: respStatus}, nil
 }
 
 // GetSourceStatus returns the configuration status of a source.
-func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusRequest) (*pb.GetSourceStatusResponse, error) {
+func (s *Server) GetSourceStatus(ctx context.Context, req *pb.GetSourceStatusRequest) (*pb.GetSourceStatusResponse, error) {
 	auth, err := s.authenticateToken(req.Token)
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
@@ -1201,7 +1197,7 @@ func (s *Server) GetSourceStatus(_ context.Context, req *pb.GetSourceStatusReque
 	// source's schema. An agent from before the field reports nothing.
 	if req.AgentVersion != "" {
 		if err := s.Store.RecordAgentSeen(lg.ID, req.Instance, req.AgentVersion); err != nil {
-			log.Printf("source status: record agent %s@%s for %s: %v", req.AgentVersion, req.Instance, req.Service, err)
+			weftlog.Infof(ctx, "source status: record agent %s@%s for %s: %v", req.AgentVersion, req.Instance, req.Service, err)
 		}
 	}
 

@@ -1,6 +1,7 @@
 package logdb
 
 import (
+	"context"
 	"testing"
 
 	"github.com/graybeardcorp/weft/shard"
@@ -144,7 +145,7 @@ func seedLogGroups(t *testing.T, db *store.Store, customer, namespace string, se
 		t.Fatalf("namespace: %v", err)
 	}
 	for _, svc := range services {
-		if err := db.AddLogGroup(ns.ID, store.SourceTypeWeftd, svc, svc, "local", ""); err != nil {
+		if err := db.AddLogGroup(context.Background(), ns.ID, store.SourceTypeWeftd, svc, svc, "local", ""); err != nil {
 			t.Fatalf("log group %s: %v", svc, err)
 		}
 	}

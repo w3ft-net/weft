@@ -74,7 +74,7 @@ func TestColdShard_RemoteQuery(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE customer_id = 1")
+	rows, err := cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestColdShard_RemoteReadOnly(t *testing.T) {
 	}
 	defer cs.Close()
 
-	err = cs.Ingest([]*pb.LogRow{{Raw: "nope", TsUnixNs: time.Now().UnixNano()}}, nil)
+	err = cs.Ingest(context.Background(), []*pb.LogRow{{Raw: "nope", TsUnixNs: time.Now().UnixNano()}}, nil)
 	if err == nil {
 		t.Fatal("expected error on Ingest")
 	}
@@ -168,7 +168,7 @@ func TestColdShard_RemoteFiltersByApp(t *testing.T) {
 	}
 	defer cs.Close()
 
-	rows, err := cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'callbox' AND customer_id = 1")
+	rows, err := cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE namespace = 'callbox' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func BenchmarkColdShard_RemoteQuery(b *testing.B) {
 			TsUnixNs: coldT0.Add(time.Duration(i) * time.Millisecond).UnixNano(),
 		}
 	}
-	ds.Ingest(rows, nil)
+	ds.Ingest(context.Background(), rows, nil)
 	path := filepath.Join(b.TempDir(), "bench.parquet")
 	ds.ExportToParquet(path)
 	ds.Close()
@@ -222,6 +222,6 @@ func BenchmarkColdShard_RemoteQuery(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
+		cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
 	}
 }

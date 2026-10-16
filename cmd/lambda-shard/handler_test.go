@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +28,7 @@ func testParquet(t *testing.T) string {
 		{Raw: "info in vimgym", Namespace: "vimgym", Level: "INFO", CustomerId: 1, TsUnixNs: time.Now().UnixNano()},
 		{Raw: "warn in callbox", Namespace: "callbox", Level: "WARN", CustomerId: 1, TsUnixNs: time.Now().UnixNano()},
 	}
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "test.parquet")

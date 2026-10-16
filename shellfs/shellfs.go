@@ -5,6 +5,7 @@
 package shellfs
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"path"
@@ -93,6 +94,14 @@ func WithUser(userID string, perms mounts.OrgPerms) Option {
 // WithNoticeQueue wires a notice sink the FS signals on /tmp writes.
 func WithNoticeQueue(q NoticeSink) Option {
 	return func(c *mounts.Config) { c.NoticeQueue = q }
+}
+
+// WithContext binds the request context the mounts run under. warp's
+// bash.FS interface is ctx-less, so the per-request ShellFS carries it;
+// embedders pass a context.WithoutCancel(requestCtx) so the trace ID
+// survives while the FS may outlive the request.
+func WithContext(ctx context.Context) Option {
+	return func(c *mounts.Config) { c.Ctx = ctx }
 }
 
 // MountFS returns the underlying MountFS for callers that need

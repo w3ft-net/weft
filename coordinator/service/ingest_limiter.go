@@ -2,11 +2,11 @@ package service
 
 import (
 	"context"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"golang.org/x/time/rate"
 )
 
@@ -94,7 +94,7 @@ func (l *ingestLimiter) wait(ctx context.Context, tokenID uint, n int64, bytesPe
 	b := l.bucketFor(tokenID, bytesPerSec, burst)
 	res := b.limiter.ReserveN(time.Now(), int(n))
 	if !res.OK() {
-		log.Printf("ingest-ratelimit: token=%d row of %d bytes exceeds burst of %d bytes, allowing through unthrottled", tokenID, n, burst)
+		weftlog.Infof(ctx, "ingest-ratelimit: token=%d row of %d bytes exceeds burst of %d bytes, allowing through unthrottled", tokenID, n, burst)
 		return nil
 	}
 	delay := res.Delay()

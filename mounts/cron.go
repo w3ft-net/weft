@@ -110,7 +110,7 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 	// /bin/ pipeline) — the save still succeeds, and the fire path
 	// falls back to inline Plan() for those.
 	resolver := cronBinResolver{store: m.cfg.Store, orgID: m.cfg.OrgID}
-	loweredJSON := planner.LowerForStorage(pipeline, int64(m.cfg.OrgID), string(m.cfg.Tier), resolver)
+	loweredJSON := planner.LowerForStorage(m.cfg.ctx(), pipeline, int64(m.cfg.OrgID), string(m.cfg.Tier), resolver)
 
 	return m.cfg.Store.SaveCronWatch(m.cfg.OrgID, m.cfg.UserID, rel, schedule, pipeline, loweredJSON)
 }

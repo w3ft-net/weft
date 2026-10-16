@@ -5,7 +5,6 @@ package weftd
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/internal/release"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // SelfUpdateChecker checks releases.w3ft.net for a newer weftd. When
@@ -105,7 +105,7 @@ func (c *SelfUpdateChecker) checkOnce() bool {
 	c.init()
 	m, err := release.FetchManifestWith(c.HTTP, c.ManifestURL)
 	if err != nil {
-		log.Printf("selfupdate: %v", err)
+		weftlog.Infof(context.Background(), "selfupdate: %v", err)
 		return false
 	}
 	if m.Version == "" || !release.VersionNewer(m.Version, c.CurrentVersion) {
@@ -115,13 +115,13 @@ func (c *SelfUpdateChecker) checkOnce() bool {
 	// nothing actionable to suggest or pull.
 	plat := release.FindPlatform(m, runtime.GOOS, runtime.GOARCH)
 	if plat == nil {
-		log.Printf("selfupdate: weftd %s available but no %s/%s build in manifest",
+		weftlog.Infof(context.Background(), "selfupdate: weftd %s available but no %s/%s build in manifest",
 			m.Version, runtime.GOOS, runtime.GOARCH)
 		return false
 	}
 
 	if !c.AutoApply {
-		log.Printf("selfupdate: weftd %s available (current %s) — see %s",
+		weftlog.Infof(context.Background(), "selfupdate: weftd %s available (current %s) — see %s",
 			m.Version, c.CurrentVersion, plat.URL)
 		return false
 	}
@@ -137,7 +137,7 @@ func (c *SelfUpdateChecker) checkOnce() bool {
 func (c *SelfUpdateChecker) apply(m *release.Manifest, plat *release.Platform) bool {
 	dst, err := c.ExecPath()
 	if err != nil {
-		log.Printf("selfupdate: resolve running binary: %v", err)
+		weftlog.Infof(context.Background(), "selfupdate: resolve running binary: %v", err)
 		return false
 	}
 	// Replace the real binary, not a symlink to it.
@@ -145,22 +145,22 @@ func (c *SelfUpdateChecker) apply(m *release.Manifest, plat *release.Platform) b
 		dst = real
 	}
 
-	log.Printf("selfupdate: downloading weftd %s for %s/%s", m.Version, runtime.GOOS, runtime.GOARCH)
+	weftlog.Infof(context.Background(), "selfupdate: downloading weftd %s for %s/%s", m.Version, runtime.GOOS, runtime.GOARCH)
 	// Own client with a generous timeout — the manifest client's 30s is
 	// fine for a few-KB JSON but tight for a multi-MB binary on a slow link.
 	tmp, err := release.DownloadAndVerify(plat.URL, plat.SHA256)
 	if err != nil {
-		log.Printf("selfupdate: download weftd %s: %v", m.Version, err)
+		weftlog.Infof(context.Background(), "selfupdate: download weftd %s: %v", m.Version, err)
 		return false
 	}
 	defer os.Remove(tmp)
 
 	if err := release.ReplaceBinary(tmp, dst); err != nil {
-		log.Printf("selfupdate: install weftd %s: %v", m.Version, err)
+		weftlog.Infof(context.Background(), "selfupdate: install weftd %s: %v", m.Version, err)
 		return false
 	}
 
-	log.Printf("selfupdate: applied weftd %s → %s, restarting", c.CurrentVersion, m.Version)
+	weftlog.Infof(context.Background(), "selfupdate: applied weftd %s → %s, restarting", c.CurrentVersion, m.Version)
 	c.Restart()
 	return true
 }

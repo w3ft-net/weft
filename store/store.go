@@ -1,15 +1,16 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/graybeardcorp/saaskit/orgs"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -199,7 +200,7 @@ func Connect(dsn string) (*Store, error) {
 			backfilled++
 		}
 		if backfilled > 0 {
-			log.Printf("store: backfilled alert_condition/alert_threshold on %d cron_watches", backfilled)
+			weftlog.Infof(context.Background(), "store: backfilled alert_condition/alert_threshold on %d cron_watches", backfilled)
 		}
 	}
 	return s, nil

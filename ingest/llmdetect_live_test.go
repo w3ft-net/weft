@@ -51,7 +51,7 @@ func TestLiveClassifyMinorityTraceID(t *testing.T) {
 		t.Fatalf("classifyRaw: %v", err)
 	}
 	t.Logf("model proposed: timestamp=%+v level=%+v trace=%+v", raw.Timestamp, raw.Level, raw.TraceID)
-	res := validateClassification(raw, vlines)
+	res := validateClassification(ctx, raw, vlines)
 	t.Logf("timestamp=%+v level=%+v trace=%+v", res.Timestamp, res.Level, res.TraceID)
 	if res.TraceID == nil {
 		t.Fatal("the model's trace id proposal did not survive verification (on 10 of 30 lines)")
@@ -162,7 +162,7 @@ func TestLiveClassifySpanStartDoneSample(t *testing.T) {
 	}
 	t.Logf("model proposed: ts=%+v level=%+v trace=%+v name=%+v span=%+v parent=%+v dur=%+v",
 		raw.Timestamp, raw.Level, raw.TraceID, raw.SpanName, raw.SpanID, raw.ParentSpanID, raw.DurationNs)
-	res := validateClassification(raw, vlines)
+	res := validateClassification(ctx, raw, vlines)
 	t.Logf("verified: trace=%+v name=%+v span=%+v parent=%+v dur=%+v",
 		res.TraceID, res.SpanName, res.SpanID, res.ParentSpanID, res.DurationNs)
 	if res.DurationNs == nil {

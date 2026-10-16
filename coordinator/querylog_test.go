@@ -1,10 +1,13 @@
 package coordinator
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
 	"testing"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 )
 
 // SetQueryLog must route audit lines to the dedicated file (creating a
@@ -13,14 +16,14 @@ import (
 // timestamps off. Regression guard for the cron self-reference fix:
 // audit lines must not stay on the coordinator's main stderr stream.
 func TestSetQueryLogRoutesToFileWithTimestamp(t *testing.T) {
-	t.Cleanup(func() { queryLog.SetOutput(os.Stderr) })
+	t.Cleanup(func() { queryOut.Set(os.Stderr) })
 
 	path := filepath.Join(t.TempDir(), "nested", "queries.log")
 	if err := SetQueryLog(path); err != nil {
 		t.Fatalf("SetQueryLog: %v", err)
 	}
 
-	queryLog.Printf("query: app=%s shards=%v", "weft/coordinator", []string{"s1"})
+	logQuery(context.Background(), "query: app=%s shards=%v", "weft/coordinator", []string{"s1"})
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -42,7 +45,7 @@ func TestSetQueryLogRoutesToFileWithTimestamp(t *testing.T) {
 // instances is invisible from logs alone.
 func TestQueryLogIncludesCoordinatorID(t *testing.T) {
 	t.Cleanup(func() {
-		queryLog.SetOutput(os.Stderr)
+		queryOut.Set(os.Stderr)
 		SetQueryLogCoordinatorID("")
 	})
 
@@ -52,7 +55,7 @@ func TestQueryLogIncludesCoordinatorID(t *testing.T) {
 	}
 	SetQueryLogCoordinatorID("i-0b340ce3672315ed2")
 
-	logQuery("query: namespace=%s service=%s shards=%v", "weft", "coordinator", []string{"s1"})
+	logQuery(context.Background(), "query: namespace=%s service=%s shards=%v", "weft", "coordinator", []string{"s1"})
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -70,7 +73,7 @@ func TestQueryLogIncludesCoordinatorID(t *testing.T) {
 // rather than crashing — the coordinator must never fail to start over
 // log routing.
 func TestSetQueryLogErrorKeepsFallback(t *testing.T) {
-	t.Cleanup(func() { queryLog.SetOutput(os.Stderr) })
+	t.Cleanup(func() { queryOut.Set(os.Stderr) })
 
 	// A path whose parent is an existing regular file can't be created.
 	f := filepath.Join(t.TempDir(), "afile")
@@ -79,5 +82,28 @@ func TestSetQueryLogErrorKeepsFallback(t *testing.T) {
 	}
 	if err := SetQueryLog(filepath.Join(f, "queries.log")); err == nil {
 		t.Fatal("expected error when parent path is a regular file")
+	}
+}
+
+// An audit line for a traced request carries its trace ID, after
+// coordinator_id, without the call site spelling it.
+func TestQueryLogCarriesTheTraceID(t *testing.T) {
+	t.Cleanup(func() {
+		queryOut.Set(os.Stderr)
+		SetQueryLogCoordinatorID("")
+	})
+	path := filepath.Join(t.TempDir(), "queries.log")
+	if err := SetQueryLog(path); err != nil {
+		t.Fatal(err)
+	}
+	SetQueryLogCoordinatorID("i-1")
+
+	ctx := weftsdk.ContextWithTraceID(context.Background(), "7f778536850bbbbaed3c25469f1a23dd")
+	logQuery(ctx, "query: namespace=%s", "weft")
+
+	data, _ := os.ReadFile(path)
+	re := regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} query: namespace=weft coordinator_id=i-1 trace_id=7f778536850bbbbaed3c25469f1a23dd\n$`)
+	if !re.MatchString(string(data)) {
+		t.Fatalf("audit line shape mismatch: %q", data)
 	}
 }

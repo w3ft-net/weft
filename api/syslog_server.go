@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/graybeardcorp/weft/ingest"
 	ingsyslog "github.com/graybeardcorp/weft/ingest/syslog"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -157,12 +157,12 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 	// outright rather than guess a namespace — matches every other
 	// ingest adapter's behaviour on a missing credential.
 	if len(trimmed) == 0 || trimmed[0] == '<' {
-		log.Printf("syslog[%s]: rejecting %s: connection has no token prefix", name, remote)
+		weftlog.Infof(ctx, "syslog[%s]: rejecting %s: connection has no token prefix", name, remote)
 		return
 	}
 	sp := bytes.IndexByte(trimmed, ' ')
 	if sp <= 0 {
-		log.Printf("syslog[%s]: rejecting %s: malformed first line", name, remote)
+		weftlog.Infof(ctx, "syslog[%s]: rejecting %s: malformed first line", name, remote)
 		return
 	}
 	token := string(trimmed[:sp])
@@ -170,11 +170,11 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 
 	auth, err := ss.store.ValidateAgentToken(token)
 	if err != nil {
-		log.Printf("syslog[%s]: token validation error from %s: %v", name, remote, err)
+		weftlog.Errorf(ctx, "syslog[%s]: token validation error from %s: %v", name, remote, err)
 		return
 	}
 	if auth == nil {
-		log.Printf("syslog[%s]: rejecting %s: invalid or revoked token", name, remote)
+		weftlog.Infof(ctx, "syslog[%s]: rejecting %s: invalid or revoked token", name, remote)
 		return
 	}
 
@@ -184,7 +184,7 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 	streamCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 	stream, err := ss.coordClient.IngestStream(streamCtx)
 	if err != nil {
-		log.Printf("syslog[%s]: open ingest stream for %s: %v", name, auth.Namespace, err)
+		weftlog.Infof(ctx, "syslog[%s]: open ingest stream for %s: %v", name, auth.Namespace, err)
 		return
 	}
 
@@ -222,20 +222,20 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 		// gap Heroku had before that fix. Cache-aside against Valkey
 		// (store.FindLogGroupSchema) is what keeps this affordable per
 		// frame across a connection that can live for hours.
-		enrichRow(ss.store, auth.Organization.ID, auth.Namespace, row)
+		enrichRow(ctx, ss.store, auth.Organization.ID, auth.Namespace, row)
 		// Schema-bootstrap sample, same as the HTTP adapters get in
 		// IngestHandler. Per frame rather than per batch, so a service
 		// that isn't collecting one is only re-checked every
 		// syslogSampleRecheck instead of costing a lookup per line.
 		if until, ok := sampleRecheck[service]; !ok || time.Now().After(until) {
-			if accumulateSample(ss.store, ss.classifier, auth.Organization.ID, auth.Namespace, service, []string{row.Raw}) {
+			if accumulateSample(ctx, ss.store, ss.classifier, auth.Organization.ID, auth.Namespace, service, []string{row.Raw}) {
 				delete(sampleRecheck, service)
 			} else {
 				sampleRecheck[service] = time.Now().Add(syslogSampleRecheck)
 			}
 		}
 		if err := stream.Send(row); err != nil {
-			log.Printf("syslog[%s]: send row for %s: %v", name, auth.Namespace, err)
+			weftlog.Infof(ctx, "syslog[%s]: send row for %s: %v", name, auth.Namespace, err)
 			streamBroken = true
 			// Unblock the next br.Read so ParseStream returns promptly
 			// instead of waiting out the full idle timeout.
@@ -244,7 +244,7 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 	})
 
 	if _, err := stream.CloseAndRecv(); err != nil && !streamBroken {
-		log.Printf("syslog[%s]: close ingest stream for %s: %v", name, auth.Namespace, err)
+		weftlog.Infof(ctx, "syslog[%s]: close ingest stream for %s: %v", name, auth.Namespace, err)
 	}
 }
 

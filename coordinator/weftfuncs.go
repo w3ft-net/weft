@@ -53,9 +53,22 @@ func parseDuration(s string) (time.Duration, error) {
 
 // WeftFuncs provides cron result query functions for /bin/ scripts.
 // Both bash (ExternalCmdFunc) and Lua (weft.* table) use this.
+//
+// Ctx is the executing request's context. The warp function interface
+// these methods satisfy carries no ctx per call, so it is bound once per
+// execution (runLocal) and used for the DB lookups; nil (tests) means
+// context.Background().
 type WeftFuncs struct {
 	Store *store.Store
 	OrgID store.OrgID
+	Ctx   context.Context
+}
+
+func (w *WeftFuncs) ctx() context.Context {
+	if w.Ctx == nil {
+		return context.Background()
+	}
+	return w.Ctx
 }
 
 // SeasonalStatsResult is the {avg, stddev, samples} triple over the
@@ -69,7 +82,7 @@ type SeasonalStatsResult struct {
 func (w *WeftFuncs) Latest(watchName string) (string, error) {
 	r, err := func(orgID store.OrgID, watchName string) (*store.CronResult, error) {
 		var watch store.CronWatch
-		if err := w.Store.DB().WithContext(store.WithOrg(context.Background(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+		if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
 			return nil, err
 		}
 		var result store.CronResult
@@ -338,7 +351,7 @@ func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration
 	}
 	avg, stddev, samples, err := func(orgID store.OrgID, watchName string, period, window time.Duration) (avg, stddev float64, samples int, err error) {
 		var watch store.CronWatch
-		if err := w.Store.DB().WithContext(store.WithOrg(context.Background(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+		if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
 			return 0, 0, 0, err
 		}
 		now := time.Now()

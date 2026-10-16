@@ -3,12 +3,12 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -70,7 +70,7 @@ func NewNATElector(s *store.Store, ec2Client natEC2Client, routeTableID, eniID, 
 // NAT route table to claim.
 func (e *NATElector) Start(ctx context.Context) {
 	if e.routeTableID == "" || e.eniID == "" {
-		log.Printf("nat: route table id or own ENI id unknown — not running NAT election (expected off-EC2)")
+		weftlog.Infof(ctx, "nat: route table id or own ENI id unknown — not running NAT election (expected off-EC2)")
 		return
 	}
 	go e.run(ctx)
@@ -90,7 +90,7 @@ func (e *NATElector) run(ctx context.Context) {
 				// own (LeaseTTL later), so skipping this on a crash is
 				// never a correctness problem, only a slower handoff.
 				if err := e.store.ReleaseLease(natLeaseName, e.holder); err != nil {
-					log.Printf("nat: release lease on shutdown: %v", err)
+					weftlog.Infof(ctx, "nat: release lease on shutdown: %v", err)
 				} else {
 					store.LogLeaseEvent(natLeaseName, e.holder, "released")
 				}
@@ -112,20 +112,20 @@ func (e *NATElector) run(ctx context.Context) {
 func (e *NATElector) tick(ctx context.Context, amHolder *bool) {
 	ok, err := e.store.AcquireLease(natLeaseName, e.holder, store.LeaseTTL)
 	if err != nil {
-		log.Printf("nat: lease acquire error: %v", err)
+		weftlog.Errorf(ctx, "nat: lease acquire error: %v", err)
 		return
 	}
 	switch {
 	case ok && !*amHolder:
-		log.Printf("nat: acquired nat-holder lease, claiming route table %s → %s", e.routeTableID, e.eniID)
+		weftlog.Infof(ctx, "nat: acquired nat-holder lease, claiming route table %s → %s", e.routeTableID, e.eniID)
 		store.LogLeaseEvent(natLeaseName, e.holder, "acquired")
 		if err := e.claimRoute(ctx); err != nil {
-			log.Printf("nat: claim route failed, will retry next tick: %v", err)
+			weftlog.Errorf(ctx, "nat: claim route failed, will retry next tick: %v", err)
 			return
 		}
 		*amHolder = true
 	case !ok && *amHolder:
-		log.Printf("nat: lost nat-holder lease")
+		weftlog.Infof(ctx, "nat: lost nat-holder lease")
 		store.LogLeaseEvent(natLeaseName, e.holder, "lost")
 		*amHolder = false
 	}

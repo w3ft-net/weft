@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"log"
 	"strconv"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/stripe/stripe-go/v85/billing/meterevent"
 	"gorm.io/gorm/clause"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -56,7 +56,7 @@ func (s *Server) usageReporterLoop(ctx context.Context) {
 			// UTC day.
 			yesterday := time.Now().UTC().AddDate(0, 0, -1)
 			if err := s.ReportUsageForDay(ctx, startOfUTCDay(yesterday)); err != nil {
-				log.Printf("usage reporter: %v", err)
+				weftlog.Infof(ctx, "usage reporter: %v", err)
 			}
 		}
 	}
@@ -90,7 +90,7 @@ func (s *Server) ReportUsageForDay(ctx context.Context, day time.Time) error {
 			// Per-customer failures are logged and skipped; one bad
 			// customer can't block reports for the rest. Tomorrow's
 			// run retries with the same idempotency identifier.
-			log.Printf("usage reporter: org=%d day=%s: %v",
+			weftlog.Infof(ctx, "usage reporter: org=%d day=%s: %v",
 				r.OrgID, day.Format("2006-01-02"), err)
 		}
 	}

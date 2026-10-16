@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -20,7 +21,7 @@ func TestJob_TraceTagEmitsSummaryFirst(t *testing.T) {
 	job.SendRow(&pb.ResultRow{TsUnixNs: 2000, Raw: `{"msg":"b"}`, MetaVars: map[string]string{"namespace": "acme", "service": "edge"}}, "b")
 	job.SendSentinel("b")
 
-	lines, err := DrainLineStream(job.Stream())
+	lines, err := DrainLineStream(context.Background(), job.Stream())
 	if err != nil {
 		t.Fatalf("DrainLineStream: %v", err)
 	}
@@ -45,7 +46,7 @@ func TestJob_TraceTagEmitsDelimitedRows(t *testing.T) {
 	job.SendRow(&pb.ResultRow{TsUnixNs: 1000, Raw: "hello", MetaVars: map[string]string{"namespace": "acme", "service": "api"}}, "a")
 	job.SendSentinel("a")
 
-	lines, err := DrainLineStream(job.Stream())
+	lines, err := DrainLineStream(context.Background(), job.Stream())
 	if err != nil {
 		t.Fatalf("DrainLineStream: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestJob_TraceTagZeroRows(t *testing.T) {
 	job := pool.NewJob(nil, 1, "ts", 0, false, true)
 	job.SendSentinel("a")
 
-	lines, err := DrainLineStream(job.Stream())
+	lines, err := DrainLineStream(context.Background(), job.Stream())
 	if err != nil {
 		t.Fatalf("DrainLineStream: %v", err)
 	}
@@ -94,7 +95,7 @@ func TestJob_TraceTagRespectsLimit(t *testing.T) {
 	}
 	job.SendSentinel("a")
 
-	lines, err := DrainLineStream(job.Stream())
+	lines, err := DrainLineStream(context.Background(), job.Stream())
 	if err != nil {
 		t.Fatalf("DrainLineStream: %v", err)
 	}
@@ -120,7 +121,7 @@ func TestJob_TraceTagEmptyNamespaceService(t *testing.T) {
 	job.SendRow(&pb.ResultRow{TsUnixNs: 1000, Raw: "mystery"}, "a")
 	job.SendSentinel("a")
 
-	lines, err := DrainLineStream(job.Stream())
+	lines, err := DrainLineStream(context.Background(), job.Stream())
 	if err != nil {
 		t.Fatalf("DrainLineStream: %v", err)
 	}

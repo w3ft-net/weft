@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/internal/clientwire"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -62,7 +62,7 @@ func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Hand
 			}
 			return
 		}
-		persistLastActive(st, session)
+		persistLastActive(r.Context(), st, session)
 		recordAccessIdentity(r, session.UserID)
 		ctx := auth.WithClaims(r.Context(), claims)
 		ctx = auth.WithSession(ctx, session)
@@ -75,7 +75,7 @@ func AuthMiddleware(st *store.Store, secret string, next http.Handler) http.Hand
 // but the write only happens on a change, so the common request pays
 // nothing; failures log but never block the request (the next request
 // will retry).
-func persistLastActive(st *store.Store, session *auth.Session) {
+func persistLastActive(ctx context.Context, st *store.Store, session *auth.Session) {
 	// An org-less session (a superadmin with no membership) has no active
 	// customer to pin. Writing 0 trips the last_active_org_id foreign
 	// key, so there's nothing to persist.
@@ -86,7 +86,7 @@ func persistLastActive(st *store.Store, session *auth.Session) {
 		return
 	}
 	if err := st.UpdateUserLastActiveOrg(session.UserID, session.ActiveOrgID); err != nil {
-		log.Printf("update last_active_org_id for %s: %v", session.UserID, err)
+		weftlog.Infof(ctx, "update last_active_org_id for %s: %v", session.UserID, err)
 	}
 }
 
@@ -241,14 +241,9 @@ func AccessLog(next http.Handler) http.Handler {
 		if user == "" {
 			user = "anon"
 		}
-		// trace_id is only present once TraceMiddleware (which wraps this
-		// handler) has established one — omit the field entirely rather
-		// than print "trace_id=" for every untraced request.
-		if traceID, ok := weftsdk.TraceIDFromContext(r.Context()); ok {
-			log.Printf("access %s %s %d %s user=%s trace_id=%s", r.Method, r.URL.Path, rw.status, time.Since(start), user, traceID)
-			return
-		}
-		log.Printf("access %s %s %d %s user=%s", r.Method, r.URL.Path, rw.status, time.Since(start), user)
+		// trace_id rides on r.Context() once TraceMiddleware (which wraps
+		// this handler) has established one, and is omitted otherwise.
+		weftlog.Infof(r.Context(), "access %s %s %d %s user=%s", r.Method, r.URL.Path, rw.status, time.Since(start), user)
 	})
 }
 

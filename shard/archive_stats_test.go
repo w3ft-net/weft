@@ -34,7 +34,7 @@ func TestDuckDBShard_ArchiveCapturesCustomerStats(t *testing.T) {
 		{Raw: "g1", CustomerId: 6, TsUnixNs: base + int64(30*time.Minute)},
 		{Raw: "g2", CustomerId: 6, TsUnixNs: base + int64(30*time.Minute)},
 	}
-	if err := s.Ingest(rows, nil); err != nil {
+	if err := s.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 

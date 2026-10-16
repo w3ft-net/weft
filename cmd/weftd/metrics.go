@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -45,7 +45,7 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 	instance, namespace string, services []string, mcfg MetricsConfig) {
 
 	if len(services) == 0 {
-		log.Printf("metrics: no services configured (set top-level `services:` list); skipping")
+		weftlog.Infof(ctx, "metrics: no services configured (set top-level `services:` list); skipping")
 		return
 	}
 
@@ -53,7 +53,7 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 	if mcfg.Interval != "" {
 		d, err := time.ParseDuration(mcfg.Interval)
 		if err != nil {
-			log.Printf("metrics: bad interval %q, using 30s", mcfg.Interval)
+			weftlog.Infof(ctx, "metrics: bad interval %q, using 30s", mcfg.Interval)
 		} else {
 			interval = d
 		}
@@ -73,7 +73,7 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 	for i, s := range services {
 		apps[i] = namespace + "/" + s + "/metrics"
 	}
-	log.Printf("metrics: services=%v interval=%s collectors=%v", services, interval, mcfg.Collectors)
+	weftlog.Infof(ctx, "metrics: services=%v interval=%s collectors=%v", services, interval, mcfg.Collectors)
 
 	ss := &streamState{}
 
@@ -464,7 +464,7 @@ func sendRowWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 		if err := ss.stream.Send(row); err == nil {
 			return nil
 		}
-		log.Printf("[%s] stream broken, reconnecting", label)
+		weftlog.Infof(ctx, "[%s] stream broken, reconnecting", label)
 		ss.stream = nil
 	}
 
@@ -475,7 +475,7 @@ func sendRowWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 	ss.stream = stream
 
 	if err := ss.stream.Send(row); err != nil {
-		log.Printf("[%s] send failed after reconnect: %v", label, err)
+		weftlog.Errorf(ctx, "[%s] send failed after reconnect: %v", label, err)
 		ss.stream = nil
 	}
 	return nil

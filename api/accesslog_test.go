@@ -3,13 +3,13 @@ package api
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // TestAccessLogAttributesUser pins the AccessLog identity fix.
@@ -32,8 +32,7 @@ func TestAccessLogAttributesUser(t *testing.T) {
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(weftlog.CaptureInto(&buf))
 
 	// Authenticated request → must attribute the user id.
 	buf.Reset()

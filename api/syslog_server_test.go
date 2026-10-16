@@ -27,10 +27,11 @@ import (
 type fakeIngestCoord struct {
 	pb.UnimplementedWeftCoordinatorServer
 
-	mu       sync.Mutex
-	rows     []*pb.LogRow
-	authSeen []string
-	calls    int
+	mu        sync.Mutex
+	rows      []*pb.LogRow
+	authSeen  []string
+	traceSeen []string
+	calls     int
 }
 
 func (f *fakeIngestCoord) IngestStream(stream grpc.ClientStreamingServer[pb.LogRow, pb.IngestStreamResponse]) error {
@@ -39,6 +40,9 @@ func (f *fakeIngestCoord) IngestStream(stream grpc.ClientStreamingServer[pb.LogR
 	f.calls++
 	if vals := md.Get("authorization"); len(vals) > 0 {
 		f.authSeen = append(f.authSeen, vals[0])
+	}
+	if vals := md.Get("weft-trace-id"); len(vals) > 0 {
+		f.traceSeen = append(f.traceSeen, vals[0])
 	}
 	f.mu.Unlock()
 	for {

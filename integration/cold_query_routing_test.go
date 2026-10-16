@@ -77,13 +77,13 @@ func TestColdShardQueryRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s0.Ingest([]*pb.LogRow{
+	if err := s0.Ingest(context.Background(), []*pb.LogRow{
 		{Raw: "hot line 1", Namespace: "vimgym", Level: "INFO", CustomerId: 1, TsUnixNs: t0.Add(time.Minute).UnixNano()},
 		{Raw: "hot line 2", Namespace: "vimgym", Level: "ERROR", CustomerId: 1, TsUnixNs: t0.Add(2 * time.Minute).UnixNano()},
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s1.Ingest([]*pb.LogRow{
+	if err := s1.Ingest(context.Background(), []*pb.LogRow{
 		{Raw: "cold line 3", Namespace: "vimgym", Level: "WARN", CustomerId: 1, TsUnixNs: t1.Add(time.Minute).UnixNano()},
 		{Raw: "cold line 4", Namespace: "vimgym", Level: "INFO", CustomerId: 1, TsUnixNs: t1.Add(2 * time.Minute).UnixNano()},
 	}, nil); err != nil {

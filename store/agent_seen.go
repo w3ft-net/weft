@@ -3,10 +3,11 @@ package store
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 const (
@@ -123,12 +124,12 @@ func (t *AgentSeenTracker) Run(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			timer.Stop()
 			if err := t.Flush(); err != nil {
-				log.Printf("agent-seen: final flush: %v", err)
+				weftlog.Infof(ctx, "agent-seen: final flush: %v", err)
 			}
 			return
 		case <-timer.C:
 			if err := t.Flush(); err != nil {
-				log.Printf("agent-seen: %v", err)
+				weftlog.Infof(ctx, "agent-seen: %v", err)
 			}
 		}
 	}

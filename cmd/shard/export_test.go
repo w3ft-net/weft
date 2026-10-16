@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,7 +18,7 @@ func exportCLIFixture(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Ingest([]*pb.LogRow{{Raw: "x", CustomerId: 1, TsUnixNs: int64(1_700_000_000) * int64(time.Second)}}, nil); err != nil {
+	if err := s.Ingest(context.Background(), []*pb.LogRow{{Raw: "x", CustomerId: 1, TsUnixNs: int64(1_700_000_000) * int64(time.Second)}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

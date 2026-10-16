@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -34,7 +35,7 @@ func TestNewDuckDBShard_SeedsRowCountFromExistingTable(t *testing.T) {
 			TsUnixNs:   base + int64(i),
 		}
 	}
-	if err := first.Ingest(rows, nil); err != nil {
+	if err := first.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	if got := first.RowCount(); got != 100 {

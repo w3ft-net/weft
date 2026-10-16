@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	brdoc "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	brtypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // ClassifierResult is one classification pass over a sample: the LLM's
@@ -104,7 +105,7 @@ func (c *BedrockClassifier) Classify(ctx context.Context, det *Detection) (*Clas
 	if out == nil {
 		return &ClassifierResult{}, nil
 	}
-	return validateClassification(out, lines), nil
+	return validateClassification(ctx, out, lines), nil
 }
 
 // classifyRaw is the model call alone: its unverified proposals and the
@@ -224,11 +225,11 @@ func (r *ClassifierResult) tagRoles(t *classifyToolResponse) []tagFieldRole {
 // something on the data it was looking at. Anything that doesn't verify
 // is silently dropped (present: false), exactly like every heuristic
 // candidate in detect.go already behaves for a non-matching line.
-func validateClassification(t *classifyToolResponse, lines []string) *ClassifierResult {
+func validateClassification(ctx context.Context, t *classifyToolResponse, lines []string) *ClassifierResult {
 	result := &ClassifierResult{}
 
 	if t.Timestamp != nil && t.Timestamp.Present {
-		if c := verifyTimestampProposal(t.Timestamp, lines); c != nil {
+		if c := verifyTimestampProposal(ctx, t.Timestamp, lines); c != nil {
 			result.Timestamp = c
 		}
 	}
@@ -240,7 +241,7 @@ func validateClassification(t *classifyToolResponse, lines []string) *Classifier
 		if c := verifyTagProposal(role.src, ProbeField(role.name), lines); c != nil {
 			*role.dst = c
 		} else {
-			log.Printf("classify: dropping unverified %s candidate: %+v", role.name, role.src)
+			weftlog.Infof(ctx, "classify: dropping unverified %s candidate: %+v", role.name, role.src)
 		}
 	}
 
@@ -261,13 +262,13 @@ const (
 // through the real parser (evalExtractor) over the sample, exactly as the
 // probe checks a user-built rule: a proposal is only as good as what the
 // parser extracts with it. Returns nil if it doesn't verify.
-func verifyTimestampProposal(f *timestampField, lines []string) *TimestampCandidate {
+func verifyTimestampProposal(ctx context.Context, f *timestampField, lines []string) *TimestampCandidate {
 	if f.Strftime == "" {
 		return nil
 	}
 	layout, err := strftimeToGoLayout(f.Strftime)
 	if err != nil {
-		log.Printf("classify: dropping timestamp candidate, bad strftime %q: %v", f.Strftime, err)
+		weftlog.Infof(ctx, "classify: dropping timestamp candidate, bad strftime %q: %v", f.Strftime, err)
 		return nil
 	}
 
@@ -353,13 +354,34 @@ func proposalVerifies(f ProbeField, lines []string, ex ProbeExtractor, minRatio 
 	if err != nil {
 		return false // bad regex or JSON path
 	}
-	hits := 0
+	var found []string
 	for _, v := range vals {
 		if v != "" {
-			hits++
+			found = append(found, v)
 		}
 	}
-	return verifies(hits, len(lines), minRatio)
+	// A trace or span ID verifies on any hit count, so a model that cannot find
+	// one may point at the timestamp, which every line has. A date or time is
+	// never an identifier.
+	if isIDField(f) && len(found) > 0 && (len(inferLayouts(found)) > 0 || allMatch(timeOfDayRe, found)) {
+		return false
+	}
+	return verifies(len(found), len(lines), minRatio)
+}
+
+var timeOfDayRe = regexp.MustCompile(`^\d{1,2}:\d\d(:\d\d([.,]\d+)?)?$`)
+
+func allMatch(re *regexp.Regexp, vals []string) bool {
+	for _, v := range vals {
+		if !re.MatchString(v) {
+			return false
+		}
+	}
+	return true
+}
+
+func isIDField(f ProbeField) bool {
+	return f == ProbeTraceID || f == ProbeSpanID || f == ProbeParentSpanID
 }
 
 func verifies(hits, eligible int, minRatio float64) bool {
@@ -624,20 +646,24 @@ func strftimeToGoLayout(pattern string) (string, error) {
 // fully-populated Detection once it finishes — success, or the heuristic
 // text-mode fallback if the classifier errors out. Never blocks the
 // caller: this is meant to be called from an ingest request/RPC handler,
-// which must not wait on Bedrock's availability/latency.
-func ClassifyAsync(classifier Classifier, lines []string, final bool, onComplete func(*Detection)) *Detection {
+// which must not wait on Bedrock's availability/latency. ctx supplies
+// the trace ID only; the goroutine outlives the request and keeps its own
+// 10s timeout.
+func ClassifyAsync(ctx context.Context, classifier Classifier, lines []string, final bool, onComplete func(*Detection)) *Detection {
 	det := Detect(lines)
 	if !final || classifier == nil {
 		return det
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// The request ends before this finishes, so cancellation is
+		// detached; the values (trace ID) are kept for the logs below.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 
 		result, err := classifier.Classify(ctx, det)
 		if err != nil {
-			log.Printf("classify: bedrock classification failed, falling back to heuristic text detection: %v", err)
+			weftlog.Errorf(ctx, "classify: bedrock classification failed, falling back to heuristic text detection: %v", err)
 			// Heuristic fallback covers timestamp/level only — the only
 			// two fields the pattern-matching detector has ever known
 			// how to find. Envelope/JSON detection is already in det;
@@ -829,7 +855,7 @@ func buildProposePrompt(in ProposeInput) string {
 		fmt.Fprintf(&b, "%d: %s\n", i+1, line)
 	}
 	if len(in.Examples) == 0 && len(in.NoValueLines) == 0 {
-		b.WriteString("\nThe person has not marked anything yet; propose your best guesses from the sample alone.\n")
+		fmt.Fprintf(&b, "\nThe person has not marked anything yet. Propose rules only for a value you can actually see in these lines. If the sample has no %s, return an empty candidates list: the person will then say whether it appears at all and, if so, select an example for you. Never offer a timestamp, a counter or other ordinary text as a stand-in.\n", probeFieldLabels[in.Field])
 	} else {
 		b.WriteString("\nWhat the person marked:\n")
 	}

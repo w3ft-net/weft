@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -46,7 +47,7 @@ func TestGraduateOnboarding_RevokesOnlyLoom(t *testing.T) {
 		t.Fatalf("owner user not created: %v", err)
 	}
 
-	if err := srv.graduateOnboarding(owner.ID); err != nil {
+	if err := srv.graduateOnboarding(context.Background(), owner.ID); err != nil {
 		t.Fatalf("graduateOnboarding: %v", err)
 	}
 

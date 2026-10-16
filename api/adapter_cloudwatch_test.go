@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -107,7 +108,7 @@ func TestIngestHandler_CloudWatch_GzipAndPlain(t *testing.T) {
 	srv.coordClient = coordClient
 
 	token, ns := setupIngestOrg(t, s)
-	if err := s.AddLogGroup(ns.ID, store.SourceTypeKinesis, "myapp", "/aws/lambda/myapp", "us-east-2", ""); err != nil {
+	if err := s.AddLogGroup(context.Background(), ns.ID, store.SourceTypeKinesis, "myapp", "/aws/lambda/myapp", "us-east-2", ""); err != nil {
 		t.Fatalf("add log group: %v", err)
 	}
 
@@ -195,7 +196,7 @@ func TestIngestHandler_CloudWatch_UnknownLogGroupDropped(t *testing.T) {
 
 	token, ns := setupIngestOrg(t, s)
 	// Configure a different log group than the one in the envelope.
-	if err := s.AddLogGroup(ns.ID, store.SourceTypeKinesis, "myapp", "/aws/lambda/myapp", "us-east-2", ""); err != nil {
+	if err := s.AddLogGroup(context.Background(), ns.ID, store.SourceTypeKinesis, "myapp", "/aws/lambda/myapp", "us-east-2", ""); err != nil {
 		t.Fatalf("add log group: %v", err)
 	}
 

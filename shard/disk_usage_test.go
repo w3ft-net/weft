@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,7 +40,7 @@ func TestDiskUsage_CountsFileAndWAL(t *testing.T) {
 	for i := range rows {
 		rows[i] = &pb.LogRow{Raw: "a reasonably sized log line for footprint", CustomerId: 1, Namespace: "ns", Service: "svc", TsUnixNs: int64(i + 1)}
 	}
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
@@ -66,10 +67,10 @@ func TestQueryStats_RecordsAndResets(t *testing.T) {
 	defer ds.Close()
 
 	// ScanResultRows projects (raw, ts), so shape the queries to match.
-	if _, err := ds.Query("SELECT 'hello', now()"); err != nil {
+	if _, err := ds.Query(context.Background(), "SELECT 'hello', now()"); err != nil {
 		t.Fatalf("good query: %v", err)
 	}
-	if _, err := ds.Query("SELECT raw, ts FROM no_such_table"); err == nil {
+	if _, err := ds.Query(context.Background(), "SELECT raw, ts FROM no_such_table"); err == nil {
 		t.Fatal("expected error from bad query")
 	}
 

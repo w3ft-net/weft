@@ -1,10 +1,11 @@
 package store
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"gorm.io/gorm"
 )
 
@@ -122,7 +123,7 @@ func (s *Store) SeedDevSubscription(orgID OrgID) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}).Error; err != nil {
-		log.Printf("store: SeedDevSubscription(%s): %v", orgID, err)
+		weftlog.Infof(context.Background(), "store: SeedDevSubscription(%s): %v", orgID, err)
 	}
 }
 

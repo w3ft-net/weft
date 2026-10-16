@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -37,7 +38,7 @@ var teamCommands = map[string]bool{
 // single bare invocation of one (no pipes, redirects, or compounds).
 // Returns handled=false for everything else so handleShellExec forwards
 // to the coordinator unchanged.
-func (s *Server) maybeHandleTeamCommand(session *auth.Session, pipeline string) (handled bool, out string, err error) {
+func (s *Server) maybeHandleTeamCommand(ctx context.Context, session *auth.Session, pipeline string) (handled bool, out string, err error) {
 	fields := strings.Fields(pipeline)
 	if len(fields) == 0 || !teamCommands[fields[0]] {
 		return false, "", nil
@@ -59,7 +60,7 @@ func (s *Server) maybeHandleTeamCommand(session *auth.Session, pipeline string) 
 	case "groups":
 		out, err = s.teamGroupsCmd(session, args)
 	case "adduser":
-		out, err = s.teamAddUser(session, args)
+		out, err = s.teamAddUser(ctx, session, args)
 	case "deluser":
 		out, err = s.teamDelUser(session, args)
 	}
@@ -156,7 +157,7 @@ func groupsLabel(role string, groups []string, sep string) string {
 // teamAddUser implements `adduser <email> [<group>]`. With no group it
 // invites the email to the org (sending an invite email); with a group
 // it grants the membership. Owner-only.
-func (s *Server) teamAddUser(session *auth.Session, args []string) (string, error) {
+func (s *Server) teamAddUser(ctx context.Context, session *auth.Session, args []string) (string, error) {
 	if !session.IsOwner {
 		return "", fmt.Errorf("only the owner can manage the team")
 	}
@@ -166,7 +167,7 @@ func (s *Server) teamAddUser(session *auth.Session, args []string) (string, erro
 	email := args[0]
 	custID := session.ActiveOrgID
 	if len(args) == 1 {
-		if _, err := s.inviteMember(session, email); err != nil {
+		if _, err := s.inviteMember(ctx, session, email); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Invited %s — an invite email is on its way. They'll join %s when they accept.\n",
@@ -187,7 +188,7 @@ func (s *Server) teamAddUser(session *auth.Session, args []string) (string, erro
 	member, _ := s.store.GetTeamMemberByEmail(custID, email)
 	switch {
 	case member == nil:
-		if _, err := s.inviteMember(session, email); err != nil {
+		if _, err := s.inviteMember(ctx, session, email); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Invited %s — an invite email is on its way. They must accept before joining %s; re-run `adduser %s %s` once they have.\n",
@@ -242,7 +243,7 @@ func (e *inviteErr) Error() string { return e.msg }
 // invite link. Shared by the JSON endpoint (handleInviteTeamMember) and
 // the `adduser <email>` command. Returns an *inviteErr for the known
 // rejection cases (seat limit, duplicate).
-func (s *Server) inviteMember(session *auth.Session, email string) (*store.TeamMember, error) {
+func (s *Server) inviteMember(ctx context.Context, session *auth.Session, email string) (*store.TeamMember, error) {
 	tier := store.TierTrial
 	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub != nil {
 		tier = store.Tier(sub.Tier)
@@ -269,6 +270,6 @@ func (s *Server) inviteMember(session *auth.Session, email string) (*store.TeamM
 	if cust, err := s.store.GetOrgByName(session.ActiveCustomerName); err == nil && cust.DisplayName != "" {
 		orgName = cust.DisplayName
 	}
-	SendInviteEmail(s.email, email, session.Email, orgName, verifyURL)
+	SendInviteEmail(ctx, s.email, email, session.Email, orgName, verifyURL)
 	return member, nil
 }

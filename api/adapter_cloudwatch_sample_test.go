@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -100,7 +101,7 @@ func TestIngestHandler_CloudWatch_ConfiguredSourceNotResampled(t *testing.T) {
 	srv.coordClient = coordClient
 
 	token, ns := setupIngestOrg(t, s)
-	if err := s.AddLogGroup(ns.ID, store.SourceTypeKinesis, "cold-shard", "/aws/lambda/weft-cold-shard-query", "us-east-2", "app: cold-shard\nformat: text\n"); err != nil {
+	if err := s.AddLogGroup(context.Background(), ns.ID, store.SourceTypeKinesis, "cold-shard", "/aws/lambda/weft-cold-shard-query", "us-east-2", "app: cold-shard\nformat: text\n"); err != nil {
 		t.Fatalf("AddLogGroup: %v", err)
 	}
 

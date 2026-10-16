@@ -112,7 +112,7 @@ func (e *overdueEnv) executor(holder string) *CronExecutor {
 	return &CronExecutor{
 		Store:  e.db,
 		Holder: holder,
-		SendOverdue: func(org store.OrgID, alias, _, body string) error {
+		SendOverdue: func(_ context.Context, org store.OrgID, alias, _, body string) error {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			e.sent = append(e.sent, overduePage{org, alias, body})
@@ -158,7 +158,7 @@ func TestOverdueQuietCronWithFreshRunIsNotReported(t *testing.T) {
 	if err := adb.Model(&store.CronWatch{}).Where("id = ?", w.ID).Update("created_at", now.Add(-48*time.Hour)).Error; err != nil {
 		t.Fatal(err)
 	}
-	e.executor("a").overdueTick(&overdueGuard{active: map[uint]bool{}}, now)
+	e.executor("a").overdueTick(context.Background(), &overdueGuard{active: map[uint]bool{}}, now)
 	if n := len(e.pagesFor()); n != 0 {
 		t.Fatalf("a quiet cron that ran a minute ago caused %d page(s)", n)
 	}
@@ -174,7 +174,7 @@ func TestOverdueTickSendsOneGroupedPagePerOrgToTheSystemAlias(t *testing.T) {
 	e.watch(t, "od-b", "every 5m", &stale)
 	e.watch(t, "od-c", "every 10m", &stale)
 	ce := e.executor("a")
-	ce.overdueTick(&overdueGuard{active: map[uint]bool{}}, time.Now())
+	ce.overdueTick(context.Background(), &overdueGuard{active: map[uint]bool{}}, time.Now())
 
 	pages := e.pagesFor()
 	if len(pages) != 1 {
@@ -200,15 +200,15 @@ func TestOverdueTickReportsEachEpisodeOnce(t *testing.T) {
 	ce := e.executor("a")
 	g := &overdueGuard{active: map[uint]bool{}}
 
-	ce.overdueTick(g, now)
-	ce.overdueTick(g, now.Add(time.Minute))
+	ce.overdueTick(context.Background(), g, now)
+	ce.overdueTick(context.Background(), g, now.Add(time.Minute))
 	if n := pagesMentioning(e.pagesFor(), "od-first"); n != 1 {
 		t.Fatalf("a stopped cron was reported %d times across 2 ticks, want 1", n)
 	}
 
 	// A second cron stops later: a new page naming only it.
 	second := e.watch(t, "od-second", "every 5m", &stale)
-	ce.overdueTick(g, now.Add(2*time.Minute))
+	ce.overdueTick(context.Background(), g, now.Add(2*time.Minute))
 	pages := e.pagesFor()
 	if len(pages) != 2 || strings.Contains(pages[1].body, "od-first:") || pagesMentioning(pages[1:], "od-second") != 1 {
 		t.Fatalf("second page should name only od-second, pages: %+v", pages)
@@ -217,11 +217,11 @@ func TestOverdueTickReportsEachEpisodeOnce(t *testing.T) {
 
 	// The first recovers, then stops again: reported again.
 	e.setLastRun(t, first.ID, now.Add(3*time.Minute))
-	ce.overdueTick(g, now.Add(3*time.Minute))
+	ce.overdueTick(context.Background(), g, now.Add(3*time.Minute))
 	if g.active[first.ID] {
 		t.Fatal("recovered cron still marked overdue")
 	}
-	ce.overdueTick(g, now.Add(time.Hour))
+	ce.overdueTick(context.Background(), g, now.Add(time.Hour))
 	if n := pagesMentioning(e.pagesFor(), "od-first"); n != 2 {
 		t.Fatalf("second episode of od-first: reported %d times in total, want 2", n)
 	}
@@ -237,8 +237,8 @@ func TestOverdueTickOrgWithoutSystemAliasIsNotRetried(t *testing.T) {
 	w := e.watch(t, "od-noalias", "every 5m", &stale)
 	ce := e.executor("a")
 	g := &overdueGuard{active: map[uint]bool{}}
-	ce.overdueTick(g, time.Now())
-	ce.overdueTick(g, time.Now().Add(time.Minute))
+	ce.overdueTick(context.Background(), g, time.Now())
+	ce.overdueTick(context.Background(), g, time.Now().Add(time.Minute))
 	if !g.active[w.ID] {
 		t.Fatal("overdue cron not tracked")
 	}
@@ -253,7 +253,7 @@ func TestOverdueTickSkipsCronsThatCannotRun(t *testing.T) {
 	e := newOverdueEnv(t)
 	stale := time.Now().Add(-time.Hour)
 	e.watch(t, "od-toofast", "every 1m", &stale) // trial minimum is 5m
-	e.executor("a").overdueTick(&overdueGuard{active: map[uint]bool{}}, time.Now())
+	e.executor("a").overdueTick(context.Background(), &overdueGuard{active: map[uint]bool{}}, time.Now())
 	if n := len(e.pagesFor()); n != 0 {
 		t.Fatalf("a cron that cannot run caused %d page(s)", n)
 	}
@@ -300,7 +300,7 @@ func TestOverduePageIsDeliveredThroughTheSystemAlias(t *testing.T) {
 	e.watch(t, "od-e2e-a", "every 5m", &stale)
 	e.watch(t, "od-e2e-b", "every 5m", &stale)
 	ce := &CronExecutor{Store: e.db, Holder: "a", Notifier: NewNotifier(e.db, nil)}
-	ce.overdueTick(&overdueGuard{active: map[uint]bool{}}, time.Now())
+	ce.overdueTick(context.Background(), &overdueGuard{active: map[uint]bool{}}, time.Now())
 
 	if hits != 1 {
 		t.Fatalf("webhook received %d requests, want 1 grouped page", hits)

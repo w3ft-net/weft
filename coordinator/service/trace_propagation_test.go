@@ -1,9 +1,7 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"log"
 	"strings"
 	"testing"
 
@@ -13,6 +11,7 @@ import (
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -21,17 +20,7 @@ import (
 // fn and returns everything written.
 func captureStdLog(t *testing.T, fn func()) string {
 	t.Helper()
-	var buf bytes.Buffer
-	prevOut := log.Writer()
-	prevFlags := log.Flags()
-	log.SetOutput(&buf)
-	log.SetFlags(0)
-	defer func() {
-		log.SetOutput(prevOut)
-		log.SetFlags(prevFlags)
-	}()
-	fn()
-	return buf.String()
+	return weftlog.Capture(fn)
 }
 
 // traceCaptureStream is a minimal grpc.ServerStream carrying a fixed

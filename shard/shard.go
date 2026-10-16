@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	duckdb "github.com/duckdb/duckdb-go/v2"
 	"github.com/google/uuid"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -36,14 +36,14 @@ type RowSink interface {
 // calls on prepared statements with no placeholders.
 type Shard interface {
 	ID() string
-	Query(sql string, args ...any) ([]*pb.ResultRow, error)
+	Query(ctx context.Context, sql string, args ...any) ([]*pb.ResultRow, error)
 	// QueryToSink streams matching rows to sink. ctx carries the
 	// ambient trace ID (if any) — see weftsdk.ContextWithTraceID —
 	// down to whichever wire boundary this implementation crosses
 	// (gRPC metadata for a live shard, a JSON body field for a
 	// cold-shard Lambda invocation).
 	QueryToSink(ctx context.Context, sql string, args []any, sink RowSink)
-	Ingest(rows []*pb.LogRow, rec IngestRecorder) error
+	Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestRecorder) error
 	// Archive exports the shard's data to Parquet and returns the path
 	// written plus per-customer stats (row counts and ts spans) captured
 	// during export. The coordinator persists the stats to
@@ -324,7 +324,7 @@ func (s *DuckDBShard) QueryToSink(ctx context.Context, query string, args []any,
 
 	rows, err := s.QueryContext(ctx, query, args...)
 	if err != nil {
-		log.Printf("shard %s: QueryToSink error: %v (sql=%s args=%v)", s.id, err, query, args)
+		weftlog.Errorf(ctx, "shard %s: QueryToSink error: %v (sql=%s args=%v)", s.id, err, query, args)
 		return // sentinel still sent via defer
 	}
 	for _, r := range rows {
@@ -361,14 +361,14 @@ func awkFields(raw string) []string {
 // skipping the SQL parse/bind a multi-row INSERT pays per batch. On error it
 // reports the failure to rec (if non-nil) and returns an error naming the shard
 // and the resulting consecutive-failure count so callers need a single log line.
-func (s *DuckDBShard) Ingest(rows []*pb.LogRow, rec IngestRecorder) error {
+func (s *DuckDBShard) Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestRecorder) error {
 	if len(rows) == 0 {
 		return nil
 	}
 
 	// The Appender works against a single driver connection, so borrow one from
 	// the pool for the batch and hand it back on return.
-	conn, err := s.db.Conn(context.Background())
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return wrapIngestError(s.id, fmt.Errorf("acquire conn: %w", err), rec)
 	}
@@ -596,11 +596,11 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 
 	start := time.Now()
 	fail := func(phase string, err error) (string, []CustomerStat, error) {
-		log.Printf("archive attempt=%d failed phase=%s after=%s err=%v %s",
+		weftlog.Errorf(ctx, "archive attempt=%d failed phase=%s after=%s err=%v %s",
 			attempt, phase, time.Since(start).Round(time.Millisecond), err, s.nativeMemoryDiag(context.WithoutCancel(ctx)))
 		return "", nil, err
 	}
-	log.Printf("archive attempt=%d start shard=%s prefix=%s %s", attempt, s.id, s3Prefix, s.nativeMemoryDiag(ctx))
+	weftlog.Infof(ctx, "archive attempt=%d start shard=%s prefix=%s %s", attempt, s.id, s3Prefix, s.nativeMemoryDiag(ctx))
 
 	// Capture per-customer stats first, off the same local handle that's
 	// about to be exported. Cheaper here (one GROUP BY over local DuckDB)
@@ -612,7 +612,7 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 	if err != nil {
 		return fail("stats", fmt.Errorf("customer stats: %w", err))
 	}
-	log.Printf("archive attempt=%d stats customers=%d took=%s %s",
+	weftlog.Infof(ctx, "archive attempt=%d stats customers=%d took=%s %s",
 		attempt, len(stats), time.Since(statsStart).Round(time.Millisecond), s.nativeMemoryDiag(ctx))
 
 	stopSampling = s.sampleArchiveMemory(attempt, "copy", archiveSampleInterval)
@@ -621,7 +621,7 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 	if err != nil {
 		return fail("export", err)
 	}
-	log.Printf("archive attempt=%d done path=%s rows=%d total=%s %s",
+	weftlog.Infof(ctx, "archive attempt=%d done path=%s rows=%d total=%s %s",
 		attempt, path, rows, time.Since(start).Round(time.Millisecond), s.nativeMemoryDiag(ctx))
 	return path, stats, nil
 }
@@ -666,14 +666,14 @@ func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix
 	if err != nil {
 		return "", 0, fmt.Errorf("partition sizing: %w", err)
 	}
-	log.Printf("archive attempt=%d sizing db_bytes=%d est_parquet_bytes=%d target_files=%d granularity=%q",
+	weftlog.Infof(ctx, "archive attempt=%d sizing db_bytes=%d est_parquet_bytes=%d target_files=%d granularity=%q",
 		attempt, plan.dbBytes, plan.estParquetBytes, plan.targetFiles, string(plan.gran))
 
 	copyStart := time.Now()
-	log.Printf("archive attempt=%d copy start %s", attempt, s.nativeMemoryDiag(ctx))
+	weftlog.Infof(ctx, "archive attempt=%d copy start %s", attempt, s.nativeMemoryDiag(ctx))
 	defer func() {
 		if err == nil {
-			log.Printf("archive attempt=%d copy done rows=%d took=%s", attempt, rows, time.Since(copyStart).Round(time.Millisecond))
+			weftlog.Infof(ctx, "archive attempt=%d copy done rows=%d took=%s", attempt, rows, time.Since(copyStart).Round(time.Millisecond))
 		}
 	}()
 
@@ -823,8 +823,8 @@ func (s *DuckDBShard) ExportToS3Parquet(s3Path string, cfg *S3Config) error {
 // The SQL is expected to return (raw, ts). args binds positional
 // `?` placeholders (planner-supplied customer id, timestamps,
 // namespace/env/service names); pass none for legacy fully-baked SQL.
-func (s *DuckDBShard) Query(query string, args ...any) ([]*pb.ResultRow, error) {
-	return s.QueryContext(context.Background(), query, args...)
+func (s *DuckDBShard) Query(ctx context.Context, query string, args ...any) ([]*pb.ResultRow, error) {
+	return s.QueryContext(ctx, query, args...)
 }
 
 // QueryContext is Query with a deadline. The DuckDB Go driver honors

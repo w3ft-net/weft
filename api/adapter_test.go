@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -50,7 +51,7 @@ func TestIngestHandler_EnrichesConfiguredService(t *testing.T) {
 	// level_field=1, trace_id_field=2: "ERROR req-42 db timeout" →
 	// Level="ERROR", TraceId="req-42".
 	schemaYAML := "app: myapp\nformat: text\nlevel_field: \"1\"\ntrace_id_field: \"2\"\n"
-	if err := s.AddLogGroup(ns.ID, store.SourceTypeDirect, "myapp", "", "us-east-2", schemaYAML); err != nil {
+	if err := s.AddLogGroup(context.Background(), ns.ID, store.SourceTypeDirect, "myapp", "", "us-east-2", schemaYAML); err != nil {
 		t.Fatalf("add log group: %v", err)
 	}
 
@@ -201,7 +202,7 @@ func TestIngestHandler_Heroku_ConfiguredServiceNotSampled(t *testing.T) {
 	srv.coordClient = coordClient
 
 	token, ns := setupIngestOrg(t, s)
-	if err := s.AddLogGroup(ns.ID, store.SourceTypeDirect, "myapp", "", "us-east-2", "app: myapp\nformat: text\n"); err != nil {
+	if err := s.AddLogGroup(context.Background(), ns.ID, store.SourceTypeDirect, "myapp", "", "us-east-2", "app: myapp\nformat: text\n"); err != nil {
 		t.Fatal(err)
 	}
 

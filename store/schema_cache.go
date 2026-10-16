@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"log"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -82,11 +82,11 @@ func schemaCacheKey(orgID OrgID, namespace string, service string) string {
 // get returns (entry, true) on a cache hit, (nil, false) on a miss OR
 // any cache-layer error — callers can't distinguish the two and
 // shouldn't need to: either way, fall through to Postgres.
-func (c *SchemaCache) get(orgID OrgID, namespace string, service string) (*cachedSchemaEntry, bool) {
+func (c *SchemaCache) get(ctx context.Context, orgID OrgID, namespace string, service string) (*cachedSchemaEntry, bool) {
 	if c == nil {
 		return nil, false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), schemaCacheOpTimeout)
+	ctx, cancel := context.WithTimeout(ctx, schemaCacheOpTimeout)
 	defer cancel()
 	val, err := c.client.Get(ctx, schemaCacheKey(orgID, namespace, service)).Result()
 	if err != nil {
@@ -102,7 +102,7 @@ func (c *SchemaCache) get(orgID OrgID, namespace string, service string) (*cache
 // set populates the cache after a Postgres lookup (cache-aside fill).
 // Best-effort: a write failure just means the next lookup falls through
 // to Postgres again, same as a cold cache.
-func (c *SchemaCache) set(orgID OrgID, namespace string, service string, entry *cachedSchemaEntry) {
+func (c *SchemaCache) set(ctx context.Context, orgID OrgID, namespace string, service string, entry *cachedSchemaEntry) {
 	if c == nil {
 		return
 	}
@@ -114,10 +114,10 @@ func (c *SchemaCache) set(orgID OrgID, namespace string, service string, entry *
 	if !entry.Configured {
 		ttl = schemaCacheNegativeTTL
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), schemaCacheOpTimeout)
+	ctx, cancel := context.WithTimeout(ctx, schemaCacheOpTimeout)
 	defer cancel()
 	if err := c.client.Set(ctx, schemaCacheKey(orgID, namespace, service), b, ttl).Err(); err != nil {
-		log.Printf("schema cache: set %s/%s: %v", namespace, service, err)
+		weftlog.Infof(ctx, "schema cache: set %s/%s: %v", namespace, service, err)
 	}
 }
 
@@ -129,13 +129,15 @@ func (c *SchemaCache) set(orgID OrgID, namespace string, service string, entry *
 // re-fetch the new schema from Postgres. No pub/sub broadcast needed
 // unless a local per-process tier is added later, at which point this
 // is the natural place to also PUBLISH an eviction notice.
-func (c *SchemaCache) invalidate(orgID OrgID, namespace string, service string) {
+func (c *SchemaCache) invalidate(ctx context.Context, orgID OrgID, namespace string, service string) {
 	if c == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), schemaCacheOpTimeout)
+	// A client disconnecting mid-request must not skip the eviction; keep
+	// the trace but drop the cancellation.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), schemaCacheOpTimeout)
 	defer cancel()
 	if err := c.client.Del(ctx, schemaCacheKey(orgID, namespace, service)).Err(); err != nil {
-		log.Printf("schema cache: invalidate %s/%s: %v", namespace, service, err)
+		weftlog.Infof(ctx, "schema cache: invalidate %s/%s: %v", namespace, service, err)
 	}
 }

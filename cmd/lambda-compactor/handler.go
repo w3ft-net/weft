@@ -3,11 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -61,6 +61,6 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(res); err != nil {
-		log.Printf("lambda-compactor: encode response: %v", err)
+		weftlog.Infof(r.Context(), "lambda-compactor: encode response: %v", err)
 	}
 }

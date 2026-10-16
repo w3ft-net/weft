@@ -192,17 +192,17 @@ func setupTestCoordinator(t testing.TB) *Coordinator {
 	t.Cleanup(func() { s1.Close() })
 
 	// --- Shard 0: 10:00–11:00, 25 rows ---
-	if err := s0.Ingest(shard0Rows(), nil); err != nil {
+	if err := s0.Ingest(context.Background(), shard0Rows(), nil); err != nil {
 		t.Fatalf("ingest shard-0: %v", err)
 	}
 
 	// --- Shard 1: 11:00–12:00, 25 rows ---
-	if err := s1.Ingest(shard1Rows(), nil); err != nil {
+	if err := s1.Ingest(context.Background(), shard1Rows(), nil); err != nil {
 		t.Fatalf("ingest shard-1: %v", err)
 	}
 
 	// Inject some rows from a different customer to test isolation.
-	if err := s0.Ingest(otherCustomerRows(), nil); err != nil {
+	if err := s0.Ingest(context.Background(), otherCustomerRows(), nil); err != nil {
 		t.Fatalf("ingest other-customer: %v", err)
 	}
 
@@ -622,7 +622,7 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s0.Close() })
-	if err := s0.Ingest(shard0Rows(), nil); err != nil {
+	if err := s0.Ingest(context.Background(), shard0Rows(), nil); err != nil {
 		t.Fatal(err)
 	}
 

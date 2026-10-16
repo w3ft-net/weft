@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"testing"
 )
 
@@ -25,7 +26,7 @@ func TestScanResultRows_CarriesExtraColumnsAsMetaVars(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	rows, err := ds.Query(`SELECT raw, ts, namespace, instance FROM logs`)
+	rows, err := ds.Query(context.Background(), `SELECT raw, ts, namespace, instance FROM logs`)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -65,7 +66,7 @@ func TestScanResultRows_NoExtraColumnsLeavesMetaVarsNil(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	rows, err := ds.Query(`SELECT raw, ts FROM logs`)
+	rows, err := ds.Query(context.Background(), `SELECT raw, ts FROM logs`)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

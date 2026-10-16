@@ -1,9 +1,10 @@
 package logdb
 
 import (
-	"log"
+	"context"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -160,7 +161,7 @@ func recordToBucket(r store.Bucket) *Bucket {
 		if d, err := time.ParseDuration(r.WindowDuration); err == nil {
 			winDur = d
 		} else {
-			log.Printf("bucket-manager: bucket id=%d label=%s unparseable window_duration %q: %v",
+			weftlog.Infof(context.Background(), "bucket-manager: bucket id=%d label=%s unparseable window_duration %q: %v",
 				r.ID, r.Label, r.WindowDuration, err)
 		}
 	}

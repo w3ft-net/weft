@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/qmuntal/stateless"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
@@ -393,7 +393,7 @@ func (sh *Shard) postRecoveryTarget() (stateless.State, error) {
 	}
 	prior, err := sh.deps.Store.LatestPreRecoveryState(sh.ID)
 	if err != nil {
-		log.Printf("shardsm %s: LatestPreRecoveryState lookup failed, defaulting to INGESTING: %v", sh.ID, err)
+		weftlog.Errorf(context.Background(), "shardsm %s: LatestPreRecoveryState lookup failed, defaulting to INGESTING: %v", sh.ID, err)
 		return StateIngesting, nil
 	}
 	switch prior {
@@ -526,9 +526,9 @@ func (sh *Shard) runLaunch() {
 
 	res, err := sh.deps.Launcher.Launch(context.Background(), spec)
 	if err != nil {
-		log.Printf("shardsm %s: launch failed: %v", sh.ID, err)
+		weftlog.Errorf(context.Background(), "shardsm %s: launch failed: %v", sh.ID, err)
 		if e := sh.deps.Store.IncrementShardLaunchAttempts(sh.ID); e != nil {
-			log.Printf("shardsm %s: bump launch_attempts: %v", sh.ID, e)
+			weftlog.Infof(context.Background(), "shardsm %s: bump launch_attempts: %v", sh.ID, e)
 		}
 		sh.mu.Lock()
 		sh.LaunchAttempts++
@@ -537,7 +537,7 @@ func (sh *Shard) runLaunch() {
 	}
 
 	if err := sh.deps.Store.SetShardLaunchResult(sh.ID, res.InstanceID, res.AZ, res.VolumeID, stripeIndex); err != nil {
-		log.Printf("shardsm %s: persist launch result: %v", sh.ID, err)
+		weftlog.Infof(context.Background(), "shardsm %s: persist launch result: %v", sh.ID, err)
 		return // leave InstanceID unstamped; next Evaluate retries
 	}
 	sh.mu.Lock()
@@ -545,7 +545,7 @@ func (sh *Shard) runLaunch() {
 	sh.AZ = res.AZ
 	sh.EBSVolumeID = res.VolumeID
 	sh.mu.Unlock()
-	log.Printf("shardsm %s: launched (instance=%s vol=%s az=%s); awaiting heartbeat",
+	weftlog.Infof(context.Background(), "shardsm %s: launched (instance=%s vol=%s az=%s); awaiting heartbeat",
 		sh.ID, res.InstanceID, res.VolumeID, res.AZ)
 }
 
@@ -642,7 +642,7 @@ func (sh *Shard) evaluateRecovery(ctx context.Context) error {
 		err := sh.deps.Launcher.Terminate(termCtx, deadID)
 		cancel()
 		if err != nil {
-			log.Printf("shardsm %s: reap %s failed, retrying next tick: %v", sh.ID, deadID, err)
+			weftlog.Errorf(ctx, "shardsm %s: reap %s failed, retrying next tick: %v", sh.ID, deadID, err)
 			return nil
 		}
 	}
@@ -702,11 +702,11 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 		path, stats, err := liveShard.Archive(exportCtx, sh.archiveS3Prefix(services))
 		cancel()
 		if err != nil {
-			log.Printf("shardsm %s: archive export failed, retrying next tick: %v", sh.ID, err)
+			weftlog.Errorf(ctx, "shardsm %s: archive export failed, retrying next tick: %v", sh.ID, err)
 			return nil
 		}
 		if err := sh.recordArchive(path, stats); err != nil {
-			log.Printf("shardsm %s: %v; retrying next tick", sh.ID, err)
+			weftlog.Infof(ctx, "shardsm %s: %v; retrying next tick", sh.ID, err)
 			return nil
 		}
 		parquetPath = path
@@ -731,14 +731,14 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 	// data but has no live handle stays ARCHIVING and retries; AdminDelete is
 	// the operator escape hatch.
 	if parquetPath == "" && rowCount > 0 {
-		log.Printf("shardsm %s: ARCHIVING with no export recorded and no live handle (%d rows); keeping volume %q and instance %q", sh.ID, rowCount, volumeID, instanceID)
+		weftlog.Infof(ctx, "shardsm %s: ARCHIVING with no export recorded and no live handle (%d rows); keeping volume %q and instance %q", sh.ID, rowCount, volumeID, instanceID)
 		return nil
 	}
 
 	// Step 2 — retire the data volume (detach → delete).
 	if volumeID != "" && sh.deps.Volumes != nil {
 		if err := sh.retireVolume(ctx, volumeID); err != nil {
-			log.Printf("shardsm %s: retire volume %s, retrying next tick: %v", sh.ID, volumeID, err)
+			weftlog.Infof(ctx, "shardsm %s: retire volume %s, retrying next tick: %v", sh.ID, volumeID, err)
 			return nil
 		}
 		if err := sh.deps.Store.ClearShardVolume(sh.ID); err != nil {
@@ -757,7 +757,7 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 		err := sh.deps.Launcher.Terminate(termCtx, instanceID)
 		cancel()
 		if err != nil {
-			log.Printf("shardsm %s: terminate %s, retrying next tick: %v", sh.ID, instanceID, err)
+			weftlog.Infof(ctx, "shardsm %s: terminate %s, retrying next tick: %v", sh.ID, instanceID, err)
 			return nil
 		}
 		if err := sh.deps.Store.ClearShardInstance(sh.ID); err != nil {
@@ -802,7 +802,7 @@ func (sh *Shard) recordArchive(path string, stats []shard.CustomerStat) error {
 	// without stats; the janitor falls back to scanning that file. Don't fail
 	// the whole archive over metadata.
 	if err := sh.deps.Store.RecordArchiveStats(sh.ID, stats); err != nil {
-		log.Printf("shardsm %s: record archive stats: %v", sh.ID, err)
+		weftlog.Infof(context.Background(), "shardsm %s: record archive stats: %v", sh.ID, err)
 	}
 	if live != nil {
 		live.Close()
@@ -812,7 +812,7 @@ func (sh *Shard) recordArchive(path string, stats []shard.CustomerStat) error {
 	sh.ParquetPath = path
 	sh.LastHeartbeatAt = time.Time{}
 	sh.mu.Unlock()
-	log.Printf("shardsm %s: archived to %s", sh.ID, path)
+	weftlog.Infof(context.Background(), "shardsm %s: archived to %s", sh.ID, path)
 	return nil
 }
 
@@ -845,7 +845,7 @@ func (sh *Shard) retireVolume(ctx context.Context, volumeID string) error {
 // ── Action methods ──────────────────────────────────────────────
 
 func (sh *Shard) onEnterLaunching(ctx context.Context, args ...any) error {
-	log.Printf("shardsm %s: enter LAUNCHING (stub — Phase 2 wires EC2 + volume work)", sh.ID)
+	weftlog.Infof(ctx, "shardsm %s: enter LAUNCHING (stub — Phase 2 wires EC2 + volume work)", sh.ID)
 	return nil
 }
 
@@ -959,7 +959,7 @@ func (sh *Shard) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat) 
 	sh.mu.Unlock()
 	if needDial {
 		if err := sh.reconnect(ctx, hb); err != nil {
-			log.Printf("shardsm %s: reconnect on heartbeat at %s: %v", sh.ID, hb.Addr, err)
+			weftlog.Infof(ctx, "shardsm %s: reconnect on heartbeat at %s: %v", sh.ID, hb.Addr, err)
 			sh.mu.Lock()
 			sh.reconnectFailures++
 			sh.mu.Unlock()
@@ -1034,14 +1034,14 @@ func (sh *Shard) reconnect(ctx context.Context, hb store.ShardHeartbeat) error {
 	// Persist the (possibly moved) addr so it survives RefreshFromStore and
 	// a later restart's eager-dial — same rationale as configureOnHeartbeat.
 	if err := sh.deps.Store.SetShardAddr(sh.ID, hb.Addr); err != nil {
-		log.Printf("shardsm %s: persist reconnect addr %s: %v", sh.ID, hb.Addr, err)
+		weftlog.Infof(ctx, "shardsm %s: persist reconnect addr %s: %v", sh.ID, hb.Addr, err)
 	}
 
 	if old != nil {
 		go func() {
 			time.Sleep(defaultCloseRebindGrace)
 			if e := old.Close(); e != nil {
-				log.Printf("shardsm %s: deferred close of old conn: %v", sh.ID, e)
+				weftlog.Infof(ctx, "shardsm %s: deferred close of old conn: %v", sh.ID, e)
 			}
 		}()
 	}
@@ -1053,7 +1053,7 @@ func (sh *Shard) reconnect(ctx context.Context, hb store.ShardHeartbeat) error {
 // no AWS side effects here; the reap + relaunch is evaluateRecovery's
 // job, so a restart that lands in SUSPENDED re-drives it.)
 func (sh *Shard) onEnterSuspended(ctx context.Context, args ...any) error {
-	log.Printf("shardsm %s: enter SUSPENDED — connection torn down; Evaluate will reap %s and relaunch",
+	weftlog.Infof(ctx, "shardsm %s: enter SUSPENDED — connection torn down; Evaluate will reap %s and relaunch",
 		sh.ID, sh.InstanceID)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
@@ -1068,7 +1068,7 @@ func (sh *Shard) onEnterSuspended(ctx context.Context, args ...any) error {
 // state differs from SUSPENDED only in lacking a heartbeat-promotion
 // edge, so the still-alive shard process can't race the reap.
 func (sh *Shard) onEnterUpgrading(ctx context.Context, args ...any) error {
-	log.Printf("shardsm %s: enter UPGRADING — connection torn down; Evaluate will reap %s and relaunch for binary upgrade",
+	weftlog.Infof(ctx, "shardsm %s: enter UPGRADING — connection torn down; Evaluate will reap %s and relaunch for binary upgrade",
 		sh.ID, sh.InstanceID)
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
@@ -1086,7 +1086,7 @@ func (sh *Shard) onEnterDegraded(ctx context.Context, args ...any) error {
 	sh.degradedAt = sh.deps.Clock()
 	failures := sh.IngestFailures
 	sh.mu.Unlock()
-	log.Printf("shardsm %s: enter DEGRADED — %d consecutive ingest failures; out of write routing, retrying after %s",
+	weftlog.Infof(ctx, "shardsm %s: enter DEGRADED — %d consecutive ingest failures; out of write routing, retrying after %s",
 		sh.ID, failures, ingestRecoveryCooldown)
 	return nil
 }
@@ -1096,12 +1096,12 @@ func (sh *Shard) onEnterDegraded(ctx context.Context, args ...any) error {
 // the ColdShard, retired the volume, and terminated the instance. Nothing
 // to do but record the arrival.
 func (sh *Shard) onEnterArchived(ctx context.Context, args ...any) error {
-	log.Printf("shardsm %s: ARCHIVED — data in S3, instance + volume retired", sh.ID)
+	weftlog.Infof(ctx, "shardsm %s: ARCHIVED — data in S3, instance + volume retired", sh.ID)
 	return nil
 }
 
 func (sh *Shard) onEnterGone(ctx context.Context, args ...any) error {
-	log.Printf("shardsm %s: enter GONE — removing from registry + deleting record", sh.ID)
+	weftlog.Infof(ctx, "shardsm %s: enter GONE — removing from registry + deleting record", sh.ID)
 	// An admin delete can land mid-export; don't leave its snapshot or export
 	// instance behind with no row left to track them. Only shards that ever
 	// attempted an export have anything to clean.
@@ -1110,7 +1110,7 @@ func (sh *Shard) onEnterGone(ctx context.Context, args ...any) error {
 	sh.mu.RUnlock()
 	if exported && sh.deps.Exports != nil {
 		if err := sh.deps.Exports.Cleanup(ctx, sh.ID); err != nil {
-			log.Printf("shardsm %s: export cleanup on GONE (orphans possible; the sweep is the backstop): %v", sh.ID, err)
+			weftlog.Infof(ctx, "shardsm %s: export cleanup on GONE (orphans possible; the sweep is the backstop): %v", sh.ID, err)
 		}
 	}
 	if sh.deps.Registry != nil {
@@ -1118,7 +1118,7 @@ func (sh *Shard) onEnterGone(ctx context.Context, args ...any) error {
 	}
 	if sh.deps.Store != nil {
 		if err := sh.deps.Store.DeleteShard(sh.ID); err != nil {
-			log.Printf("shardsm %s: DeleteShard: %v", sh.ID, err)
+			weftlog.Infof(ctx, "shardsm %s: DeleteShard: %v", sh.ID, err)
 		}
 	}
 	return nil

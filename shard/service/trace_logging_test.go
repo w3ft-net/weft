@@ -1,9 +1,7 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"log"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +11,7 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -20,17 +19,7 @@ import (
 // captureLog helper — Query uses stdlib log.Printf.
 func captureShardLog(t *testing.T, fn func()) string {
 	t.Helper()
-	var buf bytes.Buffer
-	prevOut := log.Writer()
-	prevFlags := log.Flags()
-	log.SetOutput(&buf)
-	log.SetFlags(0)
-	defer func() {
-		log.SetOutput(prevOut)
-		log.SetFlags(prevFlags)
-	}()
-	fn()
-	return buf.String()
+	return weftlog.Capture(fn)
 }
 
 // queryCaptureStream is a minimal ShardQuery_QueryServer, modeled on
@@ -60,7 +49,7 @@ func newQueryTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("getShard: %v", err)
 	}
-	if err := ds.Ingest([]*pb.LogRow{
+	if err := ds.Ingest(context.Background(), []*pb.LogRow{
 		{Raw: "hello", Namespace: "acme", Service: "app", Kind: "main", CustomerId: 5, TsUnixNs: time.Now().UnixNano()},
 	}, nil); err != nil {
 		t.Fatalf("Ingest: %v", err)

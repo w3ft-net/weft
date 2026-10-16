@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/graybeardcorp/weft/config"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 
 	"github.com/google/uuid"
 	"github.com/graybeardcorp/saaskit/stripekit"
@@ -174,6 +174,12 @@ func (s *Server) coordCtx(r *http.Request) context.Context {
 	if org := r.Header.Get("X-Active-Org"); org != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, "x-active-org", org)
 	}
+	return withTraceMetadata(ctx)
+}
+
+// withTraceMetadata ferries the ambient trace and span IDs as outgoing
+// gRPC metadata so the coordinator's logs and spans join the request.
+func withTraceMetadata(ctx context.Context) context.Context {
 	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
 		ctx = metadata.AppendToOutgoingContext(ctx, "weft-trace-id", traceID)
 	}
@@ -196,30 +202,30 @@ func (s *Server) StartUnverifiedSweep(ctx context.Context) {
 		defer ticker.Stop()
 		// Run once at startup so restarts don't give squatters a free
 		// extra interval. Ignore errors — we'll retry next tick.
-		s.sweepUnverified()
+		s.sweepUnverified(ctx)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.sweepUnverified()
+				s.sweepUnverified(ctx)
 			}
 		}
 	}()
 }
 
-func (s *Server) sweepUnverified() {
+func (s *Server) sweepUnverified(ctx context.Context) {
 	cutoff := time.Now().Add(-auth.UnverifiedGracePeriod)
 	result := s.store.DB().
 		Where("email_verified_at IS NULL AND created_at < ?", cutoff).
 		Delete(&store.User{})
 	n, err := result.RowsAffected, result.Error
 	if err != nil {
-		log.Printf("unverified sweep: %v", err)
+		weftlog.Infof(ctx, "unverified sweep: %v", err)
 		return
 	}
 	if n > 0 {
-		log.Printf("unverified sweep: deleted %d expired accounts", n)
+		weftlog.Infof(ctx, "unverified sweep: deleted %d expired accounts", n)
 	}
 }
 
@@ -444,14 +450,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	token, err := s.store.CreateMagicLink(req.Email)
 	if err != nil {
-		log.Printf("login: create magic link for %s: %v", req.Email, err)
+		weftlog.Infof(r.Context(), "login: create magic link for %s: %v", req.Email, err)
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
 	}
 
 	verifyURL := fmt.Sprintf("%s/verify?token=%s", s.baseURL, token)
-	if err := SendMagicLinkEmail(s.email, req.Email, verifyURL); err != nil {
-		log.Printf("login: send magic link to %s: %v", req.Email, err)
+	if err := SendMagicLinkEmail(r.Context(), s.email, req.Email, verifyURL); err != nil {
+		weftlog.Infof(r.Context(), "login: send magic link to %s: %v", req.Email, err)
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -523,8 +529,8 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	// Grant read-only membership in Loom Inc so the welcome modal has
 	// somewhere to point. Soft-fails when Loom isn't seeded — see
 	// grantLoomMembership.
-	if err := s.grantLoomMembership(user.ID, req.Email); err != nil {
-		log.Printf("signup: grant Loom membership for %s: %v", req.Email, err)
+	if err := s.grantLoomMembership(r.Context(), user.ID, req.Email); err != nil {
+		weftlog.Infof(r.Context(), "signup: grant Loom membership for %s: %v", req.Email, err)
 	}
 
 	// Send the verification email. We ignore the send failure on purpose:
@@ -539,8 +545,8 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	verifyURL := fmt.Sprintf("%s/verify?token=%s", s.baseURL, token)
-	if err := SendMagicLinkEmail(s.email, req.Email, verifyURL); err != nil {
-		log.Printf("signup: failed to send verification email to %s: %v", req.Email, err)
+	if err := SendMagicLinkEmail(r.Context(), s.email, req.Email, verifyURL); err != nil {
+		weftlog.Errorf(r.Context(), "signup: failed to send verification email to %s: %v", req.Email, err)
 	}
 
 	// Generate JWT.
@@ -586,8 +592,8 @@ func (s *Server) handleResendVerification(w http.ResponseWriter, r *http.Request
 		return
 	}
 	verifyURL := fmt.Sprintf("%s/verify?token=%s", s.baseURL, token)
-	if err := SendMagicLinkEmail(s.email, user.Email, verifyURL); err != nil {
-		log.Printf("resend-verification: failed to send to %s: %v", user.Email, err)
+	if err := SendMagicLinkEmail(r.Context(), s.email, user.Email, verifyURL); err != nil {
+		weftlog.Errorf(r.Context(), "resend-verification: failed to send to %s: %v", user.Email, err)
 		http.Error(w, "failed to send email", http.StatusBadGateway)
 		return
 	}
@@ -606,7 +612,7 @@ func (s *Server) handleWelcomeDismiss(w http.ResponseWriter, r *http.Request) {
 			"has_seen_welcome": true,
 			"updated_at":       time.Now(),
 		}).Error; err != nil {
-		log.Printf("welcome-dismiss: %v", err)
+		weftlog.Infof(r.Context(), "welcome-dismiss: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -670,8 +676,8 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			if err := s.grantLoomMembership(user.ID, email); err != nil {
-				log.Printf("verify: grant Loom membership for %s: %v", email, err)
+			if err := s.grantLoomMembership(r.Context(), user.ID, email); err != nil {
+				weftlog.Infof(r.Context(), "verify: grant Loom membership for %s: %v", email, err)
 			}
 		}
 		s.store.AcceptTeamMember(invite.ID, user.ID)
@@ -705,8 +711,8 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 			s.store.AddTeamMemberWithEmail(cust.ID, user.ID, email, store.RoleOwner)
 			_ = s.store.UpdateUserLastActiveOrg(user.ID, cust.ID)
 
-			if err := s.grantLoomMembership(user.ID, email); err != nil {
-				log.Printf("verify: grant Loom membership for %s: %v", email, err)
+			if err := s.grantLoomMembership(r.Context(), user.ID, email); err != nil {
+				weftlog.Infof(r.Context(), "verify: grant Loom membership for %s: %v", email, err)
 			}
 		} else {
 			// Existing user — this is the signup-verification round-trip.
@@ -721,7 +727,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 						"email_verified_at": &verifiedNow,
 						"updated_at":        verifiedNow,
 					}).Error; err != nil {
-					log.Printf("verify: mark verified for %s: %v", user.ID, err)
+					weftlog.Infof(r.Context(), "verify: mark verified for %s: %v", user.ID, err)
 				}
 				now := time.Now()
 				user.EmailVerifiedAt = &now
@@ -745,7 +751,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	activeID, activeName := s.resolveActiveOrg(user)
 	json.NewEncoder(w).Encode(map[string]any{
 		"token": jwt,
-		"user":  s.userResponse(user, activeID, activeName),
+		"user":  s.userResponse(r.Context(), user, activeID, activeName),
 	})
 }
 
@@ -763,10 +769,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// first request scoped elsewhere, rather than trusting the browser.
 	if user.OnboardingStep == "graduate" && session.ActiveCustomerName != LoomCustomerSlug {
 		if advanced, err := s.store.AdvanceOnboardingStep(user.ID, "graduate", "done"); err != nil {
-			log.Printf("onboarding: graduate %s on org switch: %v", user.ID, err)
+			weftlog.Infof(r.Context(), "onboarding: graduate %s on org switch: %v", user.ID, err)
 		} else if advanced {
-			if err := s.graduateOnboarding(user.ID); err != nil {
-				log.Printf("onboarding: graduate %s: %v", user.ID, err)
+			if err := s.graduateOnboarding(r.Context(), user.ID); err != nil {
+				weftlog.Infof(r.Context(), "onboarding: graduate %s: %v", user.ID, err)
 			}
 			// graduateOnboarding pins the home org; the user chose this one.
 			_ = s.store.UpdateUserLastActiveOrg(user.ID, session.ActiveOrgID)
@@ -776,7 +782,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	json.NewEncoder(w).Encode(s.userResponse(user, session.ActiveOrgID, session.ActiveCustomerName))
+	json.NewEncoder(w).Encode(s.userResponse(r.Context(), user, session.ActiveOrgID, session.ActiveCustomerName))
 }
 
 // userResponse builds the canonical user object the SPA consumes. Both
@@ -790,7 +796,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 // activeOrgID/Name are the org the response is scoped to: the
 // middleware-resolved session org for /me, or the user's landing org for
 // /verify. Tier and the orgs "active" flag are computed against it.
-func (s *Server) userResponse(user *store.User, activeOrgID store.OrgID, activeCustomerName string) map[string]any {
+func (s *Server) userResponse(ctx context.Context, user *store.User, activeOrgID store.OrgID, activeCustomerName string) map[string]any {
 	// Tier and customer come from the resolved active org, not from a
 	// user.CustomerName field that no longer exists.
 	tier := store.Tier("none")
@@ -817,7 +823,7 @@ func (s *Server) userResponse(user *store.User, activeOrgID store.OrgID, activeC
 	// after a Loom tour completion. It tracks the queued notice, so it
 	// goes false once the notice has been delivered anywhere — including
 	// in the shell, which drains the same row.
-	pendingGraduation := len(s.pendingGraduationIDs(user.ID)) > 0
+	pendingGraduation := len(s.pendingGraduationIDs(ctx, user.ID)) > 0
 
 	resp := map[string]any{
 		"id":                   user.ID,
@@ -870,12 +876,13 @@ func (s *Server) resolveActiveOrg(user *store.User) (store.OrgID, string) {
 
 // ensureStripeCustomer returns the Stripe customer ID for a user, creating one
 // on Stripe if the user doesn't have one yet.
-func (s *Server) ensureStripeCustomer(u *store.User, customerName string) (string, error) {
+func (s *Server) ensureStripeCustomer(ctx context.Context, u *store.User, customerName string) (string, error) {
 	if u.StripeCustomerID != "" {
 		return u.StripeCustomerID, nil
 	}
 	cust, err := customer.New(&stripe.CustomerParams{
-		Email: stripe.String(u.Email),
+		Params: stripe.Params{Context: ctx},
+		Email:  stripe.String(u.Email),
 		Metadata: map[string]string{
 			"user_id":  u.ID,
 			"customer": customerName,
@@ -921,9 +928,9 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 
 	stripe.Key = s.StripeSecretKey
 
-	custID, err := s.ensureStripeCustomer(user, session.ActiveCustomerName)
+	custID, err := s.ensureStripeCustomer(r.Context(), user, session.ActiveCustomerName)
 	if err != nil {
-		log.Printf("stripe customer create failed: %v", err)
+		weftlog.Errorf(r.Context(), "stripe customer create failed: %v", err)
 		http.Error(w, "billing setup failed", http.StatusInternalServerError)
 		return
 	}
@@ -931,7 +938,7 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 	// Reuse an existing trialing Stripe subscription if the trial row already
 	// has one attached (handles page refresh / retries idempotently).
 	if trial, _ := s.store.ActiveSubscription(session.ActiveOrgID); trial != nil && trial.StripeSubscriptionID != "" {
-		getParams := &stripe.SubscriptionParams{}
+		getParams := &stripe.SubscriptionParams{Params: stripe.Params{Context: r.Context()}}
 		getParams.AddExpand("pending_setup_intent")
 		sub, err := subscription.Get(trial.StripeSubscriptionID, getParams)
 		if err == nil && sub.PendingSetupIntent != nil && sub.PendingSetupIntent.ClientSecret != "" {
@@ -955,6 +962,7 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	params := &stripe.SubscriptionParams{
+		Params:          stripe.Params{Context: r.Context()},
 		Customer:        stripe.String(custID),
 		Items:           items,
 		TrialPeriodDays: stripe.Int64(14),
@@ -977,12 +985,12 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 
 	sub, err := subscription.New(params)
 	if err != nil {
-		log.Printf("stripe subscription create failed: %v", err)
+		weftlog.Errorf(r.Context(), "stripe subscription create failed: %v", err)
 		http.Error(w, "billing setup failed", http.StatusInternalServerError)
 		return
 	}
 	if sub.PendingSetupIntent == nil || sub.PendingSetupIntent.ClientSecret == "" {
-		log.Printf("stripe subscription missing pending_setup_intent: id=%s", sub.ID)
+		weftlog.Infof(r.Context(), "stripe subscription missing pending_setup_intent: id=%s", sub.ID)
 		http.Error(w, "billing setup failed", http.StatusInternalServerError)
 		return
 	}
@@ -990,7 +998,7 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 	// Attach the Stripe subscription ID to our local trial row so refresh
 	// reuses the same subscription and the webhook can promote it on confirm.
 	if trial, _ := s.store.ActiveSubscription(session.ActiveOrgID); trial != nil {
-		_ = s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.Subscription{}).
+		_ = s.store.DB().WithContext(store.WithoutTenantScope(r.Context())).Model(&store.Subscription{}).
 			Where("id = ?", trial.ID).
 			Updates(map[string]any{
 				"stripe_subscription_id": sub.ID,
@@ -1038,9 +1046,9 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	// item (if present). Matching by position would be fragile when
 	// Stripe reorders or a new tier adds the overage item for the
 	// first time.
-	existing, err := subscription.Get(currentSub.StripeSubscriptionID, nil)
+	existing, err := subscription.Get(currentSub.StripeSubscriptionID, &stripe.SubscriptionParams{Params: stripe.Params{Context: r.Context()}})
 	if err != nil {
-		log.Printf("stripe subscription lookup failed: %v", err)
+		weftlog.Errorf(r.Context(), "stripe subscription lookup failed: %v", err)
 		http.Error(w, "billing update failed", http.StatusInternalServerError)
 		return
 	}
@@ -1086,6 +1094,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updateParams := &stripe.SubscriptionParams{
+		Params:            stripe.Params{Context: r.Context()},
 		Items:             items,
 		ProrationBehavior: stripe.String("create_prorations"),
 		PaymentBehavior:   stripe.String("default_incomplete"),
@@ -1099,7 +1108,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := subscription.Update(currentSub.StripeSubscriptionID, updateParams)
 	if err != nil {
-		log.Printf("stripe subscription update failed: %v", err)
+		weftlog.Errorf(r.Context(), "stripe subscription update failed: %v", err)
 		http.Error(w, "billing update failed", http.StatusInternalServerError)
 		return
 	}
@@ -1164,7 +1173,7 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		// signature, or an authentic event whose API-version release train
 		// doesn't match the pinned stripe-go. Name which one, so the log
 		// points at the real fix instead of a phantom signing-secret problem.
-		log.Printf("Stripe webhook rejected: %s: %v", stripekit.ClassifyWebhookError(err), err)
+		weftlog.Infof(r.Context(), "Stripe webhook rejected: %s: %v", stripekit.ClassifyWebhookError(err), err)
 		http.Error(w, "invalid signature", http.StatusBadRequest)
 		return
 	}
@@ -1175,7 +1184,7 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		// tier recorded in metadata, clearing any trial expiry.
 		var sub stripe.Subscription
 		if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
-			log.Printf("Stripe webhook unmarshal error: %v", err)
+			weftlog.Errorf(r.Context(), "Stripe webhook unmarshal error: %v", err)
 			break
 		}
 		// Shared Stripe account: ignore sibling products' subscriptions.
@@ -1186,7 +1195,7 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		// Only promote once the subscription is actually paying (not trialing
 		// without a PM, and not past_due).
 		if tier != "" && (sub.Status == stripe.SubscriptionStatusActive || sub.Status == stripe.SubscriptionStatusTrialing) {
-			if err := s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.Subscription{}).
+			if err := s.store.DB().WithContext(store.WithoutTenantScope(context.WithoutCancel(r.Context()))).Model(&store.Subscription{}).
 				Where("stripe_subscription_id = ? AND comp_reason = ''", sub.ID).
 				Updates(map[string]any{
 					"tier":       tier,
@@ -1194,9 +1203,9 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 					"expires_at": nil,
 					"updated_at": time.Now(),
 				}).Error; err != nil {
-				log.Printf("failed to promote subscription %s: %v", sub.ID, err)
+				weftlog.Errorf(r.Context(), "failed to promote subscription %s: %v", sub.ID, err)
 			} else {
-				log.Printf("subscription promoted: stripe_sub=%s tier=%s status=%s", sub.ID, tier, sub.Status)
+				weftlog.Infof(r.Context(), "subscription promoted: stripe_sub=%s tier=%s status=%s", sub.ID, tier, sub.Status)
 			}
 		}
 
@@ -1204,7 +1213,7 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		// Mark the local subscription past_due so the UI can prompt for a new card.
 		var inv stripe.Invoice
 		if err := json.Unmarshal(event.Data.Raw, &inv); err != nil {
-			log.Printf("Stripe webhook unmarshal error: %v", err)
+			weftlog.Errorf(r.Context(), "Stripe webhook unmarshal error: %v", err)
 			break
 		}
 		// Shared Stripe account: ignore sibling products' invoices.
@@ -1216,34 +1225,34 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if inv.Parent.SubscriptionDetails.Subscription != nil {
 			subID := inv.Parent.SubscriptionDetails.Subscription.ID
-			_ = s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.Subscription{}).
+			_ = s.store.DB().WithContext(store.WithoutTenantScope(context.WithoutCancel(r.Context()))).Model(&store.Subscription{}).
 				Where("stripe_subscription_id = ? AND comp_reason = ''", subID).
 				Updates(map[string]any{
 					"status":     "past_due",
 					"updated_at": time.Now(),
 				}).Error
-			log.Printf("subscription payment failed: stripe_sub=%s", subID)
+			weftlog.Errorf(r.Context(), "subscription payment failed: stripe_sub=%s", subID)
 		}
 
 	case "customer.subscription.deleted":
 		var sub stripe.Subscription
 		if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
-			log.Printf("Stripe webhook unmarshal error: %v", err)
+			weftlog.Errorf(r.Context(), "Stripe webhook unmarshal error: %v", err)
 			break
 		}
 		// Shared Stripe account: ignore sibling products' subscriptions.
 		if !s.subscriptionHasOurPrice(&sub) {
 			break
 		}
-		if err := s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.Subscription{}).
+		if err := s.store.DB().WithContext(store.WithoutTenantScope(context.WithoutCancel(r.Context()))).Model(&store.Subscription{}).
 			Where("stripe_subscription_id = ? AND comp_reason = ''", sub.ID).
 			Updates(map[string]any{
 				"status":     "cancelled",
 				"updated_at": time.Now(),
 			}).Error; err != nil {
-			log.Printf("failed to cancel subscription %s: %v", sub.ID, err)
+			weftlog.Errorf(r.Context(), "failed to cancel subscription %s: %v", sub.ID, err)
 		} else {
-			log.Printf("subscription cancelled: %s", sub.ID)
+			weftlog.Infof(r.Context(), "subscription cancelled: %s", sub.ID)
 		}
 	}
 
@@ -1277,7 +1286,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.coordClient.GetUsage(s.coordCtx(r), &pb.GetUsageRequest{})
 	if err != nil {
-		log.Printf("GetUsage gRPC error: %v", err)
+		weftlog.Errorf(r.Context(), "GetUsage gRPC error: %v", err)
 		http.Error(w, "coordinator error", http.StatusBadGateway)
 		return
 	}
@@ -1673,7 +1682,7 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 	// back to inline Plan(). This is the canonical save-time entry
 	// point; the gRPC and shell save paths use the same helper.
 	resolver := storeBinResolver{store: s.store, orgID: custID}
-	loweredJSON := planner.LowerForStorage(req.Pipeline, int64(custID), string(tier), resolver)
+	loweredJSON := planner.LowerForStorage(r.Context(), req.Pipeline, int64(custID), string(tier), resolver)
 
 	// SaveCronWatch's error may be a non-blocking store.Warning (or an
 	// errors.Join of several) — the save already happened, but
@@ -1885,7 +1894,7 @@ func (s *Server) handleInviteTeamMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	member, err := s.inviteMember(session, req.Email)
+	member, err := s.inviteMember(r.Context(), session, req.Email)
 	if err != nil {
 		if ie, ok := err.(*inviteErr); ok {
 			http.Error(w, ie.msg, ie.status)
@@ -1980,7 +1989,7 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 
 	// Can't remove self.
 	var target store.TeamMember
-	if err := s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).First(&target, "id = ?", id).Error; err != nil {
+	if err := s.store.DB().WithContext(store.WithoutTenantScope(r.Context())).First(&target, "id = ?", id).Error; err != nil {
 		http.Error(w, "member not found", http.StatusNotFound)
 		return
 	}
@@ -1990,7 +1999,7 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Remove.
-	s.store.DB().WithContext(store.WithoutTenantScope(context.Background())).Model(&store.TeamMember{}).Where("id = ?", id).Updates(map[string]any{
+	s.store.DB().WithContext(store.WithoutTenantScope(r.Context())).Model(&store.TeamMember{}).Where("id = ?", id).Updates(map[string]any{
 		"status":     "removed",
 		"updated_at": time.Now(),
 	})
@@ -2257,7 +2266,7 @@ func (s *Server) handleDeleteNamespace(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.store.DeleteNamespace(custID, name); err != nil {
+	if err := s.store.DeleteNamespace(r.Context(), custID, name); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

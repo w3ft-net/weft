@@ -238,7 +238,7 @@ func seed(s *store.Store, tokensOut string) error {
 		// field isn't part of any routing lookup.
 		for _, app := range c.Apps {
 			fullApp := c.Name + "/" + app
-			if err := s.AddLogGroup(ns.ID, store.SourceTypeWeftd,
+			if err := s.AddLogGroup(context.Background(), ns.ID, store.SourceTypeWeftd,
 				app, fullApp, "us-east-2", minimalSchemaYAML(app, emitsTraceID(c.Name))); err != nil {
 				return fmt.Errorf("log_group %s: %w", fullApp, err)
 			}
@@ -409,7 +409,7 @@ func seedProdLoom(s *store.Store, tokensOut string) error {
 	// an orphaned namespace-prefixed duplicate).
 	for _, app := range loomSpec.Apps {
 		fullApp := loomSpec.Name + "/" + app
-		if err := s.AddLogGroup(ns.ID, store.SourceTypeWeftd,
+		if err := s.AddLogGroup(context.Background(), ns.ID, store.SourceTypeWeftd,
 			app, fullApp, "us-east-2", minimalSchemaYAML(app, emitsTraceID(loomSpec.Name))); err != nil {
 			return fmt.Errorf("log_group %s: %w", fullApp, err)
 		}

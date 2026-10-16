@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"log"
 	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/weftd"
 )
@@ -125,7 +125,7 @@ func runFileTailer(ctx context.Context, client pb.WeftCoordinatorClient, instanc
 	h, start := checkpoints.Open(path, startup)
 	tailer, err := weftd.NewTailer(path, start)
 	if err != nil {
-		log.Printf("[%s] open %s: %v", app, path, err)
+		weftlog.Infof(ctx, "[%s] open %s: %v", app, path, err)
 		return
 	}
 	defer tailer.Close()
@@ -217,7 +217,7 @@ func (s *fileShipper) run(ctx context.Context, lines <-chan weftd.Line) {
 func (s *fileShipper) commitAndRearm(arm func(time.Duration), backoff *time.Duration, armed *bool) bool {
 	if err := s.commit(); err != nil {
 		s.failing = true
-		log.Printf("[%s] ack cycle failed, retrying in %v: %v", s.app, *backoff, err)
+		weftlog.Errorf(context.Background(), "[%s] ack cycle failed, retrying in %v: %v", s.app, *backoff, err)
 		arm(*backoff)
 		if *backoff *= 2; *backoff > maxCommitBackoff {
 			*backoff = maxCommitBackoff
@@ -253,12 +253,12 @@ func (s *fileShipper) add(l weftd.Line) {
 			}
 			if err := s.openAndReplay(); err != nil {
 				s.failing = true
-				log.Printf("[%s] open stream: %v", s.app, err)
+				weftlog.Infof(context.Background(), "[%s] open stream: %v", s.app, err)
 			}
 			return // openAndReplay already sent this row with the rest of the window
 		}
 		if err := s.stream.Send(row); err != nil {
-			log.Printf("[%s] stream broken: %v", s.app, err)
+			weftlog.Infof(context.Background(), "[%s] stream broken: %v", s.app, err)
 			s.dropStream() // the window is intact; the next ack cycle resends it
 		}
 		return
@@ -269,17 +269,17 @@ func (s *fileShipper) add(l weftd.Line) {
 		if err := s.stream.Send(row); err == nil {
 			return
 		}
-		log.Printf("[%s] stream broken, reconnecting", s.app)
+		weftlog.Infof(context.Background(), "[%s] stream broken, reconnecting", s.app)
 		s.dropStream()
 	}
 	stream, cancel, err := s.openStream()
 	if err != nil {
-		log.Printf("[%s] open stream: %v", s.app, err)
+		weftlog.Infof(context.Background(), "[%s] open stream: %v", s.app, err)
 		return
 	}
 	s.stream, s.streamCancel = stream, cancel
 	if err := s.stream.Send(row); err != nil {
-		log.Printf("[%s] send failed after reconnect: %v", s.app, err)
+		weftlog.Errorf(context.Background(), "[%s] send failed after reconnect: %v", s.app, err)
 		s.dropStream()
 	}
 }
@@ -347,7 +347,7 @@ func (s *fileShipper) commit() error {
 func (s *fileShipper) finish() {
 	if s.track {
 		if err := s.commit(); err != nil {
-			log.Printf("[%s] shutdown drain: %d rows left unacked, they will be re-read: %v", s.app, len(s.window), err)
+			weftlog.Infof(context.Background(), "[%s] shutdown drain: %d rows left unacked, they will be re-read: %v", s.app, len(s.window), err)
 		}
 		return
 	}

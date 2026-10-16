@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // FileValueSpec describes a dimension value sourced from a file on
@@ -204,12 +204,12 @@ func NewFileValueReader(ctx context.Context, spec FileValueSpec) *FileValueReade
 
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Printf("file value reader: fsnotify: %v", err)
+		weftlog.Infof(ctx, "file value reader: fsnotify: %v", err)
 		return r
 	}
 	dir, base := splitPath(spec.Path)
 	if err := w.Add(dir); err != nil {
-		log.Printf("file value reader: watch %s: %v", dir, err)
+		weftlog.Infof(ctx, "file value reader: watch %s: %v", dir, err)
 		w.Close()
 		return r
 	}
@@ -230,7 +230,7 @@ func (r *FileValueReader) refresh() {
 	data, err := os.ReadFile(r.spec.Path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.Printf("file value reader: %s: %v", r.spec.Path, err)
+			weftlog.Infof(context.Background(), "file value reader: %s: %v", r.spec.Path, err)
 		}
 		return
 	}
@@ -244,7 +244,7 @@ func (r *FileValueReader) extract(data []byte) string {
 	}
 	var parsed any
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		log.Printf("file value reader: %s: parse json: %v", r.spec.Path, err)
+		weftlog.Infof(context.Background(), "file value reader: %s: parse json: %v", r.spec.Path, err)
 		return ""
 	}
 	value, ok := applyJSONPath(parsed, r.spec.JSONPath)
@@ -297,7 +297,7 @@ func (r *FileValueReader) runWatch(ctx context.Context, w *fsnotify.Watcher, bas
 			if !ok {
 				return
 			}
-			log.Printf("file value reader: watch error: %v", err)
+			weftlog.Errorf(ctx, "file value reader: watch error: %v", err)
 		}
 	}
 }

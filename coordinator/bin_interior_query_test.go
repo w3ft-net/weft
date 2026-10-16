@@ -66,7 +66,7 @@ func newInteriorQueryFixtureOn(t *testing.T, db *store.Store, custID store.OrgID
 		logRow("web", "ERROR", int64(cust.ID), now.Add(-5*time.Minute)),
 		logRow("web", "WARN", int64(cust.ID), now.Add(-2*time.Minute)),
 	}
-	if err := s.Ingest(rows, nil); err != nil {
+	if err := s.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 

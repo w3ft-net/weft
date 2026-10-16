@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -43,7 +43,7 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var pdItems []store.PagerDutyIntegration
-	_ = s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Order("name").Find(&pdItems).Error
+	_ = s.store.DB().WithContext(store.WithOrg(r.Context(), custID)).Order("name").Find(&pdItems).Error
 	pdKeys := make(map[string]string, len(pdItems))
 	pdMeta := make([]map[string]any, 0, len(pdItems))
 	for _, it := range pdItems {
@@ -111,9 +111,9 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Exchange code for access token.
 	redirectURI := s.apiBaseURL() + "/api/integrations/slack/callback"
-	tokenResp, err := exchangeSlackCode(code, s.SlackClientID, s.SlackClientSecret, redirectURI)
+	tokenResp, err := exchangeSlackCode(r.Context(), code, s.SlackClientID, s.SlackClientSecret, redirectURI)
 	if err != nil {
-		log.Printf("Slack OAuth exchange error: %v", err)
+		weftlog.Errorf(r.Context(), "Slack OAuth exchange error: %v", err)
 		http.Redirect(w, r, s.baseURL+"/account?integration=slack&status=error", http.StatusFound)
 		return
 	}
@@ -130,7 +130,7 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 	botToken := tokenResp.AccessToken
 	teamName := tokenResp.Team.Name
 	if botToken == "" {
-		log.Printf("Slack OAuth: no access_token in response")
+		weftlog.Infof(r.Context(), "Slack OAuth: no access_token in response")
 		http.Redirect(w, r, s.baseURL+"/account?integration=slack&status=error", http.StatusFound)
 		return
 	}
@@ -151,7 +151,7 @@ func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Model(&store.NotifyConfig{}).Updates(map[string]any{
+	s.store.DB().WithContext(store.WithOrg(r.Context(), custID)).Model(&store.NotifyConfig{}).Updates(map[string]any{
 		"slack_webhook":   "",
 		"slack_team_name": "",
 	})
@@ -176,16 +176,16 @@ func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var item store.PagerDutyIntegration
-	result := s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Where("name = ?", req.Name).First(&item)
+	result := s.store.DB().WithContext(store.WithOrg(r.Context(), custID)).Where("name = ?", req.Name).First(&item)
 	var saveErr error
 	if result.Error == gorm.ErrRecordNotFound {
-		saveErr = s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Create(&store.PagerDutyIntegration{
+		saveErr = s.store.DB().WithContext(store.WithOrg(r.Context(), custID)).Create(&store.PagerDutyIntegration{
 			OrgID:          custID,
 			Name:           req.Name,
 			IntegrationKey: req.Key,
 		}).Error
 	} else {
-		saveErr = s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Model(&item).Update("integration_key", req.Key).Error
+		saveErr = s.store.DB().WithContext(store.WithOrg(r.Context(), custID)).Model(&item).Update("integration_key", req.Key).Error
 	}
 	if saveErr != nil {
 		http.Error(w, "store error: "+saveErr.Error(), http.StatusInternalServerError)
@@ -208,7 +208,7 @@ func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.store.DB().
-		WithContext(store.WithOrg(context.Background(), custID)).
+		WithContext(store.WithOrg(r.Context(), custID)).
 		Where("name = ?", name).Delete(&store.PagerDutyIntegration{}).Error
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
@@ -267,7 +267,7 @@ func (s *Server) handlePagerDutyDisconnect(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	s.store.DB().WithContext(store.WithOrg(context.Background(), custID)).Delete(&store.PagerDutyIntegration{})
+	s.store.DB().WithContext(store.WithOrg(r.Context(), custID)).Delete(&store.PagerDutyIntegration{})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -288,7 +288,7 @@ type slackOAuthResponse struct {
 	} `json:"incoming_webhook"`
 }
 
-func exchangeSlackCode(code, clientID, clientSecret, redirectURI string) (*slackOAuthResponse, error) {
+func exchangeSlackCode(ctx context.Context, code, clientID, clientSecret, redirectURI string) (*slackOAuthResponse, error) {
 	form := url.Values{
 		"code":          {code},
 		"client_id":     {clientID},
@@ -296,11 +296,13 @@ func exchangeSlackCode(code, clientID, clientSecret, redirectURI string) (*slack
 		"redirect_uri":  {redirectURI},
 	}
 
-	resp, err := http.Post(
-		"https://slack.com/api/oauth.v2.access",
-		"application/x-www-form-urlencoded",
-		strings.NewReader(form.Encode()),
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://slack.com/api/oauth.v2.access", strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

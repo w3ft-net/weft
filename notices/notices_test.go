@@ -1,6 +1,7 @@
 package notices
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -33,9 +34,9 @@ func TestNoticeQueue_FirstSignalQueues(t *testing.T) {
 	user, _ := db.CreateUser("alice-nq1@example.test")
 
 	q := NewQueue(db, user.ID)
-	q.Maybe("tmp_48h_expiry")
+	q.Maybe(context.Background(), "tmp_48h_expiry")
 
-	got := q.Drain()
+	got := q.Drain(context.Background())
 	if len(got) != 1 {
 		t.Fatalf("first drain: got %d notices, want 1", len(got))
 	}
@@ -56,11 +57,11 @@ func TestNoticeQueue_MaybeDedupsWithinRequest(t *testing.T) {
 	user, _ := db.CreateUser("alice-nq2@example.test")
 
 	q := NewQueue(db, user.ID)
-	q.Maybe("tmp_48h_expiry")
-	q.Maybe("tmp_48h_expiry")
-	q.Maybe("tmp_48h_expiry")
+	q.Maybe(context.Background(), "tmp_48h_expiry")
+	q.Maybe(context.Background(), "tmp_48h_expiry")
+	q.Maybe(context.Background(), "tmp_48h_expiry")
 
-	if got := len(q.Drain()); got != 1 {
+	if got := len(q.Drain(context.Background())); got != 1 {
 		t.Errorf("multiple Maybe → got %d queued, want 1", got)
 	}
 }
@@ -74,20 +75,20 @@ func TestNoticeQueue_DrainDeliversOnce(t *testing.T) {
 	user, _ := db.CreateUser("alice-nq3@example.test")
 
 	q1 := NewQueue(db, user.ID)
-	q1.Maybe("tmp_48h_expiry")
-	if got := len(q1.Drain()); got != 1 {
+	q1.Maybe(context.Background(), "tmp_48h_expiry")
+	if got := len(q1.Drain(context.Background())); got != 1 {
 		t.Fatalf("first drain: got %d, want 1", got)
 	}
 
 	// Nothing new signaled: the delivered row stays delivered.
-	if got := len(NewQueue(db, user.ID).Drain()); got != 0 {
+	if got := len(NewQueue(db, user.ID).Drain(context.Background())); got != 0 {
 		t.Errorf("drain with nothing signaled: got %d, want 0", got)
 	}
 
 	// Signaled again: delivered again.
 	q2 := NewQueue(db, user.ID)
-	q2.Maybe("tmp_48h_expiry")
-	if got := len(q2.Drain()); got != 1 {
+	q2.Maybe(context.Background(), "tmp_48h_expiry")
+	if got := len(q2.Drain(context.Background())); got != 1 {
 		t.Errorf("re-signal in a new request: got %d, want 1", got)
 	}
 }
@@ -108,7 +109,7 @@ func TestNoticeQueue_DrainsOutOfBandNotices(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := NewQueue(db, user.ID).Drain()
+	got := NewQueue(db, user.ID).Drain(context.Background())
 	if len(got) != 1 {
 		t.Fatalf("got %d notices, want 1", len(got))
 	}
@@ -126,8 +127,8 @@ func TestNoticeQueue_EmptyUserNoOp(t *testing.T) {
 	db := testStore(t)
 
 	q := NewQueue(db, "")
-	q.Maybe("tmp_48h_expiry")
-	if got := len(q.Drain()); got != 0 {
+	q.Maybe(context.Background(), "tmp_48h_expiry")
+	if got := len(q.Drain(context.Background())); got != 0 {
 		t.Errorf("empty userID: got %d queued, want 0", got)
 	}
 }
@@ -140,8 +141,8 @@ func TestNoticeQueue_UnknownKeyNoOp(t *testing.T) {
 	user, _ := db.CreateUser("alice-nq4@example.test")
 
 	q := NewQueue(db, user.ID)
-	q.Maybe("not_a_real_key")
-	if got := len(q.Drain()); got != 0 {
+	q.Maybe(context.Background(), "not_a_real_key")
+	if got := len(q.Drain(context.Background())); got != 0 {
 		t.Errorf("unknown key: got %d queued, want 0", got)
 	}
 }
@@ -156,7 +157,7 @@ func TestNoticeQueue_UnknownKeyStaysPending(t *testing.T) {
 	if err := db.EmitNotice(user.ID, "from_a_newer_build", "warning", nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(NewQueue(db, user.ID).Drain()); got != 0 {
+	if got := len(NewQueue(db, user.ID).Drain(context.Background())); got != 0 {
 		t.Fatalf("unrenderable notice should not be delivered; got %d", got)
 	}
 	pending, err := db.PendingNotices(user.ID)
@@ -175,12 +176,12 @@ func TestNoticeQueue_PerUser(t *testing.T) {
 	bob, _ := db.CreateUser("bob-pu2@example.test")
 
 	qA := NewQueue(db, alice.ID)
-	qA.Maybe("tmp_48h_expiry")
-	qA.Drain()
+	qA.Maybe(context.Background(), "tmp_48h_expiry")
+	qA.Drain(context.Background())
 
 	qB := NewQueue(db, bob.ID)
-	qB.Maybe("tmp_48h_expiry")
-	if got := len(qB.Drain()); got != 1 {
+	qB.Maybe(context.Background(), "tmp_48h_expiry")
+	if got := len(qB.Drain(context.Background())); got != 1 {
 		t.Errorf("bob's signal: got %d queued, want 1 (alice's drain should not affect bob)", got)
 	}
 }

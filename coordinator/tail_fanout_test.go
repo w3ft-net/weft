@@ -24,7 +24,7 @@ func TestTailFanout_LocalPassthrough(t *testing.T) {
 
 	matcher := &RowMatcher{Namespace: "vimgym", Service: "api", Kind: "main"}
 	id, ch := f.Subscribe(ctx, matcher)
-	defer f.Unsubscribe(id, matcher)
+	defer f.Unsubscribe(context.Background(), id, matcher)
 
 	f.Publish([]*pb.LogRow{{
 		Namespace: "vimgym", Service: "api", Kind: "main", Raw: "local row",
@@ -76,7 +76,7 @@ func TestTailFanout_RedisCrossDelivery(t *testing.T) {
 
 	matcher := &RowMatcher{Namespace: "ns1", Service: "svc1", Kind: "main"}
 	id, ch := b.Subscribe(ctx, matcher)
-	defer b.Unsubscribe(id, matcher)
+	defer b.Unsubscribe(context.Background(), id, matcher)
 
 	time.Sleep(200 * time.Millisecond) // let the PSUBSCRIBE register with redis
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -180,7 +181,7 @@ func (s *Store) NamespaceContents(orgID OrgID, namespaceID uint) (NamespaceConte
 // unique row, so the name could never be created again, and would not fire
 // the foreign-key cascades that clear tokens, sources and shard routing.
 // Permissions have no foreign key, so they are deleted explicitly.
-func (s *Store) DeleteNamespace(orgID OrgID, name string) error {
+func (s *Store) DeleteNamespace(ctx context.Context, orgID OrgID, name string) error {
 	ns, err := s.GetNamespace(orgID, name)
 	if err != nil {
 		return err
@@ -201,7 +202,7 @@ func (s *Store) DeleteNamespace(orgID OrgID, name string) error {
 		return err
 	}
 	for _, svc := range services {
-		s.invalidateSchemaCache(ns.ID, svc)
+		s.invalidateSchemaCache(ctx, ns.ID, svc)
 	}
 	return nil
 }

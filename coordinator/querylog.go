@@ -1,9 +1,14 @@
 package coordinator
 
 import (
-	"log"
+	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sync"
+
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // queryLog carries the query-audit stream (every "query:" line). It is
@@ -15,7 +20,27 @@ import (
 // Flags match the stdlib default logger (date+time) so the audit
 // pseudofile's lines keep the `2006/01/02 15:04:05 query: ...` shape
 // weft's schema detection already keys timestamps off.
-var queryLog = log.New(os.Stderr, "", log.LstdFlags)
+var queryLog = weftlog.NewLogger(queryOut)
+
+// queryOut is where queryLog writes; SetQueryLog swaps it for the audit file.
+var queryOut = &switchWriter{w: os.Stderr}
+
+type switchWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *switchWriter) Set(w io.Writer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.w = w
+}
+
+func (s *switchWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
 
 // SetQueryLog redirects the query-audit stream to path, creating the
 // parent directory and opening the file append/create. On any failure
@@ -30,7 +55,7 @@ func SetQueryLog(path string) error {
 	if err != nil {
 		return err
 	}
-	queryLog.SetOutput(f)
+	queryOut.Set(f)
 	return nil
 }
 
@@ -52,13 +77,14 @@ func SetQueryLogCoordinatorID(id string) {
 	queryLogCoordinatorID = id
 }
 
-// logQuery writes a query-audit line, appending coordinator_id when
-// set. The sole entry point for queryLog.Printf so every audit line
-// picks up the tag uniformly — see SetQueryLogCoordinatorID.
-func logQuery(format string, args ...any) {
-	if queryLogCoordinatorID == "" {
-		queryLog.Printf(format, args...)
-		return
+// logQuery writes a query-audit line, appending coordinator_id when set
+// and, through ctx, the request's trace ID. The sole entry point for
+// queryLog so every audit line picks up the tags uniformly — see
+// SetQueryLogCoordinatorID.
+func logQuery(ctx context.Context, format string, args ...any) {
+	l := queryLog
+	if queryLogCoordinatorID != "" {
+		l = l.With("coordinator_id", queryLogCoordinatorID)
 	}
-	queryLog.Printf(format+" coordinator_id=%s", append(args, queryLogCoordinatorID)...)
+	l.InfoContext(ctx, fmt.Sprintf(format, args...))
 }

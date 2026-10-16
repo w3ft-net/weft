@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 func main() {
+	weftlog.Init(os.Stderr)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -17,7 +21,7 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 
-	log.Printf("weft starting on :%s", port)
+	weftlog.Infof(context.Background(), "weft starting on :%s", port)
 	if err := http.ListenAndServe(fmt.Sprintf(":%s", port), nil); err != nil {
 		log.Fatal(err)
 	}

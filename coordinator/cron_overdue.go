@@ -3,11 +3,11 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -100,7 +100,7 @@ func (ce *CronExecutor) overdueStep(ctx context.Context, g *overdueGuard, now ti
 		}
 		g.leaseCtx = leaseCtx
 	}
-	ce.overdueTick(g, now)
+	ce.overdueTick(ctx, g, now)
 	return true
 }
 
@@ -108,11 +108,11 @@ func (ce *CronExecutor) overdueStep(ctx context.Context, g *overdueGuard, now ti
 // recovered. A cron that stays overdue is not re-reported. Newly overdue crons
 // are paged as one message per org, so an outage that stops every cron at once
 // is one page per tenant and not one per cron.
-func (ce *CronExecutor) overdueTick(g *overdueGuard, now time.Time) {
+func (ce *CronExecutor) overdueTick(ctx context.Context, g *overdueGuard, now time.Time) {
 	var watches []store.CronWatch
-	err := ce.Store.DB().WithContext(store.WithoutTenantScope(context.Background())).Where("enabled = ?", true).Find(&watches).Error
+	err := ce.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Where("enabled = ?", true).Find(&watches).Error
 	if err != nil {
-		log.Printf("cron: overdue check failed to list watches: %v", err)
+		weftlog.Errorf(ctx, "cron: overdue check failed to list watches: %v", err)
 		return
 	}
 
@@ -131,13 +131,13 @@ func (ce *CronExecutor) overdueTick(g *overdueGuard, now time.Time) {
 			continue
 		}
 		g.active[o.watch.ID] = true
-		log.Printf("cron_overdue name=%s id=%d interval=%s age=%s", o.watch.Name, o.watch.ID, o.interval, o.age.Round(time.Second))
+		weftlog.Infof(ctx, "cron_overdue name=%s id=%d interval=%s age=%s", o.watch.Name, o.watch.ID, o.interval, o.age.Round(time.Second))
 		fresh[o.watch.OrgID] = append(fresh[o.watch.OrgID], o)
 	}
 	for id := range g.active {
 		if !seen[id] {
 			delete(g.active, id)
-			log.Printf("cron_overdue_cleared id=%d", id)
+			weftlog.Infof(ctx, "cron_overdue_cleared id=%d", id)
 		}
 	}
 
@@ -147,14 +147,14 @@ func (ce *CronExecutor) overdueTick(g *overdueGuard, now time.Time) {
 	}
 	sort.Slice(orgs, func(i, j int) bool { return orgs[i] < orgs[j] })
 	for _, org := range orgs {
-		ce.notifyOverdue(org, fresh[org], total[org])
+		ce.notifyOverdue(ctx, org, fresh[org], total[org])
 	}
 }
 
 // notifyOverdue pages one org about the crons that newly went overdue, through
 // the org's reserved `system` alias in its notify.yaml. An org that has not
 // defined it gets nothing; that is expected, so the failure is only logged.
-func (ce *CronExecutor) notifyOverdue(org store.OrgID, crons []overdueCron, totalOverdue int) {
+func (ce *CronExecutor) notifyOverdue(ctx context.Context, org store.OrgID, crons []overdueCron, totalOverdue int) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d cron(s) have not run for twice their interval:\n", len(crons))
 	for _, o := range crons {
@@ -171,7 +171,7 @@ func (ce *CronExecutor) notifyOverdue(org store.OrgID, crons []overdueCron, tota
 	if send == nil {
 		return
 	}
-	if err := send(org, store.SystemAlias, "cron-overdue", b.String()); err != nil {
-		log.Printf("cron_overdue not delivered for org %d: %v", org, err)
+	if err := send(ctx, org, store.SystemAlias, "cron-overdue", b.String()); err != nil {
+		weftlog.Infof(ctx, "cron_overdue not delivered for org %d: %v", org, err)
 	}
 }

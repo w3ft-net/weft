@@ -1,10 +1,11 @@
 package coordinator
 
 import (
-	"log"
+	"context"
 	"strconv"
 	"strings"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
@@ -58,7 +59,7 @@ func (r *IngestionErrorRecorder) Record(shardID, errMsg string, rows []*pb.LogRo
 		DLQPath:   dlqPath,
 	}:
 	default:
-		log.Printf("ingestion-errors: channel full, dropping error record for %s", shardID)
+		weftlog.Errorf(context.Background(), "ingestion-errors: channel full, dropping error record for %s", shardID)
 	}
 }
 
@@ -72,7 +73,7 @@ func (r *IngestionErrorRecorder) flush() {
 			"{"+strings.Join(ie.Customers, ",")+"}",
 			ie.DLQPath,
 		).Error; err != nil {
-			log.Printf("ingestion-errors: failed to persist: %v", err)
+			weftlog.Errorf(context.Background(), "ingestion-errors: failed to persist: %v", err)
 		}
 	}
 }

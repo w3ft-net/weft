@@ -1,12 +1,12 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +16,7 @@ import (
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/internal/release"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -65,13 +66,13 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 	// ingest/llmdetect.go.
 	namespaceID, appName := ns.ID, req.App
 	sampleJSON, _ := json.Marshal(req.Lines)
-	detection := ingest.ClassifyAsync(s.classifier, req.Lines, !req.Partial, func(d *ingest.Detection) {
+	detection := ingest.ClassifyAsync(r.Context(), s.classifier, req.Lines, !req.Partial, func(d *ingest.Detection) {
 		detectionJSON, err := json.Marshal(d)
 		if err != nil {
 			return
 		}
 		if err := s.store.UpdateLogGroupDetection(namespaceID, appName, string(sampleJSON), string(detectionJSON)); err != nil {
-			log.Printf("classify: update detection for %s/%s: %v", agent.Namespace, appName, err)
+			weftlog.Infof(r.Context(), "classify: update detection for %s/%s: %v", agent.Namespace, appName, err)
 		}
 	})
 	detectionJSON, _ := json.Marshal(detection)
@@ -317,7 +318,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	// no full sample yet, so it can't be configured.
 	lg, err := s.store.FindLogGroup(customer.ID, namespace, app)
 	if err != nil {
-		log.Printf("configure source %s/%s: FindLogGroup: %v", namespace, app, err)
+		weftlog.Infof(r.Context(), "configure source %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -402,7 +403,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	// weftd reads the schema on the agent. One that cannot interpret this
 	// schema would ignore it silently, so refuse it now, naming what is needed.
 	if minAgent := schema.MinAgentVersion(); minAgent != "" && lg.SourceType == store.SourceTypeWeftd {
-		if msg := s.agentsCannotReadSchema(lg.ID, minAgent); msg != "" {
+		if msg := s.agentsCannotReadSchema(r.Context(), lg.ID, minAgent); msg != "" {
 			http.Error(w, msg, http.StatusConflict)
 			return
 		}
@@ -410,7 +411,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 
 	schemaYAML, err := schema.ToYAML()
 	if err != nil {
-		log.Printf("configure source %s/%s: schema marshal: %v", namespace, app, err)
+		weftlog.Infof(r.Context(), "configure source %s/%s: schema marshal: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -421,7 +422,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	// ConfigureLogGroup also evicts this service's Valkey schema-cache
 	// entry (store/schema_cache.go) so every api/coordinator node's next
 	// ingest-time lookup picks up the new schema immediately.
-	if err := s.store.ConfigureLogGroup(ns.ID, app, string(schemaYAML)); err != nil {
+	if err := s.store.ConfigureLogGroup(r.Context(), ns.ID, app, string(schemaYAML)); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// The pending row disappeared between GetPendingLogGroup and
 			// the UPDATE — either a parallel configure won the race or
@@ -429,7 +430,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "source is no longer pending", http.StatusConflict)
 			return
 		}
-		log.Printf("configure source %s/%s: ConfigureLogGroup: %v", namespace, app, err)
+		weftlog.Infof(r.Context(), "configure source %s/%s: ConfigureLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -495,7 +496,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	}
 	fleets, err := s.store.RecentAgentsFor(weftdIDs, agentWindow)
 	if err != nil {
-		log.Printf("list sources: recent agents: %v", err)
+		weftlog.Infof(r.Context(), "list sources: recent agents: %v", err)
 	}
 	for _, lg := range shown {
 		var fleet *agentFleet
@@ -628,7 +629,7 @@ func (s *Server) handleResampleSource(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, store.ErrAlreadySampling):
 			http.Error(w, "a sample is already being collected for this source", http.StatusConflict)
 		default:
-			log.Printf("resample source %s/%s: RequestResample: %v", namespace, app, err)
+			weftlog.Infof(r.Context(), "resample source %s/%s: RequestResample: %v", namespace, app, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 		return
@@ -656,7 +657,7 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 
 	lg, err := s.store.FindLogGroup(session.ActiveOrgID, namespace, app)
 	if err != nil {
-		log.Printf("source schema %s/%s: FindLogGroup: %v", namespace, app, err)
+		weftlog.Infof(r.Context(), "source schema %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -753,10 +754,10 @@ const agentWindow = 7 * 24 * time.Hour
 // trusted with a schema that needs weftd minVersion, or "" if all of them can. An agent
 // that has never reported a version (one from before the field existed) counts
 // as unknown, not as capable.
-func (s *Server) agentsCannotReadSchema(logGroupID uint, minVersion string) string {
+func (s *Server) agentsCannotReadSchema(ctx context.Context, logGroupID uint, minVersion string) string {
 	agents, err := s.store.RecentAgents(logGroupID, agentWindow)
 	if err != nil {
-		log.Printf("recent agents for log group %d: %v", logGroupID, err)
+		weftlog.Infof(ctx, "recent agents for log group %d: %v", logGroupID, err)
 		return "could not check which agent versions read this source; try again"
 	}
 	oldest, n := store.OldestAgentVersion(agents)

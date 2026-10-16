@@ -14,11 +14,12 @@
 package notices
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -180,7 +181,7 @@ func NewQueue(s *store.Store, userID string) *Queue {
 // call now produces a notice on every request. That is the intended
 // trade: over-firing is a visible bug in the emitter rather than
 // something the storage layer silently absorbs.
-func (q *Queue) Maybe(key string) {
+func (q *Queue) Maybe(ctx context.Context, key string) {
 	if q == nil || q.userID == "" || q.store == nil {
 		return
 	}
@@ -195,7 +196,7 @@ func (q *Queue) Maybe(key string) {
 	}
 	q.signaled[key] = true
 	if err := q.store.EmitNotice(q.userID, key, string(tmpl.kind), nil); err != nil {
-		log.Printf("notices: emit %s for %s: %v", key, q.userID, err)
+		weftlog.Infof(ctx, "notices: emit %s for %s: %v", key, q.userID, err)
 	}
 }
 
@@ -208,7 +209,7 @@ func (q *Queue) Maybe(key string) {
 // a bounded one now: the row is per-instance, so a connection that drops
 // before the notice renders costs one missed render, not the only copy
 // the user was ever going to get.
-func (q *Queue) Drain() []Notice {
+func (q *Queue) Drain(ctx context.Context) []Notice {
 	if q == nil || q.userID == "" || q.store == nil {
 		return nil
 	}
@@ -217,7 +218,7 @@ func (q *Queue) Drain() []Notice {
 
 	pending, err := q.store.PendingNotices(q.userID)
 	if err != nil {
-		log.Printf("notices: load pending for %s: %v", q.userID, err)
+		weftlog.Infof(ctx, "notices: load pending for %s: %v", q.userID, err)
 		return nil
 	}
 
@@ -232,7 +233,7 @@ func (q *Queue) Drain() []Notice {
 		ids = append(ids, p.ID)
 	}
 	if err := q.store.MarkNoticesSeen(ids); err != nil {
-		log.Printf("notices: mark seen for %s: %v", q.userID, err)
+		weftlog.Infof(ctx, "notices: mark seen for %s: %v", q.userID, err)
 	}
 	if len(out) == 0 {
 		return nil

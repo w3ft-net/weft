@@ -2,9 +2,9 @@ package coordinator
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/alert"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 	"gorm.io/gorm"
 )
@@ -20,7 +21,7 @@ import (
 // Narrowed to an interface so tests can intercept Send without a live
 // HTTP endpoint. The concrete *Notifier satisfies it.
 type NotifyDispatcher interface {
-	Send(orgID store.OrgID, aliasName, watchName, body string) error
+	Send(ctx context.Context, orgID store.OrgID, aliasName, watchName, body string) error
 }
 
 // AlertContext provides the alert command with access to result history,
@@ -41,7 +42,7 @@ type AlertContext struct {
 // multi-row mode (-k set), each non-blank line of stdin is evaluated
 // independently, with the tag (if -t set) naming the row for per-tag
 // incident dedup.
-func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ctx *AlertContext) int {
+func AlertCommand(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ac *AlertContext) int {
 	data, _ := io.ReadAll(stdin)
 	stdout.Write(data)
 
@@ -65,7 +66,7 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 		case alert.IfNonzero:
 			fired = v != "0" && v != ""
 		}
-		return evaluateIfMode(fired, parsed, condStr, ctx, stderr)
+		return evaluateIfMode(ctx, fired, parsed, condStr, ac, stderr)
 	}
 
 	rows := splitAlertRows(string(data), parsed)
@@ -86,7 +87,7 @@ func AlertCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wr
 		if !parsed.Key.IsZero() && !parsed.Tag.IsZero() && r.tag == "" {
 			continue
 		}
-		rc := evaluateAlertRow(r, parsed, condStr, ctx, stderr)
+		rc := evaluateAlertRow(ctx, r, parsed, condStr, ac, stderr)
 		if rc > exit {
 			exit = rc
 		}
@@ -139,15 +140,15 @@ func splitAlertRows(data string, parsed *alert.Args) []alertRow {
 // evaluateAlertRow runs condition evaluation + dedup + dispatch for one row.
 // Returns 1 on a hard parse/eval error that the caller should propagate as
 // the exit code.
-func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *AlertContext, stderr io.Writer) int {
+func evaluateAlertRow(ctx context.Context, r alertRow, parsed *alert.Args, condStr string, ac *AlertContext, stderr io.Writer) int {
 	current, numErr := strconv.ParseFloat(r.value, 64)
 	isNumeric := numErr == nil
 
 	// Window aggregates (per-tag when we have one).
 	var stats store.CronAggStats
-	if parsed.Duration > 0 && ctx.Store != nil && ctx.Watch != nil {
+	if parsed.Duration > 0 && ac.Store != nil && ac.Watch != nil {
 		stats, _ = func(orgID store.OrgID, cronWatchID uint, since time.Time, tag string) (store.CronAggStats, error) {
-			since = store.ClampRetention(ctx.Store.TierForOrg(orgID), since)
+			since = store.ClampRetention(ac.Store.TierForOrg(orgID), since)
 			gran := store.PickGranularity(time.Since(since))
 
 			var row struct {
@@ -170,19 +171,19 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 				query += " AND tag = ?"
 				args = append(args, tag)
 			}
-			err := ctx.Store.DB().Raw(query, args...).Scan(&row).Error
+			err := ac.Store.DB().Raw(query, args...).Scan(&row).Error
 			return store.CronAggStats{Avg: row.Avg, Min: row.Min, Max: row.Max, Samples: row.Samples}, err
-		}(ctx.OrgID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
+		}(ac.OrgID, ac.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
 	}
 
 	// Previous tick's value for this same tag (changed/rising/falling).
 	var prevValue float64
 	var prevStdout string
 	var hasPrev bool
-	if ctx.Store != nil && ctx.Watch != nil {
-		results, err := ctx.Store.ListCronResults(ctx.Watch.ID, 2, r.tag)
+	if ac.Store != nil && ac.Watch != nil {
+		results, err := ac.Store.ListCronResults(ac.Watch.ID, 2, r.tag)
 		if err != nil {
-			log.Printf("alert: ListCronResults watch=%d tag=%q: %v", ctx.Watch.ID, r.tag, err)
+			weftlog.Infof(ctx, "alert: ListCronResults watch=%d tag=%q: %v", ac.Watch.ID, r.tag, err)
 		}
 		if len(results) >= 2 {
 			prevStdout = strings.TrimSpace(results[1].Stdout)
@@ -268,9 +269,9 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 	case alert.Absent:
 		if parsed.Duration == 0 {
 			triggered = r.value == ""
-		} else if ctx.Store != nil && ctx.Watch != nil {
+		} else if ac.Store != nil && ac.Watch != nil {
 			n, _ := func(orgID store.OrgID, cronWatchID uint, since time.Time, tag string) (int, error) {
-				since = store.ClampRetention(ctx.Store.TierForOrg(orgID), since)
+				since = store.ClampRetention(ac.Store.TierForOrg(orgID), since)
 				var n int64
 				query := `
 					SELECT COUNT(*) FROM cron_results
@@ -280,9 +281,9 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 					query += " AND tag = ?"
 					args = append(args, tag)
 				}
-				err := ctx.Store.DB().Raw(query, args...).Scan(&n).Error
+				err := ac.Store.DB().Raw(query, args...).Scan(&n).Error
 				return int(n), err
-			}(ctx.OrgID, ctx.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
+			}(ac.OrgID, ac.Watch.ID, time.Now().Add(-parsed.Duration), r.tag)
 			triggered = n == 0
 		} else {
 			triggered = r.value == ""
@@ -333,8 +334,8 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 	if !triggered {
 		// Still close any open incident for this (watch, condition, tag) —
 		// condition cleared.
-		if ctx.Watch != nil && ctx.Store != nil {
-			checkIncident(ctx.Store, ctx.Watch.ID, condStr, r.tag, false)
+		if ac.Watch != nil && ac.Store != nil {
+			checkIncident(ctx, ac.Store, ac.Watch.ID, condStr, r.tag, false)
 		}
 		return 0
 	}
@@ -342,8 +343,8 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 	msg := parsed.Msg
 	if msg == "" {
 		prefix := "weft"
-		if ctx.Watch != nil {
-			prefix = ctx.Watch.Name
+		if ac.Watch != nil {
+			prefix = ac.Watch.Name
 		}
 		if r.tag != "" {
 			prefix = prefix + "[" + r.tag + "]"
@@ -352,23 +353,23 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 	}
 
 	shouldDispatch := true
-	if ctx.Watch != nil && ctx.Store != nil {
-		shouldDispatch = checkIncident(ctx.Store, ctx.Watch.ID, condStr, r.tag, true)
+	if ac.Watch != nil && ac.Store != nil {
+		shouldDispatch = checkIncident(ctx, ac.Store, ac.Watch.ID, condStr, r.tag, true)
 	}
 
 	fmt.Fprintln(stderr, msg)
 
-	if shouldDispatch && parsed.Notify != "" && ctx.Notifier != nil {
+	if shouldDispatch && parsed.Notify != "" && ac.Notifier != nil {
 		// Dispatch the formatted alert message (what the shell prints to
 		// stderr), not the raw triggering row — Slack/PagerDuty users
 		// want "watchname[tag]: 5.12 > 5.00", not "5.12 disk" on its own.
 		body := truncateAlertBody(msg)
-		watchName, orgID := ctx.dispatchIdentity(r.tag)
-		if err := ctx.Notifier.Send(orgID, parsed.Notify, watchName, body); err != nil {
+		watchName, orgID := ac.dispatchIdentity(r.tag)
+		if err := ac.Notifier.Send(ctx, orgID, parsed.Notify, watchName, body); err != nil {
 			fmt.Fprintf(stderr, "alert: dispatch to %q failed: %v\n", parsed.Notify, err)
 			return 1
 		}
-	} else if parsed.Notify != "" && ctx.Notifier == nil && ctx.Interactive {
+	} else if parsed.Notify != "" && ac.Notifier == nil && ac.Interactive {
 		fmt.Fprintf(stderr, "alert: notifier unavailable — would dispatch to %q\n", parsed.Notify)
 	}
 	return 0
@@ -379,15 +380,15 @@ func evaluateAlertRow(r alertRow, parsed *alert.Args, condStr string, ctx *Alert
 // ensures every invocation creates its own PagerDuty incident. When a tag
 // is set, it's appended to the watch name so PagerDuty sees per-tag
 // incidents collapse into per-tag dedup keys, not one watch-wide key.
-func (ctx *AlertContext) dispatchIdentity(tag string) (string, store.OrgID) {
-	if ctx.Watch != nil {
-		name := ctx.Watch.Name
+func (ac *AlertContext) dispatchIdentity(tag string) (string, store.OrgID) {
+	if ac.Watch != nil {
+		name := ac.Watch.Name
 		if tag != "" {
 			name = name + "[" + tag + "]"
 		}
-		return name, ctx.Watch.OrgID
+		return name, ac.Watch.OrgID
 	}
-	return fmt.Sprintf("adhoc-%d", time.Now().UnixNano()), ctx.OrgID
+	return fmt.Sprintf("adhoc-%d", time.Now().UnixNano()), ac.OrgID
 }
 
 func truncateAlertBody(s string) string {
@@ -404,10 +405,10 @@ func truncateAlertBody(s string) string {
 // evaluateAlertRow so a composite predicate watch behaves identically
 // to a stdin-condition watch — alerts open when the predicate trips,
 // close when it stops tripping.
-func evaluateIfMode(triggered bool, parsed *alert.Args, condStr string, ctx *AlertContext, stderr io.Writer) int {
+func evaluateIfMode(ctx context.Context, triggered bool, parsed *alert.Args, condStr string, ac *AlertContext, stderr io.Writer) int {
 	if !triggered {
-		if ctx.Watch != nil && ctx.Store != nil {
-			checkIncident(ctx.Store, ctx.Watch.ID, condStr, "", false)
+		if ac.Watch != nil && ac.Store != nil {
+			checkIncident(ctx, ac.Store, ac.Watch.ID, condStr, "", false)
 		}
 		return 0
 	}
@@ -415,8 +416,8 @@ func evaluateIfMode(triggered bool, parsed *alert.Args, condStr string, ctx *Ale
 	msg := parsed.Msg
 	if msg == "" {
 		prefix := "weft"
-		if ctx.Watch != nil {
-			prefix = ctx.Watch.Name
+		if ac.Watch != nil {
+			prefix = ac.Watch.Name
 		}
 		mode := "if-zero"
 		if parsed.IfMode == alert.IfNonzero {
@@ -426,20 +427,20 @@ func evaluateIfMode(triggered bool, parsed *alert.Args, condStr string, ctx *Ale
 	}
 
 	shouldDispatch := true
-	if ctx.Watch != nil && ctx.Store != nil {
-		shouldDispatch = checkIncident(ctx.Store, ctx.Watch.ID, condStr, "", true)
+	if ac.Watch != nil && ac.Store != nil {
+		shouldDispatch = checkIncident(ctx, ac.Store, ac.Watch.ID, condStr, "", true)
 	}
 
 	fmt.Fprintln(stderr, msg)
 
-	if shouldDispatch && parsed.Notify != "" && ctx.Notifier != nil {
+	if shouldDispatch && parsed.Notify != "" && ac.Notifier != nil {
 		body := truncateAlertBody(msg)
-		watchName, orgID := ctx.dispatchIdentity("")
-		if err := ctx.Notifier.Send(orgID, parsed.Notify, watchName, body); err != nil {
+		watchName, orgID := ac.dispatchIdentity("")
+		if err := ac.Notifier.Send(ctx, orgID, parsed.Notify, watchName, body); err != nil {
 			fmt.Fprintf(stderr, "alert: dispatch to %q failed: %v\n", parsed.Notify, err)
 			return 1
 		}
-	} else if parsed.Notify != "" && ctx.Notifier == nil && ctx.Interactive {
+	} else if parsed.Notify != "" && ac.Notifier == nil && ac.Interactive {
 		fmt.Fprintf(stderr, "alert: notifier unavailable — would dispatch to %q\n", parsed.Notify)
 	}
 	return 0
@@ -448,7 +449,7 @@ func evaluateIfMode(triggered bool, parsed *alert.Args, condStr string, ctx *Ale
 // checkIncident manages per-tag incident dedup. Returns true if this is a
 // NEW incident and dispatch should fire; false if an incident is already
 // open (suppress) or the condition cleared (close).
-func checkIncident(s *store.Store, watchID uint, condition, tag string, triggered bool) bool {
+func checkIncident(ctx context.Context, s *store.Store, watchID uint, condition, tag string, triggered bool) bool {
 	existing, err := func() (*store.AlertIncident, error) {
 		var inc store.AlertIncident
 		err := s.DB().Where("cron_watch_id = ? AND condition = ? AND tag = ? AND closed_at IS NULL",
@@ -464,7 +465,7 @@ func checkIncident(s *store.Store, watchID uint, condition, tag string, triggere
 	if err != nil {
 		// A swallow here would silently double-fire on every tick;
 		// log loudly so we can spot DB-side regressions.
-		log.Printf("alert: OpenIncident watch=%d condition=%q tag=%q: %v", watchID, condition, tag, err)
+		weftlog.Infof(ctx, "alert: OpenIncident watch=%d condition=%q tag=%q: %v", watchID, condition, tag, err)
 	}
 	if triggered {
 		if existing != nil {

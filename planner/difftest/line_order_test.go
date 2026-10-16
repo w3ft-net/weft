@@ -1,6 +1,7 @@
 package difftest
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -33,7 +34,7 @@ func TestLineOrderAcrossShards(t *testing.T) {
 	h := newHarness(t, nil, 2)
 	// Interleave the events across shards so every ts tie spans both.
 	for sh, rows := range [][]*pb.LogRow{append(append(append([]*pb.LogRow{}, a...), e...), c...), append(append([]*pb.LogRow{}, b...), d...)} {
-		if err := h.shards[sh].Ingest(rows, nil); err != nil {
+		if err := h.shards[sh].Ingest(context.Background(), rows, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

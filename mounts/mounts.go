@@ -4,6 +4,7 @@
 package mounts
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 
@@ -24,7 +25,7 @@ func denyWrite(dir, group string) error {
 
 // NoticeSink is the narrow interface mounts use to signal one-time notices.
 type NoticeSink interface {
-	Maybe(noticeKey string)
+	Maybe(ctx context.Context, noticeKey string)
 }
 
 // Config holds the shared state that mount implementations need.
@@ -46,6 +47,20 @@ type Config struct {
 	CanCreateNamespaces bool
 	LogServices         []string
 	NoticeQueue         NoticeSink
+	// Ctx is the request context the mounts run under. warp's Mount
+	// interface is ctx-less, so the per-request Config carries it
+	// (detached from cancellation by the embedder) to keep the trace
+	// ID on store calls, logs and notice emission. Nil means no request
+	// (tests, boot) and falls back to context.Background().
+	Ctx context.Context
+}
+
+// ctx returns the request context, or Background when none was bound.
+func (c Config) ctx() context.Context {
+	if c.Ctx == nil {
+		return context.Background()
+	}
+	return c.Ctx
 }
 
 // OrgPerms is the org-scoped permission bundle a session carries. The

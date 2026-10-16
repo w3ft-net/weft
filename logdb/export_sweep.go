@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
+
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // The archive sweeper is the backstop for the ephemeral archive export
@@ -133,7 +134,7 @@ func (s *ArchiveSweeper) SweepExportOnce(ctx context.Context) (int, error) {
 			continue
 		}
 		deleted++
-		log.Printf("archive-sweep: removed orphaned export %s %s (shard %s attempt %d): %s", r.Kind, r.ID, r.ShardID, r.Attempt, reason)
+		weftlog.Infof(ctx, "archive-sweep: removed orphaned export %s %s (shard %s attempt %d): %s", r.Kind, r.ID, r.ShardID, r.Attempt, reason)
 	}
 	return deleted, errors.Join(errs...)
 }
@@ -149,7 +150,7 @@ func (s *ArchiveSweeper) RunOnce(ctx context.Context) error {
 		errs = append(errs, fmt.Errorf("find stuck archives: %w", err))
 	}
 	for _, sh := range stuck {
-		log.Printf("ALERT archiving-stuck shard=%s age=%s export_attempts=%d: still ARCHIVING; see the shardsm and archive lines for this shard",
+		weftlog.Infof(ctx, "ALERT archiving-stuck shard=%s age=%s export_attempts=%d: still ARCHIVING; see the shardsm and archive lines for this shard",
 			sh.ShardID, s.Clock().Sub(sh.Since).Round(time.Minute), sh.Attempts)
 	}
 	if _, err := s.SweepExportOnce(ctx); err != nil {
@@ -173,7 +174,7 @@ func (s *ArchiveSweeper) Start(ctx context.Context) {
 				return
 			case <-t.C:
 				if err := s.RunOnce(ctx); err != nil {
-					log.Printf("archive-sweep: %v", err)
+					weftlog.Infof(ctx, "archive-sweep: %v", err)
 				}
 			}
 		}

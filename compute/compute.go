@@ -2,9 +2,9 @@ package compute
 
 import (
 	"context"
-	"log"
 	"sync"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 )
@@ -33,7 +33,7 @@ type Executor interface {
 // handle, or consult a registered Resolver override. FanOutToShards
 // is otherwise oblivious to where the handle came from — the boundary
 // is "give me something I can call QueryToSink on."
-type ResolveShardFunc func(d *pb.ShardDescriptor) (shard.Shard, error)
+type ResolveShardFunc func(ctx context.Context, d *pb.ShardDescriptor) (shard.Shard, error)
 
 // FanOutToShards turns each descriptor into a handle (via resolve),
 // runs QueryToSink concurrently, and waits. The resolver owns
@@ -50,9 +50,9 @@ func FanOutToShards(ctx context.Context, req *pb.ExecuteQueryRequest, job shard.
 	for _, desc := range req.Shards {
 		go func(d *pb.ShardDescriptor) {
 			defer wg.Done()
-			sh, err := resolve(d)
+			sh, err := resolve(ctx, d)
 			if err != nil {
-				log.Printf("execute-query: resolve shard %s: %v", d.ShardId, err)
+				weftlog.Infof(ctx, "execute-query: resolve shard %s: %v", d.ShardId, err)
 				job.SendSentinel(d.ShardId)
 				return
 			}

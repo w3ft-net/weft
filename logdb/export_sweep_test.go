@@ -3,15 +3,14 @@
 package logdb
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"log"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -273,14 +272,5 @@ func TestShardStore_StuckArchiving(t *testing.T) {
 // captureTestLog returns everything the std logger wrote while fn ran.
 func captureTestLog(t *testing.T, fn func()) string {
 	t.Helper()
-	var buf bytes.Buffer
-	prevOut, prevFlags := log.Writer(), log.Flags()
-	log.SetOutput(&buf)
-	log.SetFlags(0)
-	defer func() {
-		log.SetOutput(prevOut)
-		log.SetFlags(prevFlags)
-	}()
-	fn()
-	return buf.String()
+	return weftlog.Capture(fn)
 }

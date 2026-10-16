@@ -61,14 +61,14 @@ func (f *TailFanout) Subscribe(ctx context.Context, matcher *RowMatcher) (uint64
 	first := f.refs[t] == 1
 	f.mu.Unlock()
 	if first {
-		f.redis.announceInterest(t, true)
+		f.redis.announceInterest(ctx, t, true)
 	}
 	return id, ch
 }
 
 // Unsubscribe needs matcher (unlike TailBroker.Unsubscribe(id)) to know
 // which topic's refcount to decrement.
-func (f *TailFanout) Unsubscribe(id uint64, matcher *RowMatcher) {
+func (f *TailFanout) Unsubscribe(ctx context.Context, id uint64, matcher *RowMatcher) {
 	f.broker.Unsubscribe(id)
 	if f.redis == nil {
 		return
@@ -82,7 +82,7 @@ func (f *TailFanout) Unsubscribe(id uint64, matcher *RowMatcher) {
 	}
 	f.mu.Unlock()
 	if last {
-		f.redis.announceInterest(t, false)
+		f.redis.announceInterest(ctx, t, false)
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/coordinator/onboarding"
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/notices"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -73,11 +73,11 @@ func nextOnboardingStep(current string) string {
 // returns nil — the user signs up successfully and their welcome
 // modal will just point at an org they can't switch into. Better
 // than failing the signup outright.
-func (s *Server) grantLoomMembership(userID, email string) error {
+func (s *Server) grantLoomMembership(ctx context.Context, userID, email string) error {
 	cust, err := s.store.GetOrgByName(LoomCustomerSlug)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			log.Printf("onboarding: Loom customer not seeded; skipping membership grant for %s", email)
+			weftlog.Infof(ctx, "onboarding: Loom customer not seeded; skipping membership grant for %s", email)
 			return nil
 		}
 		return err
@@ -85,7 +85,7 @@ func (s *Server) grantLoomMembership(userID, email string) error {
 	ns, err := s.store.GetNamespace(cust.ID, LoomDemoNamespace)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			log.Printf("onboarding: Loom namespace not seeded; skipping namespace permission for %s", email)
+			weftlog.Infof(ctx, "onboarding: Loom namespace not seeded; skipping namespace permission for %s", email)
 			// Still create the team_member row — the user can at
 			// least switch into Loom; no readable namespaces yet
 			// just means they see a quiet org.
@@ -114,7 +114,7 @@ func (s *Server) grantLoomMembership(userID, email string) error {
 // queries). Called from handleOnboardingAdvance when the step
 // transitions to 'done'. Idempotent — re-running on an already-
 // graduated user is a no-op.
-func (s *Server) graduateOnboarding(userID string) error {
+func (s *Server) graduateOnboarding(ctx context.Context, userID string) error {
 	cust, err := s.store.GetOrgByName(LoomCustomerSlug)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -127,7 +127,7 @@ func (s *Server) graduateOnboarding(userID string) error {
 	// org and user; a user_id-only update here is not narrowed to Loom by
 	// the org context and deactivates every membership the user holds,
 	// including their own org.
-	if err := s.store.Orgs.RemoveMember(context.Background(), cust.ID.String(), userID); err != nil {
+	if err := s.store.Orgs.RemoveMember(ctx, cust.ID.String(), userID); err != nil {
 		return err
 	}
 
@@ -163,10 +163,10 @@ const GraduationNoticeKey = notices.KeyOnboardingGraduated
 // pendingGraduationIDs returns the user's undelivered graduation notice
 // rows. Empty means the banner has nothing to show — either it was never
 // emitted or it has already been delivered, here or in the shell.
-func (s *Server) pendingGraduationIDs(userID string) []int64 {
+func (s *Server) pendingGraduationIDs(ctx context.Context, userID string) []int64 {
 	pending, err := s.store.PendingNotices(userID)
 	if err != nil {
-		log.Printf("notices: pending for %s: %v", userID, err)
+		weftlog.Infof(ctx, "notices: pending for %s: %v", userID, err)
 		return nil
 	}
 	var ids []int64
@@ -183,7 +183,7 @@ func (s *Server) pendingGraduationIDs(userID string) []int64 {
 // it marks nothing and still reports success.
 func (s *Server) handleGraduationNoticeSeen(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if err := s.store.MarkNoticesSeen(s.pendingGraduationIDs(session.UserID)); err != nil {
+	if err := s.store.MarkNoticesSeen(s.pendingGraduationIDs(r.Context(), session.UserID)); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -217,8 +217,8 @@ func (s *Server) handleOnboardingAdvance(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if advanced && next == "done" {
-		if err := s.graduateOnboarding(session.UserID); err != nil {
-			log.Printf("onboarding: graduate %s: %v", session.UserID, err)
+		if err := s.graduateOnboarding(r.Context(), session.UserID); err != nil {
+			weftlog.Infof(r.Context(), "onboarding: graduate %s: %v", session.UserID, err)
 			http.Error(w, "graduation failed", http.StatusInternalServerError)
 			return
 		}
@@ -271,7 +271,7 @@ func (s *Server) handleShellBuiltin(w http.ResponseWriter, r *http.Request) {
 	if req.Event == "modal_closed" {
 		trigger = onboarding.TriggerModalClosed
 	}
-	if newStep, prompt, advanced := s.maybeAdvanceShellLesson(session, req.Pipeline, req.ExitCode, trigger); advanced {
+	if newStep, prompt, advanced := s.maybeAdvanceShellLesson(r.Context(), session, req.Pipeline, req.ExitCode, trigger); advanced {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"step":   newStep,
@@ -299,22 +299,22 @@ func (s *Server) handleShellBuiltin(w http.ResponseWriter, r *http.Request) {
 //
 // trigger is what was observed; onboarding.CompletesOn decides whether it
 // completes the current lesson.
-func (s *Server) maybeAdvanceShellLesson(session *auth.Session, pipeline string, exitCode *int, trigger onboarding.Trigger) (newStep, prompt string, advanced bool) {
+func (s *Server) maybeAdvanceShellLesson(ctx context.Context, session *auth.Session, pipeline string, exitCode *int, trigger onboarding.Trigger) (newStep, prompt string, advanced bool) {
 	if session == nil || session.ActiveCustomerName != LoomCustomerSlug {
-		log.Printf("onboarding: skip — active org is %q, not loom", session.ActiveCustomerName)
+		weftlog.Infof(ctx, "onboarding: skip — active org is %q, not loom", session.ActiveCustomerName)
 		return "", "", false
 	}
 	user, err := s.store.GetUserByID(session.UserID)
 	if err != nil || user == nil {
-		log.Printf("onboarding: skip — user lookup failed: %v", err)
+		weftlog.Errorf(ctx, "onboarding: skip — user lookup failed: %v", err)
 		return "", "", false
 	}
 	if user.OnboardingDismissed {
-		log.Printf("onboarding: skip — dismissed")
+		weftlog.Infof(ctx, "onboarding: skip — dismissed")
 		return "", "", false
 	}
 	current := user.OnboardingStep
-	log.Printf("onboarding: step=%q pipeline=%q match=%v", current, pipeline, onboarding.CheckPipeline(current, pipeline))
+	weftlog.Infof(ctx, "onboarding: step=%q pipeline=%q match=%v", current, pipeline, onboarding.CheckPipeline(current, pipeline))
 	if !onboarding.CheckPipeline(current, pipeline) {
 		return "", "", false
 	}
@@ -322,7 +322,7 @@ func (s *Server) maybeAdvanceShellLesson(session *auth.Session, pipeline string,
 		return "", "", false
 	}
 	if exitCode != nil && !onboarding.AdvancesOnExit(current, *exitCode) {
-		log.Printf("onboarding: step=%q exit=%d — not advancing", current, *exitCode)
+		weftlog.Infof(ctx, "onboarding: step=%q exit=%d — not advancing", current, *exitCode)
 		return "", "", false
 	}
 	next := nextOnboardingStep(current)
@@ -331,15 +331,15 @@ func (s *Server) maybeAdvanceShellLesson(session *auth.Session, pipeline string,
 	}
 	advanced, err = s.store.AdvanceOnboardingStep(user.ID, current, next)
 	if err != nil {
-		log.Printf("onboarding: shell advance %s→%s for %s: %v", current, next, user.ID, err)
+		weftlog.Infof(ctx, "onboarding: shell advance %s→%s for %s: %v", current, next, user.ID, err)
 		return "", "", false
 	}
 	if !advanced {
 		return "", "", false
 	}
 	if next == "done" {
-		if err := s.graduateOnboarding(user.ID); err != nil {
-			log.Printf("onboarding: graduate from shell hook for %s: %v", user.ID, err)
+		if err := s.graduateOnboarding(ctx, user.ID); err != nil {
+			weftlog.Infof(ctx, "onboarding: graduate from shell hook for %s: %v", user.ID, err)
 		}
 	}
 	return next, onboarding.PromptFor(next), true

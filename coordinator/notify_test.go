@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -31,7 +32,7 @@ func TestSendWebhook(t *testing.T) {
 		Headers: map[string]string{"X-Signing-Secret": "test-secret"},
 	}
 
-	if err := n.sendWebhook("ops", "error-rate", target, "error-rate: 127 (above 50)"); err != nil {
+	if err := n.sendWebhook(context.Background(), "ops", "error-rate", target, "error-rate: 127 (above 50)"); err != nil {
 		t.Fatalf("sendWebhook: %v", err)
 	}
 
@@ -64,7 +65,7 @@ func TestSendWebhookNon2xx(t *testing.T) {
 	n := NewNotifier(nil, nil)
 
 	target := store.WebhookTarget{URL: srv.URL}
-	err := n.sendWebhook("ops", "error-rate", target, "test")
+	err := n.sendWebhook(context.Background(), "ops", "error-rate", target, "test")
 	if err == nil {
 		t.Fatal("expected error for non-2xx response")
 	}
@@ -73,7 +74,7 @@ func TestSendWebhookNon2xx(t *testing.T) {
 func TestSendEmailNoConfig(t *testing.T) {
 	n := NewNotifier(nil, nil)
 	target := store.EmailTarget{Address: "test@example.com"}
-	err := n.sendEmail("error-rate", target, "test body")
+	err := n.sendEmail(context.Background(), "error-rate", target, "test body")
 	if err == nil {
 		t.Fatal("expected error when no email config")
 	}

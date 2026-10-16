@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/weftd"
 )
 
@@ -45,7 +45,7 @@ func configureCheckpointing(c CheckpointConfig) time.Duration {
 		shipCfg.commitInterval = c.CommitInterval
 	}
 	if !c.enabled() {
-		log.Printf("checkpoint: disabled by config; files are tailed from EOF on every start")
+		weftlog.Infof(context.Background(), "checkpoint: disabled by config; files are tailed from EOF on every start")
 		return flush
 	}
 
@@ -57,7 +57,7 @@ func configureCheckpointing(c CheckpointConfig) time.Duration {
 	if c.MaxResumeBytes != "" {
 		n, err := parseByteSize(c.MaxResumeBytes)
 		if err != nil {
-			log.Printf("checkpoint: max_resume_bytes %q: %v — using the default", c.MaxResumeBytes, err)
+			weftlog.Infof(context.Background(), "checkpoint: max_resume_bytes %q: %v — using the default", c.MaxResumeBytes, err)
 		} else {
 			opts.MaxResumeBytes = n
 		}
@@ -65,12 +65,12 @@ func configureCheckpointing(c CheckpointConfig) time.Duration {
 	store, err := weftd.OpenCheckpointStore(dir, opts)
 	switch {
 	case errors.Is(err, weftd.ErrCheckpointLocked):
-		log.Printf("checkpoint: %s is locked by another weftd — running with checkpointing disabled", dir)
+		weftlog.Infof(context.Background(), "checkpoint: %s is locked by another weftd — running with checkpointing disabled", dir)
 	case err != nil:
-		log.Printf("checkpoint: cannot use %s: %v — running with checkpointing disabled", dir, err)
+		weftlog.Infof(context.Background(), "checkpoint: cannot use %s: %v — running with checkpointing disabled", dir, err)
 	default:
 		checkpoints = store
-		log.Printf("checkpoint: state in %s", dir)
+		weftlog.Infof(context.Background(), "checkpoint: state in %s", dir)
 	}
 	return flush
 }
@@ -87,7 +87,7 @@ func runCheckpointStatsReporter(ctx context.Context) {
 		case <-t.C:
 		}
 		for path, c := range checkpoints.Stats() {
-			log.Printf("checkpoint stats [%s]: resumed=%d new_file=%d rotated_while_down=%d truncated=%d skipped_bytes=%d",
+			weftlog.Infof(ctx, "checkpoint stats [%s]: resumed=%d new_file=%d rotated_while_down=%d truncated=%d skipped_bytes=%d",
 				path, c.Resumed, c.NewFile, c.RotatedWhileDown, c.Truncated, c.SkippedBytes)
 		}
 	}

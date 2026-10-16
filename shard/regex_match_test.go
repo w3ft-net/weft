@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"testing"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -37,7 +38,7 @@ func TestDuckDB_RegexpMatches_PinsPushdownContract(t *testing.T) {
 		{Raw: "2026-03-28T10:00:05 INFO vimgym i-001 request completed", CustomerId: 1, Namespace: "vimgym", TsUnixNs: 2},
 		{Raw: "2026-03-28T10:00:09 DEBUG vimgym i-001 cache miss", CustomerId: 1, Namespace: "vimgym", TsUnixNs: 3},
 	}
-	if err := s.Ingest(rows, nil); err != nil {
+	if err := s.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
@@ -75,7 +76,7 @@ func TestDuckDB_RegexpMatches_PinsPushdownContract(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := s.Query(tc.sql)
+			got, err := s.Query(context.Background(), tc.sql)
 			if err != nil {
 				t.Fatalf("query: %v", err)
 			}

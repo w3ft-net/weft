@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -29,7 +30,7 @@ func TestResampleOfConfiguredSourceIsVisible(t *testing.T) {
 	if err := s.UpsertPendingLogGroup(ns.ID, "api", "i", "d", `["a"]`, `{}`, 1, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ConfigureLogGroup(ns.ID, "api", "app: api\nformat: text\n"); err != nil {
+	if err := s.ConfigureLogGroup(context.Background(), ns.ID, "api", "app: api\nformat: text\n"); err != nil {
 		t.Fatal(err)
 	}
 

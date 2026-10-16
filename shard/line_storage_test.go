@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -25,7 +26,7 @@ func TestIngest_EventLineColumnsRoundTrip(t *testing.T) {
 		{Raw: "ValueError", CustomerId: 1, TsUnixNs: 1000, EventId: testEventID, LineNo: 1},
 		{Raw: "plain", CustomerId: 1, TsUnixNs: 2000},
 	}
-	if err := ds.Ingest(rows, nil); err != nil {
+	if err := ds.Ingest(context.Background(), rows, nil); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 
@@ -65,7 +66,7 @@ func TestIngest_BadEventIDFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ds.Close()
-	err = ds.Ingest([]*pb.LogRow{{Raw: "x", CustomerId: 1, EventId: "not-a-uuid"}}, nil)
+	err = ds.Ingest(context.Background(), []*pb.LogRow{{Raw: "x", CustomerId: 1, EventId: "not-a-uuid"}}, nil)
 	if err == nil {
 		t.Fatal("want an error for an unparseable event_id")
 	}
@@ -91,7 +92,7 @@ func TestNewDuckDBShard_MigratesEventLineColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ds.Close()
-	if err := ds.Ingest([]*pb.LogRow{{Raw: "a", CustomerId: 1, EventId: testEventID, LineNo: 3}}, nil); err != nil {
+	if err := ds.Ingest(context.Background(), []*pb.LogRow{{Raw: "a", CustomerId: 1, EventId: testEventID, LineNo: 3}}, nil); err != nil {
 		t.Fatalf("ingest after migration: %v", err)
 	}
 	var n int

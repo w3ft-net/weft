@@ -207,7 +207,7 @@ func newHarness(t *testing.T, rows []*pb.LogRow, nShards int) *harness {
 		for j := i; j < len(rows); j += nShards {
 			part = append(part, rows[j])
 		}
-		if err := sh.Ingest(part, nil); err != nil {
+		if err := sh.Ingest(context.Background(), part, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -290,7 +290,7 @@ func (h *harness) dispatch(req *pb.ExecuteQueryRequest) (string, error) {
 	// A shard that fails its SQL just ends its stream, so check the SQL
 	// first or an error would look like an empty result.
 	for _, sh := range h.shards {
-		if _, err := sh.Query(req.Sql, toAny(req.Args)...); err != nil {
+		if _, err := sh.Query(context.Background(), req.Sql, toAny(req.Args)...); err != nil {
 			return "", fmt.Errorf("shard SQL %s: %w", req.Sql, err)
 		}
 		req.Shards = append(req.Shards, &pb.ShardDescriptor{ShardId: sh.ID()})

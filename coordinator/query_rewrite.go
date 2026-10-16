@@ -142,10 +142,11 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 						fmt.Fprintf(stderr, "query: %v\n", err)
 						return 1
 					}
-					// Draining an already-produced in-memory stream, not a
-					// network call — deliberately not the propagated ctx
-					// above (renamed to avoid the two meanings colliding).
-					drainCtx := context.Background()
+					// Draining an already-produced stream: the values (trace
+					// ID) of the propagated ctx above are kept, but its
+					// cancellation is deliberately detached (renamed to avoid
+					// the two meanings colliding).
+					drainCtx := context.WithoutCancel(ctx)
 					for {
 						line, ok, err := result.Stream.Next(drainCtx)
 						if err != nil {

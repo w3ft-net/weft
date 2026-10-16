@@ -1,8 +1,10 @@
 package store
 
 import (
-	"log"
+	"context"
 	"time"
+
+	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // LogEvaluateEvent emits one structured line per bucket/shard FSM Evaluate
@@ -13,10 +15,10 @@ import (
 // clean Evaluate.
 func LogEvaluateEvent(kind, id string, dur time.Duration, err error) {
 	if err != nil {
-		log.Printf("evaluate_event kind=%s id=%s duration_ms=%d err=%q", kind, id, dur.Milliseconds(), err)
+		weftlog.Infof(context.Background(), "evaluate_event kind=%s id=%s duration_ms=%d err=%q", kind, id, dur.Milliseconds(), err)
 		return
 	}
-	log.Printf("evaluate_event kind=%s id=%s duration_ms=%d", kind, id, dur.Milliseconds())
+	weftlog.Infof(context.Background(), "evaluate_event kind=%s id=%s duration_ms=%d", kind, id, dur.Milliseconds())
 }
 
 // LogEvaluateTick emits one line per evaluateStateMachines tick with the
@@ -26,7 +28,7 @@ func LogEvaluateEvent(kind, id string, dur time.Duration, err error) {
 // disprove the known sequential-evaluation gap (one slow shard blocking
 // convergence fleet-wide, docs/known-issues.md) under real load.
 func LogEvaluateTick(buckets, shards int, dur time.Duration) {
-	log.Printf("evaluate_tick buckets=%d shards=%d duration_ms=%d", buckets, shards, dur.Milliseconds())
+	weftlog.Infof(context.Background(), "evaluate_tick buckets=%d shards=%d duration_ms=%d", buckets, shards, dur.Milliseconds())
 }
 
 // LogTailFanoutEvent emits one structured line per Redis TailFanout health
@@ -37,10 +39,10 @@ func LogEvaluateTick(buckets, shards int, dur time.Duration) {
 // (docs/plans/coordinator-scaling-live-testing.md phase 3). op is a short
 // verb (connect, psubscribe, punsubscribe, publish, unmarshal). err is nil
 // for a clean event such as "connect".
-func LogTailFanoutEvent(op string, err error) {
+func LogTailFanoutEvent(ctx context.Context, op string, err error) {
 	if err != nil {
-		log.Printf("tailfanout_event op=%s err=%q", op, err)
+		weftlog.Infof(ctx, "tailfanout_event op=%s err=%q", op, err)
 		return
 	}
-	log.Printf("tailfanout_event op=%s", op)
+	weftlog.Infof(ctx, "tailfanout_event op=%s", op)
 }

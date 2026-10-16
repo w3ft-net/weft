@@ -81,7 +81,7 @@ func TestValidateClassification_AcceptsVerifiedCandidate(t *testing.T) {
 	tool := &classifyToolResponse{
 		Level: &tagField{Present: true, FieldIndex: 1, ExtractPattern: `level=(\S+)`, SampleValue: "SEVERE"},
 	}
-	got := validateClassification(tool, lines)
+	got := validateClassification(context.Background(), tool, lines)
 	if got.Level == nil {
 		t.Fatal("expected a verified level candidate, got nil")
 	}
@@ -102,7 +102,7 @@ func TestValidateClassification_DropsUnverifiedCandidate(t *testing.T) {
 	tool := &classifyToolResponse{
 		Level: &tagField{Present: true, FieldIndex: 1, ExtractPattern: `level=(\S+)`, SampleValue: "SEVERE"},
 	}
-	got := validateClassification(tool, lines)
+	got := validateClassification(context.Background(), tool, lines)
 	if got.Level != nil {
 		t.Errorf("expected unverified level candidate to be dropped, got %+v", got.Level)
 	}
@@ -117,7 +117,7 @@ func TestValidateClassification_JSONPathMode(t *testing.T) {
 	tool := &classifyToolResponse{
 		TraceID: &tagField{Present: true, JSONPath: ".context.trace.id", SampleValue: "t-1"},
 	}
-	got := validateClassification(tool, lines)
+	got := validateClassification(context.Background(), tool, lines)
 	if got.TraceID == nil || got.TraceID.JSONPath != ".context.trace.id" {
 		t.Fatalf("got %+v", got.TraceID)
 	}
@@ -132,7 +132,7 @@ func TestValidateClassification_WholeLineSearchMode(t *testing.T) {
 	tool := &classifyToolResponse{
 		TraceID: &tagField{Present: true, FieldIndex: 0, ExtractPattern: `trace_id=(\S+)`, SampleValue: "w1"},
 	}
-	got := validateClassification(tool, lines)
+	got := validateClassification(context.Background(), tool, lines)
 	if got.TraceID == nil {
 		t.Fatal("expected a verified whole-line-search trace ID candidate")
 	}
@@ -150,7 +150,7 @@ func TestValidateClassification_TimestampRoundTrips(t *testing.T) {
 	tool := &classifyToolResponse{
 		Timestamp: &timestampField{Present: true, FieldIndex: 1, Strftime: "%Y-%m-%dT%H:%M:%SZ", SampleValue: "2026-09-24T10:15:03Z"},
 	}
-	got := validateClassification(tool, lines)
+	got := validateClassification(context.Background(), tool, lines)
 	if got.Timestamp == nil {
 		t.Fatal("expected a verified timestamp candidate")
 	}
@@ -164,7 +164,7 @@ func TestValidateClassification_BadStrftimeDropsTimestamp(t *testing.T) {
 	tool := &classifyToolResponse{
 		Timestamp: &timestampField{Present: true, FieldIndex: 1, Strftime: "%Q-bad", SampleValue: "x"},
 	}
-	got := validateClassification(tool, lines)
+	got := validateClassification(context.Background(), tool, lines)
 	if got.Timestamp != nil {
 		t.Errorf("expected bad strftime to drop the candidate, got %+v", got.Timestamp)
 	}
@@ -183,7 +183,7 @@ func TestClassifyAsync_SuccessAppliesClassification(t *testing.T) {
 	}
 
 	done := make(chan *Detection, 1)
-	det := ClassifyAsync(classifier, lines, true, func(d *Detection) { done <- d })
+	det := ClassifyAsync(context.Background(), classifier, lines, true, func(d *Detection) { done <- d })
 	if det == nil {
 		t.Fatal("ClassifyAsync returned nil immediate Detection")
 	}
@@ -210,7 +210,7 @@ func TestClassifyAsync_ErrorFallsBackToHeuristic(t *testing.T) {
 	classifier := &fakeClassifier{err: errors.New("bedrock unavailable")}
 
 	done := make(chan *Detection, 1)
-	ClassifyAsync(classifier, lines, true, func(d *Detection) { done <- d })
+	ClassifyAsync(context.Background(), classifier, lines, true, func(d *Detection) { done <- d })
 
 	select {
 	case final := <-done:
@@ -225,7 +225,7 @@ func TestClassifyAsync_ErrorFallsBackToHeuristic(t *testing.T) {
 func TestClassifyAsync_NotFinalSkipsClassification(t *testing.T) {
 	classifier := &fakeClassifier{result: &ClassifierResult{Level: &FieldCandidate{FieldIndex: 1}}}
 	called := false
-	det := ClassifyAsync(classifier, []string{"a b c"}, false, func(d *Detection) { called = true })
+	det := ClassifyAsync(context.Background(), classifier, []string{"a b c"}, false, func(d *Detection) { called = true })
 	if det == nil {
 		t.Fatal("expected a non-nil Detection for a partial sample")
 	}
@@ -252,7 +252,7 @@ func TestValidateClassification_MinorityTagFieldSurvives(t *testing.T) {
 	tool := &classifyToolResponse{
 		TraceID: &tagField{Present: true, ExtractPattern: `trace_id=(\S+)`, SampleValue: "aa11"},
 	}
-	got := validateClassification(tool, lines)
+	got := validateClassification(context.Background(), tool, lines)
 	if got.TraceID == nil {
 		t.Fatal("a trace id on 3 of 20 lines must survive validation")
 	}
@@ -263,7 +263,7 @@ func TestValidateClassification_SingleHitNeverVerifies(t *testing.T) {
 	tool := &classifyToolResponse{
 		TraceID: &tagField{Present: true, ExtractPattern: `trace_id=(\S+)`, SampleValue: "aa11"},
 	}
-	if got := validateClassification(tool, lines); got.TraceID != nil {
+	if got := validateClassification(context.Background(), tool, lines); got.TraceID != nil {
 		t.Errorf("one hit is a coincidence, not a pattern; got %+v", got.TraceID)
 	}
 }
@@ -279,7 +279,7 @@ func TestValidateClassification_LevelStillNeedsCoverage(t *testing.T) {
 	tool := &classifyToolResponse{
 		Level: &tagField{Present: true, ExtractPattern: `level=(\S+)`, SampleValue: "INFO"},
 	}
-	if got := validateClassification(tool, lines); got.Level != nil {
+	if got := validateClassification(context.Background(), tool, lines); got.Level != nil {
 		t.Errorf("a level on 3 of 20 lines is not the line's level field; got %+v", got.Level)
 	}
 }
@@ -296,13 +296,13 @@ func TestValidateClassification_DurationMustParseAsInteger(t *testing.T) {
 	tool := &classifyToolResponse{
 		DurationNs: &tagField{Present: true, ExtractPattern: `duration_ns=(\S+)`, SampleValue: "abc"},
 	}
-	if got := validateClassification(tool, lines); got.DurationNs != nil {
+	if got := validateClassification(context.Background(), tool, lines); got.DurationNs != nil {
 		t.Errorf("non-integer duration verified: %+v", got.DurationNs)
 	}
 
 	good := []string{"x duration_ns=120", "y duration_ns=3400", "z duration_ns=7"}
 	tool.DurationNs.SampleValue = "120"
-	if got := validateClassification(tool, good); got.DurationNs == nil {
+	if got := validateClassification(context.Background(), tool, good); got.DurationNs == nil {
 		t.Error("an integer duration must verify")
 	}
 }
@@ -320,7 +320,7 @@ func TestValidateClassification_AcceptedCandidatesExtractWithRealParser(t *testi
 		Level:     &tagField{Present: true, FieldIndex: 3, ExtractPattern: `^(\w+)/`, SampleValue: "INFO"},
 		Timestamp: &timestampField{Present: true, FieldIndex: 1, SpanFields: 2, Strftime: "%Y-%m-%d %H:%M:%S,%3f", SampleValue: "2026-10-15 12:00:01,123"},
 	}
-	got := validateClassification(tool, lines)
+	got := validateClassification(context.Background(), tool, lines)
 	if got.Level == nil || got.Timestamp == nil {
 		t.Fatalf("level=%+v timestamp=%+v, want both verified", got.Level, got.Timestamp)
 	}
@@ -459,5 +459,38 @@ func TestClassifyPromptIncludesFieldNumbering(t *testing.T) {
 	p := buildClassifyPrompt(det, lines)
 	if !strings.Contains(p, "1=2026-10-15 2=12:00:00 3=INFO 4=a") {
 		t.Errorf("prompt lacks the field numbering:\n%s", p)
+	}
+}
+
+// A model that cannot find a trace ID may point at the timestamp instead.
+// Trace IDs verify on any hit count, so only the value itself can tell them
+// apart: a date or time is not an identifier.
+func TestValidateClassification_TraceIDIsNotATimestamp(t *testing.T) {
+	lines := []string{
+		`2026/10/16 14:52:08 ingest-stream: received 13 rows from customer=graybeard`,
+		`2026/10/16 14:52:11 ingest-stream: received 871 rows from customer=loom`,
+		`2026/10/16 14:52:14 sample: customer=graybeard namespace=anterior app=django lines=0 partial=true`,
+	}
+	for name, f := range map[string]*tagField{
+		"date field":     {Present: true, FieldIndex: 1, SampleValue: "2026/10/16"},
+		"time field":     {Present: true, FieldIndex: 2, SampleValue: "14:52:08"},
+		"date and time":  {Present: true, ExtractPattern: `^(\d{4}/\d\d/\d\d \d\d:\d\d:\d\d)`, SampleValue: "2026/10/16 14:52:08"},
+		"time in a line": {Present: true, ExtractPattern: `(\d\d:\d\d:\d\d)`, SampleValue: "14:52:08"},
+	} {
+		for _, role := range []string{"trace_id", "span_id", "parent_span_id"} {
+			tool := &classifyToolResponse{}
+			switch role {
+			case "trace_id":
+				tool.TraceID = f
+			case "span_id":
+				tool.SpanID = f
+			default:
+				tool.ParentSpanID = f
+			}
+			got := validateClassification(context.Background(), tool, lines)
+			if got.TraceID != nil || got.SpanID != nil || got.ParentSpanID != nil {
+				t.Errorf("%s as %s: a timestamp must not pass for an identifier: %+v %+v %+v", name, role, got.TraceID, got.SpanID, got.ParentSpanID)
+			}
+		}
 	}
 }

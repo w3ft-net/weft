@@ -2,9 +2,11 @@ package coordinator
 
 import (
 	"context"
-	"log"
 	"time"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -54,10 +56,10 @@ type cronClaimState struct {
 func (ce *CronExecutor) runClaims(ctx context.Context, watch store.CronWatch) {
 	// Defensive: skip watches that violate the minimum interval for their
 	// tier. Saves are validated, so this is belt-and-suspenders.
-	if !ce.intervalAllowed(watch, parseSchedule(watch.Schedule)) {
+	if !ce.intervalAllowed(ctx, watch, parseSchedule(watch.Schedule)) {
 		return
 	}
-	log.Printf("cron[%s]: started (every %s)", watch.Name, parseSchedule(watch.Schedule))
+	weftlog.Infof(ctx, "cron[%s]: started (every %s)", watch.Name, parseSchedule(watch.Schedule))
 
 	st := &cronClaimState{watch: watch}
 	ticker := time.NewTicker(cronClaimPoll)
@@ -65,10 +67,10 @@ func (ce *CronExecutor) runClaims(ctx context.Context, watch store.CronWatch) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("cron[%s]: stopped", watch.Name)
+			weftlog.Infof(ctx, "cron[%s]: stopped", watch.Name)
 			return
 		case <-ticker.C:
-			ce.claimTick(st, time.Now())
+			ce.claimTick(ctx, st, time.Now())
 		}
 	}
 }
@@ -77,7 +79,7 @@ func (ce *CronExecutor) runClaims(ctx context.Context, watch store.CronWatch) {
 // without holding its claim: a failed claim write means no run, and the
 // slot is retried on the next tick (fail closed — the worst case is a
 // skipped slot, never a duplicate).
-func (ce *CronExecutor) claimTick(st *cronClaimState, now time.Time) {
+func (ce *CronExecutor) claimTick(ctx context.Context, st *cronClaimState, now time.Time) {
 	w := st.watch
 	interval := parseSchedule(w.Schedule)
 	slot, ok := LatestDueSlot(w.ID, interval, cronSettle, now)
@@ -99,11 +101,11 @@ func (ce *CronExecutor) claimTick(st *cronClaimState, now time.Time) {
 	// claim a slot from the old one.
 	updated, err := ce.Store.GetCronWatch(w.OrgID, w.Name)
 	if err != nil {
-		log.Printf("cron[%s]: failed to reload, skipping tick: %v", w.Name, err)
+		weftlog.Errorf(ctx, "cron[%s]: failed to reload, skipping tick: %v", w.Name, err)
 		return
 	}
 	if parseSchedule(updated.Schedule) != interval {
-		log.Printf("cron[%s]: schedule changed to %q, re-slotting", w.Name, updated.Schedule)
+		weftlog.Infof(ctx, "cron[%s]: schedule changed to %q, re-slotting", w.Name, updated.Schedule)
 		st.watch, st.seen = *updated, false
 		return
 	}
@@ -113,26 +115,30 @@ func (ce *CronExecutor) claimTick(st *cronClaimState, now time.Time) {
 	lag := now.Sub(slot.FireAt(cronSettle)).Milliseconds()
 	switch {
 	case err != nil:
-		log.Printf("cron_claim result=error key=%s lag_ms=%d err=%v", slot.Key(), lag, err)
+		weftlog.Errorf(ctx, "cron_claim result=error key=%s lag_ms=%d err=%v", slot.Key(), lag, err)
 		return
 	case !won:
-		log.Printf("cron_claim result=lost key=%s lag_ms=%d", slot.Key(), lag)
+		weftlog.Infof(ctx, "cron_claim result=lost key=%s lag_ms=%d", slot.Key(), lag)
 		decided()
 		return
 	}
-	log.Printf("cron_claim result=won key=%s lag_ms=%d", slot.Key(), lag)
+	// A won slot is the start of a unit of work no request initiated: mint
+	// its trace here so the firing (query, alert evaluation, notifications,
+	// result persistence) is correlated end to end.
+	ctx = weftsdk.ContextWithTraceID(ctx, weftsdk.NewTraceID())
+	weftlog.Infof(ctx, "cron_claim result=won key=%s lag_ms=%d", slot.Key(), lag)
 	decided()
-	ce.fire(st.watch, slot.Window())
+	ce.fire(ctx, st.watch, slot.Window())
 }
 
 // pruneClaims drops claim rows past cronClaimRetention.
-func (ce *CronExecutor) pruneClaims() {
+func (ce *CronExecutor) pruneClaims(ctx context.Context) {
 	n, err := ce.Store.DeleteCronClaimsBefore(time.Now().Add(-cronClaimRetention))
 	if err != nil {
-		log.Printf("cron: claim cleanup failed: %v", err)
+		weftlog.Errorf(ctx, "cron: claim cleanup failed: %v", err)
 		return
 	}
 	if n > 0 {
-		log.Printf("cron: pruned %d old claims", n)
+		weftlog.Infof(ctx, "cron: pruned %d old claims", n)
 	}
 }

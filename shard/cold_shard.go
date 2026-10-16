@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -20,6 +19,7 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -140,16 +140,16 @@ func parquetReadExpr(path string) string {
 
 // Query executes a SQL query against the archived Parquet data.
 // args carries positional placeholder values for `?` markers in query.
-func (s *ColdShard) Query(query string, args ...any) ([]*pb.ResultRow, error) {
+func (s *ColdShard) Query(ctx context.Context, query string, args ...any) ([]*pb.ResultRow, error) {
 	if s.functionURL != "" {
-		return s.queryRemote(query, args)
+		return s.queryRemote(ctx, query, args)
 	}
-	return s.queryLocal(query, args)
+	return s.queryLocal(ctx, query, args)
 }
 
-func (s *ColdShard) queryLocal(query string, args []any) ([]*pb.ResultRow, error) {
+func (s *ColdShard) queryLocal(ctx context.Context, query string, args []any) ([]*pb.ResultRow, error) {
 	rewritten := strings.Replace(query, "FROM logs", "FROM "+s.readParquetExpr(), 1)
-	sqlRows, err := s.db.Query(rewritten, args...)
+	sqlRows, err := s.db.QueryContext(ctx, rewritten, args...)
 	if err != nil {
 		return nil, fmt.Errorf("cold query %s: %w", s.id, err)
 	}
@@ -157,17 +157,19 @@ func (s *ColdShard) queryLocal(query string, args []any) ([]*pb.ResultRow, error
 	return ScanResultRows(sqlRows)
 }
 
-func (s *ColdShard) queryRemote(query string, args []any) ([]*pb.ResultRow, error) {
+func (s *ColdShard) queryRemote(ctx context.Context, query string, args []any) ([]*pb.ResultRow, error) {
+	traceID, _ := weftsdk.TraceIDFromContext(ctx)
 	body, err := json.Marshal(LambdaQueryRequest{
 		SQL:         query,
 		ParquetPath: s.parquetPath,
 		Args:        anyArgsToStrings(args),
+		TraceId:     traceID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, s.functionURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.functionURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -199,7 +201,7 @@ func (s *ColdShard) QueryToSink(ctx context.Context, query string, args []any, s
 		return
 	}
 
-	rows, err := s.queryLocal(query, args)
+	rows, err := s.queryLocal(ctx, query, args)
 	if err != nil {
 		return
 	}
@@ -210,7 +212,7 @@ func (s *ColdShard) QueryToSink(ctx context.Context, query string, args []any, s
 
 func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []any, sink RowSink) {
 	start := time.Now()
-	traceID, traced := weftsdk.TraceIDFromContext(ctx)
+	traceID, _ := weftsdk.TraceIDFromContext(ctx)
 
 	body, err := json.Marshal(LambdaQueryRequest{
 		SQL:         query,
@@ -219,31 +221,31 @@ func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []
 		TraceId:     traceID,
 	})
 	if err != nil {
-		log.Printf("cold shard %s: marshal request: %v", s.id, err)
+		weftlog.Infof(ctx, "cold shard %s: marshal request: %v", s.id, err)
 		return
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.functionURL, bytes.NewReader(body))
 	if err != nil {
-		log.Printf("cold shard %s: build request: %v", s.id, err)
+		weftlog.Infof(ctx, "cold shard %s: build request: %v", s.id, err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if err := s.signRequest(req, body); err != nil {
-		log.Printf("cold shard %s: sign request: %v", s.id, err)
+		weftlog.Infof(ctx, "cold shard %s: sign request: %v", s.id, err)
 		return
 	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		log.Printf("cold shard %s: lambda call failed: %v", s.id, err)
+		weftlog.Errorf(ctx, "cold shard %s: lambda call failed: %v", s.id, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("cold shard %s: lambda returned %d: %s", s.id, resp.StatusCode, body)
+		weftlog.Infof(ctx, "cold shard %s: lambda returned %d: %s", s.id, resp.StatusCode, body)
 		return
 	}
 
@@ -258,15 +260,11 @@ func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []
 			// incident that originated this feature), so unconditional
 			// logging here doesn't reintroduce the log-spam problem a
 			// hot live-shard path would have.
-			if traced {
-				log.Printf("cold shard %s: query completed in %s (%d rows) trace_id=%s", s.id, time.Since(start), rowsSeen, traceID)
-			} else {
-				log.Printf("cold shard %s: query completed in %s (%d rows)", s.id, time.Since(start), rowsSeen)
-			}
+			weftlog.Infof(ctx, "cold shard %s: query completed in %s (%d rows)", s.id, time.Since(start), rowsSeen)
 			return
 		}
 		if err != nil {
-			log.Printf("cold shard %s: stream read error after %d rows: %v", s.id, rowsSeen, err)
+			weftlog.Errorf(ctx, "cold shard %s: stream read error after %d rows: %v", s.id, rowsSeen, err)
 			return
 		}
 		rowsSeen++
@@ -278,7 +276,7 @@ func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []
 // recorder is ignored: a cold shard in the ingest path is a routing
 // bug, not a flaky-shard failure, so it shouldn't trip the
 // suspend counter.
-func (s *ColdShard) Ingest(rows []*pb.LogRow, _ IngestRecorder) error {
+func (s *ColdShard) Ingest(_ context.Context, rows []*pb.LogRow, _ IngestRecorder) error {
 	return fmt.Errorf("cold shard %s is read-only", s.id)
 }
 

@@ -2,6 +2,7 @@ package shellfs
 
 import (
 	"bytes"
+	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -383,7 +384,7 @@ type stubNoticeSink struct {
 	signaled []string
 }
 
-func (s *stubNoticeSink) Maybe(key string) {
+func (s *stubNoticeSink) Maybe(_ context.Context, key string) {
 	s.signaled = append(s.signaled, key)
 }
 

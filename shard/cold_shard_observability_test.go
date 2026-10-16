@@ -1,14 +1,13 @@
 package shard
 
 import (
-	"bytes"
 	"context"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	weftsdk "github.com/w3ft-net/weft-go"
 )
 
@@ -18,17 +17,7 @@ import (
 // previously-silent failure now leaves a breadcrumb.
 func captureLog(t *testing.T, fn func()) string {
 	t.Helper()
-	var buf bytes.Buffer
-	prevOut := log.Writer()
-	prevFlags := log.Flags()
-	log.SetOutput(&buf)
-	log.SetFlags(0)
-	defer func() {
-		log.SetOutput(prevOut)
-		log.SetFlags(prevFlags)
-	}()
-	fn()
-	return buf.String()
+	return weftlog.Capture(fn)
 }
 
 // TestQueryToSink_LogsStreamReadError: a 200 response whose body is not

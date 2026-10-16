@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"os"
 	"testing"
 )
@@ -44,13 +45,13 @@ func TestFindLogGroupSchema_CacheAsideAndInvalidation(t *testing.T) {
 	}
 	const service = "cacheme"
 
-	if err := db.AddLogGroup(ns.ID, SourceTypeDirect, service, "", "local", "app: cacheme\nformat: text\n"); err != nil {
+	if err := db.AddLogGroup(context.Background(), ns.ID, SourceTypeDirect, service, "", "local", "app: cacheme\nformat: text\n"); err != nil {
 		t.Fatalf("AddLogGroup: %v", err)
 	}
 
 	// Cold lookup: cache miss, falls through to Postgres, then warms
 	// the cache as a side effect.
-	yaml1, ok, err := db.FindLogGroupSchema(cust.ID, "test", service)
+	yaml1, ok, err := db.FindLogGroupSchema(context.Background(), cust.ID, "test", service)
 	if err != nil || !ok {
 		t.Fatalf("cold FindLogGroupSchema: ok=%v err=%v", ok, err)
 	}
@@ -68,7 +69,7 @@ func TestFindLogGroupSchema_CacheAsideAndInvalidation(t *testing.T) {
 		Update("schema_yaml", "app: cacheme\nformat: json\n").Error; err != nil {
 		t.Fatalf("direct postgres mutation: %v", err)
 	}
-	yaml2, ok, err := db.FindLogGroupSchema(cust.ID, "test", service)
+	yaml2, ok, err := db.FindLogGroupSchema(context.Background(), cust.ID, "test", service)
 	if err != nil || !ok {
 		t.Fatalf("warm FindLogGroupSchema: ok=%v err=%v", ok, err)
 	}
@@ -78,10 +79,10 @@ func TestFindLogGroupSchema_CacheAsideAndInvalidation(t *testing.T) {
 
 	// ConfigureLogGroup invalidates — the next lookup must see the new
 	// schema immediately, not wait out the cache's TTL.
-	if err := db.ConfigureLogGroup(ns.ID, service, "app: cacheme\nformat: prefix_json\n"); err != nil {
+	if err := db.ConfigureLogGroup(context.Background(), ns.ID, service, "app: cacheme\nformat: prefix_json\n"); err != nil {
 		t.Fatalf("ConfigureLogGroup: %v", err)
 	}
-	yaml3, ok, err := db.FindLogGroupSchema(cust.ID, "test", service)
+	yaml3, ok, err := db.FindLogGroupSchema(context.Background(), cust.ID, "test", service)
 	if err != nil || !ok {
 		t.Fatalf("post-invalidation FindLogGroupSchema: ok=%v err=%v", ok, err)
 	}
@@ -108,7 +109,7 @@ func TestFindLogGroupSchema_NegativeCache(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ { // cold, then warm
-		_, ok, err := db.FindLogGroupSchema(cust.ID, "test", "never-onboarded")
+		_, ok, err := db.FindLogGroupSchema(context.Background(), cust.ID, "test", "never-onboarded")
 		if err != nil {
 			t.Fatalf("iteration %d: unexpected error: %v", i, err)
 		}
@@ -133,11 +134,11 @@ func TestFindLogGroupSchema_NilCacheFallsThroughToPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AddLogGroup(ns.ID, SourceTypeDirect, "nocache", "", "local", "app: nocache\nformat: text\n"); err != nil {
+	if err := db.AddLogGroup(context.Background(), ns.ID, SourceTypeDirect, "nocache", "", "local", "app: nocache\nformat: text\n"); err != nil {
 		t.Fatalf("AddLogGroup: %v", err)
 	}
 
-	yaml, ok, err := db.FindLogGroupSchema(cust.ID, "test", "nocache")
+	yaml, ok, err := db.FindLogGroupSchema(context.Background(), cust.ID, "test", "nocache")
 	if err != nil || !ok || yaml != "app: nocache\nformat: text\n" {
 		t.Fatalf("FindLogGroupSchema with nil cache: yaml=%q ok=%v err=%v", yaml, ok, err)
 	}
