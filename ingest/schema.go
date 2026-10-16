@@ -115,6 +115,13 @@ type Schema struct {
 	DurationNsField   string `yaml:"duration_ns_field,omitempty"`
 	DurationNsPattern string `yaml:"duration_ns_pattern,omitempty"`
 
+	// DurationUnit says how the extracted duration text reads: "" or "ns" is a
+	// bare integer count of nanoseconds (the original behaviour); "us", "ms"
+	// and "s" are a bare, possibly fractional, number of that unit; "text" is
+	// a duration written with its own units, such as 5.01s, 340ms or 1m2s.
+	// The parsed value is always stored as integer nanoseconds.
+	DurationUnit string `yaml:"duration_unit,omitempty"`
+
 	// Extract holds, per value ("timestamp", "level", "trace_id", "span_name",
 	// "span_id", "parent_span_id", "duration_ns"), how to read it out of its
 	// field. A value with an entry here is read by the span-reporting
@@ -228,6 +235,29 @@ func (s *Schema) valueRef(id valueID) (field, pattern string) {
 // come out empty without any error. Schemas that use them are refused for
 // sources whose agents are older (api: handleConfigureSource).
 const MinAgentVersionForExtract = "0.28.0"
+
+// MinAgentVersionForDurationUnit is the first weftd release that reads
+// duration_unit; an older one parses the text as an integer count of
+// nanoseconds and silently drops any other spelling.
+const MinAgentVersionForDurationUnit = "0.29.0"
+
+// MinAgentVersion is the oldest weftd that reads this schema correctly, or ""
+// when any agent does.
+func (s *Schema) MinAgentVersion() string {
+	switch {
+	case s.durationNeedsUnitParser():
+		return MinAgentVersionForDurationUnit
+	case s.UsesExtract():
+		return MinAgentVersionForExtract
+	}
+	return ""
+}
+
+// durationNeedsUnitParser is whether the schema relies on duration_unit
+// meaning anything beyond what every weftd already does.
+func (s *Schema) durationNeedsUnitParser() bool {
+	return s.DurationUnit != "" && s.DurationUnit != "ns"
+}
 
 // UsesExtract reports whether the schema needs a parser that understands
 // extract specs: it has an extract section, or counts a field from the end.

@@ -222,4 +222,59 @@ describe('ExtractionWizard decision tree', () => {
     await waitFor(() => expect(done).toHaveBeenCalled())
     expect(done.mock.calls[0][0]).toMatchObject({ level_field: '2' })
   })
+
+  it('offers the model\'s first guess when detection has nothing, and asks the unit of a bare duration', async () => {
+    const lines = ['12:00:00 start', '12:00:02 GET /a 200 took=12.5', '12:00:04 GET /b 500 took=340']
+    const reqs: ProbeRequest[] = []
+    const probe: ProbeFn = async req => {
+      reqs.push(req)
+      const empty: ProbeResult = { extractor: null, results: [], matched: 0, total: lines.length }
+      if (req.field === 'timestamp') {
+        return req.propose
+          ? {
+              extractor: { field: '1', pattern: '', timestamp_format: '15:04:05', timestamp_fields: 1 },
+              source: 'model',
+              results: lines.map((l, i) => ({ line: i, matched: true, value: 'x', text: l.slice(0, 8), prefix: '' })),
+              matched: 3, total: 3,
+              schema_patch: { timestamp_field: '1', timestamp_format: '15:04:05', timestamp_fields: 1 },
+            }
+          : empty
+      }
+      if (req.field !== 'duration_ns' || req.marks.length === 0) return empty
+      const results = lines.map((l, i) => {
+        const m = /took=([\d.]+)/.exec(l)
+        if (!m) return { line: i, matched: false, value: '' }
+        return { line: i, matched: true, value: m[1], text: m[1], prefix: l.slice(0, m.index + 5) }
+      })
+      return {
+        extractor: { field: 'none', pattern: 'took=([\\d.]+)', duration_unit: req.duration_unit ?? '' },
+        results, matched: 2, total: 3,
+        needs_unit: !req.duration_unit,
+        schema_patch: { duration_ns_field: 'none', duration_ns_pattern: 'took=([\\d.]+)', duration_unit: req.duration_unit ?? '' },
+      }
+    }
+    const done = vi.fn()
+    render(<ExtractionWizard testidPrefix="p" sample={lines} base={base} probe={probe}
+      spansDetected={true} onComplete={done} onCancel={() => {}} />)
+
+    // timestamp: nothing detected, so the model's guess is shown and accepted
+    await see('confirm-yes-button')
+    expect(reqs.some(r => r.field === 'timestamp' && r.propose)).toBe(true)
+    click('confirm-yes-button')
+    for (let i = 0; i < 4; i++) { await press('expect-no-button') } // level, trace, span name/id... skipped
+    await press('expect-no-button') // parent span id
+    // duration: highlight a bare number -> the wizard asks what it counts
+    await press('expect-yes-button')
+    await see('pick-line')
+    click('next-line-button')
+    await waitFor(() => expect(screen.getByTestId(`${T}-pick-line`).textContent).toBe(lines[1]))
+    selectIn(`${T}-pick-line`, '12.5')
+    click('use-selection-button')
+    await press('unit-ms-button')
+    await see('rows')
+    expect(reqs[reqs.length - 1].duration_unit).toBe('ms')
+    click('accept-button')
+    await waitFor(() => expect(done).toHaveBeenCalled())
+    expect(done.mock.calls[0][0]).toMatchObject({ duration_ns_pattern: 'took=([\\d.]+)', duration_unit: 'ms' })
+  })
 })

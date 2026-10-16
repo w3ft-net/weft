@@ -52,6 +52,8 @@ type ProbeExtractor struct {
 	Pattern         string `json:"pattern"`
 	TimestampFormat string `json:"timestamp_format,omitempty"`
 	TimestampFields int    `json:"timestamp_fields,omitempty"`
+	// DurationUnit is how a duration's text reads (see Schema.DurationUnit).
+	DurationUnit string `json:"duration_unit,omitempty"`
 	// Spec says how the field's text is stripped (see ExtractSpec); nil
 	// means the legacy reading, with the parser's built-in trims.
 	Spec *ExtractSpec `json:"spec,omitempty"`
@@ -112,6 +114,13 @@ func (e ProbeExtractor) Describe() string {
 	return strings.Join(parts, ", ") + e.describeTail()
 }
 
+func describeDurationUnit(u string) string {
+	if u == "text" {
+		return "written with its unit (such as 1.5s or 340ms)"
+	}
+	return "in " + u
+}
+
 func (e ProbeExtractor) describeTail() string {
 	var out string
 	if e.Spec != nil && e.Spec.Fallback != "" {
@@ -119,6 +128,9 @@ func (e ProbeExtractor) describeTail() string {
 	}
 	if e.TimestampFormat != "" {
 		out += ", format " + e.TimestampFormat
+	}
+	if e.DurationUnit != "" {
+		out += ", " + describeDurationUnit(e.DurationUnit)
 	}
 	return out
 }
@@ -133,6 +145,13 @@ type ProbeRequest struct {
 	Lines    []string        `json:"lines"`
 	Marks    []ProbeMark     `json:"marks"`
 	Previous *ProbeExtractor `json:"previous,omitempty"`
+	// DurationUnit is what the person (or model) says a bare duration number
+	// is counted in. Unset: the unit is read off the marked text if it has one
+	// ("1.5s"), else nanoseconds.
+	DurationUnit string `json:"duration_unit,omitempty"`
+	// Propose asks for a first guess before the person has marked anything:
+	// the proposer's best verified candidate, or none.
+	Propose bool `json:"propose,omitempty"`
 
 	// Proposer, if set, is asked for candidate extractors when the built-in
 	// search finds none. Its candidates are held to exactly the same test as
@@ -182,6 +201,10 @@ type ProbeResult struct {
 	Matched int               `json:"matched"`
 	Total   int               `json:"total"`
 	Message string            `json:"message,omitempty"`
+	// NeedsUnit is set for a duration whose marked text is a bare number: the
+	// extractor locates it, but only the person knows what it counts. Probe
+	// again with DurationUnit set.
+	NeedsUnit bool `json:"needs_unit,omitempty"`
 }
 
 // SchemaPatch returns the extractor as the schema/configure request keys it
@@ -206,11 +229,15 @@ func (r *ProbeResult) SchemaPatch(f ProbeField) map[string]any {
 			"extract":          extract,
 		}
 	}
-	return map[string]any{
+	patch := map[string]any{
 		string(f) + "_field":   e.Field,
 		string(f) + "_pattern": e.Pattern,
 		"extract":              extract,
 	}
+	if f == ProbeDurationNs {
+		patch["duration_unit"] = e.DurationUnit
+	}
+	return patch
 }
 
 var probeFieldNames = map[ProbeField]bool{
@@ -234,7 +261,10 @@ type probeCtx struct {
 	bodies []string
 	starts []int // offset of body within each raw line
 	marks  []resolvedMark
-	prev   []string
+	// provisionalUnit: the unit of the extractor pick last returned was
+	// guessed from the marks, not given (see durationUnit).
+	provisionalUnit bool
+	prev            []string
 }
 
 // Probe finds the simplest extractor consistent with the user's marks and
@@ -280,7 +310,7 @@ func ProbeContext(ctx context.Context, req ProbeRequest) (*ProbeResult, error) {
 		}
 		c.marks = append(c.marks, rm)
 	}
-	if positives == 0 && req.Previous == nil {
+	if positives == 0 && req.Previous == nil && !req.Propose {
 		return nil, fmt.Errorf("mark at least one line that has the value")
 	}
 	if req.Previous != nil {
@@ -288,6 +318,23 @@ func ProbeContext(ctx context.Context, req ProbeRequest) (*ProbeResult, error) {
 	}
 
 	res := &ProbeResult{Total: len(req.Lines)}
+	if positives == 0 && req.Previous == nil {
+		// Nothing marked yet: a first guess from the proposer, held to what
+		// can be checked without marks (it must read the value on enough lines).
+		if req.Proposer != nil {
+			if best := c.proposeFirst(ctx); best != nil {
+				res.Extractor, res.Source = best, "model"
+				c.fillResults(res)
+				return res, nil
+			}
+		}
+		res.Message = "no suggestion for this field"
+		res.Results = make([]ProbeLineResult, len(req.Lines))
+		for i := range res.Results {
+			res.Results[i].Line = i
+		}
+		return res, nil
+	}
 	if positives == 0 {
 		// Nothing to synthesize from: just show what Previous does.
 		if c.prev == nil {
@@ -300,6 +347,7 @@ func ProbeContext(ctx context.Context, req ProbeRequest) (*ProbeResult, error) {
 	for _, group := range c.candidateGroups() {
 		if best, _ := c.pick(group); best != nil {
 			res.Extractor, res.Source = best, "rule"
+			res.NeedsUnit = c.req.Field == ProbeDurationNs && c.provisionalUnit && best.DurationUnit != "text"
 			c.fillResults(res)
 			return res, nil
 		}
@@ -326,8 +374,11 @@ func (c *probeCtx) pick(group []ProbeExtractor) (*ProbeExtractor, []string) {
 	var bestVals []string
 	bestScore := -1
 	for _, ex := range group {
+		if c.req.Field == ProbeDurationNs && ex.DurationUnit == "" {
+			ex.DurationUnit, c.provisionalUnit = c.durationUnit()
+		}
 		vals, err := c.eval(ex)
-		if err != nil || !c.satisfies(vals) {
+		if err != nil || !c.satisfies(vals, ex) {
 			continue
 		}
 		if score := c.softScore(vals); score > bestScore {
@@ -338,9 +389,43 @@ func (c *probeCtx) pick(group []ProbeExtractor) (*ProbeExtractor, []string) {
 	return best, bestVals
 }
 
-// askProposer asks the proposer for candidates and returns the first that
-// the same checker accepts.
-func (c *probeCtx) askProposer(ctx context.Context) (*ProbeExtractor, []string) {
+// durationUnit is the unit for a duration extractor that names none: the one
+// the caller gave; else "text" when every marked value carries its own unit;
+// else a bare number, whose unit only the person knows. Until they say, it is
+// read as whatever scale can hold the marked text (nanoseconds for whole
+// numbers, seconds for fractions) so the value can be located, and the result
+// is flagged NeedsUnit.
+func (c *probeCtx) durationUnit() (unit string, provisional bool) {
+	if c.req.DurationUnit != "" {
+		return c.req.DurationUnit, false
+	}
+	text, whole := true, true
+	for _, m := range c.marks {
+		if m.none {
+			continue
+		}
+		if _, err := strconv.ParseFloat(m.text, 64); err == nil {
+			if _, err := strconv.ParseInt(m.text, 10, 64); err != nil {
+				whole = false
+			}
+			text = false
+		} else if _, ok := (durationMode{text: true}).parse(m.text); !ok {
+			text = false
+		}
+	}
+	switch {
+	case text:
+		return "text", false
+	case whole:
+		return "", true
+	}
+	return "s", true
+}
+
+// proposals asks the proposer for candidate extractors, given what the person
+// has marked so far (nothing, for a first guess), and returns them in the
+// model's order. Nil if the proposer fails.
+func (c *probeCtx) proposals(ctx context.Context) []ProbeExtractor {
 	in := ProposeInput{
 		Field: c.req.Field, Base: c.req.Base, Lines: c.req.Lines, Previous: c.req.Previous,
 	}
@@ -356,20 +441,57 @@ func (c *probeCtx) askProposer(ctx context.Context) (*ProbeExtractor, []string) 
 	cands, err := c.req.Proposer.ProposeExtractors(ctx, in)
 	if err != nil {
 		log.Printf("probe: extractor proposer failed: %v", err)
-		return nil, nil
+		return nil
 	}
-	group := make([]ProbeExtractor, 0, len(cands))
+	out := make([]ProbeExtractor, 0, len(cands))
 	for _, ex := range cands {
-		group = append(group, c.normalizeProposal(ex))
+		if len(c.positives()) == 0 {
+			out = append(out, c.captureGroupVariants(ex)...)
+			continue
+		}
+		out = append(out, c.normalizeProposal(ex))
 	}
+	return out
+}
+
+// askProposer returns the first proposal the same checker accepts against the
+// person's marks.
+func (c *probeCtx) askProposer(ctx context.Context) (*ProbeExtractor, []string) {
 	// One at a time, in the model's order: a model's first choice should win
 	// over a later one that merely also fits.
-	for _, ex := range group {
+	for _, ex := range c.proposals(ctx) {
 		if best, vals := c.pick([]ProbeExtractor{ex}); best != nil {
 			return best, vals
 		}
 	}
 	return nil, nil
+}
+
+// proposeFirst returns the first proposal that reads a value on enough of the
+// sample, by the same real-parser check detection applies to its own
+// candidates: with no marks, that is all there is to check.
+func (c *probeCtx) proposeFirst(ctx context.Context) *ProbeExtractor {
+	minRatio := tagMinRatio(string(c.req.Field))
+	if c.req.Field == ProbeTimestamp {
+		minRatio = minVerifyRatio
+	}
+	for _, ex := range c.proposals(ctx) {
+		vals, err := c.eval(ex)
+		if err != nil {
+			continue
+		}
+		hits := 0
+		for _, v := range vals {
+			if v != "" {
+				hits++
+			}
+		}
+		if verifies(hits, len(vals), minRatio) {
+			ex := ex
+			return &ex
+		}
+	}
+	return nil
 }
 
 // schemaFor is the schema fragment that makes ex extract field f.
@@ -397,7 +519,7 @@ func schemaFor(f ProbeField, base ProbeBase, ex ProbeExtractor) *Schema {
 	case ProbeParentSpanID:
 		s.ParentSpanIDField, s.ParentSpanIDPattern = ex.Field, ex.Pattern
 	case ProbeDurationNs:
-		s.DurationNsField, s.DurationNsPattern = ex.Field, ex.Pattern
+		s.DurationNsField, s.DurationNsPattern, s.DurationUnit = ex.Field, ex.Pattern, ex.DurationUnit
 	}
 	return s
 }
@@ -482,7 +604,8 @@ func evalExtractorSpans(f ProbeField, base ProbeBase, lines []string, ex ProbeEx
 
 // satisfies reports whether vals give every positive mark its value and
 // every None mark nothing.
-func (c *probeCtx) satisfies(vals []string) bool {
+func (c *probeCtx) satisfies(vals []string, ex ProbeExtractor) bool {
+	mode, _ := durationUnitMode(ex.DurationUnit)
 	for _, m := range c.marks {
 		v := vals[m.line]
 		switch {
@@ -496,6 +619,12 @@ func (c *probeCtx) satisfies(vals []string) bool {
 			}
 		case c.req.Field == ProbeLevel:
 			if !strings.EqualFold(v, m.text) {
+				return false
+			}
+		case c.req.Field == ProbeDurationNs:
+			// The value is parsed to nanoseconds; the mark is the text as
+			// written, so compare what each means.
+			if ns, ok := mode.parse(m.text); !ok || v != strconv.FormatInt(ns, 10) {
 				return false
 			}
 		default:
@@ -1025,13 +1154,13 @@ func DetectedExtractors(d *Detection, f ProbeField) []*ProbeExtractor {
 	for _, c := range cands {
 		switch {
 		case c.JSONPath != "":
-			out = append(out, &ProbeExtractor{Field: c.JSONPath, Pattern: c.Pattern})
+			out = append(out, &ProbeExtractor{Field: c.JSONPath, Pattern: c.Pattern, DurationUnit: c.Unit})
 		case c.FieldIndex != 0:
 			spec := derivedFrame(d.Lines, c.FieldIndex, 1)
 			spec.CutAt = c.CutAt
-			out = append(out, &ProbeExtractor{Field: strconv.Itoa(c.FieldIndex), Pattern: c.Pattern, Spec: spec})
+			out = append(out, &ProbeExtractor{Field: strconv.Itoa(c.FieldIndex), Pattern: c.Pattern, Spec: spec, DurationUnit: c.Unit})
 		default:
-			out = append(out, &ProbeExtractor{Field: "none", Pattern: c.Pattern})
+			out = append(out, &ProbeExtractor{Field: "none", Pattern: c.Pattern, DurationUnit: c.Unit})
 		}
 	}
 	return out
@@ -1043,6 +1172,28 @@ func DetectedExtractor(d *Detection, f ProbeField) *ProbeExtractor {
 		return all[0]
 	}
 	return nil
+}
+
+// captureGroupVariants is normalizeProposal for a first guess, where no marked
+// text says which capture group is the value: one variant per group, in order,
+// for the caller to check against the sample.
+func (c *probeCtx) captureGroupVariants(ex ProbeExtractor) []ProbeExtractor {
+	if (ex.Field != "none" && ex.Field != "") || ex.Pattern == "" {
+		return []ProbeExtractor{ex}
+	}
+	re, err := regexp.Compile(ex.Pattern)
+	if err != nil || re.NumSubexp() < 2 {
+		return []ProbeExtractor{ex}
+	}
+	var out []ProbeExtractor
+	for g := 1; g <= re.NumSubexp(); g++ {
+		if only, err := onlyCaptureGroup(ex.Pattern, g); err == nil {
+			v := ex
+			v.Pattern = only
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // normalizeProposal makes a proposed whole-line regex read the way ingest

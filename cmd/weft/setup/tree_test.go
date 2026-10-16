@@ -19,6 +19,7 @@ type scriptUI struct {
 	notified   []string
 	spans      bool
 	spansAsked bool
+	unit       string // answer to DurationUnit
 }
 
 func (u *scriptUI) ConfirmCandidate(f ingest.ProbeField, lines []string, ex *ingest.ProbeExtractor, res *ingest.ProbeResult) (bool, error) {
@@ -59,6 +60,10 @@ func (u *scriptUI) Review(f ingest.ProbeField, lines []string, ex *ingest.ProbeE
 	return r, nil
 }
 func (u *scriptUI) Notify(msg string) { u.notified = append(u.notified, msg) }
+func (u *scriptUI) DurationUnit(sample []string) (string, error) {
+	u.asked = append(u.asked, "unit")
+	return u.unit, nil
+}
 func (u *scriptUI) WantSpans() (bool, error) {
 	u.spansAsked = true
 	return u.spans, nil
@@ -372,5 +377,100 @@ func TestDistinctValues(t *testing.T) {
 	}
 	if got := distinctValues(res, 2); len(got) != 2 {
 		t.Errorf("cap ignored: %v", got)
+	}
+}
+
+// With nothing detected, the model's first guess is shown for confirmation
+// before the person is asked to point at anything.
+func TestExtractFieldOffersModelFirstGuess(t *testing.T) {
+	guess := &ingest.ProbeExtractor{Field: "none", Pattern: `trace_id=(\S+)`}
+	local := LocalProber(treeLines)
+	proposeCalls := 0
+	probe := func(req ingest.ProbeRequest) (*ingest.ProbeResult, error) {
+		if req.Propose {
+			proposeCalls++
+			req.Previous, req.Propose = guess, false
+		}
+		return local(req)
+	}
+	ui := &scriptUI{t: t, confirm: []bool{true}}
+	ex, err := ExtractField(ui, probe, ingest.ProbeTraceID, treeLines, ingest.ProbeBase{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ex == nil || ex.Pattern != guess.Pattern {
+		t.Fatalf("extractor = %+v, want the model's guess", ex)
+	}
+	if proposeCalls != 1 || strings.Join(ui.asked, ",") != "candidate" {
+		t.Errorf("propose calls=%d asked=%v, want 1 call and a single confirmation", proposeCalls, ui.asked)
+	}
+}
+
+// A guess that was already shown (and turned down) as a detected candidate is
+// not offered a second time.
+func TestExtractFieldDoesNotRepeatRejectedGuess(t *testing.T) {
+	cand := &ingest.ProbeExtractor{Field: "none", Pattern: `trace_id=(\S+)`}
+	local := LocalProber(treeLines)
+	probe := func(req ingest.ProbeRequest) (*ingest.ProbeResult, error) {
+		if req.Propose {
+			req.Previous, req.Propose = cand, false
+		}
+		return local(req)
+	}
+	ui := &scriptUI{t: t, confirm: []bool{false, false}} // reject the candidate, then "expect it?" no
+	if _, err := ExtractField(ui, probe, ingest.ProbeTraceID, treeLines, ingest.ProbeBase{}, []*ingest.ProbeExtractor{cand}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ui.asked, ","); got != "candidate,expect" {
+		t.Errorf("asked %s, want candidate,expect", got)
+	}
+}
+
+// Marked duration text with no unit of its own prompts for the unit, and the
+// answer decides what the number means.
+func TestExtractFieldAsksUnitForBareDuration(t *testing.T) {
+	lines := []string{
+		"12:00:00 starting worker",
+		"12:00:02 GET /api/items 200 took=12.5",
+		"12:00:03 GET /healthz 200",
+		"12:00:04 GET /api/orders 500 took=340",
+	}
+	ui := &scriptUI{t: t, confirm: []bool{true}, unit: "ms",
+		picks:   []PickResult{{Kind: PickNextLine}, sel(lines, 1, "12.5")},
+		reviews: []ReviewResult{{Kind: ReviewAccept}}}
+	ex, err := ExtractField(ui, LocalProber(lines), ingest.ProbeDurationNs, lines, ingest.ProbeBase{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ex == nil || ex.DurationUnit != "ms" {
+		t.Fatalf("extractor = %+v, want unit ms", ex)
+	}
+	if !strings.Contains(strings.Join(ui.asked, ","), "unit") {
+		t.Errorf("unit never asked: %v", ui.asked)
+	}
+}
+
+// Text that carries its own unit needs no question.
+func TestExtractFieldDoesNotAskUnitForSuffixedDuration(t *testing.T) {
+	lines := []string{
+		"12:00:00 starting worker",
+		"12:00:02 GET /api/items 200 took=12.5ms",
+		"12:00:03 GET /healthz 200",
+		"12:00:04 GET /api/orders 500 took=1.2s",
+	}
+	ui := &scriptUI{t: t, confirm: []bool{true},
+		picks:   []PickResult{{Kind: PickNextLine}, sel(lines, 1, "12.5ms")},
+		reviews: []ReviewResult{{Kind: ReviewAccept}}}
+	ex, err := ExtractField(ui, LocalProber(lines), ingest.ProbeDurationNs, lines, ingest.ProbeBase{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ex == nil || ex.DurationUnit != "text" {
+		t.Fatalf("extractor = %+v, want unit text", ex)
+	}
+	for _, a := range ui.asked {
+		if a == "unit" {
+			t.Errorf("asked for a unit although the text has one: %v", ui.asked)
+		}
 	}
 }

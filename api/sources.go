@@ -349,6 +349,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		ParentSpanIDPattern string             `json:"parent_span_id_pattern"`
 		DurationNsField     string             `json:"duration_ns_field"`
 		DurationNsPattern   string             `json:"duration_ns_pattern"`
+		DurationUnit        string             `json:"duration_unit"`
 		JSONStartField      int                `json:"json_start_field"`
 		ExpandKeys          []ingest.ExpandKey `json:"expand_keys"`
 		// Extract is how each value is read out of its field (what to strip,
@@ -382,6 +383,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		ParentSpanIDPattern: req.ParentSpanIDPattern,
 		DurationNsField:     req.DurationNsField,
 		DurationNsPattern:   req.DurationNsPattern,
+		DurationUnit:        req.DurationUnit,
 		JSONStartField:      req.JSONStartField,
 		ExpandKeys:          req.ExpandKeys,
 		Extract:             req.Extract,
@@ -399,8 +401,8 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 
 	// weftd reads the schema on the agent. One that cannot interpret this
 	// schema would ignore it silently, so refuse it now, naming what is needed.
-	if schema.UsesExtract() && lg.SourceType == store.SourceTypeWeftd {
-		if msg := s.agentsCannotReadExtract(lg.ID); msg != "" {
+	if minAgent := schema.MinAgentVersion(); minAgent != "" && lg.SourceType == store.SourceTypeWeftd {
+		if msg := s.agentsCannotReadSchema(lg.ID, minAgent); msg != "" {
 			http.Error(w, msg, http.StatusConflict)
 			return
 		}
@@ -747,11 +749,11 @@ func errForbidden(msg string) error    { return forbiddenError(msg) }
 // source: a host retired weeks ago should not block a schema forever.
 const agentWindow = 7 * 24 * time.Hour
 
-// agentsCannotReadExtract says why the agents reading the source cannot be
-// trusted with an extract-form schema, or "" if all of them can. An agent
+// agentsCannotReadSchema says why the agents reading the source cannot be
+// trusted with a schema that needs weftd minVersion, or "" if all of them can. An agent
 // that has never reported a version (one from before the field existed) counts
 // as unknown, not as capable.
-func (s *Server) agentsCannotReadExtract(logGroupID uint) string {
+func (s *Server) agentsCannotReadSchema(logGroupID uint, minVersion string) string {
 	agents, err := s.store.RecentAgents(logGroupID, agentWindow)
 	if err != nil {
 		log.Printf("recent agents for log group %d: %v", logGroupID, err)
@@ -762,10 +764,10 @@ func (s *Server) agentsCannotReadExtract(logGroupID uint) string {
 	case n == 0:
 		return fmt.Sprintf("no agent has reported for this source in the last %d days, so its weftd version is unknown; "+
 			"this schema needs weftd %s or newer. Upgrade weftd on the hosts shipping this source (they report their version "+
-			"as they run), then configure again.", int(agentWindow.Hours()/24), ingest.MinAgentVersionForExtract)
-	case release.VersionNewer(ingest.MinAgentVersionForExtract, oldest):
+			"as they run), then configure again.", int(agentWindow.Hours()/24), minVersion)
+	case release.VersionNewer(minVersion, oldest):
 		return fmt.Sprintf("the oldest agent reading this source is weftd %s (%d host(s) reporting); this schema needs weftd %s or newer. "+
-			"Upgrade weftd on those hosts, then configure again.", oldest, n, ingest.MinAgentVersionForExtract)
+			"Upgrade weftd on those hosts, then configure again.", oldest, n, minVersion)
 	}
 	return ""
 }

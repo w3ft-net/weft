@@ -32,6 +32,10 @@ func (s *Server) handleProbeSource(w http.ResponseWriter, r *http.Request) {
 		// UseDetected starts from the source's detected candidate for the
 		// field (as Previous) when the client has none of its own.
 		UseDetected bool `json:"use_detected"`
+		// Propose asks for the model's first guess when nothing has been marked.
+		Propose bool `json:"propose"`
+		// DurationUnit is what a bare duration number is counted in.
+		DurationUnit string `json:"duration_unit"`
 		// DetectedIndex picks which detected candidate (0-based) to start from,
 		// so a client can offer them one after another.
 		DetectedIndex int `json:"detected_index"`
@@ -89,6 +93,7 @@ func (s *Server) handleProbeSource(w http.ResponseWriter, r *http.Request) {
 
 	probeReq := ingest.ProbeRequest{
 		Field: req.Field, Base: req.Base, Lines: lines, Marks: req.Marks, Previous: req.Previous,
+		Propose: req.Propose, DurationUnit: req.DurationUnit,
 	}
 	// If the classifier can propose extractors, let it help when the
 	// built-in search finds none. Its proposals are verified like any other.

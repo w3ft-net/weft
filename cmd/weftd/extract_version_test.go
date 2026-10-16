@@ -18,3 +18,13 @@ func TestVersionIsAtLeastTheMinimumForExtractSchemas(t *testing.T) {
 			Version, ingest.MinAgentVersionForExtract)
 	}
 }
+
+// Same guard for duration_unit: the API refuses a schema using it for any
+// source whose agents are older than ingest.MinAgentVersionForDurationUnit, so
+// this build must read it.
+func TestVersionIsAtLeastTheMinimumForDurationUnit(t *testing.T) {
+	if release.VersionNewer(ingest.MinAgentVersionForDurationUnit, Version) {
+		t.Fatalf("weftd Version %s is older than ingest.MinAgentVersionForDurationUnit %s: bump cmd/weftd/version.go",
+			Version, ingest.MinAgentVersionForDurationUnit)
+	}
+}

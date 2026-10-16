@@ -192,6 +192,8 @@ type tagField struct {
 	JSONPath       string `json:"json_path"`
 	ExtractPattern string `json:"extract_pattern"`
 	SampleValue    string `json:"sample_value"`
+	// DurationUnit, for a duration only: see Schema.DurationUnit.
+	DurationUnit string `json:"duration_unit"`
 }
 
 // tagFieldRoles lists every ClassifierResult field sharing tagField's
@@ -298,12 +300,27 @@ func verifyTagProposal(f *tagField, field ProbeField, lines []string) *FieldCand
 	if !ok {
 		return nil
 	}
-	if !proposalVerifies(field, lines, ex, tagMinRatio(string(field))) {
+	if field == ProbeDurationNs {
+		if _, ok := durationUnitMode(f.DurationUnit); !ok {
+			return nil
+		}
+		found := false
+		for _, u := range unitVariants(f.DurationUnit) {
+			ex.DurationUnit = u
+			if proposalVerifies(field, lines, ex, tagMinRatio(string(field))) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil
+		}
+	} else if !proposalVerifies(field, lines, ex, tagMinRatio(string(field))) {
 		return nil
 	}
 	// The candidate mirrors the extractor: a JSON-path proposal carries no
 	// pattern (the parser never applies one to a JSON path).
-	cand := &FieldCandidate{Sample: f.SampleValue, JSONPath: f.JSONPath, Pattern: ex.Pattern}
+	cand := &FieldCandidate{Sample: f.SampleValue, JSONPath: f.JSONPath, Pattern: ex.Pattern, Unit: ex.DurationUnit}
 	if ex.Field != "none" && f.JSONPath == "" {
 		cand.FieldIndex = f.FieldIndex
 	}
@@ -379,6 +396,8 @@ What each value is, whatever the format of the log:
   - span fields: the name, id, parent id and duration of a unit of work, if the lines describe such units.
   - level: the severity of the message, in whatever words or numbers this log uses. The field may hold more than the level (the level, a delimiter, then unrelated text): then give extract_pattern, a regex with one capture group that captures only the level.
 
+For duration_ns (stored as nanoseconds whatever it is written in), also give duration_unit: ns, us, ms or s when the extracted text is a bare number counted in that unit, or text when the text carries its own unit (5.01s, 340ms, 1m2s). If the same duration appears in more than one spelling on a line, prefer the most precise one.
+
 For timestamp, give field_index or json_path the same way, plus a strftime pattern (e.g. "%Y-%m-%d %H:%M:%S,%f", "%Y-%m-%dT%H:%M:%S%z") describing the value's format. Use %f for a fractional-second field written as exactly 6 digits (microseconds); use %3f for exactly 3 digits (milliseconds, the common case for comma-separated fractional seconds like "10:15:03,102"); use %9f for 9 digits (nanoseconds). sample_value should be the literal value you found for every present field, for traceability.
 
 Only claim present: true when you actually see the field in the sample — never guess. Respond only by calling the classify_log_fields tool.`
@@ -405,6 +424,27 @@ var tagFieldSchema = map[string]any{
 	"required": []string{"present", "field_index", "json_path", "extract_pattern", "sample_value"},
 }
 
+// durationFieldSchema is tagFieldSchema plus the unit the duration text is
+// written in, the way the timestamp schema carries its strftime pattern.
+var durationFieldSchema = func() map[string]any {
+	props := map[string]any{}
+	for k, v := range tagFieldSchema["properties"].(map[string]any) {
+		props[k] = v
+	}
+	props["duration_unit"] = durationUnitSchema
+	return map[string]any{
+		"type":       "object",
+		"properties": props,
+		"required":   []string{"present", "field_index", "json_path", "extract_pattern", "sample_value", "duration_unit"},
+	}
+}()
+
+var durationUnitSchema = map[string]any{
+	"type":        "string",
+	"enum":        []string{"ns", "us", "ms", "s", "text"},
+	"description": "the unit of the text your pattern captures. Look at the captured text itself: if it is only digits (optionally with a decimal point), choose the unit those numbers are counted in: ns, us, ms or s (a bare 5015996546 is ns; a bare 12.5 next to a total of 340 is most likely ms). Choose text ONLY when the captured text itself ends in a unit, such as 5.01s, 340ms or 1m2s",
+}
+
 var classifyJSONSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
@@ -425,7 +465,7 @@ var classifyJSONSchema = map[string]any{
 		"span_name":      tagFieldSchema,
 		"span_id":        tagFieldSchema,
 		"parent_span_id": tagFieldSchema,
-		"duration_ns":    tagFieldSchema,
+		"duration_ns":    durationFieldSchema,
 	},
 	"required": []string{"timestamp", "level", "trace_id", "span_name", "span_id", "parent_span_id", "duration_ns"},
 }
@@ -654,6 +694,7 @@ type proposedExtractor struct {
 	JSONPath       string `json:"json_path"`
 	ExtractPattern string `json:"extract_pattern"`
 	Strftime       string `json:"strftime"`
+	DurationUnit   string `json:"duration_unit"`
 }
 
 type proposeToolResponse struct {
@@ -666,8 +707,8 @@ type proposeToolResponse struct {
 // unverified; Probe checks each against the user's marks.
 func proposalsToExtractors(lines []string, resp *proposeToolResponse, f ProbeField) []ProbeExtractor {
 	var out []ProbeExtractor
-	for _, c := range resp.Candidates {
-		if len(out) == maxProposals {
+	for i, c := range resp.Candidates {
+		if i == maxProposals {
 			break
 		}
 		if f == ProbeTimestamp {
@@ -684,6 +725,16 @@ func proposalsToExtractors(lines []string, resp *proposeToolResponse, f ProbeFie
 			continue
 		}
 		if ex, ok := tagExtractor(lines, c.FieldIndex, c.JSONPath, c.ExtractPattern); ok {
+			if f == ProbeDurationNs {
+				if _, ok := durationUnitMode(c.DurationUnit); !ok {
+					continue
+				}
+				for _, u := range unitVariants(c.DurationUnit) {
+					ex.DurationUnit = u
+					out = append(out, ex)
+				}
+				continue
+			}
 			out = append(out, ex)
 		}
 	}
@@ -725,6 +776,48 @@ For a timestamp, also give strftime (e.g. "%Y-%m-%d %H:%M:%S,%3f"; %3f is millis
 
 Every rule must give exactly the marked value on every line marked with one, and nothing on every line marked as having none. Prefer simple, readable rules.`
 
+func proposeSystemPromptFor(f ProbeField) string {
+	if f == ProbeDurationNs {
+		return proposeSystemPrompt + proposeDurationNote
+	}
+	return proposeSystemPrompt
+}
+
+// proposeDurationNote is added to the retry prompt for a duration only, so
+// the unit instructions do not perturb the other fields' proposals.
+const proposeDurationNote = `
+
+This value is a duration. Also give duration_unit: ns, us, ms or s when the extracted text is a bare number (a fraction is fine) counted in that unit, or text when the text carries its own unit, such as 5.01s, 340ms or 1m2s. Choose the unit that makes the numbers plausible durations for the work described.`
+
+// proposeSchemaFor is the tool schema for f: the shared schema, plus the unit
+// property for a duration.
+func proposeSchemaFor(f ProbeField) map[string]any {
+	if f != ProbeDurationNs {
+		return proposeJSONSchema
+	}
+	items := map[string]any{}
+	for k, v := range proposeJSONSchema["properties"].(map[string]any)["candidates"].(map[string]any)["items"].(map[string]any) {
+		items[k] = v
+	}
+	props := map[string]any{}
+	for k, v := range items["properties"].(map[string]any) {
+		props[k] = v
+	}
+	props["duration_unit"] = durationUnitSchema
+	items["properties"] = props
+	candidates := map[string]any{}
+	for k, v := range proposeJSONSchema["properties"].(map[string]any)["candidates"].(map[string]any) {
+		candidates[k] = v
+	}
+	items["required"] = append(append([]string{}, proposeJSONSchema["properties"].(map[string]any)["candidates"].(map[string]any)["items"].(map[string]any)["required"].([]string)...), "duration_unit")
+	candidates["items"] = items
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"candidates": candidates},
+		"required":   []string{"candidates"},
+	}
+}
+
 // buildProposePrompt describes the sample and the user's marks.
 func buildProposePrompt(in ProposeInput) string {
 	var b strings.Builder
@@ -735,7 +828,11 @@ func buildProposePrompt(in ProposeInput) string {
 		}
 		fmt.Fprintf(&b, "%d: %s\n", i+1, line)
 	}
-	b.WriteString("\nWhat the person marked:\n")
+	if len(in.Examples) == 0 && len(in.NoValueLines) == 0 {
+		b.WriteString("\nThe person has not marked anything yet; propose your best guesses from the sample alone.\n")
+	} else {
+		b.WriteString("\nWhat the person marked:\n")
+	}
 	for _, m := range in.Examples {
 		fmt.Fprintf(&b, "  line %d: the value is %q\n", m.Line+1, m.Text)
 	}
@@ -751,7 +848,7 @@ func buildProposePrompt(in ProposeInput) string {
 var probeFieldLabels = map[ProbeField]string{
 	ProbeTimestamp: "timestamp", ProbeLevel: "log level", ProbeTraceID: "trace ID",
 	ProbeSpanName: "span name", ProbeSpanID: "span ID", ProbeParentSpanID: "parent span ID",
-	ProbeDurationNs: "span duration in nanoseconds (an integer)",
+	ProbeDurationNs: "span duration (how long the unit of work took)",
 }
 
 // ProposeExtractors asks the model for candidate extractors that fit the
@@ -777,12 +874,12 @@ func (c *BedrockClassifier) proposeRaw(ctx context.Context, in ProposeInput) (*p
 			Role:    brtypes.ConversationRoleUser,
 			Content: []brtypes.ContentBlock{&brtypes.ContentBlockMemberText{Value: buildProposePrompt(in)}},
 		}},
-		System: []brtypes.SystemContentBlock{&brtypes.SystemContentBlockMemberText{Value: proposeSystemPrompt}},
+		System: []brtypes.SystemContentBlock{&brtypes.SystemContentBlockMemberText{Value: proposeSystemPromptFor(in.Field)}},
 		ToolConfig: &brtypes.ToolConfiguration{
 			Tools: []brtypes.Tool{&brtypes.ToolMemberToolSpec{Value: brtypes.ToolSpecification{
 				Name:        aws.String(proposeToolName),
 				Description: aws.String("Report candidate extraction rules for the marked value."),
-				InputSchema: &brtypes.ToolInputSchemaMemberJson{Value: brdoc.NewLazyDocument(proposeJSONSchema)},
+				InputSchema: &brtypes.ToolInputSchemaMemberJson{Value: brdoc.NewLazyDocument(proposeSchemaFor(in.Field))},
 			}}},
 			ToolChoice: &brtypes.ToolChoiceMemberAny{},
 		},

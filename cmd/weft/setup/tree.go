@@ -76,12 +76,17 @@ type UI interface {
 	// WantSpans asks whether the service logs spans (span name/ID, parent,
 	// duration), so the four span prompts are not asked of everyone.
 	WantSpans() (bool, error)
+	// DurationUnit asks what a bare duration number is counted in, when the
+	// marked text carries no unit of its own. Returns ns, us, ms or s.
+	DurationUnit(sample []string) (string, error)
 	Notify(msg string)
 }
 
 // ExtractField walks the decision tree for one value:
 //
 //  1. Show each detected candidate in turn. One accepted: done.
+//     1b. None accepted (or none detected): ask the server for a first guess,
+//     which asks the model, and show it the same way.
 //  2. Otherwise ask whether the value is expected on these lines at all.
 //     No: skip it.
 //  3. Yes: show lines until the user highlights the value on one, or has
@@ -96,6 +101,7 @@ func ExtractField(ui UI, probe Prober, f ingest.ProbeField, lines []string, base
 	for _, cand := range candidates {
 		res, err := probe(ingest.ProbeRequest{Field: f, Base: base, Previous: cand})
 		if err != nil {
+			ui.Notify(fmt.Sprintf("could not check a suggested %s rule: %v", fieldNames[f], err))
 			continue
 		}
 		ok, err := ui.ConfirmCandidate(f, lines, cand, res)
@@ -104,6 +110,17 @@ func ExtractField(ui UI, probe Prober, f ingest.ProbeField, lines []string, base
 		}
 		if ok {
 			return cand, nil
+		}
+	}
+	// A guess from the model, for when detection found nothing or the person
+	// turned it down. A failure here only means no guess: they can still point.
+	if res, err := probe(ingest.ProbeRequest{Field: f, Base: base, Propose: true}); err == nil && res.Extractor != nil && !sameExtractor(res.Extractor, candidates) {
+		ok, err := ui.ConfirmCandidate(f, lines, res.Extractor, res)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return res.Extractor, nil
 		}
 	}
 	expect, err := ui.ExpectOnLines(f)
@@ -118,6 +135,7 @@ func ExtractField(ui UI, probe Prober, f ingest.ProbeField, lines []string, base
 	var prev *ingest.ProbeExtractor
 	hint := "is it on this line?"
 	line, seen := 0, map[int]bool{}
+	unit, unitAsked := "", false
 
 	mark := func(p PickResult) ingest.ProbeMark {
 		return ingest.ProbeMark{Line: p.Line, Prefix: lines[p.Line][:p.Start], Text: lines[p.Line][p.Start:p.End]}
@@ -146,9 +164,22 @@ func ExtractField(ui UI, probe Prober, f ingest.ProbeField, lines []string, base
 			marks = setMark(marks, mark(p))
 		}
 
-		res, err := probe(ingest.ProbeRequest{Field: f, Base: base, Marks: marks, Previous: prev})
+		res, err := probe(ingest.ProbeRequest{Field: f, Base: base, Marks: marks, Previous: prev, DurationUnit: unit})
 		if err != nil {
 			return nil, err
+		}
+		// Marked text with no unit of its own ("12.5") says nothing about
+		// what it counts; the person does.
+		if f == ingest.ProbeDurationNs && res.Extractor != nil && res.NeedsUnit && !unitAsked {
+			unitAsked = true
+			u, err := ui.DurationUnit(markedTexts(marks))
+			if err != nil {
+				return nil, err
+			}
+			if u != "" && u != "ns" {
+				unit = u
+				continue
+			}
 		}
 		if res.Extractor == nil {
 			ui.Notify(res.Message)
@@ -187,6 +218,26 @@ func ExtractField(ui UI, probe Prober, f ingest.ProbeField, lines []string, base
 			}
 		}
 	}
+}
+
+// sameExtractor reports whether ex is one of cands (already shown).
+func sameExtractor(ex *ingest.ProbeExtractor, cands []*ingest.ProbeExtractor) bool {
+	for _, c := range cands {
+		if c.Field == ex.Field && c.Pattern == ex.Pattern && c.TimestampFormat == ex.TimestampFormat && c.DurationUnit == ex.DurationUnit {
+			return true
+		}
+	}
+	return false
+}
+
+func markedTexts(marks []ingest.ProbeMark) []string {
+	var out []string
+	for _, m := range marks {
+		if !m.None {
+			out = append(out, m.Text)
+		}
+	}
+	return out
 }
 
 func hasPositive(marks []ingest.ProbeMark) bool {
@@ -290,7 +341,7 @@ func applyExtractor(s *ingest.Schema, f ingest.ProbeField, ex *ingest.ProbeExtra
 	case ingest.ProbeParentSpanID:
 		s.ParentSpanIDField, s.ParentSpanIDPattern = ex.Field, ex.Pattern
 	case ingest.ProbeDurationNs:
-		s.DurationNsField, s.DurationNsPattern = ex.Field, ex.Pattern
+		s.DurationNsField, s.DurationNsPattern, s.DurationUnit = ex.Field, ex.Pattern, ex.DurationUnit
 	}
 }
 
@@ -312,7 +363,7 @@ func extractorFromSchema(s *ingest.Schema, f ingest.ProbeField) *ingest.ProbeExt
 	case ingest.ProbeParentSpanID:
 		ex = ingest.ProbeExtractor{Field: s.ParentSpanIDField, Pattern: s.ParentSpanIDPattern}
 	case ingest.ProbeDurationNs:
-		ex = ingest.ProbeExtractor{Field: s.DurationNsField, Pattern: s.DurationNsPattern}
+		ex = ingest.ProbeExtractor{Field: s.DurationNsField, Pattern: s.DurationNsPattern, DurationUnit: s.DurationUnit}
 	}
 	if (ex.Field == "" || ex.Field == "none") && ex.Pattern == "" {
 		return nil

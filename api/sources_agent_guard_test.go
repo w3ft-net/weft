@@ -186,3 +186,70 @@ func TestListSources_ReportsAgentFleet(t *testing.T) {
 		t.Errorf("a source no agent has reported for shows %+v", silent.Agents)
 	}
 }
+
+// duration_unit changes how the agent turns text into nanoseconds; an older
+// agent would read "5.01s" as no duration at all, so the schema is refused
+// until every agent reading the source is new enough. Plain nanoseconds read
+// the same everywhere and need nothing.
+func TestConfigureSource_DurationUnitNeedsCapableAgents(t *testing.T) {
+	srv, s := testServer(t)
+	handler := srv.Handler()
+
+	name := fmt.Sprintf("agentguard-duration-%d", os.Getpid())
+	cust, _ := s.FindOrCreateOrg(name)
+	user, _ := s.CreateVerifiedUser(name + "@example.com")
+	dashTeamMember(s, cust, user, name)
+	jwt, _ := auth.Generate(user, "test-secret")
+
+	form := func(unit string) map[string]any {
+		return map[string]any{"format": "text", "duration_ns_field": "none", "duration_ns_pattern": `took=(\S+)`, "duration_unit": unit}
+	}
+	configure := func(service string, body map[string]any) (int, string) {
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/api/sources/ns1/"+service+"/configure", bytes.NewReader(b))
+		req.Header.Set("Authorization", "Bearer "+jwt)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+	record := func(service, version string) {
+		t.Helper()
+		lg, err := s.FindLogGroup(cust.ID, "ns1", service)
+		if err != nil || lg == nil {
+			t.Fatalf("FindLogGroup %s: %v %v", service, lg, err)
+		}
+		if err := s.RecordAgentSeen(lg.ID, "web-1", version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	min := ingest.MinAgentVersionForDurationUnit
+
+	// An agent that has extract specs but not duration units: refused, naming both.
+	seedPendingSource(t, srv, cust.ID, "ns1", "old")
+	record("old", ingest.MinAgentVersionForExtract)
+	if code, body := configure("old", form("ms")); code != 409 || !strings.Contains(body, min) {
+		t.Errorf("old agent with ms = %d %q, want 409 naming %s", code, body, min)
+	}
+
+	// The same agent reads whole nanoseconds fine.
+	seedPendingSource(t, srv, cust.ID, "ns1", "ns")
+	record("ns", ingest.MinAgentVersionForExtract)
+	if code, body := configure("ns", form("ns")); code != 200 {
+		t.Errorf("old agent with ns = %d %q, want 200", code, body)
+	}
+
+	// A capable agent: stored.
+	seedPendingSource(t, srv, cust.ID, "ns1", "new")
+	record("new", min)
+	if code, body := configure("new", form("text")); code != 200 {
+		t.Errorf("capable agent with text = %d %q, want 200", code, body)
+	}
+
+	// An unknown unit is invalid, whoever reads it.
+	seedPendingSource(t, srv, cust.ID, "ns1", "bad")
+	record("bad", min)
+	if code, _ := configure("bad", form("fortnights")); code != 400 {
+		t.Errorf("unknown unit = %d, want 400", code)
+	}
+}

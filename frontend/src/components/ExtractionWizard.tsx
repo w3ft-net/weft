@@ -29,14 +29,16 @@ const FIELDS: FieldDef[] = [
 ]
 const TRACE_IDX = 2 // spans are gated after the trace ID
 
-type Stage = 'loading' | 'confirm' | 'expect' | 'pick' | 'review' | 'spans-gate'
+type Stage = 'loading' | 'confirm' | 'expect' | 'pick' | 'review' | 'unit' | 'spans-gate'
 type Patch = SchemaPatch
 
 // What clearing a field looks like in the configure request.
 function clearPatch(f: ProbeField): Patch {
   const extract = { [f]: null }
   if (f === 'timestamp') return { timestamp_field: '', timestamp_format: '', timestamp_fields: 0, extract }
-  return { [`${f}_field`]: '', [`${f}_pattern`]: '', extract }
+  const patch: Patch = { [`${f}_field`]: '', [`${f}_pattern`]: '', extract }
+  if (f === 'duration_ns') patch.duration_unit = ''
+  return patch
 }
 
 function setMark(marks: ProbeMark[], m: ProbeMark): ProbeMark[] {
@@ -132,15 +134,21 @@ export default function ExtractionWizard({
   const [busy, setBusy] = useState(false)
   const [cand, setCand] = useState({ idx: 0, total: 0 })
   const patches = useRef<Patch>({})
+  // The unit chosen for bare duration numbers, once asked.
+  const durationUnit = useRef<string | null>(null)
+  // Fields whose first model guess has already been offered.
+  const proposed = useRef<Set<number>>(new Set())
+  const [pendingUnit, setPendingUnit] = useState<{ marks: ProbeMark[]; result: ProbeResult } | null>(null)
   const notes = useRef<string[]>([])
   const field = FIELDS[fi]
 
-  function run(f: ProbeField, m: ProbeMark[], previous: ProbeExtractor | null, detectedIndex?: number) {
+  function run(f: ProbeField, m: ProbeMark[], previous: ProbeExtractor | null, detectedIndex?: number, unit?: string) {
     return probe({
       field: f, base, marks: m,
       previous: previous ?? undefined,
       use_detected: detectedIndex !== undefined ? true : undefined,
       detected_index: detectedIndex,
+      duration_unit: unit ?? durationUnit.current ?? undefined,
     })
   }
 
@@ -160,6 +168,17 @@ export default function ExtractionWizard({
         setCand({ idx, total: res.detected_total ?? idx + 1 })
         setStage('confirm')
         return
+      }
+      // Detection is out of candidates: offer the model's first guess, once.
+      if (!proposed.current.has(i)) {
+        proposed.current.add(i)
+        const guess = await probe({ field: FIELDS[i].key, base, marks: [], propose: true })
+        if (guess.extractor) {
+          setResult(guess)
+          setCand({ idx, total: idx + 1 })
+          setStage('confirm')
+          return
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -221,8 +240,27 @@ export default function ExtractionWizard({
         setSelection(null)
         return
       }
+      if (res.needs_unit && durationUnit.current === null) {
+        setPendingUnit({ marks: next, result: res })
+        setSelection(null)
+        setStage('unit')
+        return
+      }
       setMarks(next); setPrev(res.extractor); setResult(res)
       setFlagLine(null); setSelection(null); setNotice('')
+      setStage('review')
+    })
+  }
+
+  // The person said what a bare duration number counts; read the marks again with it.
+  function chooseUnit(unit: string) {
+    if (!pendingUnit) return
+    guarded(async () => {
+      durationUnit.current = unit
+      const res = await run(field.key, pendingUnit.marks, null, undefined, unit)
+      if (!res.extractor) { setNotice(res.message ?? 'No rule matches that selection.'); setStage('pick'); return }
+      setMarks(pendingUnit.marks); setPrev(res.extractor); setResult(res)
+      setPendingUnit(null); setNotice('')
       setStage('review')
     })
   }
@@ -241,6 +279,7 @@ export default function ExtractionWizard({
   }
 
   function restart() {
+    durationUnit.current = null
     resetField()
     setStage('pick')
   }
@@ -310,6 +349,26 @@ export default function ExtractionWizard({
             data-testid={`${tp}-confirm-yes-button`}>yes, that’s the {field.label}</button>
           <button className="tui-btn" onClick={() => offerCandidate(fi, cand.idx + 1)}
             data-testid={`${tp}-confirm-no-button`}>no{cand.idx + 1 < cand.total ? ', show the next' : ''}</button>
+        </div>
+        {messages}
+      </div>
+    )
+  }
+
+  if (stage === 'unit' && pendingUnit) {
+    return (
+      <div className="psc-wizard" data-testid={tp}>
+        {header}
+        <p className="psc-prose">
+          What are these numbers counted in? You selected{' '}
+          {pendingUnit.marks.filter(m => !m.none).map(m => `“${m.text}”`).join(', ')}.
+          Durations are stored as nanoseconds.
+        </p>
+        <div className="psc-actions">
+          {[['ns', 'nanoseconds'], ['us', 'microseconds'], ['ms', 'milliseconds'], ['s', 'seconds']].map(([u, label]) => (
+            <button key={u} className="tui-btn" disabled={busy} onClick={() => chooseUnit(u)}
+              data-testid={`${tp}-unit-${u}-button`}>{label}</button>
+          ))}
         </div>
         {messages}
       </div>

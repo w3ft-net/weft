@@ -640,6 +640,9 @@ export interface ConfigureSourceRequest {
   parent_span_id_pattern: string
   duration_ns_field: string
   duration_ns_pattern: string
+  // How the duration text reads: '' / 'ns' (bare nanoseconds), 'us' | 'ms' | 's'
+  // (a bare number in that unit), or 'text' (carries its own unit, e.g. 5.01s).
+  duration_unit?: string
   expand_keys?: { key: string; type: string }[]
 }
 
@@ -1056,6 +1059,9 @@ export interface ProbeResult {
   // ConfigureSourceRequest keys this extractor sets; `extract` maps a value's
   // name to its spec (null clears it). Merge with lib/schemaPatch.
   schema_patch?: Record<string, string | number | Record<string, ExtractSpec | null>>
+  // A duration located by a bare number: the person must say what it counts
+  // (probe again with duration_unit).
+  needs_unit?: boolean
 }
 
 export interface ProbeRequest {
@@ -1066,6 +1072,10 @@ export interface ProbeRequest {
   use_detected?: boolean
   // With use_detected: which detected candidate (0-based) to start from.
   detected_index?: number
+  // Ask the model for a first guess when nothing has been marked.
+  propose?: boolean
+  // What a bare duration number is counted in: 'ns' | 'us' | 'ms' | 's'.
+  duration_unit?: string
 }
 
 export type ProbeFn = (req: ProbeRequest) => Promise<ProbeResult>

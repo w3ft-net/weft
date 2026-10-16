@@ -68,6 +68,10 @@ func (s *Schema) Validate() []string {
 		errs = append(errs, err)
 	}
 
+	if _, ok := durationUnitMode(s.DurationUnit); !ok {
+		errs = append(errs, fmt.Sprintf("duration_unit: %q is not one of ns, us, ms, s, text", s.DurationUnit))
+	}
+
 	if s.LevelPattern != "" {
 		if _, err := regexp.Compile(s.LevelPattern); err != nil {
 			errs = append(errs, fmt.Sprintf("level_pattern: %v", err))

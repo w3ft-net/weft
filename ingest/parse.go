@@ -27,6 +27,7 @@ type Parser struct {
 	spanIDRe     *regexp.Regexp
 	parentSpanRe *regexp.Regexp
 	durationNsRe *regexp.Regexp
+	durationMode durationMode
 
 	// JSON paths, compiled once here instead of per row — mirrors the
 	// *Re fields above. nil means the corresponding schema field isn't
@@ -112,6 +113,12 @@ func NewParser(s *Schema) (*Parser, error) {
 		*spec.dst = segs
 		p.hasJSONPaths = true
 	}
+
+	mode, ok := durationUnitMode(s.DurationUnit)
+	if !ok {
+		return nil, fmt.Errorf("duration_unit %q is not one of ns, us, ms, s, text", s.DurationUnit)
+	}
+	p.durationMode = mode
 
 	if err := p.compilePlan(); err != nil {
 		return nil, err
@@ -285,7 +292,7 @@ func (p *Parser) parse(raw string, ingestTime time.Time, spans *FieldSpans) (*pb
 		dur = p.extractSpanField(fields, body, p.schema.DurationNsField, p.durationNsRe, p.durationNsPath, jsonBody, hasJSONBody)
 	}
 	if dur != "" {
-		if ns, err := strconv.ParseInt(dur, 10, 64); err == nil {
+		if ns, ok := p.durationMode.parse(dur); ok {
 			row.DurationNs = ns
 		}
 	}

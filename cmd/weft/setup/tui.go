@@ -61,6 +61,21 @@ func (terminalUI) WantSpans() (bool, error) {
 	return ok, err
 }
 
+func (terminalUI) DurationUnit(sample []string) (string, error) {
+	unit := "ns"
+	err := huh.NewSelect[string]().
+		Title("What are these numbers counted in?").
+		Description("You marked "+strings.Join(sample, ", ")+". Durations are stored as nanoseconds.").
+		Options(
+			huh.NewOption("nanoseconds", "ns"),
+			huh.NewOption("microseconds", "us"),
+			huh.NewOption("milliseconds", "ms"),
+			huh.NewOption("seconds", "s"),
+		).
+		Value(&unit).Run()
+	return unit, err
+}
+
 func (terminalUI) ExpectOnLines(f ingest.ProbeField) (bool, error) {
 	var ok bool
 	err := huh.NewConfirm().

@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -132,4 +133,99 @@ func TestLiveRawToolInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("raw tool input: %s", b)
+}
+
+// A span-emitting service interleaves start/done pairs (duration only on
+// "done"), error lines and their continuation lines. Every span field must
+// survive verification even though none is on every line.
+func TestLiveClassifySpanStartDoneSample(t *testing.T) {
+	c := liveClassifier(t)
+	var lines []string
+	for i := 0; i < 10; i++ {
+		ts := time.Date(2026, 10, 16, 9, 42, i*3, 0, time.UTC).Format("2006/01/02 15:04:05")
+		tid, sid, pid := fmt.Sprintf("%032x", i*7919+1), fmt.Sprintf("%016x", i*104729+3), fmt.Sprintf("%016x", i*1299709+5)
+		lines = append(lines,
+			ts+" span start name=compute.ExecuteQueryStream trace_id="+tid+" span_id="+sid+" parent_span_id="+pid,
+			ts+" cold shard shard-20260831T0000-7f25c473: lambda returned 500: query failed: IO Error: No files found",
+			"LINE 1: ... raw, ts FROM read_parquet('s3://weft-cold/x')",
+			"^",
+			ts+" span done name=compute.ExecuteQueryStream trace_id="+tid+" span_id="+sid+" parent_span_id="+pid+
+				fmt.Sprintf(" duration=%d.%09ds duration_ns=%d status=ok", 1+i%4, 1234567+i, 1001234567+i),
+		)
+	}
+	det := Detect(lines)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	raw, vlines, err := c.classifyRaw(ctx, det)
+	if err != nil {
+		t.Fatalf("classifyRaw: %v", err)
+	}
+	t.Logf("model proposed: ts=%+v level=%+v trace=%+v name=%+v span=%+v parent=%+v dur=%+v",
+		raw.Timestamp, raw.Level, raw.TraceID, raw.SpanName, raw.SpanID, raw.ParentSpanID, raw.DurationNs)
+	res := validateClassification(raw, vlines)
+	t.Logf("verified: trace=%+v name=%+v span=%+v parent=%+v dur=%+v",
+		res.TraceID, res.SpanName, res.SpanID, res.ParentSpanID, res.DurationNs)
+	if res.DurationNs == nil {
+		t.Error("no verified duration_ns candidate")
+	}
+}
+
+// With nothing marked, the real model must propose a duration rule and a
+// unit that the parser verifies on the sample.
+func TestLiveProposeFirstDurationGuess(t *testing.T) {
+	c := liveClassifier(t)
+	var lines []string
+	for i := 0; i < 8; i++ {
+		ts := time.Date(2026, 10, 16, 9, 42, i*3, 0, time.UTC).Format("2006/01/02 15:04:05")
+		lines = append(lines,
+			ts+" span start name=compute.ExecuteQueryStream span_id="+fmt.Sprintf("%016x", i+1),
+			ts+" cold shard shard-1: lambda returned 500: query failed",
+			ts+" span done name=compute.ExecuteQueryStream span_id="+fmt.Sprintf("%016x", i+1)+fmt.Sprintf(" took=%d.%03ds status=ok", 1+i%3, 120+i))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := ProbeContext(ctx, ProbeRequest{Field: ProbeDurationNs, Lines: lines, Propose: true, Proposer: c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Extractor == nil {
+		t.Fatalf("no first guess: %s", res.Message)
+	}
+	t.Logf("guess: %+v (%s), matched %d/%d", *res.Extractor, res.Extractor.Describe(), res.Matched, res.Total)
+	for _, r := range res.Results {
+		if r.Matched {
+			t.Logf("line %d -> %s ns", r.Line, r.Value)
+			break
+		}
+	}
+	if res.Matched < 2 {
+		t.Errorf("guess reads only %d lines", res.Matched)
+	}
+}
+
+// With nothing marked, a first guess for an ordinary tag value (not a duration).
+func TestLiveProposeFirstTraceGuess(t *testing.T) {
+	c := liveClassifier(t)
+	var lines []string
+	for i := 0; i < 12; i++ {
+		ts := time.Date(2026, 10, 16, 9, 42, i, 0, time.UTC).Format("2006-01-02 15:04:05.000")
+		if i%3 == 0 {
+			lines = append(lines, ts+" INFO handled GET /api/items 200 12ms trace_id=3f9a1c0de4b2a8"+fmt.Sprintf("%02d", i))
+		} else {
+			lines = append(lines, ts+" DEBUG handled GET /healthz 200 1ms")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := ProbeContext(ctx, ProbeRequest{Field: ProbeTraceID, Base: ProbeBase{Format: "text"}, Lines: lines, Propose: true, Proposer: c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Extractor == nil {
+		t.Fatalf("no first guess: %s", res.Message)
+	}
+	t.Logf("guess: %s, matched %d/%d", res.Extractor.Describe(), res.Matched, res.Total)
+	if res.Matched != 4 {
+		t.Errorf("guess reads %d lines, want the 4 that carry a trace id", res.Matched)
+	}
 }

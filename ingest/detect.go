@@ -70,6 +70,8 @@ type FieldCandidate struct {
 	// CutAt, for a positional field, keeps only the text before its first
 	// occurrence ("/" for "VALUE/other"): the field's head is the value.
 	CutAt string
+	// Unit, for a duration, is how its text reads (see Schema.DurationUnit).
+	Unit string
 	// Values are the distinct values seen at that position (for a categorical
 	// field), so a person can judge what it is.
 	Values []string
