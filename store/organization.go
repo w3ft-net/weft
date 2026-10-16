@@ -153,6 +153,59 @@ func (s *Store) GetNamespace(orgID OrgID, name string) (*Namespace, error) {
 	return &ns, nil
 }
 
+// NamespaceContents is what stands between a namespace and its removal.
+type NamespaceContents struct {
+	Sources []string // service names, sorted
+	Tokens  int      // live (unrevoked) agent tokens
+}
+
+// NamespaceContents lists a namespace's sources and counts its live tokens.
+func (s *Store) NamespaceContents(orgID OrgID, namespaceID uint) (NamespaceContents, error) {
+	var c NamespaceContents
+	if err := s.scoped(orgID).Model(&LogGroup{}).Where("namespace_id = ?", namespaceID).
+		Order("app").Pluck("app", &c.Sources).Error; err != nil {
+		return c, err
+	}
+	var n int64
+	if err := s.scoped(orgID).Model(&AgentToken{}).
+		Where("namespace_id = ? AND revoked = false", namespaceID).Count(&n).Error; err != nil {
+		return c, err
+	}
+	c.Tokens = int(n)
+	return c, nil
+}
+
+// DeleteNamespace removes a namespace and everything keyed to it, for good.
+// It is a hard delete on purpose: a soft delete would keep the (org, name)
+// unique row, so the name could never be created again, and would not fire
+// the foreign-key cascades that clear tokens, sources and shard routing.
+// Permissions have no foreign key, so they are deleted explicitly.
+func (s *Store) DeleteNamespace(orgID OrgID, name string) error {
+	ns, err := s.GetNamespace(orgID, name)
+	if err != nil {
+		return err
+	}
+	var services []string
+	if err := s.scoped(orgID).Model(&LogGroup{}).Where("namespace_id = ?", ns.ID).Pluck("app", &services).Error; err != nil {
+		return err
+	}
+	err = s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
+		for _, m := range []any{&NamespacePermission{}, &LogGroup{}, &AgentToken{}} {
+			if err := tx.Unscoped().Where("namespace_id = ?", ns.ID).Delete(m).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Unscoped().Delete(ns).Error
+	})
+	if err != nil {
+		return err
+	}
+	for _, svc := range services {
+		s.invalidateSchemaCache(ns.ID, svc)
+	}
+	return nil
+}
+
 // ListNamespaces returns all namespaces for an org.
 func (s *Store) ListNamespaces(orgID OrgID) ([]Namespace, error) {
 	var nss []Namespace

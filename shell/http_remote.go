@@ -748,6 +748,49 @@ func (h *HTTPCoordinator) RemoveSource(namespace, app string) error {
 	return nil
 }
 
+// NamespaceNotEmptyError is the server's refusal to remove a namespace that
+// still holds sources or live tokens; retry with force to remove it anyway.
+type NamespaceNotEmptyError struct {
+	Namespace string
+	Sources   []string
+	Tokens    int
+}
+
+func (e *NamespaceNotEmptyError) Error() string {
+	return fmt.Sprintf("namespace %q is not empty (%d sources, %d live tokens)", e.Namespace, len(e.Sources), e.Tokens)
+}
+
+// RemoveNamespace deletes a namespace. Without force the server refuses a
+// namespace that still has sources or live tokens, and the returned error is a
+// *NamespaceNotEmptyError describing them.
+func (h *HTTPCoordinator) RemoveNamespace(name string, force bool) error {
+	url := fmt.Sprintf("%s/api/namespaces/%s", h.baseURL, name)
+	if force {
+		url += "?force=true"
+	}
+	req, _ := http.NewRequest("DELETE", url, nil)
+	h.setAuthHeaders(req)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		var body struct {
+			Sources []string `json:"sources"`
+			Tokens  int      `json:"tokens"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&body) == nil {
+			return &NamespaceNotEmptyError{Namespace: name, Sources: body.Sources, Tokens: body.Tokens}
+		}
+	}
+	if resp.StatusCode >= 400 {
+		return httpError(resp)
+	}
+	return nil
+}
+
 // SourceSchema is the GET /api/sources/{ns}/{app}/schema response. Which
 // fields are populated depends on Status: "configured" carries the live
 // SchemaYAML; "sampling" (and an in-flight resample) carries the

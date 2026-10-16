@@ -311,6 +311,7 @@ func (s *Server) Handler() http.Handler {
 	auth.Handle("DELETE /api/integrations/pagerduty/{name}", protected(s.handlePagerDutyDelete))
 	auth.HandleFunc("GET /api/namespaces", s.handleListNamespaces)
 	auth.Handle("POST /api/namespaces", protected(s.handleCreateNamespace))
+	auth.Handle("DELETE /api/namespaces/{name}", protected(s.handleDeleteNamespace))
 	auth.Handle("PUT /api/namespaces/{name}/permissions/{userId}", protected(s.handleSetNamespacePermission))
 	auth.HandleFunc("GET /api/permissions", s.handleGetPermissions)
 	auth.Handle("PUT /api/permissions", protected(s.handleSetPermissions))
@@ -2210,6 +2211,57 @@ func (s *Server) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]any{"name": ns.Name, "id": ns.ID})
+}
+
+// handleDeleteNamespace removes a namespace. Owner only. A namespace that
+// still has sources or live tokens is refused with a 409 naming them, unless
+// ?force=true, which removes it and everything keyed to it. Log data already
+// stored in shards is not touched; it ages out under normal retention.
+// DELETE /api/namespaces/{name}[?force=true]
+func (s *Server) handleDeleteNamespace(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	if !session.IsOwner {
+		http.Error(w, "forbidden: owner only", http.StatusForbidden)
+		return
+	}
+	custID, ok := activeOrg(w, session)
+	if !ok {
+		return
+	}
+	name := r.PathValue("name")
+	ns, err := s.store.GetNamespace(custID, name)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		http.Error(w, "namespace not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if r.URL.Query().Get("force") != "true" {
+		c, err := s.store.NamespaceContents(custID, ns.ID)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if len(c.Sources) > 0 || c.Tokens > 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]any{
+				"error":   fmt.Sprintf("namespace %q is not empty", name),
+				"sources": c.Sources,
+				"tokens":  c.Tokens,
+			})
+			return
+		}
+	}
+
+	if err := s.store.DeleteNamespace(custID, name); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleSetNamespacePermission(w http.ResponseWriter, r *http.Request) {

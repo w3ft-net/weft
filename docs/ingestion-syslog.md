@@ -82,7 +82,7 @@ will add (see *Adding a new syslog-speaking platform* below).
 
 One token per namespace+env, the same bearer token weftd and Heroku use,
 validated with `store.ValidateAgentToken`. Tokens are not scoped to a
-platform: minting one is `weft token create --namespace NS [--env ENV]`
+platform: minting one is `weft token create NS [--env ENV]`
 regardless of where it will be pasted, and the listener it arrives at
 (not the token) decides how its frames are mapped. The cost is that a
 leaked token is valid on every ingest path, as it already was for

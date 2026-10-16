@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -447,7 +448,7 @@ func runLogin() {
 
 func runNamespace() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: weft namespace {list|create}")
+		fmt.Fprintln(os.Stderr, "usage: weft namespace {list|create|remove}")
 		os.Exit(1)
 	}
 
@@ -472,7 +473,7 @@ func runNamespace() {
 			os.Exit(1)
 		}
 		if len(nss) == 0 {
-			fmt.Println("No namespaces. Create one with: weft namespace create --name <name>")
+			fmt.Println("No namespaces. Create one with: weft namespace create <name>")
 			return
 		}
 		for _, ns := range nss {
@@ -480,19 +481,9 @@ func runNamespace() {
 		}
 
 	case "create":
-		args := os.Args[3:]
-		var name string
-		for i := 0; i < len(args); i++ {
-			if args[i] == "--name" && i+1 < len(args) {
-				name = args[i+1]
-				i++
-			}
-		}
-		if name == "" && len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-			name = args[0]
-		}
-		if name == "" {
-			fmt.Fprintln(os.Stderr, "usage: weft namespace create --name <name>")
+		name, err := parseNamespaceCreateArgs(os.Args[3:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		ns, err := remote.CreateNamespace(name)
@@ -501,6 +492,30 @@ func runNamespace() {
 			os.Exit(1)
 		}
 		fmt.Printf("Created namespace: %s\n", ns.Name)
+
+	case "remove":
+		a, err := parseNamespaceRemoveArgs(os.Args[3:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := remote.RemoveNamespace(a.namespace, a.force); err != nil {
+			var notEmpty *shell.NamespaceNotEmptyError
+			if errors.As(err, &notEmpty) {
+				fmt.Fprintf(os.Stderr, "namespace %s is not empty:\n", a.namespace)
+				for _, s := range notEmpty.Sources {
+					fmt.Fprintf(os.Stderr, "  source %s/%s\n", a.namespace, s)
+				}
+				if notEmpty.Tokens > 0 {
+					fmt.Fprintf(os.Stderr, "  %d live token(s)\n", notEmpty.Tokens)
+				}
+				fmt.Fprintf(os.Stderr, "Remove them first, or re-run with --force to delete the namespace and all of it:\n    weft namespace remove %s --force\n", a.namespace)
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "remove namespace: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Removed namespace: %s\n", a.namespace)
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown namespace command: %s\n", os.Args[2])
@@ -572,19 +587,12 @@ func runSourcePending(cfg *shell.Config) {
 	}
 	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
 
-	var namespace string
-	var watch bool
-	args := os.Args[3:]
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--namespace", "-n":
-			if i+1 < len(args) {
-				namespace = args[i+1]
-			}
-		case "--watch", "-w":
-			watch = true
-		}
+	pa, err := parseSourcePendingArgs(os.Args[3:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
+	namespace, watch := pa.namespace, pa.watch
 	if watch {
 		runSourcePendingWatch(remote, namespace)
 		return
@@ -955,45 +963,12 @@ func httpClient(cfg *shell.Config) (*shell.HTTPCoordinator, error) {
 // registers the mapping; `weft source configure` finishes onboarding
 // once real events have accumulated a sample.
 func runSourceAdd(client *shell.HTTPCoordinator) {
-	args := os.Args[3:]
-	var namespace, service, logGroup, region string
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--namespace":
-			if i+1 < len(args) {
-				namespace = args[i+1]
-				i++
-			}
-		case "--service":
-			if i+1 < len(args) {
-				service = args[i+1]
-				i++
-			}
-		case "--log-group":
-			if i+1 < len(args) {
-				logGroup = args[i+1]
-				i++
-			}
-		case "--region":
-			if i+1 < len(args) {
-				region = args[i+1]
-				i++
-			}
-		}
-	}
-
-	if namespace == "" || service == "" || logGroup == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft source add --namespace NS --service NAME --log-group GROUP [--region REGION]")
+	add, err := parseSourceAddArgs(os.Args[3:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if strings.Contains(service, "/") {
-		fmt.Fprintln(os.Stderr, "--service should be the bare service name only; pass the namespace via --namespace")
-		os.Exit(1)
-	}
-	if region == "" {
-		region = "us-east-2"
-	}
+	namespace, service, logGroup, region := add.namespace, add.service, add.logGroup, add.region
 
 	if err := client.AddKinesisSource(shell.AddKinesisSourceRequest{
 		Namespace: namespace,
@@ -1065,28 +1040,9 @@ func agentsText(s shell.SourceInfo) string {
 }
 
 func runSourceRemove(client *shell.HTTPCoordinator) {
-	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: weft source remove --namespace NS --service NAME")
-		os.Exit(1)
-	}
-	args := os.Args[3:]
-	var namespace, app string
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--namespace":
-			if i+1 < len(args) {
-				namespace = args[i+1]
-				i++
-			}
-		case "--service":
-			if i+1 < len(args) {
-				app = args[i+1]
-				i++
-			}
-		}
-	}
-	if namespace == "" || app == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft source remove --namespace NS --service NAME")
+	namespace, app, err := parseSourceRemoveArgs(os.Args[3:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	if err := client.RemoveSource(namespace, app); err != nil {
@@ -1127,33 +1083,12 @@ func runToken() {
 }
 
 func runTokenCreate(client *shell.HTTPCoordinator) {
-	args := os.Args[3:]
-	var label, namespace, env string
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--label":
-			if i+1 < len(args) {
-				label = args[i+1]
-				i++
-			}
-		case "--namespace", "--ns":
-			if i+1 < len(args) {
-				namespace = args[i+1]
-				i++
-			}
-		case "--env":
-			if i+1 < len(args) {
-				env = args[i+1]
-				i++
-			}
-		}
-	}
-
-	if namespace == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft token create --namespace NAME [--label LABEL] [--env ENV]")
+	ta, err := parseTokenCreateArgs(os.Args[3:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	label, namespace, env := ta.label, ta.namespace, ta.env
 
 	token, err := client.CreateToken("", label, namespace, env)
 	if err != nil {

@@ -9,7 +9,7 @@ A centralized log analysis service. Connect your AWS accounts, query logs using 
 For each CloudWatch log group you want to connect:
 
 ```bash
-weft source add --namespace myapp --service web --log-group /aws/myapp/web --region us-east-1
+weft source add myapp/web --log-group /aws/myapp/web --region us-east-1
 
 weft source list
 ```

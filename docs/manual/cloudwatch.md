@@ -24,15 +24,13 @@ For sub-second tailing, install weftd.
 ### 1. Register the source
 
 Use the `weft` CLI to tell weft which log group maps to which service
-(the `--service` you pick becomes the `<service>` path segment; see
+(the service half of `ns/svc` becomes the `<service>` path segment; see
 **Namespaces**).
 Run this from any machine with the `weft` binary installed and a valid
 login.
 
 ```
-weft source add \
-  --namespace myco \
-  --service my-app \
+weft source add myco/my-app \
   --log-group /aws/lambda/my-fn \
   --region us-east-2
 ```

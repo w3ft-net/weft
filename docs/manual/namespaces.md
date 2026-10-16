@@ -23,8 +23,13 @@ the path of every log file you configure under it.
 Or, from the CLI:
 
 ```
-weft namespace create --name babbage
+weft namespace create babbage
 ```
+
+To remove one, `weft namespace remove babbage`. It refuses while the namespace
+still has sources or live tokens, and lists them; `--force` removes the
+namespace and everything in it. Logs already stored age out under normal
+retention.
 
 ## Tokens
 
@@ -49,7 +54,7 @@ path significance, whereas the label does not (but you can still filter on it).
 From the CLI:
 
 ```
-weft token create --namespace babbage --label api-prod --env prod
+weft token create babbage --label api-prod --env prod
 ```
 
 The token is only shown once regardless of where you create it, so put it

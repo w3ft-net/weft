@@ -119,6 +119,7 @@ func TestEndpointsRequireAuth(t *testing.T) {
 		{"DELETE", "/api/integrations/pagerduty/myrule", session},
 		{"GET", "/api/namespaces", session},
 		{"POST", "/api/namespaces", session},
+		{"DELETE", "/api/namespaces/ns", session},
 		{"PUT", "/api/namespaces/ns/permissions/user-1", session},
 		{"GET", "/api/permissions", session},
 		{"PUT", "/api/permissions", session},

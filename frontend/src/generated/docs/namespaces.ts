@@ -22,8 +22,12 @@ your log sources.</p>
 and click <strong>new</strong>. Choose something easy to type for the name — it'll be in
 the path of every log file you configure under it.</p>
 <p>Or, from the CLI:</p>
-<pre><code>weft namespace create --name babbage
+<pre><code>weft namespace create babbage
 </code></pre>
+<p>To remove one, <code>weft namespace remove babbage</code>. It refuses while the namespace
+still has sources or live tokens, and lists them; <code>--force</code> removes the
+namespace and everything in it. Logs already stored age out under normal
+retention.</p>
 <h2 id="tokens">Tokens</h2>
 <p>Weft uses a simple token-based authentication for all log producers, whether
 that be weftd, Render, Heroku, or Kinesis.  Each token is scoped to exactly one
@@ -40,7 +44,7 @@ environment tag (<code>prod</code>, <code>staging</code>, <code>qa</code>, etc.)
 for? You tell me! It's nice to have options. The environment will have log file
 path significance, whereas the label does not (but you can still filter on it).</p>
 <p>From the CLI:</p>
-<pre><code>weft token create --namespace babbage --label api-prod --env prod
+<pre><code>weft token create babbage --label api-prod --env prod
 </code></pre>
 <p>The token is only shown once regardless of where you create it, so put it
 somewhere safe! If you lose it, revoke it and create a new one -- either by

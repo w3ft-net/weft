@@ -193,7 +193,7 @@ def main(argv=None) -> int:
         return 0
     if args.command == "clean-hint":
         for name in chosen:
-            print(f"weft source remove --namespace <ns> --service {name}{args.suffix}")
+            print(f"weft source remove <ns>/{name}{args.suffix}")
         return 0
     if not args.token:
         ap.error("--token (or $WEFT_FIXTURE_TOKEN) is required")
