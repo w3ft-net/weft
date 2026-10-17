@@ -43,8 +43,7 @@ progress in the browser or with <code>weft source pending --watch</code>.</p>
 you don't have to define a schema for other producers, we highly recommend it.
 Having a means of plucking <a href="/manual/metavars">metavariables</a> out of the logs lets us
 make lookups on those values nice and snappy.</p>
-<p>Once you've transtioned from &quot;sampling&quot; to &quot;pending&quot; (FIXME -- I don't think
-this is true for push sources? what state does it go to?), you can view our
+<p>Once you've transtioned from &quot;sampling&quot; to &quot;pending,&quot; you can view our
 best guess about your sample in the browser or on the CLI with <code>weft source configure</code>. A little wizard will walk you through our guesses for each of the
 values we want to extract and you can approve, reject, etc.</p>
 <p>You can resample at any time by clicking &quot;resample&quot; or running <code>weft source resample</code>.</p>

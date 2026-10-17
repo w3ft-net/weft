@@ -43,8 +43,7 @@ you don't have to define a schema for other producers, we highly recommend it.
 Having a means of plucking [metavariables](metavars.md) out of the logs lets us
 make lookups on those values nice and snappy. 
 
-Once you've transtioned from "sampling" to "pending" (FIXME -- I don't think
-this is true for push sources? what state does it go to?), you can view our
+Once you've transtioned from "sampling" to "pending," you can view our
 best guess about your sample in the browser or on the CLI with `weft source
 configure`. A little wizard will walk you through our guesses for each of the
 values we want to extract and you can approve, reject, etc.

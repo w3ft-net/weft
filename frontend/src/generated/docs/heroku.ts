@@ -14,25 +14,23 @@ const heroku = {
     { level: 3, id: "metric-lines-auto-route-to-metricslog", text: "Metric lines auto-route to metrics.log" },
   ],
   html: `<h2 id="connecting-a-heroku-app">Connecting a Heroku app</h2>
-<p>Weft accepts logs directly from Heroku's HTTPS log-drain protocol. Create a
-token, point a drain at weft, and dynos start flowing within seconds. This page
-covers the Heroku-specific parts; the steps every source shares are in
-<a href="/manual/overview">Connect a log source</a>.</p>
+<p>Weft accepts logs directly from Heroku's HTTPS log-drain protocol. This page
+covers the Heroku-specific parts; for an overview, see <a href="/manual/overview">Connect a log
+source</a>.</p>
 <h3 id="1-create-a-token">1. Create a token</h3>
-<p>Create a namespace token as described in
-<a href="/manual/namespaces#creating-a-token">Connect a log source</a>.</p>
+<p>Create a namespaced token as described in <a href="/manual/namespaces#creating-a-token">Connect a log
+source</a>.  There's nothing special about Heroku
+that requires its own token, but it's probably tidier if it's got its own.</p>
 <h3 id="2-add-the-drain">2. Add the drain</h3>
 <p>For each Heroku app you want to ingest, run <code>heroku drains:add</code> with the
-token embedded in the URL path. Your token goes in the URL like so:</p>
+token embedded in the weft drain URL. Your token goes in the URL like so:</p>
 <pre><code>heroku drains:add &quot;https://api.w3ft.net/api/ingest/heroku/wft_a1b2c3d4e5f6...&quot; -a myapp
 heroku drains:add &quot;https://api.w3ft.net/api/ingest/heroku/wft_a1b2c3d4e5f6...&quot; -a sister-app
 </code></pre>
 <p>Heroku starts delivering within a few seconds. Then confirm rows are landing
-and, if you want parsed fields, approve a schema; both steps are the same for
-every source (<a href="/manual/overview#sampling-logs-for-a-schema">steps 3 and 4</a>).
-The schema is per service, and Heroku router lines and platform events share
-the app's service with your own output, so choose fields that fit your app's
-lines.</p>
+and, if you want nice, speedy lookups, <a href="/manual/overview#sampling-logs-for-a-schema">approve a
+schema</a>. Heroku schemas are per
+service, so it covers the web, cron and build files under it.</p>
 <h3 id="how-dynos-and-procs-map-to-log-files">How dynos and procs map to log files</h3>
 <p>The Heroku app name is the weft service, and the process type from the
 procid (<code>web</code>, <code>worker</code>, <code>router</code>) is the log kind.
@@ -71,7 +69,7 @@ dyno at once.</p>
 </tr>
 </tbody>
 </table>
-<p>(The presence of the <code>&lt;env&gt;</code> segment dependent on how you created your token.
+<p>(The presence of the <code>&lt;env&gt;</code> segment depends on how you created your token.
 See <a href="/manual/introduction#paths">Paths</a> for the layout rules.)</p>
 <h3 id="metric-lines-auto-route-to-metricslog">Metric lines auto-route to <code>metrics.log</code></h3>
 <p>Heroku's <code>runtime-heroku-metrics</code> labs feature (and most add-ons) emit
@@ -79,14 +77,14 @@ l2met-shaped lines like:</p>
 <pre><code>source=web.1 sample#memory_total=512.00MB sample#memory_rss=487.21MB sample#load_avg_1m=0.42
 </code></pre>
 <p>Weft detects these and routes them to <code>&lt;appname&gt;/metrics.log</code>, with the
-key/value pairs lifted into payload JSON (numeric where the value is
-numeric; trailing units like <code>MB</code> are kept on a sibling
+key/value pairs converted to JSON (numeric where the value is
+numeric, with trailing units like <code>MB</code> kept on a sibling
 <code>&lt;key&gt;_unit</code> field). The original line also flows into the dyno's
 log file, so <code>grep memory_total /log/.../web.log</code> matches it.</p>
 <pre><code># Enable the metric stream on a Heroku app (one-time)
 heroku labs:enable &quot;runtime-heroku-metrics&quot; -a myapp
 
-# Query it like any other JSON log source
+# Then read it like any other JSON log source
 weft sh
 $ tail /log/myco/prod/myapp/metrics.log | jq 'select(.memory_total &gt; 400)'
 </code></pre>

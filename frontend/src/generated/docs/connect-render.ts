@@ -9,27 +9,24 @@ const connectRender = {
   headings: [
     { level: 3, id: "1-create-a-token", text: "1. Create a token" },
     { level: 3, id: "2-add-the-log-stream-in-render", text: "2. Add the log stream in Render" },
-    { level: 2, id: "reading-your-logs", text: "Reading your logs" },
+    { level: 2, id: "finding-your-logs", text: "Finding your logs" },
   ],
   html: `<p>Weft accepts logs directly from Render's built-in <strong>Log Streams</strong> feature using
-syslog over TLS. This page covers the Render-specific parts; the steps every
-source shares are in <a href="/manual/overview">Connect a log source</a>.</p>
+syslog over TLS. This page covers the Render-specific parts; for an overview, see <a href="/manual/overview">Connect a log source</a>.</p>
 <h3 id="1-create-a-token">1. Create a token</h3>
-<p>Create a namespace token as described in
-<a href="/manual/namespaces#creating-a-token">Connect a log source</a>. Render tokens are
-ordinary namespace tokens, the same kind you use for any other source.</p>
+<p>Create a namespaced token as described in <a href="/manual/namespaces#creating-a-token">Connect a log
+source</a>. There's nothing special about Render
+that requires its own token, but it's probably tidier if it's got its own.</p>
 <h3 id="2-add-the-log-stream-in-render">2. Add the log stream in Render</h3>
 <p>In the Render dashboard, click <strong>Integrations → Observability</strong> in the sidebar.
 Scroll down to <strong>Log Streams</strong>, add a stream, and configure a generic/custom
 syslog destination. Paste in the token from Step 1, along with the endpoint
 (<code>render.syslog.w3ft.net:6514</code>).</p>
-<p>Render starts streaming within a few seconds. If you want parsed fields,
-approve a schema (<a href="/manual/overview#sampling-logs-for-a-schema">step 4</a> of
-the shared steps). The schema is per Render service, so it covers the web,
-cron and build files under it.</p>
-<h2 id="reading-your-logs">Reading your logs</h2>
-<p>To confirm rows are landing, see
-<a href="/manual/overview#sampling-logs-for-a-schema">Connect a log source</a>. Weft maps Render services to log files as follows:</p>
+<p>Render starts streaming within a few seconds. If you want nice, speedy lookups,
+<a href="/manual/overview#sampling-logs-for-a-schema">approve a schema</a>. Render
+schemas are per service, so it covers the web, cron and build files under it.</p>
+<h2 id="finding-your-logs">Finding your logs</h2>
+<p>Weft maps Render services to log files as follows:</p>
 <table>
 <thead>
 <tr>
@@ -56,9 +53,8 @@ cron and build files under it.</p>
 </tr>
 </tbody>
 </table>
-<p>If you specify an env label for your token has an env bound, the path will
-include that segment, e.g. <code>/log/&lt;ns&gt;/prod/myservice/web.log</code>. See
-<strong>Namespaces</strong> for the layout rules.</p>
+<p>(The presence of the <code>&lt;env&gt;</code> segment depends on how you created your token.
+See <a href="/manual/introduction#paths">Paths</a> for the layout rules.)</p>
 `,
 } as const;
 
