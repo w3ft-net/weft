@@ -27,6 +27,7 @@ mkdir -p /var/log /etc/weftd
 
 cat > /etc/weftd/config.yaml <<EOF
 endpoint: "coordinator:9020"
+tls: false # the dev coordinator serves plaintext
 token: "${WEFTD_TOKEN}"
 customer: "${CUSTOMER}"
 deployment: "${SERVICE}"
