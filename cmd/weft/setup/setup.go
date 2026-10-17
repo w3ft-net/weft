@@ -10,9 +10,11 @@ package setup
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
 
 	"github.com/graybeardcorp/weft/ingest"
 )
@@ -129,25 +131,13 @@ func RunSetupFromLines(app string, lines []string, det *ingest.Detection, probe 
 	fmt.Println(titleStyle.Render("Schema summary:"))
 	fmt.Printf("  %s %s\n", labelStyle.Render("Service:"), schema.Service)
 	fmt.Printf("  %s %s\n", labelStyle.Render("Format:"), schema.Format)
-	for _, row := range []struct {
-		label string
-		f     ingest.ProbeField
-	}{
-		{"Timestamp:", ingest.ProbeTimestamp}, {"Level:", ingest.ProbeLevel}, {"Trace ID:", ingest.ProbeTraceID},
-		{"Span name:", ingest.ProbeSpanName}, {"Span ID:", ingest.ProbeSpanID},
-		{"Parent span ID:", ingest.ProbeParentSpanID}, {"Duration:", ingest.ProbeDurationNs},
-	} {
-		switch ex := extractorFromSchema(schema, row.f); {
-		case ex != nil:
-			fmt.Printf("  %s %s\n", labelStyle.Render(row.label), describeExtractor(ex))
-		case row.f == ingest.ProbeTimestamp:
-			fmt.Printf("  %s ingestion time\n", labelStyle.Render(row.label))
-		default:
-			fmt.Printf("  %s none\n", labelStyle.Render(row.label))
-		}
-	}
 	if schema.Format == "prefix_json" {
 		fmt.Printf("  %s field %d+\n", labelStyle.Render("JSON payload:"), schema.JSONStartField)
+	}
+	if prev, err := ingest.SchemaPreview(schema, lines[:min(12, len(lines))]); err == nil && len(prev.Lines) > 0 {
+		fmt.Println()
+		width, _, _ := term.GetSize(int(os.Stdout.Fd()))
+		fmt.Print(RenderPreview(prev, width))
 	}
 
 	return schema, nil

@@ -661,6 +661,31 @@ export async function getPendingSourceCount(): Promise<number> {
   return resp.count
 }
 
+// A Preview is sample lines split into segments; a segment with a `field`
+// is a value the schema extracts. Segments concatenated equal the line.
+// `fields` lists the fields that appeared, in canonical order.
+export interface PreviewSegment {
+  text: string
+  field?: string
+}
+
+export interface Preview {
+  lines: PreviewSegment[][]
+  fields: string[]
+}
+
+// previewSource applies an unsaved schema to the source's stored sample.
+export function previewSource(
+  namespace: string,
+  service: string,
+  config: ConfigureSourceRequest,
+): Promise<Preview> {
+  return apiFetch<Preview>(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/schema-preview`,
+    { method: 'POST', body: JSON.stringify(config) },
+  )
+}
+
 export function configureSource(
   namespace: string,
   service: string,
@@ -742,6 +767,9 @@ export async function listSources(namespace?: string): Promise<SourceInfo[]> {
 export interface SourceSchema {
   status: 'configured' | 'sampling' | 'pending'
   schema_yaml?: string
+  // Recent live lines with the extracted fields marked, or why there are none.
+  preview?: Preview
+  preview_note?: string
   schema_hash?: string
   resample_requested?: boolean
   sample_collected?: number
@@ -1033,6 +1061,7 @@ export interface ProbeExtractor {
   spec?: ExtractSpec
   timestamp_format?: string
   timestamp_fields?: number
+  duration_unit?: string
 }
 
 export interface ProbeLineResult {

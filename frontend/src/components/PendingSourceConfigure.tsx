@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   configureSource,
   notifyPendingSourcesChanged,
+  previewSource,
   probeSource,
   resampleSource,
   type PendingSource,
@@ -141,6 +142,8 @@ export default function PendingSourceConfigure({
           sample={source.sample ?? []}
           probe={req => probeSource(source.namespace, source.service, req)}
           detection={source.detection}
+          onPreview={config => previewSource(source.namespace, source.service, config)}
+          onCancel={() => setExpanded(false)}
           onSubmit={async (config) => {
             await configureSource(source.namespace, source.service, config)
             notifyPendingSourcesChanged()

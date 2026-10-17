@@ -885,8 +885,23 @@ func runSourceResample(cfg *shell.Config) {
 // runSourceSchema prints the live schema for a configured source, or — if
 // the source is still accumulating — how far along the sample is.
 func runSourceSchema(cfg *shell.Config) {
-	if len(os.Args) < 4 {
-		usageln("usage: weft source schema <namespace>/<service>")
+	const usage = "usage: weft source schema [--yaml] <namespace>/<service>"
+	var asYAML bool
+	var target string
+	for _, a := range os.Args[3:] {
+		switch {
+		case a == "--yaml":
+			asYAML = true
+		case target == "" && !strings.HasPrefix(a, "-"):
+			target = a
+		default:
+			usageln(usage)
+			os.Exit(1)
+		}
+	}
+	parts := strings.SplitN(target, "/", 2)
+	if len(parts) != 2 {
+		usageln(usage)
 		os.Exit(1)
 	}
 	endpoint := cfg.Endpoint
@@ -895,12 +910,6 @@ func runSourceSchema(cfg *shell.Config) {
 		os.Exit(1)
 	}
 	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
-
-	parts := strings.SplitN(os.Args[3], "/", 2)
-	if len(parts) != 2 {
-		usageln("usage: weft source schema <namespace>/<service>")
-		os.Exit(1)
-	}
 	namespace, service := parts[0], parts[1]
 
 	sch, err := remote.GetSourceSchema(namespace, service)
@@ -908,21 +917,37 @@ func runSourceSchema(cfg *shell.Config) {
 		errorf("schema: %v\n", err)
 		os.Exit(1)
 	}
+	width, _, _ := term.GetSize(int(os.Stdout.Fd()))
+	printSourceSchema(os.Stdout, sch, namespace, service, asYAML, width)
+}
 
+// printSourceSchema renders a source's schema state. --yaml prints the raw
+// schema YAML exactly (it round-trips into `source configure --file`);
+// otherwise a configured source shows its schema applied to recent lines.
+func printSourceSchema(w io.Writer, sch *shell.SourceSchema, namespace, service string, asYAML bool, width int) {
 	switch sch.Status {
 	case "configured":
 		if sch.ResampleRequested {
 			errorf("# resample in progress: %d/%d lines collected\n", sch.SampleCollected, sch.SampleTarget)
 		}
-		fmt.Print(sch.SchemaYAML)
-		if !strings.HasSuffix(sch.SchemaYAML, "\n") {
-			fmt.Println()
+		switch {
+		case asYAML:
+			fmt.Fprint(w, sch.SchemaYAML)
+			if !strings.HasSuffix(sch.SchemaYAML, "\n") {
+				fmt.Fprintln(w)
+			}
+		case sch.Preview != nil && len(sch.Preview.Lines) > 0:
+			fmt.Fprint(w, setup.RenderPreview(sch.Preview, width))
+		case sch.PreviewNote != "":
+			fmt.Fprint(w, paint(outStyles().muted, sch.PreviewNote+"\n"))
+		default:
+			fmt.Fprint(w, paint(outStyles().muted, "No recent lines to preview. Use --yaml for the raw schema.\n"))
 		}
 	case "sampling":
-		fmt.Printf("%s/%s hasn't emitted enough lines to sample yet (%d/%d).\n",
+		fmt.Fprintf(w, "%s/%s hasn't emitted enough lines to sample yet (%d/%d).\n",
 			namespace, service, sch.SampleCollected, sch.SampleTarget)
 	default: // pending
-		fmt.Printf("%s/%s has a sample awaiting configuration (%d/%d lines). Configure it with: weft source configure %s/%s\n",
+		fmt.Fprintf(w, "%s/%s has a sample awaiting configuration (%d/%d lines). Configure it with: weft source configure %s/%s\n",
 			namespace, service, sch.SampleCollected, sch.SampleTarget, namespace, service)
 	}
 }

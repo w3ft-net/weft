@@ -23,7 +23,7 @@ function fakeProbe(opts: { detectedTimestamp?: boolean } = {}): { probe: ProbeFn
     if (req.field === 'timestamp' && req.use_detected && opts.detectedTimestamp) {
       return {
         extractor: { field: '1', pattern: '', timestamp_format: '15:04:05', timestamp_fields: 1 },
-        results: sample.map((l, i) => ({ line: i, matched: true, value: 'x', text: l.slice(0, 8), prefix: '' })),
+        results: sample.map((l, i) => ({ line: i, matched: true, value: 'x', text: l.slice(0, 8) })),
         matched: sample.length, total: sample.length,
         schema_patch: { timestamp_field: '1', timestamp_format: '15:04:05', timestamp_fields: 1 },
       }
@@ -67,6 +67,8 @@ async function press(id: string) {
   await see(id)
   click(id)
 }
+
+const hitsIn = (el: HTMLElement) => [...el.querySelectorAll('mark.psc-hit')].map(m => m.textContent)
 
 describe('ExtractionWizard decision tree', () => {
   afterEach(cleanup)
@@ -249,7 +251,11 @@ describe('ExtractionWizard decision tree', () => {
       if (!c) return { extractor: null, results: [], matched: 0, total: 2, detected_total: 2 }
       return {
         extractor: { field: c.field, pattern: '', spec: {} },
-        results: c.values.map((v, i) => ({ line: i, matched: true, value: v, text: v, prefix: '' })),
+        results: c.values.map((v, i) => ({
+          line: i, matched: true, value: v, text: v,
+          // the server omits an empty prefix; the second field follows the method
+          ...(c.field === '2' ? { prefix: ['GET ', 'POST '][i] } : {}),
+        })),
         matched: 2, total: 2, detected_total: 2,
         schema_patch: { level_field: c.field, level_pattern: '', extract: { level: {} } },
       }
@@ -260,10 +266,10 @@ describe('ExtractionWizard decision tree', () => {
 
     await press('expect-no-button') // timestamp: nothing detected, not expected
     // level: first candidate (the method field) is shown with what it sees
-    expect((await see('candidate-values')).textContent).toContain('GET, POST')
+    expect(hitsIn(await see('candidate'))).toEqual(['GET', 'POST'])
     click('confirm-no-button')
     // ...then the second
-    await waitFor(() => expect(screen.getByTestId(`${T}-candidate-values`).textContent).toContain('INFO, WARN'))
+    await waitFor(() => expect(hitsIn(screen.getByTestId(`${T}-candidate`))).toEqual(['INFO', 'WARN']))
     expect(asked).toEqual([0, 1])
     click('confirm-yes-button')
 
@@ -276,7 +282,7 @@ describe('ExtractionWizard decision tree', () => {
   it('offers the model\'s first guess when detection has nothing, and asks the unit of a bare duration', async () => {
     const lines = ['12:00:00 start', '12:00:02 GET /a 200 took=12.5', '12:00:04 GET /b 500 took=340']
     const reqs: ProbeRequest[] = []
-    const probe: ProbeFn = async req => {
+    const probe: ProbeFn = async (req): Promise<ProbeResult> => {
       reqs.push(req)
       const empty: ProbeResult = { extractor: null, results: [], matched: 0, total: lines.length }
       if (req.field === 'timestamp') {
@@ -284,7 +290,7 @@ describe('ExtractionWizard decision tree', () => {
           ? {
               extractor: { field: '1', pattern: '', timestamp_format: '15:04:05', timestamp_fields: 1 },
               source: 'model',
-              results: lines.map((l, i) => ({ line: i, matched: true, value: 'x', text: l.slice(0, 8), prefix: '' })),
+              results: lines.map((l, i) => ({ line: i, matched: true, value: 'x', text: l.slice(0, 8) })),
               matched: 3, total: 3,
               schema_patch: { timestamp_field: '1', timestamp_format: '15:04:05', timestamp_fields: 1 },
             }

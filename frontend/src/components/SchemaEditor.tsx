@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import type { ConfigureSourceRequest, ProbeFn, SourceDetection } from '../lib/api'
+import SchemaPreview from './SchemaPreview'
+import type { ConfigureSourceRequest, Preview, ProbeFn, SourceDetection } from '../lib/api'
 import { suggestFromDetection } from '../lib/api'
 import ExtractionWizard from './ExtractionWizard'
-import { applyPatch, describeValue } from '../lib/schemaPatch'
+import { applyPatch } from '../lib/schemaPatch'
 import './PendingSourceConfigure.css'
 
 const MAX_PREVIEW_LINES = 20
@@ -26,16 +27,6 @@ function Highlighted({ line, ts }: { line: string; ts?: string }) {
   )
 }
 
-const VALUE_ROWS: { key: string; label: string }[] = [
-  { key: 'timestamp', label: 'timestamp' },
-  { key: 'level', label: 'log level' },
-  { key: 'trace_id', label: 'trace ID' },
-  { key: 'span_name', label: 'span name' },
-  { key: 'span_id', label: 'span ID' },
-  { key: 'parent_span_id', label: 'parent span ID' },
-  { key: 'duration_ns', label: 'span duration' },
-]
-
 // SchemaEditor is the shared body of the "look at a sample and confirm the
 // schema" flow used by both the weftd pending-source onboarding and the
 // CloudWatch add-source form. Callers hand in the sample + detection and
@@ -48,6 +39,8 @@ export default function SchemaEditor({
   submittingLabel = 'configuring…',
   probe,
   onSubmit,
+  onPreview,
+  onCancel,
 }: {
   testidPrefix: string
   sample: string[]
@@ -58,28 +51,29 @@ export default function SchemaEditor({
   // (ExtractionWizard) instead of being taken from detection's first guess.
   probe?: ProbeFn
   onSubmit: (config: ConfigureSourceRequest) => Promise<void>
+  // Applies the finished (unsaved) config to the sample, for the preview shown
+  // once the walk completes. Failures are muted; they never block configuring.
+  onPreview?: (config: ConfigureSourceRequest) => Promise<Preview>
+  // Called when the guided walk is cancelled; there is no manual form to fall back to.
+  onCancel?: () => void
 }) {
   const suggested = suggestFromDetection(detection)
   const [form, setForm] = useState<ConfigureSourceRequest>(suggested)
   const [showAll, setShowAll] = useState(false)
-  const [showAdvanced, setShowAdvanced] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [guided, setGuided] = useState(!!probe)
+  // Set once the guided walk has finished: that was the confirmation, so the
+  // source is configured from it directly, like the CLI does.
+  const [walked, setWalked] = useState(false)
   const [notes, setNotes] = useState<string[]>([])
+  const [preview, setPreview] = useState<Preview | null>(null)
 
-  function update<K extends keyof ConfigureSourceRequest>(
-    field: K,
-    value: ConfigureSourceRequest[K],
-  ) {
-    setForm(f => ({ ...f, [field]: value }))
-  }
-
-  async function submit() {
+  async function submit(config: ConfigureSourceRequest = form) {
     setSubmitting(true)
     setError(null)
     try {
-      await onSubmit(form)
+      await onSubmit(config)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -93,6 +87,36 @@ export default function SchemaEditor({
   const visibleLines = showAll ? sample : sample.slice(0, MAX_PREVIEW_LINES)
   const hiddenCount = sample.length - visibleLines.length
   const formatLabel = FORMAT_DESCRIPTIONS[suggested.format] ?? suggested.format
+
+  const valuesBlock = (
+    <div className="psc-values" data-testid={`${testidPrefix}-values`}>
+      {preview && <SchemaPreview testidPrefix={testidPrefix} preview={preview} />}
+      {notes.map((n, i) => (
+        <div key={i} className="psc-wiz-notice" data-testid={`${testidPrefix}-note-${i}`}>{n}</div>
+      ))}
+    </div>
+  )
+
+  if (walked) {
+    return (
+      <div className="psc-body">
+        {valuesBlock}
+        {error && (
+          <div className="psc-error" data-testid={`${testidPrefix}-error`}>
+            error: {error}
+          </div>
+        )}
+        {(submitting || error) && (
+          <div className="psc-actions">
+            <button className="tui-btn tui-btn-primary" onClick={() => submit()} disabled={submitting}
+              data-testid={`${testidPrefix}-submit-button`}>
+              {submitting ? submittingLabel : submitLabel}
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   if (guided && probe) {
     const spansDetected = [
@@ -113,11 +137,15 @@ export default function SchemaEditor({
           probe={probe}
           spansDetected={spansDetected}
           onComplete={(patch, n) => {
-            setForm(f => applyPatch(f, patch))
+            const next = applyPatch(form, patch)
+            setForm(next)
             setNotes(n)
             setGuided(false)
+            setWalked(true)
+            onPreview?.(next).then(setPreview).catch(() => {})
+            void submit(next)
           }}
-          onCancel={() => setGuided(false)}
+          onCancel={() => onCancel?.()}
         />
       </div>
     )
@@ -125,22 +153,6 @@ export default function SchemaEditor({
 
   return (
     <div className="psc-body">
-      {probe && (
-        <div className="psc-values" data-testid={`${testidPrefix}-values`}>
-          <div className="psc-sample-label">values to extract</div>
-          {VALUE_ROWS.map(r => (
-            <div key={r.key} className="psc-value-row" data-testid={`${testidPrefix}-value-${r.key}`}>
-              <span className="psc-label">{r.label}</span>
-              <span className="psc-value-rule">{describeValue(form, r.key)}</span>
-            </div>
-          ))}
-          {notes.map((n, i) => (
-            <div key={i} className="psc-wiz-notice" data-testid={`${testidPrefix}-note-${i}`}>{n}</div>
-          ))}
-          <button className="psc-textbtn" onClick={() => setGuided(true)}
-            data-testid={`${testidPrefix}-rewalk-button`}>walk through the values again</button>
-        </div>
-      )}
       <p className="psc-prose" data-testid={`${testidPrefix}-format-prose`}>
         These look like <strong>{formatLabel}</strong>.{' '}
         {hasTimestamp ? (
@@ -188,177 +200,6 @@ export default function SchemaEditor({
         </button>
       )}
 
-      {showAdvanced && (
-        <div className="psc-advanced">
-          <label className="psc-field">
-            <span className="psc-label">format:</span>
-            <select
-              value={form.format}
-              onChange={e => update('format', e.target.value)}
-              data-testid={`${testidPrefix}-format-select`}
-            >
-              <option value="text">text</option>
-              <option value="json">json</option>
-              <option value="prefix_json">prefix_json</option>
-            </select>
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">timestamp field:</span>
-            <input
-              type="text"
-              value={form.timestamp_field}
-              onChange={e => update('timestamp_field', e.target.value)}
-              placeholder="blank = ingest time"
-              data-testid={`${testidPrefix}-timestamp-field-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">timestamp format:</span>
-            <input
-              type="text"
-              value={form.timestamp_format}
-              onChange={e => update('timestamp_format', e.target.value)}
-              placeholder="2006-01-02 15:04:05"
-              data-testid={`${testidPrefix}-timestamp-format-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">level field<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.level_field}
-              onChange={e => update('level_field', e.target.value)}
-              placeholder="leave blank to skip"
-              data-testid={`${testidPrefix}-level-field-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">level pattern<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.level_pattern}
-              onChange={e => update('level_pattern', e.target.value)}
-              placeholder="regex like ^(\\w+)/"
-              data-testid={`${testidPrefix}-level-pattern-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">trace id field<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.trace_id_field}
-              onChange={e => update('trace_id_field', e.target.value)}
-              placeholder="field index, or .path for JSON"
-              data-testid={`${testidPrefix}-trace-id-field-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">trace id pattern<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.trace_id_pattern}
-              onChange={e => update('trace_id_pattern', e.target.value)}
-              placeholder="regex like trace_id=(\\S+)"
-              data-testid={`${testidPrefix}-trace-id-pattern-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">span name field<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.span_name_field}
-              onChange={e => update('span_name_field', e.target.value)}
-              placeholder="field index, or .path for JSON"
-              data-testid={`${testidPrefix}-span-name-field-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">span name pattern<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.span_name_pattern}
-              onChange={e => update('span_name_pattern', e.target.value)}
-              placeholder="regex like span_name=(\\S+)"
-              data-testid={`${testidPrefix}-span-name-pattern-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">span id field<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.span_id_field}
-              onChange={e => update('span_id_field', e.target.value)}
-              placeholder="field index, or .path for JSON"
-              data-testid={`${testidPrefix}-span-id-field-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">span id pattern<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.span_id_pattern}
-              onChange={e => update('span_id_pattern', e.target.value)}
-              placeholder="regex like span_id=(\\S+)"
-              data-testid={`${testidPrefix}-span-id-pattern-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">parent span id field<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.parent_span_id_field}
-              onChange={e => update('parent_span_id_field', e.target.value)}
-              placeholder="field index, or .path for JSON"
-              data-testid={`${testidPrefix}-parent-span-id-field-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">parent span id pattern<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.parent_span_id_pattern}
-              onChange={e => update('parent_span_id_pattern', e.target.value)}
-              placeholder="regex like parent_span_id=(\\S+)"
-              data-testid={`${testidPrefix}-parent-span-id-pattern-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">duration field<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.duration_ns_field}
-              onChange={e => update('duration_ns_field', e.target.value)}
-              placeholder="field index, or .path for JSON"
-              data-testid={`${testidPrefix}-duration-ns-field-input`}
-            />
-          </label>
-
-          <label className="psc-field">
-            <span className="psc-label">duration pattern<span className="psc-opt">(opt)</span>:</span>
-            <input
-              type="text"
-              value={form.duration_ns_pattern}
-              onChange={e => update('duration_ns_pattern', e.target.value)}
-              placeholder="regex like duration_ns=(\\d+)"
-              data-testid={`${testidPrefix}-duration-ns-pattern-input`}
-            />
-          </label>
-        </div>
-      )}
-
       {error && (
         <div className="psc-error" data-testid={`${testidPrefix}-error`}>
           error: {error}
@@ -368,18 +209,11 @@ export default function SchemaEditor({
       <div className="psc-actions">
         <button
           className="tui-btn tui-btn-primary"
-          onClick={submit}
+          onClick={() => submit()}
           disabled={submitting}
           data-testid={`${testidPrefix}-submit-button`}
         >
           {submitting ? submittingLabel : submitLabel}
-        </button>
-        <button
-          className="tui-btn"
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          data-testid={`${testidPrefix}-advanced-button`}
-        >
-          {showAdvanced ? 'hide advanced' : 'advanced…'}
         </button>
       </div>
     </div>

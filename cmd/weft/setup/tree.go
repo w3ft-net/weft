@@ -345,35 +345,6 @@ func applyExtractor(s *ingest.Schema, f ingest.ProbeField, ex *ingest.ProbeExtra
 	}
 }
 
-// extractorFromSchema reads a value's extractor back out of the schema, or
-// nil if the schema does not extract it. The inverse of applyExtractor.
-func extractorFromSchema(s *ingest.Schema, f ingest.ProbeField) *ingest.ProbeExtractor {
-	var ex ingest.ProbeExtractor
-	switch f {
-	case ingest.ProbeTimestamp:
-		ex = ingest.ProbeExtractor{Field: s.TimestampField, TimestampFormat: s.TimestampFormat, TimestampFields: s.TimestampFields}
-	case ingest.ProbeLevel:
-		ex = ingest.ProbeExtractor{Field: s.LevelField, Pattern: s.LevelPattern}
-	case ingest.ProbeTraceID:
-		ex = ingest.ProbeExtractor{Field: s.TraceIDField, Pattern: s.TraceIDPattern}
-	case ingest.ProbeSpanName:
-		ex = ingest.ProbeExtractor{Field: s.SpanNameField, Pattern: s.SpanNamePattern}
-	case ingest.ProbeSpanID:
-		ex = ingest.ProbeExtractor{Field: s.SpanIDField, Pattern: s.SpanIDPattern}
-	case ingest.ProbeParentSpanID:
-		ex = ingest.ProbeExtractor{Field: s.ParentSpanIDField, Pattern: s.ParentSpanIDPattern}
-	case ingest.ProbeDurationNs:
-		ex = ingest.ProbeExtractor{Field: s.DurationNsField, Pattern: s.DurationNsPattern, DurationUnit: s.DurationUnit}
-	}
-	if (ex.Field == "" || ex.Field == "none") && ex.Pattern == "" {
-		return nil
-	}
-	if spec, ok := s.Extract[string(f)]; ok {
-		ex.Spec = &spec
-	}
-	return &ex
-}
-
 // distinctValues lists up to max distinct values a result read, in order of
 // first appearance: what a person looks at to judge a candidate.
 func distinctValues(res *ingest.ProbeResult, max int) []string {

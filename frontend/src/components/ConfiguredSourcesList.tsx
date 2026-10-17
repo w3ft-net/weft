@@ -6,6 +6,7 @@ import {
   type SourceInfo,
   type SourceSchema,
 } from '../lib/api'
+import SchemaPreview from './SchemaPreview'
 import './PendingSourceConfigure.css'
 
 // ConfiguredSourcesList renders the configured sources for a single
@@ -143,7 +144,13 @@ export default function ConfiguredSourcesList({
                         <span className="tui-tag tui-tag-warn">resampling {sch.sample_collected ?? 0}/{sch.sample_target ?? 0}</span> ingestion continues on the current schema
                       </div>
                     )}
-                    <pre className="csl-schema-yaml">{sch.schema_yaml}</pre>
+                    {sch.preview ? (
+                      <SchemaPreview testidPrefix={`configured-source-${s.service}-schema`} preview={sch.preview} />
+                    ) : (
+                      <div className="csl-meta csl-meta-dim" data-testid={`configured-source-${s.service}-schema-note`}>
+                        {sch.preview_note || 'no preview available'}
+                      </div>
+                    )}
                   </>
                 )}
                 {sch && sch.status === 'sampling' && (

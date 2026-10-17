@@ -1,0 +1,49 @@
+/* Schema preview palette: the same colours the CLI uses for each field.
+   The app has a single (dark) theme; if a light theme arrives, override
+   these under it. */
+:root {
+  --sp-timestamp: #00afff;
+  --sp-level: #ff8700;
+  --sp-trace_id: #5fd787;
+  --sp-span_name: #8787ff;
+  --sp-span_id: #ffaf00;
+  --sp-parent_span_id: #ff875f;
+  --sp-duration_ns: #5fd7d7;
+}
+
+.sp-lines {
+  margin: 4px 0 0;
+  padding: 6px 1ch;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.sp-hl {
+  color: var(--sp-color);
+  background: color-mix(in srgb, var(--sp-color) 16%, transparent);
+}
+.sp-f-timestamp { --sp-color: var(--sp-timestamp); }
+.sp-f-level { --sp-color: var(--sp-level); }
+.sp-f-trace_id { --sp-color: var(--sp-trace_id); }
+.sp-f-span_name { --sp-color: var(--sp-span_name); }
+.sp-f-span_id { --sp-color: var(--sp-span_id); }
+.sp-f-parent_span_id { --sp-color: var(--sp-parent_span_id); }
+.sp-f-duration_ns { --sp-color: var(--sp-duration_ns); }
+
+.sp-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 2ch;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.sp-key-swatch { color: var(--sp-color); margin-right: 1ch; }

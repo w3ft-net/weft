@@ -327,16 +327,16 @@ func TestExtractorFromSchemaRoundTrips(t *testing.T) {
 	s := &ingest.Schema{}
 	want := &ingest.ProbeExtractor{Field: "-1", Pattern: "", Spec: &ingest.ExtractSpec{Prefix: "trace_id="}}
 	applyExtractor(s, ingest.ProbeTraceID, want)
-	got := extractorFromSchema(s, ingest.ProbeTraceID)
+	got := ingest.ExtractorFromSchema(s, ingest.ProbeTraceID)
 	if got == nil || got.Field != "-1" || got.Spec == nil || got.Spec.Prefix != "trace_id=" {
 		t.Errorf("round trip = %+v", got)
 	}
 	ts := &ingest.ProbeExtractor{Field: "1", TimestampFields: 2, TimestampFormat: "2006-01-02 15:04:05", Spec: &ingest.ExtractSpec{Prefix: "["}}
 	applyExtractor(s, ingest.ProbeTimestamp, ts)
-	if got := extractorFromSchema(s, ingest.ProbeTimestamp); got == nil || got.TimestampFields != 2 || got.TimestampFormat != ts.TimestampFormat {
+	if got := ingest.ExtractorFromSchema(s, ingest.ProbeTimestamp); got == nil || got.TimestampFields != 2 || got.TimestampFormat != ts.TimestampFormat {
 		t.Errorf("timestamp round trip = %+v", got)
 	}
-	if extractorFromSchema(s, ingest.ProbeSpanID) != nil {
+	if ingest.ExtractorFromSchema(s, ingest.ProbeSpanID) != nil {
 		t.Error("an unset value must read back as nothing")
 	}
 }

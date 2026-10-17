@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -288,6 +289,65 @@ func pendingStatus(lg store.LogGroup) string {
 	return string(lg.Status)
 }
 
+// schemaRequest is the JSON body shared by the configure and
+// schema-preview routes: one unsaved ingest.Schema.
+type schemaRequest struct {
+	Envelope            string             `json:"envelope"`
+	Format              string             `json:"format"`
+	FieldSeparator      string             `json:"field_separator"`
+	TimestampField      string             `json:"timestamp_field"`
+	TimestampFormat     string             `json:"timestamp_format"`
+	TimestampFields     int                `json:"timestamp_fields"`
+	LevelField          string             `json:"level_field"`
+	LevelPattern        string             `json:"level_pattern"`
+	TraceIDField        string             `json:"trace_id_field"`
+	TraceIDPattern      string             `json:"trace_id_pattern"`
+	SpanNameField       string             `json:"span_name_field"`
+	SpanNamePattern     string             `json:"span_name_pattern"`
+	SpanIDField         string             `json:"span_id_field"`
+	SpanIDPattern       string             `json:"span_id_pattern"`
+	ParentSpanIDField   string             `json:"parent_span_id_field"`
+	ParentSpanIDPattern string             `json:"parent_span_id_pattern"`
+	DurationNsField     string             `json:"duration_ns_field"`
+	DurationNsPattern   string             `json:"duration_ns_pattern"`
+	DurationUnit        string             `json:"duration_unit"`
+	JSONStartField      int                `json:"json_start_field"`
+	ExpandKeys          []ingest.ExpandKey `json:"expand_keys"`
+	// Extract is how each value is read out of its field (what to strip,
+	// where to cut, a fallback regex); see ingest.ExtractSpec.
+	Extract map[string]ingest.ExtractSpec `json:"extract"`
+}
+
+// schema builds the ingest.Schema the request describes for service app.
+func (r *schemaRequest) schema(app string, orgID int64) *ingest.Schema {
+	return &ingest.Schema{
+		Service:             app,
+		CustomerID:          orgID,
+		Envelope:            r.Envelope,
+		Format:              r.Format,
+		FieldSeparator:      r.FieldSeparator,
+		TimestampField:      r.TimestampField,
+		TimestampFormat:     r.TimestampFormat,
+		TimestampFields:     r.TimestampFields,
+		LevelField:          r.LevelField,
+		LevelPattern:        r.LevelPattern,
+		TraceIDField:        r.TraceIDField,
+		TraceIDPattern:      r.TraceIDPattern,
+		SpanNameField:       r.SpanNameField,
+		SpanNamePattern:     r.SpanNamePattern,
+		SpanIDField:         r.SpanIDField,
+		SpanIDPattern:       r.SpanIDPattern,
+		ParentSpanIDField:   r.ParentSpanIDField,
+		ParentSpanIDPattern: r.ParentSpanIDPattern,
+		DurationNsField:     r.DurationNsField,
+		DurationNsPattern:   r.DurationNsPattern,
+		DurationUnit:        r.DurationUnit,
+		JSONStartField:      r.JSONStartField,
+		ExpandKeys:          r.ExpandKeys,
+		Extract:             r.Extract,
+	}
+}
+
 // handleConfigureSource confirms the schema for a pending source.
 // POST /api/sources/{namespace}/{app}/configure
 func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
@@ -331,64 +391,13 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Envelope            string             `json:"envelope"`
-		Format              string             `json:"format"`
-		FieldSeparator      string             `json:"field_separator"`
-		TimestampField      string             `json:"timestamp_field"`
-		TimestampFormat     string             `json:"timestamp_format"`
-		TimestampFields     int                `json:"timestamp_fields"`
-		LevelField          string             `json:"level_field"`
-		LevelPattern        string             `json:"level_pattern"`
-		TraceIDField        string             `json:"trace_id_field"`
-		TraceIDPattern      string             `json:"trace_id_pattern"`
-		SpanNameField       string             `json:"span_name_field"`
-		SpanNamePattern     string             `json:"span_name_pattern"`
-		SpanIDField         string             `json:"span_id_field"`
-		SpanIDPattern       string             `json:"span_id_pattern"`
-		ParentSpanIDField   string             `json:"parent_span_id_field"`
-		ParentSpanIDPattern string             `json:"parent_span_id_pattern"`
-		DurationNsField     string             `json:"duration_ns_field"`
-		DurationNsPattern   string             `json:"duration_ns_pattern"`
-		DurationUnit        string             `json:"duration_unit"`
-		JSONStartField      int                `json:"json_start_field"`
-		ExpandKeys          []ingest.ExpandKey `json:"expand_keys"`
-		// Extract is how each value is read out of its field (what to strip,
-		// where to cut, a fallback regex); see ingest.ExtractSpec.
-		Extract map[string]ingest.ExtractSpec `json:"extract"`
-	}
+	var req schemaRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// Build schema.
-	schema := &ingest.Schema{
-		Service:             app,
-		CustomerID:          int64(session.ActiveOrgID),
-		Envelope:            req.Envelope,
-		Format:              req.Format,
-		FieldSeparator:      req.FieldSeparator,
-		TimestampField:      req.TimestampField,
-		TimestampFormat:     req.TimestampFormat,
-		TimestampFields:     req.TimestampFields,
-		LevelField:          req.LevelField,
-		LevelPattern:        req.LevelPattern,
-		TraceIDField:        req.TraceIDField,
-		TraceIDPattern:      req.TraceIDPattern,
-		SpanNameField:       req.SpanNameField,
-		SpanNamePattern:     req.SpanNamePattern,
-		SpanIDField:         req.SpanIDField,
-		SpanIDPattern:       req.SpanIDPattern,
-		ParentSpanIDField:   req.ParentSpanIDField,
-		ParentSpanIDPattern: req.ParentSpanIDPattern,
-		DurationNsField:     req.DurationNsField,
-		DurationNsPattern:   req.DurationNsPattern,
-		DurationUnit:        req.DurationUnit,
-		JSONStartField:      req.JSONStartField,
-		ExpandKeys:          req.ExpandKeys,
-		Extract:             req.Extract,
-	}
+	schema := req.schema(app, int64(session.ActiveOrgID))
 
 	// Defense in depth: the CLI validates before ever sending this
 	// request, but the endpoint accepts any authenticated caller (MCP,
@@ -692,6 +701,9 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 			resp["sample_target"] = store.SampleTarget
 			resp["sample_updated_at"] = formatSampleUpdatedAt(lg.SampleUpdatedAt)
 		}
+		if lg.SchemaYAML != "" {
+			s.addLivePreview(r, session, resp, namespace, app, lg.SchemaYAML)
+		}
 		json.NewEncoder(w).Encode(resp)
 	case store.StatusSampling:
 		sample := lg.Sample
@@ -778,4 +790,135 @@ type agentFleet struct {
 	Count  int    `json:"count"`
 	Oldest string `json:"oldest"`
 	Newest string `json:"newest"`
+}
+
+// schemaPreviewLines is how many lines a schema preview shows.
+const schemaPreviewLines = 12
+
+// livePreviewTimeout bounds the coordinator fetch behind a schema GET's preview.
+const livePreviewTimeout = 5 * time.Second
+
+// handleSchemaPreview applies an unsaved schema to the head of the source's
+// stored sample and returns the lines with every extracted value marked.
+// POST /api/sources/{namespace}/{app}/schema-preview — same body as configure.
+// It never mutates state, and does not hard-gate on schema.Validate: a
+// half-filled schema previews what it can.
+func (s *Server) handleSchemaPreview(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	namespace := r.PathValue("namespace")
+	app := r.PathValue("app")
+	if namespace == "" || app == "" {
+		http.Error(w, "namespace and app required", http.StatusBadRequest)
+		return
+	}
+
+	lg, err := s.store.FindLogGroup(session.ActiveOrgID, namespace, app)
+	if err != nil {
+		weftlog.Infof(r.Context(), "schema preview %s/%s: FindLogGroup: %v", namespace, app, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if lg == nil {
+		http.Error(w, "no source found", http.StatusNotFound)
+		return
+	}
+
+	var lines []string
+	if lg.Sample != "" {
+		if err := json.Unmarshal([]byte(lg.Sample), &lines); err != nil {
+			weftlog.Infof(r.Context(), "schema preview %s/%s: bad sample JSON: %v", namespace, app, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+	}
+	if len(lines) == 0 {
+		http.Error(w, "source has no sample to preview against", http.StatusConflict)
+		return
+	}
+	if len(lines) > schemaPreviewLines {
+		lines = lines[:schemaPreviewLines]
+	}
+
+	var req schemaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	schema := req.schema(app, int64(session.ActiveOrgID))
+
+	preview, err := ingest.SchemaPreview(schema, lines)
+	if err != nil {
+		msg := err.Error()
+		if problems := schema.Validate(); len(problems) > 0 {
+			msg = strings.Join(problems, "\n")
+		}
+		http.Error(w, "invalid schema:\n"+msg, http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(preview)
+}
+
+// recentLines returns up to n of the newest raw lines of namespace/app by
+// running `tail -n N /log/<ns>/<app>/main.log` through the coordinator, the
+// way a shell would, bounded by livePreviewTimeout.
+func (s *Server) recentLines(r *http.Request, userID string, namespace, app string, n int) ([]string, error) {
+	if s.coordClient == nil {
+		return nil, errors.New("coordinator unavailable")
+	}
+	ctx, cancel := context.WithTimeout(s.coordCtx(r), livePreviewTimeout)
+	defer cancel()
+	end := time.Now()
+	stream, err := s.coordClient.Execute(ctx, &pb.CoordinatorExecuteRequest{
+		Pipeline:    fmt.Sprintf("tail -n %d /log/%s/%s/main.log", n, namespace, app),
+		UserId:      userID,
+		TimeStartNs: end.Add(-time.Hour).UnixNano(),
+		TimeEndNs:   end.UnixNano(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var lines []string
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return lines, nil
+		}
+		if err != nil {
+			return lines, err
+		}
+		for _, l := range resp.GetLines() {
+			lines = append(lines, l.GetRaw())
+		}
+	}
+}
+
+// addLivePreview adds "preview" (the stored schema applied to recent live
+// lines) to resp, or "preview_note" saying why there is none. It never fails
+// the caller's response.
+func (s *Server) addLivePreview(r *http.Request, session *auth.Session, resp map[string]any, namespace, app, schemaYAML string) {
+	lines, err := s.recentLines(r, session.UserID, namespace, app, schemaPreviewLines)
+	if err != nil && len(lines) == 0 {
+		weftlog.Infof(r.Context(), "source schema %s/%s: live preview fetch: %v", namespace, app, err)
+		resp["preview_note"] = "recent lines unavailable: " + err.Error()
+		return
+	}
+	if len(lines) == 0 {
+		resp["preview_note"] = "no recent lines"
+		return
+	}
+	if len(lines) > schemaPreviewLines {
+		lines = lines[len(lines)-schemaPreviewLines:]
+	}
+	schema, err := ingest.LoadSchemaFromBytes([]byte(schemaYAML))
+	if err != nil {
+		resp["preview_note"] = "stored schema unreadable: " + err.Error()
+		return
+	}
+	preview, err := ingest.SchemaPreview(schema, lines)
+	if err != nil {
+		resp["preview_note"] = "preview failed: " + err.Error()
+		return
+	}
+	resp["preview"] = preview
 }

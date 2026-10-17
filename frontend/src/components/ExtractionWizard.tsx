@@ -53,9 +53,10 @@ function setMark(marks: ProbeMark[], m: ProbeMark): ProbeMark[] {
 // The text content of the element is always exactly the line, so character
 // offsets from a browser selection match the line's own.
 export function HighlightedLine({ line, result }: { line: string; result?: ProbeLineResult }) {
-  const prefix = result?.prefix
+  // The server omits an empty prefix: a value that starts the line has none.
+  const prefix = result?.prefix ?? ''
   const text = result?.text
-  if (result?.matched && text && prefix !== undefined && line.startsWith(prefix) && line.startsWith(text, prefix.length)) {
+  if (result?.matched && text && line.startsWith(prefix) && line.startsWith(text, prefix.length)) {
     return (
       <>
         {prefix}
@@ -375,7 +376,6 @@ export default function ExtractionWizard({
   }
 
   if (stage === 'confirm' && result) {
-    const values = [...new Set(result.results.filter(r => r.matched).map(r => r.value))].slice(0, 8)
     return (
       <div className="psc-wizard" data-testid={tp}>
         {header}
@@ -383,9 +383,6 @@ export default function ExtractionWizard({
           Found a {field.label} on <strong>{result.matched} of {result.total}</strong> lines
           {cand.total > 1 ? <> (candidate {cand.idx + 1} of {cand.total})</> : null}. Is this it?
         </p>
-        <div className="psc-wiz-rule" data-testid={`${tp}-candidate-values`}>
-          sees: {values.join(', ')}
-        </div>
         <SamplePreview sample={sample} result={result} testid={`${tp}-candidate`} />
         <div className="psc-actions">
           <button className="tui-btn tui-btn-primary" disabled={busy}

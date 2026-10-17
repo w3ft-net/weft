@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/weft/ingest"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -814,6 +815,11 @@ type SourceSchema struct {
 	// alongside Sample whenever Sample is. The CLI wizard unmarshals this
 	// instead of recomputing detection itself — see setup.RunSetupFromLines.
 	Detection json.RawMessage `json:"detection"`
+	// Preview is the configured schema applied to recent lines, with each
+	// extracted value marked; PreviewNote says why there is none (no recent
+	// lines).
+	Preview     *ingest.Preview `json:"preview,omitempty"`
+	PreviewNote string          `json:"preview_note,omitempty"`
 }
 
 // GetSourceSchema fetches the current schema / sampling state for a source.
