@@ -29,7 +29,15 @@ weftd ships to the coordinator (single stable endpoint), not directly to shard n
 
 ## Protocol
 
-gRPC streaming over TLS, consistent with the internal shard protocol:
+gRPC streaming over TLS. The public NLB terminates TLS on port 9443 (ACM
+certificate for `ingest.w3ft.net`, ALPN h2) and forwards plain TCP to the
+coordinator's gRPC port; the bearer token never crosses the internet in the
+clear. weftd verifies the certificate against the system roots. A dev
+coordinator that serves plaintext is reached with `tls: false`.
+
+The plaintext listener on 9020 remains only while pre-TLS agents drain; a
+weftd that still names `ingest.w3ft.net:9020` dials 9443 instead. Message
+shapes:
 
 ```protobuf
 service WeftIngest {
@@ -147,34 +155,10 @@ If the connection to the coordinator drops, weftd retries with exponential backo
 
 ## Deployment
 
-Single static Go binary, no dependencies:
-
-```bash
-# Install
-curl -L https://weft.example.com/dl/weftd-linux-amd64 -o /usr/local/bin/weftd
-chmod +x /usr/local/bin/weftd
-
-# Run as systemd service
-systemctl enable --now weftd
-```
-
-systemd unit file:
-
-```ini
-[Unit]
-Description=weftd log shipping agent
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/weftd --config /etc/weftd/config.yaml
-Restart=always
-RestartSec=5
-User=weftd
-Group=weftd
-
-[Install]
-WantedBy=multi-user.target
-```
+weftd is a single static Go binary, distributed as a `.deb` that installs the
+systemd unit (`weftd.service`, running as the `weftd` user) and enables it on
+boot without starting it. The install steps and config reference live in the
+user manual: `docs/manual/weftd.md`.
 
 ## Open questions
 

@@ -9,32 +9,56 @@ web:
 
 ## Install weftd
 
-weftd is a Go binary that tails log files and ships structured
-lines to weft over gRPC. Download it from the **Downloads** page. The steps
-every source shares (tokens, confirming rows, approving a schema) are in
+weftd is weft's own log agent: a single Go binary that tails files and
+systemd units on a Linux host and streams structured rows to weft over gRPC.
+Why run it instead of a general-purpose shipper? A generic agent moves bytes,
+and you hand-write the parsing (regexes, grok patterns) in every host's config
+and keep those copies in sync. With weftd the schema lives in weft: the agent
+samples a new source, you approve the detected schema once, and every host
+running that source then extracts timestamp, level and fields the same way at
+the edge. Schema changes reach running agents within about a minute, without
+touching the hosts. Every row is also stamped with where it came from
+(`instance`, `deployment`, `region`, and a `version` that follows a file on
+disk), so those become query dimensions. Rows are queryable in about a second,
+against the seconds-to-minutes of the CloudWatch path. Delivery is
+at-least-once across restarts and log rotation. One agent also carries host
+metrics and a local socket for events and heartbeats from your own code, and it
+updates itself. It ships only to weft; it is not a general forwarder. If
+minute-scale latency is fine and your logs are already in CloudWatch, the
+[CloudWatch source](cloudwatch.md) needs nothing installed.
+
+Download weftd from the **Downloads** page. The steps every source shares
+(tokens, confirming rows, approving a schema) are in
 [Connect a log source](connect-source.md).
 
 ```
-# Download and install
-curl -fsSL https://w3ft.net/install.sh | sh
-
-# Or on Debian/Ubuntu
-sudo dpkg -i weftd_*.deb
+# Debian/Ubuntu (x86_64; use arm64 on ARM hosts)
+curl -LO https://releases.w3ft.net/weftd/latest/weftd_latest_amd64.deb
+sudo dpkg -i weftd_latest_amd64.deb
 ```
+
+The package installs the systemd unit and enables it on boot, but does not
+start it: weftd refuses to run until you write its config (below).
 
 Configure your log sources in `/etc/weftd/config.yaml`:
 
 ```
 # /etc/weftd/config.yaml
 
-endpoint: ingest.w3ft.net:9020 # optional; defaults to this. Override
+endpoint: ingest.w3ft.net:9443 # optional; defaults to this (TLS). Override
                               # for local/dockerized testing
+tls: true                     # optional; default true. false only for a
+                              # plaintext dev coordinator
 token: wft_a1b2c3d4e5f6...
+auto_update: true             # optional; default true. false pins this
+                              # host to the installed version
 deployment: api               # optional; the fleet/scaling-unit
                               # this agent belongs to (k8s Deployment,
                               # AWS ASG, etc.) — stamped on every row
 region: us-east-2             # optional override; auto-detected from
                               # cloud metadata at startup if omitted
+socket: /var/run/weftd.sock   # optional; records socket for your apps
+                              # (see "App API" below)
 services: [api]               # logical services co-located on this
                               # host; metrics fan out one stream per
                               # service — /log/<ns>/<service>/metrics.log
@@ -48,7 +72,7 @@ dimensions:                   # optional: column values sourced from
 
 sources:
   - service: myapp
-    path: /var/log/myapp/*.log
+    path: /var/log/myapp/app.log
     version:                           # optional
       file: /opt/myapp/VERSION         # weftd watches the file and
                                        # stamps the latest contents as
@@ -58,6 +82,9 @@ sources:
 
   - service: nginx
     path: /var/log/nginx/access.log
+
+  - unit: myapp-worker.service         # a systemd unit, read from the journal
+    kind: main
 ```
 
 This file is the single source of truth; the package never
@@ -66,16 +93,54 @@ Repeated source fields can be shared with standard YAML anchors and
 merge keys (`&name` / `<<: *name`). weftd ignores an `x-anchors:`
 block, which is the place to declare them.
 
+### Source types
+
+Each entry under `sources:` tails one thing. Set exactly one of `path:` or
+`unit:`.
+
+- **A file** (`path: /var/log/myapp/app.log`). The tailer keeps exact byte
+  offsets, follows `logrotate` in both styles (rename-and-recreate and
+  `copytruncate`), and drains the old file before it switches to the new one.
+  A line is shipped only once its newline has been written. A line longer than
+  1 MiB is cut at 1 MiB and ends with `…[line truncated]`. CRLF endings are
+  removed, blank lines are skipped, and leading and trailing whitespace is
+  trimmed from every line, so indentation (a stack trace's leading spaces,
+  say) does not survive.
+- **A glob** (`path: /var/log/myapp/*.log`). `*`, `?` and `[...]` work as in
+  the shell, and `**` matches any number of directories. Files that exist at
+  startup are tailed from the saved position. A file created later in the
+  directory the pattern starts from is picked up automatically and read from
+  its first line. A file created in a deeper directory after startup is
+  found at the next restart. If a concrete file is also named by its own
+  non-glob source, that explicit source wins and the glob skips it.
+- **A systemd unit** (`unit: myapp.service`). weftd runs
+  `journalctl -f -u <unit>` and ships new journal lines from the moment it
+  starts. Unit sources are not checkpointed (see
+  Delivery below), so a restart does not replay the journal, and
+  `journalctl` must be on the host.
+
 ### Service names
 
-Each source's `service:` sets the `<service>` segment of its
-pseudofile path. It is optional: for a systemd source (`unit:`) weftd
-uses the unit name without `.service`, and for a file source (`path:`)
-it uses the file's name without its extension, so
-`/var/log/myapp/api.log` becomes `api`. Set `service:` explicitly when
-several files should share one service, or when you want a name other
-than the derived one. The top-level `services:` list above controls how
-host metrics fan out.
+A source's service is the `<service>` segment of its pseudofile path,
+`/log/<namespace>/<service>/<kind>.log`.
+
+- **Single file**: `service:` if you set it, otherwise the file name without
+  its extension (`/var/log/myapp/api.log` becomes `api`).
+- **Unit**: `service:` if set, otherwise the unit name without `.service`.
+- **Glob**: always derived per file from its path below the pattern's fixed
+  directory, minus the extension. `/var/log/myapp/*.log` yields one service per
+  file (`api`, `worker`), and `/var/log/*/access.log` yields `api/access` and
+  `web/access`. **`service:` is ignored on a glob source**, so if several
+  files should share one service, list them as separate non-glob sources
+  with the same `service:`.
+
+`kind:` is the file part of the pseudofile, `main` by default. Give a second
+source on the same service its own `kind:` (for example `kind: audit`) to get
+a separate `/log/<ns>/<service>/audit.log`. The names `heartbeats`, `metrics`
+and `runtime` are used by the telemetry streams below.
+
+The top-level `services:` list is separate: it only controls how host
+metrics fan out.
 
 ### Token
 
@@ -86,6 +151,13 @@ The environment value takes precedence over the file value, so a secret
 injector can provide the token without templating the YAML. It is the
 only setting with an environment source; all other settings live in the
 file.
+
+Every row also carries `instance`, the host's name. `region` comes from
+the config when set, otherwise weftd asks the cloud metadata service once at
+startup (AWS IMDSv2, then GCP, then Azure, 500 ms each). It stays empty on
+bare metal, where you can set `region:` by hand. A source's `version` comes
+from `version.file` (re-read whenever the file changes), else `version.env`
+(read once at startup), else `dimensions.version`.
 
 The `deployment`, `region`, and per-source `version` values
 become first-class query dimensions — see
@@ -110,18 +182,31 @@ with your own tooling and point weftd at the result.
 
 ### How lines are parsed
 
-weftd ships each line as it reads it. A source takes
-`service`, `kind`, `path` (or `unit`), `version` and `metrics`.
-The source's schema, which lives on the weft server, defines how a line
-is split into fields (`TS`, `LEVEL` and the rest). weft detects it from
-the first batch and asks you to confirm it (see **Check schema setup**),
-or you set it with `weft source add` / `weft source configure`. The
-formats are:
+The schema lives on the weft server and weftd applies it at the edge. When
+a source is new, weftd samples 50 lines (waiting for them if the file is
+quiet), submits the sample, and checks every 5 seconds until the source is
+approved; see **Check schema setup** in
+[Connect a log source](connect-source.md). Until then the source ships
+nothing. After approval weftd starts at the end of the file, so history that
+was already there is not backfilled. A source that is already approved starts
+tailing immediately.
+
+With a schema in hand, weftd splits each line into fields and pulls out the
+timestamp and level before sending. The formats are:
 
 - `text` — whitespace-delimited fields
 - `json` — each line is a JSON object
 - `prefix_json` — a few whitespace-delimited fields, then a JSON object
   that starts at a given field number
+
+weftd re-checks every source's schema once a minute and swaps in a changed
+one without a restart or a gap. The same check honors a resample request
+from `weft source` while the tailer keeps running. Once a minute, for each
+source that saw traffic, it logs a `parse stats` line to the journal; a high
+`missing-level` percentage there usually means the schema's level field
+doesn't match the lines. If a schema can't be compiled, weftd keeps the
+previous one, or ships the raw line stamped with the arrival time when it has
+none.
 
 ```
 # Start weftd
@@ -131,6 +216,32 @@ sudo systemctl enable --now weftd
 sudo systemctl status weftd
 journalctl -u weftd -f
 ```
+
+The connection to weft is encrypted (TLS, certificate verified against the
+host's system roots), so the host needs current CA certificates and outbound
+access to port 9443. A config that still names `ingest.w3ft.net:9020` is sent
+to 9443 automatically.
+
+weftd takes two flags: `--config` (default `/etc/weftd/config.yaml`) and
+`--version`. On start it connects with the token and logs
+`authenticated as customer=… namespace=…`. If the coordinator can't be
+reached it retries with backoff up to 30 seconds. A rejected token is fatal. An
+inactive subscription makes it retry every 24 hours, and the daily
+re-authentication exits the process if the subscription lapses, so systemd
+restarts it into that retry loop.
+
+### Delivery
+
+Files are the only source with delivery guarantees. weftd keeps recently sent
+rows (up to 8 MiB per file) until the coordinator acknowledges them, at the
+`commit_interval` below, and only then advances the saved position. Anything
+unacknowledged is resent on a new stream, so delivery is **at-least-once**:
+duplicates are possible, gaps are not. During an outage the log file is the
+buffer. weftd stops reading when its window is full and resumes when the
+coordinator is back, and there is no disk spool of its own. Unit
+(`journalctl`), records-socket and metrics rows are best-effort: they are
+sent straight through and are not replayed after a restart or an outage.
+The socket drops lines when its 4096-line queue is full.
 
 ### Resuming after a restart
 
@@ -183,6 +294,17 @@ Notes:
 - A damaged `state.json` is moved to `state.json.corrupt` and weftd starts
   as if freshly installed.
 
+### Updates
+
+Once a day weftd checks `releases.w3ft.net` for a newer release. By default it
+downloads the build for the host's platform, verifies its SHA-256, replaces the
+running binary, and exits so systemd (`Restart=always`) relaunches it. If your
+config uses something this version is too old to understand, it also tries to
+update before giving up. Set `auto_update: false` to pin a host, for example
+while you investigate a release. It then only logs a line when a newer version
+exists. A host pinned this way, with a config its version can't use, exits
+instead of recovering.
+
 ### System metrics (optional)
 
 weftd can also ship host metrics alongside log lines. Opt in by
@@ -191,7 +313,7 @@ runs in the same agent process whatever the source tails.
 
 ```
 # /etc/weftd/config.yaml
-endpoint: ingest.w3ft.net:9020
+endpoint: ingest.w3ft.net:9443
 token: wft_a1b2c3d4e5f6...
 deployment: api               # optional; tags every row
 
@@ -210,11 +332,16 @@ sources:
 ```
 
 Samples are read from `/proc` (Linux only) and streamed as JSON log
-rows. The top-level `services:` list controls the destination paths:
+rows. Enable `metrics:` on one source only: each source with it enabled starts
+its own collector, so two would emit every row twice. Unknown collector
+names are ignored, and an `interval` that doesn't parse as a duration falls
+back to 30s. The top-level `services:` list controls the destination paths:
 each entry produces its own `/log/<namespace>/<service>/metrics.log`
 stream. Co-located services (e.g., `services: [coordinator, api]`
 on a host that runs both) get byte-identical rows under each path,
-filterable by the `host` field when the ASG scales out.
+filterable by the `host` field when the ASG scales out. If `services:` is
+unset, weftd uses `deployment:` as the single service; if neither is set the
+collector logs that and does not run.
 
 Each tick emits one row per metric type, with one extra row per
 mount (disk) and per interface (network):
@@ -266,6 +393,16 @@ Add a `socket:` line to `config.yaml` and weftd will accept
 newline-delimited frames in the format `<app>:<line>\n`. Each
 line is forwarded to the same ingest path file tailers use,
 stamped with the `<app>` prefix you write before the colon.
+`<app>` is `service` or `service/kind` (a bare `billing` lands in
+`/log/<ns>/billing/main.log`). The prefix must be under 32 characters with
+no space before the colon. A line without one goes to an app named
+`default`, and a line whose first colon happens to fall inside those 32
+characters (`{"id":1}`, `info: reset`) is read as having one, so always
+write the prefix. Lines may be up to 1 MiB.
+
+weftd creates the socket's directory, replaces a stale socket file, and makes
+the socket world-writable (mode 0666) so any local process can write to
+it. Treat the host's local users as trusted writers.
 
 ```
 # /etc/weftd/config.yaml

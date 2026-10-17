@@ -7,35 +7,60 @@ const installWeftd = {
   category: "connect-source",
   order: 30,
   headings: [
+    { level: 3, id: "source-types", text: "Source types" },
     { level: 3, id: "service-names", text: "Service names" },
     { level: 3, id: "token", text: "Token" },
     { level: 3, id: "file-sourced-dimensions", text: "File-sourced dimensions" },
     { level: 3, id: "how-lines-are-parsed", text: "How lines are parsed" },
+    { level: 3, id: "delivery", text: "Delivery" },
     { level: 3, id: "resuming-after-a-restart", text: "Resuming after a restart" },
+    { level: 3, id: "updates", text: "Updates" },
     { level: 3, id: "system-metrics-optional", text: "System metrics (optional)" },
     { level: 3, id: "app-api-emit-events-and-heartbeats-from-your-services", text: "App API: emit events and heartbeats from your services" },
   ],
-  html: `<p>weftd is a Go binary that tails log files and ships structured
-lines to weft over gRPC. Download it from the <strong>Downloads</strong> page. The steps
-every source shares (tokens, confirming rows, approving a schema) are in
+  html: `<p>weftd is weft's own log agent: a single Go binary that tails files and
+systemd units on a Linux host and streams structured rows to weft over gRPC.
+Why run it instead of a general-purpose shipper? A generic agent moves bytes,
+and you hand-write the parsing (regexes, grok patterns) in every host's config
+and keep those copies in sync. With weftd the schema lives in weft: the agent
+samples a new source, you approve the detected schema once, and every host
+running that source then extracts timestamp, level and fields the same way at
+the edge. Schema changes reach running agents within about a minute, without
+touching the hosts. Every row is also stamped with where it came from
+(<code>instance</code>, <code>deployment</code>, <code>region</code>, and a <code>version</code> that follows a file on
+disk), so those become query dimensions. Rows are queryable in about a second,
+against the seconds-to-minutes of the CloudWatch path. Delivery is
+at-least-once across restarts and log rotation. One agent also carries host
+metrics and a local socket for events and heartbeats from your own code, and it
+updates itself. It ships only to weft; it is not a general forwarder. If
+minute-scale latency is fine and your logs are already in CloudWatch, the
+<a href="/manual/connect-cloudwatch">CloudWatch source</a> needs nothing installed.</p>
+<p>Download weftd from the <strong>Downloads</strong> page. The steps every source shares
+(tokens, confirming rows, approving a schema) are in
 <a href="/manual/overview">Connect a log source</a>.</p>
-<pre><code># Download and install
-curl -fsSL https://w3ft.net/install.sh | sh
-
-# Or on Debian/Ubuntu
-sudo dpkg -i weftd_*.deb
+<pre><code># Debian/Ubuntu (x86_64; use arm64 on ARM hosts)
+curl -LO https://releases.w3ft.net/weftd/latest/weftd_latest_amd64.deb
+sudo dpkg -i weftd_latest_amd64.deb
 </code></pre>
+<p>The package installs the systemd unit and enables it on boot, but does not
+start it: weftd refuses to run until you write its config (below).</p>
 <p>Configure your log sources in <code>/etc/weftd/config.yaml</code>:</p>
 <pre><code># /etc/weftd/config.yaml
 
-endpoint: ingest.w3ft.net:9020 # optional; defaults to this. Override
+endpoint: ingest.w3ft.net:9443 # optional; defaults to this (TLS). Override
                               # for local/dockerized testing
+tls: true                     # optional; default true. false only for a
+                              # plaintext dev coordinator
 token: wft_a1b2c3d4e5f6...
+auto_update: true             # optional; default true. false pins this
+                              # host to the installed version
 deployment: api               # optional; the fleet/scaling-unit
                               # this agent belongs to (k8s Deployment,
                               # AWS ASG, etc.) — stamped on every row
 region: us-east-2             # optional override; auto-detected from
                               # cloud metadata at startup if omitted
+socket: /var/run/weftd.sock   # optional; records socket for your apps
+                              # (see &quot;App API&quot; below)
 services: [api]               # logical services co-located on this
                               # host; metrics fan out one stream per
                               # service — /log/&lt;ns&gt;/&lt;service&gt;/metrics.log
@@ -49,7 +74,7 @@ dimensions:                   # optional: column values sourced from
 
 sources:
   - service: myapp
-    path: /var/log/myapp/*.log
+    path: /var/log/myapp/app.log
     version:                           # optional
       file: /opt/myapp/VERSION         # weftd watches the file and
                                        # stamps the latest contents as
@@ -59,21 +84,60 @@ sources:
 
   - service: nginx
     path: /var/log/nginx/access.log
+
+  - unit: myapp-worker.service         # a systemd unit, read from the journal
+    kind: main
 </code></pre>
 <p>This file is the single source of truth; the package never
 generates or overwrites it. Start from <code>/etc/weftd/config.yaml.example</code>.
 Repeated source fields can be shared with standard YAML anchors and
 merge keys (<code>&amp;name</code> / <code>&lt;&lt;: *name</code>). weftd ignores an <code>x-anchors:</code>
 block, which is the place to declare them.</p>
+<h3 id="source-types">Source types</h3>
+<p>Each entry under <code>sources:</code> tails one thing. Set exactly one of <code>path:</code> or
+<code>unit:</code>.</p>
+<ul>
+<li><strong>A file</strong> (<code>path: /var/log/myapp/app.log</code>). The tailer keeps exact byte
+offsets, follows <code>logrotate</code> in both styles (rename-and-recreate and
+<code>copytruncate</code>), and drains the old file before it switches to the new one.
+A line is shipped only once its newline has been written. A line longer than
+1 MiB is cut at 1 MiB and ends with <code>…[line truncated]</code>. CRLF endings are
+removed, blank lines are skipped, and leading and trailing whitespace is
+trimmed from every line, so indentation (a stack trace's leading spaces,
+say) does not survive.</li>
+<li><strong>A glob</strong> (<code>path: /var/log/myapp/*.log</code>). <code>*</code>, <code>?</code> and <code>[...]</code> work as in
+the shell, and <code>**</code> matches any number of directories. Files that exist at
+startup are tailed from the saved position. A file created later in the
+directory the pattern starts from is picked up automatically and read from
+its first line. A file created in a deeper directory after startup is
+found at the next restart. If a concrete file is also named by its own
+non-glob source, that explicit source wins and the glob skips it.</li>
+<li><strong>A systemd unit</strong> (<code>unit: myapp.service</code>). weftd runs
+<code>journalctl -f -u &lt;unit&gt;</code> and ships new journal lines from the moment it
+starts. Unit sources are not checkpointed (see
+Delivery below), so a restart does not replay the journal, and
+<code>journalctl</code> must be on the host.</li>
+</ul>
 <h3 id="service-names">Service names</h3>
-<p>Each source's <code>service:</code> sets the <code>&lt;service&gt;</code> segment of its
-pseudofile path. It is optional: for a systemd source (<code>unit:</code>) weftd
-uses the unit name without <code>.service</code>, and for a file source (<code>path:</code>)
-it uses the file's name without its extension, so
-<code>/var/log/myapp/api.log</code> becomes <code>api</code>. Set <code>service:</code> explicitly when
-several files should share one service, or when you want a name other
-than the derived one. The top-level <code>services:</code> list above controls how
-host metrics fan out.</p>
+<p>A source's service is the <code>&lt;service&gt;</code> segment of its pseudofile path,
+<code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>.</p>
+<ul>
+<li><strong>Single file</strong>: <code>service:</code> if you set it, otherwise the file name without
+its extension (<code>/var/log/myapp/api.log</code> becomes <code>api</code>).</li>
+<li><strong>Unit</strong>: <code>service:</code> if set, otherwise the unit name without <code>.service</code>.</li>
+<li><strong>Glob</strong>: always derived per file from its path below the pattern's fixed
+directory, minus the extension. <code>/var/log/myapp/*.log</code> yields one service per
+file (<code>api</code>, <code>worker</code>), and <code>/var/log/*/access.log</code> yields <code>api/access</code> and
+<code>web/access</code>. <strong><code>service:</code> is ignored on a glob source</strong>, so if several
+files should share one service, list them as separate non-glob sources
+with the same <code>service:</code>.</li>
+</ul>
+<p><code>kind:</code> is the file part of the pseudofile, <code>main</code> by default. Give a second
+source on the same service its own <code>kind:</code> (for example <code>kind: audit</code>) to get
+a separate <code>/log/&lt;ns&gt;/&lt;service&gt;/audit.log</code>. The names <code>heartbeats</code>, <code>metrics</code>
+and <code>runtime</code> are used by the telemetry streams below.</p>
+<p>The top-level <code>services:</code> list is separate: it only controls how host
+metrics fan out.</p>
 <h3 id="token">Token</h3>
 <p>Create the token as described in
 <a href="/manual/namespaces#creating-a-token">Connect a log source</a>. Put <code>token:</code> in the config file, <strong>or</strong> supply it via the
@@ -82,6 +146,12 @@ The environment value takes precedence over the file value, so a secret
 injector can provide the token without templating the YAML. It is the
 only setting with an environment source; all other settings live in the
 file.</p>
+<p>Every row also carries <code>instance</code>, the host's name. <code>region</code> comes from
+the config when set, otherwise weftd asks the cloud metadata service once at
+startup (AWS IMDSv2, then GCP, then Azure, 500 ms each). It stays empty on
+bare metal, where you can set <code>region:</code> by hand. A source's <code>version</code> comes
+from <code>version.file</code> (re-read whenever the file changes), else <code>version.env</code>
+(read once at startup), else <code>dimensions.version</code>.</p>
 <p>The <code>deployment</code>, <code>region</code>, and per-source <code>version</code> values
 become first-class query dimensions — see
 <a href="/manual/metavars">Meta-variables</a> for the full list and how they appear in awk
@@ -100,19 +170,30 @@ access (<code>.foo</code>), nested fields (<code>.foo.bar</code>), and array ind
 (<code>.items[0].name</code>). For richer extraction, pre-process the file
 with your own tooling and point weftd at the result.</p>
 <h3 id="how-lines-are-parsed">How lines are parsed</h3>
-<p>weftd ships each line as it reads it. A source takes
-<code>service</code>, <code>kind</code>, <code>path</code> (or <code>unit</code>), <code>version</code> and <code>metrics</code>.
-The source's schema, which lives on the weft server, defines how a line
-is split into fields (<code>TS</code>, <code>LEVEL</code> and the rest). weft detects it from
-the first batch and asks you to confirm it (see <strong>Check schema setup</strong>),
-or you set it with <code>weft source add</code> / <code>weft source configure</code>. The
-formats are:</p>
+<p>The schema lives on the weft server and weftd applies it at the edge. When
+a source is new, weftd samples 50 lines (waiting for them if the file is
+quiet), submits the sample, and checks every 5 seconds until the source is
+approved; see <strong>Check schema setup</strong> in
+<a href="/manual/overview">Connect a log source</a>. Until then the source ships
+nothing. After approval weftd starts at the end of the file, so history that
+was already there is not backfilled. A source that is already approved starts
+tailing immediately.</p>
+<p>With a schema in hand, weftd splits each line into fields and pulls out the
+timestamp and level before sending. The formats are:</p>
 <ul>
 <li><code>text</code> — whitespace-delimited fields</li>
 <li><code>json</code> — each line is a JSON object</li>
 <li><code>prefix_json</code> — a few whitespace-delimited fields, then a JSON object
 that starts at a given field number</li>
 </ul>
+<p>weftd re-checks every source's schema once a minute and swaps in a changed
+one without a restart or a gap. The same check honors a resample request
+from <code>weft source</code> while the tailer keeps running. Once a minute, for each
+source that saw traffic, it logs a <code>parse stats</code> line to the journal; a high
+<code>missing-level</code> percentage there usually means the schema's level field
+doesn't match the lines. If a schema can't be compiled, weftd keeps the
+previous one, or ships the raw line stamped with the arrival time when it has
+none.</p>
 <pre><code># Start weftd
 sudo systemctl enable --now weftd
 
@@ -120,6 +201,28 @@ sudo systemctl enable --now weftd
 sudo systemctl status weftd
 journalctl -u weftd -f
 </code></pre>
+<p>The connection to weft is encrypted (TLS, certificate verified against the
+host's system roots), so the host needs current CA certificates and outbound
+access to port 9443. A config that still names <code>ingest.w3ft.net:9020</code> is sent
+to 9443 automatically.</p>
+<p>weftd takes two flags: <code>--config</code> (default <code>/etc/weftd/config.yaml</code>) and
+<code>--version</code>. On start it connects with the token and logs
+<code>authenticated as customer=… namespace=…</code>. If the coordinator can't be
+reached it retries with backoff up to 30 seconds. A rejected token is fatal. An
+inactive subscription makes it retry every 24 hours, and the daily
+re-authentication exits the process if the subscription lapses, so systemd
+restarts it into that retry loop.</p>
+<h3 id="delivery">Delivery</h3>
+<p>Files are the only source with delivery guarantees. weftd keeps recently sent
+rows (up to 8 MiB per file) until the coordinator acknowledges them, at the
+<code>commit_interval</code> below, and only then advances the saved position. Anything
+unacknowledged is resent on a new stream, so delivery is <strong>at-least-once</strong>:
+duplicates are possible, gaps are not. During an outage the log file is the
+buffer. weftd stops reading when its window is full and resumes when the
+coordinator is back, and there is no disk spool of its own. Unit
+(<code>journalctl</code>), records-socket and metrics rows are best-effort: they are
+sent straight through and are not replayed after a restart or an outage.
+The socket drops lines when its 4096-line queue is full.</p>
 <h3 id="resuming-after-a-restart">Resuming after a restart</h3>
 <p>weftd remembers how far it has delivered each tailed file, so a restart
 (an upgrade, a reboot, a crash) picks up where it left off and
@@ -189,12 +292,21 @@ logs that the directory is locked and runs without checkpointing.</li>
 <li>A damaged <code>state.json</code> is moved to <code>state.json.corrupt</code> and weftd starts
 as if freshly installed.</li>
 </ul>
+<h3 id="updates">Updates</h3>
+<p>Once a day weftd checks <code>releases.w3ft.net</code> for a newer release. By default it
+downloads the build for the host's platform, verifies its SHA-256, replaces the
+running binary, and exits so systemd (<code>Restart=always</code>) relaunches it. If your
+config uses something this version is too old to understand, it also tries to
+update before giving up. Set <code>auto_update: false</code> to pin a host, for example
+while you investigate a release. It then only logs a line when a newer version
+exists. A host pinned this way, with a config its version can't use, exits
+instead of recovering.</p>
 <h3 id="system-metrics-optional">System metrics (optional)</h3>
 <p>weftd can also ship host metrics alongside log lines. Opt in by
 attaching a <code>metrics:</code> block to any source in the config. The block
 runs in the same agent process whatever the source tails.</p>
 <pre><code># /etc/weftd/config.yaml
-endpoint: ingest.w3ft.net:9020
+endpoint: ingest.w3ft.net:9443
 token: wft_a1b2c3d4e5f6...
 deployment: api               # optional; tags every row
 
@@ -212,11 +324,16 @@ sources:
         - network
 </code></pre>
 <p>Samples are read from <code>/proc</code> (Linux only) and streamed as JSON log
-rows. The top-level <code>services:</code> list controls the destination paths:
+rows. Enable <code>metrics:</code> on one source only: each source with it enabled starts
+its own collector, so two would emit every row twice. Unknown collector
+names are ignored, and an <code>interval</code> that doesn't parse as a duration falls
+back to 30s. The top-level <code>services:</code> list controls the destination paths:
 each entry produces its own <code>/log/&lt;namespace&gt;/&lt;service&gt;/metrics.log</code>
 stream. Co-located services (e.g., <code>services: [coordinator, api]</code>
 on a host that runs both) get byte-identical rows under each path,
-filterable by the <code>host</code> field when the ASG scales out.</p>
+filterable by the <code>host</code> field when the ASG scales out. If <code>services:</code> is
+unset, weftd uses <code>deployment:</code> as the single service; if neither is set the
+collector logs that and does not run.</p>
 <p>Each tick emits one row per metric type, with one extra row per
 mount (disk) and per interface (network):</p>
 <table>
@@ -279,7 +396,16 @@ channel. A typed Go SDK is available at
 <p>Add a <code>socket:</code> line to <code>config.yaml</code> and weftd will accept
 newline-delimited frames in the format <code>&lt;app&gt;:&lt;line&gt;\\n</code>. Each
 line is forwarded to the same ingest path file tailers use,
-stamped with the <code>&lt;app&gt;</code> prefix you write before the colon.</p>
+stamped with the <code>&lt;app&gt;</code> prefix you write before the colon.
+<code>&lt;app&gt;</code> is <code>service</code> or <code>service/kind</code> (a bare <code>billing</code> lands in
+<code>/log/&lt;ns&gt;/billing/main.log</code>). The prefix must be under 32 characters with
+no space before the colon. A line without one goes to an app named
+<code>default</code>, and a line whose first colon happens to fall inside those 32
+characters (<code>{&quot;id&quot;:1}</code>, <code>info: reset</code>) is read as having one, so always
+write the prefix. Lines may be up to 1 MiB.</p>
+<p>weftd creates the socket's directory, replaces a stale socket file, and makes
+the socket world-writable (mode 0666) so any local process can write to
+it. Treat the host's local users as trusted writers.</p>
 <pre><code># /etc/weftd/config.yaml
 socket: /var/run/weftd.sock
 </code></pre>
