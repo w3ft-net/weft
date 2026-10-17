@@ -63,7 +63,7 @@ func TestExportToS3_DirectWrite(t *testing.T) {
 	}
 	defer cs.Close()
 
-	result, err := cs.Query("SELECT raw, ts FROM logs WHERE customer_id = 1")
+	result, err := cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 	}
 	defer csVim.Close()
 
-	result, err := csVim.Query("SELECT raw, ts FROM logs WHERE customer_id = 1")
+	result, err := csVim.Query(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestExportToS3_AppPartitioned(t *testing.T) {
 	}
 	defer csCb.Close()
 
-	result, err = csCb.Query("SELECT raw, ts FROM logs WHERE customer_id = 1")
+	result, err = csCb.Query(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}

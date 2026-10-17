@@ -67,7 +67,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	}
 
 	// Query all kevlar rows.
-	result, err := cs.Query("SELECT raw, ts FROM logs WHERE customer_id = 1")
+	result, err := cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1")
 	if err != nil {
 		t.Fatalf("query via Lambda: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	t.Logf("queried %d rows via Lambda container", len(result))
 
 	// Filter by app.
-	result, err = cs.Query("SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1")
+	result, err = cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestLambdaColdShard_DockerIntegration(t *testing.T) {
 	}
 
 	// Filter by level.
-	result, err = cs.Query("SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
+	result, err = cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
 	if err != nil {
 		t.Fatal(err)
 	}
