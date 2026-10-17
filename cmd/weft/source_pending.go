@@ -23,7 +23,7 @@ func progressBar(collected, target, width int) string {
 		collected = target
 	}
 	filled := collected * width / target
-	return "[" + strings.Repeat("█", filled) + strings.Repeat("-", width-filled) + "]"
+	return "[" + strings.Repeat("■", filled) + strings.Repeat("-", width-filled) + "]"
 }
 
 // sinceText renders an RFC3339 timestamp as a compact age ("4s ago"), or "-"

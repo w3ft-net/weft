@@ -22,7 +22,7 @@ func TestRenderPendingShowsMeterLastLineAndPreview(t *testing.T) {
 		Sample:          []byte(`["first","GET  /health   200"]`),
 	}}, now, 80)
 	out := buf.String()
-	for _, want := range []string{"[##########----------]", " 25/50 ", "sampling", "4s ago", "› GET /health 200"} {
+	for _, want := range []string{"[■■■■■■■■■■----------]", " 25/50 ", "sampling", "4s ago", "› GET /health 200"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
