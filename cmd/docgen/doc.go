@@ -64,6 +64,10 @@ func loadDoc(path string) (*doc, error) {
 	if d.Title == "" {
 		return nil, fmt.Errorf("frontmatter: `title` is required")
 	}
+	body, err = substituteVersion(body, weftdVersionFile)
+	if err != nil {
+		return nil, err
+	}
 	d.path = path
 	d.body = body
 	return &d, nil

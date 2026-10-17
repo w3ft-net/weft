@@ -141,6 +141,14 @@ The ext refuses to publish if `Version` in the source file disagrees
 with what it's about to embed via `-ldflags`. It also refuses to re-tag
 an existing release.
 
+The weftd `.deb` is published only under its version
+(`weftd/v<ver>/weftd_<ver>_<arch>.deb`); there is no `latest` deb. The
+Downloads page and the `install-weftd` manual both interpolate `<ver>` from
+`cmd/weftd/version.go` at build time (`frontend/weftdVersion.ts`, docgen's
+`{{WEFTD_VERSION}}`), so **run the release ext before deploying a build that
+contains the bump**, or those links point at a deb that isn't there yet.
+CI's generated-docs check will also ask for `make docs` after a weftd bump.
+
 After release:
 
 - `releases.w3ft.net/weft/v<ver>/weft-<platform>` — versioned binary.

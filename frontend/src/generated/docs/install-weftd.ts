@@ -38,9 +38,9 @@ minute-scale latency is fine and your logs are already in CloudWatch, the
 <p>Download weftd from the <strong>Downloads</strong> page. The steps every source shares
 (tokens, confirming rows, approving a schema) are in
 <a href="/manual/overview">Connect a log source</a>.</p>
-<pre><code># Debian/Ubuntu (x86_64; use arm64 on ARM hosts)
-curl -LO https://releases.w3ft.net/weftd/latest/weftd_latest_amd64.deb
-sudo dpkg -i weftd_latest_amd64.deb
+<pre><code># Debian/Ubuntu (x86_64; use arm64 in place of amd64 on ARM hosts)
+curl -LO https://releases.w3ft.net/weftd/v0.31.0/weftd_0.31.0_amd64.deb
+sudo dpkg -i weftd_0.31.0_amd64.deb
 </code></pre>
 <p>The package installs the systemd unit and enables it on boot, but does not
 start it: weftd refuses to run until you write its config (below).</p>

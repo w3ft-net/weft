@@ -24,6 +24,7 @@ var (
 )
 
 func main() {
+	flag.StringVar(&weftdVersionFile, "weftd-version", weftdVersionFile, "Go file declaring weftd's Version, for {{WEFTD_VERSION}} in docs")
 	flag.Parse()
 
 	var all []*doc

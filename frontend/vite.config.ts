@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { execSync } from 'node:child_process'
+import { weftdVersion } from './weftdVersion'
 
 // __WEFT_WEB_SHA__ is stamped into the build so the frontend can
 // declare itself on every fetch as X-Weft-Client: weft-web/<sha>.
@@ -21,6 +22,8 @@ export default defineConfig({
   plugins: [react()],
   define: {
     __WEFT_WEB_SHA__: JSON.stringify(resolveBuildSHA()),
+    // Released weftd version, for the Downloads page's versioned .deb URL.
+    __WEFTD_VERSION__: JSON.stringify(weftdVersion()),
   },
   server: {
     proxy: {

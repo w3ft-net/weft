@@ -28,6 +28,9 @@ declare global {
   // when no git repo was present. Used to identify the frontend on every
   // server-bound fetch as X-Weft-Client: weft-web/<sha>.
   const __WEFT_WEB_SHA__: string
+  // __WEFTD_VERSION__ is injected by Vite from cmd/weftd/version.go (see
+  // weftdVersion.ts); the Downloads page builds the versioned .deb URL from it.
+  const __WEFTD_VERSION__: string
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || ''

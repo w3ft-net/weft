@@ -21,8 +21,14 @@ function cliUrl(os: string, arch: string) {
   return `${RELEASES_BASE}/weft/latest/weft-${os}-${arch}`
 }
 
+// The release ext publishes the deb only under its version
+// (weftd/v<ver>/weftd_<ver>_<arch>.deb); there is no "latest" deb.
+function agentDebName(arch: string) {
+  return `weftd_${__WEFTD_VERSION__}_${arch}.deb`
+}
+
 function agentUrl(arch: string) {
-  return `${RELEASES_BASE}/weftd/latest/weftd_latest_${arch}.deb`
+  return `${RELEASES_BASE}/weftd/v${__WEFTD_VERSION__}/${agentDebName(arch)}`
 }
 
 // CodeBlock renders shell commands as a terminal transcript: each
@@ -132,7 +138,7 @@ export default function Downloads() {
                   data-testid={`downloads-weftd-${arch}-link`}
                   download
                 >
-                  <span className="dl-file-name">weftd_latest_{arch}.deb</span>
+                  <span className="dl-file-name">{agentDebName(arch)}</span>
                   <span className="dl-file-label">{label}</span>
                 </a>
               ))}
@@ -147,7 +153,7 @@ export default function Downloads() {
               <CodeBlock
                 testId="downloads-agent-install-block"
                 code={`curl -LO ${agentUrl('amd64')}
-sudo dpkg -i weftd_latest_amd64.deb`}
+sudo dpkg -i ${agentDebName('amd64')}`}
               />
             </div>
 

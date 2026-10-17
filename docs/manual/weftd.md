@@ -32,9 +32,9 @@ Download weftd from the **Downloads** page. The steps every source shares
 [Connect a log source](connect-source.md).
 
 ```
-# Debian/Ubuntu (x86_64; use arm64 on ARM hosts)
-curl -LO https://releases.w3ft.net/weftd/latest/weftd_latest_amd64.deb
-sudo dpkg -i weftd_latest_amd64.deb
+# Debian/Ubuntu (x86_64; use arm64 in place of amd64 on ARM hosts)
+curl -LO https://releases.w3ft.net/weftd/v{{WEFTD_VERSION}}/weftd_{{WEFTD_VERSION}}_amd64.deb
+sudo dpkg -i weftd_{{WEFTD_VERSION}}_amd64.deb
 ```
 
 The package installs the systemd unit and enables it on boot, but does not
