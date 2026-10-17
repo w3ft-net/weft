@@ -65,3 +65,5 @@ go.work.sum
 
 # Production database dumps pulled for local verification: customer data.
 /prod.sql
+.env
+.trello.json
