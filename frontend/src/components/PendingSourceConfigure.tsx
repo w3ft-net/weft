@@ -5,6 +5,7 @@ import {
   previewSource,
   probeSource,
   resampleSource,
+  LARGER_SAMPLE_LINES,
   type PendingSource,
 } from '../lib/api'
 import SchemaEditor from './SchemaEditor'
@@ -144,6 +145,11 @@ export default function PendingSourceConfigure({
           detection={source.detection}
           onPreview={config => previewSource(source.namespace, source.service, config)}
           onCancel={() => setExpanded(false)}
+          onLargerSample={async () => {
+            await resampleSource(source.namespace, source.service, LARGER_SAMPLE_LINES)
+            notifyPendingSourcesChanged()
+            setExpanded(false)
+          }}
           onSubmit={async (config) => {
             await configureSource(source.namespace, source.service, config)
             notifyPendingSourcesChanged()

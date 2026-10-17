@@ -29,6 +29,16 @@ func (terminalUI) Notify(msg string) {
 	fmt.Println(flagStyle.Render(msg))
 }
 
+func (terminalUI) OfferLargerSample(f ingest.ProbeField) (bool, error) {
+	var ok bool
+	err := huh.NewConfirm().
+		Title(fmt.Sprintf("Trigger a larger sample size to find a %s?", fieldNames[f])).
+		Description(fmt.Sprintf("None of these lines has one. This collects %d fresh lines; configure again once they land.", LargerSampleLines)).
+		Affirmative("Yes").Negative("No").
+		Value(&ok).Run()
+	return ok, err
+}
+
 func (terminalUI) ConfirmCandidate(f ingest.ProbeField, lines []string, ex *ingest.ProbeExtractor, res *ingest.ProbeResult) (bool, error) {
 	name := fieldNames[f]
 	fmt.Println()

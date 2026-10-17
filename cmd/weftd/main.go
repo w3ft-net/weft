@@ -543,10 +543,10 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	// the file otherwise.
 	if unit != "" {
 		weftlog.Infof(ctx, "[%s] new source — sampling unit %s", fullApp, unit)
-		err = weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment, false)
+		err = weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment, false, 0)
 	} else {
 		weftlog.Infof(ctx, "[%s] new source — sampling %s", fullApp, path)
-		err = weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment, false)
+		err = weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment, false, 0)
 	}
 	if err != nil {
 		return err
@@ -554,11 +554,11 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 	weftlog.Infof(ctx, "[%s] sample submitted — waiting for configuration", fullApp)
 
 	// Poll until configured.
-	schemaYAML, err := weftd.WaitForConfiguration(ctx, client, token, app, func(ctx context.Context) error {
+	schemaYAML, err := weftd.WaitForConfiguration(ctx, client, token, app, func(ctx context.Context, target int) error {
 		if unit != "" {
-			return weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment, true)
+			return weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment, true, target)
 		}
-		return weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment, true)
+		return weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment, true, target)
 	})
 	if err != nil {
 		return err
@@ -629,7 +629,7 @@ func refreshSource(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 		return
 	}
 	if st.Status == "configured" && st.ResampleRequested {
-		startResample(ctx, client, token, service, fullApp)
+		startResample(ctx, client, token, service, fullApp, int(st.SampleTarget))
 	}
 	if st.Status != "configured" || st.SchemaYAML == "" {
 		return
@@ -652,7 +652,7 @@ func refreshSource(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 // still filling its sample (which, by design, can take a while). The
 // coordinator clears the resample flag when the final sample lands, so
 // subsequent ticks stop triggering this.
-func startResample(ctx context.Context, client pb.WeftCoordinatorClient, token, bareService, fullApp string) {
+func startResample(ctx context.Context, client pb.WeftCoordinatorClient, token, bareService, fullApp string, target int) {
 	resampleMu.Lock()
 	rs, ok := resampleSources[fullApp]
 	if !ok || resampleActive[fullApp] {
@@ -671,9 +671,9 @@ func startResample(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 		}()
 		var err error
 		if rs.unit != "" {
-			err = weftd.SubmitUnitSample(ctx, client, token, bareService, rs.unit, rs.instance, globalDeployment, true)
+			err = weftd.SubmitUnitSample(ctx, client, token, bareService, rs.unit, rs.instance, globalDeployment, true, target)
 		} else {
-			err = weftd.SubmitSample(ctx, client, token, bareService, rs.path, rs.instance, globalDeployment, true)
+			err = weftd.SubmitSample(ctx, client, token, bareService, rs.path, rs.instance, globalDeployment, true, target)
 		}
 		if err != nil {
 			weftlog.Errorf(ctx, "[%s] resample failed: %v", fullApp, err)

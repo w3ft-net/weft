@@ -784,12 +784,17 @@ export function getSourceSchema(namespace: string, service: string): Promise<Sou
   )
 }
 
+// LARGER_SAMPLE_LINES is the sample size asked for when a value was on none of
+// the lines of the first one (the CLI asks for the same).
+export const LARGER_SAMPLE_LINES = 500
+
 // resampleSource asks the agent for a fresh sample of an already-configured
 // source. Ingestion continues on the current schema; the fresh sample
 // appears for review once the agent finishes accumulating.
-export function resampleSource(namespace: string, service: string): Promise<void> {
+// lines is the sample size wanted; omitted asks for the default.
+export function resampleSource(namespace: string, service: string, lines?: number): Promise<void> {
   return apiFetch(
-    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/resample`,
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/resample${lines ? `?size=${lines}` : ''}`,
     { method: 'POST' },
   )
 }

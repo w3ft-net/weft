@@ -349,7 +349,7 @@ func accumulateSample(ctx context.Context, st *store.Store, classifier ingest.Cl
 	default:
 		return false
 	}
-	if lg.SampleCollected >= store.SampleTarget {
+	if lg.SampleCollected >= lg.Target() {
 		return false
 	}
 	var existing []string
@@ -358,8 +358,8 @@ func accumulateSample(ctx context.Context, st *store.Store, classifier ingest.Cl
 	}
 	combined := append(existing, lines...)
 	partial := true
-	if len(combined) >= store.SampleTarget {
-		combined = combined[:store.SampleTarget]
+	if len(combined) >= lg.Target() {
+		combined = combined[:lg.Target()]
 		partial = false
 	}
 	sampleJSON, err := json.Marshal(combined)

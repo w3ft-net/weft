@@ -78,7 +78,7 @@ func TestResampleOfConfiguredSourceIsVisible(t *testing.T) {
 		t.Fatalf("before resample: pending=%v listed=%+v, want nothing pending and no resample", p, find(l))
 	}
 
-	if err := s.RequestResample(ns.ID, "api"); err != nil {
+	if err := s.RequestResample(ns.ID, "api", 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpsertPendingLogGroup(ns.ID, "api", "i", "d", `["f1","f2"]`, `{}`, 2, true); err != nil {

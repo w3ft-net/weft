@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -129,13 +130,13 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 		json.NewEncoder(w).Encode(map[string]any{
 			"status":           "sampling",
 			"sample_collected": lg.SampleCollected,
-			"sample_target":    store.SampleTarget,
+			"sample_target":    lg.Target(),
 		})
 	case store.StatusPending:
 		json.NewEncoder(w).Encode(map[string]any{
 			"status":           "pending",
 			"sample_collected": lg.SampleCollected,
-			"sample_target":    store.SampleTarget,
+			"sample_target":    lg.Target(),
 		})
 	default:
 		json.NewEncoder(w).Encode(map[string]any{"status": "unknown"})
@@ -226,7 +227,7 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:       lg.CreatedAt.Format("2006-01-02T15:04:05Z"),
 			Status:          pendingStatus(lg.LogGroup),
 			SampleCollected: lg.SampleCollected,
-			SampleTarget:    store.SampleTarget,
+			SampleTarget:    lg.Target(),
 			SampleUpdatedAt: formatSampleUpdatedAt(lg.SampleUpdatedAt),
 		})
 	}
@@ -259,10 +260,10 @@ func resampleOf(lg store.LogGroup) *resampleInfo {
 		return nil
 	}
 	if lg.ResampleRequestedAt != nil {
-		return &resampleInfo{Collected: lg.SampleCollected, Target: store.SampleTarget}
+		return &resampleInfo{Collected: lg.SampleCollected, Target: lg.Target()}
 	}
 	if lg.Sample != "" && lg.Sample != "[]" && lg.Sample != "null" {
-		return &resampleInfo{Collected: lg.SampleCollected, Target: store.SampleTarget, Ready: true}
+		return &resampleInfo{Collected: lg.SampleCollected, Target: lg.Target(), Ready: true}
 	}
 	return nil
 }
@@ -281,7 +282,7 @@ func pendingStatus(lg store.LogGroup) string {
 			}
 			return string(store.StatusPending)
 		}
-		if lg.SampleCollected < store.SampleTarget {
+		if lg.SampleCollected < lg.Target() {
 			return string(store.StatusSampling)
 		}
 		return string(store.StatusPending)
@@ -631,8 +632,22 @@ func (s *Server) handleResampleSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.RequestResample(ns.ID, app); err != nil {
+	// ?size=N asks for a sample of N lines instead of the default, for a value
+	// that appears on only some requests.
+	size := 0
+	if v := r.URL.Query().Get("size"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			http.Error(w, "size must be a number of lines", http.StatusBadRequest)
+			return
+		}
+		size = n
+	}
+
+	if err := s.store.RequestResample(ns.ID, app, size); err != nil {
 		switch {
+		case errors.Is(err, store.ErrBadSampleSize):
+			http.Error(w, err.Error(), http.StatusBadRequest)
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			http.Error(w, "no source found", http.StatusNotFound)
 		case errors.Is(err, store.ErrAlreadySampling):
@@ -698,7 +713,7 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 		// can show "resample in progress (N/target)".
 		if lg.ResampleRequestedAt != nil {
 			resp["sample_collected"] = lg.SampleCollected
-			resp["sample_target"] = store.SampleTarget
+			resp["sample_target"] = lg.Target()
 			resp["sample_updated_at"] = formatSampleUpdatedAt(lg.SampleUpdatedAt)
 		}
 		if lg.SchemaYAML != "" {
@@ -713,7 +728,7 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"status":            "sampling",
 			"sample_collected":  lg.SampleCollected,
-			"sample_target":     store.SampleTarget,
+			"sample_target":     lg.Target(),
 			"sample":            json.RawMessage(sample),
 			"sample_updated_at": formatSampleUpdatedAt(lg.SampleUpdatedAt),
 		})
@@ -725,7 +740,7 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"status":            "pending",
 			"sample_collected":  lg.SampleCollected,
-			"sample_target":     store.SampleTarget,
+			"sample_target":     lg.Target(),
 			"sample":            json.RawMessage(sample),
 			"detection":         json.RawMessage(lg.Detection),
 			"sample_updated_at": formatSampleUpdatedAt(lg.SampleUpdatedAt),

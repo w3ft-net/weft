@@ -57,22 +57,32 @@ func CheckSourceStatus(ctx context.Context, client pb.WeftCoordinatorClient, tok
 	}, nil
 }
 
-// SubmitSample accumulates a full sample from a file and sends it to the
-// coordinator. While still short of the target it ships throttled partial
+// sampleSize is the line count to collect when the coordinator asked for
+// target lines; it asks for none (0) outside a resample.
+func sampleSize(target int) int {
+	if target <= 0 {
+		return sampleLineCount
+	}
+	return target
+}
+
+// SubmitSample accumulates a full sample of target lines (0 means
+// sampleLineCount) from a file and sends it to the coordinator. While still short of the target it ships throttled partial
 // progress pings so the source surfaces as "sampling (N/target)" rather
 // than stalling invisibly on a low-volume source. fresh skips the file's
 // existing content and samples only lines written from now on (a resample
 // wants current traffic, not the startup chatter at the head of the file).
-func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, path, instance, deployment string, fresh bool) error {
+func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, path, instance, deployment string, fresh bool, target int) error {
+	target = sampleSize(target)
 	progress := func(lines []string) {
 		// Best-effort: a dropped progress ping just delays the UI update.
 		_ = submitSampleLines(ctx, client, token, app, instance, deployment, lines, true)
 	}
-	lines, err := SampleLines(ctx, path, sampleLineCount, fresh, progress)
+	lines, err := SampleLines(ctx, path, target, fresh, progress)
 	if err != nil {
 		return fmt.Errorf("sample %s: %w", path, err)
 	}
-	if len(lines) < sampleLineCount {
+	if len(lines) < target {
 		// Only reachable when ctx was cancelled before the full sample
 		// accumulated (agent shutdown). Do not finalize a partial sample.
 		return ctx.Err()
@@ -83,15 +93,16 @@ func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, a
 // SubmitUnitSample is the journald (unit:) counterpart of SubmitSample.
 // Journald sources have no file path, so the file sampler cannot serve
 // them — it would open("") and fail with ENOENT.
-func SubmitUnitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, unit, instance, deployment string, fresh bool) error {
+func SubmitUnitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, unit, instance, deployment string, fresh bool, target int) error {
+	target = sampleSize(target)
 	progress := func(lines []string) {
 		_ = submitSampleLines(ctx, client, token, app, instance, deployment, lines, true)
 	}
-	lines, err := SampleUnitLines(ctx, unit, sampleLineCount, fresh, progress)
+	lines, err := SampleUnitLines(ctx, unit, target, fresh, progress)
 	if err != nil {
 		return fmt.Errorf("sample unit %s: %w", unit, err)
 	}
-	if len(lines) < sampleLineCount {
+	if len(lines) < target {
 		return ctx.Err()
 	}
 	return submitSampleLines(ctx, client, token, app, instance, deployment, lines, false)
@@ -251,7 +262,7 @@ func accumulate(ctx context.Context, target int, progress func([]string), ch <-c
 // If the user asks for a fresh sample while the source waits (the first
 // batch didn't show what the schema needs), resample is called to collect
 // and submit one; the wait then continues.
-func WaitForConfiguration(ctx context.Context, client pb.WeftCoordinatorClient, token, app string, resample func(context.Context) error) (string, error) {
+func WaitForConfiguration(ctx context.Context, client pb.WeftCoordinatorClient, token, app string, resample func(ctx context.Context, target int) error) (string, error) {
 	for {
 		status, err := CheckSourceStatus(ctx, client, token, app)
 		if err != nil {
@@ -260,7 +271,7 @@ func WaitForConfiguration(ctx context.Context, client pb.WeftCoordinatorClient, 
 			return status.SchemaYAML, nil
 		} else if status.ResampleRequested && resample != nil {
 			weftlog.Infof(ctx, "[%s] resample requested — sampling fresh lines", app)
-			if err := resample(ctx); err != nil {
+			if err := resample(ctx, int(status.SampleTarget)); err != nil {
 				return "", err
 			}
 			weftlog.Infof(ctx, "[%s] fresh sample submitted — waiting for configuration", app)

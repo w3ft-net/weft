@@ -206,7 +206,7 @@ func TestCountPendingLogGroups_ResampledDirectStaysListedAtZero(t *testing.T) {
 	if err := db.UpsertPendingLogGroup(ns.ID, "myapp", "", "", `["a"]`, `{}`, SampleTarget, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RequestResample(ns.ID, "myapp"); err != nil {
+	if err := db.RequestResample(ns.ID, "myapp", 0); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := db.CountPendingLogGroups(cust.ID); n != 1 {

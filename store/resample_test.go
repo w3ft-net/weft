@@ -106,7 +106,7 @@ func TestResampleKeepsConfiguredAndSwaps(t *testing.T) {
 
 	// Request resample, then a partial submit: sample stored, still
 	// configured + still ingesting, flag still set.
-	if err := db.RequestResample(nsID, fullApp); err != nil {
+	if err := db.RequestResample(nsID, fullApp, 0); err != nil {
 		t.Fatalf("RequestResample: %v", err)
 	}
 	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["fresh1"]`, "{}", 1, true); err != nil {
@@ -190,7 +190,7 @@ func TestRequestResampleOnPendingRestartsSampling(t *testing.T) {
 	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["boot 1","boot 2"]`, `{"x":1}`, 50, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RequestResample(nsID, fullApp); err != nil {
+	if err := db.RequestResample(nsID, fullApp, 0); err != nil {
 		t.Fatalf("RequestResample on pending: %v", err)
 	}
 	lg, _ := db.FindLogGroup(custID, nsName, app)
@@ -218,13 +218,13 @@ func TestRequestResampleOnPendingRestartsSampling(t *testing.T) {
 // a missing one has nothing to resample.
 func TestRequestResampleGuards(t *testing.T) {
 	db, nsID, _, _, _, fullApp := setupSource(t, "resample-guards")
-	if err := db.RequestResample(nsID, fullApp); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := db.RequestResample(nsID, fullApp, 0); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("missing source: want ErrRecordNotFound, got %v", err)
 	}
 	if err := db.UpsertPendingLogGroup(nsID, fullApp, "h", "d", `["x"]`, "{}", 1, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RequestResample(nsID, fullApp); !errors.Is(err, ErrAlreadySampling) {
+	if err := db.RequestResample(nsID, fullApp, 0); !errors.Is(err, ErrAlreadySampling) {
 		t.Fatalf("sampling source: want ErrAlreadySampling, got %v", err)
 	}
 }
@@ -240,7 +240,7 @@ func TestRequestResampleResetsDirectSample(t *testing.T) {
 	if err := db.UpsertPendingLogGroup(nsID, app, "", "", `["a"]`, "{}", SampleTarget, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RequestResample(nsID, app); err != nil {
+	if err := db.RequestResample(nsID, app, 0); err != nil {
 		t.Fatal(err)
 	}
 	lg, _ := db.FindLogGroup(custID, nsName, app)
@@ -263,7 +263,7 @@ func TestRequestResampleWhileCollectingConflicts(t *testing.T) {
 	if err := db.UpsertPendingLogGroup(nsID, app, "", "", `["a","b"]`, "{}", 2, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RequestResample(nsID, app); !errors.Is(err, ErrAlreadySampling) {
+	if err := db.RequestResample(nsID, app, 0); !errors.Is(err, ErrAlreadySampling) {
 		t.Fatalf("resample while collecting = %v, want ErrAlreadySampling", err)
 	}
 	lg, _ := db.FindLogGroup(custID, nsName, app)
@@ -275,7 +275,7 @@ func TestRequestResampleWhileCollectingConflicts(t *testing.T) {
 	if err := db.UpsertPendingLogGroup(nsID, app, "", "", `["a","b"]`, "{}", SampleTarget, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RequestResample(nsID, app); err != nil {
+	if err := db.RequestResample(nsID, app, 0); err != nil {
 		t.Fatalf("resample after a full sample: %v", err)
 	}
 }
@@ -304,7 +304,7 @@ func TestAwaitingSchemaListsResampledConfiguredSource(t *testing.T) {
 		t.Fatalf("configured source with no resample listed: count=%d", n)
 	}
 
-	if err := db.RequestResample(nsID, fullApp); err != nil {
+	if err := db.RequestResample(nsID, fullApp, 0); err != nil {
 		t.Fatal(err)
 	}
 	if n := count(); n != 1 {
@@ -345,7 +345,7 @@ func TestUpdateLogGroupDetectionLandsOnResampledConfiguredSource(t *testing.T) {
 	if err := configureLogGroup(db, nsID, fullApp, "schema-v1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.RequestResample(nsID, fullApp); err != nil {
+	if err := db.RequestResample(nsID, fullApp, 0); err != nil {
 		t.Fatal(err)
 	}
 	const sample = `["a","b"]`
@@ -369,5 +369,33 @@ func TestUpdateLogGroupDetectionLandsOnResampledConfiguredSource(t *testing.T) {
 	lg, _ = db.FindLogGroup(custID, nsName, app)
 	if lg.Status != StatusConfigured || lg.Detection != `{"classified":true}` {
 		t.Fatalf("status=%q detection=%q, want configured with the classified detection", lg.Status, lg.Detection)
+	}
+}
+
+// A resample can ask for more lines than the default (a value that shows up on
+// only some requests needs a bigger haystack), and the source reports that
+// target until the next resample says otherwise.
+func TestRequestResampleSizesTheSample(t *testing.T) {
+	db, nsID, custID, nsName, app, _ := setupSource(t, "resample-size")
+	if err := db.EnsureServiceLogGroup(nsID, app); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertPendingLogGroup(nsID, app, "", "", `["a"]`, "{}", SampleTarget, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []int{-1, SampleTarget - 1, MaxSampleTarget + 1} {
+		if err := db.RequestResample(nsID, app, bad); !errors.Is(err, ErrBadSampleSize) {
+			t.Errorf("size %d: err = %v, want ErrBadSampleSize", bad, err)
+		}
+	}
+	if err := db.RequestResample(nsID, app, 500); err != nil {
+		t.Fatal(err)
+	}
+	lg, _ := db.FindLogGroup(custID, nsName, app)
+	if lg.Target() != 500 {
+		t.Errorf("target = %d, want 500", lg.Target())
+	}
+	if (LogGroup{}).Target() != SampleTarget {
+		t.Errorf("unset target = %d, want the default %d", (LogGroup{}).Target(), SampleTarget)
 	}
 }

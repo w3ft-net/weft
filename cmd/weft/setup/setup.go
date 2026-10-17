@@ -122,7 +122,7 @@ func RunSetupFromLines(app string, lines []string, det *ingest.Detection, probe 
 	// decision tree (see ExtractField). Lines are the raw sample, not
 	// det.Lines, so the line numbers shown match what the browser shows.
 	fmt.Println()
-	if err := ExtractAll(terminalUI{}, probe, schema, lines, det, app); err != nil {
+	if err := ExtractAll(terminalUI{}, probe, schema, lines, det); err != nil {
 		return nil, err
 	}
 

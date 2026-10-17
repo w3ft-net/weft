@@ -1209,19 +1209,21 @@ func (s *Server) GetSourceStatus(ctx context.Context, req *pb.GetSourceStatusReq
 			SchemaYaml:        lg.SchemaYAML,
 			SchemaHash:        hex.EncodeToString(sum[:]),
 			ResampleRequested: lg.ResampleRequestedAt != nil,
+			// The size a resample was asked for, so the agent collects that many.
+			SampleTarget: int32(lg.Target()),
 		}, nil
 	case store.StatusSampling:
 		return &pb.GetSourceStatusResponse{
 			Status:            "sampling",
 			SampleCollected:   int32(lg.SampleCollected),
-			SampleTarget:      store.SampleTarget,
+			SampleTarget:      int32(lg.Target()),
 			ResampleRequested: lg.ResampleRequestedAt != nil,
 		}, nil
 	case store.StatusPending:
 		return &pb.GetSourceStatusResponse{
 			Status:            "pending",
 			SampleCollected:   int32(lg.SampleCollected),
-			SampleTarget:      store.SampleTarget,
+			SampleTarget:      int32(lg.Target()),
 			ResampleRequested: lg.ResampleRequestedAt != nil,
 		}, nil
 	default:

@@ -29,7 +29,7 @@ const FIELDS: FieldDef[] = [
 ]
 const TRACE_IDX = 2 // spans are gated after the trace ID
 
-type Stage = 'loading' | 'confirm' | 'expect' | 'pick' | 'review' | 'unit' | 'spans-gate'
+type Stage = 'loading' | 'confirm' | 'expect' | 'pick' | 'review' | 'unit' | 'spans-gate' | 'larger'
 type Patch = SchemaPatch
 
 // What clearing a field looks like in the configure request.
@@ -154,15 +154,18 @@ function SelectableLine({
 }
 
 export default function ExtractionWizard({
-  testidPrefix, sample, base, probe, spansDetected, onComplete, onCancel,
+  testidPrefix, sample, base, probe, spansDetected, onComplete, onCancel, onLargerSample,
 }: {
   testidPrefix: string
   sample: string[]
   base: { envelope: string; format: string; field_separator: string; json_start_field: number }
   probe: ProbeFn
   spansDetected: boolean
-  onComplete: (patch: Patch, notes: string[]) => void
+  onComplete: (patch: Patch) => void
   onCancel: () => void
+  // Asks for a bigger sample, for a value that is on none of these lines.
+  // The caller leaves the walk once it resolves.
+  onLargerSample: () => Promise<void>
 }) {
   const tp = `${testidPrefix}-wizard`
   const [fi, setFi] = useState(0)
@@ -184,7 +187,6 @@ export default function ExtractionWizard({
   // Fields whose first model guess has already been offered.
   const proposed = useRef<Set<number>>(new Set())
   const [pendingUnit, setPendingUnit] = useState<{ marks: ProbeMark[]; result: ProbeResult } | null>(null)
-  const notes = useRef<string[]>([])
   const field = FIELDS[fi]
 
   function run(f: ProbeField, m: ProbeMark[], previous: ProbeExtractor | null, detectedIndex?: number, unit?: string) {
@@ -247,7 +249,7 @@ export default function ExtractionWizard({
   // Record this field's answer and move on.
   function advance(patch: Patch) {
     patches.current = mergePatches(patches.current, patch)
-    if (fi === FIELDS.length - 1) { onComplete(patches.current, notes.current); return }
+    if (fi === FIELDS.length - 1) { onComplete(patches.current); return }
     if (fi === TRACE_IDX && !spansDetected) { resetField(); setStage('spans-gate'); return }
     enterField(fi + 1)
   }
@@ -264,8 +266,7 @@ export default function ExtractionWizard({
 
   function nextLine(delta: 1 | -1) {
     if (delta === 1 && seen.size >= sample.length) {
-      notes.current.push(`None of the sample lines has a ${field.label}. If it appears only on some requests, collect a fresher sample.`)
-      skipField()
+      setStage('larger')
       return
     }
     const n = (line + delta + sample.length) % sample.length
@@ -368,7 +369,7 @@ export default function ExtractionWizard({
         <div className="psc-actions">
           <button className="tui-btn tui-btn-primary" onClick={() => enterField(TRACE_IDX + 1)}
             data-testid={`${tp}-spans-yes-button`}>yes, walk through them</button>
-          <button className="tui-btn" onClick={() => onComplete(patches.current, notes.current)}
+          <button className="tui-btn" onClick={() => onComplete(patches.current)}
             data-testid={`${tp}-spans-no-button`}>no</button>
         </div>
       </div>
@@ -410,6 +411,26 @@ export default function ExtractionWizard({
             <button key={u} className="tui-btn" disabled={busy} onClick={() => chooseUnit(u)}
               data-testid={`${tp}-unit-${u}-button`}>{label}</button>
           ))}
+        </div>
+        {messages}
+      </div>
+    )
+  }
+
+  if (stage === 'larger') {
+    return (
+      <div className="psc-wizard" data-testid={tp}>
+        {header}
+        <p className="psc-prose">None of these lines has a {field.label}.</p>
+        <SamplePreview sample={sample} testid={`${tp}-preview`} />
+        <div className="psc-actions">
+          <button className="tui-btn tui-btn-primary" disabled={busy}
+            onClick={() => guarded(onLargerSample)}
+            data-testid={`${tp}-larger-yes-button`}>
+            Trigger a larger sample size to find a {field.label}?
+          </button>
+          <button className="tui-btn" onClick={skipField} disabled={busy}
+            data-testid={`${tp}-larger-no-button`}>no, skip it</button>
         </div>
         {messages}
       </div>

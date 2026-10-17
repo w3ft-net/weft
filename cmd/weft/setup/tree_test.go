@@ -20,6 +20,8 @@ type scriptUI struct {
 	spans      bool
 	spansAsked bool
 	unit       string // answer to DurationUnit
+	larger     bool   // answer to OfferLargerSample
+	offered    []ingest.ProbeField
 }
 
 func (u *scriptUI) ConfirmCandidate(f ingest.ProbeField, lines []string, ex *ingest.ProbeExtractor, res *ingest.ProbeResult) (bool, error) {
@@ -58,6 +60,10 @@ func (u *scriptUI) Review(f ingest.ProbeField, lines []string, ex *ingest.ProbeE
 	r := u.reviews[0]
 	u.reviews = u.reviews[1:]
 	return r, nil
+}
+func (u *scriptUI) OfferLargerSample(f ingest.ProbeField) (bool, error) {
+	u.offered = append(u.offered, f)
+	return u.larger, nil
 }
 func (u *scriptUI) Notify(msg string) { u.notified = append(u.notified, msg) }
 func (u *scriptUI) DurationUnit(sample []string) (string, error) {
@@ -235,7 +241,7 @@ func TestExtractAllFillsSchemaAndGatesSpans(t *testing.T) {
 		spans:   false,
 	}
 	schema := &ingest.Schema{Format: "text"}
-	if err := ExtractAll(ui, LocalProber(lines), schema, lines, det, "ns/svc"); err != nil {
+	if err := ExtractAll(ui, LocalProber(lines), schema, lines, det); err != nil {
 		t.Fatal(err)
 	}
 	if schema.TimestampField != "1" || schema.TimestampFields != 2 || schema.TimestampFormat != "2006-01-02 15:04:05" {
@@ -256,30 +262,40 @@ func TestExtractAllFillsSchemaAndGatesSpans(t *testing.T) {
 	}
 }
 
-func TestExtractAllReportsValueNotInSample(t *testing.T) {
+// A value on none of the sampled lines offers a larger sample; accepting ends
+// the walk so the caller can request it.
+func TestExtractAllOffersLargerSampleWhenValueNotInSample(t *testing.T) {
 	lines := []string{"a", "b"}
-	ui := &scriptUI{
-		t: t,
-		// timestamp: expected? no. level: expected? no. trace: expected? yes,
-		// then every line is shown without it. Spans: declined.
-		confirm: []bool{false, false, true},
-		picks:   []PickResult{{Kind: PickNextLine}, {Kind: PickNextLine}},
+	script := func(larger bool) *scriptUI {
+		return &scriptUI{
+			t: t,
+			// timestamp: expected? no. level: expected? no. trace: expected? yes,
+			// then every line is shown without it. Spans: declined.
+			confirm: []bool{false, false, true},
+			picks:   []PickResult{{Kind: PickNextLine}, {Kind: PickNextLine}},
+			larger:  larger,
+		}
 	}
+
+	ui := script(true)
+	err := ExtractAll(ui, LocalProber(lines), &ingest.Schema{Format: "text"}, lines, nil)
+	if !errors.Is(err, ErrLargerSample) {
+		t.Fatalf("err = %v, want ErrLargerSample", err)
+	}
+	if len(ui.offered) != 1 || ui.offered[0] != ingest.ProbeTraceID {
+		t.Errorf("offered for %v, want only the trace ID", ui.offered)
+	}
+
+	ui = script(false)
 	schema := &ingest.Schema{Format: "text"}
-	if err := ExtractAll(ui, LocalProber(lines), schema, lines, nil, "ns/svc"); err != nil {
-		t.Fatal(err)
+	if err := ExtractAll(ui, LocalProber(lines), schema, lines, nil); err != nil {
+		t.Fatalf("declining must carry on, got %v", err)
 	}
 	if schema.TraceIDField != "" {
 		t.Errorf("trace id set: %q", schema.TraceIDField)
 	}
-	found := false
-	for _, n := range ui.notified {
-		if strings.Contains(n, "weft source resample ns/svc") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("notifications %v, want one pointing at `weft source resample ns/svc`", ui.notified)
+	if !ui.spansAsked {
+		t.Error("declining should continue to the span gate")
 	}
 }
 
@@ -313,7 +329,7 @@ func TestExtractAllStoresDerivedSpec(t *testing.T) {
 		reviews: []ReviewResult{{Kind: ReviewAccept}},
 	}
 	schema := &ingest.Schema{Format: "text"}
-	if err := ExtractAll(ui, LocalProber(lines), schema, lines, nil, "ns/svc"); err != nil {
+	if err := ExtractAll(ui, LocalProber(lines), schema, lines, nil); err != nil {
 		t.Fatal(err)
 	}
 	if schema.LevelField != "3" || schema.Extract["level"].CutAt != "/" {

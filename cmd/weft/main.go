@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -770,6 +771,17 @@ func runSourceConfigure(cfg *shell.Config) {
 			return &res, nil
 		}
 		schema, err = setup.RunSetupFromLines(namespace+"/"+service, lines, det, probe)
+		if errors.Is(err, setup.ErrLargerSample) {
+			// Nothing is configured from a walk that is waiting on more lines.
+			if err := remote.ResampleSource(namespace, service, setup.LargerSampleLines); err != nil {
+				errorf("resample: %v\n", err)
+				os.Exit(1)
+			}
+			successf("Collecting %d fresh lines for %s/%s. Run weft source configure %s/%s again once they land.\n",
+				setup.LargerSampleLines, namespace, service, namespace, service)
+			hintf("Track progress with: weft source pending --watch\n")
+			return
+		}
 		if err != nil {
 			errorf("setup: %v\n", err)
 			os.Exit(1)
@@ -856,9 +868,26 @@ func schemaConfigMap(schema *ingest.Schema) map[string]any {
 // current schema; the new sample shows up for review once a full one has
 // accumulated.
 func runSourceResample(cfg *shell.Config) {
-	if len(os.Args) < 4 {
-		usageln("usage: weft source resample <namespace>/<service>")
-		os.Exit(1)
+	const usage = "usage: weft source resample [--lines N] <namespace>/<service>"
+	var lines int
+	var target string
+	args := os.Args[3:]
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--lines" && i+1 < len(args):
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil || n <= 0 {
+				usageln(usage)
+				os.Exit(1)
+			}
+			lines = n
+			i++
+		case target == "" && !strings.HasPrefix(args[i], "-"):
+			target = args[i]
+		default:
+			usageln(usage)
+			os.Exit(1)
+		}
 	}
 	endpoint := cfg.Endpoint
 	if !strings.HasPrefix(endpoint, "http") {
@@ -867,14 +896,14 @@ func runSourceResample(cfg *shell.Config) {
 	}
 	remote := shell.NewHTTPCoordinator(endpoint, cfg.Token, effectiveOrg(cfg))
 
-	parts := strings.SplitN(os.Args[3], "/", 2)
+	parts := strings.SplitN(target, "/", 2)
 	if len(parts) != 2 {
-		usageln("usage: weft source resample <namespace>/<service>")
+		usageln(usage)
 		os.Exit(1)
 	}
 	namespace, service := parts[0], parts[1]
 
-	if err := remote.ResampleSource(namespace, service); err != nil {
+	if err := remote.ResampleSource(namespace, service, lines); err != nil {
 		errorf("resample: %v\n", err)
 		os.Exit(1)
 	}

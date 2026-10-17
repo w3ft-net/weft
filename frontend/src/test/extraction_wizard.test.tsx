@@ -77,7 +77,7 @@ describe('ExtractionWizard decision tree', () => {
     const { probe, calls } = fakeProbe({ detectedTimestamp: true })
     const done = vi.fn()
     render(<ExtractionWizard testidPrefix="p" sample={sample} base={base} probe={probe}
-      spansDetected={false} onComplete={done} onCancel={() => {}} />)
+      spansDetected={false} onComplete={done} onCancel={() => {}} onLargerSample={async () => {}} />)
 
     // timestamp: detection's guess, accepted
     await see('confirm-yes-button')
@@ -115,13 +115,12 @@ describe('ExtractionWizard decision tree', () => {
     await press('spans-no-button')
 
     expect(done).toHaveBeenCalledTimes(1)
-    const [patch, notes] = done.mock.calls[0]
+    const [patch] = done.mock.calls[0]
     expect(patch).toMatchObject({
       timestamp_field: '1', timestamp_format: '15:04:05', timestamp_fields: 1,
       level_field: '', level_pattern: '',
       trace_id_field: 'none', trace_id_pattern: 'trace_id=(\\w+)',
     })
-    expect(notes).toEqual([])
   })
 
   // Same vocabulary as the CLI picker: your selection is drawn by us (it
@@ -130,7 +129,7 @@ describe('ExtractionWizard decision tree', () => {
   it('draws the selection itself and double-click grabs the whole token', async () => {
     const { probe, calls } = fakeProbe()
     render(<ExtractionWizard testidPrefix="p" sample={sample} base={base} probe={probe}
-      spansDetected={false} onComplete={() => {}} onCancel={() => {}} />)
+      spansDetected={false} onComplete={() => {}} onCancel={() => {}} onLargerSample={async () => {}} />)
     await press('expect-no-button') // timestamp
     await press('expect-no-button') // level
     await press('expect-yes-button') // trace id
@@ -162,7 +161,7 @@ describe('ExtractionWizard decision tree', () => {
   it('shows the sample from the start, with the guess highlighted on it', async () => {
     const { probe } = fakeProbe({ detectedTimestamp: true })
     render(<ExtractionWizard testidPrefix="p" sample={sample} base={base} probe={probe}
-      spansDetected={false} onComplete={() => {}} onCancel={() => {}} />)
+      spansDetected={false} onComplete={() => {}} onCancel={() => {}} onLargerSample={async () => {}} />)
     const cand = await see('candidate')
     expect(cand.textContent).toBe(sample.join(''))
     const hits = [...cand.querySelectorAll('mark.psc-hit')].map(m => m.textContent)
@@ -174,12 +173,11 @@ describe('ExtractionWizard decision tree', () => {
     expect(screen.getByTestId(`${T}-preview`).querySelector('mark')).toBeNull()
   })
 
-  it('reports a value that is on none of the lines and moves on', async () => {
+  // A value on none of the lines offers a bigger sample instead of a dead end.
+  async function walkToLargerOffer(onLargerSample: () => Promise<void>, done = vi.fn()) {
     const { probe } = fakeProbe()
-    const done = vi.fn()
     render(<ExtractionWizard testidPrefix="p" sample={['a', 'b']} base={base} probe={probe}
-      spansDetected={true} onComplete={done} onCancel={() => {}} />)
-
+      spansDetected={true} onComplete={done} onCancel={() => {}} onLargerSample={onLargerSample} />)
     // timestamp, level: not expected
     await press('expect-no-button')
     await waitFor(() => expect(screen.getByTestId(`${T}-header`).textContent).toContain('log level'))
@@ -191,6 +189,23 @@ describe('ExtractionWizard decision tree', () => {
     click('next-line-button')
     await waitFor(() => expect(screen.getByTestId(`${T}-pick-line`).textContent).toBe('b'))
     click('next-line-button')
+    await see('larger-yes-button')
+    return done
+  }
+
+  it('offers a larger sample when a value is on none of the lines, and asks for it on yes', async () => {
+    const larger = vi.fn().mockResolvedValue(undefined)
+    const done = await walkToLargerOffer(larger)
+    expect(screen.getByTestId(`${T}-larger-yes-button`).textContent).toBe('Trigger a larger sample size to find a trace ID?')
+    click('larger-yes-button')
+    await waitFor(() => expect(larger).toHaveBeenCalledTimes(1))
+    expect(done).not.toHaveBeenCalled() // the walk ends there; nothing is configured
+  })
+
+  it('moves on without the value when the larger sample is declined', async () => {
+    const larger = vi.fn()
+    const done = await walkToLargerOffer(larger)
+    click('larger-no-button')
 
     // spans were detected, so they are walked rather than gated; skip all four
     for (let i = 0; i < 4; i++) {
@@ -198,11 +213,8 @@ describe('ExtractionWizard decision tree', () => {
       click('expect-no-button')
     }
     await waitFor(() => expect(done).toHaveBeenCalled())
-    const [patch, notes] = done.mock.calls[0]
-    expect(patch).toMatchObject({ trace_id_field: '', trace_id_pattern: '' })
-    expect(notes).toHaveLength(1)
-    expect(notes[0]).toContain('trace ID')
-    expect(notes[0]).toContain('fresher sample')
+    expect(done.mock.calls[0][0]).toMatchObject({ trace_id_field: '', trace_id_pattern: '' })
+    expect(larger).not.toHaveBeenCalled()
   })
 
   it('refuses a selection no rule fits and keeps asking', async () => {
@@ -210,7 +222,7 @@ describe('ExtractionWizard decision tree', () => {
       ? { extractor: null, results: [], matched: 0, total: 1 }
       : { extractor: null, results: [], matched: 0, total: 1, message: 'no extraction rule matches every line you marked' }
     render(<ExtractionWizard testidPrefix="p" sample={['id=abc ok']} base={base} probe={probe}
-      spansDetected={true} onComplete={() => {}} onCancel={() => {}} />)
+      spansDetected={true} onComplete={() => {}} onCancel={() => {}} onLargerSample={async () => {}} />)
     await press('expect-yes-button')
     await see('pick-line')
     selectIn(`${T}-pick-line`, 'abc')
@@ -230,7 +242,7 @@ describe('ExtractionWizard decision tree', () => {
           schema_patch: { trace_id_field: 'none', trace_id_pattern: 'id=(\\w+)' },
         }
     render(<ExtractionWizard testidPrefix="p" sample={['id=abc ok']} base={base} probe={probe}
-      spansDetected={true} onComplete={() => {}} onCancel={() => {}} />)
+      spansDetected={true} onComplete={() => {}} onCancel={() => {}} onLargerSample={async () => {}} />)
     await press('expect-yes-button')
     await see('pick-line')
     selectIn(`${T}-pick-line`, 'abc')
@@ -262,7 +274,7 @@ describe('ExtractionWizard decision tree', () => {
     }
     const done = vi.fn()
     render(<ExtractionWizard testidPrefix="p" sample={['GET INFO a', 'POST WARN b']} base={base} probe={probe}
-      spansDetected={true} onComplete={done} onCancel={() => {}} />)
+      spansDetected={true} onComplete={done} onCancel={() => {}} onLargerSample={async () => {}} />)
 
     await press('expect-no-button') // timestamp: nothing detected, not expected
     // level: first candidate (the method field) is shown with what it sees
@@ -311,7 +323,7 @@ describe('ExtractionWizard decision tree', () => {
     }
     const done = vi.fn()
     render(<ExtractionWizard testidPrefix="p" sample={lines} base={base} probe={probe}
-      spansDetected={true} onComplete={done} onCancel={() => {}} />)
+      spansDetected={true} onComplete={done} onCancel={() => {}} onLargerSample={async () => {}} />)
 
     // timestamp: nothing detected, so the model's guess is shown and accepted
     await see('confirm-yes-button')

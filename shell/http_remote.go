@@ -869,9 +869,13 @@ func (h *HTTPCoordinator) ProbeSource(namespace, service string, in, out any) er
 
 // ResampleSource asks the agent for a fresh sample of an already-configured
 // source. Ingestion is not interrupted; the fresh sample becomes available
-// for review once the agent finishes accumulating.
-func (h *HTTPCoordinator) ResampleSource(namespace, service string) error {
+// for review once the agent finishes accumulating. lines is the sample size
+// wanted; 0 asks for the default.
+func (h *HTTPCoordinator) ResampleSource(namespace, service string, lines int) error {
 	url := fmt.Sprintf("%s/api/sources/%s/%s/resample", h.baseURL, namespace, service)
+	if lines > 0 {
+		url += fmt.Sprintf("?size=%d", lines)
+	}
 	req, _ := http.NewRequest("POST", url, nil)
 	h.setAuthHeaders(req)
 

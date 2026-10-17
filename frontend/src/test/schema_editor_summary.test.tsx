@@ -13,7 +13,7 @@ describe('SchemaEditor when the guided walk is cancelled', () => {
   it('calls onCancel and offers no manual form', async () => {
     let cancelled = 0
     render(
-      <SchemaEditor testidPrefix="se" sample={['a line']} detection={{} as SourceDetection}
+      <SchemaEditor testidPrefix="se" onLargerSample={async () => {}} sample={['a line']} detection={{} as SourceDetection}
         probe={probe} onSubmit={async () => {}} onCancel={() => { cancelled++ }} />,
     )
     fireEvent.click(await screen.findByTestId('se-wizard-cancel-button'))
@@ -34,7 +34,7 @@ describe('SchemaEditor when the guided walk finishes', () => {
   it('configures straight away: the walk was the confirmation', async () => {
     const submitted: unknown[] = []
     render(
-      <SchemaEditor testidPrefix="se" sample={['a line']} detection={{} as SourceDetection}
+      <SchemaEditor testidPrefix="se" onLargerSample={async () => {}} sample={['a line']} detection={{} as SourceDetection}
         probe={probe} onSubmit={async c => { submitted.push(c) }} />,
     )
     await walkToTheEnd()
@@ -51,7 +51,7 @@ describe('SchemaEditor when the guided walk finishes', () => {
 
   it('shows the preview from onPreview once the walk completes', async () => {
     render(
-      <SchemaEditor testidPrefix="se" sample={['a line']} detection={{} as SourceDetection}
+      <SchemaEditor testidPrefix="se" onLargerSample={async () => {}} sample={['a line']} detection={{} as SourceDetection}
         probe={probe} onSubmit={async () => {}} onPreview={async () => preview} />,
     )
     await walkToTheEnd()
@@ -63,7 +63,7 @@ describe('SchemaEditor when the guided walk finishes', () => {
   it('still configures when the preview call rejects', async () => {
     const submitted: unknown[] = []
     render(
-      <SchemaEditor testidPrefix="se" sample={['a line']} detection={{} as SourceDetection}
+      <SchemaEditor testidPrefix="se" onLargerSample={async () => {}} sample={['a line']} detection={{} as SourceDetection}
         probe={probe} onSubmit={async c => { submitted.push(c) }}
         onPreview={async () => { throw new Error('nope') }} />,
     )
@@ -76,7 +76,7 @@ describe('SchemaEditor when the guided walk finishes', () => {
   it('keeps the values and a retry when configuring fails', async () => {
     let calls = 0
     render(
-      <SchemaEditor testidPrefix="se" sample={['a line']} detection={{} as SourceDetection}
+      <SchemaEditor testidPrefix="se" onLargerSample={async () => {}} sample={['a line']} detection={{} as SourceDetection}
         probe={probe} onSubmit={async () => { calls++; if (calls === 1) throw new Error('boom') }} />,
     )
     await walkToTheEnd()

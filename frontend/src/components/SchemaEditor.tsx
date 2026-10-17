@@ -41,6 +41,7 @@ export default function SchemaEditor({
   onSubmit,
   onPreview,
   onCancel,
+  onLargerSample,
 }: {
   testidPrefix: string
   sample: string[]
@@ -56,6 +57,9 @@ export default function SchemaEditor({
   onPreview?: (config: ConfigureSourceRequest) => Promise<Preview>
   // Called when the guided walk is cancelled; there is no manual form to fall back to.
   onCancel?: () => void
+  // Requests a bigger sample when a value is on none of these lines. The walk
+  // ends here: the caller shows the source collecting again.
+  onLargerSample: () => Promise<void>
 }) {
   const suggested = suggestFromDetection(detection)
   const [form, setForm] = useState<ConfigureSourceRequest>(suggested)
@@ -66,7 +70,6 @@ export default function SchemaEditor({
   // Set once the guided walk has finished: that was the confirmation, so the
   // source is configured from it directly, like the CLI does.
   const [walked, setWalked] = useState(false)
-  const [notes, setNotes] = useState<string[]>([])
   const [preview, setPreview] = useState<Preview | null>(null)
 
   async function submit(config: ConfigureSourceRequest = form) {
@@ -91,9 +94,6 @@ export default function SchemaEditor({
   const valuesBlock = (
     <div className="psc-values" data-testid={`${testidPrefix}-values`}>
       {preview && <SchemaPreview testidPrefix={testidPrefix} preview={preview} />}
-      {notes.map((n, i) => (
-        <div key={i} className="psc-wiz-notice" data-testid={`${testidPrefix}-note-${i}`}>{n}</div>
-      ))}
     </div>
   )
 
@@ -136,16 +136,16 @@ export default function SchemaEditor({
           }}
           probe={probe}
           spansDetected={spansDetected}
-          onComplete={(patch, n) => {
+          onComplete={patch => {
             const next = applyPatch(form, patch)
             setForm(next)
-            setNotes(n)
             setGuided(false)
             setWalked(true)
             onPreview?.(next).then(setPreview).catch(() => {})
             void submit(next)
           }}
           onCancel={() => onCancel?.()}
+          onLargerSample={onLargerSample}
         />
       </div>
     )

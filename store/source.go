@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -47,10 +48,20 @@ const (
 // UX.
 type LogGroupStatus string
 
-// SampleTarget is the line count a full sample carries. The agent owns
-// the real accumulation; this is the canonical value the coordinator and
-// UIs use to report progress ("N/SampleTarget").
+// SampleTarget is the line count a full sample carries unless a resample
+// asked for more (LogGroup.Target). The agent owns the real accumulation;
+// this is the canonical value the coordinator and UIs use to report progress
+// ("N/target").
 const SampleTarget = 50
+
+// MaxSampleTarget bounds a resample's requested size: the sample is stored on
+// the log_groups row and handed to the classifier and the wizard whole.
+const MaxSampleTarget = 2000
+
+// ErrBadSampleSize is RequestResample's answer for a size outside
+// [SampleTarget, MaxSampleTarget]; a resample never asks for fewer lines than
+// the first sample had.
+var ErrBadSampleSize = fmt.Errorf("sample size must be between %d and %d lines", SampleTarget, MaxSampleTarget)
 
 const (
 	// StatusSampling: the agent has announced the source but is still
@@ -104,6 +115,18 @@ type LogGroup struct {
 	// concurrently and the fresh sample lands in Sample/Detection. The
 	// coordinator clears this on the final (non-partial) resample submit.
 	ResampleRequestedAt *time.Time
+	// SampleSize is the line count the current sample is collecting toward,
+	// when a resample asked for more than SampleTarget (a field that appears
+	// on only some requests needs a bigger haystack). Zero means the default.
+	SampleSize int `gorm:"column:sample_target"`
+}
+
+// Target is the line count a full sample of this source carries.
+func (lg LogGroup) Target() int {
+	if lg.SampleSize > 0 {
+		return lg.SampleSize
+	}
+	return SampleTarget
 }
 
 // AddLogGroup creates or updates a configured log group source. Ownership
@@ -514,9 +537,18 @@ var ErrAlreadySampling = errors.New("a sample is already being collected")
 // ingest path fills their sample from live rows (accumulateSample) and stops
 // at SampleTarget, so their old sample and count are reset here too.
 //
-// Returns gorm.ErrRecordNotFound for a missing source and ErrAlreadySampling
-// for one that is already collecting a sample (its first, or a resample).
-func (s *Store) RequestResample(namespaceID uint, service string) error {
+// size is the number of lines to collect (0 means SampleTarget).
+//
+// Returns gorm.ErrRecordNotFound for a missing source, ErrAlreadySampling
+// for one that is already collecting a sample (its first, or a resample), and
+// ErrBadSampleSize for a size out of range.
+func (s *Store) RequestResample(namespaceID uint, service string, size int) error {
+	if size == 0 {
+		size = SampleTarget
+	}
+	if size < SampleTarget || size > MaxSampleTarget {
+		return ErrBadSampleSize
+	}
 	var lg LogGroup
 	err := s.db.Where("namespace_id = ? AND app = ?", namespaceID, service).First(&lg).Error
 	if err != nil {
@@ -527,7 +559,7 @@ func (s *Store) RequestResample(namespaceID uint, service string) error {
 	if lg.Status == StatusSampling || (lg.Status == StatusConfigured && lg.ResampleRequestedAt != nil) {
 		return ErrAlreadySampling
 	}
-	updates := map[string]any{"resample_requested_at": time.Now()}
+	updates := map[string]any{"resample_requested_at": time.Now(), "sample_target": size}
 	if lg.Status == StatusPending {
 		updates["status"] = StatusSampling
 	}

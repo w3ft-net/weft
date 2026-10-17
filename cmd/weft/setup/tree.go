@@ -79,8 +79,21 @@ type UI interface {
 	// DurationUnit asks what a bare duration number is counted in, when the
 	// marked text carries no unit of its own. Returns ns, us, ms or s.
 	DurationUnit(sample []string) (string, error)
+	// OfferLargerSample is asked when the value is on none of the sampled
+	// lines: whether to collect a bigger sample to look for it in. Yes ends
+	// the walk (ErrLargerSample).
+	OfferLargerSample(f ingest.ProbeField) (bool, error)
 	Notify(msg string)
 }
+
+// LargerSampleLines is the size of the sample asked for when a value was on
+// none of the lines of the first one.
+const LargerSampleLines = 500
+
+// ErrLargerSample ends the walk: the user wants a bigger sample, to find a
+// value the current one doesn't show. The caller requests it and stops;
+// nothing is configured from a half-finished walk.
+var ErrLargerSample = errors.New("a larger sample was requested")
 
 // ExtractField walks the decision tree for one value:
 //
@@ -262,9 +275,9 @@ func setMark(marks []ingest.ProbeMark, m ingest.ProbeMark) []ingest.ProbeMark {
 
 // ExtractAll walks the decision tree for every extractable value and
 // records the answers on schema. Each starts from detection's guess (det
-// may be nil). A value that is nowhere in the sample is reported, with
-// resampleTarget ("ns/service") named in the advice, and left unset.
-func ExtractAll(ui UI, probe Prober, schema *ingest.Schema, lines []string, det *ingest.Detection, resampleTarget string) error {
+// may be nil). A value that is nowhere in the sample offers a larger one;
+// accepting returns ErrLargerSample, declining leaves the value unset.
+func ExtractAll(ui UI, probe Prober, schema *ingest.Schema, lines []string, det *ingest.Detection) error {
 	base := ingest.ProbeBase{
 		Envelope: schema.Envelope, Format: schema.Format,
 		FieldSeparator: schema.FieldSeparator, JSONStartField: schema.JSONStartField,
@@ -272,8 +285,13 @@ func ExtractAll(ui UI, probe Prober, schema *ingest.Schema, lines []string, det 
 	run := func(f ingest.ProbeField) error {
 		ex, err := ExtractField(ui, probe, f, lines, base, ingest.DetectedExtractors(det, f))
 		if errors.Is(err, ErrValueNotInSample) {
-			ui.Notify(fmt.Sprintf("None of these lines has a %s. If it appears only on some requests, collect a fresher sample: weft source resample %s",
-				fieldNames[f], resampleTarget))
+			want, aerr := ui.OfferLargerSample(f)
+			if aerr != nil {
+				return aerr
+			}
+			if want {
+				return ErrLargerSample
+			}
 			ex, err = nil, nil
 		}
 		if err != nil {
