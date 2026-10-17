@@ -24,6 +24,7 @@ render_weftd_config() {
   # 0.20.0 config schema: `service:` per source, `deployment:` for the fleet.
   cat > "/etc/weftd-loom-${env}/config.yaml" <<YAML
 endpoint: "coordinator:9020"
+tls: false # the dev coordinator serves plaintext
 token: ${token}
 deployment: loom-producer
 services:

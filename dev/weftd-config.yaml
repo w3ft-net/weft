@@ -1,4 +1,5 @@
 endpoint: "coordinator:9020"
+tls: false # the dev coordinator serves plaintext
 token: "wft_dev_0000000000000000"
 customer: "kevlar"
 host_group: "dev"

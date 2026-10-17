@@ -20,7 +20,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 
@@ -92,15 +91,16 @@ func registerResampleSource(fullApp string, rs resampleSource) {
 // Fields only (pre-plan behavior) as a rollback lever.
 var parseClientSide = os.Getenv("WEFTD_PARSE_CLIENT_SIDE") != "0"
 
-// defaultEndpoint is the production coordinator ingest address. It is the
-// only endpoint a real agent ever ships to, so config omits it and weftd
-// falls back here. Dockerized/dev setups override by setting endpoint:
-// explicitly (e.g. "coordinator:9020").
-const defaultEndpoint = "ingest.w3ft.net:9020"
+// defaultEndpoint is the production coordinator ingest address: the public
+// NLB's TLS listener. It is the only endpoint a real agent ever ships to, so
+// config omits it and weftd falls back here. Dockerized/dev setups override by
+// setting endpoint: and tls: false explicitly (e.g. "coordinator:9020").
+const defaultEndpoint = "ingest.w3ft.net:9443"
 
 type Config struct {
 	Endpoint   string            `yaml:"endpoint"`   // coordinator address; defaults to defaultEndpoint when omitted
 	Token      string            `yaml:"token"`      // agent auth token (wft_...)
+	TLS        *bool             `yaml:"tls"`        // encrypt the coordinator connection; nil = on (set false for a plaintext dev coordinator)
 	Customer   string            `yaml:"customer"`   // fallback if not returned by auth
 	Deployment string            `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
 	Region     string            `yaml:"region"`     // optional override; otherwise probed from cloud metadata
@@ -256,6 +256,10 @@ func main() {
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = defaultEndpoint
 	}
+	if ep, moved := resolveEndpoint(cfg); moved {
+		weftlog.Infof(context.Background(), "endpoint %s is the plaintext listener; using %s over TLS", cfg.Endpoint, ep)
+		cfg.Endpoint = ep
+	}
 
 	// Validate what we need to run — and if we cannot run it, try to
 	// climb to a weftd that can before giving up. See decideStartup: a
@@ -301,8 +305,8 @@ func main() {
 	// Connect to coordinator. The bearer token is attached to every RPC
 	// via PerRPCCredentials — IngestStream reads it from metadata.
 	coordConn, err := grpc.NewClient(cfg.Endpoint,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithPerRPCCredentials(bearerToken{token: cfg.Token, clientID: ClientID()}),
+		grpc.WithTransportCredentials(transportCreds(cfg.tlsEnabled())),
+		grpc.WithPerRPCCredentials(bearerToken{token: cfg.Token, clientID: ClientID(), secure: cfg.tlsEnabled()}),
 	)
 	if err != nil {
 		log.Fatalf("connect to coordinator: %v", err)
@@ -733,6 +737,7 @@ func runParseStatsReporter(ctx context.Context) {
 type bearerToken struct {
 	token    string
 	clientID string
+	secure   bool // the connection is TLS; gRPC then refuses to send the token over anything else
 }
 
 func (b bearerToken) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
@@ -743,7 +748,7 @@ func (b bearerToken) GetRequestMetadata(_ context.Context, _ ...string) (map[str
 	return md, nil
 }
 
-func (bearerToken) RequireTransportSecurity() bool { return false }
+func (b bearerToken) RequireTransportSecurity() bool { return b.secure }
 
 // openStream opens an IngestStream to the coordinator with retry.
 // Blocks until a stream is established or ctx is cancelled.
