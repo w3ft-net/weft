@@ -562,7 +562,10 @@ func (j *Job) consume() {
 			runErrCh <- fmt.Errorf("compute: %w", err)
 			return
 		}
-		if exitCode != 0 && stderrBuf.Len() > 0 {
+		// jq's 5 means some inputs failed to evaluate and the rest ran:
+		// those rows are skipped, as the shard skips them. Any other
+		// failure with a message fails the query.
+		if exitCode != 0 && exitCode != bash.ExitJqInputErrors && stderrBuf.Len() > 0 {
 			runErrCh <- fmt.Errorf("compute exit %d: %s", exitCode, stderrBuf.String())
 			return
 		}
