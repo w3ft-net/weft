@@ -320,6 +320,40 @@ func TestParseTime(t *testing.T) {
 	}
 }
 
+// `$ts` prints the row's zone-less UTC timestamp the way DuckDB casts it,
+// with the microseconds only when there are any, so `jq '{ts: $ts, ...}' |
+// chart -x .ts` has to read both forms without a ::time() format.
+func TestParseTime_DuckDBStamp(t *testing.T) {
+	for in, want := range map[string]time.Time{
+		"2026-10-18 12:00:00":        time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC),
+		"2026-10-18 12:00:00.123456": time.Date(2026, 10, 18, 12, 0, 0, 123456000, time.UTC),
+	} {
+		got, ok := parseTime(in, "")
+		if !ok || !got.Equal(want) {
+			t.Errorf("parseTime(%q) = %v, %v; want %v", in, got, ok, want)
+		}
+	}
+}
+
+// TestRenderFromStream_DuckDBStampX: `jq -c '{ts: $ts, pct: ...}' | chart -x .ts`
+// is the way to plot a metrics file now that its JSON carries no ts of its
+// own, so the stamp `$ts` prints has to work as the x axis, including rows
+// that differ in whether they have microseconds.
+func TestRenderFromStream_DuckDBStampX(t *testing.T) {
+	args, errMsg := parsePipeArgs([]string{"-x", ".ts", "-y", ".pct", "--bucket", "1m", "-a", "avg"})
+	if errMsg != "" {
+		t.Fatal(errMsg)
+	}
+	lines := []string{
+		`{"ts":"2026-10-18 12:00:00","pct":10}`,
+		`{"ts":"2026-10-18 12:00:30.250000","pct":20}`,
+		`{"ts":"2026-10-18 12:01:15.5","pct":30}`,
+	}
+	if _, errMsg := RenderFromStream(lines, args, 80, 20); errMsg != "" {
+		t.Fatalf("RenderFromStream: %s", errMsg)
+	}
+}
+
 // OB-5: an onboarding lesson once charted `tail main.log | grep ERROR | chart -x 1
 // --bucket 5m`. tail returns ~10 rows, which can all land in one bucket. This
 // pins what the native renderer does with that shape, so a "nothing to plot"

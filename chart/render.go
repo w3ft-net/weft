@@ -518,7 +518,8 @@ func percentile(values []float64, p float64) float64 {
 }
 
 // parseTime parses s with a strftime format when one is given (a
-// zone-less stamp is UTC); otherwise it accepts RFC3339 or epoch
+// zone-less stamp is UTC); otherwise it accepts RFC3339, the zone-less
+// "2006-01-02 15:04:05[.ffffff]" form that `$ts` prints (UTC), or epoch
 // seconds (integer or float). Returns the parsed time and ok=true on
 // success.
 func parseTime(s, format string) (time.Time, bool) {
@@ -527,6 +528,11 @@ func parseTime(s, format string) (time.Time, bool) {
 		return t, err == nil
 	}
 	if t, ok := parseRFC3339(s); ok {
+		return t, true
+	}
+	// Go reads a fractional second after the seconds field even when the
+	// layout has none, so this takes the stamp with or without one.
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
 		return t, true
 	}
 	if n, err := strconv.ParseFloat(s, 64); err == nil {
