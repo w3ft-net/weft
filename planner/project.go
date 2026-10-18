@@ -127,15 +127,15 @@ func jqValueToSQL(expr jq.Expr) (string, bool) {
 		return fmt.Sprintf("to_json(%s)", jqMetaSQL(col)), true
 
 	case jq.FieldExpr:
-		return fmt.Sprintf("json_extract(payload, '$.%s')", e.Name), true
+		return "json_extract(payload, " + jqPath{"." + e.Name}.jsonPath() + ")", true
 
 	case jq.LiteralExpr:
 		return jqLiteralToSQL(e.Value)
 
 	case jq.PipeExpr:
 		// Pure path chain like .a.b[0] / .a | .b.
-		if path, ok := jqPathParts(expr); ok {
-			return fmt.Sprintf("json_extract(payload, '$%s')", strings.Join(path, "")), true
+		if path, ok := jqPathOf(expr); ok && len(path) > 0 {
+			return "json_extract(payload, " + path.jsonPath() + ")", true
 		}
 		return "", false
 
@@ -171,33 +171,6 @@ func jqValueToSQL(expr jq.Expr) (string, bool) {
 		return "json_array(" + strings.Join(parts, ", ") + ")", true
 	}
 	return "", false
-}
-
-// jqPathParts returns the JSONPath fragments for a pure-path expression
-// (FieldExpr / numeric IndexExpr / left-associative pipes thereof).
-func jqPathParts(expr jq.Expr) ([]string, bool) {
-	switch e := expr.(type) {
-	case jq.FieldExpr:
-		return []string{"." + e.Name}, true
-	case jq.IndexExpr:
-		lit, ok := e.Index.(jq.LiteralExpr)
-		if !ok || lit.Value.Type != jq.TypeNumber {
-			return nil, false
-		}
-		n := int(lit.Value.Num)
-		return []string{fmt.Sprintf("[%d]", n)}, true
-	case jq.PipeExpr:
-		left, ok := jqPathParts(e.Left)
-		if !ok {
-			return nil, false
-		}
-		right, ok := jqPathParts(e.Right)
-		if !ok {
-			return nil, false
-		}
-		return append(left, right...), true
-	}
-	return nil, false
 }
 
 // jqLiteralToSQL emits a SQL literal for a jq Value.

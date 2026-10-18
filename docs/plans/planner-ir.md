@@ -288,6 +288,17 @@ only when a stage names one, so `keys` and `.` don't show them.
   warp's `JqCompact`). A missing field prints `null`.
 - A stage after one that changed the text reads that text.
 
+A path step (`.a`, `[0]`) before or between selects moves the **subject**,
+the value the program holds, and a `select` tests the subject:
+`.a | select(.b > 1)` compares `$.a.b` and emits `.a`. The head of the
+program, its selects and path steps, lowers as a filter on the longer
+paths plus a projection of the final subject. Each step also needs its
+parent to be the type jq would accept (an object before a field, an array
+before an index; null and missing pass), which the filter checks because
+jq errors there and the row drops. A tail that isn't a path (`{x: .y}`,
+`length`) reads the payload from its root, so after a path step it runs
+whole in compute, behind the head's selects as a prefilter.
+
 Comparisons lower by **jq's total order**, null < false < true < numbers <
 strings < arrays < objects, with a missing field as null. The SQL picks the
 branch by `json_type`: `.n == 500` doesn't match the string `"500"`, and

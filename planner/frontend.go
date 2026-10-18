@@ -175,11 +175,22 @@ func lowerJq(ls *loweredStage, a at) []node {
 		return []node{&opaqueNode{at: a, why: because(reasonJqSlurp)}}
 	}
 	pred := strings.Join(p.selects, " AND ")
-	if p.allLower && p.tail == nil {
+	if p.allLower && p.tail == nil && len(p.subject) == 0 {
 		return []node{&filterNode{at: a, pred: pred, exact: true}}
 	}
 	if p.allLower {
-		if sql, ok := jqValueToSQL(p.tail); ok {
+		// The subject is what the program holds. A tail reads its own
+		// paths from the payload, so it only lowers with no subject.
+		var sql string
+		ok := false
+		switch {
+		case p.tail == nil:
+			pred = strings.Join(append(p.subject.guards(), p.selects...), " AND ")
+			sql, ok = "json_extract(payload, "+p.subject.jsonPath()+")", true
+		case len(p.subject) == 0:
+			sql, ok = jqValueToSQL(p.tail)
+		}
+		if ok {
 			var nodes []node
 			if pred != "" {
 				nodes = append(nodes, &filterNode{at: a, pred: pred, exact: true})

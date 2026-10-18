@@ -62,21 +62,97 @@ var MetaVarColumns = []string{
 	"container", "node", "trace_id", "span_name", "span_id", "duration_ns",
 }
 
-// jqCondToSQL converts a jq comparison condition to a SQL fragment.
-func jqCondToSQL(cond jq.Expr) string {
+// jqPath is a chain of field and index steps from the payload, as
+// JSONPath fragments (".a", "[0]"). It's the one place a jq path becomes
+// SQL: comparisons, projections and the program's current subject all
+// build on it.
+type jqPath []string
+
+// jqPathOf returns the path a pure-path expression reads: field steps and
+// non-negative literal index steps, bare or piped, and `.` as the empty
+// path. A negative index counts from the end in jq, which JSONPath can't
+// say, so it isn't a path.
+func jqPathOf(expr jq.Expr) (jqPath, bool) {
+	switch e := expr.(type) {
+	case jq.IdentityExpr:
+		return jqPath{}, true
+	case jq.FieldExpr:
+		return jqPath{"." + e.Name}, true
+	case jq.IndexExpr:
+		lit, ok := e.Index.(jq.LiteralExpr)
+		if !ok || lit.Value.Type != jq.TypeNumber || lit.Value.Num < 0 {
+			return nil, false
+		}
+		return jqPath{fmt.Sprintf("[%d]", int(lit.Value.Num))}, true
+	case jq.PipeExpr:
+		left, ok := jqPathOf(e.Left)
+		if !ok {
+			return nil, false
+		}
+		right, ok := jqPathOf(e.Right)
+		if !ok {
+			return nil, false
+		}
+		return left.then(right), true
+	}
+	return nil, false
+}
+
+// then is p followed by q, in a new slice.
+func (p jqPath) then(q jqPath) jqPath {
+	return append(append(jqPath{}, p...), q...)
+}
+
+// jsonPath is the path as a quoted SQL JSONPath literal.
+func (p jqPath) jsonPath() string {
+	return "'$" + escapeSQLString(strings.Join(p, "")) + "'"
+}
+
+// guards are the SQL conditions under which jq can read the path
+// without an error. A step through the wrong type (.a.b with .a a
+// string, .a[0] with .a an object) is an error, which drops the row;
+// null and missing read as null. json_extract reads all of them as
+// NULL, so each step's parent must have the type the step needs.
+func (p jqPath) guards() []string {
+	var guards []string
+	for i := 1; i < len(p); i++ {
+		parent := jqPath(p[:i]).jsonPath()
+		want := "OBJECT"
+		if strings.HasPrefix(p[i], "[") {
+			want = "ARRAY"
+		}
+		guards = append(guards, fmt.Sprintf("COALESCE(json_type(payload, %s), 'NULL') IN ('NULL', '%s')", parent, want))
+	}
+	return guards
+}
+
+// guarded is cond, true only where the path is readable.
+func (p jqPath) guarded(cond string) string {
+	guards := p.guards()
+	if len(guards) == 0 {
+		return cond
+	}
+	return "(" + strings.Join(guards, " AND ") + " AND " + cond + ")"
+}
+
+// jqCondToSQL converts a jq comparison condition to a SQL fragment. The
+// condition reads the value at subject, the path the program has
+// navigated to by the time it runs (`.a | select(.b > 1)` compares
+// $.a.b).
+func jqCondToSQL(subject jqPath, cond jq.Expr) string {
 	switch e := cond.(type) {
 	case jq.EqExpr:
-		return jqComparisonToSQL(e.Left, e.Right, "=")
+		return jqComparisonToSQL(subject, e.Left, e.Right, "=")
 	case jq.NeExpr:
-		return jqComparisonToSQL(e.Left, e.Right, "!=")
+		return jqComparisonToSQL(subject, e.Left, e.Right, "!=")
 	case jq.LtExpr:
-		return jqComparisonToSQL(e.Left, e.Right, "<")
+		return jqComparisonToSQL(subject, e.Left, e.Right, "<")
 	case jq.GtExpr:
-		return jqComparisonToSQL(e.Left, e.Right, ">")
+		return jqComparisonToSQL(subject, e.Left, e.Right, ">")
 	case jq.LeExpr:
-		return jqComparisonToSQL(e.Left, e.Right, "<=")
+		return jqComparisonToSQL(subject, e.Left, e.Right, "<=")
 	case jq.GeExpr:
-		return jqComparisonToSQL(e.Left, e.Right, ">=")
+		return jqComparisonToSQL(subject, e.Left, e.Right, ">=")
 	}
 	return ""
 }
@@ -88,7 +164,7 @@ func jqCondToSQL(cond jq.Expr) string {
 // `.n == 500` doesn't for the string "500". Both sides here are
 // literal-typed except the field, so the SQL picks the branch by the
 // field's JSON type.
-func jqComparisonToSQL(left, right jq.Expr, op string) string {
+func jqComparisonToSQL(subject jqPath, left, right jq.Expr, op string) string {
 	lit, ok := right.(jq.LiteralExpr)
 	if !ok {
 		return ""
@@ -99,29 +175,42 @@ func jqComparisonToSQL(left, right jq.Expr, op string) string {
 		}
 		return ""
 	}
-	field, ok := left.(jq.FieldExpr)
+	rel, ok := jqPathOf(left)
 	if !ok {
 		return ""
 	}
+	path := subject.then(rel)
+	if len(path) == 0 || !strings.HasPrefix(path[0], ".") {
+		return "" // the payload itself, or an index into it
+	}
+	cmp := jqPathComparisonToSQL(path, lit.Value, op)
+	if cmp == "" {
+		return ""
+	}
+	return path.guarded(cmp)
+}
 
-	path := fmt.Sprintf("'$.%s'", escapeSQLString(field.Name))
+// jqPathComparisonToSQL lowers `path op literal` for a path the caller
+// guards (see jqComparisonToSQL).
+func jqPathComparisonToSQL(p jqPath, lit jq.Value, op string) string {
+	path := p.jsonPath()
 	var rank int
 	var value, sqlLit string
-	switch lit.Value.Type {
+	switch lit.Type {
 	case jq.TypeNull:
 		rank = jqRankNull
 	case jq.TypeBool:
 		rank = jqRankBool
 		value = fmt.Sprintf("CAST(json_extract(payload, %s) AS BOOLEAN)", path)
-		sqlLit = strconv.FormatBool(lit.Value.Bool)
+		sqlLit = strconv.FormatBool(lit.Bool)
 	case jq.TypeNumber:
 		rank = jqRankNumber
 		value = fmt.Sprintf("CAST(json_extract(payload, %s) AS DOUBLE)", path)
-		sqlLit = strconv.FormatFloat(lit.Value.Num, 'g', -1, 64)
+		sqlLit = strconv.FormatFloat(lit.Num, 'g', -1, 64)
 	case jq.TypeString:
 		rank = jqRankString
 		value = fmt.Sprintf("json_extract_string(payload, %s)", path)
-		sqlLit = "'" + escapeSQLString(lit.Value.Str) + "'"
+		sqlLit = "'" + escapeSQLString(lit.Str) + "'"
 	default:
 		return ""
 	}
@@ -250,20 +339,27 @@ func jqMetaComparisonToSQL(col string, lit jq.Value, op string) string {
 }
 
 // jqProgram is a jq stage split the way weft's jq dialect reads it (see
-// docs/plans/planner-ir.md, "jq"): leading select(...)s, then a tail.
+// docs/plans/planner-ir.md, "jq"): a head of select(...)s and path steps,
+// then a tail.
 //
-// A jq stage reading shard rows sees each row's payload. A program made
-// only of selects is a row filter: it keeps or drops the row, which
-// stays its raw line. Anything with a tail emits jq's output over the
-// payload.
+// The head walks the payload. Each path step (`.a`, `[0]`) moves the
+// subject, the value the program holds, and each select tests the subject
+// and keeps or drops the row (`.a | select(.b > 1)` tests $.a.b). A
+// stage reading shard rows sees each row's payload. A program made only
+// of selects is a row filter: it keeps or drops the row, which stays its
+// raw line. Anything else emits jq's output, which for a head with no
+// tail is the subject.
 type jqProgram struct {
 	src string // the expression argument, as written
-	// selects is the SQL for each leading select that lowers, stopping
-	// at the first that doesn't.
+	// selects is the SQL for each select in the head that lowers,
+	// stopping at the first that doesn't.
 	selects []string
-	// allLower is true when every leading select lowered.
+	// allLower is true when every select in the head lowered.
 	allLower bool
-	// tail is what follows the leading selects; nil for a select chain.
+	// subject is the path the head's steps navigate to; empty when it
+	// has none.
+	subject jqPath
+	// tail is what follows the head; nil when the head is the program.
 	tail  jq.Expr
 	expr  jq.Expr // the whole program
 	raw   bool    // -r
@@ -303,17 +399,27 @@ func analyzeJq(args []string) (*jqProgram, reason) {
 	nodes := jqFlattenPipe(expr)
 	n := 0
 	p.allLower = true
+head:
 	for n < len(nodes) {
-		sel, ok := nodes[n].(jq.SelectExpr)
-		if !ok {
-			break
-		}
-		if p.allLower {
-			if pred := jqCondToSQL(sel.Cond); pred != "" {
-				p.selects = append(p.selects, pred)
-			} else {
-				p.allLower = false
+		switch node := nodes[n].(type) {
+		case jq.SelectExpr:
+			if p.allLower {
+				if pred := jqCondToSQL(p.subject, node.Cond); pred != "" {
+					p.selects = append(p.selects, pred)
+				} else {
+					p.allLower = false
+				}
 			}
+		case jq.FieldExpr, jq.IndexExpr:
+			// Past a select that didn't lower the subject no longer
+			// matters: the stage runs whole.
+			step, ok := jqPathOf(node)
+			if !ok || !p.allLower {
+				break head
+			}
+			p.subject = p.subject.then(step)
+		default:
+			break head
 		}
 		n++
 	}
@@ -327,7 +433,9 @@ func analyzeJq(args []string) (*jqProgram, reason) {
 }
 
 // selectChain reports whether the program is a row filter.
-func (p *jqProgram) selectChain() bool { return p.tail == nil && !p.slurp }
+func (p *jqProgram) selectChain() bool {
+	return p.tail == nil && len(p.subject) == 0 && !p.slurp
+}
 
 // readsJqMetaVar reports whether a jq program reads a meta-variable
 // ($host), or rebinds a name it uses (see JQMetaVars), which it can't

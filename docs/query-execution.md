@@ -61,6 +61,8 @@ with awk.
 | Expression | SQL |
 |-----------|-----|
 | `select(.status == 500)` | `WHERE CAST(json_extract(payload, '$.status') AS INT) = 500` |
+| `select(.disk.pct > 90)`, `select(.items[0] == 1)` | The same on the nested path, with each step's parent checked for the type jq would accept |
+| `.disk \| select(.pct > 90)` | The same on `$.disk.pct`; the row shows `.disk` |
 | `select($service == "coordinator")` | `WHERE service = 'coordinator'` |
 | `select($level == "ERROR")` | `WHERE level = 'ERROR'` |
 | `.a.b`, `{k: .x}`, `[.a, .b]` | `SELECT` the JSON text jq prints (compact; `null` when missing) |

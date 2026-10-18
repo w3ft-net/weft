@@ -177,7 +177,6 @@ func TestRawExpr_JqInternalPipeBreak(t *testing.T) {
 	for _, pipeline := range []string{
 		`cat vimgym.log | jq '.foo | length'`,
 		`cat vimgym.log | jq '.tags | tostring'`,
-		`cat vimgym.log | jq '.foo | select(.bar == 1)'`,
 		`cat vimgym.log | jq '.items[]'`,
 	} {
 		t.Run(pipeline, func(t *testing.T) {
