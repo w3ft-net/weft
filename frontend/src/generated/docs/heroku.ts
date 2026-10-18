@@ -38,34 +38,40 @@ procid (<code>web</code>, <code>worker</code>, <code>router</code>) is the log k
 The full procid (<code>web.1</code>, <code>web.2</code>) is stamped on <code>instance</code>, so cross-dyno
 aggregation stays cheap and a single <code>tail /log/.../web.log</code> covers every web
 dyno at once.</p>
-<p>#FIXME match the Render table columns</p>
+<p>Weft maps Heroku sources to log files as follows:</p>
 <table>
 <thead>
 <tr>
 <th>Heroku source</th>
-<th>weft pseudofile</th>
+<th>weft file</th>
+<th>metavariables</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>myapp web.1</code>, <code>web.2</code></td>
-<td><code>/log/&lt;ns&gt;/&lt;env&gt;/myapp/web.log</code>   (<code>instance=web.1</code>, etc.)</td>
+<td><code>myapp</code> web dyno <code>web.1</code></td>
+<td><code>/log/&lt;ns&gt;/myapp/web.log</code></td>
+<td>instance=web.1</td>
 </tr>
 <tr>
-<td><code>myapp worker.1</code></td>
-<td><code>/log/&lt;ns&gt;/&lt;env&gt;/myapp/worker.log</code></td>
+<td><code>myapp</code> worker dyno <code>worker.1</code></td>
+<td><code>/log/&lt;ns&gt;/myapp/worker.log</code></td>
+<td>instance=worker.1</td>
 </tr>
 <tr>
-<td><code>myapp router</code></td>
-<td><code>/log/&lt;ns&gt;/&lt;env&gt;/myapp/router.log</code></td>
+<td><code>myapp</code> router</td>
+<td><code>/log/&lt;ns&gt;/myapp/router.log</code></td>
+<td>instance=router</td>
 </tr>
 <tr>
-<td><code>myapp heroku-postgres</code></td>
-<td><code>/log/&lt;ns&gt;/&lt;env&gt;/myapp/heroku-postgres.log</code></td>
+<td><code>myapp</code> <code>heroku-postgres</code></td>
+<td><code>/log/&lt;ns&gt;/myapp/heroku-postgres.log</code></td>
+<td>instance=heroku-postgres</td>
 </tr>
 <tr>
 <td>Platform events (deploys, restarts, scales)</td>
-<td><code>/log/&lt;ns&gt;/&lt;env&gt;/myapp/platform.log</code></td>
+<td><code>/log/&lt;ns&gt;/myapp/platform.log</code></td>
+<td></td>
 </tr>
 </tbody>
 </table>

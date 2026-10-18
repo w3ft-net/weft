@@ -148,13 +148,13 @@ cat /log/myco/prod/canary/main.log | alert absent --notify=ops
 echo "integration test" | alert --notify=ops
 
 # Multi-row positional: alert per host whose disk use is above 80%.
-cat /log/myco/prod/api/metrics.log \
-    | jq -r 'select(.type=="disk") | "\(.host) \(.pct)"' \
+cat /log/myco/prod/api/disk.log \
+    | jq -r '"\(.host) \(.pct)"' \
     | alert above 80 -k 2 -t 1 --notify=ops
 
-# Multi-row JSON path: same idea with JSON rows.
-# `jq -c` keeps each row on one line.
-cat /log/myco/prod/api/metrics.log | jq -c 'select(.type=="disk")' \
+# Multi-row JSON path: same idea with JSON rows. Each line of disk.log
+# is already one row.
+cat /log/myco/prod/api/disk.log \
     | alert above 80 -k .pct -t .host --notify=ops
 ```
 

@@ -25,7 +25,7 @@ this part).</li>
 </ol>
 <h3 id="supported-producers">Supported producers</h3>
 <ul>
-<li><a href="/manual/install-weftd">weftd</a> is our homegrown log shipping agent. It's the fastest
+<li><a href="/manual/weftd">weftd</a> is our homegrown log shipping agent. It's the fastest
 option and has a few more bells and whistles but you have to be able to
 actually run it -- not possible in every environment.</li>
 <li><a href="/manual/connect-cloudwatch">Cloudwatch+Kinesis</a> -- our recommended path for monitoring

@@ -69,12 +69,12 @@ the row for per-tag incident dedup. <code>&lt;field&gt;</code> is either a
 1-indexed whitespace column (<code>-k 2</code>) or a <code>.</code>-prefixed JSON
 path (<code>-k .latency_ms</code>); <code>-k</code> and <code>-t</code> must agree on which form.</p>
 <pre><code># per-host disk alert (positional)
-cat /log/myco/prod/api/metrics.log \\
-  | jq -r 'select(.type==&quot;disk&quot;) | &quot;\\(.host) \\(.pct)&quot;' \\
+cat /log/myco/prod/api/disk.log \\
+  | jq -r '&quot;\\(.host) \\(.pct)&quot;' \\
   | alert above 80 -k 2 -t 1 --notify=ops
 
-# same alert against JSONL — no jq -r reformatting (jq -c keeps one row per line)
-cat /log/myco/prod/api/metrics.log | jq -c 'select(.type==&quot;disk&quot;)' \\
+# same alert against JSONL — no jq needed, every line is already one row
+cat /log/myco/prod/api/disk.log \\
   | alert above 80 -k .pct -t .host --notify=ops
 </code></pre>
 <h2 id="etcnotifyyaml">/etc/notify.yaml</h2>

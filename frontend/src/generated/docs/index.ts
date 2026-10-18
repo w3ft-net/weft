@@ -3,7 +3,7 @@
 import namespaces from './namespaces';
 import teams from './teams';
 import overview from './overview';
-import installWeftd from './install-weftd';
+import weftd from './weftd';
 import heroku from './heroku';
 import connectRender from './connect-render';
 import connectCloudwatch from './connect-cloudwatch';
@@ -56,7 +56,7 @@ export const manualSections: readonly ManualSection[] = [
   namespaces,
   teams,
   overview,
-  installWeftd,
+  weftd,
   heroku,
   connectRender,
   connectCloudwatch,

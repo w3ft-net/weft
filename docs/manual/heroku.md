@@ -43,14 +43,15 @@ The full procid (`web.1`, `web.2`) is stamped on `instance`, so cross-dyno
 aggregation stays cheap and a single `tail /log/.../web.log` covers every web
 dyno at once.
 
-#FIXME match the Render table columns
-| Heroku source           | weft pseudofile                                        |
-|---|---|
-| `myapp web.1`, `web.2`  | `/log/<ns>/<env>/myapp/web.log`   (`instance=web.1`, etc.) |
-| `myapp worker.1`        | `/log/<ns>/<env>/myapp/worker.log`                     |
-| `myapp router`          | `/log/<ns>/<env>/myapp/router.log`                     |
-| `myapp heroku-postgres` | `/log/<ns>/<env>/myapp/heroku-postgres.log`            |
-| Platform events (deploys, restarts, scales) | `/log/<ns>/<env>/myapp/platform.log` |
+Weft maps Heroku sources to log files as follows:
+
+| Heroku source                    | weft file                                | metavariables |
+|---|---|---|
+| `myapp` web dyno `web.1`         | `/log/<ns>/myapp/web.log`                | instance=web.1 |
+| `myapp` worker dyno `worker.1`   | `/log/<ns>/myapp/worker.log`             | instance=worker.1 |
+| `myapp` router                   | `/log/<ns>/myapp/router.log`             | instance=router |
+| `myapp` `heroku-postgres`        | `/log/<ns>/myapp/heroku-postgres.log`    | instance=heroku-postgres |
+| Platform events (deploys, restarts, scales) | `/log/<ns>/myapp/platform.log` | |
 
 (The presence of the `<env>` segment depends on how you created your token.
 See [Paths](query-logs.md#paths) for the layout rules.)

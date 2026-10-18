@@ -56,8 +56,8 @@ independently against its tag.
 ```
 # /cron.d/disk-per-host
 # schedule: every 1m
-cat /log/myco/prod/api/metrics.log \
-  | jq -r 'select(.type=="disk") | "\(.host) \(.pct)"' \
+cat /log/myco/prod/api/disk.log \
+  | jq -r '"\(.host) \(.pct)"' \
   | alert above 80 -k 2 -t 1 --notify=ops
 ```
 
@@ -66,12 +66,12 @@ cat /log/myco/prod/api/metrics.log \
 independently, giving one PagerDuty incident per affected host.
 
 `-k` and `-t` also accept JSON paths, which skips the `jq -r`
-reformatting. Use `jq -c` so each row stays on one line; multi-line
-`jq` output is read one line per row:
+reformatting. Each line of `disk.log` is already one JSON row, so it
+goes straight in. If you do filter with `jq`, use `jq -c` so each row
+stays on one line; multi-line `jq` output is read one line per row:
 
 ```
-cat /log/myco/prod/api/metrics.log \
-  | jq -c 'select(.type=="disk")' \
+cat /log/myco/prod/api/disk.log \
   | alert above 80 -k .pct -t .host --notify=ops
 ```
 

@@ -23,13 +23,13 @@ fast path: weft skips data that can't match instead of parsing every row.
 | `TS`                       | `$ts`                   | `ts`             | schema-extracted from the row                             |
 | `DEPLOYMENT`               | `$deployment`           | `deployment`     | weftd `deployment:` config (or k8s/ASG)                   |
 | `ENV`                      | `$env`                  | `env`            | bound to the agent token at mint time                     |
-| `VERSION`                  | `$version`              | `version`        | weftd `version.file:` (live) or `version.env:` (snapshot) |
+| `VERSION`                  | `$version`              | `version`        | weftd `metavariables.version:` |
 | `REGION`                   | `$region`               | `region`         | cloud metadata probe at agent startup                     |
 | `CLUSTER`                  | `$cluster`              | `cluster`        | weftd k8s mode                                            |
 | `K8S_NAMESPACE`            | `$k8s_namespace`        | `k8s_namespace`  | weftd k8s mode                                            |
 | `POD`                      | `$pod`                  | `pod`            | weftd k8s mode                                            |
 | `CONTAINER`                | `$container`            | `container`      | weftd k8s mode                                            |
-| `NODE`                     | `$node`                 | `node`           | weftd `dimensions.node:` (file-sourced, never auto-derived) |
+| `NODE`                     | `$node`                 | `node`           | weftd `metavariables.node:` (never auto-derived) |
 | `EVENT_ID`                 | `$event_id`             | `event_id`       | shared by the lines of one multi-line event               |
 | `LINE_NO`                  | `$line_no`              | `line_no`        | the line's 0-based position within its event              |
 

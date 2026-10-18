@@ -77,7 +77,7 @@ fast path: weft skips data that can't match instead of parsing every row.</p>
 <td><code>VERSION</code></td>
 <td><code>$version</code></td>
 <td><code>version</code></td>
-<td>weftd <code>version.file:</code> (live) or <code>version.env:</code> (snapshot)</td>
+<td>weftd <code>metavariables.version:</code></td>
 </tr>
 <tr>
 <td><code>REGION</code></td>
@@ -113,7 +113,7 @@ fast path: weft skips data that can't match instead of parsing every row.</p>
 <td><code>NODE</code></td>
 <td><code>$node</code></td>
 <td><code>node</code></td>
-<td>weftd <code>dimensions.node:</code> (file-sourced, never auto-derived)</td>
+<td>weftd <code>metavariables.node:</code> (never auto-derived)</td>
 </tr>
 <tr>
 <td><code>EVENT_ID</code></td>

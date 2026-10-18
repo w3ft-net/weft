@@ -85,12 +85,12 @@ path (`-k .latency_ms`); `-k` and `-t` must agree on which form.
 
 ```
 # per-host disk alert (positional)
-cat /log/myco/prod/api/metrics.log \
-  | jq -r 'select(.type=="disk") | "\(.host) \(.pct)"' \
+cat /log/myco/prod/api/disk.log \
+  | jq -r '"\(.host) \(.pct)"' \
   | alert above 80 -k 2 -t 1 --notify=ops
 
-# same alert against JSONL — no jq -r reformatting (jq -c keeps one row per line)
-cat /log/myco/prod/api/metrics.log | jq -c 'select(.type=="disk")' \
+# same alert against JSONL — no jq needed, every line is already one row
+cat /log/myco/prod/api/disk.log \
   | alert above 80 -k .pct -t .host --notify=ops
 ```
 
