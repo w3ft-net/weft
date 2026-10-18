@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -720,12 +721,12 @@ func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, inst
 		return
 	}
 
-	streamScannedLines(ctx, client, bufio.NewScanner(stdout), instance, app)
+	streamScannedLines(ctx, client, stdout, instance, app)
 
 	cmd.Wait()
 }
 
-// streamScannedLines pumps every non-blank line from sc over a SINGLE
+// streamScannedLines pumps every non-blank line from r over a SINGLE
 // reused IngestStream (reconnecting only when a send breaks), then
 // half-closes it on exit. Hoisting the streamState out of the loop is
 // the whole point: the previous code passed a fresh &streamState{} per
@@ -734,7 +735,11 @@ func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, inst
 // stream.Recv() per line (the server-side leak) and churning ~one stream
 // per log line. runFileTailer already reused one stream; this brings the
 // journal path in line.
-func streamScannedLines(ctx context.Context, client pb.WeftCoordinatorClient, sc *bufio.Scanner, instance, app string) {
+//
+// A line longer than weftd.DefaultMaxLineBytes is cut there and marked, as
+// the file tailer does; bufio.Scanner would instead fail at 64 KiB and end
+// the loop, silently dropping everything after it.
+func streamScannedLines(ctx context.Context, client pb.WeftCoordinatorClient, r io.Reader, instance, app string) {
 	ss := &streamState{}
 	defer func() {
 		if ss.stream != nil {
@@ -743,13 +748,30 @@ func streamScannedLines(ctx context.Context, client pb.WeftCoordinatorClient, sc
 			ss.stream.CloseAndRecv()
 		}
 	}()
-	for sc.Scan() {
-		line := sc.Text()
-		if line == "" {
+	br := bufio.NewReaderSize(r, 64<<10)
+	var line []byte
+	truncated := false
+	for {
+		chunk, isPrefix, err := br.ReadLine() // strips \n and \r\n
+		if room := weftd.DefaultMaxLineBytes - len(line); len(chunk) > room {
+			chunk, truncated = chunk[:room], true
+		}
+		line = append(line, chunk...)
+		if isPrefix && err == nil {
 			continue
 		}
-		if err := sendLineWithReconnect(ctx, client, ss, line, instance, app, ""); err != nil {
-			return // context cancelled
+		if len(line) > 0 {
+			text := string(line)
+			if truncated {
+				text += weftd.TruncatedMarker
+			}
+			if sendLineWithReconnect(ctx, client, ss, text, instance, app, "") != nil {
+				return // context cancelled
+			}
+		}
+		line, truncated = line[:0], false
+		if err != nil {
+			return
 		}
 	}
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/weftd"
 	"google.golang.org/grpc"
 )
 
@@ -180,7 +180,7 @@ func TestStreamScannedLines_ReusesOneStream(t *testing.T) {
 		fmt.Fprintf(&sb, "line %d\n", i)
 	}
 
-	streamScannedLines(context.Background(), client, bufio.NewScanner(strings.NewReader(sb.String())), "i-001", "xylem/django")
+	streamScannedLines(context.Background(), client, strings.NewReader(sb.String()), "i-001", "xylem/django")
 
 	if got := client.streamCount(); got != 1 {
 		t.Fatalf("journal tailer opened %d streams for %d lines; want exactly 1 reused stream "+
@@ -188,5 +188,37 @@ func TestStreamScannedLines_ReusesOneStream(t *testing.T) {
 	}
 	if got := client.streams[0].sentCount(); got != n {
 		t.Fatalf("reused stream carried %d rows; want all %d", got, n)
+	}
+}
+
+// TestStreamScannedLines_LongLineDoesNotStopTheTailer pins the journal path
+// against bufio.Scanner's 64 KiB token limit: a longer entry used to make
+// Scan fail with ErrTooLong and the tailer exit silently, dropping every
+// later line. Like file sources, an oversized line is cut at
+// weftd.DefaultMaxLineBytes and marked, and the lines after it still ship.
+func TestStreamScannedLines_LongLineDoesNotStopTheTailer(t *testing.T) {
+	client := &mockCoordClient{}
+	huge := strings.Repeat("x", weftd.DefaultMaxLineBytes+4096)
+	in := "before\n" + huge + "\nafter\n"
+
+	streamScannedLines(context.Background(), client, strings.NewReader(in), "i-001", "xylem/django")
+
+	if client.streamCount() != 1 {
+		t.Fatalf("opened %d streams; want 1", client.streamCount())
+	}
+	rows := client.streams[0].sent
+	if len(rows) != 3 {
+		t.Fatalf("shipped %d rows; want 3 (before, truncated, after)", len(rows))
+	}
+	if got := rows[0].Raw; got != "before" {
+		t.Errorf("row 0 = %q", got)
+	}
+	if want := weftd.DefaultMaxLineBytes + len(weftd.TruncatedMarker); len(rows[1].Raw) != want ||
+		!strings.HasSuffix(rows[1].Raw, weftd.TruncatedMarker) {
+		t.Errorf("row 1 len %d, suffix ok=%v; want len %d ending in the truncation marker",
+			len(rows[1].Raw), strings.HasSuffix(rows[1].Raw, weftd.TruncatedMarker), want)
+	}
+	if got := rows[2].Raw; got != "after" {
+		t.Errorf("row 2 = %q", got)
 	}
 }

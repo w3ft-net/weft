@@ -20,7 +20,7 @@ const (
 	DefaultMaxLineBytes = 1 << 20
 
 	fingerprintBytes = 1024
-	truncatedMarker  = "…[line truncated]"
+	TruncatedMarker  = "…[line truncated]"
 )
 
 // FileID identifies a file independent of its path: device, inode, and a
@@ -317,7 +317,7 @@ func (t *Tailer) takeLine() Line {
 	}
 	text := string(b)
 	if t.skipped > 0 {
-		text += truncatedMarker
+		text += TruncatedMarker
 	}
 	t.pending, t.skipped = t.pending[:0], 0
 	t.refreshIdentity()
