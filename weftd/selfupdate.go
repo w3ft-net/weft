@@ -80,27 +80,8 @@ func (c *SelfUpdateChecker) Run(ctx context.Context) {
 	}
 }
 
-// TryUpdateNow runs one check synchronously and reports whether the
-// running binary was actually replaced. It exists for the startup
-// rescue in cmd/weftd: when the authored config names something this
-// binary is too old to understand, the agent climbs to the newest
-// release and restarts into it rather than fataling on a config its
-// successor would accept.
-//
-// The caller owns the exit here — it is aborting startup, not shutting
-// down a running agent — so the Restart hook is neutralized for the
-// duration and the swap is reported through the return value instead.
-func (c *SelfUpdateChecker) TryUpdateNow() bool {
-	c.init()
-	saved := c.Restart
-	c.Restart = func() {}
-	defer func() { c.Restart = saved }()
-	return c.checkOnce()
-}
-
 // checkOnce reports whether it replaced the running binary. Run ignores
-// the result (its restart arrives via the Restart hook); TryUpdateNow
-// needs it to decide between exiting for a restart and fataling.
+// the result (its restart arrives via the Restart hook).
 func (c *SelfUpdateChecker) checkOnce() bool {
 	c.init()
 	m, err := release.FetchManifestWith(c.HTTP, c.ManifestURL)

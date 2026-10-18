@@ -174,7 +174,6 @@ if [ "$ROLE" != "loom-producer" ] && [ -n "${WEFTD_TOKEN:-}" ] && command -v wef
   fi
 
   cat > /etc/weftd/config.yaml <<WEFTCFG
-endpoint: ingest.w3ft.net:9020
 token: ${WEFTD_TOKEN}
 deployment: ${ROLE}
 socket: /var/run/weftd.sock

@@ -39,7 +39,6 @@ func TestTokenFromChain(t *testing.T) {
 // design rests on it.
 func TestConfigParsesAnchorHolderBlock(t *testing.T) {
 	const src = `
-endpoint: w3ft.net:443
 token: wft_file
 
 x-anchors:
@@ -60,8 +59,8 @@ sources:
 		t.Fatalf("unmarshal config with x-anchors holder: %v", err)
 	}
 
-	if cfg.Endpoint != "w3ft.net:443" || cfg.Token != "wft_file" {
-		t.Fatalf("scalars not parsed: endpoint=%q token=%q", cfg.Endpoint, cfg.Token)
+	if cfg.Token != "wft_file" {
+		t.Fatalf("scalars not parsed: token=%q", cfg.Token)
 	}
 	if len(cfg.Sources) != 2 {
 		t.Fatalf("expected 2 sources, got %d", len(cfg.Sources))
@@ -95,9 +94,9 @@ func TestShippedExampleParses(t *testing.T) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("shipped config.yaml.example does not parse: %v", err)
 	}
-	if cfg.Endpoint == "" || cfg.Token == "" || len(cfg.Sources) == 0 {
-		t.Fatalf("example missing essentials: endpoint=%q token=%q sources=%d",
-			cfg.Endpoint, cfg.Token, len(cfg.Sources))
+	if cfg.Token == "" || len(cfg.Sources) == 0 {
+		t.Fatalf("example missing essentials: token=%q sources=%d",
+			cfg.Token, len(cfg.Sources))
 	}
 	// Source 0 merges *with_metrics from the x-anchors block. metrics is
 	// a real SourceConfig field, so a silently-failed merge key would

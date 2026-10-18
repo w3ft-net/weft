@@ -47,7 +47,6 @@ mkdir -p "$OUT_DIR"
 # `app:` would leave the service blank and weftd would fall back to
 # basename(path) → "api-prod" instead of "api".
 cat > "${OUT_DIR}/config.yaml" <<EOF
-endpoint: ingest.w3ft.net:9020
 token: ${TOKEN}
 deployment: loom-producer
 services:

@@ -35,7 +35,9 @@ RUN CGO_ENABLED=1 go build $BUILD_FLAGS -o /bin/weft-compute ./cmd/compute
 RUN CGO_ENABLED=1 go build $BUILD_FLAGS -o /bin/weft-coordinator ./cmd/coordinator
 RUN CGO_ENABLED=1 go build $BUILD_FLAGS -o /bin/weft-api ./cmd/api
 RUN CGO_ENABLED=1 go build $BUILD_FLAGS -o /bin/lambda-shard ./cmd/lambda-shard
-RUN CGO_ENABLED=0 go build $BUILD_FLAGS -o /bin/weftd ./cmd/weftd
+# weftd_dev compiles in the endpoint:/tls: overrides the dev stack needs to reach
+# its plaintext coordinator; release builds (.deb) do not have them.
+RUN CGO_ENABLED=0 go build -tags weftd_dev $BUILD_FLAGS -o /bin/weftd ./cmd/weftd
 
 # Use the same distro as the builder to match glibc.
 FROM golang:1.26

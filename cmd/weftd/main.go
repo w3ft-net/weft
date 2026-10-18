@@ -91,16 +91,10 @@ func registerResampleSource(fullApp string, rs resampleSource) {
 // Fields only (pre-plan behavior) as a rollback lever.
 var parseClientSide = os.Getenv("WEFTD_PARSE_CLIENT_SIDE") != "0"
 
-// defaultEndpoint is the production coordinator ingest address: the public
-// NLB's TLS listener. It is the only endpoint a real agent ever ships to, so
-// config omits it and weftd falls back here. Dockerized/dev setups override by
-// setting endpoint: and tls: false explicitly (e.g. "coordinator:9020").
-const defaultEndpoint = "ingest.w3ft.net:9443"
-
 type Config struct {
-	Endpoint   string            `yaml:"endpoint"`   // coordinator address; defaults to defaultEndpoint when omitted
+	transportConfig `yaml:",inline"` // endpoint:/tls: overrides; dev builds only (see transport_dev.go)
+
 	Token      string            `yaml:"token"`      // agent auth token (wft_...)
-	TLS        *bool             `yaml:"tls"`        // encrypt the coordinator connection; nil = on (set false for a plaintext dev coordinator)
 	Customer   string            `yaml:"customer"`   // fallback if not returned by auth
 	Deployment string            `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
 	Region     string            `yaml:"region"`     // optional override; otherwise probed from cloud metadata
@@ -120,53 +114,13 @@ func autoUpdateEnabled(cfg Config) bool {
 	return cfg.AutoUpdate == nil || *cfg.AutoUpdate
 }
 
-// configError names the reason cfg cannot be run by this binary, or ""
-// when it is usable. Kept separate from main so the startup decision
-// below is testable without driving os.Exit.
+// configError names the reason cfg cannot be run, or "" when it is usable.
+// Kept separate from main so it is testable without driving os.Exit.
 func configError(cfg Config) string {
-	if cfg.Endpoint == "" {
-		return "endpoint is required"
-	}
 	if cfg.Token == "" {
 		return "token is required: set token: in the config file or WEFTD_TOKEN in the environment"
 	}
 	return ""
-}
-
-// startupDecision is what main does once the config has been parsed and
-// the credential chain resolved.
-type startupDecision int
-
-const (
-	startupRun     startupDecision = iota // config is usable; start the agent
-	startupRescued                        // config unusable, but a newer weftd was installed; exit for the restart
-	startupFatal                          // config unusable and no newer weftd to rescue us
-)
-
-// decideStartup validates cfg and, when this binary cannot run it, gives
-// self-update a chance to replace us with one that can.
-//
-// The ordering matters and is the whole point: an unusable config is
-// frequently not a broken config but an *older binary*. Config keys gain
-// defaults and get renamed across releases, so a config authored for the
-// current weftd can be rejected outright by a stale one — that is how a
-// fleet ends up with an agent permanently unable to parse its own
-// config. Fataling first made config validation the gate on the very
-// mechanism that fixes version skew, turning a solved problem into a
-// crash-loop that ships no logs until a human intervenes.
-//
-// An operator who pinned the host with `auto_update: false` gets the
-// fatal they asked for; pinning is usually how someone investigates a
-// bad release, so we never climb versions behind their back.
-func decideStartup(cfg Config, rescue func() bool) (startupDecision, string) {
-	reason := configError(cfg)
-	if reason == "" {
-		return startupRun, ""
-	}
-	if autoUpdateEnabled(cfg) && rescue != nil && rescue() {
-		return startupRescued, reason
-	}
-	return startupFatal, reason
 }
 
 // allowedDimensionColumns lists the columns that can be populated
@@ -253,31 +207,7 @@ func main() {
 	// structural ever comes from the environment.
 	cfg.Token = tokenFromChain(os.Getenv("WEFTD_TOKEN"), cfg.Token)
 
-	if cfg.Endpoint == "" {
-		cfg.Endpoint = defaultEndpoint
-	}
-	if ep, moved := resolveEndpoint(cfg); moved {
-		weftlog.Infof(context.Background(), "endpoint %s is the plaintext listener; using %s over TLS", cfg.Endpoint, ep)
-		cfg.Endpoint = ep
-	}
-
-	// Validate what we need to run — and if we cannot run it, try to
-	// climb to a weftd that can before giving up. See decideStartup: a
-	// config this binary rejects is often a config written for our
-	// successor, and self-update must not sit behind the check that
-	// rejects it.
-	switch decision, reason := decideStartup(cfg, func() bool {
-		return (&weftd.SelfUpdateChecker{
-			CurrentVersion: Version,
-			AutoApply:      true,
-		}).TryUpdateNow()
-	}); decision {
-	case startupRescued:
-		// Restart=always brings the freshly-swapped binary up; it gets a
-		// clean parse of the same config.
-		weftlog.Infof(context.Background(), "config rejected by weftd %s (%s) — updated to a newer build, restarting into it", Version, reason)
-		os.Exit(0)
-	case startupFatal:
+	if reason := configError(cfg); reason != "" {
 		log.Fatal(reason)
 	}
 
@@ -304,7 +234,7 @@ func main() {
 
 	// Connect to coordinator. The bearer token is attached to every RPC
 	// via PerRPCCredentials — IngestStream reads it from metadata.
-	coordConn, err := grpc.NewClient(cfg.Endpoint,
+	coordConn, err := grpc.NewClient(cfg.endpoint(),
 		grpc.WithTransportCredentials(transportCreds(cfg.tlsEnabled())),
 		grpc.WithPerRPCCredentials(bearerToken{token: cfg.Token, clientID: ClientID(), secure: cfg.tlsEnabled()}),
 	)
@@ -505,7 +435,7 @@ func main() {
 		go runParseStatsReporter(ctx)
 	}
 
-	weftlog.Infof(ctx, "weftd started: %d sources, streaming to %s", len(cfg.Sources), cfg.Endpoint)
+	weftlog.Infof(ctx, "weftd started: %d sources, streaming to %s", len(cfg.Sources), cfg.endpoint())
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
