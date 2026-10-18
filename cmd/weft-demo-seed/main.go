@@ -666,8 +666,8 @@ func preseedScripts(s *store.Store, custID store.OrgID, customerName string, mem
 
 	// --- /bin/mem_history: three versions ---------------------------------
 	memV1 := fmt.Sprintf("tail -n 100 %s | jq '.memory.pct'", hostLog)
-	memV2 := fmt.Sprintf("tail -n 360 %s | jq '{ts, pct: .memory.pct}'", hostLog)
-	memV3 := "tail -n 360 $1 | jq '{ts, pct: .memory.pct}'"
+	memV2 := fmt.Sprintf("tail -n 360 %s | jq '{ts: $ts, pct: .memory.pct}'", hostLog)
+	memV3 := "tail -n 360 $1 | jq '{ts: $ts, pct: .memory.pct}'"
 	if existing, _ := s.GetShellFunction(custID, "mem_history"); existing == nil || existing.Source != memV3 {
 		versions := []struct {
 			userID, source, message string
@@ -782,7 +782,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 		"tail -n 12 %s | jq '.memory.pct' | alert above 80",
 		hostLog)
 	memPressureV2 := fmt.Sprintf(
-		"tail -n 12 %s | jq -c '{host, pct: .memory.pct}' "+
+		"tail -n 12 %s | jq -c '{host: $host, pct: .memory.pct}' "+
 			"| alert above 70 -k .pct -t .host",
 		hostLog)
 	if existing, _ := s.GetCronWatch(custID, "mem-pressure"); existing == nil || existing.Pipeline != memPressureV2 {

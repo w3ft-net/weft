@@ -100,11 +100,11 @@ const SHELL_COMMANDS = [
     ],
   },
   {
-    cmd: `tail /log/loom/prod/loom-producer/host.log | jq 'select(.cpu.user>80)'`,
+    cmd: `tail /log/loom/prod/loom-producer/host.log | jq 'select(.cpu.user>80) | {host: $host, user: .cpu.user}'`,
     output: [
-      '{"host":"web-2","cpu":{"user":94,"idle":3}}',
-      '{"host":"importer","cpu":{"user":88,"idle":11}}',
-      '{"host":"web-2","cpu":{"user":91,"idle":6}}',
+      '{"host":"web-2","user":94}',
+      '{"host":"importer","user":88}',
+      '{"host":"web-2","user":91}',
     ],
   },
   {
