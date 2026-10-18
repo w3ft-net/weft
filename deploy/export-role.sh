@@ -10,7 +10,7 @@
 # `shutdown` terminates it and DeleteOnTermination removes the restored volume.
 #
 # Deliberately NOT mounted at /opt/app/data: weftd reads shard.json there for
-# its `node` dimension, and the restored volume carries the live shard's, so
+# its `node` metavariable, and the restored volume carries the live shard's, so
 # the export host's metrics would be attributed to the shard.
 
 EXPORT_MOUNT=/mnt/export

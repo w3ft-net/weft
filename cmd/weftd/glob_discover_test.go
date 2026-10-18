@@ -82,7 +82,7 @@ func runWatchGlob(t *testing.T, pattern string, expected int) []string {
 	defer cancel()
 
 	rec := &sampleSubmitRecorder{}
-	go watchGlob(ctx, rec, "wft_test", "testhost", "testns", "main", pattern, nil)
+	go watchGlob(ctx, rec, "wft_test", "testhost", "testns", "main", pattern, nil, nil)
 
 	deadline := time.Now().Add(2500 * time.Millisecond)
 	for time.Now().Before(deadline) {
@@ -232,7 +232,7 @@ func TestGlob_SkipsExplicitlyClaimedFile(t *testing.T) {
 
 	rec := &sampleSubmitRecorder{}
 	excluded := map[string]bool{absClean(claimed): true}
-	go watchGlob(ctx, rec, "wft_test", "testhost", "testns", "main", filepath.Join(dir, "*.log"), excluded)
+	go watchGlob(ctx, rec, "wft_test", "testhost", "testns", "main", filepath.Join(dir, "*.log"), excluded, nil)
 
 	deadline := time.Now().Add(2500 * time.Millisecond)
 	for time.Now().Before(deadline) {

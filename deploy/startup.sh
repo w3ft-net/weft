@@ -150,14 +150,6 @@ fi
 # WEFTD_TOKEN would conflict with the host's customer/env binding.
 if [ "$ROLE" != "loom-producer" ] && [ -n "${WEFTD_TOKEN:-}" ] && command -v weftd >/dev/null 2>&1; then
   mkdir -p /etc/weftd
-  # The coordinator role co-hosts api today; both surfaces want their
-  # own /log/weft/<service>/{metrics,heartbeats}.log streams. Other
-  # roles ship metrics under their single role name.
-  case "$ROLE" in
-    coordinator) SERVICES='[coordinator, api]' ;;
-    *)           SERVICES="[${ROLE}]" ;;
-  esac
-
   # The coordinator writes its query-audit stream to a dedicated file
   # (--query-log in weft-coordinator.service). Tail it as its own
   # (app=coordinator, kind=queries) source so it lands at
@@ -177,23 +169,22 @@ if [ "$ROLE" != "loom-producer" ] && [ -n "${WEFTD_TOKEN:-}" ] && command -v wef
 token: ${WEFTD_TOKEN}
 deployment: ${ROLE}
 socket: /var/run/weftd.sock
-services: ${SERVICES}
-dimensions:
+metrics:
+  interval: 30s
+  collectors:
+    - cpu
+    - memory
+    - disk
+metavariables:
   # \$NODE = stable workload identity. Reads shard.json's shard_id
   # on shard hosts; non-shard hosts have no shard.json so the column
   # stays NULL there. Live-watched: when the provisioner christens a
   # blank shard mid-run by writing shard.json, subsequent metrics rows
   # pick up the new ID without restarting weftd.
-  node: /opt/app/data/shard.json:.shard_id
+  node:
+    json: /opt/app/data/shard.json:.shard_id
 sources:
   - path: /opt/app/logs/*.log
-    metrics:
-      enabled: true
-      interval: 30s
-      collectors:
-        - cpu
-        - memory
-        - disk
 ${QUERIES_SOURCE}
 WEFTCFG
   chmod 600 /etc/weftd/config.yaml

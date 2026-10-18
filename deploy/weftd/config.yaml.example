@@ -13,11 +13,27 @@
 
 token: wft_REPLACE_ME
 
-# Optional host-wide dimensions stamped on every row.
+# Optional host-wide values stamped on every row.
 deployment: api                 # fleet / scaling-unit (k8s Deployment, ASG)
 region: us-east-2               # optional; auto-detected from cloud metadata
-services: [api]                 # logical services co-located here; metrics
-                                # fan out one stream per name
+
+# Metavariables take their value from the environment (env:), a file
+# (file:), or a field of a JSON file (json: <path>:.<field>). Files are
+# watched, so a deploy that rewrites one changes later rows without a
+# restart; env: is read once at startup. Columns: deployment, version,
+# region, cluster, node.
+metavariables:
+  version:
+    env: APP_VERSION
+  # node:
+  #   json: /opt/app/data/shard.json:.shard_id
+
+# Optional host metrics (cpu, memory, disk, load, network), one collector
+# per host. The block turns them on; delete it to turn them off. They need
+# `deployment:` (above): the rows are written under it, to
+# /log/<ns>/<deployment>/{host,disk,network}.log.
+metrics:
+  interval: 30s
 
 # Self-update: when a newer weftd is published, the agent downloads,
 # verifies, swaps its own binary and restarts into it. On by default;
@@ -32,10 +48,6 @@ services: [api]                 # logical services co-located here; metrics
 x-anchors:
   json_app: &json_app
     schema: json
-  with_metrics: &with_metrics
-    metrics:
-      enabled: true
-      interval: 30s
 
 sources:
   # Ordinary application log. kind defaults to "main" if omitted; shown
@@ -43,7 +55,7 @@ sources:
   - service: api
     kind: main
     path: /var/log/api/*.log
-    <<: [*json_app, *with_metrics]
+    <<: *json_app
 
   # A second stream from the same host under a distinct kind, so it
   # lands at its own pseudofile /log/<ns>/api/audit.log instead of
@@ -58,4 +70,3 @@ sources:
   # systemd journal source (no path:; tails the unit's journal).
   - service: worker
     unit: worker.service
-    <<: *with_metrics

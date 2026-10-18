@@ -3,7 +3,7 @@
 # weftd is configured by the YAML file you author at
 # /etc/weftd/config.yaml (start from /etc/weftd/config.yaml.example).
 # That file is the single source of truth for endpoint, sources, kinds,
-# dimensions, metrics — everything. This package never generates or
+# metavariables, metrics — everything. This package never generates or
 # overwrites it.
 #
 # The ONLY thing this file is for is the auth token, as a credential

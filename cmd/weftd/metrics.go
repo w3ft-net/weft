@@ -15,9 +15,9 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-// MetricsConfig is the per-source metrics configuration.
+// MetricsConfig is the top-level `metrics:` block. Having the block at all
+// turns host metrics on; the rows are written under the host's deployment.
 type MetricsConfig struct {
-	Enabled    bool     `yaml:"enabled"`
 	Interval   string   `yaml:"interval"`   // default "30s"
 	Collectors []string `yaml:"collectors"` // default: all
 }
@@ -36,18 +36,33 @@ type netState struct {
 	rxBytes, txBytes int64
 }
 
+// The kinds host metrics are written as: a pseudofile each at
+// /log/<namespace>/<deployment>/<kind>.log. The agent builds the rows, so
+// none of them goes through schema sampling.
+const (
+	kindHost    = "host"    // one row per tick: cpu, memory and load as objects
+	kindDisk    = "disk"    // one row per /dev/* mount
+	kindNetwork = "network" // one row per non-loopback interface
+)
+
+// effectiveDeployment is the host's deployment as its rows carry it: a
+// `deployment` metavariable if one is set and has a value, else the
+// `deployment:` key.
+func effectiveDeployment() string {
+	if v := metavarValue("", "deployment"); v != "" {
+		return v
+	}
+	return globalDeployment
+}
+
 // runMetricsCollector runs in its own goroutine, collecting system metrics
 // at the configured interval and sending them as LogRows through the
-// coordinator IngestStream. One row per (tick × service in services) so
-// every co-located service has its own /log/<ns>/<service>/metrics.log
-// stream; rows are byte-identical except for the App field.
+// coordinator IngestStream. Metrics describe the host, not a source, so
+// they go to one place, under the host's deployment (its ASG, k8s
+// Deployment, ...) as the service. The deployment is read every tick: it
+// can come from a file that appears after startup.
 func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
-	instance, namespace string, services []string, mcfg MetricsConfig) {
-
-	if len(services) == 0 {
-		weftlog.Infof(ctx, "metrics: no services configured (set top-level `services:` list); skipping")
-		return
-	}
+	instance, namespace string, mcfg MetricsConfig) {
 
 	interval := 30 * time.Second
 	if mcfg.Interval != "" {
@@ -69,11 +84,10 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 		}
 	}
 
-	apps := make([]string, len(services))
-	for i, s := range services {
-		apps[i] = namespace + "/" + s + "/metrics"
+	weftlog.Infof(ctx, "metrics: interval=%s collectors=%v", interval, mcfg.Collectors)
+	if effectiveDeployment() == "" {
+		weftlog.Errorf(ctx, "metrics: no deployment is set, so there is nowhere to write host metrics; set `deployment:` (or a deployment metavariable) and they start on their own")
 	}
-	weftlog.Infof(ctx, "metrics: services=%v interval=%s collectors=%v", services, interval, mcfg.Collectors)
 
 	ss := &streamState{}
 
@@ -89,49 +103,53 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			deployment := effectiveDeployment()
+			service := sanitizeDeployment(deployment)
+			if service == "" {
+				continue
+			}
 			now := time.Now()
 			elapsed := now.Sub(prevTime).Seconds()
 			if prevTime.IsZero() {
 				elapsed = 0
 			}
 
-			// Build the rows once with apps[0] as a placeholder; the
-			// fan-out loop below restamps App per service before send.
-			placeholder := apps[0]
-			var rows []*pb.LogRow
+			// What each kind sends this tick.
+			sections := map[string]any{}
+			var disks, nets []map[string]any
 
 			if collectors["cpu"] {
 				cur, err := readCPU()
 				if err == nil {
 					if prevCPU != nil {
-						rows = append(rows, buildCPURow(placeholder, instance, now, prevCPU, cur))
+						sections["cpu"] = cpuSection(prevCPU, cur)
 					}
 					prevCPU = cur
 				}
 			}
 
 			if collectors["memory"] {
-				if row, err := buildMemoryRow(placeholder, instance, now); err == nil {
-					rows = append(rows, row)
+				if m, err := memorySection(); err == nil {
+					sections["memory"] = m
 				}
 			}
 
 			if collectors["disk"] {
-				if diskRows, err := buildDiskRows(placeholder, instance, now); err == nil {
-					rows = append(rows, diskRows...)
+				if rows, err := diskRows(); err == nil {
+					disks = rows
 				}
 			}
 
 			if collectors["load"] {
-				if row, err := buildLoadRow(placeholder, instance, now); err == nil {
-					rows = append(rows, row)
+				if l, err := loadSection(); err == nil {
+					sections["load"] = l
 				}
 			}
 
 			if collectors["network"] {
 				curNet, err := readNetDev()
 				if err == nil && len(prevNet) > 0 && elapsed > 0 {
-					rows = append(rows, buildNetworkRows(placeholder, instance, now, prevNet, curNet, elapsed)...)
+					nets = networkRows(prevNet, curNet, elapsed)
 				}
 				if err == nil {
 					prevNet = curNet
@@ -140,15 +158,42 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 
 			prevTime = now
 
+			var rows []*pb.LogRow
+			if len(sections) > 0 {
+				rows = append(rows, metricRow(kindHost, instance, deployment, now, sections))
+			}
+			for _, d := range disks {
+				rows = append(rows, metricRow(kindDisk, instance, deployment, now, d))
+			}
+			for _, n := range nets {
+				rows = append(rows, metricRow(kindNetwork, instance, deployment, now, n))
+			}
+
 			for _, row := range rows {
-				for _, app := range apps {
-					row.Namespace, row.Service, row.Kind = splitFullApp(app)
-					if err := sendRowWithReconnect(ctx, client, ss, row, app); err != nil {
-						return // context cancelled
-					}
+				row.Namespace, row.Service = namespace, service
+				if err := sendRowWithReconnect(ctx, client, ss, row, namespace+"/"+service+"/"+row.Kind); err != nil {
+					return // context cancelled
 				}
 			}
 		}
+	}
+}
+
+// metricRow is one LogRow of kind, whose JSON payload is fields plus the
+// ts, host and deployment every row carries.
+func metricRow(kind, instance, deployment string, now time.Time, fields map[string]any) *pb.LogRow {
+	payload := make(map[string]any, len(fields)+3)
+	for k, v := range fields {
+		payload[k] = v
+	}
+	payload["ts"] = now.UTC().Format(time.RFC3339Nano)
+	payload["host"] = instance
+	payload["deployment"] = deployment
+	body, _ := json.Marshal(payload)
+	return &pb.LogRow{
+		Instance: instance, Kind: kind,
+		Raw: string(body), Level: "INFO", TsUnixNs: now.UnixNano(),
+		PayloadJson: body,
 	}
 }
 
@@ -185,30 +230,20 @@ func readCPU() (*cpuState, error) {
 	return nil, fmt.Errorf("/proc/stat: no cpu line")
 }
 
-func buildCPURow(app, instance string, now time.Time, prev, cur *cpuState) *pb.LogRow {
+// cpuSection is the "cpu" object: percentages of the time between two
+// /proc/stat samples.
+func cpuSection(prev, cur *cpuState) map[string]any {
 	dt := float64(cur.total() - prev.total())
 	if dt == 0 {
 		dt = 1
 	}
-	user := float64(cur.user-prev.user) / dt * 100
-	system := float64(cur.system-prev.system) / dt * 100
-	idle := float64(cur.idle-prev.idle) / dt * 100
-	iowait := float64(cur.iowait-prev.iowait) / dt * 100
-
-	// Count logical CPUs from /proc/stat (cpu0, cpu1, ...).
-	cores := countCPUs()
-
-	payload, _ := json.Marshal(map[string]any{
-		"type": "cpu", "ts": now.UTC().Format(time.RFC3339Nano),
-		"host": instance, "deployment": globalDeployment,
-		"user": round2(user), "system": round2(system),
-		"idle": round2(idle), "iowait": round2(iowait), "cores": cores,
-	})
-
-	return &pb.LogRow{
-		Instance: instance,
-		Raw:      string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
-		PayloadJson: payload,
+	return map[string]any{
+		"user":   round2(float64(cur.user-prev.user) / dt * 100),
+		"system": round2(float64(cur.system-prev.system) / dt * 100),
+		"idle":   round2(float64(cur.idle-prev.idle) / dt * 100),
+		"iowait": round2(float64(cur.iowait-prev.iowait) / dt * 100),
+		// Logical CPUs, counted from /proc/stat (cpu0, cpu1, ...).
+		"cores": countCPUs(),
 	}
 }
 
@@ -231,7 +266,8 @@ func countCPUs() int {
 
 // ── Memory ───────────────────────────────────────────────────────────────────
 
-func buildMemoryRow(app, instance string, now time.Time) (*pb.LogRow, error) {
+// memorySection is the "memory" object.
+func memorySection() (map[string]any, error) {
 	f, err := os.Open("/proc/meminfo")
 	if err != nil {
 		return nil, err
@@ -264,23 +300,16 @@ func buildMemoryRow(app, instance string, now time.Time) (*pb.LogRow, error) {
 		pct = float64(usedMB) / float64(totalMB) * 100
 	}
 
-	payload, _ := json.Marshal(map[string]any{
-		"type": "memory", "ts": now.UTC().Format(time.RFC3339Nano),
-		"host": instance, "deployment": globalDeployment,
+	return map[string]any{
 		"total_mb": totalMB, "used_mb": usedMB,
 		"available_mb": availMB, "swap_used_mb": swapUsedMB, "pct": round2(pct),
-	})
-
-	return &pb.LogRow{
-		Instance: instance,
-		Raw:      string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
-		PayloadJson: payload,
 	}, nil
 }
 
 // ── Disk ─────────────────────────────────────────────────────────────────────
 
-func buildDiskRows(app, instance string, now time.Time) ([]*pb.LogRow, error) {
+// diskRows is one payload per real block-device mount.
+func diskRows() ([]map[string]any, error) {
 	f, err := os.Open("/proc/mounts")
 	if err != nil {
 		return nil, err
@@ -288,7 +317,7 @@ func buildDiskRows(app, instance string, now time.Time) ([]*pb.LogRow, error) {
 	defer f.Close()
 
 	seen := map[string]bool{}
-	var rows []*pb.LogRow
+	var rows []map[string]any
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -319,17 +348,9 @@ func buildDiskRows(app, instance string, now time.Time) ([]*pb.LogRow, error) {
 			pct = usedGB / totalGB * 100
 		}
 
-		payload, _ := json.Marshal(map[string]any{
-			"type": "disk", "ts": now.UTC().Format(time.RFC3339Nano),
-			"host": instance, "deployment": globalDeployment,
+		rows = append(rows, map[string]any{
 			"path":     mountpoint,
 			"total_gb": round2(totalGB), "used_gb": round2(usedGB), "pct": round2(pct),
-		})
-
-		rows = append(rows, &pb.LogRow{
-			Instance: instance,
-			Raw:      string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
-			PayloadJson: payload,
 		})
 	}
 	return rows, nil
@@ -337,7 +358,8 @@ func buildDiskRows(app, instance string, now time.Time) ([]*pb.LogRow, error) {
 
 // ── Load ─────────────────────────────────────────────────────────────────────
 
-func buildLoadRow(app, instance string, now time.Time) (*pb.LogRow, error) {
+// loadSection is the "load" object.
+func loadSection() (map[string]any, error) {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
 		return nil, err
@@ -350,16 +372,8 @@ func buildLoadRow(app, instance string, now time.Time) (*pb.LogRow, error) {
 	load5, _ := strconv.ParseFloat(fields[1], 64)
 	load15, _ := strconv.ParseFloat(fields[2], 64)
 
-	payload, _ := json.Marshal(map[string]any{
-		"type": "load", "ts": now.UTC().Format(time.RFC3339Nano),
-		"host": instance, "deployment": globalDeployment,
+	return map[string]any{
 		"load1": round2(load1), "load5": round2(load5), "load15": round2(load15),
-	})
-
-	return &pb.LogRow{
-		Instance: instance,
-		Raw:      string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
-		PayloadJson: payload,
 	}, nil
 }
 
@@ -400,29 +414,18 @@ func readNetDev() (map[string]netState, error) {
 	return result, nil
 }
 
-func buildNetworkRows(app, instance string, now time.Time,
-	prev, cur map[string]netState, elapsed float64) []*pb.LogRow {
-
-	var rows []*pb.LogRow
+// networkRows is one payload per interface present in both samples.
+func networkRows(prev, cur map[string]netState, elapsed float64) []map[string]any {
+	var rows []map[string]any
 	for iface, c := range cur {
 		p, ok := prev[iface]
 		if !ok {
 			continue
 		}
-		rxPerSec := float64(c.rxBytes-p.rxBytes) / elapsed
-		txPerSec := float64(c.txBytes-p.txBytes) / elapsed
-
-		payload, _ := json.Marshal(map[string]any{
-			"type": "network", "ts": now.UTC().Format(time.RFC3339Nano),
-			"host": instance, "deployment": globalDeployment,
+		rows = append(rows, map[string]any{
 			"iface":        iface,
-			"rx_bytes_sec": int64(rxPerSec), "tx_bytes_sec": int64(txPerSec),
-		})
-
-		rows = append(rows, &pb.LogRow{
-			Instance: instance,
-			Raw:      string(payload), Level: "INFO", TsUnixNs: now.UnixNano(),
-			PayloadJson: payload,
+			"rx_bytes_sec": int64(float64(c.rxBytes-p.rxBytes) / elapsed),
+			"tx_bytes_sec": int64(float64(c.txBytes-p.txBytes) / elapsed),
 		})
 	}
 	return rows
@@ -434,9 +437,10 @@ func round2(f float64) float64 {
 	return float64(int(f*100)) / 100
 }
 
-// sanitizeDeployment replaces characters that would break the
-// {namespace}/{subapp}.log pseudofile convention ('/') or read oddly in a
-// filename (whitespace, '.') with '_'. Empty input returns empty.
+// sanitizeDeployment makes a deployment name safe as the service path
+// segment host metrics are written under: '/' would add a segment, and
+// whitespace and '.' read oddly in a pseudofile path, so each becomes '_'.
+// Empty input returns empty.
 func sanitizeDeployment(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -457,8 +461,7 @@ func sendRowWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 
 	row.Deployment = globalDeployment
 	row.Region = globalRegion
-	// metrics rows have no source-bound `version:` config; leave empty.
-	stampDimensions(row)
+	stampMetavariables(row, "")
 
 	if ss.stream != nil {
 		if err := ss.stream.Send(row); err == nil {

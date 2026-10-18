@@ -49,18 +49,13 @@ mkdir -p "$OUT_DIR"
 cat > "${OUT_DIR}/config.yaml" <<EOF
 token: ${TOKEN}
 deployment: loom-producer
-services:
-  - api
-  - worker
-  - edge
+metrics:
+  interval: 30s
+  collectors:
+    - memory
 sources:
   - service: api
     path: /var/log/loom/api-${ENV}.log
-    metrics:
-      enabled: true
-      interval: 30s
-      collectors:
-        - memory
   - service: worker
     path: /var/log/loom/worker-${ENV}.log
   - service: edge

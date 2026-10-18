@@ -90,18 +90,47 @@ func TestShippedExampleParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read shipped example: %v", err)
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	cfg, err := parseConfig(data)
+	if err != nil {
 		t.Fatalf("shipped config.yaml.example does not parse: %v", err)
 	}
 	if cfg.Token == "" || len(cfg.Sources) == 0 {
 		t.Fatalf("example missing essentials: token=%q sources=%d",
 			cfg.Token, len(cfg.Sources))
 	}
-	// Source 0 merges *with_metrics from the x-anchors block. metrics is
-	// a real SourceConfig field, so a silently-failed merge key would
-	// leave it disabled — this proves the anchor splice actually lands.
-	if !cfg.Sources[0].Metrics.Enabled {
-		t.Fatalf("example source 0 metrics not enabled — <<: *with_metrics merge did not splice")
+	if cfg.Metavariables["version"].Env != "APP_VERSION" {
+		t.Fatalf("example metavariables block not parsed: %+v", cfg.Metavariables)
+	}
+	if cfg.Metrics == nil {
+		t.Fatalf("example top-level metrics block not parsed: %+v", cfg.Metrics)
+	}
+}
+
+// The metrics: block turns host metrics on by being present, including a bare
+// `metrics:` (YAML null), and its absence leaves them off.
+func TestParseConfig_MetricsPresence(t *testing.T) {
+	cases := []struct {
+		name, src string
+		on        bool
+		interval  string
+	}{
+		{"absent", "token: t\n", false, ""},
+		{"bare", "token: t\nmetrics:\n", true, ""},
+		{"empty map", "token: t\nmetrics: {}\n", true, ""},
+		{"with interval", "token: t\nmetrics:\n  interval: 10s\n", true, "10s"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := parseConfig([]byte(tc.src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (cfg.Metrics != nil) != tc.on {
+				t.Fatalf("Metrics = %+v, want on=%v", cfg.Metrics, tc.on)
+			}
+			if tc.on && cfg.Metrics.Interval != tc.interval {
+				t.Fatalf("Interval = %q, want %q", cfg.Metrics.Interval, tc.interval)
+			}
+		})
 	}
 }

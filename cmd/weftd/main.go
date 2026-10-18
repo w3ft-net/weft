@@ -37,26 +37,6 @@ var globalDeployment string
 // supplied via config override) and stamped on every LogRow.
 var globalRegion string
 
-// versionReaders maps a per-source `version.file` path to the live
-// reader watching it. Built at startup; consulted from the LogRow
-// stamping path. Per-source so multi-app hosts can have distinct
-// versions. Per-source `version:` is independent of the host-wide
-// `dimensions.version:`; the per-source value wins when both are
-// configured.
-var versionReaders = map[string]*weftd.VersionReader{}
-
-// versionEnvs holds the per-source `version.env` value captured at
-// startup. Read once via os.Getenv; no live refresh, by design — env
-// vars can't change for a running process anyway. An empty entry (key
-// present, value "") means the env was configured but was unset at
-// startup.
-var versionEnvs = map[string]string{}
-
-// dimensionReaders holds the live FileValueReader per allowed
-// column when `dimensions:` is configured. Lookup is by column
-// name; missing entries return "" via Current() on a zero reader.
-var dimensionReaders = map[string]*weftd.FileValueReader{}
-
 // parserCache holds per-app schema-driven parsers. Populated when
 // onboarding completes; consulted on the row-stamping path when
 // parseClientSide is enabled.
@@ -95,16 +75,16 @@ var parseClientSide = os.Getenv("WEFTD_PARSE_CLIENT_SIDE") != "0"
 type Config struct {
 	transportConfig `yaml:",inline"` // endpoint:/tls: overrides; dev builds only (see transport_dev.go)
 
-	Token      string            `yaml:"token"`      // agent auth token (wft_...)
-	Customer   string            `yaml:"customer"`   // fallback if not returned by auth
-	Deployment string            `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
-	Region     string            `yaml:"region"`     // optional override; otherwise probed from cloud metadata
-	Socket     string            `yaml:"socket"`
-	Services   []string          `yaml:"services"`   // logical services co-located on this host; metrics fan out one stream per name
-	Dimensions map[string]string `yaml:"dimensions"` // file-sourced dimension values; see docs/plans/dimensions-from-files.md
-	Sources    []SourceConfig    `yaml:"sources"`
-	AutoUpdate *bool             `yaml:"auto_update"` // self-replace on a newer release; nil = on (set false to opt out)
-	Checkpoint CheckpointConfig  `yaml:"checkpoint"`  // file-offset checkpointing; on by default
+	Token         string                        `yaml:"token"`      // agent auth token (wft_...)
+	Customer      string                        `yaml:"customer"`   // fallback if not returned by auth
+	Deployment    string                        `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+	Region        string                        `yaml:"region"`     // optional override; otherwise probed from cloud metadata
+	Socket        string                        `yaml:"socket"`
+	Metrics       *MetricsConfig                `yaml:"metrics"`       // host metrics; nil (no block) = off. Use parseConfig so a bare `metrics:` counts as present.
+	Metavariables map[string]MetavariableConfig `yaml:"metavariables"` // host-wide column values sourced from env:, file: or json:
+	Sources       []SourceConfig                `yaml:"sources"`
+	AutoUpdate    *bool                         `yaml:"auto_update"` // self-replace on a newer release; nil = on (set false to opt out)
+	Checkpoint    CheckpointConfig              `yaml:"checkpoint"`  // file-offset checkpointing; on by default
 }
 
 // autoUpdateEnabled resolves the auto_update gate. Unset (nil) means on:
@@ -113,6 +93,24 @@ type Config struct {
 // investigation).
 func autoUpdateEnabled(cfg Config) bool {
 	return cfg.AutoUpdate == nil || *cfg.AutoUpdate
+}
+
+// parseConfig decodes the config file. The `metrics:` block turns host metrics
+// on by being present, so a bare `metrics:` (YAML null, which decodes to nil)
+// is taken as present with every default.
+func parseConfig(data []byte) (Config, error) {
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return cfg, err
+	}
+	var keys map[string]any
+	if err := yaml.Unmarshal(data, &keys); err != nil {
+		return cfg, err
+	}
+	if _, ok := keys["metrics"]; ok && cfg.Metrics == nil {
+		cfg.Metrics = &MetricsConfig{}
+	}
+	return cfg, nil
 }
 
 // configError names the reason cfg cannot be run, or "" when it is usable.
@@ -124,33 +122,12 @@ func configError(cfg Config) string {
 	return ""
 }
 
-// allowedDimensionColumns lists the columns that can be populated
-// from the `dimensions:` config map. `env`, `app`, `instance`,
-// `level`, `ts`, and the k8s-derived columns are intentionally
-// excluded — see docs/plans/dimensions-from-files.md for the why.
-var allowedDimensionColumns = map[string]bool{
-	"deployment": true,
-	"version":    true,
-	"region":     true,
-	"cluster":    true,
-	"node":       true,
-}
-
-// VersionConfig declares how weftd discovers this source's version
-// dimension. Exactly one of `file:` or `env:` should be set; if both
-// are, `file:` wins (it's the live-refresh path).
-type VersionConfig struct {
-	File string `yaml:"file,omitempty"` // path to a file containing the version; fsnotify-watched, refreshed on change
-	Env  string `yaml:"env,omitempty"`  // environment-variable name; read once at startup, no live refresh
-}
-
 type SourceConfig struct {
-	Service string        `yaml:"service,omitempty"` // bare service name within namespace (e.g. "coordinator")
-	Kind    string        `yaml:"kind,omitempty"`    // log-stream kind; defaults to "main". Heartbeats/metrics/runtime ship their own kinds.
-	Path    string        `yaml:"path"`              // file path or glob (file tailing)
-	Unit    string        `yaml:"unit,omitempty"`    // systemd unit name (journal tailing)
-	Version VersionConfig `yaml:"version,omitempty"` // how to discover this source's version dimension
-	Metrics MetricsConfig `yaml:"metrics,omitempty"` // optional system metrics collection
+	Service       string                        `yaml:"service,omitempty"`       // bare service name within namespace (e.g. "coordinator")
+	Kind          string                        `yaml:"kind,omitempty"`          // log-stream kind; defaults to "main". Heartbeats/metrics/runtime ship their own kinds.
+	Path          string                        `yaml:"path"`                    // file path or glob (file tailing)
+	Unit          string                        `yaml:"unit,omitempty"`          // systemd unit name (journal tailing)
+	Metavariables map[string]MetavariableConfig `yaml:"metavariables,omitempty"` // this source's overrides of the host-wide metavariables
 }
 
 // sourceKind returns the configured kind for a source, defaulting to
@@ -196,8 +173,8 @@ func main() {
 		}
 		log.Fatalf("read config: %v", err)
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	cfg, err := parseConfig(data)
+	if err != nil {
 		log.Fatalf("parse config: %v", err)
 	}
 
@@ -246,18 +223,15 @@ func main() {
 
 	// Build metrics config to report to coordinator.
 	var metricsProto *pb.MetricsConfig
-	for _, src := range cfg.Sources {
-		if src.Metrics.Enabled {
-			collectors := src.Metrics.Collectors
-			if len(collectors) == 0 {
-				collectors = []string{"cpu", "memory", "disk", "load", "network"}
-			}
-			metricsProto = &pb.MetricsConfig{
-				Enabled:    true,
-				Interval:   src.Metrics.Interval,
-				Collectors: collectors,
-			}
-			break // report first enabled source's config
+	if cfg.Metrics != nil {
+		collectors := cfg.Metrics.Collectors
+		if len(collectors) == 0 {
+			collectors = []string{"cpu", "memory", "disk", "load", "network"}
+		}
+		metricsProto = &pb.MetricsConfig{
+			Enabled:    true,
+			Interval:   cfg.Metrics.Interval,
+			Collectors: collectors,
 		}
 	}
 
@@ -335,20 +309,12 @@ func main() {
 		weftlog.Infof(ctx, "region detected: %s", globalRegion)
 	}
 
-	// Initialize file-sourced dimension readers. Each entry validates
-	// the column is in the allowed set and the value parses; weftd
-	// refuses to start on bad config rather than silently dropping
-	// stamps.
-	for col, raw := range cfg.Dimensions {
-		if !allowedDimensionColumns[col] {
-			log.Fatalf("dimensions: column %q is not file-sourceable; allowed: deployment, version, region, cluster, node", col)
-		}
-		spec, err := weftd.ParseFileValueSpec(raw)
-		if err != nil {
-			log.Fatalf("dimensions.%s: %v", col, err)
-		}
-		dimensionReaders[col] = weftd.NewFileValueReader(ctx, spec)
-		weftlog.Infof(ctx, "dimensions.%s: watching %s", col, spec.Path)
+	for _, k := range retiredConfigKeys(data) {
+		weftlog.Errorf(ctx, "config: ignoring retired key, %s", k)
+	}
+	sourceMetavars, err := initMetavariables(ctx, cfg)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	// A concrete file may be matched by a `*.log`-style glob source and
@@ -365,7 +331,7 @@ func main() {
 	}
 
 	// Start sources — each independently onboards then streams.
-	for _, src := range cfg.Sources {
+	for i, src := range cfg.Sources {
 		src := src // capture loop var
 
 		// Derive the service name for this source.
@@ -380,16 +346,7 @@ func main() {
 		}
 		// Every tailed log lands at <ns>/<svc>/<kind>; kind defaults to "main".
 		fullApp := namespace + "/" + app + "/" + sourceKind(src)
-
-		// Per-source version dimension: file path wins (live-refresh
-		// via fsnotify), env-var name is the read-once-at-startup
-		// fallback. Both empty → the row inherits dimensions.version
-		// at row-stamping time, or "" when neither is configured.
-		if src.Version.File != "" {
-			versionReaders[fullApp] = weftd.NewVersionReader(ctx, src.Version.File)
-		} else if src.Version.Env != "" {
-			versionEnvs[fullApp] = os.Getenv(src.Version.Env)
-		}
+		registerSource(fullApp, sourceMetavars[i])
 
 		if src.Unit != "" {
 			go func() {
@@ -403,7 +360,7 @@ func main() {
 			if strings.ContainsAny(src.Path, "*?[") {
 				// Glob: each matched file is onboarded independently from inside watchGlob.
 				// The app name derived from the pattern ("*") is meaningless here.
-				go watchGlob(ctx, coordClient, cfg.Token, hostname, namespace, sourceKind(src), src.Path, explicitPaths)
+				go watchGlob(ctx, coordClient, cfg.Token, hostname, namespace, sourceKind(src), src.Path, explicitPaths, sourceMetavars[i])
 			} else {
 				// Single file: onboard once, then tail.
 				go func() {
@@ -415,9 +372,10 @@ func main() {
 				}()
 			}
 		}
-		if src.Metrics.Enabled {
-			go runMetricsCollector(ctx, coordClient, hostname, namespace, effectiveServices(cfg), src.Metrics)
-		}
+	}
+
+	if cfg.Metrics != nil {
+		go runMetricsCollector(ctx, coordClient, hostname, namespace, *cfg.Metrics)
 	}
 
 	// Start socket listener.
@@ -908,7 +866,7 @@ func absClean(p string) string {
 // auto-discovered — that's the well-known limitation of fsnotify
 // without a recursive subscriber. Startup-time discovery via
 // globMatch handles the deep case.
-func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, instance, namespace, kind, pattern string, excluded map[string]bool) {
+func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, instance, namespace, kind, pattern string, excluded map[string]bool, metavars metavarSet) {
 	prefix := fixedPrefix(pattern)
 	watchDir := strings.TrimSuffix(prefix, string(filepath.Separator))
 	if watchDir == "" {
@@ -928,6 +886,7 @@ func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, inst
 		tailing[p] = true
 		app := appFromPath(pattern, p)
 		fullApp := namespace + "/" + app + "/" + kind
+		registerSource(fullApp, metavars)
 		go func() {
 			if err := onboardAndRun(ctx, client, token, app, p, "", instance, fullApp, func() {
 				runFileTailer(ctx, client, instance, fullApp, p, startup)
@@ -1020,20 +979,6 @@ func prefixNamespace(namespace, app string) string {
 	return namespace + "/" + app
 }
 
-// effectiveServices returns the list of logical services co-located
-// on this host. Falls back to a single-element list using deployment
-// when `services:` is unset, so existing single-role deploys keep
-// working without explicit config.
-func effectiveServices(cfg Config) []string {
-	if len(cfg.Services) > 0 {
-		return cfg.Services
-	}
-	if cfg.Deployment != "" {
-		return []string{cfg.Deployment}
-	}
-	return nil
-}
-
 func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, instance, namespace string, sock *weftd.SocketListener) {
 	lines := sock.Lines()
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -1086,58 +1031,6 @@ type streamState struct {
 	stream pb.WeftCoordinator_IngestStreamClient
 }
 
-// versionForService returns the live version dimension for `app`.
-// Resolution order: per-source `version.file` (live), per-source
-// `version.env` (snapshot at startup), then host-wide
-// `dimensions.version`. Lock-free; safe on the hot row-stamping path.
-func versionForService(app string) string {
-	if r, ok := versionReaders[app]; ok {
-		return r.Current()
-	}
-	if v, ok := versionEnvs[app]; ok {
-		return v
-	}
-	return dimensionValue("version")
-}
-
-// dimensionValue reads the latest value for a dimensions-config
-// column. Returns "" when the column isn't configured, which lets
-// callers compose this with other fallbacks via plain string-OR.
-func dimensionValue(col string) string {
-	if r, ok := dimensionReaders[col]; ok {
-		return r.Current()
-	}
-	return ""
-}
-
-// stampDimensions overlays the configured dimensions: values onto a
-// LogRow. Operator config wins over auto-derived sources per the
-// resolution order in dimensions-from-files.md.
-func stampDimensions(row *pb.LogRow) {
-	if v := dimensionValue("deployment"); v != "" {
-		row.Deployment = v
-	}
-	if v := dimensionValue("region"); v != "" {
-		row.Region = v
-	}
-	if v := dimensionValue("cluster"); v != "" {
-		row.Cluster = v
-	}
-	if v := dimensionValue("node"); v != "" {
-		row.Node = v
-	}
-	// `version` is folded into the row at construction via
-	// versionForService, which already consults dimensionValue("version")
-	// as a fallback. Don't double-stamp here.
-}
-
-// buildLogRow constructs a LogRow for `line`. When parseClientSide is on
-// and an app-specific parser is installed, the line passes through
-// ingest.Parser to extract Level / TsUnixNs / PayloadJson from the
-// schema; agent-derived fields (Customer, Instance, Deployment, Region,
-// Version) are stamped on top. When no parser is available, falls back
-// to the pre-flag behavior: raw + Fields, ingestion-time timestamp,
-// empty Level.
 // splitFullApp breaks the agent's internal "namespace/service/kind"
 // composite back into its parts for the wire. weftd builds the
 // composite as namespace + "/" + service + "/" + sourceKind, so this is
@@ -1171,8 +1064,7 @@ func buildLogRow(line, instance, app, traceID string) *pb.LogRow {
 			msg.Instance = instance
 			msg.Deployment = globalDeployment
 			msg.Region = globalRegion
-			msg.Version = versionForService(app)
-			stampDimensions(msg)
+			stampMetavariables(msg, app)
 			if slot.HasLevelField() && msg.Level == "" {
 				slot.RecordMissingLevel()
 			} else {
@@ -1194,12 +1086,11 @@ func buildLogRow(line, instance, app, traceID string) *pb.LogRow {
 		Instance:   instance,
 		Deployment: globalDeployment,
 		Region:     globalRegion,
-		Version:    versionForService(app),
 		Raw:        line,
 		TsUnixNs:   now.UnixNano(),
 		TraceId:    traceID,
 	}
-	stampDimensions(row)
+	stampMetavariables(row, app)
 	return row
 }
 
