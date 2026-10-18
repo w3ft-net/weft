@@ -33,7 +33,7 @@ const NARRATIVES: { start: number; end: number; title: string; body: ReactNode }
     title: 'metrics ride the same wires',
     body: <>
       <em>weftd</em> samples <code>/proc</code> and ships cpu, memory, disk, load,
-      network rows as JSON to <code>metrics.log</code>. no second product, no
+      network rows as JSON to <code>host.log</code>, <code>disk.log</code> and <code>network.log</code>. no second product, no
       second query language — just <code>tail | jq</code>.
     </>,
   },
@@ -100,11 +100,11 @@ const SHELL_COMMANDS = [
     ],
   },
   {
-    cmd: `tail /log/loom/prod/api/metrics.log | jq 'select(.type=="cpu" and .user>80)'`,
+    cmd: `tail /log/loom/prod/loom-producer/host.log | jq 'select(.cpu.user>80)'`,
     output: [
-      '{"type":"cpu","_host":"web-2","user":94,"idle":3}',
-      '{"type":"cpu","_host":"importer","user":88,"idle":11}',
-      '{"type":"cpu","_host":"web-2","user":91,"idle":6}',
+      '{"host":"web-2","cpu":{"user":94,"idle":3}}',
+      '{"host":"importer","cpu":{"user":88,"idle":11}}',
+      '{"host":"web-2","cpu":{"user":91,"idle":6}}',
     ],
   },
   {

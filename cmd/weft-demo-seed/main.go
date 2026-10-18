@@ -604,12 +604,19 @@ func preseedScripts(s *store.Store, custID store.OrgID, customerName string, mem
 	// primaryService is "<ns>/<svc>"; demo tokens are env-bearing, so the
 	// canonical pseudofile is the 4-seg form
 	// /log/<ns>/<env>/<svc>/<kind>.log. main = regular logs,
-	// metrics = the system-metrics stream.
+	// host = weftd's cpu/memory/load stream.
 	primaryNS, primarySvc := customerName, lastSegment(primaryService)
 	primaryLog := fmt.Sprintf("/log/%s/%s/%s/main.log",
 		primaryNS, primaryEnv, primarySvc)
-	metricsLog := fmt.Sprintf("/log/%s/%s/%s/metrics.log",
-		primaryNS, primaryEnv, primarySvc)
+	// Host metrics are filed under the weftd deployment, which the demo
+	// sets to the service for acme and globex and to loom-producer for
+	// loom (one host, three services).
+	hostDeployment := primarySvc
+	if customerName == "loom" {
+		hostDeployment = "loom-producer"
+	}
+	hostLog := fmt.Sprintf("/log/%s/%s/%s/host.log",
+		primaryNS, primaryEnv, hostDeployment)
 
 	// --- /bin/scan: three versions, three authors -------------------------
 	//
@@ -658,16 +665,16 @@ func preseedScripts(s *store.Store, custID store.OrgID, customerName string, mem
 	}
 
 	// --- /bin/mem_history: three versions ---------------------------------
-	memV1 := fmt.Sprintf("tail -n 100 %s | jq '.pct'", metricsLog)
-	memV2 := fmt.Sprintf("tail -n 360 %s | jq 'select(.type == \"memory\") | {ts, pct}'", metricsLog)
-	memV3 := "tail -n 360 $1 | jq 'select(.type == \"memory\") | {ts, pct}'"
+	memV1 := fmt.Sprintf("tail -n 100 %s | jq '.memory.pct'", hostLog)
+	memV2 := fmt.Sprintf("tail -n 360 %s | jq '{ts, pct: .memory.pct}'", hostLog)
+	memV3 := "tail -n 360 $1 | jq '{ts, pct: .memory.pct}'"
 	if existing, _ := s.GetShellFunction(custID, "mem_history"); existing == nil || existing.Source != memV3 {
 		versions := []struct {
 			userID, source, message string
 		}{
 			{user1.ID, memV1, "quick memory dump"},
 			{user2.ID, memV2, "add timestamp, filter to memory type"},
-			{user3.ID, memV3, "take path as $1 so it works for any metrics log"},
+			{user3.ID, memV3, "take path as $1 so it works for any host log"},
 		}
 		for i, v := range versions {
 			if err := s.SaveShellFunction(custID, v.userID, "mem_history", v.source, "bash"); err != nil {
@@ -772,12 +779,12 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 
 	// --- /cron.d/mem-pressure: two versions -------------------------------
 	memPressureV1 := fmt.Sprintf(
-		"tail -n 12 %s | jq 'select(.type == \"memory\") | .pct' | alert above 80",
-		metricsLog)
+		"tail -n 12 %s | jq '.memory.pct' | alert above 80",
+		hostLog)
 	memPressureV2 := fmt.Sprintf(
-		"tail -n 12 %s | jq -c 'select(.type == \"memory\")' "+
+		"tail -n 12 %s | jq -c '{host, pct: .memory.pct}' "+
 			"| alert above 70 -k .pct -t .host",
-		metricsLog)
+		hostLog)
 	if existing, _ := s.GetCronWatch(custID, "mem-pressure"); existing == nil || existing.Pipeline != memPressureV2 {
 		versions := []struct {
 			userID, pipeline, message string
