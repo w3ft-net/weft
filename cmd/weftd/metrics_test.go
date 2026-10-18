@@ -16,48 +16,47 @@ func decodePayload(t *testing.T, payload []byte) map[string]any {
 	return m
 }
 
-// TestMetricRow: a row is its kind, the section fields, and the ts, host
-// and deployment every row carries; the kind says what it is, so there's
-// no "type" field.
+// TestMetricRow: a row is its kind and the section fields, with the host
+// and time in the row's own columns. The payload does not repeat them, so it
+// has no ts, host, deployment or type field.
 func TestMetricRow(t *testing.T) {
 	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	fields := map[string]any{
 		"cpu":    map[string]any{"user": 12.5},
 		"memory": map[string]any{"pct": 40.0},
 	}
-	row := metricRow(kindHost, "i-123", "prod-api", now, fields)
+	row := metricRow(kindHost, "i-123", now, fields)
 
 	if row.Kind != "host" || row.Instance != "i-123" || row.TsUnixNs != now.UnixNano() {
 		t.Errorf("row = kind %q instance %q ts %d", row.Kind, row.Instance, row.TsUnixNs)
 	}
-	got := decodePayload(t, row.PayloadJson)
 	if row.Raw != string(row.PayloadJson) {
 		t.Errorf("raw %q != payload %q", row.Raw, row.PayloadJson)
 	}
-	if got["host"] != "i-123" || got["deployment"] != "prod-api" || got["ts"] != "2026-10-18T12:00:00Z" {
-		t.Errorf("common fields = %v", got)
+	got := decodePayload(t, row.PayloadJson)
+	if len(got) != 2 {
+		t.Errorf("payload = %v, want only cpu and memory", got)
 	}
-	if _, ok := got["type"]; ok {
-		t.Errorf("payload has a type field: %v", got)
+	for _, k := range []string{"ts", "host", "deployment", "type"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("payload has a %q field: %v", k, got)
+		}
 	}
 	if cpu, _ := got["cpu"].(map[string]any); cpu["user"] != 12.5 {
 		t.Errorf("cpu = %v", got["cpu"])
-	}
-	if _, ok := fields["ts"]; ok {
-		t.Errorf("metricRow wrote into the caller's fields: %v", fields)
 	}
 }
 
 func TestMetricRow_DiskAndNetwork(t *testing.T) {
 	now := time.Now()
-	disk := metricRow(kindDisk, "i-1", "d", now, map[string]any{"path": "/var/lib", "pct": 91.0})
+	disk := metricRow(kindDisk, "i-1", now, map[string]any{"path": "/var/lib", "pct": 91.0})
 	if disk.Kind != "disk" {
 		t.Errorf("disk kind = %q", disk.Kind)
 	}
-	if got := decodePayload(t, disk.PayloadJson); got["path"] != "/var/lib" || got["pct"] != 91.0 {
+	if got := decodePayload(t, disk.PayloadJson); got["path"] != "/var/lib" || got["pct"] != 91.0 || len(got) != 2 {
 		t.Errorf("disk payload = %v", got)
 	}
-	net := metricRow(kindNetwork, "i-1", "d", now, map[string]any{"iface": "eth0"})
+	net := metricRow(kindNetwork, "i-1", now, map[string]any{"iface": "eth0"})
 	if net.Kind != "network" {
 		t.Errorf("network kind = %q", net.Kind)
 	}

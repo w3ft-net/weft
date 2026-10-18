@@ -103,8 +103,7 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			deployment := effectiveDeployment()
-			service := sanitizeDeployment(deployment)
+			service := sanitizeDeployment(effectiveDeployment())
 			if service == "" {
 				continue
 			}
@@ -160,13 +159,13 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 
 			var rows []*pb.LogRow
 			if len(sections) > 0 {
-				rows = append(rows, metricRow(kindHost, instance, deployment, now, sections))
+				rows = append(rows, metricRow(kindHost, instance, now, sections))
 			}
 			for _, d := range disks {
-				rows = append(rows, metricRow(kindDisk, instance, deployment, now, d))
+				rows = append(rows, metricRow(kindDisk, instance, now, d))
 			}
 			for _, n := range nets {
-				rows = append(rows, metricRow(kindNetwork, instance, deployment, now, n))
+				rows = append(rows, metricRow(kindNetwork, instance, now, n))
 			}
 
 			for _, row := range rows {
@@ -179,17 +178,12 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 	}
 }
 
-// metricRow is one LogRow of kind, whose JSON payload is fields plus the
-// ts, host and deployment every row carries.
-func metricRow(kind, instance, deployment string, now time.Time, fields map[string]any) *pb.LogRow {
-	payload := make(map[string]any, len(fields)+3)
-	for k, v := range fields {
-		payload[k] = v
-	}
-	payload["ts"] = now.UTC().Format(time.RFC3339Nano)
-	payload["host"] = instance
-	payload["deployment"] = deployment
-	body, _ := json.Marshal(payload)
+// metricRow is one LogRow of kind whose JSON payload is fields. The payload
+// carries nothing the row's columns already hold: the time, host and
+// deployment are its ts, instance and deployment, which queries read as $ts,
+// $host and $deployment.
+func metricRow(kind, instance string, now time.Time, fields map[string]any) *pb.LogRow {
+	body, _ := json.Marshal(fields)
 	return &pb.LogRow{
 		Instance: instance, Kind: kind,
 		Raw: string(body), Level: "INFO", TsUnixNs: now.UnixNano(),
