@@ -18,18 +18,15 @@ const (
 	defaultCommitInterval = 15 * time.Second
 )
 
-// CheckpointConfig is the `checkpoint:` block. Every field is optional;
-// older agents ignore the block entirely (yaml.Unmarshal is not strict), so
-// rollout order does not matter.
+// CheckpointConfig is the `checkpoint:` block. Checkpointing is always on;
+// every field only tunes it and is optional. Older agents ignore the block
+// entirely (yaml.Unmarshal is not strict), so rollout order does not matter.
 type CheckpointConfig struct {
 	Dir            string        `yaml:"dir"`              // default /var/lib/weftd/checkpoints
-	Enabled        *bool         `yaml:"enabled"`          // nil = on (same pattern as auto_update)
 	FlushInterval  time.Duration `yaml:"flush_interval"`   // how often offsets are persisted
 	CommitInterval time.Duration `yaml:"commit_interval"`  // how often unacked rows are acked
 	MaxResumeBytes string        `yaml:"max_resume_bytes"` // backlog replay cap per file, e.g. 256MiB
 }
-
-func (c CheckpointConfig) enabled() bool { return c.Enabled == nil || *c.Enabled }
 
 // configureCheckpointing opens the checkpoint store and applies the delivery
 // settings to the package-level shipper state. It never fails the agent: a
@@ -43,10 +40,6 @@ func configureCheckpointing(c CheckpointConfig) time.Duration {
 	}
 	if c.CommitInterval > 0 {
 		shipCfg.commitInterval = c.CommitInterval
-	}
-	if !c.enabled() {
-		weftlog.Infof(context.Background(), "checkpoint: disabled by config; files are tailed from EOF on every start")
-		return flush
 	}
 
 	dir := c.Dir

@@ -27,7 +27,6 @@ func TestCheckpointConfig_ParsesBlockAndOlderAgentsIgnoreIt(t *testing.T) {
 token: wft_x
 checkpoint:
   dir: /tmp/ck
-  enabled: false
   flush_interval: 2s
   commit_interval: 30s
   max_resume_bytes: 64MiB
@@ -36,16 +35,8 @@ checkpoint:
 		t.Fatal(err)
 	}
 	c := cfg.Checkpoint
-	if c.Dir != "/tmp/ck" || c.enabled() || c.FlushInterval != 2*time.Second || c.CommitInterval != 30*time.Second || c.MaxResumeBytes != "64MiB" {
+	if c.Dir != "/tmp/ck" || c.FlushInterval != 2*time.Second || c.CommitInterval != 30*time.Second || c.MaxResumeBytes != "64MiB" {
 		t.Errorf("parsed %+v", c)
-	}
-
-	var none Config
-	if err := yaml.Unmarshal([]byte("token: wft_x\n"), &none); err != nil {
-		t.Fatal(err)
-	}
-	if !none.Checkpoint.enabled() {
-		t.Error("checkpointing must default to on")
 	}
 }
 
@@ -71,15 +62,6 @@ func TestConfigureCheckpointing_OpensStoreAndAppliesIntervals(t *testing.T) {
 	}
 	if flush != 3*time.Second || shipCfg.commitInterval != 20*time.Second {
 		t.Errorf("flush=%v commit=%v", flush, shipCfg.commitInterval)
-	}
-}
-
-func TestConfigureCheckpointing_DisabledLeavesNoStore(t *testing.T) {
-	resetCheckpointGlobals(t)
-	off := false
-	configureCheckpointing(CheckpointConfig{Dir: t.TempDir(), Enabled: &off})
-	if checkpoints != nil {
-		t.Error("disabled config opened a store")
 	}
 }
 
