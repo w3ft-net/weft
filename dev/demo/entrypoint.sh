@@ -31,12 +31,11 @@ tls: false # the dev coordinator serves plaintext
 token: "${WEFTD_TOKEN}"
 customer: "${CUSTOMER}"
 deployment: "${SERVICE}"
+metrics:
+  interval: 10s
 sources:
-  - app: ${SERVICE}
+  - service: ${SERVICE}
     path: ${LOG_PATH}
-    metrics:
-      enabled: true
-      interval: 10s
 EOF
 
 # Make sure the file exists before weftd opens it; otherwise the agent

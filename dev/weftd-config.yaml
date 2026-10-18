@@ -2,10 +2,9 @@ endpoint: "coordinator:9020"
 tls: false # the dev coordinator serves plaintext
 token: "wft_dev_0000000000000000"
 customer: "kevlar"
-host_group: "dev"
+deployment: "dev"
+metrics:
+  interval: 10s
 sources:
-  - app: testapp
+  - service: testapp
     path: /var/log/testapp.log
-    metrics:
-      enabled: true
-      interval: 10s

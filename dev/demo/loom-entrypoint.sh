@@ -27,16 +27,11 @@ endpoint: "coordinator:9020"
 tls: false # the dev coordinator serves plaintext
 token: ${token}
 deployment: loom-producer
-services:
-  - api
-  - worker
-  - edge
+metrics:
+  interval: 10s
 sources:
   - service: api
     path: /var/log/loom/api-${env}.log
-    metrics:
-      enabled: true
-      interval: 10s
   - service: worker
     path: /var/log/loom/worker-${env}.log
   - service: edge
