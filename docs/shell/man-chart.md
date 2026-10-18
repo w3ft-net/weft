@@ -116,12 +116,12 @@ chart error-rate -t bar                 vertical bars by timestamp
 chart error-rate --follow               live; press q to exit
 
 # Pipe form: a quick distribution by host
-cat /log/myco/prod/api/host.log | jq -c '{host, pct: .memory.pct}' \
+cat /log/myco/prod/api/host.log | jq -c '{host: $host, pct: .memory.pct}' \
   | chart -x .host -y .pct -a avg
 
 # Pipe form: time-bucketed p95 over the current range
 cat /log/myco/prod/api/host.log \
-  | jq -c '{ts, pct: .memory.pct}' \
+  | jq -c '{ts: $ts, pct: .memory.pct}' \
   | chart -x .ts -y .pct --bucket 1m -a p95
 
 # Pipe form: log lines per minute, to spot a window with no logs.
@@ -134,7 +134,7 @@ cat /log/myco/prod/api/host.log | jq '.memory.pct' | chart
 
 # Pipe form: one line per instance
 cat /log/myco/prod/api/host.log \
-  | jq -c '{ts, host, pct: .memory.pct}' \
+  | jq -c '{ts: $ts, host: $host, pct: .memory.pct}' \
   | chart -x .ts -y .pct --tag .host --bucket 1m -a avg
 
 # --tag requires one JSON object per line, so use jq -c

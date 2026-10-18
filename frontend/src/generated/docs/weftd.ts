@@ -405,20 +405,26 @@ weftd logs an error and writes nothing. Characters that don't belong in a path
 </table>
 <p><code>host.log</code> holds <code>cpu</code>, <code>memory</code> and <code>load</code> as nested objects, so the first
 tick has no <code>cpu</code> (it needs two samples to compute a delta) and a collector you
-turned off has no object. Every row in all three files also carries <code>ts</code>,
-<code>host</code>, and <code>deployment</code>. <code>network.log</code> needs two samples too, so it's empty
+turned off has no object. <code>network.log</code> needs two samples too, so it's empty
 for the first tick after startup.</p>
+<p>The JSON doesn't repeat the time, host or deployment: those are the row's own
+columns, which <code>jq</code> reads as <code>$ts</code>, <code>$host</code> and <code>$deployment</code>. Because the
+shard filters on the column, <code>select($host == &quot;i-0abc&quot;)</code> narrows a deployment's
+shared file to one host before any row is returned.</p>
 <p>Query them the same way you query any JSON log source:</p>
 <pre><code># Recent memory pressure
 tail /log/myns/web/host.log | jq '.memory.pct'
 
 # Per-host, per-mount disk usage, alerting above 80%
 tail /log/myns/web/disk.log \\
-  | jq -r '&quot;\\(.host):\\(.path) \\(.pct)&quot;' \\
+  | jq -r '&quot;\\($host):\\(.path) \\(.pct)&quot;' \\
   | alert above 80 -k 2 -t 1 --notify=ops
 
 # Recent load averages by host
-tail -n 1000 /log/myns/web/host.log | jq '{host, load5: .load.load5}'
+tail -n 1000 /log/myns/web/host.log | jq '{host: $host, load5: .load.load5}'
+
+# One host's disks
+tail /log/myns/web/disk.log | jq 'select($host == &quot;i-0abc&quot;)'
 </code></pre>
 <p>Metrics only run on Linux (the collectors read <code>/proc/stat</code>,
 <code>/proc/meminfo</code>, <code>/proc/mounts</code>, <code>/proc/loadavg</code>, and

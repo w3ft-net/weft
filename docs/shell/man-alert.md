@@ -149,12 +149,12 @@ echo "integration test" | alert --notify=ops
 
 # Multi-row positional: alert per host whose disk use is above 80%.
 cat /log/myco/prod/api/disk.log \
-    | jq -r '"\(.host) \(.pct)"' \
+    | jq -r '"\($host) \(.pct)"' \
     | alert above 80 -k 2 -t 1 --notify=ops
 
-# Multi-row JSON path: same idea with JSON rows. Each line of disk.log
-# is already one row.
-cat /log/myco/prod/api/disk.log \
+# Multi-row JSON path: same idea with JSON rows. The host is a column,
+# not a field of the row, so build the row with it.
+cat /log/myco/prod/api/disk.log | jq -c '{host: $host, pct}' \
     | alert above 80 -k .pct -t .host --notify=ops
 ```
 

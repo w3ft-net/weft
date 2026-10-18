@@ -70,11 +70,11 @@ the row for per-tag incident dedup. <code>&lt;field&gt;</code> is either a
 path (<code>-k .latency_ms</code>); <code>-k</code> and <code>-t</code> must agree on which form.</p>
 <pre><code># per-host disk alert (positional)
 cat /log/myco/prod/api/disk.log \\
-  | jq -r '&quot;\\(.host) \\(.pct)&quot;' \\
+  | jq -r '&quot;\\($host) \\(.pct)&quot;' \\
   | alert above 80 -k 2 -t 1 --notify=ops
 
-# same alert against JSONL — no jq needed, every line is already one row
-cat /log/myco/prod/api/disk.log \\
+# same alert against JSONL — the host is a column, so put it in the row
+cat /log/myco/prod/api/disk.log | jq -c '{host: $host, pct}' \\
   | alert above 80 -k .pct -t .host --notify=ops
 </code></pre>
 <h2 id="etcnotifyyaml">/etc/notify.yaml</h2>

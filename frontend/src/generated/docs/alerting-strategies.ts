@@ -55,17 +55,18 @@ independently against its tag.</p>
 <pre><code># /cron.d/disk-per-host
 # schedule: every 1m
 cat /log/myco/prod/api/disk.log \\
-  | jq -r '&quot;\\(.host) \\(.pct)&quot;' \\
+  | jq -r '&quot;\\($host) \\(.pct)&quot;' \\
   | alert above 80 -k 2 -t 1 --notify=ops
 </code></pre>
 <p><code>-k 2</code> says &quot;field 2 holds the numeric value&quot;; <code>-t 1</code> says &quot;field
 1 names this row&quot; (the host). Each host opens and closes incidents
 independently, giving one PagerDuty incident per affected host.</p>
 <p><code>-k</code> and <code>-t</code> also accept JSON paths, which skips the <code>jq -r</code>
-reformatting. Each line of <code>disk.log</code> is already one JSON row, so it
-goes straight in. If you do filter with <code>jq</code>, use <code>jq -c</code> so each row
-stays on one line; multi-line <code>jq</code> output is read one line per row:</p>
+text formatting. The host is a column of the row, not a field in its
+JSON, so build the row with it, using <code>jq -c</code> so each row stays on one
+line; multi-line <code>jq</code> output is read one line per row:</p>
 <pre><code>cat /log/myco/prod/api/disk.log \\
+  | jq -c '{host: $host, pct}' \\
   | alert above 80 -k .pct -t .host --notify=ops
 </code></pre>
 <p>A single alert may not mix the two forms — both <code>-k</code> and <code>-t</code> must

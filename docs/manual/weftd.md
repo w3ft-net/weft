@@ -262,9 +262,13 @@ The objects in `host.log`:
 
 `host.log` holds `cpu`, `memory` and `load` as nested objects, so the first
 tick has no `cpu` (it needs two samples to compute a delta) and a collector you
-turned off has no object. Every row in all three files also carries `ts`,
-`host`, and `deployment`. `network.log` needs two samples too, so it's empty
+turned off has no object. `network.log` needs two samples too, so it's empty
 for the first tick after startup.
+
+The JSON doesn't repeat the time, host or deployment: those are the row's own
+columns, which `jq` reads as `$ts`, `$host` and `$deployment`. Because the
+shard filters on the column, `select($host == "i-0abc")` narrows a deployment's
+shared file to one host before any row is returned.
 
 Query them the same way you query any JSON log source:
 
@@ -274,11 +278,14 @@ tail /log/myns/web/host.log | jq '.memory.pct'
 
 # Per-host, per-mount disk usage, alerting above 80%
 tail /log/myns/web/disk.log \
-  | jq -r '"\(.host):\(.path) \(.pct)"' \
+  | jq -r '"\($host):\(.path) \(.pct)"' \
   | alert above 80 -k 2 -t 1 --notify=ops
 
 # Recent load averages by host
-tail -n 1000 /log/myns/web/host.log | jq '{host, load5: .load.load5}'
+tail -n 1000 /log/myns/web/host.log | jq '{host: $host, load5: .load.load5}'
+
+# One host's disks
+tail /log/myns/web/disk.log | jq 'select($host == "i-0abc")'
 ```
 
 Metrics only run on Linux (the collectors read `/proc/stat`,
