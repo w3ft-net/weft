@@ -31,7 +31,7 @@ require (
 	github.com/qmuntal/stateless v1.8.0
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/stripe/stripe-go/v85 v85.2.0
-	github.com/w3ft-net/weft-go v0.6.3
+	github.com/w3ft-net/weft-go v0.7.0
 	github.com/yuin/goldmark v1.8.2
 	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/term v0.42.0
