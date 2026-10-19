@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -1052,12 +1053,20 @@ func splitFullApp(fullApp string) (namespace, service, kind string) {
 func buildLogRow(line, instance, app, traceID string) *pb.LogRow {
 	now := time.Now()
 
+	// An SDK-written line carries a header with the fields the SDK already
+	// knows (see docs/plans/sdk-line-header.md). It is stripped here, so the
+	// header never reaches the coordinator and raw is the body only.
+	hdr, line, hasHdr := weftd.ParseHeader(line)
+	if hdr.TraceID != "" {
+		traceID = hdr.TraceID
+	}
+
 	namespace, service, kind := splitFullApp(app)
 
+	var row *pb.LogRow
 	if parseClientSide {
-		slot := parserCache.Slot(app)
-		if parser := slot.Parser(); parser != nil {
-			msg, _ := parser.ParseLine(line, now)
+		if slot := parserCache.Slot(app); slot.Parser() != nil {
+			msg, _ := slot.Parser().ParseLine(line, now)
 			msg.Namespace = namespace
 			msg.Service = service
 			msg.Kind = kind
@@ -1070,28 +1079,63 @@ func buildLogRow(line, instance, app, traceID string) *pb.LogRow {
 			} else {
 				slot.RecordOK()
 			}
-			// A structural (socket-envelope) trace ID is higher-fidelity
-			// than schema-based extraction and wins when both are present.
+			// A structural (header or socket-envelope) trace ID is
+			// higher-fidelity than schema-based extraction and wins when both
+			// are present.
 			if traceID != "" {
 				msg.TraceId = traceID
 			}
-			return msg
+			row = msg
 		}
 	}
-
-	row := &pb.LogRow{
-		Namespace:  namespace,
-		Service:    service,
-		Kind:       kind,
-		Instance:   instance,
-		Deployment: globalDeployment,
-		Region:     globalRegion,
-		Raw:        line,
-		TsUnixNs:   now.UnixNano(),
-		TraceId:    traceID,
+	if row == nil {
+		row = &pb.LogRow{
+			Namespace:  namespace,
+			Service:    service,
+			Kind:       kind,
+			Instance:   instance,
+			Deployment: globalDeployment,
+			Region:     globalRegion,
+			Raw:        line,
+			TsUnixNs:   now.UnixNano(),
+			TraceId:    traceID,
+		}
+		stampMetavariables(row, app)
 	}
-	stampMetavariables(row, app)
+	if hasHdr {
+		applyHeader(row, hdr)
+	}
 	return row
+}
+
+// applyHeader sets the row's fields from the values the SDK supplied. A
+// header value wins over whatever the schema parser extracted; a value it
+// left empty leaves the parser's result alone.
+func applyHeader(row *pb.LogRow, h weftd.LineHeader) {
+	if h.TsNs != 0 {
+		row.TsUnixNs = h.TsNs
+	}
+	if h.Level != "" {
+		row.Level = strings.ToUpper(h.Level)
+	}
+	if h.SpanName != "" {
+		row.SpanName = h.SpanName
+	}
+	if h.SpanID != "" {
+		row.SpanId = h.SpanID
+	}
+	if h.ParentID != "" {
+		row.ParentSpanId = h.ParentID
+	}
+	if h.DurNs != 0 {
+		row.DurationNs = h.DurNs
+	}
+	if h.Kind != "" {
+		row.Kind = h.Kind
+	}
+	if h.Fmt == "json" && len(row.PayloadJson) == 0 && json.Valid([]byte(row.Raw)) {
+		row.PayloadJson = []byte(row.Raw)
+	}
 }
 
 // sendLineWithReconnect sends a line, opening or reconnecting the stream as needed.
