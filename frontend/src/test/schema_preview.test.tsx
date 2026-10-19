@@ -66,6 +66,17 @@ describe('ConfiguredSourcesList schema panel', () => {
     await open({ status: 'configured', schema_yaml: 'format: text', preview_note: 'no recent lines' })
     await waitFor(() => expect(screen.getByTestId('configured-source-web-schema-note').textContent).toBe('no recent lines'))
   })
+
+  it('says a weft SDK source has nothing to extract', async () => {
+    await open({ status: 'configured', schema_yaml: 'sdk: true', sdk_note: 'values come from the SDK', preview_note: 'no recent lines' })
+    await waitFor(() => expect(screen.getByTestId('configured-source-web-schema-sdk-note').textContent).toBe('values come from the SDK'))
+  })
+
+  it('shows no SDK note for an ordinary source', async () => {
+    await open({ status: 'configured', schema_yaml: 'format: text', preview_note: 'no recent lines' })
+    await waitFor(() => expect(screen.getByTestId('configured-source-web-schema-note')).toBeTruthy())
+    expect(screen.queryByTestId('configured-source-web-schema-sdk-note')).toBeNull()
+  })
 })
 
 describe('no advanced schema controls', () => {

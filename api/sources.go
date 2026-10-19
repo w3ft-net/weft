@@ -717,6 +717,9 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 			resp["sample_updated_at"] = formatSampleUpdatedAt(lg.SampleUpdatedAt)
 		}
 		if lg.SchemaYAML != "" {
+			if sch, err := ingest.LoadSchemaFromBytes([]byte(lg.SchemaYAML)); err == nil && sch.SDK {
+				resp["sdk_note"] = ingest.SDKDerivedNote
+			}
 			s.addLivePreview(r, session, resp, namespace, app, lg.SchemaYAML)
 		}
 		json.NewEncoder(w).Encode(resp)

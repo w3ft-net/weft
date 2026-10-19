@@ -691,6 +691,10 @@ func runSourceConfigure(cfg *shell.Config) {
 				namespace, service, sch.SampleCollected, sch.SampleTarget)
 			os.Exit(1)
 		}
+		if sch.SDKNote != "" {
+			errorf("%s/%s is already configured. %s\n", namespace, service, sch.SDKNote)
+			os.Exit(1)
+		}
 		if len(sch.Sample) == 0 || string(sch.Sample) == "[]" {
 			errorf("%s/%s is already configured. To change its schema, collect a fresh sample first:\n    weft source resample %s/%s\nthen re-run configure once it lands.\n",
 				namespace, service, namespace, service)
@@ -958,6 +962,9 @@ func printSourceSchema(w io.Writer, sch *shell.SourceSchema, namespace, service 
 	case "configured":
 		if sch.ResampleRequested {
 			errorf("# resample in progress: %d/%d lines collected\n", sch.SampleCollected, sch.SampleTarget)
+		}
+		if sch.SDKNote != "" && !asYAML {
+			fmt.Fprint(w, paint(outStyles().muted, sch.SDKNote+"\n"))
 		}
 		switch {
 		case asYAML:

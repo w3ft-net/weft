@@ -144,6 +144,11 @@ export default function ConfiguredSourcesList({
                         <span className="tui-tag tui-tag-warn">resampling {sch.sample_collected ?? 0}/{sch.sample_target ?? 0}</span> ingestion continues on the current schema
                       </div>
                     )}
+                    {sch.sdk_note && (
+                      <div className="csl-meta csl-meta-dim" data-testid={`configured-source-${s.service}-schema-sdk-note`}>
+                        {sch.sdk_note}
+                      </div>
+                    )}
                     {sch.preview ? (
                       <SchemaPreview testidPrefix={`configured-source-${s.service}-schema`} preview={sch.preview} />
                     ) : (

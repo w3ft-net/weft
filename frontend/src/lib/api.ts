@@ -770,6 +770,8 @@ export interface SourceSchema {
   // Recent live lines with the extracted fields marked, or why there are none.
   preview?: Preview
   preview_note?: string
+  // Set when the source is written by the weft SDK: its values come from the line header.
+  sdk_note?: string
   schema_hash?: string
   resample_requested?: boolean
   sample_collected?: number

@@ -69,3 +69,19 @@ func TestPrintSourceSchemaNote(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// A source written by the weft SDK shows why there is nothing extracted, and
+// --yaml stays the raw schema so it still round-trips into configure --file.
+func TestPrintSourceSchemaSDKNote(t *testing.T) {
+	sch := fetchSchema(t, `{"status":"configured","schema_yaml":"sdk: true\n","sdk_note":"values come from the SDK","preview_note":"no recent lines"}`)
+	var buf bytes.Buffer
+	printSourceSchema(&buf, sch, "ns", "svc", false, 80)
+	if got := ansi.Strip(buf.String()); got != "values come from the SDK\nno recent lines\n" {
+		t.Fatalf("got %q", got)
+	}
+	buf.Reset()
+	printSourceSchema(&buf, sch, "ns", "svc", true, 80)
+	if buf.String() != "sdk: true\n" {
+		t.Fatalf("yaml output %q, want the raw schema only", buf.String())
+	}
+}

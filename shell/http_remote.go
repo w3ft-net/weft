@@ -820,6 +820,9 @@ type SourceSchema struct {
 	// lines).
 	Preview     *ingest.Preview `json:"preview,omitempty"`
 	PreviewNote string          `json:"preview_note,omitempty"`
+	// SDKNote is set when the source is written by the weft SDK: its values
+	// come from the line header, so there is no extraction to show.
+	SDKNote string `json:"sdk_note,omitempty"`
 }
 
 // GetSourceSchema fetches the current schema / sampling state for a source.
