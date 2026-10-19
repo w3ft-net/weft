@@ -113,6 +113,9 @@ func SubmitUnitSample(ctx context.Context, client pb.WeftCoordinatorClient, toke
 // sample that makes the source configurable. Shared by the file and
 // journald sampling paths.
 func submitSampleLines(ctx context.Context, client pb.WeftCoordinatorClient, token, app, instance, deployment string, lines []string, partial bool) error {
+	// A source written by the weft SDK has a header on each line. Send the
+	// bodies and say so, so the coordinator configures it without a wizard.
+	lines, sdkFed, sdkFormat := StripSample(lines)
 	_, err := client.SubmitSample(ctx, &pb.SubmitSampleRequest{
 		Token:      token,
 		Service:    app,
@@ -120,6 +123,8 @@ func submitSampleLines(ctx context.Context, client pb.WeftCoordinatorClient, tok
 		Deployment: deployment,
 		Lines:      lines,
 		Partial:    partial,
+		SdkFed:     sdkFed,
+		SdkFormat:  sdkFormat,
 	})
 	if err != nil {
 		return fmt.Errorf("submit sample: %w", err)

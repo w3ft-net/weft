@@ -23,7 +23,7 @@ func TestParseHeader_V1AllValues(t *testing.T) {
 		t.Fatal("ok = false, want a header")
 	}
 	want := LineHeader{
-		TsNs: 1700000000123456789, Level: "WARN", TraceID: "abc123",
+		Version: 1, TsNs: 1700000000123456789, Level: "WARN", TraceID: "abc123",
 		SpanName: "db.query", SpanID: "s1", ParentID: "s0", DurNs: 2500,
 		Fmt: "json", Kind: "stderr",
 	}
@@ -50,10 +50,10 @@ func TestParseHeader_EmptyAndShortValues(t *testing.T) {
 	if !ok || body != "text" {
 		t.Fatalf("ok=%v body=%q", ok, body)
 	}
-	if h.TsNs != 0 || h.Level != "" || h.TraceID != "t1" || h.Fmt != "" || h.Kind != "" {
+	if h.Version != 1 || h.TsNs != 0 || h.Level != "" || h.TraceID != "t1" || h.Fmt != "" || h.Kind != "" {
 		t.Errorf("header = %+v, want only the trace ID set", h)
 	}
-	if h, _, ok := ParseHeader(hdr("v1") + "text"); !ok || h != (LineHeader{}) {
+	if h, _, ok := ParseHeader(hdr("v1") + "text"); !ok || h != (LineHeader{Version: 1}) {
 		t.Errorf("version-only header = %+v, %v; want an empty header", h, ok)
 	}
 }
@@ -85,9 +85,9 @@ func TestParseHeader_LegacyEnvelope(t *testing.T) {
 // A bad value is treated as not supplied; it never fails the line.
 func TestParseHeader_BadValuesDropped(t *testing.T) {
 	cases := map[string]LineHeader{
-		hdr("v1", "notanumber", "", "", "", "", "", "-4", "yaml", "bad/kind"): {},
-		hdr("v1", "", "", "", "", "", "", "", "", "heartbeats"):               {}, // reserved
-		hdr("v1", "", "", "", "", "", "", "", "", "host"):                     {},
+		hdr("v1", "notanumber", "", "", "", "", "", "-4", "yaml", "bad/kind"): {Version: 1},
+		hdr("v1", "", "", "", "", "", "", "", "", "heartbeats"):               {Version: 1}, // reserved
+		hdr("v1", "", "", "", "", "", "", "", "", "host"):                     {Version: 1},
 	}
 	for line, want := range cases {
 		h, _, ok := ParseHeader(line + "x")

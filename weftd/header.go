@@ -15,6 +15,7 @@ import (
 // value is the version, which fixes the order and meaning of the rest. An
 // empty value means "not supplied".
 type LineHeader struct {
+	Version  int    // 0 for the legacy trace-only envelope
 	TsNs     int64  // unix nanoseconds; 0 when absent
 	Level    string // as the SDK wrote it
 	TraceID  string
@@ -71,9 +72,11 @@ func ParseHeader(line string) (h LineHeader, body string, ok bool) {
 	if m == nil {
 		return h, line, false
 	}
-	if v, _ := strconv.Atoi(m[1]); v < 1 {
+	v, _ := strconv.Atoi(m[1])
+	if v < 1 {
 		return h, line, false
 	}
+	h.Version = v
 	vals = vals[1:]
 	if len(vals) > v1Values {
 		vals = vals[:v1Values]
@@ -109,4 +112,33 @@ func positiveInt(s string) int64 {
 		return 0
 	}
 	return n
+}
+
+// StripSample removes line headers from sample lines, so the wizard and the
+// detectors see the same bodies the rows carry. sdkFed reports whether any
+// line had a versioned header; format is "json" only when every headered
+// line declared json, and "text" otherwise. Lines without a header pass
+// through unchanged.
+func StripSample(lines []string) (bodies []string, sdkFed bool, format string) {
+	bodies = make([]string, len(lines))
+	allJSON := true
+	for i, l := range lines {
+		h, body, ok := ParseHeader(l)
+		bodies[i] = body
+		if !ok || h.Version < 1 {
+			bodies[i] = l
+			continue
+		}
+		sdkFed = true
+		if h.Fmt != "json" {
+			allJSON = false
+		}
+	}
+	if !sdkFed {
+		return bodies, false, ""
+	}
+	if allJSON {
+		return bodies, true, "json"
+	}
+	return bodies, true, "text"
 }

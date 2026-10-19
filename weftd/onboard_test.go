@@ -148,3 +148,53 @@ func TestCheckSourceStatusReportsAgentVersionAndHost(t *testing.T) {
 		t.Errorf("request = %+v, want the agent's version and host alongside the service", rec.got)
 	}
 }
+
+// sampleRecorder captures the sample weftd submits.
+type sampleRecorder struct {
+	pb.WeftCoordinatorClient
+	got *pb.SubmitSampleRequest
+}
+
+func (r *sampleRecorder) SubmitSample(_ context.Context, req *pb.SubmitSampleRequest, _ ...grpc.CallOption) (*pb.SubmitSampleResponse, error) {
+	r.got = req
+	return &pb.SubmitSampleResponse{Status: "pending"}, nil
+}
+
+// Headered lines go up as bodies with sdk_fed set; plain lines go up as they
+// are with it clear.
+func TestSubmitSampleLines_SDKFed(t *testing.T) {
+	rec := &sampleRecorder{}
+	lines := []string{
+		hdr("v1", "5", "INFO", "t1", "", "", "", "", "json", "") + `{"msg":"a"}`,
+		hdr("v1", "6", "WARN", "", "", "", "", "", "json", "") + `{"msg":"b"}`,
+	}
+	if err := submitSampleLines(context.Background(), rec, "wft_x", "api", "i-1", "web", lines, false); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.got.SdkFed || rec.got.SdkFormat != "json" {
+		t.Errorf("sdk_fed=%v format=%q, want true and json", rec.got.SdkFed, rec.got.SdkFormat)
+	}
+	if got := rec.got.Lines; len(got) != 2 || got[0] != `{"msg":"a"}` || got[1] != `{"msg":"b"}` {
+		t.Errorf("lines = %q, want the bodies without headers", got)
+	}
+
+	if err := submitSampleLines(context.Background(), rec, "wft_x", "api", "i-1", "web", []string{"plain one", "plain two"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if rec.got.SdkFed || rec.got.SdkFormat != "" || rec.got.Lines[0] != "plain one" {
+		t.Errorf("plain sample: sdk_fed=%v format=%q lines=%q", rec.got.SdkFed, rec.got.SdkFormat, rec.got.Lines)
+	}
+}
+
+func TestStripSample_FormatAndLegacy(t *testing.T) {
+	// One text line makes the whole source text.
+	_, fed, format := StripSample([]string{hdr("v1", "", "", "", "", "", "", "", "json", "") + "{}", hdr("v1", "", "", "", "", "", "", "", "text", "") + "hi"})
+	if !fed || format != "text" {
+		t.Errorf("mixed fmt: fed=%v format=%q, want true and text", fed, format)
+	}
+	// The legacy trace-only envelope does not make a source SDK-fed.
+	bodies, fed, _ := StripSample([]string{"\x1eabc\x1eold style"})
+	if fed || bodies[0] != "\x1eabc\x1eold style" {
+		t.Errorf("legacy envelope: fed=%v bodies=%q, want unchanged and not SDK-fed", fed, bodies)
+	}
+}
