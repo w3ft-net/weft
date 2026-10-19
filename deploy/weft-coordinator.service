@@ -12,12 +12,10 @@ ExecStart=/opt/app/bin/weft-coordinator \
     --compute=${COMPUTE_NLB} \
     --region=${AWS_REGION} \
     --redis-addr=${REDIS_ADDR} \
-    --redis-tls=${REDIS_TLS} \
-    --query-log=/opt/app/logs/coordinator-queries.log
+    --redis-tls=${REDIS_TLS}
 Restart=always
 RestartSec=5
-StandardOutput=append:/opt/app/logs/coordinator.log
-StandardError=append:/opt/app/logs/coordinator.log
+Environment=WEFT_LOG_FILE=/opt/app/logs/coordinator.log
 
 [Install]
 WantedBy=multi-user.target

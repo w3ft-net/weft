@@ -2,11 +2,14 @@ package coordinator
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
+	"github.com/graybeardcorp/weft/internal/weftlog"
 	weftsdk "github.com/w3ft-net/weft-go"
 )
 
@@ -105,5 +108,26 @@ func TestQueryLogCarriesTheTraceID(t *testing.T) {
 	re := regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} query: namespace=weft coordinator_id=i-1 trace_id=7f778536850bbbbaed3c25469f1a23dd\n$`)
 	if !re.MatchString(string(data)) {
 		t.Fatalf("audit line shape mismatch: %q", data)
+	}
+}
+
+// With SDK logging the audit stream rides the main file as kind=queries.
+func TestLogQuery_SDKFileUsesQueriesKind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "coordinator.log")
+	t.Setenv(weftsdk.EnvLogFile, path)
+	prev := slog.Default()
+	defer slog.SetDefault(prev)
+	lf, err := weftsdk.InstallLogging("")
+	if err != nil || lf == nil {
+		t.Fatalf("InstallLogging = %v, %v", lf, err)
+	}
+	defer lf.Close()
+	weftlog.SetFile(lf)
+	defer weftlog.SetFile(nil)
+
+	logQuery(context.Background(), "query: select 1")
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "\x1fqueries\x1e") || !strings.Contains(string(data), "query: select 1") {
+		t.Errorf("audit line = %q, want kind queries", data)
 	}
 }

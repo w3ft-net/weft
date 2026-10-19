@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -83,6 +84,11 @@ func SetQueryLogCoordinatorID(id string) {
 // SetQueryLogCoordinatorID.
 func logQuery(ctx context.Context, format string, args ...any) {
 	l := queryLog
+	if f := weftlog.File(); f != nil {
+		// SDK logging: the audit stream is a second kind in the service's own
+		// file, so it reads as queries.log beside coordinator.log.
+		l = slog.New(f.KindHandler("queries", nil))
+	}
 	if queryLogCoordinatorID != "" {
 		l = l.With("coordinator_id", queryLogCoordinatorID)
 	}

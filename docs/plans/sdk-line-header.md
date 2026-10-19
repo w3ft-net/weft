@@ -8,9 +8,12 @@ schema, the first-line onboarding in `onboardAndRun`, and the derived-fields
 note in the schema endpoint, CLI and browser (items 2, 3, 5), and the
 `weft-go` (committed) and `weft-py` (in the working tree) file handlers with
 stdout/stderr capture and the stamping helpers removed (item 4). Python has
-no span model, so its headers carry no span fields. Not started: weft's own
-units and `startup.sh`, and the docs (item 6), which wait on an SDK release
-and the `go.mod` bump. Supersedes the "socket envelope" part of
+no span model, so its headers carry no span fields. Item 6 is done: docs, `weft-go` v0.6.1,
+and weft's own units, `startup.sh` and `weftlog` (committed, not deployed).
+Rollout caveat: weft's existing sources already have wizard schemas, and an
+already-configured source keeps its schema when SDK lines arrive, so after
+deploy run `weft source resample` or clear each weft/* schema to get the
+synthesized one. Supersedes the "socket envelope" part of
 [request-tracing](request-tracing.md) (the `\x1e<trace_id>\x1e` frame on the
 records socket); that plan's `trace <id>` query and reserved column are
 unchanged.

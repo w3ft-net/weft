@@ -129,6 +129,11 @@ if [ "$ROLE" = "shard" ]; then
   fi
 fi
 
+# The units run as app and open their own log file (WEFT_LOG_FILE); systemd
+# used to open it as root, so files left by an older boot may be root-owned.
+mkdir -p /opt/app/logs
+chown -R app:app /opt/app/logs
+
 # The export unit is a long oneshot: don't block here on it, so weftd below is
 # up (and shipping its log) while the export runs. export_finish waits for it.
 if [ "$ROLE" = "export" ]; then
@@ -150,21 +155,10 @@ fi
 # WEFTD_TOKEN would conflict with the host's customer/env binding.
 if [ "$ROLE" != "loom-producer" ] && [ -n "${WEFTD_TOKEN:-}" ] && command -v weftd >/dev/null 2>&1; then
   mkdir -p /etc/weftd
-  # The coordinator writes its query-audit stream to a dedicated file
-  # (--query-log in weft-coordinator.service). Tail it as its own
-  # (app=coordinator, kind=queries) source so it lands at
-  # /log/weft/coordinator/queries.log instead of folding into
-  # coordinator.log — substring monitors watching weft/coordinator must
-  # not match the audit probe that produced the line. weftd's
-  # glob/explicit deconfliction keeps the /opt/app/logs/*.log source
-  # below from also ingesting this file. Coordinator role only.
-  QUERIES_SOURCE=""
-  if [ "$ROLE" = "coordinator" ]; then
-    QUERIES_SOURCE="  - path: /opt/app/logs/coordinator-queries.log
-    service: coordinator
-    kind: queries"
-  fi
-
+  # Each role's process writes its logs through the weft SDK to
+  # /opt/app/logs/<role>.log (WEFT_LOG_FILE in the unit), headered so weftd
+  # needs no schema extraction. The coordinator's query audit rides the same
+  # file as kind=queries (/log/weft/coordinator/queries.log).
   cat > /etc/weftd/config.yaml <<WEFTCFG
 token: ${WEFTD_TOKEN}
 deployment: ${ROLE}
@@ -185,7 +179,6 @@ metavariables:
     json: /opt/app/data/shard.json:.shard_id
 sources:
   - path: /opt/app/logs/*.log
-${QUERIES_SOURCE}
 WEFTCFG
   chmod 600 /etc/weftd/config.yaml
 

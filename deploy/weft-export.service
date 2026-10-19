@@ -20,5 +20,4 @@ ExecStart=/opt/app/bin/weft-shard export \
     --attempt=${EXPORT_ATTEMPT} \
     --timeout=150m
 TimeoutStartSec=160min
-StandardOutput=append:/opt/app/logs/export.log
-StandardError=append:/opt/app/logs/export.log
+Environment=WEFT_LOG_FILE=/opt/app/logs/export.log

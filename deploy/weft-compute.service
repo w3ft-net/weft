@@ -12,8 +12,7 @@ ExecStart=/opt/app/bin/weft-compute \
     --parallelism=4
 Restart=always
 RestartSec=5
-StandardOutput=append:/opt/app/logs/compute.log
-StandardError=append:/opt/app/logs/compute.log
+Environment=WEFT_LOG_FILE=/opt/app/logs/compute.log
 
 [Install]
 WantedBy=multi-user.target

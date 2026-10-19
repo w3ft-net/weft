@@ -14,8 +14,7 @@ ExecStart=/opt/app/bin/weft-shard \
     --coordinator-addr=${COORDINATOR_NLB}
 Restart=always
 RestartSec=5
-StandardOutput=append:/opt/app/logs/shard.log
-StandardError=append:/opt/app/logs/shard.log
+Environment=WEFT_LOG_FILE=/opt/app/logs/shard.log
 
 [Install]
 WantedBy=multi-user.target

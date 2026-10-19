@@ -1,13 +1,14 @@
 // Package weftlog is how every weft server process writes its log lines.
 //
-// Lines keep the stdlib logger's shape, "2006/01/02 15:04:05 message", because
-// the weft/* sources' schemas (and the span roll-up) are detected from it. What
-// changes is that the SDK's slog handler sits in front: a line logged with a
-// request's ctx gains "trace_id=<id>" without the call site spelling it, so
-// every line a request causes can be found by that one ID.
+// With WEFT_LOG_FILE set (the units do), Init hands logging to the weft SDK: it
+// writes headered lines to that file, weftd reads timestamp, level and trace ID
+// off the header, and stdout and stderr are captured into the same file. A line
+// logged with a request's ctx carries its trace ID without the call site
+// spelling it.
 //
-// The stdlib logger is routed through the same handler by Init, so lines it
-// still writes (the SDK's own span lines) come out in the same shape.
+// Without it (tests, local runs) lines keep the stdlib logger's shape,
+// "2006/01/02 15:04:05 message", with "trace_id=<id>" appended when the ctx
+// carries one. The stdlib logger is routed through the same handler by Init.
 package weftlog
 
 import (
@@ -27,13 +28,35 @@ import (
 // through this package, slog, or the stdlib logger. Call it once, first thing
 // in main.
 func Init(w io.Writer) {
+	lf, err := weftsdk.InstallLogging("")
+	if lf != nil {
+		file = lf
+		if err := lf.CaptureStdio(); err != nil {
+			Errorf(context.Background(), "capture stdout/stderr: %v", err)
+		}
+		return
+	}
 	slog.SetDefault(NewLogger(w))
+	if err != nil {
+		Errorf(context.Background(), "open %s: %v", weftsdk.EnvLogFile, err)
+	}
 }
+
+// file is the SDK log file Init opened, nil when logging is the legacy shape.
+var file *weftsdk.LogFile
+
+// SetFile makes lf the SDK log file File reports. Init does this itself; tests
+// that open a file without Init (which would capture the test's stdout) use it.
+func SetFile(lf *weftsdk.LogFile) { file = lf }
+
+// File is the SDK log file, or nil when Init wrote the legacy shape. A second
+// stream (the coordinator's query audit) writes into it with KindHandler.
+func File() *weftsdk.LogFile { return file }
 
 // NewLogger is a logger writing to w in the legacy line shape, with the trace
 // ID of the ctx it is given added to each line.
 func NewLogger(w io.Writer) *slog.Logger {
-	return slog.New(weftsdk.NewSlogHandler(&lineHandler{w: w, mu: new(sync.Mutex)}))
+	return slog.New(&lineHandler{w: w, mu: new(sync.Mutex)})
 }
 
 // Infof logs a line, with ctx's trace ID if it carries one.
@@ -72,7 +95,7 @@ func (h *lineHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= slog.LevelInfo
 }
 
-func (h *lineHandler) Handle(_ context.Context, r slog.Record) error {
+func (h *lineHandler) Handle(ctx context.Context, r slog.Record) error {
 	var b strings.Builder
 	t := r.Time
 	if t.IsZero() {
@@ -87,6 +110,9 @@ func (h *lineHandler) Handle(_ context.Context, r slog.Record) error {
 		writeAttr(&b, slog.Attr{Key: h.prefix + a.Key, Value: a.Value})
 		return true
 	})
+	if id, ok := weftsdk.TraceIDFromContext(ctx); ok {
+		writeAttr(&b, slog.String("trace_id", id))
+	}
 	if !strings.HasSuffix(b.String(), "\n") {
 		b.WriteByte('\n')
 	}

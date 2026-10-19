@@ -125,8 +125,12 @@ func main() {
 	// Route the query-audit stream to its own file so substring monitors
 	// watching weft/coordinator can't self-trigger on the audit probe.
 	// On failure we keep the stderr fallback rather than fail to start.
-	if err := coordinator.SetQueryLog(*queryLogPath); err != nil {
-		weftlog.Warnf(context.Background(), "warning: query-audit log to %s unavailable, using stderr: %v", *queryLogPath, err)
+	// With SDK logging the audit stream rides the main log file; the file flag
+	// only serves runs without WEFT_LOG_FILE.
+	if weftlog.File() == nil {
+		if err := coordinator.SetQueryLog(*queryLogPath); err != nil {
+			weftlog.Warnf(context.Background(), "warning: query-audit log to %s unavailable, using stderr: %v", *queryLogPath, err)
+		}
 	}
 
 	// Shared bearer token for coord ↔ shard gRPC. The query path no
