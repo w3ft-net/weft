@@ -90,8 +90,14 @@ customers), so the rules are explicit:
    rollout order: ship weftd with header support first, then the SDKs, and
    raise `WeftdHardFloor` (`coordinator/service/server.go`) to that version.
    The SDK docs state the minimum weftd.
-6. **Unheadered lines** in the same file (panics, stdout noise, third-party
-   writers) get ingest time and no level. Nothing asks about them.
+6. **An SDK file is SDK-only.** The handler writes to its own file and
+   nothing else does, so every line has a header. A headerless line in an
+   SDK-fed source is a fault, not a design case: weftd ships it with ingest
+   time and no level, and nothing prompts. The expected causes are a torn
+   line after rotation or a checkpoint resume, concurrent writers
+   interleaving long lines, and a message containing a raw newline (the
+   handler must escape newlines; a JSON body does so already, and `text`
+   bodies must too).
 
 ### weftd
 
@@ -137,13 +143,24 @@ A source with no headered lines behaves exactly as today.
 - Body format: JSON (`{"msg": "...", ...attrs}`) so `jq` works and attributes
   are queryable; `fmt=text` remains for `SendLine`-style raw strings.
 
+### File ownership and raw output
+
+The handler writes to its own file (default: next to the app's other logs;
+configurable), never to stdout. Raw stdout and stderr (panics, stdlib
+prints, runtime noise) go to a separate file or the journal and are an
+ordinary source with the wizard, under their own kind (for example
+`stdio`). The two sources sit side by side under the same service, so there
+is no mixed file and no ambiguous middle.
+
 ### Weft's own hosts
 
-`weft-coordinator.service` and the other roles send stdout and stderr to
-`/opt/app/logs/<role>.log`. Services using the handler write headered lines
-there, so the file source `/opt/app/logs/*.log` becomes SDK-fed and the
-resample prompt for trace ID goes away. Raw stdout/stderr (panics, stdlib
-prints) stay unheadered in the same file, per rule 6.
+Today `weft-coordinator.service` (and the other roles) send stdout and
+stderr to `/opt/app/logs/<role>.log`, which `startup.sh` tails as one source.
+After this change the structured logs go to a new SDK-written file under the
+same service, which is SDK-fed, so resampling no longer asks for a trace ID.
+`<role>.log` keeps holding raw stdout/stderr and stays wizard-driven. The
+`startup.sh` source list and the glob/explicit deconfliction need to name
+both files.
 
 ## Out of scope
 
@@ -156,8 +173,7 @@ prints) stay unheadered in the same file, per rule 6.
 ## Open questions
 
 - Exact `WeftdHardFloor` value and whether to enforce it from the SDK side.
-- Whether to ask the wizard about unheadered lines in a mixed file instead of
-  leaving them raw (current answer: no).
+- The default path and kind name for the SDK file and for the raw stdio file.
 - Release sequencing across `weft`, `weft-go` and `weft-py`.
 
 ## Work
