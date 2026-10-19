@@ -7,10 +7,10 @@ import (
 	"github.com/graybeardcorp/weft/planner"
 )
 
-const explainUsage = "usage: explain <pipeline>\n  say where each stage of the pipeline runs and what would let more of it run at the source\n"
+const explainUsage = "usage: explain <pipeline>\n  say how much of the pipeline is optimized and what would make more of it so\n"
 
-// maybeHandleExplain answers `explain <pipeline>`: where each stage of a
-// one-liner would run and what would let more of it run at the source. It
+// maybeHandleExplain answers `explain <pipeline>`: how much of a
+// one-liner is optimized and what would make more of it so. It
 // takes the line as typed, so a pipe belongs to the line explained and not
 // to explain, as with a shell's `time`. It runs nothing and reads no log
 // data, and it names no source to check access to, so it can't be used to
@@ -28,5 +28,5 @@ func (s *Server) maybeHandleExplain(session *auth.Session, line, cwd string) (ha
 	if err != nil {
 		return true, "", err
 	}
-	return true, a.Summary(), nil
+	return true, a.Render(true), nil
 }

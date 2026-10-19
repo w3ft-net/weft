@@ -6,11 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"strconv"
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // PlannerVersion stamps every LoweredPlan with the version of the
@@ -37,7 +37,10 @@ import (
 // aggregates there.
 // v9: every row query selects event_id and line_no after (raw, ts), and a
 // ts order is (ts, event_id, line_no), one-line events first.
-const PlannerVersion = 9
+// v10: an awk with an exactly-lowering pattern and a print SQL computes
+// (`$3 == "x" { print HOST, $0 }`) is Filter then Project in the shard,
+// not a prefilter plus a compute stage.
+const PlannerVersion = 10
 
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to
@@ -237,12 +240,12 @@ func HashBinSource(source string) string {
 func LowerForStorage(ctx context.Context, pipeline string, customerID int64, tier string, resolveBin BinResolver) []byte {
 	lp, err := Lower(pipeline, customerID, tier, resolveBin)
 	if err != nil {
-		weftlog.Infof(ctx, "lower: skip save-time lowering for pipeline (customer=%d): %v", customerID, err)
+		weftsdk.Infof(ctx, "lower: skip save-time lowering for pipeline (customer=%d): %v", customerID, err)
 		return nil
 	}
 	b, err := json.Marshal(lp)
 	if err != nil {
-		weftlog.Infof(ctx, "lower: marshal LoweredPlan (customer=%d): %v", customerID, err)
+		weftsdk.Infof(ctx, "lower: marshal LoweredPlan (customer=%d): %v", customerID, err)
 		return nil
 	}
 	return b

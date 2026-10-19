@@ -40,15 +40,15 @@ func TestShellExec_Explain(t *testing.T) {
 		body map[string]any
 		want []string
 	}{
-		{"all at the source",
+		{"all optimized",
 			map[string]any{"pipeline": "explain cat /log/x/y/main.log | grep ERROR"},
-			[]string{"Every stage runs at the source."}},
+			[]string{"Every stage: optimized retrieval."}},
 		{"a barrier",
 			map[string]any{"pipeline": `explain cat /log/x/y/main.log | awk '{ printf "%s\n", $0 }'`},
-			[]string{"awk", "after transfer", "Barrier: stage 1"}},
+			[]string{"awk", "post-retrieval", "Barrier: stage 1"}},
 		{"relative to the client's cwd",
 			map[string]any{"pipeline": "explain cat main.log | grep ERROR", "dirstack": []string{"/log/x/y"}},
-			[]string{"Every stage runs at the source."}},
+			[]string{"Every stage: optimized retrieval."}},
 		{"a saved script is analyzed through its body",
 			map[string]any{"pipeline": `explain find-errors boom | awk '{ printf "%s\n", $0 }'`},
 			[]string{"grep boom", "Barrier: stage 2"}},

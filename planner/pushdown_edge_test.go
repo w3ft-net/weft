@@ -335,8 +335,8 @@ func TestEdge_Awk_PartialPushdown(t *testing.T) {
 		{
 			name:        "regex pattern with print action",
 			pipeline:    `cat vimgym.log | awk '/timeout/ { print $1, $2 }'`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout')`,
-			wantCompute: []string{`awk '/timeout/ { print $1, $2 }'`},
+			wantSQL:     `SELECT concat_ws(' ', COALESCE(list_extract(fields, 1), ''), COALESCE(list_extract(fields, 2), '')) as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout')`,
+			wantCompute: nil,
 		},
 		// Filter + increment + END (count errors)
 		{
@@ -917,8 +917,8 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 		{
 			name:        "partial awk then sort",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { print $3 }' | sort`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: []string{`awk 'LEVEL == "ERROR" { print $3 }'`, `sort`},
+			wantSQL:     `SELECT COALESCE(list_extract(fields, 3), '') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantCompute: []string{`sort`},
 		},
 		// Partial jq pushdown followed by more compute — .payload folds into the
 		// SELECT, leaving only sort to run downstream.
@@ -1229,8 +1229,8 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 		{
 			name:        "partial print then sort is safe",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { print $3 }' | sort`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: []string{`awk 'LEVEL == "ERROR" { print $3 }'`, `sort`},
+			wantSQL:     `SELECT COALESCE(list_extract(fields, 3), '') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantCompute: []string{`sort`},
 		},
 	}
 

@@ -192,3 +192,53 @@ func TestConfigureCore_HonoursExplicitCustomer(t *testing.T) {
 		t.Errorf("explicit Customer should suppress @weft fallback; got: %q", visible)
 	}
 }
+
+// typeLine feeds a line to the core as keystrokes and returns what it
+// printed, without ANSI.
+func typeLine(t *testing.T, line string) string {
+	t.Helper()
+	var output strings.Builder
+	var actions []shellcore.Action
+	core := shellcore.NewShellCore(nil, 200, 200,
+		func(b []byte) { output.Write(b) },
+		func(a shellcore.Action) { actions = append(actions, a) },
+	)
+	(&Shell{User: "alice"}).ConfigureCore(core)
+	for _, r := range line {
+		core.HandleEvent(shellcore.KeyEvent{Rune: r})
+	}
+	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
+	if len(actions) > 0 {
+		t.Errorf("%q was sent to the server (%v) instead of answered by help", line, actions)
+	}
+	return stripANSI(output.String())
+}
+
+// `man explain` and `explain --help` show the man page, as `man range` does.
+func TestConfigureCore_ManExplain(t *testing.T) {
+	for _, line := range []string{"man explain", "explain --help"} {
+		if got := typeLine(t, line); !strings.Contains(got, "EXPLAIN(1)") {
+			t.Errorf("%q: no man page in %q", line, got)
+		}
+	}
+}
+
+// `man commands` is the page about weft's own commands, and every command
+// it points to has a page of its own.
+func TestConfigureCore_ManCommandsPointsAtRealPages(t *testing.T) {
+	page := typeLine(t, "man commands")
+	if !strings.Contains(page, "COMMANDS(1)") {
+		t.Fatalf("no commands page in %q", page)
+	}
+	for _, topic := range []string{"range", "explain", "chart", "less", "alert", "notify", "weft-funcs", "dashboard", "git", "clipboard", "sharing", "passwd", "teams"} {
+		if !strings.Contains(page, "man "+topic) {
+			t.Errorf("commands page doesn't mention man %s", topic)
+		}
+		if got := typeLine(t, "man "+topic); strings.TrimSpace(got) == "" || strings.Contains(got, "No manual entry") {
+			t.Errorf("man %s shows nothing useful: %q", topic, got)
+		}
+	}
+	if !strings.Contains(typeLine(t, "man"), "man commands") {
+		t.Error("bare man doesn't list commands")
+	}
+}

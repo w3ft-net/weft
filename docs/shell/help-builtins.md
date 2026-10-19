@@ -56,11 +56,11 @@ Commands with no Unix counterpart.
 
 - `range [<start>..<end>]` — show or set the query window; it governs every read (`man range`).
 - `chart` — render a pipeline or cron in the terminal (`man chart`).
-- `explain <pipeline>` — say where each stage of a one-liner runs and what would speed it up, without running it (`man explain`).
+- `explain <pipeline>` — say how much of a one-liner is optimized and what would speed it up, without running it (`man explain`).
 - `alert` — fire a notification from a pipeline's final number (`man alert`).
 - `clipboard` — copy a short link to a `/bin` script (`man clipboard`).
 - `dashboard` — dashboard YAML grammar and tiles (`man dashboard`).
 
 `help cron` and `help alerts` cover scheduling and notification.
 
-> `man <name>` where a page exists.
+> `man <name>` where a page exists. `man commands` lists weft's own commands.

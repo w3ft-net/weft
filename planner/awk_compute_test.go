@@ -8,17 +8,17 @@ import (
 	"github.com/graybeardcorp/warp/pkg/bash"
 )
 
-// When awk's pattern is pushed into SQL, the stage still runs in
-// compute exactly as written, whatever its action contains.
+// When awk's pattern is pushed into SQL as a prefilter only, the stage
+// still runs in compute exactly as written, whatever its action contains.
 func TestAwkPushdown_ComputeRunsTheProgramVerbatim(t *testing.T) {
-	plan, err := Plan(`cat /log/acme/api/main.log | awk 'LEVEL == "ERROR" { print $1 $2 }'`, 0, "", time.Time{}, time.Time{})
+	plan, err := Plan(`cat /log/acme/api/main.log | awk 'LEVEL == "ERROR" { n++ ; print $1 $2 }'`, 0, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(plan.ShardSQL, "level = 'ERROR'") {
 		t.Errorf("expected the LEVEL comparison as a prefilter; SQL = %s", plan.ShardSQL)
 	}
-	want := `awk 'LEVEL == "ERROR" { print $1 $2 }'`
+	want := `awk 'LEVEL == "ERROR" { n++ ; print $1 $2 }'`
 	if len(plan.ComputeStages) != 1 || plan.ComputeStages[0] != want {
 		t.Errorf("compute = %q, want [%q]", plan.ComputeStages, want)
 	}

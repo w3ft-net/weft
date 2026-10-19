@@ -500,12 +500,12 @@ func lintSavedWatch(pipeline string, loweredPlan []byte) error {
 		return nil
 	}
 	msgs := planner.LintTruncationRisk(&lp)
-	// A cron pays for a stage that runs after transfer on every fire, so
+	// A cron pays for a stage that runs post-retrieval on every fire, so
 	// say so once, at save. A pipeline with nothing to gain stays silent,
 	// as does one that calls a /bin script: its stages aren't analyzed.
 	if len(lp.BinDeps) == 0 {
 		if a, err := planner.Analyze(pipeline, "/", nil); err == nil && a.Barrier != 0 {
-			msgs = append(msgs, "This cron runs on every fire, so a stage that runs after transfer is paid for each time.\n\n"+strings.TrimRight(a.Summary(), "\n"))
+			msgs = append(msgs, "This cron runs on every fire, so a stage that runs post-retrieval is paid for each time.\n\n"+strings.TrimRight(a.Render(false), "\n"))
 		}
 	}
 	if len(msgs) == 0 {

@@ -86,9 +86,9 @@ func TestSaveCronWatch_SyntaxErrorStillBlocks(t *testing.T) {
 	}
 }
 
-// A cron pays for a stage that runs after transfer on every fire, so
+// A cron pays for a stage that runs post-retrieval on every fire, so
 // saving one explains it: a warning names the stage and what to change.
-func TestSaveCronWatch_ExplainsStageAfterTransfer(t *testing.T) {
+func TestSaveCronWatch_ExplainsStagePostRetrieval(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateOrg("cron-lint-explain")
 	user, _ := db.CreateUser("dave-lint@example.test")
@@ -105,7 +105,7 @@ func TestSaveCronWatch_ExplainsStageAfterTransfer(t *testing.T) {
 		t.Fatalf("got %d warnings, want 1: %v", len(warnings), warnings)
 	}
 	msg := warnings[0]
-	for _, want := range []string{"on every fire", "awk", "after transfer", "Barrier: stage 1"} {
+	for _, want := range []string{"on every fire", "awk", "post-retrieval", "Barrier: stage 1"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("warning lacks %q:\n%s", want, msg)
 		}
@@ -113,7 +113,7 @@ func TestSaveCronWatch_ExplainsStageAfterTransfer(t *testing.T) {
 }
 
 // A /bin script's own stages aren't analyzed, so a pipeline that calls one
-// is never reported as stuck after transfer.
+// is never reported as post-retrieval.
 func TestSaveCronWatch_NoExplanationForBinScript(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateOrg("cron-lint-bin")

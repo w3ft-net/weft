@@ -19,10 +19,18 @@ func awkProjection(prog *awk.Program) (string, bool) {
 	rule := &prog.Rules[0]
 	// A pattern is a filter (or BEGIN/END scope), which a projection
 	// would silently drop.
-	if rule.Pattern != nil || rule.Action == nil || len(rule.Action.Stmts) != 1 {
+	if rule.Pattern != nil || rule.Action == nil {
 		return "", false
 	}
-	ps, ok := rule.Action.Stmts[0].(*awk.PrintStmt)
+	return awkActionProjection(rule.Action)
+}
+
+// awkActionProjection is the SQL for an action that is a single print.
+func awkActionProjection(action *awk.Block) (string, bool) {
+	if len(action.Stmts) != 1 {
+		return "", false
+	}
+	ps, ok := action.Stmts[0].(*awk.PrintStmt)
 	if !ok {
 		return "", false
 	}

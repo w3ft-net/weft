@@ -35,30 +35,7 @@ type awkPushdown struct {
 // conflated namespace and service, is gone). HOST stays an alias for
 // INSTANCE so users coming from OTel/Datadog vocabulary find what they
 // expect. See docs/plans/ingest-dimensions.md.
-var AwkMetaVars = map[string]string{
-	"LEVEL":         "level",
-	"NAMESPACE":     "namespace",
-	"SERVICE":       "service",
-	"KIND":          "kind",
-	"INSTANCE":      "instance",
-	"HOST":          "instance",
-	"TS":            "ts",
-	"DEPLOYMENT":    "deployment",
-	"ENV":           "env",
-	"VERSION":       "version",
-	"REGION":        "region",
-	"CLUSTER":       "cluster",
-	"K8S_NAMESPACE": "k8s_namespace",
-	"POD":           "pod",
-	"CONTAINER":     "container",
-	"NODE":          "node",
-	"TRACE_ID":      "trace_id",
-	"SPAN_NAME":     "span_name",
-	"SPAN_ID":       "span_id",
-	"DURATION_NS":   "duration_ns",
-	"EVENT_ID":      "event_id",
-	"LINE_NO":       "line_no",
-}
+var AwkMetaVars = metaVarNames(strings.ToUpper)
 
 // tryAwkPushdown extracts a SQL predicate from an awk program. It never
 // rewrites the program: either the predicate is exact and the stage is

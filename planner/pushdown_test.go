@@ -441,6 +441,15 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 			wantCompute: nil,
 		},
 
+		// A pattern and a print SQL computes both lower: the shard filters
+		// and projects, and the stage is dropped.
+		{
+			name:        "awk exact pattern with metavar print",
+			pipeline:    `cat vimgym.log | awk '$3 == "ingest-stream:" { print HOST, $0 }' | grep 'first row'`,
+			wantSQL:     `SELECT raw, ts, event_id, line_no FROM (SELECT unnest(string_split(concat_ws(' ', COALESCE(CAST(instance AS VARCHAR), ''), raw), chr(10))) as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND list_extract(fields, 3) = 'ingest-stream:') AS t WHERE regexp_matches(raw, 'first row')`,
+			wantCompute: nil,
+		},
+
 		// Unknown $IDENT (not a known metavar) bails — the awk stage stays in
 		// compute so the user-defined variable semantics survive.
 		{
@@ -510,8 +519,8 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter with positional print prefilters",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { print $3, INSTANCE }'`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
-			wantCompute: []string{`awk 'LEVEL == "ERROR" { print $3, INSTANCE }'`},
+			wantSQL:     `SELECT concat_ws(' ', COALESCE(list_extract(fields, 3), ''), COALESCE(CAST(instance AS VARCHAR), '')) as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantCompute: nil,
 		},
 
 		// A grep after a sort hoists below it and filters each line.

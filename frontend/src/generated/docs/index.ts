@@ -10,6 +10,7 @@ import connectCloudwatch from './connect-cloudwatch';
 import schemaSetup from './schema-setup';
 import introduction from './introduction';
 import builtins from './builtins';
+import commands from './commands';
 import metavars from './metavars';
 import tmp from './tmp';
 import crons from './crons';
@@ -63,6 +64,7 @@ export const manualSections: readonly ManualSection[] = [
   schemaSetup,
   introduction,
   builtins,
+  commands,
   metavars,
   tmp,
   crons,

@@ -298,8 +298,9 @@ func TestSaveWatch_TruncationWarning(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v (body: %s)", err, w.Body.String())
 	}
-	if len(resp.Warnings) != 1 {
-		t.Fatalf("got %d warnings, want 1: %v (body: %s)", len(resp.Warnings), resp.Warnings, w.Body.String())
+	// The truncation lint, then the explanation of the grep -c stage.
+	if len(resp.Warnings) != 2 {
+		t.Fatalf("got %d warnings, want 2: %v (body: %s)", len(resp.Warnings), resp.Warnings, w.Body.String())
 	}
 	if !strings.Contains(resp.Warnings[0], "tail -n 1000") {
 		t.Errorf("warning text should name the cap, got: %q", resp.Warnings[0])

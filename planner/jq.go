@@ -14,7 +14,13 @@ import (
 // can rebind one (`. as $level | ...`); a program that does is opaque to
 // the planner and reads its own. Exported so compute can bind a row's
 // projected MetaVarColumns to every alias a jq expression might read.
-var JQMetaVars = map[string]string{
+var JQMetaVars = metaVarNames(strings.ToLower)
+
+// metaVars is the one list of row meta-variables: each name, lower case,
+// to the column it reads. awk spells them upper case (HOST) and jq as
+// variables ($host); HOST stays an alias for INSTANCE so users coming
+// from OTel/Datadog vocabulary find what they expect.
+var metaVars = map[string]string{
 	"namespace":     "namespace",
 	"service":       "service",
 	"kind":          "kind",
@@ -37,6 +43,15 @@ var JQMetaVars = map[string]string{
 	"duration_ns":   "duration_ns",
 	"event_id":      "event_id",
 	"line_no":       "line_no",
+}
+
+// metaVarNames spells metaVars in a language's case.
+func metaVarNames(spell func(string) string) map[string]string {
+	m := make(map[string]string, len(metaVars))
+	for name, col := range metaVars {
+		m[spell(name)] = col
+	}
+	return m
 }
 
 // JQNumericMetaColumn reports whether jq reads a meta-variable's column

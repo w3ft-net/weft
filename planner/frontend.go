@@ -113,10 +113,18 @@ func lowerAwk(ls *loweredStage, a at) []node {
 	ls.rowwise = awkIsRowFilter(prog)
 
 	pd, why := tryAwkPushdown(prog)
-	switch {
-	case pd == nil:
+	if pd != nil && (pd.limit > 0 || pd.offset > 0) {
+		return []node{&limitNode{at: a, n: pd.limit, offset: pd.offset}}
+	}
+	return awkRowStage(prog, pd, why).nodes(a)
+}
+
+// awkRowStage says what an awk program does to a row in the terms every
+// row stage shares: pd is tryAwkPushdown's predicate and why its reason.
+func awkRowStage(prog *awk.Program, pd *awkPushdown, why reason) rowStage {
+	if pd == nil {
 		if expr, ok := awkProjection(prog); ok {
-			return []node{&projectNode{at: a, expr: expr}}
+			return rowStage{proj: expr}
 		}
 		if len(prog.Rules) == 1 && prog.Rules[0].Pattern == nil {
 			// One unpatterned rule: say why its action isn't a projection.
@@ -125,20 +133,23 @@ func lowerAwk(ls *loweredStage, a at) []node {
 				why = because(reasonAwkComputedField)
 			}
 		}
-		return []node{&opaqueNode{at: a, why: why}}
-	case pd.limit > 0 || pd.offset > 0:
-		return []node{&limitNode{at: a, n: pd.limit, offset: pd.offset}}
-	case pd.exact:
-		return []node{&filterNode{at: a, pred: pd.predicate, exact: true}}
+		return rowStage{opaque: true, why: why}
 	}
-	filterWhy := pd.why
-	if filterWhy.code == reasonNone {
-		filterWhy = why
+	rs := rowStage{pred: pd.predicate, predExact: pd.exact}
+	if pd.exact {
+		return rs
 	}
-	return []node{
-		&filterNode{at: a, pred: pd.predicate, why: filterWhy},
-		&opaqueNode{at: a, why: why},
+	// A pattern SQL evaluates exactly, over an action it can print.
+	if len(prog.Rules) == 1 {
+		if pat := extractAwkPattern(prog.Rules[0].Pattern); pat != nil && pat.exact {
+			if expr, ok := awkActionProjection(prog.Rules[0].Action); ok {
+				rs.predExact, rs.proj = true, expr
+				return rs
+			}
+		}
 	}
+	rs.opaque, rs.why, rs.predWhy = true, why, pd.why
+	return rs
 }
 
 // awkProgramArg finds the program among awk's arguments, past -F, -v
@@ -174,9 +185,15 @@ func lowerJq(ls *loweredStage, a at) []node {
 	if p.slurp {
 		return []node{&opaqueNode{at: a, why: because(reasonJqSlurp)}}
 	}
+	return jqRowStage(p).nodes(a)
+}
+
+// jqRowStage says what a jq program does to a row in the terms every row
+// stage shares.
+func jqRowStage(p *jqProgram) rowStage {
 	pred := strings.Join(p.selects, " AND ")
 	if p.allLower && p.tail == nil && len(p.subject) == 0 {
-		return []node{&filterNode{at: a, pred: pred, exact: true}}
+		return rowStage{pred: pred, predExact: true}
 	}
 	if p.allLower {
 		// The subject is what the program holds. A tail reads its own
@@ -191,22 +208,55 @@ func lowerJq(ls *loweredStage, a at) []node {
 			sql, ok = jqValueToSQL(p.tail)
 		}
 		if ok {
-			var nodes []node
-			if pred != "" {
-				nodes = append(nodes, &filterNode{at: a, pred: pred, exact: true})
-			}
-			return append(nodes, &projectNode{at: a, expr: wrapJqProjection(sql, p.raw)})
+			return rowStage{pred: pred, predExact: true, proj: wrapJqProjection(sql, p.raw)}
 		}
 	}
-	why = because(reasonJqTail)
+	why := because(reasonJqTail)
 	if !p.allLower {
 		why = because(reasonJqSelect)
 	}
-	if pred == "" {
-		return []node{&opaqueNode{at: a, why: why}}
+	return rowStage{pred: pred, opaque: true, why: why}
+}
+
+// rowStage is what a row stage (awk, jq) does to each row, in the terms
+// SQL can act on. A frontend fills it in; nodes is the one place it
+// becomes IR, so every language folds a filter and a projection the same
+// way.
+type rowStage struct {
+	pred      string // SQL predicate on the row, or "" for none
+	predExact bool   // pred is exactly the stage's filter, not just a prefilter
+	proj      string // SQL for the text the stage prints, or "" if rows pass through
+	opaque    bool   // the stage does more than pred and proj, so it still runs
+	why       reason // why the stage still runs
+	predWhy   reason // why pred is only a prefilter; why if unset
+}
+
+func (rs rowStage) nodes(a at) []node {
+	if rs.opaque {
+		if rs.pred == "" {
+			return []node{&opaqueNode{at: a, why: rs.why}}
+		}
+		return []node{
+			&filterNode{at: a, pred: rs.pred, why: cmpReason(rs.predWhy, rs.why)},
+			&opaqueNode{at: a, why: rs.why},
+		}
 	}
-	return []node{
-		&filterNode{at: a, pred: pred, why: why},
-		&opaqueNode{at: a, why: why},
+	var nodes []node
+	if rs.pred != "" || rs.proj == "" {
+		nodes = append(nodes, &filterNode{at: a, pred: rs.pred, exact: true})
 	}
+	if rs.proj != "" {
+		nodes = append(nodes, &projectNode{at: a, expr: rs.proj})
+	}
+	return nodes
+}
+
+// cmpReason is the first reason that says anything.
+func cmpReason(rs ...reason) reason {
+	for _, r := range rs {
+		if r.code != reasonNone {
+			return r
+		}
+	}
+	return reason{}
 }

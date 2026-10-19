@@ -1,0 +1,93 @@
+$ grep ERROR
+Every stage: optimized retrieval.
+
+$ awk '$3 == "ingest-stream:" { print HOST, $0 }' | grep 'first row'
+Every stage: optimized retrieval.
+
+$ awk '$3 == "x" { printf "%s\n", $0 }' | grep y
+  1  awk '$3 == "x" { printf "%s\n", $0 }'  partly optimized
+       pattern: optimized; action: post-retrieval
+       Action does more than print the line or its fields.
+       Try: Print only, e.g. `print $1, HOST`.
+  2  grep y                                 post-retrieval
+
+Barrier: stage 1. Everything after it: post-retrieval.
+
+$ awk '$NF > 10 { print $1 }'
+  1  awk '$NF > 10 { print $1 }'  post-retrieval
+       Computed field position ($NF, $i).
+       Try: Use a fixed position ($1, $2), or jq on a JSON source.
+
+Barrier: stage 1. Everything after it: post-retrieval.
+
+$ awk 'BEGIN { FS = "," } { print $2 }'
+  1  awk 'BEGIN { FS = "," } { print $2 }'  post-retrieval
+       BEGIN can change line splitting.
+       Try: Drop BEGIN; use awk's default splitting.
+
+Barrier: stage 1. Everything after it: post-retrieval.
+
+$ awk -F, '{ print $2 }'
+  1  awk -F, '{ print $2 }'  post-retrieval
+       Flag -F, changes line splitting.
+       Try: Fixed separator: `cut -d<sep> -f<n>` is optimized (lines without the separator pass whole).
+
+Barrier: stage 1. Everything after it: post-retrieval.
+
+$ tr a b | grep y
+  1  tr a b  post-retrieval
+       tr: post-retrieval only.
+  2  grep y  post-retrieval
+
+Barrier: stage 1. Everything after it: post-retrieval.
+
+$ grep y | tr a b
+  1  grep y  optimized retrieval
+  2  tr a b  post-retrieval
+       tr: post-retrieval only.
+
+Barrier: stage 2. Everything after it: post-retrieval.
+
+$ sort -n | grep y
+  1  sort -n  post-retrieval
+       No optimized form.
+  2  grep y   post-retrieval
+
+Barrier: stage 1. Everything after it: post-retrieval.
+
+$ jq -s 'length'
+  1  jq -s 'length'  post-retrieval
+       -s reads the whole stream as one input.
+
+Barrier: stage 1. Everything after it: post-retrieval.
+
+$ jq 'select(.a == 1) | .b | tostring | ascii_downcase'
+  1  jq 'select(.a == 1) | .b | tostring | ascii_downcase'  partly optimized
+       select: optimized; rest: post-retrieval
+       After the selects: more than picking fields.
+
+Barrier: stage 1. Everything after it: post-retrieval.
+
+$ sed 's/a/b/'
+  1  sed 's/a/b/'  post-retrieval
+       sed optimized only as `sed -n '/re/p'`.
+       Try: Matching lines: use grep. Substitution: post-retrieval, so put it after narrowing stages.
+
+Barrier: stage 1. Everything after it: post-retrieval.
+
+$ cut -d, -f1,3-
+Every stage: optimized retrieval.
+
+$ grep -e a -e b
+  1  grep -e a -e b  post-retrieval
+       grep optimized with -i, -v, or no flags; not -e.
+
+Barrier: stage 1. Everything after it: post-retrieval.
+
+$ tail -n 100 /log/acme/api/main.log | grep y
+  1  grep y  post-retrieval
+       Filters rows a head or tail already kept.
+       Try: Filter first: that gives the last N matches, not the matches among the last N.
+
+Barrier: stage 1. Everything after it: post-retrieval.
+

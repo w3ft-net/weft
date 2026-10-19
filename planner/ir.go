@@ -143,6 +143,10 @@ const (
 	reasonCutArgs
 	reasonCutFields
 	reasonCutDelimiter
+
+	// reasonCodeCount ends the list: every code below it needs advice
+	// (see adviceFor).
+	reasonCodeCount
 )
 
 // reason is a reasonCode with the detail its message names (a flag, a
