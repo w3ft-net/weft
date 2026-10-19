@@ -77,8 +77,7 @@ customers), so the rules are explicit:
 2. **Unknown higher version.** A weftd that knows versions up to K reads the
    first K-worth of values from a higher-version header, ignores the rest,
    and keeps the body. Because the header is closed by the second `\x1e`,
-   the body is always findable. The source's status reports "SDK is newer
-   than this weftd; upgrade".
+   the body is always findable.
 3. **Breaking change.** A reorder or redefinition needs a new leading
    sentinel, not a version bump. Expected to be never.
 4. **Legacy envelope.** `\x1eTRACE\x1eline` has no `\x1f` and no `v<digits>`
@@ -87,10 +86,9 @@ customers), so the rules are explicit:
    0.2.0 is released, but the tracing SDK surface is marked not started in
    request-tracing.md.)
 5. **Old weftd, new SDK.** A weftd that predates header support reads the
-   control bytes into `raw`, and its wizard samples them. Mitigation is
-   rollout order: ship weftd with header support first, then the SDKs, and
-   raise `WeftdHardFloor` (`coordinator/service/server.go`) to that version.
-   The SDK docs state the minimum weftd.
+   control bytes into `raw`, and its wizard samples them. We do not guard
+   against this: weftd auto-updates, and we are not waiting on or detecting
+   stragglers. Release weftd first and the window closes on its own.
 6. **An SDK file is SDK-only.** The handler writes to its own file and
    nothing else does, so every line has a header. A headerless line in an
    SDK-fed source is a fault, not a design case: weftd ships it with ingest
@@ -217,35 +215,17 @@ from `startup.sh` (the audit stream becomes `kind: queries` rows).
 
 ## Decisions on the earlier open questions
 
-### Old weftd, new SDK: detect and flag, do not raise the hard floor
-
-`WeftdHardFloor` rejects every `IngestStream` below a version
-(`coordinator/service/server.go`), which would cut off all pre-header agents
-including hosts with no SDK. Instead:
-
-- weftd sets the derived-fields flag on `SubmitSampleRequest` only when it
-  understands headers.
-- A sample containing `\x1e` header lines with no flag came from an older
-  weftd. The coordinator sets the source status to "written by the weft SDK;
-  upgrade weftd to >= X" and does not open the wizard on the junk.
-- `MinWeftdVersion` (advisory, via `AgentsAtOrBelow`) lists the hosts still
-  below X so an operator can see who has not upgraded.
-
-X is the first weftd release with header support (the next minor after
-0.31.0).
-
 ### Release sequencing
 
-1. Coordinator and proto: the new `SubmitSampleRequest` field is additive,
-   so older agents are unaffected. Deploy first.
-2. Cut the weftd release with header support. The fleet self-upgrades
-   (strictly-newer, restart-gated); hosts on a pinned `.deb` need a repin.
-3. Release `weft-go` and `weft-py` with the file handler **default-off**:
-   the SDK only writes headered lines when `WEFT_LOG_FILE` (or the option) is
-   set.
-4. Bump `weft-go` in `go.mod` (currently v0.5.0) and convert weft's own
-   units and `startup.sh`, once `AgentsAtOrBelow` shows no weftd below X on
-   those hosts.
+No version gates or upgrade detection. Release in this order and let
+auto-update do the rest:
+
+1. Coordinator and proto (the new `SubmitSampleRequest` field is additive).
+2. weftd with header support.
+3. `weft-go` and `weft-py`, with the file handler off until a log file is
+   configured.
+4. Bump `weft-go` in `go.mod` (currently v0.5.0) and convert weft's own units
+   and `startup.sh`.
 
 ### Go capture
 
@@ -276,12 +256,6 @@ Logger to a swappable writer (`switchWriter`), in the stdlib line shape. The
 header writer is a wrapper around that writer, so moving it to
 `kind: queries` is a writer change, not a rewrite. Its schema stops being
 detected from the line shape, because the header supplies the fields.
-
-## Open questions
-
-- Exact release number X for the header-supporting weftd.
-- Whether `AgentsAtOrBelow` is enough, or the coordinator should also block
-  the SDK-fed setup until every agent for the namespace is at X.
 
 ## Work
 
