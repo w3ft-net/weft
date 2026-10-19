@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"strconv"
 	"strings"
 	"time"
@@ -12,7 +13,6 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // Ephemeral archive export resources (docs/plans/ephemeral-archive-export.md):
@@ -100,7 +100,7 @@ func NewExportResources(region string, subnets map[string]string, launchTemplate
 	}
 	imageID, err := resolveOwnImageID(context.Background())
 	if err != nil {
-		weftlog.Infof(context.Background(), "export-resources: could not resolve own AMI from IMDS (%v); export launches will use the launch template AMI", err)
+		weftsdk.Infof(context.Background(), "export-resources: could not resolve own AMI from IMDS (%v); export launches will use the launch template AMI", err)
 		imageID = ""
 	}
 	return NewExportResourcesWithClient(ec2.NewFromConfig(cfg), subnets, launchTemplate, imageID), nil
@@ -135,7 +135,7 @@ func (x *ExportResources) CreateSnapshot(ctx context.Context, spec SnapshotSpec)
 	}
 	for _, s := range existing.Snapshots {
 		if s.SnapshotId != nil && s.State != ec2types.SnapshotStateError {
-			weftlog.Infof(ctx, "export-resources: adopting snapshot %s already tagged for %s attempt %d", *s.SnapshotId, spec.ShardID, spec.Attempt)
+			weftsdk.Infof(ctx, "export-resources: adopting snapshot %s already tagged for %s attempt %d", *s.SnapshotId, spec.ShardID, spec.Attempt)
 			return *s.SnapshotId, nil
 		}
 	}
@@ -214,7 +214,7 @@ func (x *ExportResources) LaunchInstance(ctx context.Context, spec ExportSpec) (
 	for _, r := range found.Reservations {
 		for _, inst := range r.Instances {
 			if inst.InstanceId != nil {
-				weftlog.Infof(ctx, "export-resources: adopting in-flight export instance %s for %s attempt %d", *inst.InstanceId, spec.ShardID, spec.Attempt)
+				weftsdk.Infof(ctx, "export-resources: adopting in-flight export instance %s for %s attempt %d", *inst.InstanceId, spec.ShardID, spec.Attempt)
 				return *inst.InstanceId, nil
 			}
 		}

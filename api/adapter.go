@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/graybeardcorp/weft/ingest"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -373,7 +373,7 @@ func accumulateSample(ctx context.Context, st *store.Store, classifier ingest.Cl
 			return
 		}
 		if err := st.UpdateLogGroupDetection(namespaceID, service, string(sampleJSON), string(detectionJSON)); err != nil {
-			weftlog.Infof(ctx, "classify: update detection for source %s/%s: %v", namespace, service, err)
+			weftsdk.Infof(ctx, "classify: update detection for source %s/%s: %v", namespace, service, err)
 		}
 	})
 	detectionJSON, err := json.Marshal(detection)

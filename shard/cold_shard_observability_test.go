@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
+	"github.com/graybeardcorp/weft/internal/logtest"
 	weftsdk "github.com/w3ft-net/weft-go"
 )
 
@@ -17,7 +17,7 @@ import (
 // previously-silent failure now leaves a breadcrumb.
 func captureLog(t *testing.T, fn func()) string {
 	t.Helper()
-	return weftlog.Capture(fn)
+	return logtest.Capture(fn)
 }
 
 // TestQueryToSink_LogsStreamReadError: a 200 response whose body is not
@@ -138,7 +138,7 @@ func TestQueryToSink_TraceIDInLogWhenPresent(t *testing.T) {
 	if !strings.Contains(out, "obs-traced") || !strings.Contains(out, "query completed") {
 		t.Fatalf("successful query should log completion; got %q", out)
 	}
-	if !strings.Contains(out, "trace_id=test-trace-123") {
+	if !strings.Contains(out, `"trace_id":"test-trace-123"`) {
 		t.Fatalf("traced query's log should include trace_id; got %q", out)
 	}
 }

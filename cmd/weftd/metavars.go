@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"os"
 	"sort"
 	"sync"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/weftd"
 	"gopkg.in/yaml.v3"
@@ -85,9 +85,9 @@ func buildMetavariables(ctx context.Context, where string, cfg map[string]Metava
 			return nil, fmt.Errorf("%s.%s: %w", where, col, err)
 		}
 		set[col] = r
-		weftlog.Infof(ctx, "%s.%s: from %s", where, col, desc)
+		weftsdk.Infof(ctx, "%s.%s: from %s", where, col, desc)
 		if mc.Env != "" && r.Current() == "" {
-			weftlog.Infof(ctx, "%s.%s: environment variable %s is unset", where, col, mc.Env)
+			weftsdk.Infof(ctx, "%s.%s: environment variable %s is unset", where, col, mc.Env)
 		}
 	}
 	return set, nil

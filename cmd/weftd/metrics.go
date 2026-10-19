@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"os"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -68,7 +68,7 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 	if mcfg.Interval != "" {
 		d, err := time.ParseDuration(mcfg.Interval)
 		if err != nil {
-			weftlog.Infof(ctx, "metrics: bad interval %q, using 30s", mcfg.Interval)
+			weftsdk.Infof(ctx, "metrics: bad interval %q, using 30s", mcfg.Interval)
 		} else {
 			interval = d
 		}
@@ -84,9 +84,9 @@ func runMetricsCollector(ctx context.Context, client pb.WeftCoordinatorClient,
 		}
 	}
 
-	weftlog.Infof(ctx, "metrics: interval=%s collectors=%v", interval, mcfg.Collectors)
+	weftsdk.Infof(ctx, "metrics: interval=%s collectors=%v", interval, mcfg.Collectors)
 	if effectiveDeployment() == "" {
-		weftlog.Errorf(ctx, "metrics: no deployment is set, so there is nowhere to write host metrics; set `deployment:` (or a deployment metavariable) and they start on their own")
+		weftsdk.Errorf(ctx, "metrics: no deployment is set, so there is nowhere to write host metrics; set `deployment:` (or a deployment metavariable) and they start on their own")
 	}
 
 	ss := &streamState{}
@@ -461,7 +461,7 @@ func sendRowWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 		if err := ss.stream.Send(row); err == nil {
 			return nil
 		}
-		weftlog.Infof(ctx, "[%s] stream broken, reconnecting", label)
+		weftsdk.Infof(ctx, "[%s] stream broken, reconnecting", label)
 		ss.stream = nil
 	}
 
@@ -472,7 +472,7 @@ func sendRowWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient,
 	ss.stream = stream
 
 	if err := ss.stream.Send(row); err != nil {
-		weftlog.Errorf(ctx, "[%s] send failed after reconnect: %v", label, err)
+		weftsdk.Errorf(ctx, "[%s] send failed after reconnect: %v", label, err)
 		ss.stream = nil
 	}
 	return nil

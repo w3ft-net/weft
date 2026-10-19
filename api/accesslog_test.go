@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/weft/auth"
-	"github.com/graybeardcorp/weft/internal/weftlog"
+	"github.com/graybeardcorp/weft/internal/logtest"
 )
 
 // TestAccessLogAttributesUser pins the AccessLog identity fix.
@@ -32,7 +32,7 @@ func TestAccessLogAttributesUser(t *testing.T) {
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	var buf bytes.Buffer
-	t.Cleanup(weftlog.CaptureInto(&buf))
+	t.Cleanup(logtest.CaptureInto(&buf))
 
 	// Authenticated request → must attribute the user id.
 	buf.Reset()

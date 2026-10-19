@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"strings"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 )
@@ -48,7 +48,7 @@ func NewDLQ(region, bucket string) *DLQ {
 
 	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))
 	if err != nil {
-		weftlog.Errorf(context.Background(), "dlq: failed to load AWS config: %v", err)
+		weftsdk.Errorf(context.Background(), "dlq: failed to load AWS config: %v", err)
 		return nil
 	}
 
@@ -95,10 +95,10 @@ func (d *DLQ) Write(rows []*pb.LogRow) string {
 		Body:   bytes.NewReader(buf.Bytes()),
 	})
 	if err != nil {
-		weftlog.Errorf(context.Background(), "dlq: failed to write %d rows to s3://%s/%s: %v", len(rows), d.bucket, key, err)
+		weftsdk.Errorf(context.Background(), "dlq: failed to write %d rows to s3://%s/%s: %v", len(rows), d.bucket, key, err)
 		return ""
 	}
 
-	weftlog.Infof(context.Background(), "dlq: wrote %d rows to s3://%s/%s", len(rows), d.bucket, key)
+	weftsdk.Infof(context.Background(), "dlq: wrote %d rows to s3://%s/%s", len(rows), d.bucket, key)
 	return key
 }

@@ -12,6 +12,7 @@ package logdb
 import (
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"log"
 	"os"
 	"strconv"
@@ -21,7 +22,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -83,9 +83,9 @@ func Start(cfg Config) (*Provisioner, error) {
 	if err := reg.LoadFromStore(func(sh *Shard) (shard.Shard, error) {
 		return ReconstructShard(sh, reconstructCfg)
 	}); err != nil {
-		weftlog.Warnf(context.Background(), "warning: load shards from store: %v", err)
+		weftsdk.Warnf(context.Background(), "warning: load shards from store: %v", err)
 	} else {
-		weftlog.Infof(context.Background(), "coordinator: restored shards from store")
+		weftsdk.Infof(context.Background(), "coordinator: restored shards from store")
 	}
 
 	subnets := parseShardSubnets()
@@ -121,7 +121,7 @@ func parseShardSubnets() map[string]map[string]string {
 			az, subnet, ok := strings.Cut(strings.TrimSpace(pair), "=")
 			az, subnet = strings.TrimSpace(az), strings.TrimSpace(subnet)
 			if !ok || az == "" || subnet == "" {
-				weftlog.Warnf(context.Background(), "warning: %s: malformed pair %q (want az=subnet), skipping", env, pair)
+				weftsdk.Warnf(context.Background(), "warning: %s: malformed pair %q (want az=subnet), skipping", env, pair)
 				continue
 			}
 			azMap[az] = subnet
@@ -158,7 +158,7 @@ func parseShardVolumeSizes() map[string]int32 {
 		}
 		gb, err := strconv.Atoi(raw)
 		if err != nil || gb <= 0 {
-			weftlog.Warnf(context.Background(), "warning: %s=%q is not a positive integer, ignoring (tier %s falls back to %d GiB)", env, raw, tier, defaultShardVolumeGB)
+			weftsdk.Warnf(context.Background(), "warning: %s=%q is not a positive integer, ignoring (tier %s falls back to %d GiB)", env, raw, tier, defaultShardVolumeGB)
 			continue
 		}
 		out[tier] = int32(gb)
@@ -221,7 +221,7 @@ func parseExportConfig(tierSubnets map[string]map[string]string) exportConfig {
 	if raw := strings.TrimSpace(os.Getenv("EXPORT_MAX_CONCURRENT")); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 {
-			weftlog.Warnf(context.Background(), "warning: EXPORT_MAX_CONCURRENT=%q is not a positive integer, using the default (%d)", raw, defaultMaxConcurrentExports)
+			weftsdk.Warnf(context.Background(), "warning: EXPORT_MAX_CONCURRENT=%q is not a positive integer, using the default (%d)", raw, defaultMaxConcurrentExports)
 		} else {
 			c.MaxConcurrent = n
 		}
@@ -252,22 +252,22 @@ func (c exportConfig) usable(parquetDir string) (bool, string) {
 func wireArchiveExport(ctx context.Context, provConfig *ProvisionerConfig, region string, tierSubnets map[string]map[string]string) {
 	c := parseExportConfig(tierSubnets)
 	if ok, why := c.usable(provConfig.ParquetDir); !ok {
-		weftlog.Infof(ctx, "provisioner: archive export disabled (%s); shards archive in process", why)
+		weftsdk.Infof(ctx, "provisioner: archive export disabled (%s); shards archive in process", why)
 		return
 	}
 	exports, err := NewExportResources(region, c.Subnets, c.LaunchTemplate)
 	if err != nil {
-		weftlog.Infof(ctx, "provisioner: archive export disabled, ExportResources: %v; shards archive in process", err)
+		weftsdk.Infof(ctx, "provisioner: archive export disabled, ExportResources: %v; shards archive in process", err)
 		return
 	}
 	manifests, err := shard.NewS3ManifestStore(ctx, region)
 	if err != nil {
-		weftlog.Infof(ctx, "provisioner: archive export disabled, manifest store: %v; shards archive in process", err)
+		weftsdk.Infof(ctx, "provisioner: archive export disabled, manifest store: %v; shards archive in process", err)
 		return
 	}
 	outputs, err := NewS3ObjectDeleter(ctx, region)
 	if err != nil {
-		weftlog.Infof(ctx, "provisioner: archive export disabled, output deleter: %v; shards archive in process", err)
+		weftsdk.Infof(ctx, "provisioner: archive export disabled, output deleter: %v; shards archive in process", err)
 		return
 	}
 	provConfig.Exports = exports
@@ -278,7 +278,7 @@ func wireArchiveExport(ctx context.Context, provConfig *ProvisionerConfig, regio
 	if maxConcurrent == 0 {
 		maxConcurrent = defaultMaxConcurrentExports
 	}
-	weftlog.Infof(ctx, "provisioner: archive export enabled (template=%s subnets=%v max_concurrent=%d)",
+	weftsdk.Infof(ctx, "provisioner: archive export enabled (template=%s subnets=%v max_concurrent=%d)",
 		c.LaunchTemplate, c.Subnets, maxConcurrent)
 }
 
@@ -301,7 +301,7 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 		return nil, fmt.Errorf("EC2 provisioner: %w", err)
 	}
 	var launcher ShardLauncher = ep
-	weftlog.Infof(context.Background(), "provisioner: EC2Provisioner (direct, per-AZ) for %d tier(s): subnets=%v templates=%v", len(subnets), subnets, templates)
+	weftsdk.Infof(context.Background(), "provisioner: EC2Provisioner (direct, per-AZ) for %d tier(s): subnets=%v templates=%v", len(subnets), subnets, templates)
 
 	provConfig := DefaultProvisionerConfig()
 	provConfig.ShardSecret = cfg.ShardSecret
@@ -310,7 +310,7 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 	provConfig.VolumeSizesGB = parseShardVolumeSizes()
 	provConfig.Holder = cfg.Holder
 	wireArchiveExport(cfg.Ctx, &provConfig, cfg.AWSRegion, subnets)
-	weftlog.Infof(context.Background(), "provisioner: per-tier volume sizes (GiB) from env: %v (tiers absent fall back to %d)", provConfig.VolumeSizesGB, defaultShardVolumeGB)
+	weftsdk.Infof(context.Background(), "provisioner: per-tier volume sizes (GiB) from env: %v (tiers absent fall back to %d)", provConfig.VolumeSizesGB, defaultShardVolumeGB)
 	prov := NewProvisioner(reg, launcher, provConfig)
 	prov.SetVolumeManager(vm)
 
@@ -340,7 +340,7 @@ func startArchiveSweeper(ctx context.Context, prov *Provisioner) {
 		sw.Resources = lister
 	}
 	sw.Start(ctx)
-	weftlog.Infof(ctx, "coordinator: archive sweeper started (orphan removal=%v, stuck-archive alert after %s)", sw.Resources != nil, archivingStuckAfter)
+	weftsdk.Infof(ctx, "coordinator: archive sweeper started (orphan removal=%v, stuck-archive alert after %s)", sw.Resources != nil, archivingStuckAfter)
 }
 
 // startRetentionJanitor wires and starts the daily archive retention
@@ -356,24 +356,24 @@ func startRetentionJanitor(ctx context.Context, prov *Provisioner, region string
 	var compactor shard.Compactor
 	if url := os.Getenv("COMPACTOR_FUNCTION_URL"); url != "" {
 		compactor = shard.NewLambdaCompactor(url, lambdaSigningCreds(ctx, region), region)
-		weftlog.Infof(ctx, "janitor: compactor Lambda at %s", url)
+		weftsdk.Infof(ctx, "janitor: compactor Lambda at %s", url)
 	} else {
 		compactor = shard.LocalCompactor{S3: shard.S3ConfigFromEnv()}
-		weftlog.Infof(ctx, "janitor: in-process compactor (COMPACTOR_FUNCTION_URL unset)")
+		weftsdk.Infof(ctx, "janitor: in-process compactor (COMPACTOR_FUNCTION_URL unset)")
 	}
 
 	var deleter ObjectDeleter = LocalFileDeleter{}
 	if strings.HasPrefix(prov.config.ParquetDir, "s3://") {
 		d, err := NewS3ObjectDeleter(ctx, region)
 		if err != nil {
-			weftlog.Infof(ctx, "janitor: S3 deleter unavailable, not starting: %v", err)
+			weftsdk.Infof(ctx, "janitor: S3 deleter unavailable, not starting: %v", err)
 			return
 		}
 		deleter = d
 	}
 
 	NewProvisionerJanitor(prov, compactor, deleter, 24*time.Hour).Start(ctx)
-	weftlog.Infof(ctx, "coordinator: retention janitor enabled (daily)")
+	weftsdk.Infof(ctx, "coordinator: retention janitor enabled (daily)")
 }
 
 // lambdaSigningCreds loads the credential provider used to SigV4-sign
@@ -382,7 +382,7 @@ func startRetentionJanitor(ctx context.Context, prov *Provisioner, region string
 func lambdaSigningCreds(ctx context.Context, region string) aws.CredentialsProvider {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
 	if err != nil {
-		weftlog.Infof(ctx, "janitor: aws creds for compactor signing: %v", err)
+		weftsdk.Infof(ctx, "janitor: aws creds for compactor signing: %v", err)
 		return nil
 	}
 	return cfg.Credentials
@@ -406,7 +406,7 @@ func startDev(cfg Config, reg *ShardRegistry) (*Provisioner, error) {
 	prov.LoadStateMachines()
 
 	prov.Start(cfg.Ctx)
-	weftlog.Infof(context.Background(), "provisioner: started with docker launcher (dev mode), image=%s data=%s",
+	weftsdk.Infof(context.Background(), "provisioner: started with docker launcher (dev mode), image=%s data=%s",
 		launcher.Image, launcher.HostDataRoot)
 	return prov, nil
 }

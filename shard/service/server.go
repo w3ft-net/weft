@@ -13,7 +13,6 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	weftcfg "github.com/graybeardcorp/weft/config"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 )
@@ -189,7 +188,7 @@ func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.C
 	s.id = req.ShardId
 	s.apps = req.Services
 	s.heartbeatToken = req.HeartbeatToken
-	weftlog.Infof(ctx, "shard configured: id=%s apps=%v window=[%s, %s]",
+	weftsdk.Infof(ctx, "shard configured: id=%s apps=%v window=[%s, %s]",
 		req.ShardId, req.Services, req.WindowStart, req.WindowEnd)
 
 	return &pb.ConfigureResponse{}, nil
@@ -207,7 +206,7 @@ func (s *Server) Archive(ctx context.Context, req *pb.ArchiveRequest) (*pb.Archi
 	if err != nil {
 		return nil, fmt.Errorf("archive shard %s: %w", s.id, err)
 	}
-	weftlog.Infof(ctx, "shard %s: archived to %s", s.id, path)
+	weftsdk.Infof(ctx, "shard %s: archived to %s", s.id, path)
 	return &pb.ArchiveResponse{
 		ParquetPath:   path,
 		CustomerStats: shard.CustomerStatsToProto(stats),
@@ -264,13 +263,13 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 	ctx, span := weftsdk.StartSpan(ctx, "shard.Query")
 	defer span.End()
 	if _, ok := weftsdk.TraceIDFromContext(ctx); ok {
-		weftlog.Infof(ctx, "shard %s: query (sql=%s)", s.id, req.Sql)
+		weftsdk.Infof(ctx, "shard %s: query (sql=%s)", s.id, req.Sql)
 	}
 
 	rows, err := ds.QueryContext(ctx, req.Sql, stringArgsToAny(req.Args)...)
 	if err != nil {
 		span.RecordError(err)
-		weftlog.Errorf(ctx, "shard %s: query error: %v (sql=%s args=%v)", s.id, err, req.Sql, req.Args)
+		weftsdk.Errorf(ctx, "shard %s: query error: %v (sql=%s args=%v)", s.id, err, req.Sql, req.Args)
 		return err
 	}
 
@@ -333,7 +332,7 @@ func (s *Server) IngestStream(stream pb.ShardQuery_IngestStreamServer) error {
 
 		if len(rows) >= 100 {
 			if err := ds.Ingest(stream.Context(), rows, nil); err != nil {
-				weftlog.Infof(stream.Context(), "ingest-stream: %v", err)
+				weftsdk.Infof(stream.Context(), "ingest-stream: %v", err)
 			}
 			rows = rows[:0]
 		}
@@ -341,10 +340,10 @@ func (s *Server) IngestStream(stream pb.ShardQuery_IngestStreamServer) error {
 
 	if len(rows) > 0 {
 		if err := ds.Ingest(stream.Context(), rows, nil); err != nil {
-			weftlog.Infof(stream.Context(), "ingest-stream flush: %v", err)
+			weftsdk.Infof(stream.Context(), "ingest-stream flush: %v", err)
 		}
 	}
 
-	weftlog.Infof(stream.Context(), "ingest-stream: received %d rows", count)
+	weftsdk.Infof(stream.Context(), "ingest-stream: received %d rows", count)
 	return stream.SendAndClose(&pb.IngestStreamResponse{RowsReceived: count})
 }

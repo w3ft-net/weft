@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"sort"
 	"sync"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/qmuntal/stateless"
 	"gorm.io/gorm"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -212,7 +212,7 @@ func (b *BucketSM) onEnterWarming(ctx context.Context, args ...any) error {
 // repeated calls converge to exactly Target shards.
 func (b *BucketSM) mintWarmingCohort(ctx context.Context, now time.Time) error {
 	if b.controller == nil || b.Target <= 0 {
-		weftlog.Infof(ctx, "bucketsm %d (%s): WARMING — no controller or target<=0, nothing to mint", b.ID, b.Label)
+		weftsdk.Infof(ctx, "bucketsm %d (%s): WARMING — no controller or target<=0, nothing to mint", b.ID, b.Label)
 		return nil
 	}
 
@@ -265,10 +265,10 @@ func (b *BucketSM) mintWarmingCohort(ctx context.Context, now time.Time) error {
 			StripeIndex: si,
 		})
 		if err != nil {
-			weftlog.Infof(ctx, "bucketsm %d (%s): mint stripe %d: %v", b.ID, b.Label, si, err)
+			weftsdk.Infof(ctx, "bucketsm %d (%s): mint stripe %d: %v", b.ID, b.Label, si, err)
 			continue
 		}
-		weftlog.Infof(ctx, "bucketsm %d (%s): WARMING minted %s (stripe=%d window %s–%s)",
+		weftsdk.Infof(ctx, "bucketsm %d (%s): WARMING minted %s (stripe=%d window %s–%s)",
 			b.ID, b.Label, id, si, warmStart.Format(time.RFC3339), warmEnd.Format(time.RFC3339))
 	}
 	return nil
@@ -281,7 +281,7 @@ func (b *BucketSM) mintWarmingCohort(ctx context.Context, now time.Time) error {
 // ones; the bucket never gaps the write path.
 func (b *BucketSM) onEnterRotating(ctx context.Context, args ...any) error {
 	if b.controller == nil {
-		weftlog.Infof(ctx, "bucketsm %d (%s): enter ROTATING — no controller, nothing to rotate", b.ID, b.Label)
+		weftsdk.Infof(ctx, "bucketsm %d (%s): enter ROTATING — no controller, nothing to rotate", b.ID, b.Label)
 		return nil
 	}
 	ing, err := b.shardsInStates(servingCohort...)
@@ -295,7 +295,7 @@ func (b *BucketSM) onEnterRotating(ctx context.Context, args ...any) error {
 	for _, r := range ing {
 		if windowStartBefore(r, warmStart) {
 			if err := b.controller.FireShard(ctx, r.ID, TriggerRotateRequested); err != nil {
-				weftlog.Infof(ctx, "bucketsm %d (%s): rotate %s: %v", b.ID, b.Label, r.ID, err)
+				weftsdk.Infof(ctx, "bucketsm %d (%s): rotate %s: %v", b.ID, b.Label, r.ID, err)
 			}
 		}
 	}
@@ -309,7 +309,7 @@ func (b *BucketSM) onEnterRotating(ctx context.Context, args ...any) error {
 // the oldest shards (closest to their own rotation anyway) stay hot.
 func (b *BucketSM) onEnterScalingDown(ctx context.Context, args ...any) error {
 	if b.controller == nil {
-		weftlog.Infof(ctx, "bucketsm %d (%s): enter SCALING_DOWN — no controller, nothing to drain", b.ID, b.Label)
+		weftsdk.Infof(ctx, "bucketsm %d (%s): enter SCALING_DOWN — no controller, nothing to drain", b.ID, b.Label)
 		return nil
 	}
 	ing, err := b.shardsInStates(servingCohort...)
@@ -329,7 +329,7 @@ func (b *BucketSM) onEnterScalingDown(ctx context.Context, args ...any) error {
 	})
 	for _, r := range ing[:excess] {
 		if err := b.controller.FireShard(ctx, r.ID, TriggerRotateRequested); err != nil {
-			weftlog.Infof(ctx, "bucketsm %d (%s): scale-down rotate %s: %v", b.ID, b.Label, r.ID, err)
+			weftsdk.Infof(ctx, "bucketsm %d (%s): scale-down rotate %s: %v", b.ID, b.Label, r.ID, err)
 		}
 	}
 	return nil
@@ -367,7 +367,7 @@ func (b *BucketSM) Evaluate(ctx context.Context) error {
 	now := b.clock().UTC()
 
 	if err := b.sweepRetention(ctx, now); err != nil {
-		weftlog.Infof(ctx, "bucketsm %d (%s): retention sweep: %v", b.ID, b.Label, err)
+		weftsdk.Infof(ctx, "bucketsm %d (%s): retention sweep: %v", b.ID, b.Label, err)
 	}
 
 	switch st {
@@ -553,7 +553,7 @@ func (b *BucketSM) sweepRetention(ctx context.Context, now time.Time) error {
 			continue
 		}
 		if err := b.controller.FireShard(ctx, r.ID, TriggerArchiveRequested); err != nil {
-			weftlog.Infof(ctx, "bucketsm %d (%s): archive %s: %v", b.ID, b.Label, r.ID, err)
+			weftsdk.Infof(ctx, "bucketsm %d (%s): archive %s: %v", b.ID, b.Label, r.ID, err)
 		}
 	}
 	return nil

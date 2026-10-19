@@ -4,12 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"sync"
 
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -61,7 +61,7 @@ func (r *redisFanout) recvLoop(deliver func(rows []*pb.LogRow)) {
 	for msg := range r.ps.Channel() {
 		row := &pb.LogRow{}
 		if err := proto.Unmarshal([]byte(msg.Payload), row); err != nil {
-			weftlog.Infof(context.Background(), "tailfanout: redis unmarshal row: %v", err)
+			weftsdk.Infof(context.Background(), "tailfanout: redis unmarshal row: %v", err)
 			store.LogTailFanoutEvent(context.Background(), "unmarshal", err)
 			continue
 		}
@@ -103,7 +103,7 @@ func (r *redisFanout) announceInterest(ctx context.Context, t tailTopic, add boo
 		r.patterns[t] = p
 		r.mu.Unlock()
 		if err := r.ps.PSubscribe(ctx, p); err != nil {
-			weftlog.Infof(ctx, "tailfanout: redis psubscribe %s: %v", p, err)
+			weftsdk.Infof(ctx, "tailfanout: redis psubscribe %s: %v", p, err)
 			store.LogTailFanoutEvent(ctx, "psubscribe", err)
 		}
 		return
@@ -112,7 +112,7 @@ func (r *redisFanout) announceInterest(ctx context.Context, t tailTopic, add boo
 	delete(r.patterns, t)
 	r.mu.Unlock()
 	if err := r.ps.PUnsubscribe(ctx, p); err != nil {
-		weftlog.Infof(ctx, "tailfanout: redis punsubscribe %s: %v", p, err)
+		weftsdk.Infof(ctx, "tailfanout: redis punsubscribe %s: %v", p, err)
 		store.LogTailFanoutEvent(ctx, "punsubscribe", err)
 	}
 }
@@ -128,14 +128,14 @@ func (r *redisFanout) publish(rows []*pb.LogRow) {
 	for _, row := range rows {
 		data, err := proto.Marshal(row)
 		if err != nil {
-			weftlog.Infof(ctx, "tailfanout: redis marshal row: %v", err)
+			weftsdk.Infof(ctx, "tailfanout: redis marshal row: %v", err)
 			store.LogTailFanoutEvent(ctx, "marshal", err)
 			continue
 		}
 		pipe.Publish(ctx, channelFor(row), data)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
-		weftlog.Infof(ctx, "tailfanout: redis publish: %v", err)
+		weftsdk.Infof(ctx, "tailfanout: redis publish: %v", err)
 		store.LogTailFanoutEvent(ctx, "publish", err)
 	}
 }

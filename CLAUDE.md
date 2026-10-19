@@ -38,7 +38,7 @@ Inter-node protocol is gRPC (shard queries, weftd ingest, tail subscriptions). C
 
 ## Logging
 
-Server code logs with `weftlog.Infof/Warnf/Errorf(ctx, format, args...)` (`internal/weftlog`), never stdlib `log.Printf`. Pass the request's ctx: the weft SDK's slog handler appends `trace_id=<id>` from it, so don't spell the ID in the message. Use `context.Background()` only where there is truly no request (boot, tickers, cron). Each server `main` calls `weftlog.Init(os.Stderr)` first. Lines keep the stdlib shape (`2006/01/02 15:04:05 message`) because the weft/* sources' schemas are detected from it. `TestNoStdlibLogPrintsOutsideTerminalTools` enforces this; operator CLIs (`weft-admin`, `weft-demo-seed`, `docgen`, `loadtest`, `loom-producer`, `weft-migrate`) are exempt. In tests, assert on output with `weftlog.Capture`.
+Server code logs with `weftsdk.Infof/Warnf/Errorf(ctx, format, args...)` (`weftsdk "github.com/w3ft-net/weft-go"`), never stdlib `log.Printf`. Pass the request's ctx: the SDK records its trace ID in the line header, so don't spell the ID in the message. Use `context.Background()` only where there is truly no request (boot, tickers, cron). Each server `main` calls `weftsdk.InitLogging("", os.Stderr).CaptureStdio()` first: with `WEFT_LOG_FILE` set (the units set it) lines go to that file with weftd headers and stdout/stderr are captured into it, so the weft/* sources need no schema extraction; without it they are JSON on stderr. `TestNoStdlibLogPrintsOutsideTerminalTools` (`internal/logtest`) enforces this; operator CLIs (`weft-admin`, `weft-demo-seed`, `docgen`, `loadtest`, `loom-producer`, `weft-migrate`) are exempt. In tests, assert on output with `logtest.Capture` (JSON lines).
 
 ## Multi-tenancy
 

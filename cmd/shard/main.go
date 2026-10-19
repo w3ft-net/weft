@@ -22,13 +22,12 @@ import (
 
 	"github.com/graybeardcorp/weft/auth"
 	weftcfg "github.com/graybeardcorp/weft/config"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	shardsvc "github.com/graybeardcorp/weft/shard/service"
 )
 
 func main() {
-	weftlog.Init(os.Stderr)
+	weftsdk.InitLogging("", os.Stderr).CaptureStdio()
 	if len(os.Args) > 1 && os.Args[1] == "export" {
 		os.Exit(runExportCommand(os.Args[2:]))
 	}
@@ -52,13 +51,13 @@ func main() {
 	if id, err := shardIdentityHint(*dataDir); err != nil {
 		log.Fatalf("inspect shard.json: %v", err)
 	} else if id != "" {
-		weftlog.Infof(context.Background(), "found existing identity %s — opening db at %s", id, dbPath)
+		weftsdk.Infof(context.Background(), "found existing identity %s — opening db at %s", id, dbPath)
 		srv, err = shardsvc.NewServerFromIdentity(*dataDir, dbPath)
 		if err != nil {
 			log.Fatalf("reopen from identity: %v", err)
 		}
 	} else {
-		weftlog.Infof(context.Background(), "no shard.json in %s — starting blank, awaiting Configure", *dataDir)
+		weftsdk.Infof(context.Background(), "no shard.json in %s — starting blank, awaiting Configure", *dataDir)
 		srv = shardsvc.NewBlankServer(*dataDir, dbPath)
 	}
 
@@ -106,9 +105,9 @@ func main() {
 	pb.RegisterShardQueryServer(gs, srv)
 
 	go func() {
-		weftlog.Infof(context.Background(), "shard gRPC listening on :%d", *grpcPort)
+		weftsdk.Infof(context.Background(), "shard gRPC listening on :%d", *grpcPort)
 		if err := gs.Serve(lis); err != nil {
-			weftlog.Errorf(context.Background(), "grpc serve error: %v", err)
+			weftsdk.Errorf(context.Background(), "grpc serve error: %v", err)
 		}
 	}()
 
@@ -143,16 +142,16 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		s := <-sigs
-		weftlog.Infof(context.Background(), "shard: received %s, gracefully stopping", s)
+		weftsdk.Infof(context.Background(), "shard: received %s, gracefully stopping", s)
 		gs.GracefulStop()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(shutdownCtx)
 	}()
 
-	weftlog.Infof(context.Background(), "shard HTTP listening on :%d", *httpPort)
+	weftsdk.Infof(context.Background(), "shard HTTP listening on :%d", *httpPort)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		weftlog.Errorf(context.Background(), "http serve error: %v", err)
+		weftsdk.Errorf(context.Background(), "http serve error: %v", err)
 		os.Exit(1)
 	}
 }
@@ -270,7 +269,7 @@ func runHeartbeat(coordAddr string, grpcPort int, hbInterval time.Duration, srv 
 
 	conn, err := grpc.NewClient(coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		weftlog.Infof(context.Background(), "heartbeat: connect to coordinator: %v", err)
+		weftsdk.Infof(context.Background(), "heartbeat: connect to coordinator: %v", err)
 		return
 	}
 	client := pb.NewWeftCoordinatorClient(conn)
@@ -335,7 +334,7 @@ func sendHeartbeat(client pb.WeftCoordinatorClient, addr, instanceID string, srv
 	}
 
 	if _, err := client.Heartbeat(ctx, req); err != nil {
-		weftlog.Infof(ctx, "heartbeat: %v", err)
+		weftsdk.Infof(ctx, "heartbeat: %v", err)
 		return false
 	}
 	return true

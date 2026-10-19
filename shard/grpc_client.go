@@ -15,7 +15,6 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/graybeardcorp/weft/auth"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -133,7 +132,7 @@ func (s *GRPCShard) Query(ctx context.Context, sql string, args ...any) ([]*pb.R
 		}
 		lastErr = err
 		if attempt < maxRetryAttempts-1 {
-			weftlog.Errorf(ctx, "shard %s: Query attempt %d failed (%v); retrying", s.id, attempt+1, err)
+			weftsdk.Errorf(ctx, "shard %s: Query attempt %d failed (%v); retrying", s.id, attempt+1, err)
 			time.Sleep(retryBackoff)
 		}
 	}
@@ -175,20 +174,20 @@ func (s *GRPCShard) QueryToSink(ctx context.Context, sql string, args []any, sin
 		}
 		if rowsSent > 0 {
 			// Sink saw partial output; retrying would double-send.
-			weftlog.Errorf(ctx, "shard %s: QueryToSink mid-stream error after %d rows: %v", s.id, rowsSent, err)
+			weftsdk.Errorf(ctx, "shard %s: QueryToSink mid-stream error after %d rows: %v", s.id, rowsSent, err)
 			return
 		}
 		if !isRetriable(err) {
-			weftlog.Errorf(ctx, "shard %s: QueryToSink failed: %v (sql=%s)", s.id, err, sql)
+			weftsdk.Errorf(ctx, "shard %s: QueryToSink failed: %v (sql=%s)", s.id, err, sql)
 			return
 		}
 		lastErr = err
 		if attempt < maxRetryAttempts-1 {
-			weftlog.Errorf(ctx, "shard %s: QueryToSink attempt %d failed pre-row (%v); retrying", s.id, attempt+1, err)
+			weftsdk.Errorf(ctx, "shard %s: QueryToSink attempt %d failed pre-row (%v); retrying", s.id, attempt+1, err)
 			time.Sleep(retryBackoff)
 		}
 	}
-	weftlog.Infof(ctx, "shard %s: QueryToSink gave up after %d attempts: %v (sql=%s)", s.id, maxRetryAttempts, lastErr, sql)
+	weftsdk.Infof(ctx, "shard %s: QueryToSink gave up after %d attempts: %v (sql=%s)", s.id, maxRetryAttempts, lastErr, sql)
 }
 
 // withTraceMetadata is the trace courier (out to shard): mirrors the

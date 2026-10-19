@@ -2,9 +2,9 @@ package compute
 
 import (
 	"context"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"sync"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 )
@@ -52,7 +52,7 @@ func FanOutToShards(ctx context.Context, req *pb.ExecuteQueryRequest, job shard.
 			defer wg.Done()
 			sh, err := resolve(ctx, d)
 			if err != nil {
-				weftlog.Infof(ctx, "execute-query: resolve shard %s: %v", d.ShardId, err)
+				weftsdk.Infof(ctx, "execute-query: resolve shard %s: %v", d.ShardId, err)
 				job.SendSentinel(d.ShardId)
 				return
 			}

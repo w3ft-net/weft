@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"net"
 	"sync"
 	"time"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/graybeardcorp/weft/ingest"
 	ingsyslog "github.com/graybeardcorp/weft/ingest/syslog"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -157,12 +157,12 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 	// outright rather than guess a namespace — matches every other
 	// ingest adapter's behaviour on a missing credential.
 	if len(trimmed) == 0 || trimmed[0] == '<' {
-		weftlog.Infof(ctx, "syslog[%s]: rejecting %s: connection has no token prefix", name, remote)
+		weftsdk.Infof(ctx, "syslog[%s]: rejecting %s: connection has no token prefix", name, remote)
 		return
 	}
 	sp := bytes.IndexByte(trimmed, ' ')
 	if sp <= 0 {
-		weftlog.Infof(ctx, "syslog[%s]: rejecting %s: malformed first line", name, remote)
+		weftsdk.Infof(ctx, "syslog[%s]: rejecting %s: malformed first line", name, remote)
 		return
 	}
 	token := string(trimmed[:sp])
@@ -170,11 +170,11 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 
 	auth, err := ss.store.ValidateAgentToken(token)
 	if err != nil {
-		weftlog.Errorf(ctx, "syslog[%s]: token validation error from %s: %v", name, remote, err)
+		weftsdk.Errorf(ctx, "syslog[%s]: token validation error from %s: %v", name, remote, err)
 		return
 	}
 	if auth == nil {
-		weftlog.Infof(ctx, "syslog[%s]: rejecting %s: invalid or revoked token", name, remote)
+		weftsdk.Infof(ctx, "syslog[%s]: rejecting %s: invalid or revoked token", name, remote)
 		return
 	}
 
@@ -184,7 +184,7 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 	streamCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 	stream, err := ss.coordClient.IngestStream(streamCtx)
 	if err != nil {
-		weftlog.Infof(ctx, "syslog[%s]: open ingest stream for %s: %v", name, auth.Namespace, err)
+		weftsdk.Infof(ctx, "syslog[%s]: open ingest stream for %s: %v", name, auth.Namespace, err)
 		return
 	}
 
@@ -235,7 +235,7 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 			}
 		}
 		if err := stream.Send(row); err != nil {
-			weftlog.Infof(ctx, "syslog[%s]: send row for %s: %v", name, auth.Namespace, err)
+			weftsdk.Infof(ctx, "syslog[%s]: send row for %s: %v", name, auth.Namespace, err)
 			streamBroken = true
 			// Unblock the next br.Read so ParseStream returns promptly
 			// instead of waiting out the full idle timeout.
@@ -244,7 +244,7 @@ func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
 	})
 
 	if _, err := stream.CloseAndRecv(); err != nil && !streamBroken {
-		weftlog.Infof(ctx, "syslog[%s]: close ingest stream for %s: %v", name, auth.Namespace, err)
+		weftsdk.Infof(ctx, "syslog[%s]: close ingest stream for %s: %v", name, auth.Namespace, err)
 	}
 }
 

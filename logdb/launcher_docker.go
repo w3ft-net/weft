@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"net"
 	"os"
 	"os/exec"
@@ -12,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // DockerLauncher is the dev-mode shard launcher: it spawns sibling
@@ -138,7 +137,7 @@ func (d *DockerLauncher) Launch(ctx context.Context, spec LaunchSpec) (LaunchRes
 	if az == "" {
 		az = devAZ
 	}
-	weftlog.Infof(ctx, "docker-launcher: launched %s as container %s (az=%s)", spec.ShardID, cname, az)
+	weftsdk.Infof(ctx, "docker-launcher: launched %s as container %s (az=%s)", spec.ShardID, cname, az)
 	return LaunchResult{InstanceID: cname, AZ: az}, nil
 }
 

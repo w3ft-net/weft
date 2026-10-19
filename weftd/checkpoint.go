@@ -6,14 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 const (
@@ -135,15 +134,15 @@ func (c *CheckpointStore) load() {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			weftlog.Infof(context.Background(), "checkpoint: read %s: %v — starting without state", path, err)
+			weftsdk.Infof(context.Background(), "checkpoint: read %s: %v — starting without state", path, err)
 		}
 		return
 	}
 	var f cpFile
 	if err := json.Unmarshal(data, &f); err != nil || f.Version != 1 {
-		weftlog.Infof(context.Background(), "checkpoint: %s is unreadable (%v) — moving aside and starting without state", path, err)
+		weftsdk.Infof(context.Background(), "checkpoint: %s is unreadable (%v) — moving aside and starting without state", path, err)
 		if err := os.Rename(path, path+".corrupt"); err != nil {
-			weftlog.Infof(context.Background(), "checkpoint: rename corrupt state: %v", err)
+			weftsdk.Infof(context.Background(), "checkpoint: rename corrupt state: %v", err)
 		}
 		return
 	}
@@ -230,7 +229,7 @@ func (c *CheckpointStore) decideLocked(key string, f *os.File, id FileID, size i
 	e, ok := c.entries[key]
 	if !ok {
 		st.NewFile++
-		weftlog.Infof(context.Background(), "checkpoint[%s]: new file, reading from start", key)
+		weftsdk.Infof(context.Background(), "checkpoint[%s]: new file, reading from start", key)
 		return c.capLocked(key, f, 0, size)
 	}
 
@@ -238,14 +237,14 @@ func (c *CheckpointStore) decideLocked(key string, f *os.File, id FileID, size i
 	switch {
 	case !c.sameFile(f, e, id):
 		st.RotatedWhileDown++
-		weftlog.Infof(context.Background(), "checkpoint[%s]: rotated while down; previous file's unread tail lost", key)
+		weftsdk.Infof(context.Background(), "checkpoint[%s]: rotated while down; previous file's unread tail lost", key)
 	case e.Offset > size:
 		st.Truncated++
-		weftlog.Infof(context.Background(), "checkpoint[%s]: truncated while down, reading from start", key)
+		weftsdk.Infof(context.Background(), "checkpoint[%s]: truncated while down, reading from start", key)
 	default:
 		start = e.Offset
 		st.Resumed++
-		weftlog.Infof(context.Background(), "checkpoint[%s]: resuming at %d (%d bytes behind)", key, start, size-start)
+		weftsdk.Infof(context.Background(), "checkpoint[%s]: resuming at %d (%d bytes behind)", key, start, size-start)
 	}
 	return c.capLocked(key, f, start, size)
 }
@@ -274,7 +273,7 @@ func (c *CheckpointStore) capLocked(key string, f *os.File, start, size int64) i
 	}
 	skipped := at - start
 	c.counters(key).SkippedBytes += skipped
-	weftlog.Infof(context.Background(), "checkpoint[%s]: resume backlog %d bytes exceeds cap %d; skipped %d bytes", key, size-start, max, skipped)
+	weftsdk.Infof(context.Background(), "checkpoint[%s]: resume backlog %d bytes exceeds cap %d; skipped %d bytes", key, size-start, max, skipped)
 	return at
 }
 
@@ -399,7 +398,7 @@ func (c *CheckpointStore) Run(ctx context.Context, interval time.Duration) {
 			return
 		case <-t.C:
 			if err := c.Flush(); err != nil {
-				weftlog.Infof(ctx, "checkpoint: flush: %v", err)
+				weftsdk.Infof(ctx, "checkpoint: flush: %v", err)
 			}
 		}
 	}

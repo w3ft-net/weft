@@ -16,10 +16,10 @@ package notices
 import (
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"strings"
 	"sync"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -196,7 +196,7 @@ func (q *Queue) Maybe(ctx context.Context, key string) {
 	}
 	q.signaled[key] = true
 	if err := q.store.EmitNotice(q.userID, key, string(tmpl.kind), nil); err != nil {
-		weftlog.Infof(ctx, "notices: emit %s for %s: %v", key, q.userID, err)
+		weftsdk.Infof(ctx, "notices: emit %s for %s: %v", key, q.userID, err)
 	}
 }
 
@@ -218,7 +218,7 @@ func (q *Queue) Drain(ctx context.Context) []Notice {
 
 	pending, err := q.store.PendingNotices(q.userID)
 	if err != nil {
-		weftlog.Infof(ctx, "notices: load pending for %s: %v", q.userID, err)
+		weftsdk.Infof(ctx, "notices: load pending for %s: %v", q.userID, err)
 		return nil
 	}
 
@@ -233,7 +233,7 @@ func (q *Queue) Drain(ctx context.Context) []Notice {
 		ids = append(ids, p.ID)
 	}
 	if err := q.store.MarkNoticesSeen(ids); err != nil {
-		weftlog.Infof(ctx, "notices: mark seen for %s: %v", q.userID, err)
+		weftsdk.Infof(ctx, "notices: mark seen for %s: %v", q.userID, err)
 	}
 	if len(out) == 0 {
 		return nil

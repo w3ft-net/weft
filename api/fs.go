@@ -3,12 +3,12 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/graybeardcorp/weft/auth"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/mounts"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shellfs"
@@ -151,7 +151,7 @@ func (s *Server) handleRemoveFS(w http.ResponseWriter, r *http.Request) {
 func (s *Server) fetchLogServices(r *http.Request) []string {
 	resp, err := s.coordClient.ListServices(s.coordCtx(r), &pb.ListServicesRequest{})
 	if err != nil {
-		weftlog.Infof(r.Context(), "fetchLogServices: coordinator ListApps: %v", err)
+		weftsdk.Infof(r.Context(), "fetchLogServices: coordinator ListApps: %v", err)
 		return nil
 	}
 	return resp.Services

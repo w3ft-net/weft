@@ -1,22 +1,31 @@
 package coordinator
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	weftsdk "github.com/w3ft-net/weft-go"
 )
 
+// auditLine decodes the one JSON line an audit write produced.
+func auditLine(t *testing.T, data []byte) map[string]any {
+	t.Helper()
+	var rec map[string]any
+	if err := json.Unmarshal(data, &rec); err != nil || bytes.Count(data, []byte("\n")) != 1 {
+		t.Fatalf("want one JSON audit line, got %q (%v)", data, err)
+	}
+	return rec
+}
+
 // SetQueryLog must route audit lines to the dedicated file (creating a
-// missing parent dir), and the line must keep the
-// `2006/01/02 15:04:05 query: ...` shape weft's schema detection keys
-// timestamps off. Regression guard for the cron self-reference fix:
+// missing parent dir). Regression guard for the cron self-reference fix:
 // audit lines must not stay on the coordinator's main stderr stream.
 func TestSetQueryLogRoutesToFileWithTimestamp(t *testing.T) {
 	t.Cleanup(func() { queryOut.Set(os.Stderr) })
@@ -32,11 +41,8 @@ func TestSetQueryLogRoutesToFileWithTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read audit log: %v", err)
 	}
-	got := string(data)
-
-	re := regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} query: app=weft/coordinator shards=\[s1\]\n$`)
-	if !re.MatchString(got) {
-		t.Fatalf("audit line shape mismatch: %q", got)
+	if rec := auditLine(t, data); rec["msg"] != "query: app=weft/coordinator shards=[s1]" || rec["time"] == nil {
+		t.Fatalf("audit line = %v", rec)
 	}
 }
 
@@ -64,11 +70,9 @@ func TestQueryLogIncludesCoordinatorID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read audit log: %v", err)
 	}
-	got := string(data)
-
-	re := regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} query: namespace=weft service=coordinator shards=\[s1\] coordinator_id=i-0b340ce3672315ed2\n$`)
-	if !re.MatchString(got) {
-		t.Fatalf("audit line shape mismatch: %q", got)
+	rec := auditLine(t, data)
+	if rec["msg"] != "query: namespace=weft service=coordinator shards=[s1]" || rec["coordinator_id"] != "i-0b340ce3672315ed2" {
+		t.Fatalf("audit line = %v", rec)
 	}
 }
 
@@ -105,9 +109,9 @@ func TestQueryLogCarriesTheTraceID(t *testing.T) {
 	logQuery(ctx, "query: namespace=%s", "weft")
 
 	data, _ := os.ReadFile(path)
-	re := regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} query: namespace=weft coordinator_id=i-1 trace_id=7f778536850bbbbaed3c25469f1a23dd\n$`)
-	if !re.MatchString(string(data)) {
-		t.Fatalf("audit line shape mismatch: %q", data)
+	rec := auditLine(t, data)
+	if rec["msg"] != "query: namespace=weft" || rec["coordinator_id"] != "i-1" || rec["trace_id"] != "7f778536850bbbbaed3c25469f1a23dd" {
+		t.Fatalf("audit line = %v", rec)
 	}
 }
 
@@ -117,13 +121,13 @@ func TestLogQuery_SDKFileUsesQueriesKind(t *testing.T) {
 	t.Setenv(weftsdk.EnvLogFile, path)
 	prev := slog.Default()
 	defer slog.SetDefault(prev)
-	lf, err := weftsdk.InstallLogging("")
-	if err != nil || lf == nil {
-		t.Fatalf("InstallLogging = %v, %v", lf, err)
+	lf := weftsdk.InitLogging("", io.Discard)
+	if lf == nil {
+		t.Fatal("no log file")
 	}
 	defer lf.Close()
-	weftlog.SetFile(lf)
-	defer weftlog.SetFile(nil)
+	SetQueryLogFile(lf)
+	defer SetQueryLogFile(nil)
 
 	logQuery(context.Background(), "query: select 1")
 	data, _ := os.ReadFile(path)

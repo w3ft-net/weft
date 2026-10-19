@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -46,7 +46,7 @@ func (ce *CronExecutor) Start(ctx context.Context) {
 	// Initial load.
 	ce.reconcile(ctx)
 	go ce.runOverdueGuard(ctx)
-	weftlog.Infof(ctx, "cron: started (%d watches)", len(ce.cancels))
+	weftsdk.Infof(ctx, "cron: started (%d watches)", len(ce.cancels))
 
 	// Reconcile loop: pick up new/changed/deleted watches.
 	go func() {
@@ -74,7 +74,7 @@ func (ce *CronExecutor) reconcile(ctx context.Context) {
 	var watches []store.CronWatch
 	err := ce.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Where("enabled = ?", true).Find(&watches).Error
 	if err != nil {
-		weftlog.Errorf(ctx, "cron: failed to list watches: %v", err)
+		weftsdk.Errorf(ctx, "cron: failed to list watches: %v", err)
 		return
 	}
 
@@ -129,7 +129,7 @@ func (ce *CronExecutor) intervalBelowMin(watch store.CronWatch, interval time.Du
 // taken, since there is no point squatting on a watch that will never run.
 func (ce *CronExecutor) intervalAllowed(ctx context.Context, watch store.CronWatch, interval time.Duration) bool {
 	if tier, min, below := ce.intervalBelowMin(watch, interval); below {
-		weftlog.Infof(ctx, "cron[%s]: skipping — interval %s is below minimum %s for tier %s",
+		weftsdk.Infof(ctx, "cron[%s]: skipping — interval %s is below minimum %s for tier %s",
 			watch.Name, interval, min, tier)
 		return false
 	}
@@ -207,7 +207,7 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 	// field isn't numeric are persisted with Value=NULL so the debugging
 	// trail stays intact; aggregates ignore NULLs.
 	if saveErr := ce.persistResults(watch, start, stdout, stderr, exitCode, duration); saveErr != nil {
-		weftlog.Errorf(ctx, "cron[%s]: failed to save result: %v", watch.Name, saveErr)
+		weftsdk.Errorf(ctx, "cron[%s]: failed to save result: %v", watch.Name, saveErr)
 	}
 
 	// Update watch status.
@@ -218,10 +218,10 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 			"last_status": status,
 		}).Error
 	}(watch.ID, status); updateErr != nil {
-		weftlog.Errorf(ctx, "cron[%s]: failed to update run status: %v", watch.Name, updateErr)
+		weftsdk.Errorf(ctx, "cron[%s]: failed to update run status: %v", watch.Name, updateErr)
 	}
 
-	weftlog.Infof(ctx, "cron[%s]: %s (%dms, stdout=%d bytes, stderr=%d bytes)",
+	weftsdk.Infof(ctx, "cron[%s]: %s (%dms, stdout=%d bytes, stderr=%d bytes)",
 		watch.Name, status, duration.Milliseconds(), len(stdout), len(stderr))
 }
 

@@ -13,7 +13,6 @@ import (
 
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/internal/clientwire"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -86,7 +85,7 @@ func persistLastActive(ctx context.Context, st *store.Store, session *auth.Sessi
 		return
 	}
 	if err := st.UpdateUserLastActiveOrg(session.UserID, session.ActiveOrgID); err != nil {
-		weftlog.Infof(ctx, "update last_active_org_id for %s: %v", session.UserID, err)
+		weftsdk.Infof(ctx, "update last_active_org_id for %s: %v", session.UserID, err)
 	}
 }
 
@@ -243,7 +242,7 @@ func AccessLog(next http.Handler) http.Handler {
 		}
 		// trace_id rides on r.Context() once TraceMiddleware (which wraps
 		// this handler) has established one, and is omitted otherwise.
-		weftlog.Infof(r.Context(), "access %s %s %d %s user=%s", r.Method, r.URL.Path, rw.status, time.Since(start), user)
+		weftsdk.Infof(r.Context(), "access %s %s %d %s user=%s", r.Method, r.URL.Path, rw.status, time.Since(start), user)
 	})
 }
 

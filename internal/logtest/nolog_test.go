@@ -1,4 +1,4 @@
-package weftlog
+package logtest
 
 import (
 	"go/ast"
@@ -20,7 +20,7 @@ var terminalTools = []string{
 }
 
 // TestNoStdlibLogPrintsOutsideTerminalTools keeps trace IDs automatic: a
-// stdlib log.Printf has no context to read one from, so only weftlog
+// stdlib log.Printf has no context to read one from, so only the SDK
 // (ctx-aware, through the SDK's slog handler) may write a server log line.
 func TestNoStdlibLogPrintsOutsideTerminalTools(t *testing.T) {
 	root := filepath.Join("..", "..")
@@ -85,6 +85,6 @@ func TestNoStdlibLogPrintsOutsideTerminalTools(t *testing.T) {
 		for f, n := range counts {
 			b.WriteString("\n  " + f + ": " + strconv.Itoa(n))
 		}
-		t.Errorf("%d stdlib log.Print* calls remain in %d files; use weftlog.Infof/Warnf/Errorf with the request's ctx:%s", len(found), len(counts), b.String())
+		t.Errorf("%d stdlib log.Print* calls remain in %d files; use weftsdk.Infof/Warnf/Errorf with the request's ctx:%s", len(found), len(counts), b.String())
 	}
 }

@@ -3,14 +3,13 @@ package ingest
 import (
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // ProbeField names a value the schema wizard can extract from a log line.
@@ -441,7 +440,7 @@ func (c *probeCtx) proposals(ctx context.Context) []ProbeExtractor {
 	defer cancel()
 	cands, err := c.req.Proposer.ProposeExtractors(ctx, in)
 	if err != nil {
-		weftlog.Errorf(ctx, "probe: extractor proposer failed: %v", err)
+		weftsdk.Errorf(ctx, "probe: extractor proposer failed: %v", err)
 		return nil
 	}
 	out := make([]ProbeExtractor, 0, len(cands))

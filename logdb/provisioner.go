@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
@@ -427,7 +427,7 @@ func (p *Provisioner) ShardDescriptorsFor(ctx context.Context, tr TimeRange, nam
 	if namespaceID != 0 && p.config.ShardOps != nil {
 		s, err := p.config.ShardOps.ShardIDsServingService(namespaceID, service)
 		if err != nil {
-			weftlog.Infof(ctx, "provisioner: ShardDescriptorsFor: serving lookup ns=%d service=%q: %v — falling back to no filter", namespaceID, service, err)
+			weftsdk.Infof(ctx, "provisioner: ShardDescriptorsFor: serving lookup ns=%d service=%q: %v — falling back to no filter", namespaceID, service, err)
 		} else {
 			serving = s
 		}
@@ -489,14 +489,14 @@ func (p *Provisioner) adoptFromHeartbeats() {
 
 	heartbeats, err := p.config.Store.LiveShardHeartbeats("1 minute")
 	if err != nil {
-		weftlog.Errorf(context.Background(), "provisioner: heartbeat query failed: %v", err)
+		weftsdk.Errorf(context.Background(), "provisioner: heartbeat query failed: %v", err)
 		return
 	}
 	// The table keeps one row per source, so expired rows (replaced
 	// instances, christened ones, gone shards) are the only thing to trim.
 	// Idempotent and a handful of rows, so every coordinator may run it.
 	if err := p.config.Store.PruneShardHeartbeats(heartbeatRetention); err != nil {
-		weftlog.Infof(context.Background(), "provisioner: prune shard_heartbeats: %v", err)
+		weftsdk.Infof(context.Background(), "provisioner: prune shard_heartbeats: %v", err)
 	}
 
 	for _, hb := range heartbeats {
@@ -627,11 +627,11 @@ func (p *Provisioner) promoteOnHeartbeat(ctx context.Context, e *Shard, hb store
 	}
 	dialed, err := e.dialConfigure(ctx, hb)
 	if err != nil {
-		weftlog.Infof(ctx, "provisioner: heartbeat %s (instance %s): not promoting — coordinator can't reach %s: %v", e.ID, hb.InstanceID, hb.Addr, err)
+		weftsdk.Infof(ctx, "provisioner: heartbeat %s (instance %s): not promoting — coordinator can't reach %s: %v", e.ID, hb.InstanceID, hb.Addr, err)
 		return
 	}
 	if err := e.Fire(ctx, TriggerHeartbeat, hb, dialed); err != nil {
-		weftlog.Infof(ctx, "provisioner: heartbeat promote %s: %v", e.ID, err)
+		weftsdk.Infof(ctx, "provisioner: heartbeat promote %s: %v", e.ID, err)
 	}
 	// If the guard rejected the promotion (e.g. a stray-instance heartbeat),
 	// configureOnHeartbeat never ran and the handle wasn't attached — close
@@ -825,7 +825,7 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 		err := b.Evaluate(ctx)
 		store.LogEvaluateEvent("bucket", fmt.Sprint(b.ID), time.Since(start), err)
 		if err != nil {
-			weftlog.Infof(ctx, "provisioner: bucket %d Evaluate: %v", b.ID, err)
+			weftsdk.Infof(ctx, "provisioner: bucket %d Evaluate: %v", b.ID, err)
 		}
 		p.markProgress()
 	})
@@ -884,7 +884,7 @@ func (p *Provisioner) runShardEvaluate(ctx context.Context, e *Shard) {
 		err := e.Evaluate(ctx)
 		store.LogEvaluateEvent("shard", e.ID, time.Since(start), err)
 		if err != nil {
-			weftlog.Infof(ctx, "provisioner: shard %s Evaluate: %v", e.ID, err)
+			weftsdk.Infof(ctx, "provisioner: shard %s Evaluate: %v", e.ID, err)
 		}
 		p.markProgress()
 	}
@@ -908,7 +908,7 @@ func (p *Provisioner) ensureBucketSMs() {
 	}
 	all, err := p.Buckets.All()
 	if err != nil {
-		weftlog.Infof(context.Background(), "provisioner: ensureBucketSMs: Buckets.All: %v", err)
+		weftsdk.Infof(context.Background(), "provisioner: ensureBucketSMs: Buckets.All: %v", err)
 		return
 	}
 	p.smMu.Lock()
@@ -932,7 +932,7 @@ func (p *Provisioner) syncShardServices() {
 	}
 	all, err := p.Buckets.All()
 	if err != nil {
-		weftlog.Infof(context.Background(), "provisioner: syncShardServices: Buckets.All: %v", err)
+		weftsdk.Infof(context.Background(), "provisioner: syncShardServices: Buckets.All: %v", err)
 		return
 	}
 	for _, bucket := range all {
@@ -950,7 +950,7 @@ func (p *Provisioner) syncServicesForBucket(bucket *Bucket) {
 	}
 	svcs, err := p.config.ShardOps.ServicesForBucket(bucket.ID)
 	if err != nil {
-		weftlog.Infof(context.Background(), "provisioner: services for bucket %d: %v", bucket.ID, err)
+		weftsdk.Infof(context.Background(), "provisioner: services for bucket %d: %v", bucket.ID, err)
 		return
 	}
 	for _, e := range p.registry.Entries() {
@@ -1036,7 +1036,7 @@ func (p *Provisioner) DeleteArchived(shardID string, force bool) error {
 	if err := entry.Fire(context.Background(), TriggerAdminDelete); err != nil {
 		return fmt.Errorf("delete archived %s: %w", shardID, err)
 	}
-	weftlog.Infof(context.Background(), "provisioner: archived shard %s deleted", shardID)
+	weftsdk.Infof(context.Background(), "provisioner: archived shard %s deleted", shardID)
 	return nil
 }
 
@@ -1069,7 +1069,7 @@ func (p *Provisioner) ForceRemove(shardID string, force bool) error {
 	if err := entry.Fire(context.Background(), TriggerAdminDelete); err != nil {
 		return fmt.Errorf("force-remove %s: %w", shardID, err)
 	}
-	weftlog.Infof(context.Background(), "provisioner: stuck ARCHIVING shard %s force-removed (instance=%q volume=%q force=%v)", shardID, instanceID, volumeID, force)
+	weftsdk.Infof(context.Background(), "provisioner: stuck ARCHIVING shard %s force-removed (instance=%q volume=%q force=%v)", shardID, instanceID, volumeID, force)
 	return nil
 }
 
@@ -1107,7 +1107,7 @@ func (p *Provisioner) RelaunchShard(shardID string) error {
 	if err := entry.Fire(context.Background(), TriggerRelaunchRequested); err != nil {
 		return fmt.Errorf("relaunch %s: %w", shardID, err)
 	}
-	weftlog.Infof(context.Background(), "provisioner: relaunch requested for %s (was %s); driving via UPGRADING → LAUNCHING", shardID, st)
+	weftsdk.Infof(context.Background(), "provisioner: relaunch requested for %s (was %s); driving via UPGRADING → LAUNCHING", shardID, st)
 	return nil
 }
 

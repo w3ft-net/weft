@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/graybeardcorp/weft/planner"
@@ -33,8 +34,9 @@ func TestSaveCronWatch_TruncationWarning(t *testing.T) {
 	if len(blocking) != 0 {
 		t.Fatalf("SaveCronWatch: got blocking error %v, want the save to succeed", blocking)
 	}
-	if len(warnings) != 1 {
-		t.Fatalf("SaveCronWatch: got %d warnings, want 1: %v", len(warnings), warnings)
+	// The truncation lint, then the explanation of the grep -c stage.
+	if len(warnings) != 2 || !strings.Contains(warnings[0], "caps this cron") {
+		t.Fatalf("SaveCronWatch: got warnings %q, want the truncation lint then the explanation", warnings)
 	}
 
 	// The save actually happened despite the non-nil error.
@@ -81,5 +83,45 @@ func TestSaveCronWatch_SyntaxErrorStillBlocks(t *testing.T) {
 	blocking, _ := Split(err)
 	if len(blocking) == 0 {
 		t.Fatal("want a blocking error for an unparseable pipeline, got none")
+	}
+}
+
+// A cron pays for a stage that runs after transfer on every fire, so
+// saving one explains it: a warning names the stage and what to change.
+func TestSaveCronWatch_ExplainsStageAfterTransfer(t *testing.T) {
+	db := testOpen(t)
+	cust, _ := db.FindOrCreateOrg("cron-lint-explain")
+	user, _ := db.CreateUser("dave-lint@example.test")
+
+	pipeline := `cat /log/x/y/main.log | awk '{ printf "%s\n", $0 }' | alert above 5`
+	lowered := planner.LowerForStorage(context.Background(), pipeline, int64(cust.ID), "bolt", noBinResolver{})
+
+	err := db.SaveCronWatch(cust.ID, user.ID, "explain-cron", "*/5 * * * *", pipeline, lowered)
+	blocking, warnings := Split(err)
+	if len(blocking) != 0 {
+		t.Fatalf("SaveCronWatch: got blocking error %v, want success", blocking)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("got %d warnings, want 1: %v", len(warnings), warnings)
+	}
+	msg := warnings[0]
+	for _, want := range []string{"on every fire", "awk", "after transfer", "Barrier: stage 1"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("warning lacks %q:\n%s", want, msg)
+		}
+	}
+}
+
+// A /bin script's own stages aren't analyzed, so a pipeline that calls one
+// is never reported as stuck after transfer.
+func TestSaveCronWatch_NoExplanationForBinScript(t *testing.T) {
+	db := testOpen(t)
+	cust, _ := db.FindOrCreateOrg("cron-lint-bin")
+	user, _ := db.CreateUser("erin-lint@example.test")
+
+	pipeline := `cat /log/x/y/main.log | /bin/errs | alert above 5`
+	err := db.SaveCronWatch(cust.ID, user.ID, "bin-cron", "*/5 * * * *", pipeline, nil)
+	if blocking, warnings := Split(err); len(blocking) != 0 || len(warnings) != 0 {
+		t.Fatalf("got blocking %v, warnings %q; want neither", blocking, warnings)
 	}
 }

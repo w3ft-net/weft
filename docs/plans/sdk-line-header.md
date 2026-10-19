@@ -9,7 +9,7 @@ note in the schema endpoint, CLI and browser (items 2, 3, 5), and the
 `weft-go` (committed) and `weft-py` (in the working tree) file handlers with
 stdout/stderr capture and the stamping helpers removed (item 4). Python has
 no span model, so its headers carry no span fields. Item 6 is done: docs, `weft-go` v0.6.1,
-and weft's own units, `startup.sh` and `weftlog` (committed, not deployed).
+and weft's own units, `startup.sh` and the `weftlog` package folded into the SDK as `InitLogging`/`Infof` (committed, not deployed).
 Rollout caveat: weft's existing sources already have wizard schemas, and an
 already-configured source keeps its schema when SDK lines arrive, so after
 deploy run `weft source resample` or clear each weft/* schema to get the
@@ -262,7 +262,7 @@ path a guess.
 
 ### Coordinator audit stream is movable
 
-`coordinator/querylog.go` writes the audit stream through a `weftlog`
+`coordinator/querylog.go` writes the audit stream through a
 Logger to a swappable writer (`switchWriter`), in the stdlib line shape. The
 header writer is a wrapper around that writer, so moving it to
 `kind: queries` is a writer change, not a rewrite. Its schema stops being

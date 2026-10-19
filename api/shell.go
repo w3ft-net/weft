@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
 	"strings"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/graybeardcorp/weft/coordinator/onboarding"
 	"github.com/graybeardcorp/weft/internal/timerange"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -111,6 +111,25 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		if cmdErr != nil {
 			writeSSEEvent(w, map[string]any{"type": "stderr", "text": cmdErr.Error() + "\n"})
 		} else if out != "" {
+			for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+				writeSSEEvent(w, map[string]any{"type": "line", "data": map[string]any{"raw": line}})
+			}
+		}
+		writeSSEEvent(w, map[string]any{"type": "done"})
+		flusher.Flush()
+		return
+	}
+
+	// explain answers from the planner alone and runs nothing, so it never
+	// reaches the coordinator.
+	cwd := "/"
+	if len(req.DirStack) > 0 {
+		cwd = req.DirStack[0]
+	}
+	if handled, out, cmdErr := s.maybeHandleExplain(session, req.Pipeline, cwd); handled {
+		if cmdErr != nil {
+			writeSSEEvent(w, map[string]any{"type": "stderr", "text": "explain: " + cmdErr.Error() + "\n"})
+		} else {
 			for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 				writeSSEEvent(w, map[string]any{"type": "line", "data": map[string]any{"raw": line}})
 			}
@@ -243,7 +262,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 					// Client disconnected — not an error worth logging loudly.
 					return
 				}
-				weftlog.Errorf(r.Context(), "shell exec stream error: %v", rr.err)
+				weftsdk.Errorf(r.Context(), "shell exec stream error: %v", rr.err)
 				msg := rr.err.Error()
 				if s, ok := status.FromError(rr.err); ok {
 					// Strip the "rpc error: code = ... desc = " envelope.

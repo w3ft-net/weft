@@ -6,7 +6,6 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -59,7 +58,7 @@ func (ce *CronExecutor) runClaims(ctx context.Context, watch store.CronWatch) {
 	if !ce.intervalAllowed(ctx, watch, parseSchedule(watch.Schedule)) {
 		return
 	}
-	weftlog.Infof(ctx, "cron[%s]: started (every %s)", watch.Name, parseSchedule(watch.Schedule))
+	weftsdk.Infof(ctx, "cron[%s]: started (every %s)", watch.Name, parseSchedule(watch.Schedule))
 
 	st := &cronClaimState{watch: watch}
 	ticker := time.NewTicker(cronClaimPoll)
@@ -67,7 +66,7 @@ func (ce *CronExecutor) runClaims(ctx context.Context, watch store.CronWatch) {
 	for {
 		select {
 		case <-ctx.Done():
-			weftlog.Infof(ctx, "cron[%s]: stopped", watch.Name)
+			weftsdk.Infof(ctx, "cron[%s]: stopped", watch.Name)
 			return
 		case <-ticker.C:
 			ce.claimTick(ctx, st, time.Now())
@@ -101,11 +100,11 @@ func (ce *CronExecutor) claimTick(ctx context.Context, st *cronClaimState, now t
 	// claim a slot from the old one.
 	updated, err := ce.Store.GetCronWatch(w.OrgID, w.Name)
 	if err != nil {
-		weftlog.Errorf(ctx, "cron[%s]: failed to reload, skipping tick: %v", w.Name, err)
+		weftsdk.Errorf(ctx, "cron[%s]: failed to reload, skipping tick: %v", w.Name, err)
 		return
 	}
 	if parseSchedule(updated.Schedule) != interval {
-		weftlog.Infof(ctx, "cron[%s]: schedule changed to %q, re-slotting", w.Name, updated.Schedule)
+		weftsdk.Infof(ctx, "cron[%s]: schedule changed to %q, re-slotting", w.Name, updated.Schedule)
 		st.watch, st.seen = *updated, false
 		return
 	}
@@ -115,10 +114,10 @@ func (ce *CronExecutor) claimTick(ctx context.Context, st *cronClaimState, now t
 	lag := now.Sub(slot.FireAt(cronSettle)).Milliseconds()
 	switch {
 	case err != nil:
-		weftlog.Errorf(ctx, "cron_claim result=error key=%s lag_ms=%d err=%v", slot.Key(), lag, err)
+		weftsdk.Errorf(ctx, "cron_claim result=error key=%s lag_ms=%d err=%v", slot.Key(), lag, err)
 		return
 	case !won:
-		weftlog.Infof(ctx, "cron_claim result=lost key=%s lag_ms=%d", slot.Key(), lag)
+		weftsdk.Infof(ctx, "cron_claim result=lost key=%s lag_ms=%d", slot.Key(), lag)
 		decided()
 		return
 	}
@@ -126,7 +125,7 @@ func (ce *CronExecutor) claimTick(ctx context.Context, st *cronClaimState, now t
 	// its trace here so the firing (query, alert evaluation, notifications,
 	// result persistence) is correlated end to end.
 	ctx = weftsdk.ContextWithTraceID(ctx, weftsdk.NewTraceID())
-	weftlog.Infof(ctx, "cron_claim result=won key=%s lag_ms=%d", slot.Key(), lag)
+	weftsdk.Infof(ctx, "cron_claim result=won key=%s lag_ms=%d", slot.Key(), lag)
 	decided()
 	ce.fire(ctx, st.watch, slot.Window())
 }
@@ -135,10 +134,10 @@ func (ce *CronExecutor) claimTick(ctx context.Context, st *cronClaimState, now t
 func (ce *CronExecutor) pruneClaims(ctx context.Context) {
 	n, err := ce.Store.DeleteCronClaimsBefore(time.Now().Add(-cronClaimRetention))
 	if err != nil {
-		weftlog.Errorf(ctx, "cron: claim cleanup failed: %v", err)
+		weftsdk.Errorf(ctx, "cron: claim cleanup failed: %v", err)
 		return
 	}
 	if n > 0 {
-		weftlog.Infof(ctx, "cron: pruned %d old claims", n)
+		weftsdk.Infof(ctx, "cron: pruned %d old claims", n)
 	}
 }

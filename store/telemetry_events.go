@@ -2,9 +2,8 @@ package store
 
 import (
 	"context"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"time"
-
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // LogEvaluateEvent emits one structured line per bucket/shard FSM Evaluate
@@ -15,10 +14,10 @@ import (
 // clean Evaluate.
 func LogEvaluateEvent(kind, id string, dur time.Duration, err error) {
 	if err != nil {
-		weftlog.Infof(context.Background(), "evaluate_event kind=%s id=%s duration_ms=%d err=%q", kind, id, dur.Milliseconds(), err)
+		weftsdk.Infof(context.Background(), "evaluate_event kind=%s id=%s duration_ms=%d err=%q", kind, id, dur.Milliseconds(), err)
 		return
 	}
-	weftlog.Infof(context.Background(), "evaluate_event kind=%s id=%s duration_ms=%d", kind, id, dur.Milliseconds())
+	weftsdk.Infof(context.Background(), "evaluate_event kind=%s id=%s duration_ms=%d", kind, id, dur.Milliseconds())
 }
 
 // LogEvaluateTick emits one line per evaluateStateMachines tick with the
@@ -28,7 +27,7 @@ func LogEvaluateEvent(kind, id string, dur time.Duration, err error) {
 // disprove the known sequential-evaluation gap (one slow shard blocking
 // convergence fleet-wide, docs/known-issues.md) under real load.
 func LogEvaluateTick(buckets, shards int, dur time.Duration) {
-	weftlog.Infof(context.Background(), "evaluate_tick buckets=%d shards=%d duration_ms=%d", buckets, shards, dur.Milliseconds())
+	weftsdk.Infof(context.Background(), "evaluate_tick buckets=%d shards=%d duration_ms=%d", buckets, shards, dur.Milliseconds())
 }
 
 // LogTailFanoutEvent emits one structured line per Redis TailFanout health
@@ -41,8 +40,8 @@ func LogEvaluateTick(buckets, shards int, dur time.Duration) {
 // for a clean event such as "connect".
 func LogTailFanoutEvent(ctx context.Context, op string, err error) {
 	if err != nil {
-		weftlog.Infof(ctx, "tailfanout_event op=%s err=%q", op, err)
+		weftsdk.Infof(ctx, "tailfanout_event op=%s err=%q", op, err)
 		return
 	}
-	weftlog.Infof(ctx, "tailfanout_event op=%s", op)
+	weftsdk.Infof(ctx, "tailfanout_event op=%s", op)
 }

@@ -2,12 +2,11 @@ package weftd
 
 import (
 	"context"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // DetectRegion probes the standard cloud-metadata endpoints in order
@@ -109,7 +108,7 @@ func doProbe(req *http.Request) (string, bool) {
 func mustReq(ctx context.Context, method, url string, body io.Reader) *http.Request {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
-		weftlog.Infof(ctx, "region probe: bad request %s %s: %v", method, url, err)
+		weftsdk.Infof(ctx, "region probe: bad request %s %s: %v", method, url, err)
 		// Return a stub that doProbe will fail on cleanly.
 		return &http.Request{}
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
 	"strconv"
@@ -18,7 +19,6 @@ import (
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/internal/release"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -74,7 +74,7 @@ func (s *Server) handleAgentSample(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.UpdateLogGroupDetection(namespaceID, appName, string(sampleJSON), string(detectionJSON)); err != nil {
-			weftlog.Infof(r.Context(), "classify: update detection for %s/%s: %v", agent.Namespace, appName, err)
+			weftsdk.Infof(r.Context(), "classify: update detection for %s/%s: %v", agent.Namespace, appName, err)
 		}
 	})
 	detectionJSON, _ := json.Marshal(detection)
@@ -379,7 +379,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 	// no full sample yet, so it can't be configured.
 	lg, err := s.store.FindLogGroup(customer.ID, namespace, app)
 	if err != nil {
-		weftlog.Infof(r.Context(), "configure source %s/%s: FindLogGroup: %v", namespace, app, err)
+		weftsdk.Infof(r.Context(), "configure source %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -421,7 +421,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 
 	schemaYAML, err := schema.ToYAML()
 	if err != nil {
-		weftlog.Infof(r.Context(), "configure source %s/%s: schema marshal: %v", namespace, app, err)
+		weftsdk.Infof(r.Context(), "configure source %s/%s: schema marshal: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -440,7 +440,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "source is no longer pending", http.StatusConflict)
 			return
 		}
-		weftlog.Infof(r.Context(), "configure source %s/%s: ConfigureLogGroup: %v", namespace, app, err)
+		weftsdk.Infof(r.Context(), "configure source %s/%s: ConfigureLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -506,7 +506,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	}
 	fleets, err := s.store.RecentAgentsFor(weftdIDs, agentWindow)
 	if err != nil {
-		weftlog.Infof(r.Context(), "list sources: recent agents: %v", err)
+		weftsdk.Infof(r.Context(), "list sources: recent agents: %v", err)
 	}
 	for _, lg := range shown {
 		var fleet *agentFleet
@@ -653,7 +653,7 @@ func (s *Server) handleResampleSource(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, store.ErrAlreadySampling):
 			http.Error(w, "a sample is already being collected for this source", http.StatusConflict)
 		default:
-			weftlog.Infof(r.Context(), "resample source %s/%s: RequestResample: %v", namespace, app, err)
+			weftsdk.Infof(r.Context(), "resample source %s/%s: RequestResample: %v", namespace, app, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 		return
@@ -681,7 +681,7 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 
 	lg, err := s.store.FindLogGroup(session.ActiveOrgID, namespace, app)
 	if err != nil {
-		weftlog.Infof(r.Context(), "source schema %s/%s: FindLogGroup: %v", namespace, app, err)
+		weftsdk.Infof(r.Context(), "source schema %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -787,7 +787,7 @@ const agentWindow = 7 * 24 * time.Hour
 func (s *Server) agentsCannotReadSchema(ctx context.Context, logGroupID uint, minVersion string) string {
 	agents, err := s.store.RecentAgents(logGroupID, agentWindow)
 	if err != nil {
-		weftlog.Infof(ctx, "recent agents for log group %d: %v", logGroupID, err)
+		weftsdk.Infof(ctx, "recent agents for log group %d: %v", logGroupID, err)
 		return "could not check which agent versions read this source; try again"
 	}
 	oldest, n := store.OldestAgentVersion(agents)
@@ -832,7 +832,7 @@ func (s *Server) handleSchemaPreview(w http.ResponseWriter, r *http.Request) {
 
 	lg, err := s.store.FindLogGroup(session.ActiveOrgID, namespace, app)
 	if err != nil {
-		weftlog.Infof(r.Context(), "schema preview %s/%s: FindLogGroup: %v", namespace, app, err)
+		weftsdk.Infof(r.Context(), "schema preview %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -844,7 +844,7 @@ func (s *Server) handleSchemaPreview(w http.ResponseWriter, r *http.Request) {
 	var lines []string
 	if lg.Sample != "" {
 		if err := json.Unmarshal([]byte(lg.Sample), &lines); err != nil {
-			weftlog.Infof(r.Context(), "schema preview %s/%s: bad sample JSON: %v", namespace, app, err)
+			weftsdk.Infof(r.Context(), "schema preview %s/%s: bad sample JSON: %v", namespace, app, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -917,7 +917,7 @@ func (s *Server) recentLines(r *http.Request, userID string, namespace, app stri
 func (s *Server) addLivePreview(r *http.Request, session *auth.Session, resp map[string]any, namespace, app, schemaYAML string) {
 	lines, err := s.recentLines(r, session.UserID, namespace, app, schemaPreviewLines)
 	if err != nil && len(lines) == 0 {
-		weftlog.Infof(r.Context(), "source schema %s/%s: live preview fetch: %v", namespace, app, err)
+		weftsdk.Infof(r.Context(), "source schema %s/%s: live preview fetch: %v", namespace, app, err)
 		resp["preview_note"] = "recent lines unavailable: " + err.Error()
 		return
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"sort"
 	"strconv"
@@ -14,7 +15,6 @@ import (
 	"github.com/graybeardcorp/warp/pkg/bash"
 	luapkg "github.com/graybeardcorp/warp/pkg/lua"
 	"github.com/graybeardcorp/weft/compute"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/logdb"
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/notices"
@@ -417,7 +417,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					if sh == nil {
 						dlqPath := c.DLQ.Write(rows)
 						c.Errors.Record("none", "no shard serves "+k.namespace+"/"+k.service, rows, dlqPath)
-						weftlog.Infof(ctx, "drain: DLQ'd %d rows for %s (no shard serves this service)", len(rows), k.namespace+"/"+k.service)
+						weftsdk.Infof(ctx, "drain: DLQ'd %d rows for %s (no shard serves this service)", len(rows), k.namespace+"/"+k.service)
 						continue
 					}
 					// sh.Ingest reports its own outcome to the provisioner —
@@ -427,7 +427,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					// line. (Routing exclusion is the FSM's job now, not a
 					// per-failure ingest latch.)
 					if err := sh.Ingest(ctx, rows, c.Provisioner); err != nil {
-						weftlog.Infof(ctx, "drain: %v", err)
+						weftsdk.Infof(ctx, "drain: %v", err)
 
 						// Retry once. IngestingShard round-robins, so a
 						// second call lands on a different candidate if any
@@ -445,7 +445,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 						// All retries exhausted — DLQ.
 						dlqPath := c.DLQ.Write(rows)
 						c.Errors.Record(sh.ID(), err.Error(), rows, dlqPath)
-						weftlog.Errorf(ctx, "drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(rows), k.namespace+"/"+k.service, sh.ID())
+						weftsdk.Errorf(ctx, "drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(rows), k.namespace+"/"+k.service, sh.ID())
 						continue
 					}
 					c.Provisioner.Stats().Record(k.namespace+"/"+k.service, int64(len(rows)))
@@ -495,11 +495,11 @@ func (c *Coordinator) flushUsage(store *store.Store) {
 			INSERT INTO usage_hourly (org_id, hour, bytes_ingested)
 			VALUES (?, ?, ?)`,
 			e.CustomerID, e.Hour, e.Bytes).Error; err != nil {
-			weftlog.Errorf(context.Background(), "usage flush error: customer=%d hour=%s: %v", e.CustomerID, e.Hour, err)
+			weftsdk.Errorf(context.Background(), "usage flush error: customer=%d hour=%s: %v", e.CustomerID, e.Hour, err)
 		}
 	}
 	if len(entries) > 0 {
-		weftlog.Infof(context.Background(), "usage flush: wrote %d hourly entries", len(entries))
+		weftsdk.Infof(context.Background(), "usage flush: wrote %d hourly entries", len(entries))
 	}
 }
 
@@ -758,7 +758,7 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 		return nil, false
 	}
 	if lp.PlannerVersion != planner.PlannerVersion {
-		weftlog.Infof(ctx, "watch %d: lowered_plan stamped at version %d, planner is at %d — recompiling",
+		weftsdk.Infof(ctx, "watch %d: lowered_plan stamped at version %d, planner is at %d — recompiling",
 			watch.ID, lp.PlannerVersion, planner.PlannerVersion)
 		// Stale planner version invalidates the cache entry too.
 		c.loweredCache.Delete(watch.ID)
@@ -798,7 +798,7 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 	args := lp.Hydrate(resolveCtx)
 	res, err := c.dispatchLoweredWithTier(ctx, lp, args, tr, tier, alertCtx)
 	if err != nil {
-		weftlog.Errorf(ctx, "watch %d: lowered dispatch failed: %v — falling back to inline Plan", watch.ID, err)
+		weftsdk.Errorf(ctx, "watch %d: lowered dispatch failed: %v — falling back to inline Plan", watch.ID, err)
 		return nil, false
 	}
 	return res, true
@@ -868,7 +868,7 @@ func (c *Coordinator) loadLoweredPlan(ctx context.Context, watch *store.CronWatc
 	}
 	var lp planner.LoweredPlan
 	if err := json.Unmarshal(watch.LoweredPlan, &lp); err != nil {
-		weftlog.Infof(ctx, "watch %d: lowered_plan unmarshal: %v — falling back to inline Plan", watch.ID, err)
+		weftsdk.Infof(ctx, "watch %d: lowered_plan unmarshal: %v — falling back to inline Plan", watch.ID, err)
 		return nil, false
 	}
 	// Store by-value into the entry so concurrent fires share the
@@ -911,7 +911,7 @@ func (c *Coordinator) refreshLoweredSync(ctx context.Context, watch *store.CronW
 		Where("id = ?", watch.ID).
 		Update("lowered_plan", loweredJSON).
 		Error; err != nil {
-		weftlog.Infof(ctx, "watch %d: refresh lowered_plan: %v", watch.ID, err)
+		weftsdk.Infof(ctx, "watch %d: refresh lowered_plan: %v", watch.ID, err)
 		return
 	}
 	// Refresh wrote a new lowered_plan; the next fire's loadLoweredPlan
@@ -1053,7 +1053,7 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 		// is on /log/..., which the planner accepts. ErrNotPlannable
 		// here would mean the pipeline shape changed between
 		// substitution and re-render — surface it.
-		weftlog.Errorf(ctx, "rewriter callback: plan error: %v (pipeline=%q)", err, pipeline)
+		weftsdk.Errorf(ctx, "rewriter callback: plan error: %v (pipeline=%q)", err, pipeline)
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 

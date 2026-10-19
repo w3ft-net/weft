@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/weftd"
 )
 
@@ -50,7 +50,7 @@ func configureCheckpointing(c CheckpointConfig) time.Duration {
 	if c.MaxResumeBytes != "" {
 		n, err := parseByteSize(c.MaxResumeBytes)
 		if err != nil {
-			weftlog.Infof(context.Background(), "checkpoint: max_resume_bytes %q: %v — using the default", c.MaxResumeBytes, err)
+			weftsdk.Infof(context.Background(), "checkpoint: max_resume_bytes %q: %v — using the default", c.MaxResumeBytes, err)
 		} else {
 			opts.MaxResumeBytes = n
 		}
@@ -58,12 +58,12 @@ func configureCheckpointing(c CheckpointConfig) time.Duration {
 	store, err := weftd.OpenCheckpointStore(dir, opts)
 	switch {
 	case errors.Is(err, weftd.ErrCheckpointLocked):
-		weftlog.Infof(context.Background(), "checkpoint: %s is locked by another weftd — running with checkpointing disabled", dir)
+		weftsdk.Infof(context.Background(), "checkpoint: %s is locked by another weftd — running with checkpointing disabled", dir)
 	case err != nil:
-		weftlog.Infof(context.Background(), "checkpoint: cannot use %s: %v — running with checkpointing disabled", dir, err)
+		weftsdk.Infof(context.Background(), "checkpoint: cannot use %s: %v — running with checkpointing disabled", dir, err)
 	default:
 		checkpoints = store
-		weftlog.Infof(context.Background(), "checkpoint: state in %s", dir)
+		weftsdk.Infof(context.Background(), "checkpoint: state in %s", dir)
 	}
 	return flush
 }
@@ -80,7 +80,7 @@ func runCheckpointStatsReporter(ctx context.Context) {
 		case <-t.C:
 		}
 		for path, c := range checkpoints.Stats() {
-			weftlog.Infof(ctx, "checkpoint stats [%s]: resumed=%d new_file=%d rotated_while_down=%d truncated=%d skipped_bytes=%d",
+			weftsdk.Infof(ctx, "checkpoint stats [%s]: resumed=%d new_file=%d rotated_while_down=%d truncated=%d skipped_bytes=%d",
 				path, c.Resumed, c.NewFile, c.RotatedWhileDown, c.Truncated, c.SkippedBytes)
 		}
 	}

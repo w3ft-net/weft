@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"math"
 	"strings"
 	"time"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -188,7 +188,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 	// No attempt in flight: claim the next one.
 	if started == nil {
 		if attempt >= maxExportAttempts {
-			weftlog.Errorf(ctx, "shardsm %s: ARCHIVING export failed %d times (cap %d); keeping volume %q and instance — reset export_attempt to retry",
+			weftsdk.Errorf(ctx, "shardsm %s: ARCHIVING export failed %d times (cap %d); keeping volume %q and instance — reset export_attempt to retry",
 				sh.ID, attempt, maxExportAttempts, volumeID)
 			return nil
 		}
@@ -197,7 +197,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 		// for every attempt, blocking healthy shards; it waits unclaimed instead
 		// (the stuck-archive alert surfaces it).
 		if volumeID == "" {
-			weftlog.Infof(ctx, "shardsm %s: ARCHIVING export has no volume to snapshot; not claiming an export slot", sh.ID)
+			weftsdk.Infof(ctx, "shardsm %s: ARCHIVING export has no volume to snapshot; not claiming an export slot", sh.ID)
 			return nil
 		}
 		diskBytes, err := d.Store.LatestShardDiskBytes(sh.ID)
@@ -216,10 +216,10 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 		case ExportClaimHeld:
 			// Nothing started: no attempt number taken, no clock running, no AWS
 			// call made. The shard simply waits for a slot, however long that takes.
-			weftlog.Infof(ctx, "shardsm %s: export held, the cap of %d concurrent export attempts is reached", sh.ID, d.maxConcurrentExports())
+			weftsdk.Infof(ctx, "shardsm %s: export held, the cap of %d concurrent export attempts is reached", sh.ID, d.maxConcurrentExports())
 			return nil
 		case ExportClaimLost:
-			weftlog.Infof(ctx, "shardsm %s: another evaluator claimed export attempt %d; deferring to it", sh.ID, attempt+1)
+			weftsdk.Infof(ctx, "shardsm %s: another evaluator claimed export attempt %d; deferring to it", sh.ID, attempt+1)
 			return nil
 		}
 		attempt++
@@ -228,7 +228,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 		sh.mu.Lock()
 		sh.ExportAttempt, sh.ExportInstanceType, sh.ExportStartedAt = attempt, typ, started
 		sh.mu.Unlock()
-		weftlog.Infof(ctx, "shardsm %s: export attempt %d/%d begun (db≈%d bytes → %s)", sh.ID, attempt, maxExportAttempts, diskBytes, typ)
+		weftsdk.Infof(ctx, "shardsm %s: export attempt %d/%d begun (db≈%d bytes → %s)", sh.ID, attempt, maxExportAttempts, diskBytes, typ)
 	}
 
 	if now.Sub(*started) > exportAttemptTimeout {
@@ -238,12 +238,12 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 	// Snapshot the shard's volume.
 	if snapID == "" {
 		if volumeID == "" {
-			weftlog.Infof(ctx, "shardsm %s: ARCHIVING export has no volume to snapshot", sh.ID)
+			weftsdk.Infof(ctx, "shardsm %s: ARCHIVING export has no volume to snapshot", sh.ID)
 			return nil
 		}
 		id, err := d.Exports.CreateSnapshot(ctx, SnapshotSpec{ShardID: sh.ID, Attempt: attempt, VolumeID: volumeID})
 		if err != nil {
-			weftlog.Infof(ctx, "shardsm %s: export snapshot of %s, retrying next tick: %v", sh.ID, volumeID, err)
+			weftsdk.Infof(ctx, "shardsm %s: export snapshot of %s, retrying next tick: %v", sh.ID, volumeID, err)
 			return nil
 		}
 		if err := d.Store.SetExportSnapshot(sh.ID, id); err != nil {
@@ -262,7 +262,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 		return sh.failExportAttempt(ctx, fmt.Sprintf("snapshot %s no longer exists", snapID))
 	}
 	if err != nil {
-		weftlog.Infof(ctx, "shardsm %s: export snapshot %s state, retrying next tick: %v", sh.ID, snapID, err)
+		weftsdk.Infof(ctx, "shardsm %s: export snapshot %s state, retrying next tick: %v", sh.ID, snapID, err)
 		return nil
 	}
 	switch snap.State {
@@ -281,7 +281,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 			Prefix: sh.exportS3Prefix(services),
 		})
 		if err != nil {
-			weftlog.Infof(ctx, "shardsm %s: export instance launch, retrying next tick: %v", sh.ID, err)
+			weftsdk.Infof(ctx, "shardsm %s: export instance launch, retrying next tick: %v", sh.ID, err)
 			return nil
 		}
 		if err := d.Store.SetExportInstance(sh.ID, id); err != nil {
@@ -290,7 +290,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 		sh.mu.Lock()
 		sh.ExportInstanceID = id
 		sh.mu.Unlock()
-		weftlog.Infof(ctx, "shardsm %s: export attempt %d launched %s (%s) from %s", sh.ID, attempt, id, itype, snapID)
+		weftsdk.Infof(ctx, "shardsm %s: export attempt %d launched %s (%s) from %s", sh.ID, attempt, id, itype, snapID)
 		return nil
 	}
 
@@ -298,7 +298,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 	key := shard.ManifestKey(sh.exportS3Prefix(services), sh.ID)
 	m, found, err := d.ExportManifests.Get(ctx, key)
 	if err != nil {
-		weftlog.Infof(ctx, "shardsm %s: poll export manifest %s, retrying next tick: %v", sh.ID, key, err)
+		weftsdk.Infof(ctx, "shardsm %s: poll export manifest %s, retrying next tick: %v", sh.ID, key, err)
 		return nil
 	}
 	if found && m.Attempt == attempt {
@@ -306,7 +306,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 	}
 	state, err := d.Exports.InstanceState(ctx, instID)
 	if err != nil {
-		weftlog.Infof(ctx, "shardsm %s: export instance %s state, retrying next tick: %v", sh.ID, instID, err)
+		weftsdk.Infof(ctx, "shardsm %s: export instance %s state, retrying next tick: %v", sh.ID, instID, err)
 		return nil
 	}
 	if !exportInstanceEnded(state) {
@@ -316,7 +316,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 	// our two polls. Look once more before calling it a failure.
 	m, found, err = d.ExportManifests.Get(ctx, key)
 	if err != nil {
-		weftlog.Infof(ctx, "shardsm %s: re-poll export manifest %s, retrying next tick: %v", sh.ID, key, err)
+		weftsdk.Infof(ctx, "shardsm %s: re-poll export manifest %s, retrying next tick: %v", sh.ID, key, err)
 		return nil
 	}
 	if found && m.Attempt == attempt {
@@ -334,16 +334,16 @@ func (sh *Shard) deleteAttemptOutput() bool {
 	attempt, recorded, services := sh.ExportAttempt, sh.ParquetPath, sh.Services
 	sh.mu.RUnlock()
 	if recorded != "" {
-		weftlog.Infof(context.Background(), "shardsm %s: archive already recorded at %s; not deleting export output", sh.ID, recorded)
+		weftsdk.Infof(context.Background(), "shardsm %s: archive already recorded at %s; not deleting export output", sh.ID, recorded)
 		return true
 	}
 	if sh.deps.ExportOutputs == nil {
-		weftlog.Infof(context.Background(), "shardsm %s: no output deleter configured; attempt %d's partial output (if any) is left in place", sh.ID, attempt)
+		weftsdk.Infof(context.Background(), "shardsm %s: no output deleter configured; attempt %d's partial output (if any) is left in place", sh.ID, attempt)
 		return true
 	}
 	for _, p := range shard.ExportOutputPaths(sh.exportS3Prefix(services), sh.ID, attempt) {
 		if err := sh.deps.ExportOutputs.DeleteParquet(p); err != nil {
-			weftlog.Errorf(context.Background(), "shardsm %s: delete failed attempt %d's output %s, retrying next tick: %v", sh.ID, attempt, p, err)
+			weftsdk.Errorf(context.Background(), "shardsm %s: delete failed attempt %d's output %s, retrying next tick: %v", sh.ID, attempt, p, err)
 			return false
 		}
 	}
@@ -357,7 +357,7 @@ func (sh *Shard) failExportAttempt(ctx context.Context, reason string) error {
 	sh.mu.RLock()
 	attempt := sh.ExportAttempt
 	sh.mu.RUnlock()
-	weftlog.Errorf(ctx, "shardsm %s: export attempt %d/%d failed: %s", sh.ID, attempt, maxExportAttempts, reason)
+	weftsdk.Errorf(ctx, "shardsm %s: export attempt %d/%d failed: %s", sh.ID, attempt, maxExportAttempts, reason)
 	return sh.endExportAttempt(ctx, true)
 }
 
@@ -369,7 +369,7 @@ func (sh *Shard) failExportAttempt(ctx context.Context, reason string) error {
 // is logged, not returned, like the other AWS steps.
 func (sh *Shard) endExportAttempt(ctx context.Context, discardOutput bool) error {
 	if err := sh.deps.Exports.Cleanup(ctx, sh.ID); err != nil {
-		weftlog.Infof(ctx, "shardsm %s: export cleanup, retrying next tick: %v", sh.ID, err)
+		weftsdk.Infof(ctx, "shardsm %s: export cleanup, retrying next tick: %v", sh.ID, err)
 		return nil
 	}
 	if discardOutput && !sh.deleteAttemptOutput() {

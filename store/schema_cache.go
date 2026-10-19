@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"time"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -117,7 +117,7 @@ func (c *SchemaCache) set(ctx context.Context, orgID OrgID, namespace string, se
 	ctx, cancel := context.WithTimeout(ctx, schemaCacheOpTimeout)
 	defer cancel()
 	if err := c.client.Set(ctx, schemaCacheKey(orgID, namespace, service), b, ttl).Err(); err != nil {
-		weftlog.Infof(ctx, "schema cache: set %s/%s: %v", namespace, service, err)
+		weftsdk.Infof(ctx, "schema cache: set %s/%s: %v", namespace, service, err)
 	}
 }
 
@@ -138,6 +138,6 @@ func (c *SchemaCache) invalidate(ctx context.Context, orgID OrgID, namespace str
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), schemaCacheOpTimeout)
 	defer cancel()
 	if err := c.client.Del(ctx, schemaCacheKey(orgID, namespace, service)).Err(); err != nil {
-		weftlog.Infof(ctx, "schema cache: invalidate %s/%s: %v", namespace, service, err)
+		weftsdk.Infof(ctx, "schema cache: invalidate %s/%s: %v", namespace, service, err)
 	}
 }

@@ -19,7 +19,6 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -221,31 +220,31 @@ func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []
 		TraceId:     traceID,
 	})
 	if err != nil {
-		weftlog.Infof(ctx, "cold shard %s: marshal request: %v", s.id, err)
+		weftsdk.Infof(ctx, "cold shard %s: marshal request: %v", s.id, err)
 		return
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.functionURL, bytes.NewReader(body))
 	if err != nil {
-		weftlog.Infof(ctx, "cold shard %s: build request: %v", s.id, err)
+		weftsdk.Infof(ctx, "cold shard %s: build request: %v", s.id, err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if err := s.signRequest(req, body); err != nil {
-		weftlog.Infof(ctx, "cold shard %s: sign request: %v", s.id, err)
+		weftsdk.Infof(ctx, "cold shard %s: sign request: %v", s.id, err)
 		return
 	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		weftlog.Errorf(ctx, "cold shard %s: lambda call failed: %v", s.id, err)
+		weftsdk.Errorf(ctx, "cold shard %s: lambda call failed: %v", s.id, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		weftlog.Infof(ctx, "cold shard %s: lambda returned %d: %s", s.id, resp.StatusCode, body)
+		weftsdk.Infof(ctx, "cold shard %s: lambda returned %d: %s", s.id, resp.StatusCode, body)
 		return
 	}
 
@@ -260,11 +259,11 @@ func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []
 			// incident that originated this feature), so unconditional
 			// logging here doesn't reintroduce the log-spam problem a
 			// hot live-shard path would have.
-			weftlog.Infof(ctx, "cold shard %s: query completed in %s (%d rows)", s.id, time.Since(start), rowsSeen)
+			weftsdk.Infof(ctx, "cold shard %s: query completed in %s (%d rows)", s.id, time.Since(start), rowsSeen)
 			return
 		}
 		if err != nil {
-			weftlog.Errorf(ctx, "cold shard %s: stream read error after %d rows: %v", s.id, rowsSeen, err)
+			weftsdk.Errorf(ctx, "cold shard %s: stream read error after %d rows: %v", s.id, rowsSeen, err)
 			return
 		}
 		rowsSeen++

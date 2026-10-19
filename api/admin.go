@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -79,7 +79,7 @@ func (s *Server) handleAdminCreateCustomer(w http.ResponseWriter, r *http.Reques
 
 	cust, err := s.store.FindOrCreateOrg(customerName)
 	if err != nil {
-		weftlog.Infof(r.Context(), "admin: create customer %q: %v", customerName, err)
+		weftsdk.Infof(r.Context(), "admin: create customer %q: %v", customerName, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -87,19 +87,19 @@ func (s *Server) handleAdminCreateCustomer(w http.ResponseWriter, r *http.Reques
 	// comp account behind an email round-trip is pure friction.
 	user, err := s.store.CreateVerifiedUser(email)
 	if err != nil {
-		weftlog.Infof(r.Context(), "admin: create owner %q: %v", email, err)
+		weftsdk.Infof(r.Context(), "admin: create owner %q: %v", email, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
 	if err := s.store.AddTeamMemberWithEmail(cust.ID, user.ID, email, store.RoleOwner); err != nil {
-		weftlog.Infof(r.Context(), "admin: create owner membership for %q: %v", email, err)
+		weftsdk.Infof(r.Context(), "admin: create owner membership for %q: %v", email, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
 	if err := s.store.GrantCompSubscription(cust.ID, req.Tier, reason); err != nil {
-		weftlog.Infof(r.Context(), "admin: grant comp for %q: %v", customerName, err)
+		weftsdk.Infof(r.Context(), "admin: grant comp for %q: %v", customerName, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -109,7 +109,7 @@ func (s *Server) handleAdminCreateCustomer(w http.ResponseWriter, r *http.Reques
 	// it the comp owner lands on an empty dashboard and "Start the tour"
 	// is disabled. Soft-fails if Loom isn't seeded (see grantLoomMembership).
 	if err := s.grantLoomMembership(r.Context(), user.ID, email); err != nil {
-		weftlog.Infof(r.Context(), "admin: grant Loom membership for %q: %v", email, err)
+		weftsdk.Infof(r.Context(), "admin: grant Loom membership for %q: %v", email, err)
 	}
 
 	// Land the owner in their new org on next request.
@@ -120,11 +120,11 @@ func (s *Server) handleAdminCreateCustomer(w http.ResponseWriter, r *http.Reques
 	// deliver it out of band.
 	loginURL := ""
 	if token, err := s.store.CreateMagicLink(email); err != nil {
-		weftlog.Infof(r.Context(), "admin: create magic link for %q: %v", email, err)
+		weftsdk.Infof(r.Context(), "admin: create magic link for %q: %v", email, err)
 	} else {
 		loginURL = fmt.Sprintf("%s/verify?token=%s", s.baseURL, token)
 		if err := SendMagicLinkEmail(r.Context(), s.email, email, loginURL); err != nil {
-			weftlog.Infof(r.Context(), "admin: send login link to %q: %v", email, err)
+			weftsdk.Infof(r.Context(), "admin: send login link to %q: %v", email, err)
 		}
 	}
 
@@ -255,7 +255,7 @@ func (s *Server) handleAdminSetComp(w http.ResponseWriter, r *http.Request) {
 			req.Reason = "admin-comp"
 		}
 		if err := s.store.GrantCompSubscription(cust.ID, req.Tier, req.Reason); err != nil {
-			weftlog.Infof(r.Context(), "admin: grant comp for %s: %v", name, err)
+			weftsdk.Infof(r.Context(), "admin: grant comp for %s: %v", name, err)
 			http.Error(w, "failed to grant comp", http.StatusInternalServerError)
 			return
 		}
@@ -266,7 +266,7 @@ func (s *Server) handleAdminSetComp(w http.ResponseWriter, r *http.Request) {
 				"status":     "cancelled",
 				"updated_at": time.Now(),
 			}).Error; err != nil {
-			weftlog.Infof(r.Context(), "admin: revoke comp for %s: %v", name, err)
+			weftsdk.Infof(r.Context(), "admin: revoke comp for %s: %v", name, err)
 			http.Error(w, "failed to revoke comp", http.StatusInternalServerError)
 			return
 		}
@@ -289,7 +289,7 @@ func (s *Server) handleAdminSetTier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.GrantCompSubscription(cust.ID, req.Tier, "admin-set-tier"); err != nil {
-		weftlog.Infof(r.Context(), "admin: set tier for %s: %v", name, err)
+		weftsdk.Infof(r.Context(), "admin: set tier for %s: %v", name, err)
 		http.Error(w, "failed to set tier", http.StatusInternalServerError)
 		return
 	}
@@ -399,7 +399,7 @@ func writeShardOpError(ctx context.Context, w http.ResponseWriter, action, shard
 	case codes.FailedPrecondition:
 		http.Error(w, st.Message(), http.StatusConflict)
 	default:
-		weftlog.Infof(ctx, "admin: %s shard %s: %v", action, shardID, err)
+		weftsdk.Infof(ctx, "admin: %s shard %s: %v", action, shardID, err)
 		http.Error(w, action+" failed: "+st.Message(), http.StatusInternalServerError)
 	}
 }
@@ -412,7 +412,7 @@ func (s *Server) handleAdminListShards(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.coordClient.ListShards(s.coordCtx(r), &pb.ListShardsRequest{BucketId: id})
 	if err != nil {
-		weftlog.Infof(r.Context(), "admin: list shards for bucket %d: %v", id, err)
+		weftsdk.Infof(r.Context(), "admin: list shards for bucket %d: %v", id, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

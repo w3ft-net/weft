@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
 	"net/url"
@@ -15,7 +16,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -113,7 +113,7 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 	redirectURI := s.apiBaseURL() + "/api/integrations/slack/callback"
 	tokenResp, err := exchangeSlackCode(r.Context(), code, s.SlackClientID, s.SlackClientSecret, redirectURI)
 	if err != nil {
-		weftlog.Errorf(r.Context(), "Slack OAuth exchange error: %v", err)
+		weftsdk.Errorf(r.Context(), "Slack OAuth exchange error: %v", err)
 		http.Redirect(w, r, s.baseURL+"/account?integration=slack&status=error", http.StatusFound)
 		return
 	}
@@ -130,7 +130,7 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 	botToken := tokenResp.AccessToken
 	teamName := tokenResp.Team.Name
 	if botToken == "" {
-		weftlog.Infof(r.Context(), "Slack OAuth: no access_token in response")
+		weftsdk.Infof(r.Context(), "Slack OAuth: no access_token in response")
 		http.Redirect(w, r, s.baseURL+"/account?integration=slack&status=error", http.StatusFound)
 		return
 	}

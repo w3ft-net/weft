@@ -3,15 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"log"
 	"net/http"
 	"os"
-
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 func main() {
-	weftlog.Init(os.Stderr)
+	weftsdk.InitLogging("", os.Stderr).CaptureStdio()
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -21,7 +20,7 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 
-	weftlog.Infof(context.Background(), "weft starting on :%s", port)
+	weftsdk.Infof(context.Background(), "weft starting on :%s", port)
 	if err := http.ListenAndServe(fmt.Sprintf(":%s", port), nil); err != nil {
 		log.Fatal(err)
 	}

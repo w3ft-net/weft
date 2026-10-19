@@ -2,10 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"net/http"
 
 	"github.com/graybeardcorp/weft/ingest"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 const maxProbeMarks = 100
@@ -51,7 +51,7 @@ func (s *Server) handleProbeSource(w http.ResponseWriter, r *http.Request) {
 
 	lg, err := s.store.FindLogGroup(session.ActiveOrgID, namespace, app)
 	if err != nil {
-		weftlog.Infof(r.Context(), "probe source %s/%s: FindLogGroup: %v", namespace, app, err)
+		weftsdk.Infof(r.Context(), "probe source %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

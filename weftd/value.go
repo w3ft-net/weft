@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,7 +12,6 @@ import (
 	"sync/atomic"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // ValueSpec describes a metavariable value read from a file on disk. Path
@@ -202,12 +202,12 @@ func NewValueReader(ctx context.Context, spec ValueSpec) *ValueReader {
 
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		weftlog.Infof(ctx, "metavariable reader: fsnotify: %v", err)
+		weftsdk.Infof(ctx, "metavariable reader: fsnotify: %v", err)
 		return r
 	}
 	dir, base := filepath.Dir(spec.Path), filepath.Base(spec.Path)
 	if err := w.Add(dir); err != nil {
-		weftlog.Infof(ctx, "metavariable reader: watch %s: %v", dir, err)
+		weftsdk.Infof(ctx, "metavariable reader: watch %s: %v", dir, err)
 		w.Close()
 		return r
 	}
@@ -228,7 +228,7 @@ func (r *ValueReader) refresh() {
 	data, err := os.ReadFile(r.spec.Path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			weftlog.Infof(context.Background(), "metavariable reader: %s: %v", r.spec.Path, err)
+			weftsdk.Infof(context.Background(), "metavariable reader: %s: %v", r.spec.Path, err)
 		}
 		return
 	}
@@ -242,7 +242,7 @@ func (r *ValueReader) extract(data []byte) string {
 	}
 	var parsed any
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		weftlog.Infof(context.Background(), "metavariable reader: %s: parse json: %v", r.spec.Path, err)
+		weftsdk.Infof(context.Background(), "metavariable reader: %s: parse json: %v", r.spec.Path, err)
 		return ""
 	}
 	value, ok := applyJSONPath(parsed, r.spec.JSONPath)
@@ -273,7 +273,7 @@ func (r *ValueReader) runWatch(ctx context.Context, w *fsnotify.Watcher, base st
 			if !ok {
 				return
 			}
-			weftlog.Errorf(ctx, "metavariable reader: watch error: %v", err)
+			weftsdk.Errorf(ctx, "metavariable reader: watch error: %v", err)
 		}
 	}
 }

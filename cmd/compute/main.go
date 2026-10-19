@@ -17,12 +17,11 @@ import (
 
 	"github.com/graybeardcorp/weft/compute"
 	computesvc "github.com/graybeardcorp/weft/compute/service"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 func main() {
-	weftlog.Init(os.Stderr)
+	weftsdk.InitLogging("", os.Stderr).CaptureStdio()
 	port := flag.Int("port", 9010, "gRPC listen port")
 	// Accepted but unused until docs/plans/streaming-parallel-warp.md
 	// lands. The systemd unit passes --parallelism=4 today; without
@@ -48,7 +47,7 @@ func main() {
 
 	engine := &compute.Engine{AWSRegion: region, ShardSecret: shardSecret}
 	if awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region)); err != nil {
-		weftlog.Warnf(context.Background(), "warning: AWS config unavailable — cold shard queries will fail: %v", err)
+		weftsdk.Warnf(context.Background(), "warning: AWS config unavailable — cold shard queries will fail: %v", err)
 	} else {
 		engine.AWSCreds = awsCfg.Credentials
 	}
@@ -59,7 +58,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
-	weftlog.Infof(context.Background(), "compute worker listening on :%d", *port)
+	weftsdk.Infof(context.Background(), "compute worker listening on :%d", *port)
 
 	sdkCtx, sdkCancel := context.WithCancel(context.Background())
 	defer sdkCancel()
@@ -77,12 +76,12 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		s := <-sigs
-		weftlog.Infof(context.Background(), "compute: received %s, gracefully stopping", s)
+		weftsdk.Infof(context.Background(), "compute: received %s, gracefully stopping", s)
 		srv.GracefulStop()
 	}()
 
 	if err := srv.Serve(lis); err != nil {
-		weftlog.Errorf(context.Background(), "serve error: %v", err)
+		weftsdk.Errorf(context.Background(), "serve error: %v", err)
 		os.Exit(1)
 	}
 }

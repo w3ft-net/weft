@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
+	weftsdk "github.com/w3ft-net/weft-go"
 )
 
 // queryLog carries the query-audit stream (every "query:" line). It is
@@ -21,7 +21,16 @@ import (
 // Flags match the stdlib default logger (date+time) so the audit
 // pseudofile's lines keep the `2006/01/02 15:04:05 query: ...` shape
 // weft's schema detection already keys timestamps off.
-var queryLog = weftlog.NewLogger(queryOut)
+var queryLog = slog.New(slog.NewJSONHandler(queryOut, nil))
+
+// queryFile is the SDK log file the audit stream rides when logging goes
+// through one; nil otherwise.
+var queryFile *weftsdk.LogFile
+
+// SetQueryLogFile sends the audit stream into lf as kind "queries", so it
+// reads as queries.log beside the service's own log. nil leaves it on the
+// file or stderr SetQueryLog manages.
+func SetQueryLogFile(lf *weftsdk.LogFile) { queryFile = lf }
 
 // queryOut is where queryLog writes; SetQueryLog swaps it for the audit file.
 var queryOut = &switchWriter{w: os.Stderr}
@@ -84,13 +93,19 @@ func SetQueryLogCoordinatorID(id string) {
 // SetQueryLogCoordinatorID.
 func logQuery(ctx context.Context, format string, args ...any) {
 	l := queryLog
-	if f := weftlog.File(); f != nil {
+	if f := queryFile; f != nil {
 		// SDK logging: the audit stream is a second kind in the service's own
 		// file, so it reads as queries.log beside coordinator.log.
 		l = slog.New(f.KindHandler("queries", nil))
 	}
 	if queryLogCoordinatorID != "" {
 		l = l.With("coordinator_id", queryLogCoordinatorID)
+	}
+	if queryFile == nil {
+		// No line header to carry the trace ID.
+		if id, ok := weftsdk.TraceIDFromContext(ctx); ok {
+			l = l.With("trace_id", id)
+		}
 	}
 	l.InfoContext(ctx, fmt.Sprintf(format, args...))
 }

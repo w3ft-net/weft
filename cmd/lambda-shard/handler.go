@@ -12,7 +12,6 @@ import (
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 )
@@ -172,12 +171,12 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// queryToSinkRemote logs the truncated stream on its side.
 	count, err := streamRows(w, rows)
 	if err != nil {
-		weftlog.Infof(logCtx, "lambda-shard: mid-stream failure after header sent: %v", err)
+		weftsdk.Infof(logCtx, "lambda-shard: mid-stream failure after header sent: %v", err)
 		return
 	}
 	// Unconditional completion log, matching the caller-side
 	// (shard.ColdShard.queryToSinkRemote) contract — no shard id is
 	// available on this side of the wire, so parquet path identifies
 	// which archive was read.
-	weftlog.Infof(logCtx, "lambda-shard: query completed in %s parquet=%s (%d rows)", time.Since(start), req.ParquetPath, count)
+	weftsdk.Infof(logCtx, "lambda-shard: query completed in %s parquet=%s (%d rows)", time.Since(start), req.ParquetPath, count)
 }

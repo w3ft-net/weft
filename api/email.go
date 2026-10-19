@@ -3,9 +3,9 @@ package api
 import (
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/graybeardcorp/saaskit/email"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // EmailConfig is an alias for the shared email.Config, re-exported for
@@ -21,7 +21,7 @@ func EmailConfigFromEnv() *EmailConfig {
 // If cfg is nil (dev mode), logs the link instead.
 func SendMagicLinkEmail(ctx context.Context, cfg *EmailConfig, addr, verifyURL string) error {
 	if cfg == nil {
-		weftlog.Infof(ctx, "magic link for %s: %s", addr, verifyURL)
+		weftsdk.Infof(ctx, "magic link for %s: %s", addr, verifyURL)
 		return nil
 	}
 
@@ -33,7 +33,7 @@ func SendMagicLinkEmail(ctx context.Context, cfg *EmailConfig, addr, verifyURL s
 	if err != nil {
 		return err
 	}
-	weftlog.Infof(ctx, "magic link email sent to %s", addr)
+	weftsdk.Infof(ctx, "magic link email sent to %s", addr)
 	return nil
 }
 
@@ -41,7 +41,7 @@ func SendMagicLinkEmail(ctx context.Context, cfg *EmailConfig, addr, verifyURL s
 // If cfg is nil (dev mode), logs the link instead.
 func SendInviteEmail(ctx context.Context, cfg *EmailConfig, toEmail, inviterEmail, customerName, verifyURL string) error {
 	if cfg == nil {
-		weftlog.Infof(ctx, "invite for %s to join %s (from %s): %s", toEmail, customerName, inviterEmail, verifyURL)
+		weftsdk.Infof(ctx, "invite for %s to join %s (from %s): %s", toEmail, customerName, inviterEmail, verifyURL)
 		return nil
 	}
 
@@ -53,6 +53,6 @@ func SendInviteEmail(ctx context.Context, cfg *EmailConfig, toEmail, inviterEmai
 	if err != nil {
 		return err
 	}
-	weftlog.Infof(ctx, "invite email sent to %s (team: %s)", toEmail, customerName)
+	weftsdk.Infof(ctx, "invite email sent to %s (team: %s)", toEmail, customerName)
 	return nil
 }

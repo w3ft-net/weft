@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"log"
 	"net/http"
 	"os"
@@ -13,12 +14,11 @@ import (
 	"github.com/graybeardcorp/weft/config"
 	"github.com/graybeardcorp/weft/ingest"
 	ingsyslog "github.com/graybeardcorp/weft/ingest/syslog"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
 func main() {
-	weftlog.Init(os.Stderr)
+	weftsdk.InitLogging("", os.Stderr).CaptureStdio()
 	port := flag.String("port", "8080", "HTTP listen port")
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN")
 	coordAddr := flag.String("coordinator", "localhost:9020", "coordinator gRPC address")
@@ -31,7 +31,7 @@ func main() {
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
 		jwtSecret = "dev-secret-change-in-production"
-		weftlog.Warnf(context.Background(), "using default JWT secret — set JWT_SECRET in production")
+		weftsdk.Warnf(context.Background(), "using default JWT secret — set JWT_SECRET in production")
 	}
 
 	dsn := *dbDSN
@@ -40,7 +40,7 @@ func main() {
 	}
 	if dsn == "" {
 		dsn = "host=localhost dbname=weft user=weft password=weft sslmode=disable"
-		weftlog.Warnf(context.Background(), "using default DB DSN — set --db-dsn or DB_DSN in production")
+		weftsdk.Warnf(context.Background(), "using default DB DSN — set --db-dsn or DB_DSN in production")
 	}
 
 	if err := store.Migrate(store.MigrateDSN(dsn)); err != nil {
@@ -81,7 +81,7 @@ func main() {
 	// deliberate opt-in, not a startup requirement, since it depends on
 	// IAM/model-access being provisioned separately (infrastructure-live).
 	if classifier, err := ingest.NewBedrockClassifierFromEnv(context.Background()); err != nil {
-		weftlog.Warnf(context.Background(), "WARNING: bedrock classifier disabled: %v", err)
+		weftsdk.Warnf(context.Background(), "WARNING: bedrock classifier disabled: %v", err)
 	} else if classifier != nil {
 		srv.SetClassifier(classifier)
 	}
@@ -147,7 +147,7 @@ func main() {
 	}
 	srv.SetConfig(config.Watch(ctx, appName, region, 60*time.Second))
 
-	weftlog.Infof(ctx, "weft-api listening on :%s (coordinator: %s)", *port, *coordAddr)
+	weftsdk.Infof(ctx, "weft-api listening on :%s (coordinator: %s)", *port, *coordAddr)
 	if err := http.ListenAndServe(":"+*port, srv.Handler()); err != nil {
 		log.Fatal(err)
 	}

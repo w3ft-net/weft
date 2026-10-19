@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
+	"github.com/graybeardcorp/weft/internal/logtest"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -272,5 +272,5 @@ func TestShardStore_StuckArchiving(t *testing.T) {
 // captureTestLog returns everything the std logger wrote while fn ran.
 func captureTestLog(t *testing.T, fn func()) string {
 	t.Helper()
-	return weftlog.Capture(fn)
+	return logtest.Capture(fn)
 }

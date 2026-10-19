@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,7 +18,6 @@ import (
 	duckdb "github.com/duckdb/duckdb-go/v2"
 	"github.com/google/uuid"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -324,7 +324,7 @@ func (s *DuckDBShard) QueryToSink(ctx context.Context, query string, args []any,
 
 	rows, err := s.QueryContext(ctx, query, args...)
 	if err != nil {
-		weftlog.Errorf(ctx, "shard %s: QueryToSink error: %v (sql=%s args=%v)", s.id, err, query, args)
+		weftsdk.Errorf(ctx, "shard %s: QueryToSink error: %v (sql=%s args=%v)", s.id, err, query, args)
 		return // sentinel still sent via defer
 	}
 	for _, r := range rows {
@@ -596,11 +596,11 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 
 	start := time.Now()
 	fail := func(phase string, err error) (string, []CustomerStat, error) {
-		weftlog.Errorf(ctx, "archive attempt=%d failed phase=%s after=%s err=%v %s",
+		weftsdk.Errorf(ctx, "archive attempt=%d failed phase=%s after=%s err=%v %s",
 			attempt, phase, time.Since(start).Round(time.Millisecond), err, s.nativeMemoryDiag(context.WithoutCancel(ctx)))
 		return "", nil, err
 	}
-	weftlog.Infof(ctx, "archive attempt=%d start shard=%s prefix=%s %s", attempt, s.id, s3Prefix, s.nativeMemoryDiag(ctx))
+	weftsdk.Infof(ctx, "archive attempt=%d start shard=%s prefix=%s %s", attempt, s.id, s3Prefix, s.nativeMemoryDiag(ctx))
 
 	// Capture per-customer stats first, off the same local handle that's
 	// about to be exported. Cheaper here (one GROUP BY over local DuckDB)
@@ -612,7 +612,7 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 	if err != nil {
 		return fail("stats", fmt.Errorf("customer stats: %w", err))
 	}
-	weftlog.Infof(ctx, "archive attempt=%d stats customers=%d took=%s %s",
+	weftsdk.Infof(ctx, "archive attempt=%d stats customers=%d took=%s %s",
 		attempt, len(stats), time.Since(statsStart).Round(time.Millisecond), s.nativeMemoryDiag(ctx))
 
 	stopSampling = s.sampleArchiveMemory(attempt, "copy", archiveSampleInterval)
@@ -621,7 +621,7 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 	if err != nil {
 		return fail("export", err)
 	}
-	weftlog.Infof(ctx, "archive attempt=%d done path=%s rows=%d total=%s %s",
+	weftsdk.Infof(ctx, "archive attempt=%d done path=%s rows=%d total=%s %s",
 		attempt, path, rows, time.Since(start).Round(time.Millisecond), s.nativeMemoryDiag(ctx))
 	return path, stats, nil
 }
@@ -666,14 +666,14 @@ func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix
 	if err != nil {
 		return "", 0, fmt.Errorf("partition sizing: %w", err)
 	}
-	weftlog.Infof(ctx, "archive attempt=%d sizing db_bytes=%d est_parquet_bytes=%d target_files=%d granularity=%q",
+	weftsdk.Infof(ctx, "archive attempt=%d sizing db_bytes=%d est_parquet_bytes=%d target_files=%d granularity=%q",
 		attempt, plan.dbBytes, plan.estParquetBytes, plan.targetFiles, string(plan.gran))
 
 	copyStart := time.Now()
-	weftlog.Infof(ctx, "archive attempt=%d copy start %s", attempt, s.nativeMemoryDiag(ctx))
+	weftsdk.Infof(ctx, "archive attempt=%d copy start %s", attempt, s.nativeMemoryDiag(ctx))
 	defer func() {
 		if err == nil {
-			weftlog.Infof(ctx, "archive attempt=%d copy done rows=%d took=%s", attempt, rows, time.Since(copyStart).Round(time.Millisecond))
+			weftsdk.Infof(ctx, "archive attempt=%d copy done rows=%d took=%s", attempt, rows, time.Since(copyStart).Round(time.Millisecond))
 		}
 	}()
 

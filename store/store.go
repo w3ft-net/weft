@@ -4,13 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"os"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/graybeardcorp/saaskit/orgs"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -200,7 +200,7 @@ func Connect(dsn string) (*Store, error) {
 			backfilled++
 		}
 		if backfilled > 0 {
-			weftlog.Infof(context.Background(), "store: backfilled alert_condition/alert_threshold on %d cron_watches", backfilled)
+			weftsdk.Infof(context.Background(), "store: backfilled alert_condition/alert_threshold on %d cron_watches", backfilled)
 		}
 	}
 	return s, nil

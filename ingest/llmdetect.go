@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"os"
 	"regexp"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	brdoc "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	brtypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 // ClassifierResult is one classification pass over a sample: the LLM's
@@ -241,7 +241,7 @@ func validateClassification(ctx context.Context, t *classifyToolResponse, lines 
 		if c := verifyTagProposal(role.src, ProbeField(role.name), lines); c != nil {
 			*role.dst = c
 		} else {
-			weftlog.Infof(ctx, "classify: dropping unverified %s candidate: %+v", role.name, role.src)
+			weftsdk.Infof(ctx, "classify: dropping unverified %s candidate: %+v", role.name, role.src)
 		}
 	}
 
@@ -268,7 +268,7 @@ func verifyTimestampProposal(ctx context.Context, f *timestampField, lines []str
 	}
 	layout, err := strftimeToGoLayout(f.Strftime)
 	if err != nil {
-		weftlog.Infof(ctx, "classify: dropping timestamp candidate, bad strftime %q: %v", f.Strftime, err)
+		weftsdk.Infof(ctx, "classify: dropping timestamp candidate, bad strftime %q: %v", f.Strftime, err)
 		return nil
 	}
 
@@ -663,7 +663,7 @@ func ClassifyAsync(ctx context.Context, classifier Classifier, lines []string, f
 
 		result, err := classifier.Classify(ctx, det)
 		if err != nil {
-			weftlog.Errorf(ctx, "classify: bedrock classification failed, falling back to heuristic text detection: %v", err)
+			weftsdk.Errorf(ctx, "classify: bedrock classification failed, falling back to heuristic text detection: %v", err)
 			// Heuristic fallback covers timestamp/level only — the only
 			// two fields the pattern-matching detector has ever known
 			// how to find. Envelope/JSON detection is already in det;

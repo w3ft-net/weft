@@ -186,7 +186,7 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	// bash interpreter's RegisterCommand path (see
 	// coordinator/weftcmds.go), not shellcore's RegisterBuiltin.
 	for _, name := range []string{
-		"alert", "git",
+		"alert", "git", "explain",
 		"weft.latest", "weft.avg", "weft.max", "weft.min",
 		"weft.sum", "weft.stddev", "weft.first", "weft.count",
 		"weft.percentile", "weft.delta", "weft.slope", "weft.rate",

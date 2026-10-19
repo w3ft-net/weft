@@ -5,13 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"os"
 	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 )
 
 const (
@@ -208,7 +208,7 @@ func (t *Tailer) watch() {
 			if !ok {
 				return
 			}
-			weftlog.Errorf(context.Background(), "tailer[%s]: watch error: %v", t.path, err)
+			weftsdk.Errorf(context.Background(), "tailer[%s]: watch error: %v", t.path, err)
 		}
 	}
 }
@@ -220,7 +220,7 @@ func (t *Tailer) checkTruncated() {
 	if err != nil || fi.Size() >= t.pos {
 		return
 	}
-	weftlog.Infof(context.Background(), "tailer[%s]: truncated (size %d < position %d), restarting at 0", t.path, fi.Size(), t.pos)
+	weftsdk.Infof(context.Background(), "tailer[%s]: truncated (size %d < position %d), restarting at 0", t.path, fi.Size(), t.pos)
 	if _, err := t.file.Seek(0, io.SeekStart); err != nil {
 		return
 	}
@@ -250,7 +250,7 @@ func (t *Tailer) rotate() bool {
 	}
 	f, err := os.Open(t.path)
 	if err != nil {
-		weftlog.Infof(context.Background(), "tailer[%s]: reopen after rotation: %v", t.path, err)
+		weftsdk.Infof(context.Background(), "tailer[%s]: reopen after rotation: %v", t.path, err)
 		return false
 	}
 	id, err := identify(f)
@@ -285,7 +285,7 @@ func (t *Tailer) drain() bool {
 		default: // io.EOF or a read error: hold the partial line
 			t.addChunk(chunk)
 			if err != io.EOF {
-				weftlog.Infof(context.Background(), "tailer[%s]: read: %v", t.path, err)
+				weftsdk.Infof(context.Background(), "tailer[%s]: read: %v", t.path, err)
 			}
 			return true
 		}

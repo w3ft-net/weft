@@ -3,11 +3,11 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -112,7 +112,7 @@ func (ce *CronExecutor) overdueTick(ctx context.Context, g *overdueGuard, now ti
 	var watches []store.CronWatch
 	err := ce.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Where("enabled = ?", true).Find(&watches).Error
 	if err != nil {
-		weftlog.Errorf(ctx, "cron: overdue check failed to list watches: %v", err)
+		weftsdk.Errorf(ctx, "cron: overdue check failed to list watches: %v", err)
 		return
 	}
 
@@ -131,13 +131,13 @@ func (ce *CronExecutor) overdueTick(ctx context.Context, g *overdueGuard, now ti
 			continue
 		}
 		g.active[o.watch.ID] = true
-		weftlog.Infof(ctx, "cron_overdue name=%s id=%d interval=%s age=%s", o.watch.Name, o.watch.ID, o.interval, o.age.Round(time.Second))
+		weftsdk.Infof(ctx, "cron_overdue name=%s id=%d interval=%s age=%s", o.watch.Name, o.watch.ID, o.interval, o.age.Round(time.Second))
 		fresh[o.watch.OrgID] = append(fresh[o.watch.OrgID], o)
 	}
 	for id := range g.active {
 		if !seen[id] {
 			delete(g.active, id)
-			weftlog.Infof(ctx, "cron_overdue_cleared id=%d", id)
+			weftsdk.Infof(ctx, "cron_overdue_cleared id=%d", id)
 		}
 	}
 
@@ -172,6 +172,6 @@ func (ce *CronExecutor) notifyOverdue(ctx context.Context, org store.OrgID, cron
 		return
 	}
 	if err := send(ctx, org, store.SystemAlias, "cron-overdue", b.String()); err != nil {
-		weftlog.Infof(ctx, "cron_overdue not delivered for org %d: %v", org, err)
+		weftsdk.Infof(ctx, "cron_overdue not delivered for org %d: %v", org, err)
 	}
 }

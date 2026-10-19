@@ -54,6 +54,7 @@ bash/coreutils except where a note says otherwise.</p>
 <ul>
 <li><code>range [&lt;start&gt;..&lt;end&gt;]</code> — show or set the query window; it governs every read (<code>man range</code>).</li>
 <li><code>chart</code> — render a pipeline or cron in the terminal (<code>man chart</code>).</li>
+<li><code>explain &lt;pipeline&gt;</code> — say where each stage of a one-liner runs and what would speed it up, without running it (<code>man explain</code>).</li>
 <li><code>alert</code> — fire a notification from a pipeline's final number (<code>man alert</code>).</li>
 <li><code>clipboard</code> — copy a short link to a <code>/bin</code> script (<code>man clipboard</code>).</li>
 <li><code>dashboard</code> — dashboard YAML grammar and tiles (<code>man dashboard</code>).</li>

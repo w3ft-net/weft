@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"strings"
 	"sync"
@@ -12,7 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/graybeardcorp/warp/pkg/bash"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
@@ -104,7 +104,7 @@ func (p *Engine) resolveShard(ctx context.Context, d *pb.ShardDescriptor) (shard
 		// are logged but not propagated — the new dial below is the
 		// path that matters.
 		if err := c.sh.Close(); err != nil {
-			weftlog.Infof(ctx, "compute: close stale handle for %s (addr %s → %s): %v", d.ShardId, c.addr, d.GrpcAddr, err)
+			weftsdk.Infof(ctx, "compute: close stale handle for %s (addr %s → %s): %v", d.ShardId, c.addr, d.GrpcAddr, err)
 		}
 	}
 

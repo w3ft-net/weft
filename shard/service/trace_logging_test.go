@@ -11,7 +11,7 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
+	"github.com/graybeardcorp/weft/internal/logtest"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -19,7 +19,7 @@ import (
 // captureLog helper — Query uses stdlib log.Printf.
 func captureShardLog(t *testing.T, fn func()) string {
 	t.Helper()
-	return weftlog.Capture(fn)
+	return logtest.Capture(fn)
 }
 
 // queryCaptureStream is a minimal ShardQuery_QueryServer, modeled on
@@ -96,7 +96,7 @@ func TestQuery_LogsTraceIDWhenPresent(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(out, "trace_id=shard-trace-abc") {
+	if !strings.Contains(out, `"trace_id":"shard-trace-abc"`) {
 		t.Fatalf("traced query should log the trace id; got %q", out)
 	}
 }

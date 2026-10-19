@@ -11,7 +11,7 @@ import (
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
-	"github.com/graybeardcorp/weft/internal/weftlog"
+	"github.com/graybeardcorp/weft/internal/logtest"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -20,7 +20,7 @@ import (
 // fn and returns everything written.
 func captureStdLog(t *testing.T, fn func()) string {
 	t.Helper()
-	return weftlog.Capture(fn)
+	return logtest.Capture(fn)
 }
 
 // traceCaptureStream is a minimal grpc.ServerStream carrying a fixed
@@ -86,7 +86,7 @@ func TestExecuteRPC_TraceIDSurvivesGRPCMetadataBoundary(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(out, "trace_id=test-trace-xyz") {
+	if !strings.Contains(out, `"trace_id":"test-trace-xyz"`) {
 		t.Fatalf("expected the propagated trace ID in the error log; got %q", out)
 	}
 }

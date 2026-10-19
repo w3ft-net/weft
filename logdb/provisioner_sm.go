@@ -5,9 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"time"
 
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -40,13 +40,13 @@ func (p *Provisioner) LoadStateMachines() {
 	}
 	all, err := p.Buckets.All()
 	if err != nil {
-		weftlog.Infof(context.Background(), "provisioner: LoadStateMachines: Buckets.All: %v", err)
+		weftsdk.Infof(context.Background(), "provisioner: LoadStateMachines: Buckets.All: %v", err)
 		return
 	}
 	for _, bk := range all {
 		p.bucketSMs[bk.ID] = NewBucketSM(bk, p.store.DB(), p, p.clock)
 	}
-	weftlog.Infof(context.Background(), "provisioner: built %d bucket SMs + %d shard SMs", len(p.bucketSMs), len(p.registry.Entries()))
+	weftsdk.Infof(context.Background(), "provisioner: built %d bucket SMs + %d shard SMs", len(p.bucketSMs), len(p.registry.Entries()))
 }
 
 // shardDeps returns the one ShardDeps bundle every shard references by
@@ -139,7 +139,7 @@ func (p *Provisioner) MintShard(ctx context.Context, spec MintSpec) (string, err
 	// omitting persist would have wiped.
 	p.registry.Add(entry)
 	if err := p.store.StampShardServices(shardID, spec.BucketID); err != nil {
-		weftlog.Infof(ctx, "provisioner: MintShard %s: stamp shard_services: %v", shardID, err)
+		weftsdk.Infof(ctx, "provisioner: MintShard %s: stamp shard_services: %v", shardID, err)
 	}
 
 	// Bind the FSM onto the entry — the registry map is the SM set, so
@@ -147,7 +147,7 @@ func (p *Provisioner) MintShard(ctx context.Context, spec MintSpec) (string, err
 	// from the row just written; its Evaluate drives the EC2 launch.
 	entry.ensureSM(p.shardDeps())
 
-	weftlog.Infof(ctx, "provisioner: minted LAUNCHING shard %s for bucket %d (tier=%s stripe=%d az=%q window %s–%s)",
+	weftsdk.Infof(ctx, "provisioner: minted LAUNCHING shard %s for bucket %d (tier=%s stripe=%d az=%q window %s–%s)",
 		shardID, spec.BucketID, tier, stripe, az,
 		spec.WindowStart.Format(time.RFC3339), spec.WindowEnd.Format(time.RFC3339))
 	return shardID, nil

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"strconv"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/alert"
-	"github.com/graybeardcorp/weft/internal/weftlog"
 	"github.com/graybeardcorp/weft/store"
 	"gorm.io/gorm"
 )
@@ -183,7 +183,7 @@ func evaluateAlertRow(ctx context.Context, r alertRow, parsed *alert.Args, condS
 	if ac.Store != nil && ac.Watch != nil {
 		results, err := ac.Store.ListCronResults(ac.Watch.ID, 2, r.tag)
 		if err != nil {
-			weftlog.Infof(ctx, "alert: ListCronResults watch=%d tag=%q: %v", ac.Watch.ID, r.tag, err)
+			weftsdk.Infof(ctx, "alert: ListCronResults watch=%d tag=%q: %v", ac.Watch.ID, r.tag, err)
 		}
 		if len(results) >= 2 {
 			prevStdout = strings.TrimSpace(results[1].Stdout)
@@ -465,7 +465,7 @@ func checkIncident(ctx context.Context, s *store.Store, watchID uint, condition,
 	if err != nil {
 		// A swallow here would silently double-fire on every tick;
 		// log loudly so we can spot DB-side regressions.
-		weftlog.Infof(ctx, "alert: OpenIncident watch=%d condition=%q tag=%q: %v", watchID, condition, tag, err)
+		weftsdk.Infof(ctx, "alert: OpenIncident watch=%d condition=%q tag=%q: %v", watchID, condition, tag, err)
 	}
 	if triggered {
 		if existing != nil {
