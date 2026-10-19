@@ -145,7 +145,10 @@ func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
 // called once before serving requests. The caller is responsible for calling
 // Close when done.
 func (s *Server) Connect() error {
-	conn, err := grpc.NewClient(s.coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(s.coordAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor()),
+		grpc.WithChainStreamInterceptor(weftsdk.GRPC.StreamClientInterceptor()))
 	if err != nil {
 		return fmt.Errorf("connect to coordinator at %s: %w", s.coordAddr, err)
 	}
@@ -172,21 +175,6 @@ func (s *Server) coordCtx(r *http.Request) context.Context {
 	}
 	if org := r.Header.Get("X-Active-Org"); org != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, "x-active-org", org)
-	}
-	return withTraceMetadata(ctx)
-}
-
-// withTraceMetadata ferries the ambient trace and span IDs as outgoing
-// gRPC metadata so the coordinator's logs and spans join the request.
-func withTraceMetadata(ctx context.Context) context.Context {
-	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
-		ctx = metadata.AppendToOutgoingContext(ctx, "weft-trace-id", traceID)
-	}
-	// AccessLog's "api.access" span (if StartSpan established one) rides
-	// alongside as `weft-span-id` so coordinator's own span parents off
-	// it — same courier pattern as weft-trace-id.
-	if spanID, ok := weftsdk.CurrentSpanID(ctx); ok {
-		ctx = metadata.AppendToOutgoingContext(ctx, "weft-span-id", spanID)
 	}
 	return ctx
 }

@@ -161,23 +161,6 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		dirStack = md.Get("weft-dirstack")
 	}
-	// Trace courier (in): a delegated caller (weft's own api server)
-	// ferries the ambient trace ID as `weft-trace-id` metadata, mirroring
-	// the dirstack courier above. context.Value doesn't cross a gRPC call
-	// on its own — this re-establishes it as an ambient value on ctx so
-	// everything downstream (which now threads ctx) sees it via
-	// weftsdk.TraceIDFromContext.
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if ids := md.Get("weft-trace-id"); len(ids) > 0 {
-			ctx = weftsdk.ContextWithTraceID(ctx, ids[0])
-		}
-		// Same courier, for the span api's AccessLog started (if any) —
-		// read before StartSpan below so this RPC's own span parents
-		// off it instead of starting a fresh root.
-		if ids := md.Get("weft-span-id"); len(ids) > 0 {
-			ctx = weftsdk.ContextWithSpanID(ctx, ids[0])
-		}
-	}
 	// "coordinator.Execute" bookends this RPC with weftsdk's own "span
 	// start"/"span done" lines when traced (no-op otherwise), parented
 	// off whatever span api's own AccessLog started — the ctx it

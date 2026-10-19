@@ -99,8 +99,8 @@ func main() {
 	}
 	gs := grpc.NewServer(
 		grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
-		grpc.UnaryInterceptor(auth.SharedTokenUnaryServerInterceptor(shardSecret)),
-		grpc.StreamInterceptor(auth.SharedTokenStreamServerInterceptor(shardSecret)),
+		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor(), auth.SharedTokenUnaryServerInterceptor(shardSecret)),
+		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor(), auth.SharedTokenStreamServerInterceptor(shardSecret)),
 	)
 	pb.RegisterShardQueryServer(gs, srv)
 

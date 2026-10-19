@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"strings"
 	"testing"
 
@@ -69,10 +70,8 @@ func TestExecuteRPC_TraceIDSurvivesGRPCMetadataBoundary(t *testing.T) {
 		ActiveCustomerName: cust.Name,
 		EmailVerified:      true,
 	})
-	// This is the wire half: seed weft-trace-id as INCOMING metadata,
-	// exactly as api/handlers.go's coordCtx attaches it OUTGOING on the
-	// client side.
 	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("weft-trace-id", "test-trace-xyz"))
+	ctx = weftsdk.GRPC.Incoming(ctx)
 
 	req := &pb.CoordinatorExecuteRequest{
 		Pipeline: "(", // deliberately unparseable — fails fast, no shard/compute needed

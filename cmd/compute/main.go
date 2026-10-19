@@ -51,7 +51,10 @@ func main() {
 	} else {
 		engine.AWSCreds = awsCfg.Credentials
 	}
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor()),
+		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor()),
+	)
 	pb.RegisterWeftComputeServer(srv, computesvc.NewServer(engine))
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))

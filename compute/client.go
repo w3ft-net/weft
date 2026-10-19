@@ -3,13 +3,11 @@ package compute
 import (
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
-
-	weftsdk "github.com/w3ft-net/weft-go"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -24,7 +22,10 @@ type Client struct {
 
 // NewClient connects to a remote compute worker.
 func NewClient(addr string) (*Client, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor()),
+		grpc.WithChainStreamInterceptor(weftsdk.GRPC.StreamClientInterceptor()))
 	if err != nil {
 		return nil, fmt.Errorf("connect to compute at %s: %w", addr, err)
 	}
@@ -41,19 +42,6 @@ func (p *Client) Close() error {
 }
 
 func (p *Client) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (LineStream, error) {
-	// Trace courier (out to compute): context.Value doesn't cross a gRPC
-	// call on its own — ferry the ambient trace ID as `weft-trace-id`
-	// metadata, mirroring the api→coordinator boundary (coordCtx in
-	// api/handlers.go) and the pre-existing weft-dirstack pattern. The
-	// ambient span ID (coordinator's own "coordinator.Execute" span, if
-	// StartSpan established one) rides alongside as `weft-span-id` so
-	// the span compute starts on the other end parents off it.
-	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
-		ctx = metadata.AppendToOutgoingContext(ctx, "weft-trace-id", traceID)
-	}
-	if spanID, ok := weftsdk.CurrentSpanID(ctx); ok {
-		ctx = metadata.AppendToOutgoingContext(ctx, "weft-span-id", spanID)
-	}
 	stream, err := p.client.ExecuteQueryStream(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("execute query stream: %w", err)

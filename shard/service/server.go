@@ -8,8 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"google.golang.org/grpc/metadata"
-
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	weftcfg "github.com/graybeardcorp/weft/config"
@@ -225,23 +223,6 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 
 	timeoutSec := s.runtimeCfg().ShardQueryTimeoutSeconds
 	ctx := stream.Context()
-	// Trace courier (in): a delegated caller (compute) ferries the
-	// ambient trace ID as `weft-trace-id` metadata — mirrors the
-	// api→coordinator and coordinator→compute reads. context.WithTimeout
-	// below preserves ctx.Value lookups from its parent, so this can
-	// happen before or after the wrap; done here for locality with the
-	// dirstack-equivalent reads elsewhere in this codebase.
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if ids := md.Get("weft-trace-id"); len(ids) > 0 {
-			ctx = weftsdk.ContextWithTraceID(ctx, ids[0])
-		}
-		// Same courier, for the span compute's own "compute.ExecuteQuery"/
-		// "compute.ExecuteQueryStream" started (if any) — read before
-		// StartSpan below so this span parents off it.
-		if ids := md.Get("weft-span-id"); len(ids) > 0 {
-			ctx = weftsdk.ContextWithSpanID(ctx, ids[0])
-		}
-	}
 	if timeoutSec > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)

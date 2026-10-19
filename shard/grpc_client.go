@@ -9,7 +9,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	weftsdk "github.com/w3ft-net/weft-go"
@@ -62,8 +61,8 @@ type GRPCShard struct {
 func NewGRPCShard(id, addr, token string) (*GRPCShard, error) {
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(auth.ClientTokenUnaryInterceptor(token)),
-		grpc.WithStreamInterceptor(auth.ClientTokenStreamInterceptor(token)),
+		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor(), auth.ClientTokenUnaryInterceptor(token)),
+		grpc.WithChainStreamInterceptor(weftsdk.GRPC.StreamClientInterceptor(), auth.ClientTokenStreamInterceptor(token)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("connect to shard %s at %s: %w", id, addr, err)
@@ -104,7 +103,7 @@ func (s *GRPCShard) Addr() string { return s.addr }
 // carries the resulting consecutive-failure count, so callers only
 // need a single log line.
 func (s *GRPCShard) Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestRecorder) error {
-	_, err := s.client.Ingest(withTraceMetadata(ctx), &pb.IngestRequest{Rows: rows})
+	_, err := s.client.Ingest(ctx, &pb.IngestRequest{Rows: rows})
 	if err != nil {
 		// wrapIngestError already names the shard; pass the raw RPC
 		// error so the formatted message reads as one phrase, not two.
@@ -140,7 +139,7 @@ func (s *GRPCShard) Query(ctx context.Context, sql string, args ...any) ([]*pb.R
 }
 
 func (s *GRPCShard) queryOnce(ctx context.Context, sql string, args []any) ([]*pb.ResultRow, error) {
-	stream, err := s.client.Query(withTraceMetadata(ctx), &pb.QueryRequest{Sql: sql, Args: anyArgsToStrings(args)})
+	stream, err := s.client.Query(ctx, &pb.QueryRequest{Sql: sql, Args: anyArgsToStrings(args)})
 	if err != nil {
 		return nil, fmt.Errorf("query shard %s: %w", s.id, err)
 	}
@@ -190,27 +189,12 @@ func (s *GRPCShard) QueryToSink(ctx context.Context, sql string, args []any, sin
 	weftsdk.Infof(ctx, "shard %s: QueryToSink gave up after %d attempts: %v (sql=%s)", s.id, maxRetryAttempts, lastErr, sql)
 }
 
-// withTraceMetadata is the trace courier (out to shard): mirrors the
-// api→coordinator and coordinator→compute boundaries — context.Value
-// doesn't cross a gRPC call on its own. The ambient span ID (compute's
-// own span, if any) rides alongside as weft-span-id so the span shard
-// starts on the other end parents off it.
-func withTraceMetadata(ctx context.Context) context.Context {
-	if traceID, ok := weftsdk.TraceIDFromContext(ctx); ok {
-		ctx = metadata.AppendToOutgoingContext(ctx, "weft-trace-id", traceID)
-	}
-	if spanID, ok := weftsdk.CurrentSpanID(ctx); ok {
-		ctx = metadata.AppendToOutgoingContext(ctx, "weft-span-id", spanID)
-	}
-	return ctx
-}
-
 // queryToSinkOnce attempts a single QueryToSink streaming pass.
 // Returns (rowsSent, err); err==nil means EOF after streaming
 // completed. A non-nil err with rowsSent==0 is safe to retry; with
 // rowsSent>0 it isn't.
 func (s *GRPCShard) queryToSinkOnce(ctx context.Context, sql string, args []any, sink RowSink) (int, error) {
-	stream, err := s.client.Query(withTraceMetadata(ctx), &pb.QueryRequest{Sql: sql, Args: anyArgsToStrings(args)})
+	stream, err := s.client.Query(ctx, &pb.QueryRequest{Sql: sql, Args: anyArgsToStrings(args)})
 	if err != nil {
 		return 0, err
 	}

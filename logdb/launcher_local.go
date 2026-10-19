@@ -3,6 +3,7 @@ package logdb
 import (
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"net"
 	"sync"
 
@@ -46,7 +47,10 @@ func (l *LocalLauncher) LaunchInstance(_ context.Context, _ string) (string, err
 		return "", fmt.Errorf("listen: %w", err)
 	}
 
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor()),
+		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor()),
+	)
 	pb.RegisterShardQueryServer(srv, shardsvc.NewServer(nil))
 	go srv.Serve(lis)
 

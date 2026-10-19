@@ -385,10 +385,10 @@ func main() {
 	}
 	srv := grpc.NewServer(
 		grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
-		grpc.UnaryInterceptor(auth.UnaryServerInterceptor(
+		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor(), auth.UnaryServerInterceptor(
 			func(uid, org string) (*auth.Session, error) { return auth.BuildSession(db, uid, org) },
 			jwtSecret, skip)),
-		grpc.StreamInterceptor(auth.StreamServerInterceptor(
+		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor(), auth.StreamServerInterceptor(
 			func(uid, org string) (*auth.Session, error) { return auth.BuildSession(db, uid, org) },
 			jwtSecret, skip)),
 	)

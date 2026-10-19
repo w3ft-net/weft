@@ -173,7 +173,7 @@ func (s *Server) IngestHandler(a Adapter) http.Handler {
 		// Same bearer token in metadata so authenticateStream's path
 		// is exactly the path weftd takes — customer/env stamping and
 		// SeenServices onboarding happen there, not here.
-		ctx := withTraceMetadata(metadata.AppendToOutgoingContext(req.Context(), "authorization", "Bearer "+token))
+		ctx := metadata.AppendToOutgoingContext(req.Context(), "authorization", "Bearer "+token)
 		stream, err := s.coordClient.IngestStream(ctx)
 		if err != nil {
 			http.Error(w, "open ingest stream: "+err.Error(), http.StatusBadGateway)
