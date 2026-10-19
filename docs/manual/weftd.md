@@ -124,7 +124,7 @@ sources:
 | `path` | A file or glob to tail. Mutually exclusive with `unit`. | none |
 | `unit` | A systemd unit to read from the journal. Mutually exclusive with `path`. | none |
 | `service` | The `<service>` segment of the source's file path in weft (see [Finding your logs](#finding-your-logs)). Ignored on a glob. | file name without extension, or unit name without `.service` |
-| `kind` | The file part of the pseudofile, `/log/<ns>/<service>/<kind>.log`. `heartbeats`, `metrics` and `runtime` are reserved. | `main` |
+| `kind` | The file part of the pseudofile, `/log/<ns>/<service>/<kind>.log`. `heartbeats`, `runtime`, `host`, `disk` and `network` are reserved (the last three hold [host metrics](#system-metrics-optional)). | `main` |
 | `metavariables` | This source's own values for `deployment`, `version`, `region`, `cluster` and `node`, overriding the host-wide ones (see [Metavariables](#metavariables)). | none |
 
 Every source, whatever its kind, handles lines the same way. CRLF endings are

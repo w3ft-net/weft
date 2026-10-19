@@ -206,7 +206,7 @@ entry tails one thing. Set exactly one of <code>path</code> or <code>unit</code>
 </tr>
 <tr>
 <td><code>kind</code></td>
-<td>The file part of the pseudofile, <code>/log/&lt;ns&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>. <code>heartbeats</code>, <code>metrics</code> and <code>runtime</code> are reserved.</td>
+<td>The file part of the pseudofile, <code>/log/&lt;ns&gt;/&lt;service&gt;/&lt;kind&gt;.log</code>. <code>heartbeats</code>, <code>runtime</code>, <code>host</code>, <code>disk</code> and <code>network</code> are reserved (the last three hold <a href="#system-metrics-optional">host metrics</a>).</td>
 <td><code>main</code></td>
 </tr>
 <tr>
