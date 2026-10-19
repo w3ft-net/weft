@@ -2,7 +2,12 @@
 
 ## Status
 
-🟡 Designed, not started. Supersedes the "socket envelope" part of
+🟡 In progress. Landed: weftd's header parser and `buildLogRow` (items 1),
+sample stripping and the `sdk_fed` flag, the coordinator's synthesized
+schema, the first-line onboarding in `onboardAndRun`, and the derived-fields
+note in the schema endpoint, CLI and browser (items 2, 3, 5). Not started:
+the `weft-go`/`weft-py` handlers, weft's own units and `startup.sh`, and the
+docs (items 4, 6). Supersedes the "socket envelope" part of
 [request-tracing](request-tracing.md) (the `\x1e<trace_id>\x1e` frame on the
 records socket); that plan's `trace <id>` query and reserved column are
 unchanged.
