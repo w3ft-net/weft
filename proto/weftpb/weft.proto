@@ -693,6 +693,15 @@ message SubmitSampleRequest {
   // "sampling" state and is not yet configurable. The agent sends one
   // final submit with partial=false once it has the full sample.
   bool partial = 6;
+  // sdk_fed marks a source whose lines carry the weft SDK's line header
+  // (docs/plans/sdk-line-header.md). The agent has already stripped the
+  // headers from lines and reads timestamp, level, trace and span values
+  // from them, so a final sample with sdk_fed set needs no extraction wizard:
+  // the coordinator configures the source with a synthesized schema.
+  bool sdk_fed = 7;
+  // sdk_format is the body format the SDK declared in its header, "json" or
+  // "text". Meaningful only when sdk_fed is set; empty reads as "text".
+  string sdk_format = 8;
 }
 
 message SubmitSampleResponse {

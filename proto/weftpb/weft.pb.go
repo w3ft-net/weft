@@ -3615,7 +3615,16 @@ type SubmitSampleRequest struct {
 	// accumulating toward the full sample target; the source stays in
 	// "sampling" state and is not yet configurable. The agent sends one
 	// final submit with partial=false once it has the full sample.
-	Partial       bool `protobuf:"varint,6,opt,name=partial,proto3" json:"partial,omitempty"`
+	Partial bool `protobuf:"varint,6,opt,name=partial,proto3" json:"partial,omitempty"`
+	// sdk_fed marks a source whose lines carry the weft SDK's line header
+	// (docs/plans/sdk-line-header.md). The agent has already stripped the
+	// headers from lines and reads timestamp, level, trace and span values
+	// from them, so a final sample with sdk_fed set needs no extraction wizard:
+	// the coordinator configures the source with a synthesized schema.
+	SdkFed bool `protobuf:"varint,7,opt,name=sdk_fed,json=sdkFed,proto3" json:"sdk_fed,omitempty"`
+	// sdk_format is the body format the SDK declared in its header, "json" or
+	// "text". Meaningful only when sdk_fed is set; empty reads as "text".
+	SdkFormat     string `protobuf:"bytes,8,opt,name=sdk_format,json=sdkFormat,proto3" json:"sdk_format,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3690,6 +3699,20 @@ func (x *SubmitSampleRequest) GetPartial() bool {
 		return x.Partial
 	}
 	return false
+}
+
+func (x *SubmitSampleRequest) GetSdkFed() bool {
+	if x != nil {
+		return x.SdkFed
+	}
+	return false
+}
+
+func (x *SubmitSampleRequest) GetSdkFormat() string {
+	if x != nil {
+		return x.SdkFormat
+	}
+	return ""
 }
 
 type SubmitSampleResponse struct {
@@ -4977,7 +5000,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
 	"disk_bytes\x18\x05 \x01(\x03R\tdiskBytes\x12\x1d\n" +
 	"\n" +
-	"last_write\x18\x06 \x01(\tR\tlastWrite\"\xb1\x01\n" +
+	"last_write\x18\x06 \x01(\tR\tlastWrite\"\xe9\x01\n" +
 	"\x13SubmitSampleRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x1a\n" +
@@ -4986,7 +5009,10 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"deployment\x18\x04 \x01(\tR\n" +
 	"deployment\x12\x14\n" +
 	"\x05lines\x18\x05 \x03(\tR\x05lines\x12\x18\n" +
-	"\apartial\x18\x06 \x01(\bR\apartial\".\n" +
+	"\apartial\x18\x06 \x01(\bR\apartial\x12\x17\n" +
+	"\asdk_fed\x18\a \x01(\bR\x06sdkFed\x12\x1d\n" +
+	"\n" +
+	"sdk_format\x18\b \x01(\tR\tsdkFormat\".\n" +
 	"\x14SubmitSampleResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\"\x89\x01\n" +
 	"\x16GetSourceStatusRequest\x12\x14\n" +

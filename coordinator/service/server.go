@@ -1157,6 +1157,19 @@ func (s *Server) SubmitSample(ctx context.Context, req *pb.SubmitSampleRequest) 
 	})
 	detectionJSON, _ := json.Marshal(detection)
 
+	// A source written by the weft SDK needs no wizard: its lines carry the
+	// values a schema would extract, so the final sample configures it with
+	// a synthesized schema. A source that is already configured keeps its
+	// schema (it may have been tuned since).
+	sdkSetup := false
+	if req.SdkFed && !req.Partial {
+		prior, err := s.Store.FindLogGroup(auth.Organization.ID, auth.Namespace, service)
+		if err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
+		sdkSetup = prior == nil || prior.Status != store.StatusConfigured
+	}
+
 	if err := s.Store.UpsertPendingLogGroup(
 		ns.ID, service,
 		req.Instance, req.Deployment,
@@ -1169,6 +1182,16 @@ func (s *Server) SubmitSample(ctx context.Context, req *pb.SubmitSampleRequest) 
 	respStatus := "pending"
 	if req.Partial {
 		respStatus = "sampling"
+	}
+	if sdkSetup {
+		schemaYAML, err := ingest.SDKSchema(service, req.SdkFormat)
+		if err != nil {
+			return nil, fmt.Errorf("sdk schema: %w", err)
+		}
+		if err := s.Store.ConfigureLogGroup(ctx, ns.ID, service, schemaYAML); err != nil {
+			return nil, fmt.Errorf("configure sdk source: %w", err)
+		}
+		respStatus = "configured"
 	}
 	weftlog.Infof(ctx, "sample: customer=%s namespace=%s app=%s lines=%d partial=%t", auth.Organization.Name, auth.Namespace, req.Service, len(req.Lines), req.Partial)
 	return &pb.SubmitSampleResponse{Status: respStatus}, nil

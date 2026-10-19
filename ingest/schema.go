@@ -24,6 +24,12 @@ type Schema struct {
 	// "none" means no envelope.
 	Envelope string `yaml:"envelope"`
 
+	// SDK marks a source written by the weft SDK: each line carries a header
+	// with its timestamp, level, trace and span values, which the agent reads
+	// into the row's own fields (docs/plans/sdk-line-header.md). Such a source
+	// needs no extraction, and the wizard shows its values as derived.
+	SDK bool `yaml:"sdk,omitempty"`
+
 	// Format describes the body structure after envelope stripping.
 	//   "text"        — whitespace-delimited fields, no JSON
 	//   "json"        — entire line is JSON
