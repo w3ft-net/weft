@@ -3,6 +3,7 @@ package weftd
 import (
 	"bufio"
 	"context"
+	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"net"
 	"os"
@@ -48,15 +49,25 @@ func NewSocketListener(path, defaultApp string) (*SocketListener, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, err
 	}
-	// Remove stale socket file.
-	os.Remove(path)
-
-	listener, err := net.Listen("unix", path)
+	// Bind under a temporary name, open it up, then rename it into place, so
+	// a client never finds the socket at path with the process's umask mode.
+	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
+	os.Remove(tmp)
+	listener, err := net.Listen("unix", tmp)
 	if err != nil {
 		return nil, err
 	}
 	// Make socket world-writable so any app can connect.
-	os.Chmod(path, 0666)
+	if err := os.Chmod(tmp, 0666); err != nil {
+		listener.Close()
+		os.Remove(tmp)
+		return nil, fmt.Errorf("chmod socket: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		listener.Close()
+		os.Remove(tmp)
+		return nil, err
+	}
 
 	s := &SocketListener{
 		path:       path,

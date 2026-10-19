@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -105,5 +106,39 @@ func TestSocketListener_NoAppPrefixDefaultsApp(t *testing.T) {
 	want := SocketLine{App: "default", TraceID: "trace-1", Line: "no app prefix here"}
 	if got != want {
 		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestSocketListener_WorldWritableUnderRestrictiveUmask(t *testing.T) {
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+
+	path := shortSocketPath(t)
+	if err := os.WriteFile(path, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sl, err := NewSocketListener(path, "default")
+	if err != nil {
+		t.Fatalf("NewSocketListener: %v", err)
+	}
+	defer sl.Close()
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("%s is %v, want a socket", path, fi.Mode())
+	}
+	if perm := fi.Mode().Perm(); perm != 0o666 {
+		t.Errorf("socket mode = %o, want 666", perm)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	if len(entries) != 1 {
+		t.Errorf("directory has %d entries, want only the socket", len(entries))
+	}
+	dialAndSend(t, path, "ok")
+	if got := recvLine(t, sl); got.Line != "ok" {
+		t.Errorf("line = %q", got.Line)
 	}
 }
