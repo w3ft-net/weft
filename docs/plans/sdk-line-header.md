@@ -215,12 +215,73 @@ from `startup.sh` (the audit stream becomes `kind: queries` rows).
 - The records socket's protocol and best-effort delivery.
 - Languages other than Go and Python; their files remain wizard-driven.
 
+## Decisions on the earlier open questions
+
+### Old weftd, new SDK: detect and flag, do not raise the hard floor
+
+`WeftdHardFloor` rejects every `IngestStream` below a version
+(`coordinator/service/server.go`), which would cut off all pre-header agents
+including hosts with no SDK. Instead:
+
+- weftd sets the derived-fields flag on `SubmitSampleRequest` only when it
+  understands headers.
+- A sample containing `\x1e` header lines with no flag came from an older
+  weftd. The coordinator sets the source status to "written by the weft SDK;
+  upgrade weftd to >= X" and does not open the wizard on the junk.
+- `MinWeftdVersion` (advisory, via `AgentsAtOrBelow`) lists the hosts still
+  below X so an operator can see who has not upgraded.
+
+X is the first weftd release with header support (the next minor after
+0.31.0).
+
+### Release sequencing
+
+1. Coordinator and proto: the new `SubmitSampleRequest` field is additive,
+   so older agents are unaffected. Deploy first.
+2. Cut the weftd release with header support. The fleet self-upgrades
+   (strictly-newer, restart-gated); hosts on a pinned `.deb` need a repin.
+3. Release `weft-go` and `weft-py` with the file handler **default-off**:
+   the SDK only writes headered lines when `WEFT_LOG_FILE` (or the option) is
+   set.
+4. Bump `weft-go` in `go.mod` (currently v0.5.0) and convert weft's own
+   units and `startup.sh`, once `AgentsAtOrBelow` shows no weftd below X on
+   those hosts.
+
+### Go capture
+
+`fmt.Println` carries no context and Go has no goroutine-local state, so
+those lines have no trace ID; this is documented, and code that wants a
+trace ID logs through `slog` with a ctx. `debug.SetCrashOutput` (Go 1.23+;
+weft and `weft-go` are on 1.25) names one **additional** file for fatal
+errors, on top of stderr, so with fd 2 already `dup2`ed onto the SDK file
+(`Dup3` on linux/arm64) it adds nothing. We use `dup2` and leave
+`SetCrashOutput` as the fallback where an fd cannot be replaced.
+
+Units stop using `StandardOutput=append:<file>`, but should stay on the
+journal (the default) and not `null`, so output before the SDK initializes
+(flag errors, early panics) is still recoverable with `journalctl`.
+
+### SDK file path
+
+No default path: the SDK writes headered lines only when `WEFT_LOG_FILE` (or
+`WithLogFile` / `log_file=`) is set, and unset leaves logging exactly as
+before. weftd's config names the same path as a normal `sources:` entry, and
+the docs show the pair. A hidden convention would only make weftd's tail
+path a guess.
+
+### Coordinator audit stream is movable
+
+`coordinator/querylog.go` writes the audit stream through a `weftlog`
+Logger to a swappable writer (`switchWriter`), in the stdlib line shape. The
+header writer is a wrapper around that writer, so moving it to
+`kind: queries` is a writer change, not a rewrite. Its schema stops being
+detected from the line shape, because the header supplies the fields.
+
 ## Open questions
 
-- Exact `WeftdHardFloor` value and whether to enforce it from the SDK side.
-- The default path for the SDK file.
-- How the Go SDK captures `fmt.Println` output without a context (no trace ID), and whether `debug.SetCrashOutput` is a better fit than `dup2` for runtime crashes.
-- Release sequencing across `weft`, `weft-go` and `weft-py`.
+- Exact release number X for the header-supporting weftd.
+- Whether `AgentsAtOrBelow` is enough, or the coordinator should also block
+  the SDK-fed setup until every agent for the namespace is at X.
 
 ## Work
 
