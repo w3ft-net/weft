@@ -440,7 +440,11 @@ func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, 
 		err = weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment, false, 0)
 	} else {
 		weftlog.Infof(ctx, "[%s] new source — sampling %s", fullApp, path)
-		err = weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment, false, 0)
+		// A file the weft SDK writes is set up from its first line, not a full sample.
+		var sdkFed bool
+		if sdkFed, err = weftd.SubmitSDKSample(ctx, client, token, app, path, hostname, globalDeployment); err == nil && !sdkFed {
+			err = weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment, false, 0)
+		}
 	}
 	if err != nil {
 		return err

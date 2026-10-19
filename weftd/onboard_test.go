@@ -198,3 +198,41 @@ func TestStripSample_FormatAndLegacy(t *testing.T) {
 		t.Errorf("legacy envelope: fed=%v bodies=%q, want unchanged and not SDK-fed", fed, bodies)
 	}
 }
+
+// A file whose first line carries an SDK header is submitted as a one-line
+// final sample, with no wait for a full one.
+func TestSubmitSDKSample_HeaderedFirstLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.log")
+	first := hdr("v1", "5", "INFO", "t1", "", "", "", "", "json", "") + `{"msg":"hi"}`
+	if err := os.WriteFile(path, []byte(first+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := &sampleRecorder{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sent, err := SubmitSDKSample(ctx, rec, "wft_x", "api", path, "i-1", "web")
+	if err != nil || !sent {
+		t.Fatalf("sent=%v err=%v, want a submission", sent, err)
+	}
+	if rec.got.Partial || !rec.got.SdkFed || rec.got.SdkFormat != "json" || len(rec.got.Lines) != 1 || rec.got.Lines[0] != `{"msg":"hi"}` {
+		t.Errorf("request = %+v, want a final one-line sdk_fed json sample", rec.got)
+	}
+}
+
+// A plain first line is left for the usual sampler: nothing final is sent.
+func TestSubmitSDKSample_PlainFirstLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plain.log")
+	if err := os.WriteFile(path, []byte("2026/10/19 12:00:00 hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := &sampleRecorder{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sent, err := SubmitSDKSample(ctx, rec, "wft_x", "api", path, "i-1", "web")
+	if err != nil || sent {
+		t.Fatalf("sent=%v err=%v, want no submission for a plain file", sent, err)
+	}
+	if rec.got != nil && !rec.got.Partial {
+		t.Errorf("a final sample was sent for a plain file: %+v", rec.got)
+	}
+}

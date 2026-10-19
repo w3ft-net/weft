@@ -90,6 +90,30 @@ func SubmitSample(ctx context.Context, client pb.WeftCoordinatorClient, token, a
 	return submitSampleLines(ctx, client, token, app, instance, deployment, lines, false)
 }
 
+// SubmitSDKSample waits for the file's first line and, when it carries a weft
+// SDK header, submits it as the final sample. An SDK-fed source needs no
+// extraction, so there is nothing to gain from collecting a full sample, and
+// a quiet source would otherwise sit unshipped until it wrote that many
+// lines. It reports whether it submitted; when it did not (the first line is
+// plain), nothing was sent beyond progress pings and the caller samples as
+// usual.
+func SubmitSDKSample(ctx context.Context, client pb.WeftCoordinatorClient, token, app, path, instance, deployment string) (bool, error) {
+	progress := func(lines []string) {
+		_ = submitSampleLines(ctx, client, token, app, instance, deployment, lines, true)
+	}
+	first, err := SampleLines(ctx, path, 1, false, progress)
+	if err != nil {
+		return false, fmt.Errorf("sample %s: %w", path, err)
+	}
+	if len(first) == 0 {
+		return false, ctx.Err()
+	}
+	if _, sdkFed, _ := StripSample(first); !sdkFed {
+		return false, nil
+	}
+	return true, submitSampleLines(ctx, client, token, app, instance, deployment, first, false)
+}
+
 // SubmitUnitSample is the journald (unit:) counterpart of SubmitSample.
 // Journald sources have no file path, so the file sampler cannot serve
 // them — it would open("") and fail with ENOENT.
