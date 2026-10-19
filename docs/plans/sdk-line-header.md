@@ -63,7 +63,7 @@ about this involves the records socket.
 | `parent_id` | `parent_span_id` | `ProbeParentSpanID` |
 | `dur_ns` | `duration_ns` | `ProbeDurationNs` |
 | `fmt` | selects `payload_json` handling | the "are these JSON?" question |
-| `kind` (proposed) | `kind`; empty means the source's own kind | n/a |
+| `kind` | `kind`; empty means the source's own kind | n/a |
 
 The proto needs no new fields; every column above already exists.
 
@@ -174,13 +174,31 @@ process's stdout. A systemd unit must stop sending the service's
 stdout/stderr to a file (`StandardOutput=append:`) once the SDK owns the fds,
 or lines are written twice.
 
-**Stream and logger distinction (proposed).** The header's `kind` value
-(empty = the source's own kind) lets captured lines set `stdout` or
-`stderr`, so rows land at `/log/<ns>/<svc>/stdout.log` and `stderr.log`
-from a single file, with no new proto field (`LogRow.kind` exists; service
-discovery registers new kinds from data). To confirm before committing: how
-source status and synthesized schemas key on kind. The alternative is one
-file per stream with the kind set in weftd's config.
+**Stream and logger distinction.** The header's `kind` value (empty = the
+source's own kind) lets captured lines set `stdout` or `stderr`, so rows
+land at `/log/<ns>/<svc>/stdout.log` and `stderr.log` from a single file.
+This needs no proto or coordinator change, verified against the code:
+
+- Source status and schemas key on `(org, namespace, service)`
+  (`GetSourceStatus` takes only the service; `FindLogGroup` in
+  `coordinator/service/server.go`). Every kind under a service shares one
+  log group and schema, as `coordinator/queries` already shares the
+  coordinator's.
+- Kind is not a routing key; `SeenServices` registers new kinds from the
+  data. weftd's per-source state (parser cache, metavariables) keys on the
+  source's `fullApp`, and the header kind only sets the row's `Kind` after
+  that lookup.
+- weftd validates the value as a path segment and falls back to the
+  source's kind when it is invalid or reserved (`heartbeats`, `runtime`,
+  `host`, `disk`, `network`).
+
+**A service is either SDK-fed or not.** Because the schema is per service, a
+service cannot mix an SDK-fed source with a wizard-driven one: the first
+headered sample would configure the service with a synthesized schema that
+then applies to the other source. Per-kind schemas would lift this and are
+out of scope. On weft's hosts the coordinator audit stream
+(`coordinator-queries.log`, written by the coordinator in its own format)
+moves onto the SDK as `kind: queries`.
 
 ### Weft's own hosts
 
@@ -189,7 +207,8 @@ stderr to `/opt/app/logs/<role>.log`, which `startup.sh` tails as one source.
 After this change each role's services use the SDK handler and capture, the
 units stop redirecting stdout/stderr to a file, and the SDK file is the
 single source. It is SDK-fed, so resampling no longer asks for a trace ID,
-and the raw `<role>.log` source is removed from `startup.sh`.
+and the raw `<role>.log` and `coordinator-queries.log` sources are removed
+from `startup.sh` (the audit stream becomes `kind: queries` rows).
 
 ## Out of scope
 
@@ -199,7 +218,7 @@ and the raw `<role>.log` source is removed from `startup.sh`.
 ## Open questions
 
 - Exact `WeftdHardFloor` value and whether to enforce it from the SDK side.
-- The default path for the SDK file, and whether `kind` goes in the header or per-stream files are used.
+- The default path for the SDK file.
 - How the Go SDK captures `fmt.Println` output without a context (no trace ID), and whether `debug.SetCrashOutput` is a better fit than `dup2` for runtime crashes.
 - Release sequencing across `weft`, `weft-go` and `weft-py`.
 
