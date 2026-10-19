@@ -297,6 +297,30 @@ The Go and Python SDKs find `/var/run/weftd.sock` on their own; if you name it
 something else, set `WEFT_SOCKET` to match. See the SDK READMEs for usage:
 [Go](https://github.com/w3ft-net/weft-go) and Python (`pip install w3ft`).
 
+### SDK log files
+
+The Go and Python SDKs can write your application's logs to a file with
+each line's timestamp, level and trace ID in a header, and weftd reads those
+values straight off it. Point the SDK at a file with `WEFT_LOG_FILE` (or the
+path argument to `InstallLogging` / `install_logging`) and name the same file as
+a source:
+
+```yaml
+sources:
+  - service: myapp
+    path: /var/log/myapp/weft.log
+```
+
+A service fed this way has no schema to extract: weft configures it as soon as
+the first line arrives, and `weft source schema` says which values came from
+the SDK. The SDK can also capture stdout and stderr into the file; they
+appear as the service's `stdout` and `stderr` logs. The file belongs to the
+SDK, so don't write to it from anything else, and if you capture stdout and
+stderr, stop a systemd unit from redirecting them to a file too.
+
+A service is either SDK-written or not: don't point an SDK file and a plain
+log file at the same `service`.
+
 ## Behavior and semantics
 
 ### Delivery

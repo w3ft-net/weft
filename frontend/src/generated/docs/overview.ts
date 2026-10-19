@@ -39,8 +39,11 @@ still got some applications running there, so we got to support!</li>
 respective namespace. It will start off in a &quot;sampling&quot; state -- we capture a
 50-line chunk to help to define a schema for that source. You can watch that
 progress in the browser or with <code>weft source pending --watch</code>.</p>
-<p>When using weftd, you're forced to define a schema for your log lines. Though
-you don't have to define a schema for other producers, we highly recommend it.
+<p>When using weftd, you're forced to define a schema for your log lines, unless
+the lines were written by a weft SDK to a <a href="/manual/weftd#sdk-log-files">log file</a>:
+then timestamp, level, trace ID and spans come from each line's header and
+there is nothing to define. Though you don't have to define a schema for other
+producers, we highly recommend it.
 Having a means of plucking <a href="/manual/metavars">metavariables</a> out of the logs lets us
 make lookups on those values nice and snappy.</p>
 <p>Once you've transtioned from &quot;sampling&quot; to &quot;pending,&quot; you can view our

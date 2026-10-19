@@ -18,6 +18,7 @@ const weftd = {
     { level: 2, id: "other-features", text: "Other features" },
     { level: 3, id: "system-metrics-optional", text: "System metrics (optional)" },
     { level: 3, id: "app-api", text: "App API" },
+    { level: 3, id: "sdk-log-files", text: "SDK log files" },
     { level: 2, id: "behavior-and-semantics", text: "Behavior and semantics" },
     { level: 3, id: "delivery", text: "Delivery" },
     { level: 3, id: "resuming-after-a-restart", text: "Resuming after a restart" },
@@ -431,6 +432,24 @@ socket: /var/run/weftd.sock
 <p>The Go and Python SDKs find <code>/var/run/weftd.sock</code> on their own; if you name it
 something else, set <code>WEFT_SOCKET</code> to match. See the SDK READMEs for usage:
 <a href="https://github.com/w3ft-net/weft-go">Go</a> and Python (<code>pip install w3ft</code>).</p>
+<h3 id="sdk-log-files">SDK log files</h3>
+<p>The Go and Python SDKs can write your application's logs to a file with
+each line's timestamp, level and trace ID in a header, and weftd reads those
+values straight off it. Point the SDK at a file with <code>WEFT_LOG_FILE</code> (or the
+path argument to <code>InstallLogging</code> / <code>install_logging</code>) and name the same file as
+a source:</p>
+<pre><code class="language-yaml">sources:
+  - service: myapp
+    path: /var/log/myapp/weft.log
+</code></pre>
+<p>A service fed this way has no schema to extract: weft configures it as soon as
+the first line arrives, and <code>weft source schema</code> says which values came from
+the SDK. The SDK can also capture stdout and stderr into the file; they
+appear as the service's <code>stdout</code> and <code>stderr</code> logs. The file belongs to the
+SDK, so don't write to it from anything else, and if you capture stdout and
+stderr, stop a systemd unit from redirecting them to a file too.</p>
+<p>A service is either SDK-written or not: don't point an SDK file and a plain
+log file at the same <code>service</code>.</p>
 <h2 id="behavior-and-semantics">Behavior and semantics</h2>
 <h3 id="delivery">Delivery</h3>
 <p>Files are the only source with delivery guarantees. weftd keeps recently sent

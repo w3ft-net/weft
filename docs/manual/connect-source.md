@@ -38,8 +38,11 @@ respective namespace. It will start off in a "sampling" state -- we capture a
 50-line chunk to help to define a schema for that source. You can watch that
 progress in the browser or with `weft source pending --watch`.
 
-When using weftd, you're forced to define a schema for your log lines. Though
-you don't have to define a schema for other producers, we highly recommend it.
+When using weftd, you're forced to define a schema for your log lines, unless
+the lines were written by a weft SDK to a [log file](weftd.md#sdk-log-files):
+then timestamp, level, trace ID and spans come from each line's header and
+there is nothing to define. Though you don't have to define a schema for other
+producers, we highly recommend it.
 Having a means of plucking [metavariables](metavars.md) out of the logs lets us
 make lookups on those values nice and snappy. 
 
