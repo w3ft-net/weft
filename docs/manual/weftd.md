@@ -94,7 +94,7 @@ General, box-level settings are top-level keys:
 | `auto_update` | Self-update from `releases.w3ft.net` (see [Updates](#updates)). `false` pins this host to the installed version. | `true` |
 | `deployment` | The fleet or scaling unit this agent belongs to (k8s Deployment, AWS ASG, etc.). Stamped on every row, and the service [host metrics](#system-metrics-optional) are written under. | empty |
 | `region` | Region stamped on every row. | auto-detected from cloud metadata at startup |
-| `socket` | Path of the records socket for your apps (see [App API](#app-api-emit-events-and-heartbeats-from-your-services)). | none; socket disabled |
+| `socket` | Path of the records socket for your apps (see [App API](#app-api)). | none; socket disabled |
 | `metrics` | Host metrics: cpu, memory, disk, load, network. Having the block turns them on (see [System metrics](#system-metrics-optional)). | no block: off |
 | `metavariables` | Values for the `deployment`, `version`, `region`, `cluster` and `node` columns, each read from the environment, a file or a JSON file (see [Metavariables](#metavariables)). Example: `version: {file: /opt/myapp/VERSION}` | none |
 | `checkpoint` | Tuning for resume-after-restart, which is always on (see [Resuming after a restart](#resuming-after-a-restart)). | see that section |
@@ -237,14 +237,11 @@ sources:
 | `collectors` | Which of `cpu`, `memory`, `disk`, `load`, `network` to run. Unknown names are ignored. | all five |
 
 Samples are read from `/proc` (Linux only) and streamed as JSON log rows.
-Metrics describe the host, not any one source, so they go to one place: under
-your [`deployment`](#configuration), as if it were a service. A host with
-`deployment: web` writes `/log/<namespace>/web/host.log`, `disk.log` and
-`network.log`, and every host in the same deployment writes to the same files,
-so one query covers the fleet. `deployment` has to be set for metrics to run
-(a [`deployment` metavariable](#metavariables) counts, and wins); without one
-weftd logs an error and writes nothing. Characters that don't belong in a path
-(`/`, `.`, whitespace) become `_`.
+Metrics go under your [`deployment`](#configuration), as if it were a service.
+A host with `deployment: web` writes
+`/log/<namespace>/web/{host,disk,network}.log`. `deployment` has to be set for
+metrics to run; without one weftd logs an error and writes nothing. Depending
+on which collectors are enabled, your metrics will end up in:
 
 | File | One row per | Contents |
 |---|---|---|
@@ -264,13 +261,6 @@ The objects in `host.log`:
 tick has no `cpu` (it needs two samples to compute a delta) and a collector you
 turned off has no object. `network.log` needs two samples too, so it's empty
 for the first tick after startup.
-
-The JSON doesn't repeat the time, host or deployment: those are the row's own
-columns, which `jq` reads as `$ts`, `$host` and `$deployment`. Because the
-shard filters on the column, `select($host == "i-0abc")` narrows a deployment's
-shared file to one host before any row is returned.
-
-Query them the same way you query any JSON log source:
 
 ```
 # Recent memory pressure
@@ -292,117 +282,20 @@ Metrics only run on Linux (the collectors read `/proc/stat`,
 `/proc/meminfo`, `/proc/mounts`, `/proc/loadavg`, and
 `/proc/net/dev`). On other kernels the block is ignored.
 
-### App API: emit events and heartbeats from your services
+### App API
 
-weftd exposes a local records socket that running applications can
-write to directly. It binds to a Unix socket by default, so
-process-local apps ship to weft with no token, network call, or extra
-dependency. Events, heartbeats, and runtime stats all use this one
-channel. A typed Go SDK is available at
-<https://github.com/w3ft-net/weft-go>.
-
-#### Records socket
-
-Add a `socket:` line to `config.yaml` and weftd will accept
-newline-delimited frames in the format `<app>:<line>\n`. Each
-line is forwarded to the same ingest path file tailers use,
-stamped with the `<app>` prefix you write before the colon.
-`<app>` is `service` or `service/kind` (a bare `billing` lands in
-`/log/<ns>/billing/main.log`). The prefix must be under 32 characters with
-no space before the colon. A line without one goes to an app named
-`default`, and a line whose first colon happens to fall inside those 32
-characters (`{"id":1}`, `info: reset`) is read as having one, so always
-write the prefix. Lines may be up to 1 MiB.
-
-weftd creates the socket's directory, replaces a stale socket file, and makes
-the socket world-writable (mode 0666) so any local process can write to
-it. Treat the host's local users as trusted writers.
+weftd can listen on a local Unix socket so your own applications can send
+events, heartbeats and runtime stats without a token or a network call. Name the
+socket in `config.yaml`:
 
 ```
 # /etc/weftd/config.yaml
 socket: /var/run/weftd.sock
 ```
 
-```
-# Shell scripts and cron entries — anything that can write to a socket
-echo "billing:user signup id=42" | nc -U /var/run/weftd.sock
-
-# Go services via the SDK
-import "github.com/w3ft-net/weft-go"
-
-c, _ := weft.New()
-defer c.Close()
-c.Send("billing", map[string]any{"event": "signup", "id": 42})
-```
-
-The SDK looks for the socket at `/var/run/weftd.sock` by default;
-override with `WEFT_SOCKET` or `weft.WithSocket(...)`.
-
-#### Heartbeats
-
-A heartbeat is a record. The Go SDK's `Heartbeat` loop emits one
-to app `<service>/heartbeats` every interval over the **records socket
-above**. Each beat lands at `/log/<namespace>/<service>/heartbeats.log`:
-
-```json
-{"type":"heartbeat","service":"my-service","ts":"2026-06-11T14:55:36.4Z"}
-```
-
-```
-# From Go via the SDK — one line in main()
-go c.Heartbeat(ctx, "my-service", weft.DefaultHeartbeatInterval)
-
-# Without the SDK, write the same record over the records socket
-echo 'my-service/heartbeats:{"type":"heartbeat","service":"my-service"}' \
-  | nc -U /var/run/weftd.sock
-```
-
-Service names are restricted to `[a-zA-Z0-9._-]`, 1–128 chars.
-
-Liveness is judged by **recency**: a live service keeps emitting rows;
-one that stops is *absent*. Each beat is emitted at the source when the
-process is healthy, so the question is "have we seen a beat lately?",
-which a cron expresses directly. First a cron whose result is the beats in its window
-(it is empty when none arrived):
-
-```
-# /cron.d/billing-beat
-# schedule: */1 * * * *
-cat /log/myns/billing/heartbeats.log
-```
-
-Then a cron that alerts when `billing-beat` has produced no result in the
-last 90s:
-
-```
-# /cron.d/billing-down
-# schedule: */1 * * * *
-weft::is_absent billing-beat 90s
-alert --if-zero "$?" --notify=ops
-```
-
-Leave `-n` and `head`/`tail` counts off the first cron: crons are
-bound to their time range, and a line count can truncate it.
-
-#### Go SDK
-
-`github.com/w3ft-net/weft-go` is the typed client for the
-records socket above. It sends events and heartbeats, and includes a
-runtime-stats collector that periodically emits Go heap, GC pause,
-goroutine, and FD-count telemetry. Setup in `main()`:
-
-```
-import "github.com/w3ft-net/weft-go"
-
-c, _ := weft.New()
-defer c.Close()
-go c.Heartbeat(ctx, "my-service", weft.DefaultHeartbeatInterval)
-go c.RuntimeStats(ctx, "my-service", weft.DefaultRuntimeStatsInterval)
-```
-
-The SDK prefers the local Unix socket and falls back to an HTTP
-endpoint when configured (`WEFT_ENDPOINT` + `WEFT_TOKEN`). See
-the repo's README for the full env-var table and option list.
+The Go and Python SDKs find `/var/run/weftd.sock` on their own; if you name it
+something else, set `WEFT_SOCKET` to match. See the SDK READMEs for usage:
+[Go](https://github.com/w3ft-net/weft-go) and Python (`pip install w3ft`).
 
 ## Behavior and semantics
 
