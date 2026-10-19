@@ -37,7 +37,7 @@ about this involves the records socket.
 ### Format
 
 ```
-\x1e v1 \x1f ts \x1f lvl \x1f trace \x1f span_name \x1f span_id \x1f parent_id \x1f dur_ns \x1f fmt \x1e body \n
+\x1e v1 \x1f ts \x1f lvl \x1f trace \x1f span_name \x1f span_id \x1f parent_id \x1f dur_ns \x1f fmt \x1f kind \x1e body \n
 ```
 
 - The outer `\x1e` pair brackets the header. Inside, `\x1f` separates
@@ -63,6 +63,7 @@ about this involves the records socket.
 | `parent_id` | `parent_span_id` | `ProbeParentSpanID` |
 | `dur_ns` | `duration_ns` | `ProbeDurationNs` |
 | `fmt` | selects `payload_json` handling | the "are these JSON?" question |
+| `kind` (proposed) | `kind`; empty means the source's own kind | n/a |
 
 The proto needs no new fields; every column above already exists.
 
@@ -143,37 +144,63 @@ A source with no headered lines behaves exactly as today.
 - Body format: JSON (`{"msg": "...", ...attrs}`) so `jq` works and attributes
   are queryable; `fmt=text` remains for `SendLine`-style raw strings.
 
-### File ownership and raw output
+### File ownership and captured output
 
-The handler writes to its own file (default: next to the app's other logs;
-configurable), never to stdout. Raw stdout and stderr (panics, stdlib
-prints, runtime noise) go to a separate file or the journal and are an
-ordinary source with the wizard, under their own kind (for example
-`stdio`). The two sources sit side by side under the same service, so there
-is no mixed file and no ambiguous middle.
+The handler writes to its own file, and nothing else writes to it except the
+SDK's own capture (below). A file is either SDK-written or not, so there is
+no mixed file and no ambiguous middle. Apps that don't use the SDK keep
+their files and the wizard.
+
+### Capturing stdout and stderr
+
+The SDK captures the process's raw output so it needs no separate source.
+
+1. **In-process capture (headered).** Python replaces `sys.stdout` and
+   `sys.stderr` with line writers and hooks `sys.excepthook` and
+   `threading.excepthook`; the writers read the ambient trace ID from the
+   contextvar. Go reassigns `os.Stdout`/`os.Stderr` to pipe-backed writers
+   and calls `log.SetOutput` (the stdlib logger captured the original stderr
+   at init); `fmt.Println` carries no context, so those lines have no trace
+   ID. Captured lines are `fmt=text` with no level.
+2. **fd-level safety net.** Output that bypasses the in-process writers
+   (Python `faulthandler`, C extensions, Go runtime panics) writes straight
+   to fd 1/2. The SDK `dup2`s those fds onto the SDK file (`O_APPEND`), so
+   crash output lands in the same file without a header. weftd ships such a
+   line as a fault (ingest time, no level, no prompt).
+
+Guard rails: capture is off when stdout is a terminal, and is explicit in
+code (`weft.capture_stdio()` / the Go equivalent) because it takes over the
+process's stdout. A systemd unit must stop sending the service's
+stdout/stderr to a file (`StandardOutput=append:`) once the SDK owns the fds,
+or lines are written twice.
+
+**Stream and logger distinction (proposed).** The header's `kind` value
+(empty = the source's own kind) lets captured lines set `stdout` or
+`stderr`, so rows land at `/log/<ns>/<svc>/stdout.log` and `stderr.log`
+from a single file, with no new proto field (`LogRow.kind` exists; service
+discovery registers new kinds from data). To confirm before committing: how
+source status and synthesized schemas key on kind. The alternative is one
+file per stream with the kind set in weftd's config.
 
 ### Weft's own hosts
 
 Today `weft-coordinator.service` (and the other roles) send stdout and
 stderr to `/opt/app/logs/<role>.log`, which `startup.sh` tails as one source.
-After this change the structured logs go to a new SDK-written file under the
-same service, which is SDK-fed, so resampling no longer asks for a trace ID.
-`<role>.log` keeps holding raw stdout/stderr and stays wizard-driven. The
-`startup.sh` source list and the glob/explicit deconfliction need to name
-both files.
+After this change each role's services use the SDK handler and capture, the
+units stop redirecting stdout/stderr to a file, and the SDK file is the
+single source. It is SDK-fed, so resampling no longer asks for a trace ID,
+and the raw `<role>.log` source is removed from `startup.sh`.
 
 ## Out of scope
 
 - The records socket's protocol and best-effort delivery.
-- Capturing arbitrary stdout/stderr in-process (redirecting `sys.stdout` or
-  fd 1/2); considered and not needed here because headered lines reach the
-  file through the logging handler.
 - Languages other than Go and Python; their files remain wizard-driven.
 
 ## Open questions
 
 - Exact `WeftdHardFloor` value and whether to enforce it from the SDK side.
-- The default path and kind name for the SDK file and for the raw stdio file.
+- The default path for the SDK file, and whether `kind` goes in the header or per-stream files are used.
+- How the Go SDK captures `fmt.Println` output without a context (no trace ID), and whether `debug.SetCrashOutput` is a better fit than `dup2` for runtime crashes.
 - Release sequencing across `weft`, `weft-go` and `weft-py`.
 
 ## Work
