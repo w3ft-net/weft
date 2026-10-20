@@ -74,7 +74,8 @@ with awk.
 |-----------|-----|
 | `grep ERROR` | `WHERE raw LIKE '%ERROR%'` |
 | `grep -i error` | `WHERE raw ILIKE '%error%'` |
-| `sed '/pattern/...'` | Address pushdown: `WHERE raw LIKE '%pattern%'` |
+| `sed -n '/pattern/p'`, `sed '/pattern/!d'` | `WHERE regexp_matches(raw, 'pattern')` |
+| `sed '/pattern/d'`, `sed -n '/pattern/!p'` | `WHERE NOT regexp_matches(raw, 'pattern')` |
 
 ### cut
 
@@ -106,7 +107,7 @@ the stage after it names a meta-variable.
 
 ### Filters after a sort or a projection
 
-A `grep` or `sed -n '/re/p'` after a plain `sort` (`-r` and `-u` too)
+A `grep` or an address-only `sed` filter after a plain `sort` (`-r` and `-u` too)
 moves ahead of it into the shard: sort only reorders lines, so
 `sort | grep x` prints what `grep x | sort` does. After a projection the
 shard computes (`jq -r .action | grep login`), the filter reads the

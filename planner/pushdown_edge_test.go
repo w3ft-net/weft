@@ -739,6 +739,32 @@ func TestEdge_Grep(t *testing.T) {
 // Sed edge cases
 // ---------------------------------------------------------------------------
 
+// An address-only sed program that selects lines is a filter, whichever of
+// -n/p, d and ! spells it.
+func TestEdge_SedAddressFilters(t *testing.T) {
+	const prefix = `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND `
+	tests := []struct{ pipeline, pred string }{
+		{`sed -n '/pattern/p'`, `regexp_matches(raw, 'pattern')`},
+		{`sed -n '/pattern/!p'`, `NOT regexp_matches(raw, 'pattern')`},
+		{`sed '/pattern/d'`, `NOT regexp_matches(raw, 'pattern')`},
+		{`sed '/pattern/!d'`, `regexp_matches(raw, 'pattern')`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.pipeline, func(t *testing.T) {
+			plan, err := Plan(`cat vimgym.log | `+tt.pipeline, 0, "", time.Time{}, time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.ShardSQL != prefix+tt.pred {
+				t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, prefix+tt.pred)
+			}
+			if len(plan.ComputeStages) != 0 {
+				t.Errorf("ComputeStages = %v, want none", plan.ComputeStages)
+			}
+		})
+	}
+}
+
 func TestEdge_Sed(t *testing.T) {
 	t.Run("non-pushable", func(t *testing.T) {
 		tests := []struct {

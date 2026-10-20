@@ -69,9 +69,12 @@ var awkPureBuiltins = map[string]bool{
 	"toupper": true, "int": true, "sprintf": true,
 }
 
-// sedAddressPrint recognizes `sed -n '/re/p'`, the one sed program that
-// is a filter, and returns its regex.
-func sedAddressPrint(args []string) (string, bool) {
+// sedAddressFilter recognizes the sed programs that are a line filter:
+// `-n '/re/p'` and `'/re/d'`, each optionally negated with `!`. It returns
+// the regex and whether lines matching it are dropped rather than kept.
+// Without -n a print repeats the matching lines, and with -n a delete prints
+// nothing, so neither is a filter.
+func sedAddressFilter(args []string) (re string, drop, ok bool) {
 	hasN := false
 	script := ""
 	for _, a := range args {
@@ -79,23 +82,31 @@ func sedAddressPrint(args []string) (string, bool) {
 		case a == "-n":
 			hasN = true
 		case strings.HasPrefix(a, "-") || script != "":
-			return "", false
+			return "", false, false
 		default:
 			script = a
 		}
 	}
-	if !hasN || script == "" {
-		return "", false
+	if script == "" {
+		return "", false, false
 	}
 	prog, err := sed.Compile(script)
 	if err != nil || len(prog.Commands) != 1 {
-		return "", false
+		return "", false, false
 	}
 	cmd := prog.Commands[0]
-	if cmd.Type != sed.CmdPrint || cmd.Addr1 == nil || cmd.Addr1.Type != sed.AddrRegex || cmd.Addr2 != nil {
-		return "", false
+	if cmd.Addr1 == nil || cmd.Addr1.Type != sed.AddrRegex || cmd.Addr2 != nil {
+		return "", false, false
 	}
-	return cmd.Addr1.Regex, true
+	switch {
+	case cmd.Type == sed.CmdPrint && hasN:
+		drop = false
+	case cmd.Type == sed.CmdDelete && !hasN:
+		drop = true
+	default:
+		return "", false, false
+	}
+	return cmd.Addr1.Regex, drop != cmd.Negated, true
 }
 
 // rowStageLineCount accepts head/tail's `-n N` and `-N`.

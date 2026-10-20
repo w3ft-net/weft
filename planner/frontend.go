@@ -26,7 +26,7 @@ func lowerStage(s stageInfo, index int) *loweredStage {
 			ls.nodes = []node{&filterNode{at: a, pred: pred, exact: true, follow: &pat, lineWise: true}}
 		}
 	case "sed":
-		_, ls.rowwise = sedAddressPrint(s.args)
+		_, _, ls.rowwise = sedAddressFilter(s.args)
 		if pred := trySedPushdown(s.args); pred != "" {
 			ls.nodes = []node{&filterNode{at: a, pred: pred, exact: true, lineWise: true}}
 		} else {
