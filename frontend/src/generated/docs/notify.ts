@@ -4,13 +4,14 @@ const notify = {
   id: "manual-notify",
   section: "notify",
   title: "Notifications",
-  category: "alert-visualize",
+  category: "analysis-alerting",
   order: 54,
   headings: [
     { level: 2, id: "define-a-notification-alias", text: "Define a notification alias" },
     { level: 2, id: "connecting-slack-and-pagerduty", text: "Connecting Slack and PagerDuty" },
     { level: 2, id: "webhook-and-email-need-no-account-connection", text: "Webhook and email need no account connection" },
     { level: 2, id: "testing-an-alias", text: "Testing an alias" },
+    { level: 2, id: "not-supported", text: "Not supported" },
   ],
   html: `<h2 id="define-a-notification-alias">Define a notification alias</h2>
 <p>When an <code>alert</code> fires in a cron, <code>--notify=&lt;alias&gt;</code> dispatches to a
@@ -72,6 +73,11 @@ has nothing stored is refused.</p>
 <p>This sends to every target in the <code>ops</code> alias.</p>
 <p>Interactive runs dispatch immediately and open no incident
 (incidents belong to crons).</p>
+<h2 id="not-supported">Not supported</h2>
+<p>An alias reaches Slack, PagerDuty, webhooks and email; other destinations
+(SMS, Microsoft Teams, Opsgenie) are not supported. <code>alert</code> takes one
+<code>--notify</code> alias per call, and rejects options it does not know with
+<code>alert: unknown option</code>. See <code>man alert</code>.</p>
 `,
 } as const;
 

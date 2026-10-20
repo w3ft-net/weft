@@ -226,6 +226,17 @@ membership and metering. Change the team with <code>adduser</code> / <code>delus
 connecting Slack creates no commit.</li>
 <li><strong>Patterns are RE2.</strong> <code>--author</code> and <code>--grep</code> use Go
 regular expressions, so <code>+</code>, <code>?</code> and <code>|</code> are operators.</li>
+<li><strong>Flags beyond the ones listed.</strong> Each command takes only the flags
+named above. <code>git log</code> has no <code>--format</code>, <code>--pretty</code>, <code>--follow</code>,
+<code>--name-only</code> or <code>-L</code>, and takes one revision. <code>git diff</code> takes only
+<code>--cached</code>/<code>--staged</code>, so no <code>--stat</code> or <code>--name-only</code>. <code>git status</code>,
+<code>git show</code> and <code>git blame</code> take none (no <code>--short</code>, no <code>-L</code>).
+<code>git restore</code> takes <code>--source</code>/<code>-s</code> and <code>--worktree</code>/<code>-W</code>, not
+<code>--staged</code>. <code>git commit</code> takes <code>--amend</code> and <code>-m</code>, and cannot make a new
+commit. <code>git revert</code> takes <code>--no-edit</code> and one commit. Only
+<code>--color=always|never</code> and <code>--no-color</code> apply everywhere. A refused flag
+reports <code>unrecognized argument</code>, <code>unknown option</code> or <code>invalid option</code>,
+as git does.</li>
 </ul>
 `,
 } as const;

@@ -3,7 +3,7 @@ id: manual-notify
 title: Notifications
 web:
   section: notify
-  category: alert-visualize
+  category: analysis-alerting
   order: 54
 ---
 
@@ -88,3 +88,10 @@ This sends to every target in the `ops` alias.
 
 Interactive runs dispatch immediately and open no incident
 (incidents belong to crons).
+
+## Not supported
+
+An alias reaches Slack, PagerDuty, webhooks and email; other destinations
+(SMS, Microsoft Teams, Opsgenie) are not supported. `alert` takes one
+`--notify` alias per call, and rejects options it does not know with
+`alert: unknown option`. See `man alert`.

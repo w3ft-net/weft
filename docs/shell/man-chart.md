@@ -7,6 +7,10 @@ shell:
     - "man chart"
     - "chart --help"
   banner: "CHART(1)"
+web:
+  section: chart
+  category: analysis-alerting
+  order: 46
 ---
 
 ## NAME
@@ -139,6 +143,27 @@ cat /log/myco/prod/api/host.log \
 
 # --tag requires one JSON object per line, so use jq -c
 ```
+
+## NOT SUPPORTED
+
+- Chart kinds other than `line`, `sparkline` and `bar`: no pie, area or
+  table.
+- `--follow` and `-i` in pipe form, and `-n` in pipe form. They belong to
+  the cron form only; the pipe-form options (`-x`, `-y`, `-a`, `--bucket`,
+  `--tag`, `--title`) are rejected in the cron form.
+- Aggregates other than `count`, `sum`, `avg`, `min`, `max`, `p50`, `p95`
+  and `identity` (no `p99`).
+- `--tag` with `bar` or `sparkline`; it draws one line per value, so it
+  needs `line`.
+- Casts on `-y` or `--tag`, and a `-x` column range without `::time`.
+- Mixing column numbers and `.json.path` fields in one call.
+- Charting a cron whose output is JSON rows, and piping the output of
+  `chart` into another command.
+- `--flag=value` and attached short forms (`--type=bar`, `-n5`). Write the
+  flag and its value as separate words.
+- Zoom and scroll.
+
+Other options are rejected with `chart: unknown option <flag>`.
 
 ## RELATED
 

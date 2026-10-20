@@ -17,8 +17,7 @@ const weftd = {
     { level: 3, id: "metavariables", text: "Metavariables" },
     { level: 2, id: "other-features", text: "Other features" },
     { level: 3, id: "system-metrics-optional", text: "System metrics (optional)" },
-    { level: 3, id: "app-api", text: "App API" },
-    { level: 3, id: "sdk-log-files", text: "SDK log files" },
+    { level: 3, id: "socket-listener", text: "Socket listener" },
     { level: 2, id: "behavior-and-semantics", text: "Behavior and semantics" },
     { level: 3, id: "delivery", text: "Delivery" },
     { level: 3, id: "resuming-after-a-restart", text: "Resuming after a restart" },
@@ -422,54 +421,125 @@ tail /log/myns/web/disk.log | jq 'select($host == &quot;i-0abc&quot;)'
 <p>Metrics only run on Linux (the collectors read <code>/proc/stat</code>,
 <code>/proc/meminfo</code>, <code>/proc/mounts</code>, <code>/proc/loadavg</code>, and
 <code>/proc/net/dev</code>). On other kernels the block is ignored.</p>
-<h3 id="app-api">App API</h3>
-<p>weftd can listen on a local Unix socket so your own applications can send
-events, heartbeats and runtime stats without a token or a network call. Name the
-socket in <code>config.yaml</code>:</p>
+<h3 id="socket-listener">Socket listener</h3>
+<p>weftd can listen on a local Unix socket so your own applications can use the
+<a href="https://github.com/orgs/w3ft-net/repositories">weft SDKs</a> to annotate traces,
+spans, and timings and send events, heartbeats and runtime stats over the same
+streaming connection weftd already has open.  Name the socket in <code>config.yaml</code>
+and weftd will create it on startup:</p>
 <pre><code># /etc/weftd/config.yaml
 socket: /var/run/weftd.sock
 </code></pre>
-<p>The Go and Python SDKs find <code>/var/run/weftd.sock</code> on their own; if you name it
-something else, set <code>WEFT_SOCKET</code> to match. See the SDK READMEs for usage:
-<a href="https://github.com/w3ft-net/weft-go">Go</a> and Python (<code>pip install w3ft</code>).</p>
-<h3 id="sdk-log-files">SDK log files</h3>
-<p>The Go and Python SDKs can write your application's logs to a file with
-each line's timestamp, level and trace ID in a header, and weftd reads those
-values straight off it. Point the SDK at a file with <code>WEFT_LOG_FILE</code> (or the
-path argument to <code>InstallLogging</code> / <code>install_logging</code>) and name the same file as
-a source:</p>
-<pre><code class="language-yaml">sources:
-  - service: myapp
-    path: /var/log/myapp/weft.log
+<p>Some socket properties:</p>
+<ul>
+<li>It's world-writable</li>
+<li>It's one-way -- weft never sends anything back</li>
+<li>It buffers up to 4096 lines, after which, if undrained, writes will silently fail</li>
+</ul>
+<p>Though most of the convenience comes from using the weft SDKs, the enterprising
+user can always write directly to this socket themselves. Connect to the socket
+and write one line per message, each ending in a newline:</p>
+<pre><code>&lt;app&gt;:&lt;line&gt;\\n
 </code></pre>
-<p>A service fed this way has no schema to extract: weft configures it as soon as
-the first line arrives, and <code>weft source schema</code> says which values came from
-the SDK. The SDK can also capture stdout and stderr into the file; they
-appear as the service's <code>stdout</code> and <code>stderr</code> logs. The file belongs to the
-SDK, so don't write to it from anything else, and if you capture stdout and
-stderr, stop a systemd unit from redirecting them to a file too.</p>
-<p>A service is either SDK-written or not: don't point an SDK file and a plain
-log file at the same <code>service</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app</code></td>
+<td><code>service</code> or <code>service/kind</code>, where <code>kind</code> defaults to <code>main</code>. It must be shorter than 32 characters and contain no spaces. A line with no valid <code>app:</code> prefix goes to the default app.</td>
+</tr>
+<tr>
+<td><code>line</code></td>
+<td>The log line, with no newline in it. A line over 1 MiB closes the connection.</td>
+</tr>
+</tbody>
+</table>
+<h4 id="line-header">Line header</h4>
+<p>The weft SDKs write and weftd reads a per-line header carrying metadata for
+that line. It writes those headers when it writes to log files and when it
+writes to the socket.</p>
+<pre><code>\\x1e v1 \\x1f ts \\x1f level \\x1f trace \\x1f span_name \\x1f span_id \\x1f parent_id \\x1f dur_ns \\x1f fmt \\x1f kind \\x1e body
+</code></pre>
+<p>The header sits between two <code>\\x1e</code> bytes, with its values separated by <code>\\x1f</code>,
+and the spaces above are only for reading. On the socket the header comes right
+after <code>&lt;app&gt;:</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>v1</code></td>
+<td>The version. It fixes the order and meaning of the values that follow.</td>
+</tr>
+<tr>
+<td><code>ts</code></td>
+<td>When the line happened, as integer Unix nanoseconds. Empty means weftd stamps it on arrival.</td>
+</tr>
+<tr>
+<td><code>level</code></td>
+<td>The severity as the writer spells it, such as <code>INFO</code>, <code>WARN</code> or <code>ERROR</code>.</td>
+</tr>
+<tr>
+<td><code>trace</code></td>
+<td>The trace ID the line belongs to.</td>
+</tr>
+<tr>
+<td><code>span_name</code></td>
+<td>The name of the span this line describes, for a line that starts or ends a span.</td>
+</tr>
+<tr>
+<td><code>span_id</code></td>
+<td>The span's ID.</td>
+</tr>
+<tr>
+<td><code>parent_id</code></td>
+<td>The ID of the span's parent.</td>
+</tr>
+<tr>
+<td><code>dur_ns</code></td>
+<td>The span's duration in nanoseconds, on the line that ends it.</td>
+</tr>
+<tr>
+<td><code>fmt</code></td>
+<td><code>json</code> or <code>text</code>, the shape of the body.</td>
+</tr>
+<tr>
+<td><code>kind</code></td>
+<td>A second stream for the same service, such as <code>queries</code> for <code>service/queries</code>. It uses letters, digits, <code>-</code> and <code>_</code> (up to 64 characters) and can't be <code>heartbeats</code>, <code>runtime</code>, <code>host</code>, <code>disk</code> or <code>network</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Every value after <code>v1</code> is optional. A value that doesn't parse, such as a <code>ts</code>
+that isn't a number or a <code>dur_ns</code> that isn't positive, is discarded without
+rejecting the line itself. Header field values can't contain <code>\\x1e</code>, <code>\\x1f</code> or
+a newline.</p>
 <h2 id="behavior-and-semantics">Behavior and semantics</h2>
 <h3 id="delivery">Delivery</h3>
 <p>Files are the only source with delivery guarantees. weftd keeps recently sent
 rows (up to 8 MiB per file) until the coordinator acknowledges them, at the
 <code>commit_interval</code> below, and only then advances the saved position. Anything
-unacknowledged is resent on a new stream, so delivery is <strong>at-least-once</strong>:
-duplicates are possible, gaps are not. During an outage the log file is the
-buffer. weftd stops reading when its window is full and resumes when the
-coordinator is back, and there is no disk spool of its own. Unit
-(<code>journalctl</code>), records-socket and metrics rows are best-effort: they are
-sent straight through and are not replayed after a restart or an outage.
-The socket drops lines when its 4096-line queue is full.</p>
+unacknowledged is resent on a new stream, so delivery is at-least-once.  In the
+event of an outage, weftd stops reading when its window is full and resumes
+when the upstream is back. Unit (<code>journalctl</code>), records-socket and metrics rows
+are best-effort: they are sent straight through and are not replayed after a
+restart or an outage, whereas log files on disk are checkpointed (see below).</p>
 <h3 id="resuming-after-a-restart">Resuming after a restart</h3>
 <p>weftd remembers how far it has delivered each tailed file, so a restart picks
 up where it left off and reads whatever was written in the meantime. The saved
 position means &quot;weft acknowledged everything up to here&quot;, so lines
 that were in flight when weftd stopped are sent again.</p>
-<p>State is kept in <code>/var/lib/weftd/checkpoints/</code>. The <code>.deb</code> unit creates it
-(<code>StateDirectory=weftd</code>). Checkpointing is always on. These settings, all
-optional, tune it:</p>
+<p>State is kept in <code>/var/lib/weftd/checkpoints/</code>, which is created by the debian
+package (<code>StateDirectory=weftd</code>). Checkpointing is always on. These settings,
+all optional, tune it:</p>
 <pre><code class="language-yaml">checkpoint:
   dir: /var/lib/weftd/checkpoints   # where state.json lives
   flush_interval: 5s                # how often positions are written to disk
@@ -513,24 +583,15 @@ optional, tune it:</p>
 </table>
 <p>A file is matched by device, inode and a hash of its first kilobyte, so a
 reused inode is not mistaken for the same file. Files created while weftd is
-running are read from their first line. Every skip or replay is logged, and
-summarized once a minute as a <code>checkpoint stats</code> line per file.</p>
-<p>Notes:</p>
-<ul>
-<li><strong>Containers:</strong> the state directory must survive the pod. On Kubernetes,
-mount <code>/var/lib/weftd</code> from a <code>hostPath</code>. An <code>emptyDir</code> or the container
-filesystem is wiped on every reschedule.</li>
-<li><strong>Two weftd on one host</strong> cannot share a state directory. The second one
-logs that the directory is locked and runs without checkpointing.</li>
-<li>A damaged <code>state.json</code> is moved to <code>state.json.corrupt</code> and weftd starts
-as if freshly installed.</li>
-</ul>
+running are read from their first line. Every skip or replay is logged to
+weftd's own log (<code>journalctl -u weftd</code>), and summarized once a minute as a
+<code>checkpoint stats</code> line per file.</p>
 <h3 id="updates">Updates</h3>
-<p>Once a day weftd checks <code>releases.w3ft.net</code> for a newer release. By default it
-downloads the build for the host's platform, verifies its SHA-256, replaces the
+<p>Once a day (or on restart) weftd checks <code>releases.w3ft.net</code> for a newer
+release. By default it downloads the build, verifies its SHA-256, replaces the
 running binary, and exits so systemd (<code>Restart=always</code>) relaunches it. Set
-<code>auto_update: false</code> to pin a host, for example while you investigate a
-release. It then only logs a line when a newer version exists.</p>
+<code>auto_update: false</code> to pin a host.  It then only logs a line when a newer
+version exists.</p>
 `,
 } as const;
 

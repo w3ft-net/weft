@@ -42,9 +42,9 @@ var manualCategories = []manualCategory{
 		Summary: "A bash-like shell over your logs: the Unix builtins that carry over and where they differ, meta-variables, and /tmp scratch space with a cookbook.",
 	},
 	{
-		ID:      "alert-visualize",
-		Label:   "Alert & visualize",
-		Summary: "Run pipelines on a schedule with crons, choose an alerting strategy that suits the signal, and pin live queries to dashboards.",
+		ID:      "analysis-alerting",
+		Label:   "Analysis & alerting",
+		Summary: "Trace a request across services, chart results, run pipelines on a schedule with crons, choose an alerting strategy that suits the signal, and pin live queries to dashboards.",
 	},
 	{
 		ID:      "customize",

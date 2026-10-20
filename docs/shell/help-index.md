@@ -13,13 +13,13 @@ shell:
 
 ## Topics
 
-- `help builtins` — commands you can use in a pipeline
+- `help builtins` — every command: the Unix ones and weft's own
 - `help cron` — scheduled crons, result accessors, tier limits
 - `help alerts` — alert conditions, notify.yaml, dispatching
 
 ## Reference pages
 
-- `man commands` — weft's own commands, with a pointer to each reference page
+- `man commands` — the same page, with a pointer to each reference page
 - `man` — list the manual topics (`man git`, `man crons`, `man metavars`, ...)
 - `man alert` — alert grammar and options
 - `man chart` — render a cron or pipeline as an in-terminal chart

@@ -4,7 +4,7 @@ const dashboards = {
   id: "manual-dashboards",
   section: "dashboards",
   title: "Dashboards",
-  category: "alert-visualize",
+  category: "analysis-alerting",
   order: 55,
   headings: [
     { level: 2, id: "what-dashboards-are", text: "What dashboards are" },

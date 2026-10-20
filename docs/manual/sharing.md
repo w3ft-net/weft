@@ -77,6 +77,13 @@ clipboard /bin/check --range=yesterday..today -- prod
 
 See `man clipboard` for the full command reference.
 
+## Not supported
+
+Only `/bin/` scripts can be shared this way: not crons, dashboards or
+unsaved pipelines. A link cannot be pinned to an older version of the
+script. `--range` takes its value after an `=` (`--range=24h..`), and other
+options are rejected with `clipboard: unknown option`.
+
 ## Access
 
 The link grants no access. It opens for signed-in members of

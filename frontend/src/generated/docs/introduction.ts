@@ -12,10 +12,8 @@ const introduction = {
     { level: 3, id: "sandboxness", text: "Sandboxness" },
     { level: 3, id: "range", text: "Range" },
     { level: 3, id: "metavariables", text: "Metavariables" },
-    { level: 3, id: "heading", text: "" },
-    { level: 2, id: "some-examples", text: "Some Examples" },
     { level: 2, id: "paths", text: "Paths" },
-    { level: 2, id: "retention", text: "Retention" },
+    { level: 2, id: "some-examples", text: "Some Examples" },
   ],
   html: `<h2 id="the-weft-shell">The weft shell</h2>
 <p>The goal of weft is, in a nutshell, to enable efficient querying of distributed
@@ -39,8 +37,26 @@ work in progress.</p>
 <h3 id="range">Range</h3>
 <p>The timerange of logs you are working with is displayed in your PS1. How far back in time you can set it depends on your plan. Spoiler, if you ship a lot of logs and you wanna query 3 months, it's gonna be slower. You can change it with the <code>range</code> command.</p>
 <h3 id="metavariables">Metavariables</h3>
-<p>We inject some preset variables into invocations of AWK and jq that are helpful in narrowing down the lines you need; these are all indexed nicely so including them in an AWK pattern or a jq <code>select()</code> should get you your log lines faster. See the <a href="#FIXME">full reference</a> for more details.</p>
-<h3 id="heading"></h3>
+<p>We inject some preset variables into invocations of AWK and jq that are helpful in narrowing down the lines you need; these are all indexed nicely so including them in an AWK pattern or a jq <code>select()</code> should get you your log lines faster. See the <a href="/manual/metavars">full reference</a> for more details.</p>
+<h2 id="paths">Paths</h2>
+<p>Depending on what mechanism you are using to ship your logs to weft, the files
+where those lines end up are going to look something like this:</p>
+<pre><code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log          3 segments: all envs
+/log/&lt;namespace&gt;/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log    4 segments: one env
+</code></pre>
+<p><code>&lt;kind&gt;</code> is the stream: <code>main</code> for ordinary logs, plus <code>heartbeats</code>,
+<code>metrics</code> and <code>runtime</code> for services that emit telemetry. Which form a
+service has depends on whether its producer token was minted with <code>--env</code>;
+<code>ls /log/myco</code> shows env directories next to env-less services.</p>
+<ul>
+<li><code>cat /log/myco/prod/api/main.log</code> reads one env.</li>
+<li><code>cat /log/myco/api/main.log</code> reads that service across every env.</li>
+<li><code>cat myco.log</code> reads the whole namespace; filter with <code>ENV == &quot;prod&quot;</code>.</li>
+<li><code>ls /log/myco/api</code> lists a service's kinds.</li>
+<li>Globs only pick kinds inside one service: <code>/log/myco/prod/api/*.log</code>.
+Globs that cross services or namespaces (<code>cat *.log</code>,
+<code>/log/myco/*/api/main.log</code>) are refused.</li>
+</ul>
 <h2 id="some-examples">Some Examples</h2>
 <pre><code># Tail logs in real time
 tail -f myapp.log
@@ -65,31 +81,6 @@ cat /log/myco/prod/api/main.log \\
 cat api.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
 grep timeout /tmp/errs | sort | uniq -c | sort -rn
 </code></pre>
-<h2 id="paths">Paths</h2>
-<pre><code>/log/&lt;namespace&gt;/&lt;service&gt;/&lt;kind&gt;.log          3 segments: all envs
-/log/&lt;namespace&gt;/&lt;env&gt;/&lt;service&gt;/&lt;kind&gt;.log    4 segments: one env
-</code></pre>
-<p><code>&lt;kind&gt;</code> is the stream: <code>main</code> for ordinary logs, plus <code>heartbeats</code>,
-<code>metrics</code> and <code>runtime</code> for services that emit telemetry. Which form a
-service has depends on whether its producer token was minted with <code>--env</code>;
-<code>ls /log/myco</code> shows env directories next to env-less services.</p>
-<ul>
-<li><code>cat /log/myco/prod/api/main.log</code> reads one env.</li>
-<li><code>cat /log/myco/api/main.log</code> reads that service across every env.</li>
-<li><code>cat myco.log</code> reads the whole namespace; filter with <code>ENV == &quot;prod&quot;</code>.</li>
-<li><code>ls /log/myco/api</code> lists a service's kinds.</li>
-<li>Globs only pick kinds inside one service: <code>/log/myco/prod/api/*.log</code>.
-Globs that cross services or namespaces (<code>cat *.log</code>,
-<code>/log/myco/*/api/main.log</code>) are refused.</li>
-</ul>
-<h2 id="retention">Retention</h2>
-<p>Your plan sets how far back queries can read (see the <strong>Account</strong> page); older
-data is filtered out of every query. Archived data is queried transparently —
-<code>range 180d..</code> reads recent and archived data in one pass, with a little extra
-latency on the cold side.</p>
-<p>See <a href="/manual/builtins">Builtins</a> for the command list,
-<a href="/manual/metavars">Meta-variables</a> for the indexed columns, and
-<a href="/manual/tmp">Scratch space and cookbook</a> for <code>/tmp</code> and worked recipes.</p>
 `,
 } as const;
 

@@ -3,20 +3,12 @@
 const tmp = {
   id: "manual-tmp",
   section: "tmp",
-  title: "Scratch space and cookbook",
+  title: "Scratch space",
   category: "weft-shell",
   order: 58,
   headings: [
     { level: 2, id: "scratch-space-tmp", text: "Scratch space (/tmp)" },
     { level: 3, id: "lifetime-and-limits", text: "Lifetime and limits" },
-    { level: 2, id: "cookbook", text: "Cookbook" },
-    { level: 3, id: "triage-a-spike", text: "Triage a spike" },
-    { level: 3, id: "level-histogram-by-region-for-one-deployment", text: "Level histogram by region for one deployment" },
-    { level: 3, id: "prod-errors-for-one-deployment-across-the-namespace", text: "Prod errors for one deployment, across the namespace" },
-    { level: 3, id: "whole-stack-traces-for-matching-errors", text: "Whole stack traces for matching errors" },
-    { level: 3, id: "whats-new-since-an-hour-ago", text: "What's new since an hour ago" },
-    { level: 3, id: "relate-two-saved-files", text: "Relate two saved files" },
-    { level: 3, id: "organise-an-incident", text: "Organise an incident" },
   ],
   html: `<h2 id="scratch-space-tmp">Scratch space (/tmp)</h2>
 <p>Every weft account has a scratch area at <code>/tmp</code>. Use it to save the output
@@ -73,51 +65,10 @@ the <strong>Account</strong> page). A write that would exceed either fails and w
 nothing. <code>ls -lh /tmp</code> shows sizes.</li>
 <li><strong>Not scripts.</strong> Files in <code>/tmp</code> are never executed; scripts live in <code>/bin</code>.</li>
 <li><strong>No follow.</strong> <code>tail -f ... &gt; /tmp/x</code> is refused; drop <code>-f</code>.</li>
-<li><strong>Crossing out.</strong> <code>cp</code> and <code>mv</code> work only inside <code>/tmp</code>. Use
-<code>cat /tmp/x &gt; /bin/y</code> to move a file out and <code>cat /bin/y &gt; /tmp/x</code> to edit
-a copy.</li>
+<li><strong>Crossing out.</strong> <code>cp</code> and <code>mv</code> work between <code>/tmp</code> and <code>/bin</code>, <code>/cron.d</code> and the <code>/etc</code> config files, and the destination checks the file as it would for <code>&gt;</code>: you need the group that manages it, and scripts and crons are validated on save.</li>
 </ul>
 <p>The Unix tools for comparing saved files (<code>diff</code>, <code>comm</code>, <code>join</code>, <code>paste</code>,
-<code>wc</code>) are listed in <a href="/manual/builtins#files-in-tmp">Builtins</a>.</p>
-<h2 id="cookbook">Cookbook</h2>
-<h3 id="triage-a-spike">Triage a spike</h3>
-<pre><code>cat /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
-awk '{ print SERVICE, HOST }' /tmp/errs | sort | uniq -c | sort -rn | head
-</code></pre>
-<h3 id="level-histogram-by-region-for-one-deployment">Level histogram by region for one deployment</h3>
-<pre><code>cat /log/myco/prod/api/main.log \\
-  | awk 'DEPLOYMENT == &quot;api&quot; {print REGION, LEVEL}' \\
-  | sort | uniq -c
-</code></pre>
-<h3 id="prod-errors-for-one-deployment-across-the-namespace">Prod errors for one deployment, across the namespace</h3>
-<pre><code>cat myco.log \\
-  | awk 'ENV == &quot;prod&quot; &amp;&amp; LEVEL == &quot;ERROR&quot; &amp;&amp; DEPLOYMENT == &quot;api&quot;' \\
-  | head -50
-</code></pre>
-<p><code>ENV</code> and <code>DEPLOYMENT</code> narrow the read before any row is parsed. The jq form
-is <code>jq 'select($env == &quot;prod&quot; and $deployment == &quot;api&quot;)'</code>.</p>
-<h3 id="whole-stack-traces-for-matching-errors">Whole stack traces for matching errors</h3>
-<pre><code>cat /log/myco/api/main.log | awk 'LINE_NO == 0 &amp;&amp; /timeout/' &gt; /tmp/first-lines
-</code></pre>
-<p>Lines of one multi-line event share <code>EVENT_ID</code>; <code>LINE_NO == 0</code> is the first.</p>
-<h3 id="whats-new-since-an-hour-ago">What's new since an hour ago</h3>
-<pre><code>cp /tmp/errs /tmp/errs.bak
-tail -n 1000 /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
-diff /tmp/errs.bak /tmp/errs
-</code></pre>
-<p>For <code>comm</code>, sort first: <code>sort /tmp/a &gt; /tmp/a.s</code>.</p>
-<h3 id="relate-two-saved-files">Relate two saved files</h3>
-<pre><code>printf 'api 3\\nweb 1\\n' &gt; /tmp/errs-by-service
-printf 'api oncall-a\\nweb oncall-b\\n' &gt; /tmp/owners
-join /tmp/errs-by-service /tmp/owners     # api 3 oncall-a / web 1 oncall-b
-</code></pre>
-<h3 id="organise-an-incident">Organise an incident</h3>
-<pre><code>mkdir /tmp/incident-2026-04-22
-cat /log/myco/api/main.log | grep 'req_id=abc123' &gt; /tmp/incident-2026-04-22/trace
-vi /tmp/incident-2026-04-22/notes
-touch /tmp/incident-2026-04-22/trace      # keep it past 48h
-rm -rf /tmp/incident-2026-04-22           # when done
-</code></pre>
+<code>wc</code>) are listed in <a href="/manual/builtins#differences-and-limitations">Builtins</a>.</p>
 `,
 } as const;
 

@@ -3,7 +3,7 @@ id: manual-weft-funcs
 title: Weft functions
 web:
   section: weft-funcs
-  category: customize
+  category: analysis-alerting
   order: 52
 ---
 

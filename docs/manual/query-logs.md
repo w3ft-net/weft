@@ -39,9 +39,30 @@ The timerange of logs you are working with is displayed in your PS1. How far bac
 
 ### Metavariables
 
-We inject some preset variables into invocations of AWK and jq that are helpful in narrowing down the lines you need; these are all indexed nicely so including them in an AWK pattern or a jq `select()` should get you your log lines faster. See the [full reference](#FIXME) for more details.
+We inject some preset variables into invocations of AWK and jq that are helpful in narrowing down the lines you need; these are all indexed nicely so including them in an AWK pattern or a jq `select()` should get you your log lines faster. See the [full reference](metavars.md) for more details.
 
-### 
+## Paths
+
+Depending on what mechanism you are using to ship your logs to weft, the files
+where those lines end up are going to look something like this:
+
+```
+/log/<namespace>/<service>/<kind>.log          3 segments: all envs
+/log/<namespace>/<env>/<service>/<kind>.log    4 segments: one env
+```
+
+`<kind>` is the stream: `main` for ordinary logs, plus `heartbeats`,
+`metrics` and `runtime` for services that emit telemetry. Which form a
+service has depends on whether its producer token was minted with `--env`;
+`ls /log/myco` shows env directories next to env-less services.
+
+- `cat /log/myco/prod/api/main.log` reads one env.
+- `cat /log/myco/api/main.log` reads that service across every env.
+- `cat myco.log` reads the whole namespace; filter with `ENV == "prod"`.
+- `ls /log/myco/api` lists a service's kinds.
+- Globs only pick kinds inside one service: `/log/myco/prod/api/*.log`.
+  Globs that cross services or namespaces (`cat *.log`,
+  `/log/myco/*/api/main.log`) are refused.
 
 ## Some Examples
 
@@ -69,34 +90,3 @@ cat /log/myco/prod/api/main.log \
 cat api.log | awk 'LEVEL == "ERROR"' > /tmp/errs
 grep timeout /tmp/errs | sort | uniq -c | sort -rn
 ```
-
-## Paths
-
-```
-/log/<namespace>/<service>/<kind>.log          3 segments: all envs
-/log/<namespace>/<env>/<service>/<kind>.log    4 segments: one env
-```
-
-`<kind>` is the stream: `main` for ordinary logs, plus `heartbeats`,
-`metrics` and `runtime` for services that emit telemetry. Which form a
-service has depends on whether its producer token was minted with `--env`;
-`ls /log/myco` shows env directories next to env-less services.
-
-- `cat /log/myco/prod/api/main.log` reads one env.
-- `cat /log/myco/api/main.log` reads that service across every env.
-- `cat myco.log` reads the whole namespace; filter with `ENV == "prod"`.
-- `ls /log/myco/api` lists a service's kinds.
-- Globs only pick kinds inside one service: `/log/myco/prod/api/*.log`.
-  Globs that cross services or namespaces (`cat *.log`,
-  `/log/myco/*/api/main.log`) are refused.
-
-## Retention
-
-Your plan sets how far back queries can read (see the **Account** page); older
-data is filtered out of every query. Archived data is queried transparently —
-`range 180d..` reads recent and archived data in one pass, with a little extra
-latency on the cold side.
-
-See [Builtins](../shell/help-builtins.md) for the command list,
-[Meta-variables](metavars.md) for the indexed columns, and
-[Scratch space and cookbook](tmp.md) for `/tmp` and worked recipes.

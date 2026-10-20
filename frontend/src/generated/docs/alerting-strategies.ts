@@ -4,7 +4,7 @@ const alertingStrategies = {
   id: "manual-alerting-strategies",
   section: "alerting-strategies",
   title: "Alerting strategies",
-  category: "alert-visualize",
+  category: "analysis-alerting",
   order: 53,
   headings: [
     { level: 2, id: "the-four-shapes", text: "The four shapes" },

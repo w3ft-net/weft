@@ -3,7 +3,7 @@ id: manual-crons
 title: Crons
 web:
   section: crons
-  category: alert-visualize
+  category: analysis-alerting
   order: 50
 ---
 

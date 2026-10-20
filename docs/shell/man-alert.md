@@ -7,6 +7,10 @@ shell:
     - "man alert"
     - "alert --help"
   banner: "ALERT(1)"
+web:
+  section: alert
+  category: analysis-alerting
+  order: 51
 ---
 
 ## NAME
@@ -128,6 +132,22 @@ aggregated-value).
 - `--duration <dur>` — time window for sustained conditions. For above/below: condition must hold for ALL runs in the window. For rising/falling: compares against the window average. For absent: no non-empty output in the window. Units are s, m and h only: 5m, 1h, 30s (`1d` is rejected).
 - `--average` — for above/below with `--duration`: compare the rolling average over the window against the threshold. It has no effect without `--duration`.
 - `--msg <text>` — override the default alert message.
+
+## NOT SUPPORTED
+
+- Anywhere but the last stage of a pipeline, or a second `alert` in the
+  same pipeline.
+- Conditions other than `any`, `above`, `below`, `eq`, `neq`, `changed`,
+  `absent`, `rising` and `falling`: no `between`, `>=` or `<=`, and no
+  regular-expression match on text. Thresholds are numbers.
+- Durations in days (`--duration 1d`); use `s`, `m` or `h`.
+- More than one `--notify` alias per alert, and destinations other than
+  those an alias in `/etc/notify.yaml` defines.
+- Mixing positional and `.json.path` fields across `-k` and `-t`, and
+  `--if-zero`/`--if-nonzero` together with a condition keyword.
+
+Other options are rejected with `alert: unknown option <flag>` and a
+non-zero status.
 
 ## EXAMPLES
 

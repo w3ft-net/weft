@@ -81,6 +81,22 @@ is a usage error.
 `adduser`/`deluser` are admin-only. Group grants apply once the
 member has accepted their invite.
 
+## NOT SUPPORTED
+
+These manage org members, not operating-system accounts.
+
+- Passwords, login shells, home directories and the usual `adduser` /
+  `useradd` options (`-G`, `-u`, `-s`, `--disabled-password`).
+- Several emails or several groups in one call. `adduser` and `deluser`
+  take one email and at most one group.
+- Creating a group of your own. Groups are the fixed set above plus one
+  per namespace.
+- Editing `/etc/passwd`; it is a read-only roster.
+- Looking up anyone by name, uid or anything other than an email address.
+
+Other options are rejected with `<command>: unknown option <flag>` and the
+command's usage line.
+
 ## EXAMPLES
 
 ```

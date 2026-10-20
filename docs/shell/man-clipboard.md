@@ -94,6 +94,17 @@ clipboard /bin/check --range=yesterday..today -- prod
                         and yesterday's window
 ```
 
+## NOT SUPPORTED
+
+- Anything but a `/bin/<name>` script: crons, dashboards and unsaved
+  pipelines can't be shared this way. Save the pipeline as a script first.
+- Reading from a pipe. `clipboard` ignores standard input.
+- Pinning a link to a past version of the script (`--version=`): a link
+  always opens the script's current version.
+- `--range <spec>` with a space. Write `--range=<spec>`.
+
+Other options are rejected with `clipboard: unknown option <flag>`.
+
 ## SEE ALSO
 
 range, git

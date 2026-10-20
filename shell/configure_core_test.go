@@ -135,9 +135,9 @@ func TestConfigureCore_HelpBuiltinsServesWeftCorpus(t *testing.T) {
 
 	visible := stripANSI(output.String())
 	for _, marker := range []string{
-		"Reading logs",
-		"/log/",
-		"Shell extensions",
+		"Differences and limitations",
+		"/log",
+		"Weft's own commands",
 		"git",
 		"chart",
 	} {
@@ -227,7 +227,7 @@ func TestConfigureCore_ManExplain(t *testing.T) {
 // it points to has a page of its own.
 func TestConfigureCore_ManCommandsPointsAtRealPages(t *testing.T) {
 	page := typeLine(t, "man commands")
-	if !strings.Contains(page, "COMMANDS(1)") {
+	if !strings.Contains(page, "Weft's own commands") {
 		t.Fatalf("no commands page in %q", page)
 	}
 	for _, topic := range []string{"range", "explain", "chart", "less", "alert", "notify", "weft-funcs", "dashboard", "git", "clipboard", "sharing", "passwd", "teams"} {

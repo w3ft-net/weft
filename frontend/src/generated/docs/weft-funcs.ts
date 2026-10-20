@@ -4,7 +4,7 @@ const weftFuncs = {
   id: "manual-weft-funcs",
   section: "weft-funcs",
   title: "Weft functions",
-  category: "customize",
+  category: "analysis-alerting",
   order: 52,
   headings: [
     { level: 2, id: "value-functions", text: "Value functions" },

@@ -4,7 +4,7 @@ const alerting = {
   id: "help-alerts",
   section: "alerting",
   title: "Alerts",
-  category: "alert-visualize",
+  category: "analysis-alerting",
   order: 70,
   headings: [
     { level: 2, id: "conditions-summary", text: "Conditions (summary)" },

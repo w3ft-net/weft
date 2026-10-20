@@ -3,8 +3,8 @@ id: manual-trace
 title: Tracing a request
 web:
   section: trace
-  category: weft-shell
-  order: 60
+  category: analysis-alerting
+  order: 45
 ---
 
 ## Tracing a request
@@ -170,3 +170,17 @@ timings. A span's start line has no duration and isn't counted. A row at level
 `ERROR` that names a span is a span error and counts toward `ERRORS`. A source
 with no span rows, such as one that logs plain text without the SDK or a schema
 that extracts spans, has nothing for `trace spans` to find.
+
+### Not supported
+
+- More than one trace ID per call, or a partial ID or pattern. The ID is
+  matched whole.
+- Following a trace live (`trace -f`), or narrowing by service or time
+  with an option. Use `range` for time, and pipe to `grep` or `jq` for the
+  rest.
+- `--by` with anything but `service`; `--samples` without a span name; and
+  `--samples` together with `--by`.
+- Self time in `trace spans`; use `trace <id> --spans` for that.
+
+Other options are rejected with `trace: unknown option <flag>`
+(`trace spans: unknown option <flag>` for the aggregate form).

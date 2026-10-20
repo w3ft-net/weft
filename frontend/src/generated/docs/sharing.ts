@@ -11,6 +11,7 @@ const sharing = {
     { level: 2, id: "what-the-link-encodes", text: "What the link encodes" },
     { level: 2, id: "why-share-a-script-link", text: "Why share a script link" },
     { level: 2, id: "examples", text: "Examples" },
+    { level: 2, id: "not-supported", text: "Not supported" },
     { level: 2, id: "access", text: "Access" },
   ],
   html: `<h2 id="sharing-a-script-with-a-teammate">Sharing a script with a teammate</h2>
@@ -66,6 +67,11 @@ clipboard /bin/check --range=yesterday..today -- prod
                         yesterday's window, one positional arg
 </code></pre>
 <p>See <code>man clipboard</code> for the full command reference.</p>
+<h2 id="not-supported">Not supported</h2>
+<p>Only <code>/bin/</code> scripts can be shared this way: not crons, dashboards or
+unsaved pipelines. A link cannot be pinned to an older version of the
+script. <code>--range</code> takes its value after an <code>=</code> (<code>--range=24h..</code>), and other
+options are rejected with <code>clipboard: unknown option</code>.</p>
 <h2 id="access">Access</h2>
 <p>The link grants no access. It opens for signed-in members of
 your org; anyone else gets &quot;that link doesn't exist&quot;. Recipients also

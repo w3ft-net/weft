@@ -1,66 +1,96 @@
 ---
 id: help-builtins
-title: Builtins
+title: Commands
 shell:
   const: HelpBuiltins
   topics:
     - "help builtins"
+    - "man commands"
 web:
   section: builtins
   category: weft-shell
   order: 56
 ---
 
-Commands that exist in a Unix shell. Everything here behaves as it does in
-bash/coreutils except where a note says otherwise.
+The weft shell being a dialect of bash with a sandboxed and slimmed down
+coreutils, a lot of it should come automatically for you. Otherwise, why else
+would you be here? And a handful of commands --  `cd`, `wc`, `history`,
+`clear`, `which`, `rev`, `tac`, `exit` -- are indeed indistinguishable from
+their real counterparts. Most have limitations and/or differences. Of course we
+have a handful of builtins that are weft's special sauce. An overview of all of
+them are below. 
 
-## Reading logs
+## Differences and limitations
 
-- `cat`, `head`, `tail` — read `/log/...` pseudofiles; `tail -f` follows. `head` is the oldest rows, `tail` the newest, within the current `range`. In a cron, omit `-n`: a line count can silently truncate the cron's time window.
-- `ls [-l] [-a] [-h]` — lists `/bin`, `/cron.d`, `/etc`, `/log`, `/tmp`. `-l` shows size and mtime (a sparkline on `/cron.d`).
-- `cd` — changes the virtual working directory.
-- `less` — pages output; also automatic for long output (`man less`).
+Only the options listed here are supported. Any other option is rejected with
+an error (`grep: unknown option -o`, exit status 2). The exception is `less`,
+which accepts options and ignores them.
 
-## Text pipeline
+Where a command can write depends on the directory. `/log` is read-only. `/tmp` is open to every member. `/bin` needs the `binmgr` group, `/cron.d` needs `cronmgr`, and `/etc/dashboards` and `/etc/notify.yaml` need `configmgr` (`/etc/passwd` and `/etc/usage` are read-only for everyone). Expiry, size limits and how files cross into `/bin` are in [Scratch space](../manual/tmp.md#lifetime-and-limits).
 
-- `grep` — filter lines by pattern.
-- `awk` — field predicates and extraction; meta-variables (`ENV`, `LEVEL`, ...) are bare globals, not `$NAME`.
-- `sed` — stream substitution.
-- `jq` — reads each row's JSON payload (the JSON part of a line with text around it). A program of only `select(...)` filters rows and prints the original lines; anything else prints jq's output, compact, one value per line. Meta-variables are `$level`, `$host`, `$ts`, ...; a missing field is `null`, so `select(.n < 100)` keeps rows without `n`.
-- `cut`, `paste`, `sort`, `uniq`, `wc`, `rev`, `tac`, `tr`, `tee`, `xargs`.
+| Command | Supported | Unsupported | Differences |
+|---|---|---|---|
+| `>`, `>>` | Redirect into a file | Redirecting into `/log` or `/etc/passwd` | |
+| `awk` | Near complete implementation of One True AWK | `gensub`, `strftime`, `systime` | [Metavariables](../manual/metavars.md) are accessible in programs in constant casing (`LEVEL`, `HOST`, etc.)|
+| `cat` | — | All options | Reads `/log` pseudofiles as well as `/tmp`. |
+| `comm` | `-1 -2 -3` | Other options | |
+| `cp` | — | `-r` and other options | Files only, not directories. Copying between `/tmp`, `/bin`, `/cron.d` and the `/etc` config files triggers the destination's save checks. |
+| `cut` | `-d`, `-f` | `-c -b -s --complement` |  |
+| `date` | `-u`, `-d STRING`, `-I`, `-R`, `+FORMAT` | Other options | |
+| `diff` | `diff <a> <b>` | `-u -q -y` and other options | Prints `-` and `+` lines rather than a unified diff. |
+| `find` | `[path...]`, `-name`, `-iname`, `-path`, `-type f\|d`, `-maxdepth N`, `-mindepth N` | `-exec`, `-delete`, `-size`, `-mtime`, boolean operators | |
+| `git` | `log`, `show`, `diff`, `blame`, `status`, `rev-parse`, `restore` (`--source`), `checkout <rev> -- <path>`, `revert`, `commit --amend -m` | `add`, `rm`, `mv`, `stash`, `reset`, `clean`, branches, merges, rebases, `clone`, `fetch`, `pull`, `push`; flags beyond the ones each command lists in `man git` | Version history for `/bin`, `/cron.d`, `/etc/dashboards` and `/etc/notify.yaml` only. One linear branch where every save is a commit, so there is no staging. Only the last 5 past versions of each file are kept. `--author` and `--grep` take RE2 patterns. Writes (`restore`, `revert`, `commit --amend`) need the group that manages the file. See `man git`. |
+| `grep` | `-i -v -c -n -E -q -l -h -H -r` | `-o -w -F -A -B -C -m -e -x -P -s` |  |
+| `head` | `-n N`, `-N` | `-c` |  |
+| `join` | `-t SEP`, `-1 N`, `-2 N`, `-a 1\|2` | `-v -o -e -i` | Matches rows with a hash, so input needn't be sorted (GNU `join` requires it). Rows with too few fields for the key are skipped. |
+| `jq` | `-r`, `-c`, `-s` | `-R -n -e -S --arg` | [Metavariables](../manual/metavars.md) accessible in the form `$level`, `$host`, `$ts`, etc. |
+| `less` | — | All options (accepted, no effect) | |
+| `ls` | `-l -a -h` | `-R -t -r -S -1 -d -F` |  |
+| `mkdir` | `-p` | Other options | `/tmp` only. |
+| `mv` | — | All options | Same rules apply as for `cp` |
+| `paste` | `-d` | `-s` |  |
+| `rm` | `-r`, `-R`, `-f` | Other options | |
+| `sed` | `s///`, `y///`, `d`, `p`, `a`, `G`, `N`, addresses and ranges, `-n`, `-e` | `-E`, `-s` | Line filters (`-n '/re/p'`, `'/re/d'`, and their `!` forms) are [optimized](../manual/fast-pipelines.md); `s///` and other programs run post-retrieval. |
+| `sort` | `-r -n -u -k -t SEP` | `-f -h -V -s -b`, character offsets in keys (`-k1.2`) | |
+| `tail` | `-n N`, `-N`, `-n +N`, `-f` | `-c`, `-F` | `-f` works on files under `/log` only and can't be redirected |
+| `tee` | `-a` | Other options | |
+| `touch` | — | All options | `/tmp` only. |
+| `tr` | `tr SET1 SET2`, `tr -d SET`, ranges like `a-z` | `-s -c`, `[:class:]` |  |
+| `type` | — | All options |  |
+| `uniq` | `-c -d -u` | `-i -f` |  |
+| `vi(m)` | — | — | Edits anything you may write, with the same groups as `>`. |
+| `xargs` | `-n N`, `-P N`, `-I{}` | `-0 -d` |  |
 
-Once a stage changes the text (`sort`, `awk '{ print ... }'`, `sed s/.../`), the next stage reads that text, as in any shell; the JSON payload stays attached only through stages that merely filter or count rows (`grep`, an awk pattern, `head`, `tail`).
+## Weft's own commands
 
-## Files in /tmp
+### Querying
 
-`/tmp` is the only writable scratch area. Expiry, size limits and how files cross into `/bin` are in [Scratch space](../manual/tmp.md#lifetime-and-limits).
+| Command | What it does | Reference |
+|---|---|---|
+| `range [<start>..<end>]` | Show or set the time window every read uses. Relative specs like `1d..` are re-anchored on every query. | `man range` |
+| `explain <pipeline>` | Say how much of a one-liner is optimized retrieval and what would speed it up. Runs nothing. See [Making pipelines fast](../manual/fast-pipelines.md). | `man explain` |
+| `trace <id>`, `trace <id> --spans`, `trace spans [name]` | Every line of one request across all your services, a per-span-name rollup of one request, or span latency across the whole time window. | [Tracing a request](../manual/trace.md) |
+| `chart` | Render a pipeline's output, or a cron's history, as a chart in the terminal. | [chart](../shell/man-chart.md) |
+| `alert` | Fire a notification from a pipeline's final number. | [alert](../shell/man-alert.md), [notify](../manual/notify.md) |
+| `weft::latest`, `weft::avg`, `weft::max`, ... | Read and reason about your own cron history from inside a pipeline. | [weft::\*](../manual/weft-funcs.md) |
+| `dashboard` | Open a dashboard; the YAML grammar and tile kinds. | [dashboard](../shell/man-dashboard.md) |
+| `clipboard` | Copy a short, shareable link to a `/bin` script. | `man clipboard`, `man sharing` |
 
-- `>` / `>>` — redirect into `/tmp`.
-- `mkdir`, `rm [-rf]`, `vi`, `touch`, `cp`, `mv` — as usual, within `/tmp`.
-- `diff`, `comm` (sorted input), `join` (`-t ,`, `-1`, `-2` take a space before the value), `paste -d`, `wc -l -w -c -m -L`.
+See `man less` for paging and `man sharing` for sharing scripts.
 
-## Shell
+### Sharing and history
 
-- `which`, `type`, `history`, `clear`, `exit`.
+| Command | What it does | Reference |
+|---|---|---|
 
-## Partial implementations
+### Team
 
-Real commands with a reduced or weft-specific meaning.
+| Command | What it does | Reference |
+|---|---|---|
+| `adduser`, `deluser`, `groups`, `id` | Manage org members and groups, not operating-system accounts. `adduser <email>` sends an invite. `/etc/passwd` is a read-only team roster. | `man passwd`, `man teams` |
 
-- `git` — a subset over `/bin`, `/cron.d`, `/etc/dashboards` and `/etc/notify.yaml`: `log`, `show`, `diff`, `blame`, `restore --source`, `revert`, `commit --amend`, `status`. Other subcommands are refused. Last 5 past versions retained (`man git`).
-- `adduser`, `deluser`, `groups`, `id` — manage org members and groups, not OS accounts; `adduser <email>` sends an invite. `/etc/passwd` is a read-only team roster (`man passwd`).
+## Finding help
 
-## Shell extensions
-
-Commands with no Unix counterpart.
-
-- `range [<start>..<end>]` — show or set the query window; it governs every read (`man range`).
-- `chart` — render a pipeline or cron in the terminal (`man chart`).
-- `explain <pipeline>` — say how much of a one-liner is optimized and what would speed it up, without running it (`man explain`).
-- `alert` — fire a notification from a pipeline's final number (`man alert`).
-- `clipboard` — copy a short link to a `/bin` script (`man clipboard`).
-- `dashboard` — dashboard YAML grammar and tiles (`man dashboard`).
-
-`help cron` and `help alerts` cover scheduling and notification.
-
-> `man <name>` where a page exists. `man commands` lists weft's own commands.
+`help` lists the shell's topics, `help builtins` (or `man commands`) shows this page, and
+`man` with no argument lists the manual. `<command> --help` shows the same
+page as `man <command>`.

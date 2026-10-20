@@ -57,6 +57,15 @@ Bottom row shows the source title on the left and a percent
 position on the right. Incremental search and error messages
 replace the status briefly.
 
+## NOT SUPPORTED
+
+- Command-line options. `less` does not read them: `-N`, `-S`, `-R`, `-i`,
+  `-F` and the rest are accepted and have no effect.
+- Backward search (`?`), case-insensitive or regular-expression search; `/`
+  is a case-sensitive substring match.
+- Numeric counts (`5j`), half-page scrolling (`d`, `u`), follow mode (`F`),
+  opening the text in an editor (`v`) and marks.
+
 ## SEE ALSO
 
 `help`, `man alert`, `man range`

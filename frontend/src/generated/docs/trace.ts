@@ -4,14 +4,15 @@ const trace = {
   id: "manual-trace",
   section: "trace",
   title: "Tracing a request",
-  category: "weft-shell",
-  order: 60,
+  category: "analysis-alerting",
+  order: 45,
   headings: [
     { level: 3, id: "getting-trace-ids-into-your-logs", text: "Getting trace IDs into your logs" },
     { level: 3, id: "trace-id", text: "trace ID" },
     { level: 3, id: "trace-id---spans", text: "trace ID --spans" },
     { level: 3, id: "trace-spans", text: "trace spans" },
     { level: 3, id: "what-counts-as-a-span", text: "What counts as a span" },
+    { level: 3, id: "not-supported", text: "Not supported" },
   ],
   html: `<p><code>trace</code> follows one request through every service it touched. Give it a trace
 ID and it returns every log line carrying that ID, from every source you can
@@ -152,6 +153,19 @@ timings. A span's start line has no duration and isn't counted. A row at level
 <code>ERROR</code> that names a span is a span error and counts toward <code>ERRORS</code>. A source
 with no span rows, such as one that logs plain text without the SDK or a schema
 that extracts spans, has nothing for <code>trace spans</code> to find.</p>
+<h3 id="not-supported">Not supported</h3>
+<ul>
+<li>More than one trace ID per call, or a partial ID or pattern. The ID is
+matched whole.</li>
+<li>Following a trace live (<code>trace -f</code>), or narrowing by service or time
+with an option. Use <code>range</code> for time, and pipe to <code>grep</code> or <code>jq</code> for the
+rest.</li>
+<li><code>--by</code> with anything but <code>service</code>; <code>--samples</code> without a span name; and
+<code>--samples</code> together with <code>--by</code>.</li>
+<li>Self time in <code>trace spans</code>; use <code>trace &lt;id&gt; --spans</code> for that.</li>
+</ul>
+<p>Other options are rejected with <code>trace: unknown option &lt;flag&gt;</code>
+(<code>trace spans: unknown option &lt;flag&gt;</code> for the aggregate form).</p>
 `,
 } as const;
 

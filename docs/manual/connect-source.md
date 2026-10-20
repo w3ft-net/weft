@@ -38,18 +38,17 @@ respective namespace. It will start off in a "sampling" state -- we capture a
 50-line chunk to help to define a schema for that source. You can watch that
 progress in the browser or with `weft source pending --watch`.
 
-When using weftd, you're forced to define a schema for your log lines, unless
-the lines were written by a weft SDK to a [log file](weftd.md#sdk-log-files):
-then timestamp, level, trace ID and spans come from each line's header and
-there is nothing to define. Though you don't have to define a schema for other
-producers, we highly recommend it.
-Having a means of plucking [metavariables](metavars.md) out of the logs lets us
-make lookups on those values nice and snappy. 
+When using weftd, you're forced to define a schema for your log lines, (unless
+the lines were written by a weft SDK, in which case then timestamp, level,
+trace ID and spans come from each line's header). Though you don't have to
+define a schema for other producers, we highly recommend it.  Having a means of
+plucking [metavariables](metavars.md) out of the logs lets us make lookups on
+those values nice and snappy. 
 
-Once you've transtioned from "sampling" to "pending," you can view our
-best guess about your sample in the browser or on the CLI with `weft source
-configure`. A little wizard will walk you through our guesses for each of the
-values we want to extract and you can approve, reject, etc.
+Once your log source has transitioned from "sampling" to "pending," you can
+view our best guess about your sample in the browser or on the CLI with `weft
+source configure`. A little wizard will walk you through our guesses for each
+of the values we want to extract and you can approve, reject, etc.
 
 You can resample at any time by clicking "resample" or running `weft source
 resample`.

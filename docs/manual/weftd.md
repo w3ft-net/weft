@@ -282,44 +282,68 @@ Metrics only run on Linux (the collectors read `/proc/stat`,
 `/proc/meminfo`, `/proc/mounts`, `/proc/loadavg`, and
 `/proc/net/dev`). On other kernels the block is ignored.
 
-### App API
+### Socket listener
 
-weftd can listen on a local Unix socket so your own applications can send
-events, heartbeats and runtime stats without a token or a network call. Name the
-socket in `config.yaml`:
+weftd can listen on a local Unix socket so your own applications can use the
+[weft SDKs](https://github.com/orgs/w3ft-net/repositories) to annotate traces,
+spans, and timings and send events, heartbeats and runtime stats over the same
+streaming connection weftd already has open.  Name the socket in `config.yaml`
+and weftd will create it on startup:
 
 ```
 # /etc/weftd/config.yaml
 socket: /var/run/weftd.sock
 ```
+Some socket properties:
 
-The Go and Python SDKs find `/var/run/weftd.sock` on their own; if you name it
-something else, set `WEFT_SOCKET` to match. See the SDK READMEs for usage:
-[Go](https://github.com/w3ft-net/weft-go) and Python (`pip install w3ft`).
+* It's world-writable
+* It's one-way -- weft never sends anything back
+* It buffers up to 4096 lines, after which, if undrained, writes will silently fail
 
-### SDK log files
+Though most of the convenience comes from using the weft SDKs, the enterprising
+user can always write directly to this socket themselves. Connect to the socket
+and write one line per message, each ending in a newline:
 
-The Go and Python SDKs can write your application's logs to a file with
-each line's timestamp, level and trace ID in a header, and weftd reads those
-values straight off it. Point the SDK at a file with `WEFT_LOG_FILE` (or the
-path argument to `InstallLogging` / `install_logging`) and name the same file as
-a source:
-
-```yaml
-sources:
-  - service: myapp
-    path: /var/log/myapp/weft.log
+```
+<app>:<line>\n
 ```
 
-A service fed this way has no schema to extract: weft configures it as soon as
-the first line arrives, and `weft source schema` says which values came from
-the SDK. The SDK can also capture stdout and stderr into the file; they
-appear as the service's `stdout` and `stderr` logs. The file belongs to the
-SDK, so don't write to it from anything else, and if you capture stdout and
-stderr, stop a systemd unit from redirecting them to a file too.
+| Part | Meaning |
+|---|---|
+| `app` | `service` or `service/kind`, where `kind` defaults to `main`. It must be shorter than 32 characters and contain no spaces. A line with no valid `app:` prefix goes to the default app. |
+| `line` | The log line, with no newline in it. A line over 1 MiB closes the connection. |
 
-A service is either SDK-written or not: don't point an SDK file and a plain
-log file at the same `service`.
+#### Line header
+
+The weft SDKs write and weftd reads a per-line header carrying metadata for
+that line. It writes those headers when it writes to log files and when it
+writes to the socket.  
+
+```
+\x1e v1 \x1f ts \x1f level \x1f trace \x1f span_name \x1f span_id \x1f parent_id \x1f dur_ns \x1f fmt \x1f kind \x1e body
+```
+
+The header sits between two `\x1e` bytes, with its values separated by `\x1f`,
+and the spaces above are only for reading. On the socket the header comes right
+after `<app>:`.
+
+| Value | Meaning |
+|---|---|
+| `v1` | The version. It fixes the order and meaning of the values that follow. |
+| `ts` | When the line happened, as integer Unix nanoseconds. Empty means weftd stamps it on arrival. |
+| `level` | The severity as the writer spells it, such as `INFO`, `WARN` or `ERROR`. |
+| `trace` | The trace ID the line belongs to. |
+| `span_name` | The name of the span this line describes, for a line that starts or ends a span. |
+| `span_id` | The span's ID. |
+| `parent_id` | The ID of the span's parent. |
+| `dur_ns` | The span's duration in nanoseconds, on the line that ends it. |
+| `fmt` | `json` or `text`, the shape of the body. |
+| `kind` | A second stream for the same service, such as `queries` for `service/queries`. It uses letters, digits, `-` and `_` (up to 64 characters) and can't be `heartbeats`, `runtime`, `host`, `disk` or `network`. |
+
+Every value after `v1` is optional. A value that doesn't parse, such as a `ts`
+that isn't a number or a `dur_ns` that isn't positive, is discarded without
+rejecting the line itself. Header field values can't contain `\x1e`, `\x1f` or
+a newline. 
 
 ## Behavior and semantics
 
@@ -328,13 +352,11 @@ log file at the same `service`.
 Files are the only source with delivery guarantees. weftd keeps recently sent
 rows (up to 8 MiB per file) until the coordinator acknowledges them, at the
 `commit_interval` below, and only then advances the saved position. Anything
-unacknowledged is resent on a new stream, so delivery is **at-least-once**:
-duplicates are possible, gaps are not. During an outage the log file is the
-buffer. weftd stops reading when its window is full and resumes when the
-coordinator is back, and there is no disk spool of its own. Unit
-(`journalctl`), records-socket and metrics rows are best-effort: they are
-sent straight through and are not replayed after a restart or an outage.
-The socket drops lines when its 4096-line queue is full.
+unacknowledged is resent on a new stream, so delivery is at-least-once.  In the
+event of an outage, weftd stops reading when its window is full and resumes
+when the upstream is back. Unit (`journalctl`), records-socket and metrics rows
+are best-effort: they are sent straight through and are not replayed after a
+restart or an outage, whereas log files on disk are checkpointed (see below).
 
 ### Resuming after a restart
 
@@ -343,9 +365,9 @@ up where it left off and reads whatever was written in the meantime. The saved
 position means "weft acknowledged everything up to here", so lines
 that were in flight when weftd stopped are sent again. 
 
-State is kept in `/var/lib/weftd/checkpoints/`. The `.deb` unit creates it
-(`StateDirectory=weftd`). Checkpointing is always on. These settings, all
-optional, tune it:
+State is kept in `/var/lib/weftd/checkpoints/`, which is created by the debian
+package (`StateDirectory=weftd`). Checkpointing is always on. These settings,
+all optional, tune it:
 
 ```yaml
 checkpoint:
@@ -368,23 +390,14 @@ What weftd does for each file when it starts:
 
 A file is matched by device, inode and a hash of its first kilobyte, so a
 reused inode is not mistaken for the same file. Files created while weftd is
-running are read from their first line. Every skip or replay is logged, and
-summarized once a minute as a `checkpoint stats` line per file.
-
-Notes:
-
-- **Containers:** the state directory must survive the pod. On Kubernetes,
-  mount `/var/lib/weftd` from a `hostPath`. An `emptyDir` or the container
-  filesystem is wiped on every reschedule.
-- **Two weftd on one host** cannot share a state directory. The second one
-  logs that the directory is locked and runs without checkpointing.
-- A damaged `state.json` is moved to `state.json.corrupt` and weftd starts
-  as if freshly installed.
+running are read from their first line. Every skip or replay is logged to
+weftd's own log (`journalctl -u weftd`), and summarized once a minute as a
+`checkpoint stats` line per file.
 
 ### Updates
 
-Once a day weftd checks `releases.w3ft.net` for a newer release. By default it
-downloads the build for the host's platform, verifies its SHA-256, replaces the
+Once a day (or on restart) weftd checks `releases.w3ft.net` for a newer
+release. By default it downloads the build, verifies its SHA-256, replaces the
 running binary, and exits so systemd (`Restart=always`) relaunches it. Set
-`auto_update: false` to pin a host, for example while you investigate a
-release. It then only logs a line when a newer version exists.
+`auto_update: false` to pin a host.  It then only logs a line when a newer
+version exists.

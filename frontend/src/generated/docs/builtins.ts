@@ -3,66 +3,306 @@
 const builtins = {
   id: "help-builtins",
   section: "builtins",
-  title: "Builtins",
+  title: "Commands",
   category: "weft-shell",
   order: 56,
   headings: [
-    { level: 2, id: "reading-logs", text: "Reading logs" },
-    { level: 2, id: "text-pipeline", text: "Text pipeline" },
-    { level: 2, id: "files-in-tmp", text: "Files in /tmp" },
-    { level: 2, id: "shell", text: "Shell" },
-    { level: 2, id: "partial-implementations", text: "Partial implementations" },
-    { level: 2, id: "shell-extensions", text: "Shell extensions" },
+    { level: 2, id: "differences-and-limitations", text: "Differences and limitations" },
+    { level: 2, id: "wefts-own-commands", text: "Weft's own commands" },
+    { level: 3, id: "querying", text: "Querying" },
+    { level: 3, id: "sharing-and-history", text: "Sharing and history" },
+    { level: 3, id: "team", text: "Team" },
+    { level: 2, id: "finding-help", text: "Finding help" },
   ],
-  html: `<p>Commands that exist in a Unix shell. Everything here behaves as it does in
-bash/coreutils except where a note says otherwise.</p>
-<h2 id="reading-logs">Reading logs</h2>
-<ul>
-<li><code>cat</code>, <code>head</code>, <code>tail</code> — read <code>/log/...</code> pseudofiles; <code>tail -f</code> follows. <code>head</code> is the oldest rows, <code>tail</code> the newest, within the current <code>range</code>. In a cron, omit <code>-n</code>: a line count can silently truncate the cron's time window.</li>
-<li><code>ls [-l] [-a] [-h]</code> — lists <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code>, <code>/log</code>, <code>/tmp</code>. <code>-l</code> shows size and mtime (a sparkline on <code>/cron.d</code>).</li>
-<li><code>cd</code> — changes the virtual working directory.</li>
-<li><code>less</code> — pages output; also automatic for long output (<code>man less</code>).</li>
-</ul>
-<h2 id="text-pipeline">Text pipeline</h2>
-<ul>
-<li><code>grep</code> — filter lines by pattern.</li>
-<li><code>awk</code> — field predicates and extraction; meta-variables (<code>ENV</code>, <code>LEVEL</code>, ...) are bare globals, not <code>$NAME</code>.</li>
-<li><code>sed</code> — stream substitution.</li>
-<li><code>jq</code> — reads each row's JSON payload (the JSON part of a line with text around it). A program of only <code>select(...)</code> filters rows and prints the original lines; anything else prints jq's output, compact, one value per line. Meta-variables are <code>$level</code>, <code>$host</code>, <code>$ts</code>, ...; a missing field is <code>null</code>, so <code>select(.n &lt; 100)</code> keeps rows without <code>n</code>.</li>
-<li><code>cut</code>, <code>paste</code>, <code>sort</code>, <code>uniq</code>, <code>wc</code>, <code>rev</code>, <code>tac</code>, <code>tr</code>, <code>tee</code>, <code>xargs</code>.</li>
-</ul>
-<p>Once a stage changes the text (<code>sort</code>, <code>awk '{ print ... }'</code>, <code>sed s/.../</code>), the next stage reads that text, as in any shell; the JSON payload stays attached only through stages that merely filter or count rows (<code>grep</code>, an awk pattern, <code>head</code>, <code>tail</code>).</p>
-<h2 id="files-in-tmp">Files in /tmp</h2>
-<p><code>/tmp</code> is the only writable scratch area. Expiry, size limits and how files cross into <code>/bin</code> are in <a href="/manual/tmp#lifetime-and-limits">Scratch space</a>.</p>
-<ul>
-<li><code>&gt;</code> / <code>&gt;&gt;</code> — redirect into <code>/tmp</code>.</li>
-<li><code>mkdir</code>, <code>rm [-rf]</code>, <code>vi</code>, <code>touch</code>, <code>cp</code>, <code>mv</code> — as usual, within <code>/tmp</code>.</li>
-<li><code>diff</code>, <code>comm</code> (sorted input), <code>join</code> (<code>-t ,</code>, <code>-1</code>, <code>-2</code> take a space before the value), <code>paste -d</code>, <code>wc -l -w -c -m -L</code>.</li>
-</ul>
-<h2 id="shell">Shell</h2>
-<ul>
-<li><code>which</code>, <code>type</code>, <code>history</code>, <code>clear</code>, <code>exit</code>.</li>
-</ul>
-<h2 id="partial-implementations">Partial implementations</h2>
-<p>Real commands with a reduced or weft-specific meaning.</p>
-<ul>
-<li><code>git</code> — a subset over <code>/bin</code>, <code>/cron.d</code>, <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code>: <code>log</code>, <code>show</code>, <code>diff</code>, <code>blame</code>, <code>restore --source</code>, <code>revert</code>, <code>commit --amend</code>, <code>status</code>. Other subcommands are refused. Last 5 past versions retained (<code>man git</code>).</li>
-<li><code>adduser</code>, <code>deluser</code>, <code>groups</code>, <code>id</code> — manage org members and groups, not OS accounts; <code>adduser &lt;email&gt;</code> sends an invite. <code>/etc/passwd</code> is a read-only team roster (<code>man passwd</code>).</li>
-</ul>
-<h2 id="shell-extensions">Shell extensions</h2>
-<p>Commands with no Unix counterpart.</p>
-<ul>
-<li><code>range [&lt;start&gt;..&lt;end&gt;]</code> — show or set the query window; it governs every read (<code>man range</code>).</li>
-<li><code>chart</code> — render a pipeline or cron in the terminal (<code>man chart</code>).</li>
-<li><code>explain &lt;pipeline&gt;</code> — say how much of a one-liner is optimized and what would speed it up, without running it (<code>man explain</code>).</li>
-<li><code>alert</code> — fire a notification from a pipeline's final number (<code>man alert</code>).</li>
-<li><code>clipboard</code> — copy a short link to a <code>/bin</code> script (<code>man clipboard</code>).</li>
-<li><code>dashboard</code> — dashboard YAML grammar and tiles (<code>man dashboard</code>).</li>
-</ul>
-<p><code>help cron</code> and <code>help alerts</code> cover scheduling and notification.</p>
-<blockquote>
-<p><code>man &lt;name&gt;</code> where a page exists. <code>man commands</code> lists weft's own commands.</p>
-</blockquote>
+  html: `<p>The weft shell being a dialect of bash with a sandboxed and slimmed down
+coreutils, a lot of it should come automatically for you. Otherwise, why else
+would you be here? And a handful of commands --  <code>cd</code>, <code>wc</code>, <code>history</code>,
+<code>clear</code>, <code>which</code>, <code>rev</code>, <code>tac</code>, <code>exit</code> -- are indeed indistinguishable from
+their real counterparts. Most have limitations and/or differences. Of course we
+have a handful of builtins that are weft's special sauce. An overview of all of
+them are below.</p>
+<h2 id="differences-and-limitations">Differences and limitations</h2>
+<p>Only the options listed here are supported. Any other option is rejected with
+an error (<code>grep: unknown option -o</code>, exit status 2). The exception is <code>less</code>,
+which accepts options and ignores them.</p>
+<p>Where a command can write depends on the directory. <code>/log</code> is read-only. <code>/tmp</code> is open to every member. <code>/bin</code> needs the <code>binmgr</code> group, <code>/cron.d</code> needs <code>cronmgr</code>, and <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code> need <code>configmgr</code> (<code>/etc/passwd</code> and <code>/etc/usage</code> are read-only for everyone). Expiry, size limits and how files cross into <code>/bin</code> are in <a href="/manual/tmp#lifetime-and-limits">Scratch space</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Supported</th>
+<th>Unsupported</th>
+<th>Differences</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&gt;</code>, <code>&gt;&gt;</code></td>
+<td>Redirect into a file</td>
+<td>Redirecting into <code>/log</code> or <code>/etc/passwd</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>awk</code></td>
+<td>Near complete implementation of One True AWK</td>
+<td><code>gensub</code>, <code>strftime</code>, <code>systime</code></td>
+<td><a href="/manual/metavars">Metavariables</a> are accessible in programs in constant casing (<code>LEVEL</code>, <code>HOST</code>, etc.)</td>
+</tr>
+<tr>
+<td><code>cat</code></td>
+<td>—</td>
+<td>All options</td>
+<td>Reads <code>/log</code> pseudofiles as well as <code>/tmp</code>.</td>
+</tr>
+<tr>
+<td><code>comm</code></td>
+<td><code>-1 -2 -3</code></td>
+<td>Other options</td>
+<td></td>
+</tr>
+<tr>
+<td><code>cp</code></td>
+<td>—</td>
+<td><code>-r</code> and other options</td>
+<td>Files only, not directories. Copying between <code>/tmp</code>, <code>/bin</code>, <code>/cron.d</code> and the <code>/etc</code> config files triggers the destination's save checks.</td>
+</tr>
+<tr>
+<td><code>cut</code></td>
+<td><code>-d</code>, <code>-f</code></td>
+<td><code>-c -b -s --complement</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>date</code></td>
+<td><code>-u</code>, <code>-d STRING</code>, <code>-I</code>, <code>-R</code>, <code>+FORMAT</code></td>
+<td>Other options</td>
+<td></td>
+</tr>
+<tr>
+<td><code>diff</code></td>
+<td><code>diff &lt;a&gt; &lt;b&gt;</code></td>
+<td><code>-u -q -y</code> and other options</td>
+<td>Prints <code>-</code> and <code>+</code> lines rather than a unified diff.</td>
+</tr>
+<tr>
+<td><code>find</code></td>
+<td><code>[path...]</code>, <code>-name</code>, <code>-iname</code>, <code>-path</code>, <code>-type f|d</code>, <code>-maxdepth N</code>, <code>-mindepth N</code></td>
+<td><code>-exec</code>, <code>-delete</code>, <code>-size</code>, <code>-mtime</code>, boolean operators</td>
+<td></td>
+</tr>
+<tr>
+<td><code>git</code></td>
+<td><code>log</code>, <code>show</code>, <code>diff</code>, <code>blame</code>, <code>status</code>, <code>rev-parse</code>, <code>restore</code> (<code>--source</code>), <code>checkout &lt;rev&gt; -- &lt;path&gt;</code>, <code>revert</code>, <code>commit --amend -m</code></td>
+<td><code>add</code>, <code>rm</code>, <code>mv</code>, <code>stash</code>, <code>reset</code>, <code>clean</code>, branches, merges, rebases, <code>clone</code>, <code>fetch</code>, <code>pull</code>, <code>push</code>; flags beyond the ones each command lists in <code>man git</code></td>
+<td>Version history for <code>/bin</code>, <code>/cron.d</code>, <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code> only. One linear branch where every save is a commit, so there is no staging. Only the last 5 past versions of each file are kept. <code>--author</code> and <code>--grep</code> take RE2 patterns. Writes (<code>restore</code>, <code>revert</code>, <code>commit --amend</code>) need the group that manages the file. See <code>man git</code>.</td>
+</tr>
+<tr>
+<td><code>grep</code></td>
+<td><code>-i -v -c -n -E -q -l -h -H -r</code></td>
+<td><code>-o -w -F -A -B -C -m -e -x -P -s</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>head</code></td>
+<td><code>-n N</code>, <code>-N</code></td>
+<td><code>-c</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>join</code></td>
+<td><code>-t SEP</code>, <code>-1 N</code>, <code>-2 N</code>, <code>-a 1|2</code></td>
+<td><code>-v -o -e -i</code></td>
+<td>Matches rows with a hash, so input needn't be sorted (GNU <code>join</code> requires it). Rows with too few fields for the key are skipped.</td>
+</tr>
+<tr>
+<td><code>jq</code></td>
+<td><code>-r</code>, <code>-c</code>, <code>-s</code></td>
+<td><code>-R -n -e -S --arg</code></td>
+<td><a href="/manual/metavars">Metavariables</a> accessible in the form <code>$level</code>, <code>$host</code>, <code>$ts</code>, etc.</td>
+</tr>
+<tr>
+<td><code>less</code></td>
+<td>—</td>
+<td>All options (accepted, no effect)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>ls</code></td>
+<td><code>-l -a -h</code></td>
+<td><code>-R -t -r -S -1 -d -F</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>mkdir</code></td>
+<td><code>-p</code></td>
+<td>Other options</td>
+<td><code>/tmp</code> only.</td>
+</tr>
+<tr>
+<td><code>mv</code></td>
+<td>—</td>
+<td>All options</td>
+<td>Same rules apply as for <code>cp</code></td>
+</tr>
+<tr>
+<td><code>paste</code></td>
+<td><code>-d</code></td>
+<td><code>-s</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>rm</code></td>
+<td><code>-r</code>, <code>-R</code>, <code>-f</code></td>
+<td>Other options</td>
+<td></td>
+</tr>
+<tr>
+<td><code>sed</code></td>
+<td><code>s///</code>, <code>y///</code>, <code>d</code>, <code>p</code>, <code>a</code>, <code>G</code>, <code>N</code>, addresses and ranges, <code>-n</code>, <code>-e</code></td>
+<td><code>-E</code>, <code>-s</code></td>
+<td>Line filters (<code>-n '/re/p'</code>, <code>'/re/d'</code>, and their <code>!</code> forms) are <a href="/manual/fast-pipelines">optimized</a>; <code>s///</code> and other programs run post-retrieval.</td>
+</tr>
+<tr>
+<td><code>sort</code></td>
+<td><code>-r -n -u -k -t SEP</code></td>
+<td><code>-f -h -V -s -b</code>, character offsets in keys (<code>-k1.2</code>)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>tail</code></td>
+<td><code>-n N</code>, <code>-N</code>, <code>-n +N</code>, <code>-f</code></td>
+<td><code>-c</code>, <code>-F</code></td>
+<td><code>-f</code> works on files under <code>/log</code> only and can't be redirected</td>
+</tr>
+<tr>
+<td><code>tee</code></td>
+<td><code>-a</code></td>
+<td>Other options</td>
+<td></td>
+</tr>
+<tr>
+<td><code>touch</code></td>
+<td>—</td>
+<td>All options</td>
+<td><code>/tmp</code> only.</td>
+</tr>
+<tr>
+<td><code>tr</code></td>
+<td><code>tr SET1 SET2</code>, <code>tr -d SET</code>, ranges like <code>a-z</code></td>
+<td><code>-s -c</code>, <code>[:class:]</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>type</code></td>
+<td>—</td>
+<td>All options</td>
+<td></td>
+</tr>
+<tr>
+<td><code>uniq</code></td>
+<td><code>-c -d -u</code></td>
+<td><code>-i -f</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>vi(m)</code></td>
+<td>—</td>
+<td>—</td>
+<td>Edits anything you may write, with the same groups as <code>&gt;</code>.</td>
+</tr>
+<tr>
+<td><code>xargs</code></td>
+<td><code>-n N</code>, <code>-P N</code>, <code>-I{}</code></td>
+<td><code>-0 -d</code></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="wefts-own-commands">Weft's own commands</h2>
+<h3 id="querying">Querying</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>range [&lt;start&gt;..&lt;end&gt;]</code></td>
+<td>Show or set the time window every read uses. Relative specs like <code>1d..</code> are re-anchored on every query.</td>
+<td><code>man range</code></td>
+</tr>
+<tr>
+<td><code>explain &lt;pipeline&gt;</code></td>
+<td>Say how much of a one-liner is optimized retrieval and what would speed it up. Runs nothing. See <a href="/manual/fast-pipelines">Making pipelines fast</a>.</td>
+<td><code>man explain</code></td>
+</tr>
+<tr>
+<td><code>trace &lt;id&gt;</code>, <code>trace &lt;id&gt; --spans</code>, <code>trace spans [name]</code></td>
+<td>Every line of one request across all your services, a per-span-name rollup of one request, or span latency across the whole time window.</td>
+<td><a href="/manual/trace">Tracing a request</a></td>
+</tr>
+<tr>
+<td><code>chart</code></td>
+<td>Render a pipeline's output, or a cron's history, as a chart in the terminal.</td>
+<td><a href="/manual/chart">chart</a></td>
+</tr>
+<tr>
+<td><code>alert</code></td>
+<td>Fire a notification from a pipeline's final number.</td>
+<td><a href="/manual/alert">alert</a>, <a href="/manual/notify">notify</a></td>
+</tr>
+<tr>
+<td><code>weft::latest</code>, <code>weft::avg</code>, <code>weft::max</code>, ...</td>
+<td>Read and reason about your own cron history from inside a pipeline.</td>
+<td><a href="/manual/weft-funcs">weft::*</a></td>
+</tr>
+<tr>
+<td><code>dashboard</code></td>
+<td>Open a dashboard; the YAML grammar and tile kinds.</td>
+<td><a href="/manual/dashboard">dashboard</a></td>
+</tr>
+<tr>
+<td><code>clipboard</code></td>
+<td>Copy a short, shareable link to a <code>/bin</code> script.</td>
+<td><code>man clipboard</code>, <code>man sharing</code></td>
+</tr>
+</tbody>
+</table>
+<p>See <code>man less</code> for paging and <code>man sharing</code> for sharing scripts.</p>
+<h3 id="sharing-and-history">Sharing and history</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+<th>Reference</th>
+</tr>
+</thead>
+</table>
+<h3 id="team">Team</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+<th>Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>adduser</code>, <code>deluser</code>, <code>groups</code>, <code>id</code></td>
+<td>Manage org members and groups, not operating-system accounts. <code>adduser &lt;email&gt;</code> sends an invite. <code>/etc/passwd</code> is a read-only team roster.</td>
+<td><code>man passwd</code>, <code>man teams</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="finding-help">Finding help</h2>
+<p><code>help</code> lists the shell's topics, <code>help builtins</code> (or <code>man commands</code>) shows this page, and
+<code>man</code> with no argument lists the manual. <code>&lt;command&gt; --help</code> shows the same
+page as <code>man &lt;command&gt;</code>.</p>
 `,
 } as const;
 

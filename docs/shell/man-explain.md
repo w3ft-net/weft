@@ -58,14 +58,14 @@ $ explain cat /log/acme/api/main.log | awk '$3 == "ingest-stream:" { printf "%s\
        Try: Print only, e.g. `print $1, HOST`.
   2  grep 'first row'                                    post-retrieval
 
-Barrier: stage 1. Everything after it: post-retrieval.
+Barrier: stage 1.
 
 $ explain cat /log/acme/api/main.log | grep -c boom
   1  grep -c boom  post-retrieval
        grep optimized with -i, -v, or no flags; not -c.
        Try: Use `grep PATTERN | wc -l`: both optimized.
 
-Barrier: stage 1. Everything after it: post-retrieval.
+Barrier: stage 1.
 
 $ explain cat /log/acme/api/main.log | grep ERROR | wc -l
 Every stage: optimized retrieval.
@@ -79,3 +79,11 @@ yellow for partly optimized, red for post-retrieval.
 A cron runs on every fire, so saving one explains it automatically. Nothing is
 printed when the whole pipeline is optimized retrieval; otherwise the save
 succeeds and the same report follows it.
+
+## NOT SUPPORTED
+
+- Running the pipeline. `explain` shows no rows, timings or row counts; use
+  the pipeline itself for those.
+- Options (`explain -v`, `explain --json`). They are rejected with
+  `unknown option`.
+- Anything that is not a log query. `explain echo hi` is an error.

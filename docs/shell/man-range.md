@@ -94,3 +94,15 @@ range 2026-04-01..2026-04-12
 range 2026-04-12T10:00..2026-04-12T11:00
                         specific hour
 ```
+
+## NOT SUPPORTED
+
+- Seconds, weeks and combined durations (`30s`, `1w`, `1h30m`): use `m`,
+  `h` and `d`.
+- A bare start with no `..` (`range 2h`): the `..` is required, and the
+  start must be before the end.
+- A range for a single command. `range` sets the window for every query
+  that follows; there is no per-command `--since`.
+- Options of any kind (`range -h`, `range --reset`). Anything that is not a
+  `<start>..<end>` spec is rejected with an error and leaves the current
+  range unchanged.

@@ -1,6 +1,6 @@
 ---
 id: manual-tmp
-title: Scratch space and cookbook
+title: Scratch space
 web:
   section: tmp
   category: weft-shell
@@ -66,73 +66,7 @@ rm -rf /tmp/incident-2026-04-22
   nothing. `ls -lh /tmp` shows sizes.
 - **Not scripts.** Files in `/tmp` are never executed; scripts live in `/bin`.
 - **No follow.** `tail -f ... > /tmp/x` is refused; drop `-f`.
-- **Crossing out.** `cp` and `mv` work only inside `/tmp`. Use
-  `cat /tmp/x > /bin/y` to move a file out and `cat /bin/y > /tmp/x` to edit
-  a copy.
+- **Crossing out.** `cp` and `mv` work between `/tmp` and `/bin`, `/cron.d` and the `/etc` config files, and the destination checks the file as it would for `>`: you need the group that manages it, and scripts and crons are validated on save.
 
 The Unix tools for comparing saved files (`diff`, `comm`, `join`, `paste`,
-`wc`) are listed in [Builtins](../shell/help-builtins.md#files-in-tmp).
-
-## Cookbook
-
-### Triage a spike
-
-```
-cat /log/myco/api/main.log | awk 'LEVEL == "ERROR"' > /tmp/errs
-awk '{ print SERVICE, HOST }' /tmp/errs | sort | uniq -c | sort -rn | head
-```
-
-### Level histogram by region for one deployment
-
-```
-cat /log/myco/prod/api/main.log \
-  | awk 'DEPLOYMENT == "api" {print REGION, LEVEL}' \
-  | sort | uniq -c
-```
-
-### Prod errors for one deployment, across the namespace
-
-```
-cat myco.log \
-  | awk 'ENV == "prod" && LEVEL == "ERROR" && DEPLOYMENT == "api"' \
-  | head -50
-```
-
-`ENV` and `DEPLOYMENT` narrow the read before any row is parsed. The jq form
-is `jq 'select($env == "prod" and $deployment == "api")'`.
-
-### Whole stack traces for matching errors
-
-```
-cat /log/myco/api/main.log | awk 'LINE_NO == 0 && /timeout/' > /tmp/first-lines
-```
-
-Lines of one multi-line event share `EVENT_ID`; `LINE_NO == 0` is the first.
-
-### What's new since an hour ago
-
-```
-cp /tmp/errs /tmp/errs.bak
-tail -n 1000 /log/myco/api/main.log | awk 'LEVEL == "ERROR"' > /tmp/errs
-diff /tmp/errs.bak /tmp/errs
-```
-
-For `comm`, sort first: `sort /tmp/a > /tmp/a.s`.
-
-### Relate two saved files
-
-```
-printf 'api 3\nweb 1\n' > /tmp/errs-by-service
-printf 'api oncall-a\nweb oncall-b\n' > /tmp/owners
-join /tmp/errs-by-service /tmp/owners     # api 3 oncall-a / web 1 oncall-b
-```
-
-### Organise an incident
-
-```
-mkdir /tmp/incident-2026-04-22
-cat /log/myco/api/main.log | grep 'req_id=abc123' > /tmp/incident-2026-04-22/trace
-vi /tmp/incident-2026-04-22/notes
-touch /tmp/incident-2026-04-22/trace      # keep it past 48h
-rm -rf /tmp/incident-2026-04-22           # when done
-```
+`wc`) are listed in [Builtins](../shell/help-builtins.md#differences-and-limitations).

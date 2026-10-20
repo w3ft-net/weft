@@ -1,6 +1,6 @@
 ---
 id: manual-render
-title: Connect a Render service
+title: Render
 web:
   section: connect-render
   category: connect-source

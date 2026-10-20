@@ -120,6 +120,13 @@ func withManualShellPages(all []*doc) []*doc {
 	byTopic := append([]*doc(nil), all...)
 	sort.Slice(byTopic, func(i, j int) bool { return webSection(byTopic[i]) < webSection(byTopic[j]) })
 	for _, d := range byTopic {
+		if d.Shell != nil && d.Web != nil {
+			for _, t := range d.Shell.Topics {
+				if strings.HasPrefix(t, "man ") {
+					fmt.Fprintf(&index, "- `%s` — %s\n", t, d.Title)
+				}
+			}
+		}
 		if d.Shell != nil || d.Web == nil {
 			continue
 		}

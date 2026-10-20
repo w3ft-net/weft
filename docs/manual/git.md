@@ -242,3 +242,14 @@ that has since been deleted, the restore is refused.
   connecting Slack creates no commit.
 - **Patterns are RE2.** `--author` and `--grep` use Go
   regular expressions, so `+`, `?` and `|` are operators.
+- **Flags beyond the ones listed.** Each command takes only the flags
+  named above. `git log` has no `--format`, `--pretty`, `--follow`,
+  `--name-only` or `-L`, and takes one revision. `git diff` takes only
+  `--cached`/`--staged`, so no `--stat` or `--name-only`. `git status`,
+  `git show` and `git blame` take none (no `--short`, no `-L`).
+  `git restore` takes `--source`/`-s` and `--worktree`/`-W`, not
+  `--staged`. `git commit` takes `--amend` and `-m`, and cannot make a new
+  commit. `git revert` takes `--no-edit` and one commit. Only
+  `--color=always|never` and `--no-color` apply everywhere. A refused flag
+  reports `unrecognized argument`, `unknown option` or `invalid option`,
+  as git does.

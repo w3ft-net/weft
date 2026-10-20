@@ -3,89 +3,123 @@
 const connectCloudwatch = {
   id: "manual-cloudwatch",
   section: "connect-cloudwatch",
-  title: "Connect a CloudWatch source",
+  title: "CloudWatch",
   category: "connect-source",
   order: 40,
   headings: [
-    { level: 3, id: "1-register-the-source", text: "1. Register the source" },
-    { level: 3, id: "2-deploy-the-cloudformation-stack", text: "2. Deploy the CloudFormation stack" },
-    { level: 3, id: "3-approve-a-schema", text: "3. Approve a schema" },
-    { level: 3, id: "troubleshooting", text: "Troubleshooting" },
+    { level: 2, id: "connect-a-cloudwatch-source", text: "Connect a CloudWatch source" },
+    { level: 3, id: "create-a-token", text: "Create a token" },
+    { level: 3, id: "register-the-source", text: "Register the source" },
+    { level: 3, id: "deploy-the-cloudformation-stack", text: "Deploy the CloudFormation stack" },
+    { level: 3, id: "approve-a-schema", text: "Approve a schema" },
+    { level: 3, id: "finding-your-logs", text: "Finding your logs" },
   ],
-  html: `<p>If your logs already land in AWS CloudWatch Logs — Lambda, ECS/Fargate,
-API Gateway, RDS, or anything else that writes to a log group — weft can
-ingest them with no agent. You deploy a small CloudFormation
-stack in your own AWS account that forwards a CloudWatch Logs subscription
-filter through a Kinesis Data Firehose delivery stream to weft.
-Firehose pushes events to weft as they arrive.</p>
-<p>This source type has nothing to install and nothing to run. Latency is
-CloudWatch's subscription-filter delivery plus Firehose's buffering (roughly
-a minute at the lowest buffering setting the CloudFormation template uses).
-For sub-second tailing, install weftd.</p>
-<h3 id="1-register-the-source">1. Register the source</h3>
-<p>Use the <code>weft</code> CLI to tell weft which log group maps to which service
-(the service half of <code>ns/svc</code> becomes the <code>&lt;service&gt;</code> path segment; see
-<strong>Namespaces</strong>).
-Run this from any machine with the <code>weft</code> binary installed and a valid
-login.</p>
-<pre><code>weft source add myco/my-app \\
-  --log-group /aws/lambda/my-fn \\
+  html: `<h2 id="connect-a-cloudwatch-source">Connect a CloudWatch source</h2>
+<p>If your logs already land in AWS CloudWatch Logs (Lambda, ECS/Fargate, API
+Gateway, RDS, etc.), you can deploy a small CloudFormation stack in your own
+AWS account that forwards a CloudWatch Logs subscription filter through a
+Kinesis Data Firehose delivery stream to weft.</p>
+<h3 id="create-a-token">Create a token</h3>
+<p>Create a namespaced token as described in <a href="/manual/namespaces#creating-a-token">Connect a log
+source</a>. There's nothing special about Cloudwatch
+that requires its own token, but it's probably tidier if it's got its own.</p>
+<h3 id="register-the-source">Register the source</h3>
+<p>Use the <code>weft</code> CLI to tell weft which log group maps to which service. For
+example, if we wanted to add the service <code>lovelace</code> to the <code>loom</code> namespace:</p>
+<pre><code>weft source add loom/lovelace \\
+  --log-group /aws/lambda/lovelace \\
   --region us-east-2
 </code></pre>
-<p>This records the mapping. Ingestion starts after the later steps. The source
-shows up as pending in <code>weft source list</code> (or run <code>weft source pending</code>):</p>
-<pre><code>weft source list
-</code></pre>
-<h3 id="2-deploy-the-cloudformation-stack">2. Deploy the CloudFormation stack</h3>
-<p>In the AWS account that owns the log group, deploy the Firehose stack.
-It provisions the Firehose delivery stream, the IAM roles CloudWatch Logs
-needs to write to it, the subscription filter on your log group(s), and a
-required S3 bucket for any events Firehose can't deliver (30-day expiry).</p>
+<p>The source will now show up as pending in <code>weft source list</code> or <code>weft source pending</code> until you get logs flowing.</p>
+<h3 id="deploy-the-cloudformation-stack">Deploy the CloudFormation stack</h3>
+<p>In the AWS account and region that own the log group, deploy the Firehose
+stack. Create one stack per account and region you want to connect using the
+following 1-liner:</p>
 <pre><code>aws cloudformation create-stack \\
   --stack-name weft-cloudwatch-firehose \\
   --template-url https://weft-public.s3.amazonaws.com/cfn/weft-cloudwatch-firehose.yaml \\
   --parameters ParameterKey=WeftToken,ParameterValue=&lt;your-weft-namespace-token&gt; \\
-               ParameterKey=LogGroupNames,ParameterValue=&quot;/aws/lambda/my-fn&quot; \\
+               ParameterKey=LogGroupNames,ParameterValue=&quot;/aws/lambda/lovelace&quot; \\
   --capabilities CAPABILITY_IAM
 </code></pre>
-<p><code>WeftToken</code> is a namespace token (<a href="/manual/namespaces#creating-a-token">create one</a>
-for a namespace that already exists). It authenticates Firehose's deliveries
-to weft the same way any other push source authenticates. <code>LogGroupNames</code> is
-a comma-separated list, so one stack can subscribe several log groups in the
-same account/region.</p>
+<p><code>LogGroupNames</code> is a comma-separated list, so one stack can subscribe several
+log groups in the same account/region.</p>
+<p>Running the above will create the following resources:</p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kinesis Data Firehose delivery stream</td>
+<td>Receives your log events from CloudWatch Logs and POSTs them over HTTPS to weft's ingest endpoint, authenticated with your token. It buffers up to 1 MB or 60 seconds, whichever comes first, and retries a failed delivery for up to 5 minutes.</td>
+</tr>
+<tr>
+<td>S3 bucket</td>
+<td>Holds only the records weft's endpoint couldn't accept, gzipped under <code>failed/</code> and <code>errors/</code>, and deletes them after 30 days (Firehose requires one for this kind of destination)</td>
+</tr>
+<tr>
+<td>CloudWatch log group <code>/aws/kinesisfirehose/weft-&lt;stack name&gt;</code></td>
+<td>The delivery stream's own delivery-attempt logs, kept for 14 days</td>
+</tr>
+<tr>
+<td>IAM role for Firehose</td>
+<td>Lets Firehose write that log group and the S3 bucket</td>
+</tr>
+<tr>
+<td>IAM role for CloudWatch Logs</td>
+<td>Lets CloudWatch Logs put records on this stream, assumable only by log groups in this account and region</td>
+</tr>
+<tr>
+<td>Lambda function and its IAM role</td>
+<td>Small function that runs when the stack is created, updated or deleted. It maintains subscription filters named <code>weft</code> for all currently log groups.</td>
+</tr>
+<tr>
+<td>Per-log-group subscription filter</td>
+<td>Forwards every event in that group to the delivery stream (created by the Lambda above, don't appear as stack resources)</td>
+</tr>
+</tbody>
+</table>
 <p>To add or remove log groups, update the stack's <code>LogGroupNames</code> parameter and
-redeploy. The Firehose stream and IAM roles stay unchanged.</p>
-<h3 id="3-approve-a-schema">3. Approve a schema</h3>
-<p>Once your log group starts emitting events, weft accumulates a sample from
-that traffic and the source goes from <code>sampling</code> to <code>pending</code>; approve it as
-described in <a href="/manual/overview#sampling-logs-for-a-schema">Connect a log source</a>:</p>
-<pre><code>weft source configure myco/my-app
-</code></pre>
-<p>The wizard detects CloudWatch-flavored text
-(<code>2026-04-18 14:32:01 INFO {&quot;user&quot;:&quot;alice&quot;}</code>) and JSON Lambda logs
-automatically, so you usually confirm its suggestions.</p>
-<pre><code># And in the shell
-cat /log/myco/my-app/main.log | head
-</code></pre>
-<p>That path reads the service across every env. If the token you deployed
-carries an env, the rows live under <code>/log/myco/&lt;env&gt;/my-app/main.log</code>; see
-<a href="/manual/introduction#paths">Paths</a>.</p>
-<h3 id="troubleshooting">Troubleshooting</h3>
-<ul>
-<li><strong>No rows appearing</strong> — check the Firehose delivery stream's own
-CloudWatch log group (created by the stack, separate from your app's
-log group) for delivery errors; a common cause is the <code>WeftToken</code>
-parameter not matching a live namespace token. Also confirm the
-subscription filter attached — CloudWatch allows at most 2
-subscription filters per log group, so if you already forward this log
-group elsewhere (Datadog, Splunk) you may be out of slots.</li>
-<li><strong>Nothing to configure yet</strong> — a low-traffic log group can take a while to
-accumulate a sample; <code>weft source pending --watch</code> shows its progress.</li>
-<li><strong>Rows appearing but fields look wrong</strong> — your schema's
-<code>timestamp_format</code> is off. Check against Go's reference time
-(<code>Mon Jan 2 15:04:05 MST 2006</code>), then resample and re-run the wizard (see
-<a href="/manual/overview#sampling-logs-for-a-schema">Connect a log source</a>).</li>
-</ul>
+redeploy the stack.</p>
+<h3 id="approve-a-schema">Approve a schema</h3>
+<p>Once your log group starts emitting events, weft accumulates a sample from that
+traffic and the source goes from <code>sampling</code> to <code>pending</code>. If you want nice,
+speedy lookups, <a href="/manual/overview#sampling-logs-for-a-schema">approve a
+schema</a>.</p>
+<h3 id="finding-your-logs">Finding your logs</h3>
+<p>Weft maps each registered CloudWatch log group to one service, and every event
+in it lands in that service's <code>main.log</code>:</p>
+<table>
+<thead>
+<tr>
+<th>CloudWatch log group</th>
+<th>Registered as</th>
+<th>weft file</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/aws/lambda/lovelace</code></td>
+<td><code>loom/lovelace</code></td>
+<td><code>/log/loom/lovelace/main.log</code></td>
+</tr>
+<tr>
+<td><code>/ecs/myapp/web</code></td>
+<td><code>loom/web</code></td>
+<td><code>/log/loom/web/main.log</code></td>
+</tr>
+</tbody>
+</table>
+<p>Each row carries the event's own CloudWatch timestamp, so rows sort by when the
+event happened, not when it arrived. Rows have no <code>instance</code>, because the
+CloudWatch log stream name isn't kept. Events from a log group you haven't
+registered with <code>weft source add</code> are dropped.</p>
+<p>(The presence of the <code>&lt;env&gt;</code> segment depends on how you created your token.
+See <a href="/manual/introduction#paths">Paths</a> for the layout rules.)</p>
 `,
 } as const;
 

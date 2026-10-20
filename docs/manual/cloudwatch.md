@@ -1,6 +1,6 @@
 ---
 id: manual-cloudwatch
-title: Connect a CloudWatch source
+title: CloudWatch
 web:
   section: connect-cloudwatch
   category: connect-source
@@ -9,99 +9,85 @@ web:
 
 ## Connect a CloudWatch source
 
-If your logs already land in AWS CloudWatch Logs — Lambda, ECS/Fargate,
-API Gateway, RDS, or anything else that writes to a log group — weft can
-ingest them with no agent. You deploy a small CloudFormation
-stack in your own AWS account that forwards a CloudWatch Logs subscription
-filter through a Kinesis Data Firehose delivery stream to weft.
-Firehose pushes events to weft as they arrive.
+If your logs already land in AWS CloudWatch Logs (Lambda, ECS/Fargate, API
+Gateway, RDS, etc.), you can deploy a small CloudFormation stack in your own
+AWS account that forwards a CloudWatch Logs subscription filter through a
+Kinesis Data Firehose delivery stream to weft.
 
-This source type has nothing to install and nothing to run. Latency is
-CloudWatch's subscription-filter delivery plus Firehose's buffering (roughly
-a minute at the lowest buffering setting the CloudFormation template uses).
-For sub-second tailing, install weftd.
+### Create a token
 
-### 1. Register the source
+Create a namespaced token as described in [Connect a log
+source](namespaces.md#creating-a-token). There's nothing special about Cloudwatch
+that requires its own token, but it's probably tidier if it's got its own.
 
-Use the `weft` CLI to tell weft which log group maps to which service
-(the service half of `ns/svc` becomes the `<service>` path segment; see
-**Namespaces**).
-Run this from any machine with the `weft` binary installed and a valid
-login.
+### Register the source
+
+Use the `weft` CLI to tell weft which log group maps to which service. For
+example, if we wanted to add the service `lovelace` to the `loom` namespace:
 
 ```
-weft source add myco/my-app \
-  --log-group /aws/lambda/my-fn \
+weft source add loom/lovelace \
+  --log-group /aws/lambda/lovelace \
   --region us-east-2
 ```
 
-This records the mapping. Ingestion starts after the later steps. The source
-shows up as pending in `weft source list` (or run `weft source pending`):
+The source will now show up as pending in `weft source list` or `weft source
+pending` until you get logs flowing.
 
-```
-weft source list
-```
+### Deploy the CloudFormation stack
 
-### 2. Deploy the CloudFormation stack
-
-In the AWS account that owns the log group, deploy the Firehose stack.
-It provisions the Firehose delivery stream, the IAM roles CloudWatch Logs
-needs to write to it, the subscription filter on your log group(s), and a
-required S3 bucket for any events Firehose can't deliver (30-day expiry).
+In the AWS account and region that own the log group, deploy the Firehose
+stack. Create one stack per account and region you want to connect using the
+following 1-liner:
 
 ```
 aws cloudformation create-stack \
   --stack-name weft-cloudwatch-firehose \
   --template-url https://weft-public.s3.amazonaws.com/cfn/weft-cloudwatch-firehose.yaml \
   --parameters ParameterKey=WeftToken,ParameterValue=<your-weft-namespace-token> \
-               ParameterKey=LogGroupNames,ParameterValue="/aws/lambda/my-fn" \
+               ParameterKey=LogGroupNames,ParameterValue="/aws/lambda/lovelace" \
   --capabilities CAPABILITY_IAM
 ```
 
-`WeftToken` is a namespace token ([create one](namespaces.md#creating-a-token)
-for a namespace that already exists). It authenticates Firehose's deliveries
-to weft the same way any other push source authenticates. `LogGroupNames` is
-a comma-separated list, so one stack can subscribe several log groups in the
-same account/region.
+`LogGroupNames` is a comma-separated list, so one stack can subscribe several
+log groups in the same account/region.
+
+Running the above will create the following resources:
+
+| Resource | Purpose |
+|---|---|
+| Kinesis Data Firehose delivery stream | Receives your log events from CloudWatch Logs and POSTs them over HTTPS to weft's ingest endpoint, authenticated with your token. It buffers up to 1 MB or 60 seconds, whichever comes first, and retries a failed delivery for up to 5 minutes. |
+| S3 bucket | Holds only the records weft's endpoint couldn't accept, gzipped under `failed/` and `errors/`, and deletes them after 30 days (Firehose requires one for this kind of destination) |
+| CloudWatch log group `/aws/kinesisfirehose/weft-<stack name>` | The delivery stream's own delivery-attempt logs, kept for 14 days |
+| IAM role for Firehose | Lets Firehose write that log group and the S3 bucket |
+| IAM role for CloudWatch Logs | Lets CloudWatch Logs put records on this stream, assumable only by log groups in this account and region |
+| Lambda function and its IAM role | Small function that runs when the stack is created, updated or deleted. It maintains subscription filters named `weft` for all currently log groups. |
+| Per-log-group subscription filter | Forwards every event in that group to the delivery stream (created by the Lambda above, don't appear as stack resources) |
 
 To add or remove log groups, update the stack's `LogGroupNames` parameter and
-redeploy. The Firehose stream and IAM roles stay unchanged.
+redeploy the stack.
 
-### 3. Approve a schema
+### Approve a schema
 
-Once your log group starts emitting events, weft accumulates a sample from
-that traffic and the source goes from `sampling` to `pending`; approve it as
-described in [Connect a log source](connect-source.md#sampling-logs-for-a-schema):
+Once your log group starts emitting events, weft accumulates a sample from that
+traffic and the source goes from `sampling` to `pending`. If you want nice,
+speedy lookups, [approve a
+schema](connect-source.md#sampling-logs-for-a-schema).
 
-```
-weft source configure myco/my-app
-```
+### Finding your logs
 
-The wizard detects CloudWatch-flavored text
-(`2026-04-18 14:32:01 INFO {"user":"alice"}`) and JSON Lambda logs
-automatically, so you usually confirm its suggestions.
+Weft maps each registered CloudWatch log group to one service, and every event
+in it lands in that service's `main.log`:
 
-```
-# And in the shell
-cat /log/myco/my-app/main.log | head
-```
+| CloudWatch log group | Registered as | weft file |
+|---|---|---|
+| `/aws/lambda/lovelace` | `loom/lovelace` | `/log/loom/lovelace/main.log` |
+| `/ecs/myapp/web` | `loom/web` | `/log/loom/web/main.log` |
 
-That path reads the service across every env. If the token you deployed
-carries an env, the rows live under `/log/myco/<env>/my-app/main.log`; see
-[Paths](query-logs.md#paths).
+Each row carries the event's own CloudWatch timestamp, so rows sort by when the
+event happened, not when it arrived. Rows have no `instance`, because the
+CloudWatch log stream name isn't kept. Events from a log group you haven't
+registered with `weft source add` are dropped.
 
-### Troubleshooting
-
-- **No rows appearing** — check the Firehose delivery stream's own
-  CloudWatch log group (created by the stack, separate from your app's
-  log group) for delivery errors; a common cause is the `WeftToken`
-  parameter not matching a live namespace token. Also confirm the
-  subscription filter attached — CloudWatch allows at most 2
-  subscription filters per log group, so if you already forward this log
-  group elsewhere (Datadog, Splunk) you may be out of slots.
-- **Nothing to configure yet** — a low-traffic log group can take a while to
-  accumulate a sample; `weft source pending --watch` shows its progress.
-- **Rows appearing but fields look wrong** — your schema's
-  `timestamp_format` is off. Check against Go's reference time
-  (`Mon Jan 2 15:04:05 MST 2006`), then resample and re-run the wizard (see
-  [Connect a log source](connect-source.md#sampling-logs-for-a-schema)).
+(The presence of the `<env>` segment depends on how you created your token.
+See [Paths](query-logs.md#paths) for the layout rules.)

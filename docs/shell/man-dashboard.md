@@ -7,6 +7,10 @@ shell:
     - "man dashboard"
     - "dashboard --help"
   banner: "DASHBOARD(1)"
+web:
+  section: dashboard
+  category: analysis-alerting
+  order: 56
 ---
 
 ## NAME
@@ -94,6 +98,17 @@ section. You cannot mix `sections:` and top-level `tiles:`.
 - `crit` — value at or above this renders red.
 - `max` — (gauge only) upper bound of the bar. Default 100.
 
+## NOT SUPPORTED
+
+- Creating or editing a dashboard from the command; use `vi` on
+  `/etc/dashboards/<name>.yaml`.
+- Options (`dashboard -x`) and more than one name. Both are rejected with
+  `dashboard: unknown option` or `dashboard: unexpected argument`.
+- Tile kinds other than `sparkline`, `counter`, `gauge` and `table`, and
+  tiles fed by anything but a cron. Keys not listed above are rejected
+  when the file is saved.
+- Mixing `sections:` and top-level `tiles:` in one file.
+
 ## EXAMPLES
 
 ```
@@ -103,4 +118,4 @@ vi /etc/dashboards/ops.yaml create or edit it
 
 ## SEE ALSO
 
-help, help cron, man chart
+help, help cron, man chart, and [Dashboards](../manual/dashboards.md) for the YAML grammar and tile kinds

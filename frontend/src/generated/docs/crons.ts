@@ -4,7 +4,7 @@ const crons = {
   id: "manual-crons",
   section: "crons",
   title: "Crons",
-  category: "alert-visualize",
+  category: "analysis-alerting",
   order: 50,
   headings: [
     { level: 2, id: "set-up-a-cron", text: "Set up a cron" },

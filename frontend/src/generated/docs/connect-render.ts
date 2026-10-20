@@ -3,15 +3,17 @@
 const connectRender = {
   id: "manual-render",
   section: "connect-render",
-  title: "Connect a Render service",
+  title: "Render",
   category: "connect-source",
   order: 37,
   headings: [
+    { level: 2, id: "connect-a-render-service", text: "Connect a Render service" },
     { level: 3, id: "1-create-a-token", text: "1. Create a token" },
     { level: 3, id: "2-add-the-log-stream-in-render", text: "2. Add the log stream in Render" },
     { level: 2, id: "finding-your-logs", text: "Finding your logs" },
   ],
-  html: `<p>Weft accepts logs directly from Render's built-in <strong>Log Streams</strong> feature using
+  html: `<h2 id="connect-a-render-service">Connect a Render service</h2>
+<p>Weft accepts logs directly from Render's built-in <strong>Log Streams</strong> feature using
 syslog over TLS. This page covers the Render-specific parts; for an overview, see <a href="/manual/overview">Connect a log source</a>.</p>
 <h3 id="1-create-a-token">1. Create a token</h3>
 <p>Create a namespaced token as described in <a href="/manual/namespaces#creating-a-token">Connect a log
