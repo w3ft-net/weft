@@ -2,6 +2,7 @@ package shellfs
 
 import (
 	"fmt"
+	"github.com/graybeardcorp/weft/mounts"
 	"os"
 	"strings"
 	"testing"
@@ -18,52 +19,78 @@ func tmpOpsFS(t *testing.T, name string) *ShellFS {
 	return New(db, cust.ID, nil, WithTier("swatch"), WithUser("u-"+name, ownerPerms()))
 }
 
-// cp and mv work inside /tmp only, on both sides (docs/manual/tmp.md).
-// Anywhere else the write must go through its own save path:
-// `cat /tmp/x > /bin/y`. The mount layer used to allow any pair of
-// mounts, so `cp /bin/scan /tmp/x` and `cp /tmp/x /bin/y` both ran.
-func TestCopyAndMove_OnlyInsideTmp(t *testing.T) {
+// cp and mv work across mounts, and the destination's own save checks still
+// fire: the write lands in the mount's WriteFile, exactly as `cat x > y` does.
+func TestCopyAndMove_AcrossMountsRunSaveChecks(t *testing.T) {
 	fs := tmpOpsFS(t, "tmp-cpmv")
-	if err := fs.WriteFile("/tmp/a", []byte("x\n")); err != nil {
+	if err := fs.WriteFile("/tmp/a", []byte("echo hi\n")); err != nil {
 		t.Fatal(err)
 	}
-	if err := fs.WriteFile("/bin/scan", []byte("echo scan\n")); err != nil {
-		t.Fatal(err)
+	if err := fs.CopyFile("/tmp/a", "/bin/c"); err != nil {
+		t.Fatalf("cp tmp to bin: %v", err)
+	}
+	if got, err := fs.ReadFile("/bin/c"); err != nil || !strings.Contains(string(got), "echo hi") {
+		t.Errorf("/bin/c = %q, %v", got, err)
+	}
+	if err := fs.CopyFile("/bin/c", "/tmp/c"); err != nil {
+		t.Errorf("cp bin to tmp: %v", err)
+	}
+	if err := fs.Rename("/bin/c", "/tmp/d"); err != nil {
+		t.Errorf("mv bin to tmp: %v", err)
+	}
+	if _, err := fs.Stat("/bin/c"); err == nil {
+		t.Errorf("/bin/c should be gone after mv")
+	}
+	if err := fs.Rename("/tmp/d", "/bin/e"); err != nil {
+		t.Errorf("mv tmp to bin: %v", err)
 	}
 
-	refused := []struct {
-		name string
-		do   func() error
-	}{
-		{"cp bin to tmp", func() error { return fs.CopyFile("/bin/scan", "/tmp/c") }},
-		{"cp tmp to bin", func() error { return fs.CopyFile("/tmp/a", "/bin/c") }},
-		{"mv tmp to bin", func() error { return fs.Rename("/tmp/a", "/bin/c") }},
-		{"mv bin to tmp", func() error { return fs.Rename("/bin/scan", "/tmp/d") }},
+	// A cron that does not parse is rejected by /cron.d's save check.
+	if err := fs.WriteFile("/tmp/notacron", []byte("garbage\n")); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range refused {
-		err := tc.do()
-		if err == nil || !strings.Contains(err.Error(), "only inside /tmp") {
-			t.Errorf("%s: err = %v, want a refusal saying cp and mv work only inside /tmp", tc.name, err)
+	err := fs.CopyFile("/tmp/notacron", "/cron.d/bad")
+	if err == nil {
+		t.Errorf("cp of an unparsable cron into /cron.d must fail the save check")
+	}
+	if _, serr := fs.Stat("/cron.d/bad"); serr == nil {
+		t.Errorf("/cron.d/bad exists after a failed save")
+	}
+
+	// /etc/passwd and /log stay read-only.
+	for _, dst := range []string{"/etc/passwd", "/log/x"} {
+		if err := fs.CopyFile("/tmp/a", dst); err == nil {
+			t.Errorf("cp into %s must be refused", dst)
 		}
 	}
-	// Refused means untouched: nothing moved, nothing copied.
-	if _, err := fs.Stat("/bin/scan"); err != nil {
-		t.Errorf("/bin/scan must survive a refused mv: %v", err)
+	if err := fs.Rename("/log/x", "/tmp/y"); err == nil {
+		t.Errorf("mv out of read-only /log must be refused")
+	}
+}
+
+// Without the group that manages /bin, cp and mv into it are refused just as
+// a redirect is.
+func TestCopyAndMove_RespectGroupPermissions(t *testing.T) {
+	db := testStore(t)
+	cust, err := db.FindOrCreateOrg(fmt.Sprintf("tmp-cpmv-member-%d", os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := New(db, cust.ID, nil, WithTier("swatch"), WithUser("u-member", mounts.OrgPerms{}))
+	if err := fs.WriteFile("/tmp/a", []byte("echo hi\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.CopyFile("/tmp/a", "/bin/c"); err == nil {
+		t.Errorf("cp into /bin without binmgr must be refused")
+	}
+	if err := fs.Rename("/tmp/a", "/bin/c"); err == nil {
+		t.Errorf("mv into /bin without binmgr must be refused")
 	}
 	if _, err := fs.Stat("/tmp/a"); err != nil {
 		t.Errorf("/tmp/a must survive a refused mv: %v", err)
 	}
-	for _, p := range []string{"/tmp/c", "/tmp/d", "/bin/c"} {
-		if _, err := fs.Stat(p); err == nil {
-			t.Errorf("%s exists after a refused copy or move", p)
-		}
-	}
-
-	if err := fs.CopyFile("/tmp/a", "/tmp/b"); err != nil {
-		t.Errorf("cp inside /tmp: %v", err)
-	}
-	if err := fs.Rename("/tmp/b", "/tmp/e"); err != nil {
-		t.Errorf("mv inside /tmp: %v", err)
+	if err := fs.WriteFile("/bin/c", []byte("echo hi\n")); err == nil {
+		t.Errorf("a plain write is refused too; cp and mv must agree with it")
 	}
 }
 

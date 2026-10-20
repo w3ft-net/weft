@@ -221,10 +221,8 @@ func TestTmp_TouchThroughShell(t *testing.T) {
 	}
 }
 
-// cp and mv work only inside /tmp. A copy between /tmp and /bin would skip
-// that directory's own save path, so it is refused with a pointer to the
-// redirect that goes through it (see TestCopyAndMove_OnlyInsideTmp).
-func TestTmp_CpCrossMountIsRefused(t *testing.T) {
+// cp into /bin goes through the same save path as the redirect.
+func TestTmp_CpCrossMountWrites(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-xns")
 	fs := New(db, cust.ID, nil, WithTier("swatch"),
@@ -232,17 +230,11 @@ func TestTmp_CpCrossMountIsRefused(t *testing.T) {
 
 	runShell(t, fs, `echo notascript > /tmp/x`)
 	_, errOut := runShell(t, fs, `cp /tmp/x /bin/y`)
-	if !strings.Contains(errOut, "only inside /tmp") {
-		t.Errorf("cp into /bin should be refused, stderr = %q", errOut)
+	if errOut != "" {
+		t.Fatalf("cp into /bin: %s", errOut)
 	}
-	if out, _ := runShell(t, fs, `cat /bin/y`); strings.Contains(out, "notascript") {
-		t.Errorf("cp wrote /bin/y despite the refusal: %q", out)
-	}
-
-	// The redirect is the supported way in: it goes through /bin's save path.
-	runShell(t, fs, `cat /tmp/x > /bin/y`)
 	if out, _ := runShell(t, fs, `cat /bin/y`); !strings.Contains(out, "notascript") {
-		t.Errorf("cat /tmp/x > /bin/y should write /bin/y; got %q", out)
+		t.Errorf("cp /tmp/x /bin/y should write /bin/y; got %q", out)
 	}
 	runShell(t, fs, `rm /bin/y`)
 }

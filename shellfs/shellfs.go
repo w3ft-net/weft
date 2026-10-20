@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
-	"path"
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
@@ -145,31 +144,11 @@ func (f *ShellFS) RemoveAll(path string) error {
 }
 
 func (f *ShellFS) CopyFile(src, dst string) error {
-	if err := requireTmp(src, dst); err != nil {
-		return err
-	}
 	return f.mfs.CopyFile(src, dst)
 }
 
 func (f *ShellFS) Rename(oldPath, newPath string) error {
-	if err := requireTmp(oldPath, newPath); err != nil {
-		return err
-	}
 	return f.mfs.Rename(oldPath, newPath)
-}
-
-// requireTmp enforces that cp and mv name /tmp on both sides. Moving or
-// copying between /tmp and /bin, /cron.d or /etc would route around each
-// directory's own save path (script validation, cron parsing); the way to
-// write there is `cat <src> > <dst>`, which goes through it.
-func requireTmp(paths ...string) error {
-	for _, p := range paths {
-		c := path.Clean(p)
-		if c != "/tmp" && !strings.HasPrefix(c, "/tmp/") {
-			return fmt.Errorf("cp and mv work only inside /tmp: %s is outside it (to write elsewhere: cat <src> > <dst>)", p)
-		}
-	}
-	return nil
 }
 
 func (f *ShellFS) Touch(path string) error {
