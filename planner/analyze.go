@@ -314,7 +314,7 @@ func (a *Analysis) Render(color bool) string {
 			fmt.Fprintf(&b, "       Try: %s\n", s.Why.Try)
 		}
 	}
-	fmt.Fprintf(&b, "\nBarrier: stage %d. Everything after it: post-retrieval.\n", a.Barrier)
+	fmt.Fprintf(&b, "\nBarrier: stage %d.\n", a.Barrier)
 	return b.String()
 }
 
