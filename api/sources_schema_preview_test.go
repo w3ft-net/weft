@@ -74,7 +74,9 @@ func startPreviewCoord(t *testing.T, f *previewCoord) pb.WeftCoordinatorClient {
 	pb.RegisterWeftCoordinatorServer(g, f)
 	go g.Serve(lis)
 	t.Cleanup(g.Stop)
-	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor()),
+		grpc.WithChainStreamInterceptor(weftsdk.GRPC.StreamClientInterceptor()))
 	if err != nil {
 		t.Fatal(err)
 	}

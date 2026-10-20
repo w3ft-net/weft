@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net"
 	"os"
@@ -80,7 +81,9 @@ func startFakeCoord(t *testing.T) (*fakeIngestCoord, pb.WeftCoordinatorClient) {
 	go grpcSrv.Serve(lis)
 	t.Cleanup(grpcSrv.Stop)
 
-	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor()),
+		grpc.WithChainStreamInterceptor(weftsdk.GRPC.StreamClientInterceptor()))
 	if err != nil {
 		t.Fatalf("dial fake coord: %v", err)
 	}
