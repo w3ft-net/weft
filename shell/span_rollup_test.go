@@ -89,6 +89,7 @@ func TestIsSpansPipeline(t *testing.T) {
 		"trace spans shard.Query":  true,
 		"trace spans --by service": true,
 		"trace spans | jq .name":   false,
+		"trace spans a --samples":  false,
 		"trace spans > /tmp/x":     false,
 		"trace abc-123":            false,
 		"cat warp.log --spans":     false,

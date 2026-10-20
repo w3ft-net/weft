@@ -579,7 +579,7 @@ func isSpansPipeline(pipeline string) bool {
 		return false
 	}
 	for _, f := range fields {
-		if f == "|" || f == ">" || f == ">>" {
+		if f == "|" || f == ">" || f == ">>" || f == "--samples" {
 			return false
 		}
 	}
