@@ -112,6 +112,26 @@
 .manual-breadcrumb-sep { color: var(--text-dim); }
 .manual-breadcrumb-category { color: var(--text-secondary); }
 
+/* Previous / next page links, repeated above the title and below the body. */
+.manual-pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 2ch;
+  margin: 12px 0;
+}
+
+.manual-pager a {
+  display: flex;
+  flex-direction: column;
+  max-width: 48%;
+  color: var(--text-secondary);
+}
+
+.manual-pager a:hover { color: var(--accent); }
+.manual-pager-next { text-align: right; align-items: flex-end; margin-left: auto; }
+.manual-pager-dir { color: var(--text-dim); }
+.manual-pager-bottom { margin-top: 28px; }
+
 .manual-topic-title { margin-bottom: 16px; }
 
 /* Section list — a compact index, h3 entries indented under h2. */

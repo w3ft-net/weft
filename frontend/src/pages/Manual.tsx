@@ -82,6 +82,41 @@ function ManHeader({ left = 'weft(1)', center }: { left?: string; center: string
   )
 }
 
+function ManualPager({ index, position }: { index: number; position: 'top' | 'bottom' }) {
+  const prev = manualSections[index - 1]
+  const next = manualSections[index + 1]
+  return (
+    <nav className={`manual-pager manual-pager-${position}`} aria-label={`Previous and next page (${position})`}>
+      {prev ? (
+        <Link
+          to={`/manual/${prev.section}`}
+          className="manual-pager-prev"
+          rel="prev"
+          data-testid={`manual-pager-${position}-prev-link`}
+        >
+          <span className="manual-pager-dir">&larr; previous</span>
+          <span className="manual-pager-title">{prev.title}</span>
+        </Link>
+      ) : (
+        <span />
+      )}
+      {next ? (
+        <Link
+          to={`/manual/${next.section}`}
+          className="manual-pager-next"
+          rel="next"
+          data-testid={`manual-pager-${position}-next-link`}
+        >
+          <span className="manual-pager-dir">next &rarr;</span>
+          <span className="manual-pager-title">{next.title}</span>
+        </Link>
+      ) : (
+        <span />
+      )}
+    </nav>
+  )
+}
+
 // ManualTopic renders a single markdown topic. The inline TOC at the
 // top is built from the heading list emitted by docgen. The hash-scroll
 // useEffect resolves deep links to specific h2/h3 anchors inside the
@@ -108,6 +143,7 @@ export function ManualTopic() {
   }
 
   const category = manualCategories.find(c => c.id === topic.category)
+  const index = manualSections.indexOf(topic)
 
   return (
     <div className="app-layout">
@@ -124,6 +160,8 @@ export function ManualTopic() {
               {category && <span className="manual-breadcrumb-sep">/</span>}
               {category && <span className="manual-breadcrumb-category">{category.label.toLowerCase()}</span>}
             </nav>
+
+            <ManualPager index={index} position="top" />
 
             <h1 className="manual-topic-title">{topic.title}</h1>
 
@@ -166,6 +204,8 @@ export function ManualTopic() {
               }}
               dangerouslySetInnerHTML={{ __html: topic.html }}
             />
+
+            <ManualPager index={index} position="bottom" />
 
             <div className="manual-end" aria-hidden="true">
               <span className="manual-end-mark">(END)</span>
