@@ -116,6 +116,36 @@ fast path: weft skips data that can't match instead of parsing every row.</p>
 <td>weftd <code>metavariables.node:</code> (never auto-derived)</td>
 </tr>
 <tr>
+<td><code>TRACE_ID</code></td>
+<td><code>$trace_id</code></td>
+<td><code>trace_id</code></td>
+<td>the SDK's trace ID, or schema-extracted from the row</td>
+</tr>
+<tr>
+<td><code>SPAN_NAME</code></td>
+<td><code>$span_name</code></td>
+<td><code>span_name</code></td>
+<td>on a span's lines, from the SDK header or the schema</td>
+</tr>
+<tr>
+<td><code>SPAN_ID</code></td>
+<td><code>$span_id</code></td>
+<td><code>span_id</code></td>
+<td>on a span's lines, from the SDK header or the schema</td>
+</tr>
+<tr>
+<td><code>PARENT_SPAN_ID</code></td>
+<td><code>$parent_span_id</code></td>
+<td><code>parent_span_id</code></td>
+<td>on a span's lines, the span that started it</td>
+</tr>
+<tr>
+<td><code>DURATION_NS</code></td>
+<td><code>$duration_ns</code></td>
+<td><code>duration_ns</code></td>
+<td>on the line that ends a span, its duration in nanoseconds</td>
+</tr>
+<tr>
 <td><code>EVENT_ID</code></td>
 <td><code>$event_id</code></td>
 <td><code>event_id</code></td>

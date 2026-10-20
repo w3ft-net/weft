@@ -2,6 +2,10 @@
 
 ## Status
 
+⚠️ The rollup described here parsed span log lines on the client. It is
+superseded by `docs/plans/span-sql.md`, which aggregates spans in the shards
+from their columns and has the views read JSON rows.
+
 🟢 Phase 1 shipped: `theme/span_rollup.go` (parsing + flat-table
 rendering), `planner/parse.go`'s `--spans` flag, wiring into
 `ExecNonInteractive` and the interactive REPL, and the `spanview`

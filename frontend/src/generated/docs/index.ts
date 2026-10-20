@@ -13,6 +13,7 @@ import builtins from './builtins';
 import commands from './commands';
 import metavars from './metavars';
 import tmp from './tmp';
+import trace from './trace';
 import crons from './crons';
 import alertingStrategies from './alerting-strategies';
 import notify from './notify';
@@ -67,6 +68,7 @@ export const manualSections: readonly ManualSection[] = [
   commands,
   metavars,
   tmp,
+  trace,
   crons,
   alertingStrategies,
   notify,

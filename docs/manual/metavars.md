@@ -30,6 +30,11 @@ fast path: weft skips data that can't match instead of parsing every row.
 | `POD`                      | `$pod`                  | `pod`            | weftd k8s mode                                            |
 | `CONTAINER`                | `$container`            | `container`      | weftd k8s mode                                            |
 | `NODE`                     | `$node`                 | `node`           | weftd `metavariables.node:` (never auto-derived) |
+| `TRACE_ID`                 | `$trace_id`             | `trace_id`       | the SDK's trace ID, or schema-extracted from the row      |
+| `SPAN_NAME`                | `$span_name`            | `span_name`      | on a span's lines, from the SDK header or the schema      |
+| `SPAN_ID`                  | `$span_id`              | `span_id`        | on a span's lines, from the SDK header or the schema      |
+| `PARENT_SPAN_ID`           | `$parent_span_id`       | `parent_span_id` | on a span's lines, the span that started it               |
+| `DURATION_NS`              | `$duration_ns`          | `duration_ns`    | on the line that ends a span, its duration in nanoseconds |
 | `EVENT_ID`                 | `$event_id`             | `event_id`       | shared by the lines of one multi-line event               |
 | `LINE_NO`                  | `$line_no`              | `line_no`        | the line's 0-based position within its event              |
 
