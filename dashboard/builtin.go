@@ -33,7 +33,12 @@ func Builtin(p Provider) shellcore.BuiltinFunc {
 		if len(parts) == 0 || parts[0] != "dashboard" {
 			return false
 		}
-		if len(parts) < 2 {
+		name, errMsg := parseBuiltinArgs(parts[1:])
+		if errMsg != "" {
+			c.AppendScrollback(shellcore.ErrorText("dashboard: "+errMsg) + "\n")
+			return true
+		}
+		if name == "" {
 			names, err := p.ListDashboards()
 			if err != nil || len(names) == 0 {
 				c.AppendScrollback(shellcore.DimText("(no dashboards)") + "\n")
@@ -45,7 +50,6 @@ func Builtin(p Provider) shellcore.BuiltinFunc {
 			}
 			return true
 		}
-		name := parts[1]
 		spec, err := p.GetDashboardSpec(name)
 		if err != nil {
 			c.AppendScrollback(shellcore.ErrorText("dashboard: "+err.Error()) + "\n")
@@ -56,6 +60,22 @@ func Builtin(p Provider) shellcore.BuiltinFunc {
 		}
 		return true
 	}
+}
+
+// parseBuiltinArgs takes the words after `dashboard`: at most one name, and
+// no options.
+func parseBuiltinArgs(args []string) (name, errMsg string) {
+	for _, a := range args {
+		switch {
+		case strings.HasPrefix(a, "-"):
+			return "", "unknown option " + a
+		case name != "":
+			return "", "unexpected argument " + a
+		default:
+			name = a
+		}
+	}
+	return name, ""
 }
 
 // Register wires the dashboard builtin and view into the given shellcore.

@@ -251,6 +251,15 @@ func TestAlert_Rising_NoPrevious(t *testing.T) {
 	}
 }
 
+func TestAlert_ParseArgsRejectsUnknownOptions(t *testing.T) {
+	for _, args := range []string{"--foo", "above 50 --foo", "above 50 -x", "above 50 --msg hi --severity high", "-z"} {
+		_, err := alert.ParseArgs(strings.Fields(args))
+		if err == nil || !strings.Contains(err.Error(), "unknown option") {
+			t.Errorf("alert.ParseArgs(%q) = %v, want unknown option error", args, err)
+		}
+	}
+}
+
 func TestAlert_ParseArgs(t *testing.T) {
 	tests := []struct {
 		name string

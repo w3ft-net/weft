@@ -48,7 +48,7 @@ func ParseWatchCmd(args []string) (WatchArgs, string) {
 		case a == "-f" || a == "--follow":
 			out.Follow = true
 		case strings.HasPrefix(a, "-"):
-			return out, fmt.Sprintf("chart: unknown flag %q", a)
+			return out, fmt.Sprintf("chart: unknown option %s", a)
 		default:
 			if out.Name != "" {
 				return out, fmt.Sprintf("chart: unexpected argument %q (only one cron name allowed)", a)
@@ -170,7 +170,7 @@ func ParsePipeArgs(args []string) (any, string) {
 			out.Title = args[i+1]
 			i++
 		case strings.HasPrefix(a, "-"):
-			return out, fmt.Sprintf("chart: unknown flag %q", a)
+			return out, fmt.Sprintf("chart: unknown option %s", a)
 		default:
 			return out, fmt.Sprintf("chart: unexpected argument %q (use flags only in pipe mode)", a)
 		}

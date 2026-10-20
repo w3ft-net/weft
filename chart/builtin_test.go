@@ -41,7 +41,7 @@ func TestParseChartCmd(t *testing.T) {
 		{
 			name: "unknown flag",
 			argv: []string{"errors", "--no-such"},
-			err:  "unknown flag",
+			err:  "chart: unknown option --no-such",
 		},
 		{
 			name: "bad type",

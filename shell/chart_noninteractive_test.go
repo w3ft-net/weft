@@ -117,3 +117,32 @@ func (f *chartTestFS) Remove(string) error                   { return nil }
 func (f *chartTestFS) GetWatchResults(string, int) ([]chart.WatchResultValue, error) {
 	return f.results, nil
 }
+
+// TestExecNonInteractiveChartRejectsBadArgs pins that the one-shot cron form
+// refuses what the interactive parser refuses, instead of silently charting
+// with defaults.
+func TestExecNonInteractiveChartRejectsBadArgs(t *testing.T) {
+	cases := map[string]string{
+		"chart errors -x":            "chart: unknown option -x",
+		"chart errors --kind bar":    "chart: unknown option --kind",
+		"chart errors -t pie":        "unknown type",
+		"chart errors -n abc":        "-n must be a positive integer",
+		"chart errors -n":            "-n requires a number",
+		"chart errors other":         "unexpected argument",
+		"chart errors --type bar -q": "chart: unknown option -q",
+	}
+	for line, want := range cases {
+		s := &Shell{FS: &chartTestFS{results: []chart.WatchResultValue{
+			{Value: "1", RanAt: "2026-04-25T12:00:00Z"},
+		}}}
+		var buf bytes.Buffer
+		err := s.ExecNonInteractive(line, &buf)
+		if err == nil {
+			t.Errorf("%q: want error containing %q, got nil (output %q)", line, want, buf.String())
+			continue
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: error %q does not contain %q", line, err, want)
+		}
+	}
+}

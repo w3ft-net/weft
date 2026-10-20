@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -322,8 +323,17 @@ func dashboardNavigateBuiltin(navigate func(name string)) shellcore.BuiltinFunc 
 			return false
 		}
 		name := ""
-		if len(args) >= 2 {
-			name = args[1]
+		for _, a := range args[1:] {
+			switch {
+			case strings.HasPrefix(a, "-"):
+				c.AppendScrollback(shellcore.ErrorText("dashboard: unknown option "+a) + "\n")
+				return true
+			case name != "":
+				c.AppendScrollback(shellcore.ErrorText("dashboard: unexpected argument "+a) + "\n")
+				return true
+			default:
+				name = a
+			}
 		}
 		navigate(name)
 		return true
@@ -385,7 +395,7 @@ func traceRequestBuiltin(emit func(TraceRequest)) shellcore.BuiltinFunc {
 		// handles, including its own arity failures like `trace
 		// spans a b`  — falling through here for those would wrongly
 		// treat "spans" as a trace id).
-		if len(args) == 2 && args[1] != "spans" {
+		if len(args) == 2 && args[1] != "spans" && !strings.HasPrefix(args[1], "-") {
 			traceID := args[1]
 			emit(TraceRequest{Pipeline: "trace " + traceID, Title: traceID, Mode: "gap"})
 			return true
@@ -472,7 +482,10 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 
 	// FS builtins answered client-side.
 	if s.FS != nil {
-		if handled, output := s.execFSBuiltin(line); handled {
+		if handled, output, err := s.execFSBuiltin(line); handled {
+			if err != nil {
+				return err
+			}
 			if output != "" {
 				fmt.Fprint(w, output)
 			}
@@ -669,11 +682,11 @@ func queryResultLines(r *QueryResult) []string {
 // execFSBuiltin handles the FS-backed builtins the one-shot path answers
 // client-side. ls and cat are not among them: they ship to the server like
 // any other line, whose interpreter parses the whole line (pipes, several
-// paths, flags, files as well as directories). Returns (handled, output).
-func (s *Shell) execFSBuiltin(line string) (bool, string) {
+// paths, flags, files as well as directories). Returns (handled, output, err).
+func (s *Shell) execFSBuiltin(line string) (bool, string, error) {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
-		return false, ""
+		return false, "", nil
 	}
 	cmd := parts[0]
 	args := parts[1:]
@@ -685,47 +698,21 @@ func (s *Shell) execFSBuiltin(line string) (bool, string) {
 		// so we ignore the flag and just paint the latest frame.
 		wr, ok := s.FS.(chart.WatchResultsProvider)
 		if !ok {
-			return true, "chart: cron results not supported in this backend\n"
+			return true, "chart: cron results not supported in this backend\n", nil
 		}
-		// Parse a minimal subset of flags: the watch name, -t, -n.
-		var name, kind string
-		limit := 50
-		kind = "line"
-		for i := 0; i < len(args); i++ {
-			a := args[i]
-			switch {
-			case a == "-t" && i+1 < len(args):
-				kind = args[i+1]
-				i++
-			case a == "-n" && i+1 < len(args):
-				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
-					limit = n
-				}
-				i++
-			case a == "-f" || a == "--follow" || a == "-i":
-				// follow / interval ignored in one-shot mode.
-				if a == "-i" && i+1 < len(args) {
-					i++
-				}
-			case strings.HasPrefix(a, "-"):
-				// Unknown flag — let it pass through silently.
-			default:
-				if name == "" {
-					name = a
-				}
-			}
+		// Same grammar as the interactive form. --follow and -i are
+		// accepted but meaningless here (no terminal to redraw into), so
+		// the latest frame is painted once.
+		parsed, perr := chart.ParseWatchCmd(args)
+		if perr != "" {
+			return true, "", errors.New(perr)
 		}
-		if name == "" {
-			return true, "usage: chart <cron> [-t TYPE] [-n LIMIT]\n"
-		}
-		name = strings.TrimPrefix(name, "/cron.d/")
-		name = strings.TrimPrefix(name, "cron.d/")
-		out, errMsg := chart.RenderOneShot(wr, name, kind, limit, 80, 20)
+		out, errMsg := chart.RenderOneShot(wr, parsed.Name, parsed.Kind, parsed.Limit, 80, 20)
 		if errMsg != "" {
-			return true, "chart: " + errMsg + "\n"
+			return true, "chart: " + errMsg + "\n", nil
 		}
-		return true, out
+		return true, out, nil
 	}
 
-	return false, ""
+	return false, "", nil
 }

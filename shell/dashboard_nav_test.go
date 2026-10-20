@@ -91,3 +91,32 @@ func TestConfigureCore_DashboardNavigate_NoOpWhenNil(t *testing.T) {
 	// expected legacy behavior.
 	_ = out.String()
 }
+
+// TestConfigureCore_DashboardNavigate_RejectsBadArgs pins that options and
+// extra words are refused instead of being dropped on the way to the callback.
+func TestConfigureCore_DashboardNavigate_RejectsBadArgs(t *testing.T) {
+	cases := map[string]string{
+		"dashboard prod --fullscreen": "dashboard: unknown option --fullscreen",
+		"dashboard -x":                "dashboard: unknown option -x",
+		"dashboard prod staging":      "dashboard: unexpected argument staging",
+	}
+	for line, want := range cases {
+		var out strings.Builder
+		calls := 0
+		core := shellcore.NewShellCore(nil, 80, 24,
+			func(b []byte) { out.Write(b) },
+			func(a shellcore.Action) {},
+		)
+		(&Shell{User: "alice", Dashboard: func(string) { calls++ }}).ConfigureCore(core)
+		for _, r := range line {
+			core.HandleEvent(shellcore.KeyEvent{Rune: r})
+		}
+		core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
+		if calls != 0 {
+			t.Errorf("%q: navigate called %d times, want 0", line, calls)
+		}
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("%q: output lacks %q:\n%q", line, want, out.String())
+		}
+	}
+}

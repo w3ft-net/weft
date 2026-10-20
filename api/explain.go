@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/graybeardcorp/weft/auth"
@@ -23,6 +24,9 @@ func (s *Server) maybeHandleExplain(session *auth.Session, line, cwd string) (ha
 	rest = strings.TrimSpace(rest)
 	if rest == "" {
 		return true, explainUsage, nil
+	}
+	if first := strings.Fields(rest)[0]; strings.HasPrefix(first, "-") {
+		return true, "", fmt.Errorf("unknown option %s", first)
 	}
 	a, err := planner.Analyze(rest, cwd, storeBinResolver{store: s.store, orgID: session.ActiveOrgID})
 	if err != nil {

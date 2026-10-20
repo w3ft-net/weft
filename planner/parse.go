@@ -161,10 +161,12 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 					limit = n
 				}
 				i++ // skip the number
-			} else if strings.HasPrefix(args[i], "-") {
-				if n, err := strconv.Atoi(args[i][1:]); err == nil {
-					limit = n
+			} else if strings.HasPrefix(args[i], "-") && len(args[i]) > 1 {
+				n, err := strconv.Atoi(args[i][1:])
+				if err != nil {
+					return nil, fmt.Errorf("head: unknown option %s", args[i][:2])
 				}
+				limit = n
 			} else {
 				files = append(files, args[i])
 			}
@@ -198,10 +200,12 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 					limit = n
 				}
 				i++ // skip the number
-			} else if strings.HasPrefix(args[i], "-") {
-				if n, err := strconv.Atoi(args[i][1:]); err == nil {
-					limit = n
+			} else if strings.HasPrefix(args[i], "-") && len(args[i]) > 1 {
+				n, err := strconv.Atoi(args[i][1:])
+				if err != nil {
+					return nil, fmt.Errorf("tail: unknown option %s", args[i][:2])
 				}
+				limit = n
 			} else {
 				files = append(files, args[i])
 			}
@@ -275,6 +279,9 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 			if a == "--spans" {
 				spansOnly = true
 				continue
+			}
+			if strings.HasPrefix(a, "-") {
+				return nil, fmt.Errorf("trace: unknown option %s", a)
 			}
 			rest = append(rest, a)
 		}

@@ -94,8 +94,7 @@ const (
 
 // ParseArgs parses the argv following `alert` on the command line.
 // Returns an error for malformed flags, unknown conditions, or missing
-// required values. Unknown flags are silently ignored to match the prior
-// behavior of parseArgs — change carefully.
+// required values, and for options it does not know.
 func ParseArgs(args []string) (*Args, error) {
 	parsed := &Args{Condition: Any}
 	i := 0
@@ -279,6 +278,10 @@ func ParseArgs(args []string) (*Args, error) {
 			}
 			parsed.IfMode = IfNonzero
 			parsed.IfValue = args[i]
+		default:
+			if strings.HasPrefix(a, "-") {
+				return nil, fmt.Errorf("unknown option %s", a)
+			}
 		}
 		i++
 	}
