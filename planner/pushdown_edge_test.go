@@ -328,7 +328,7 @@ func TestEdge_Awk_PartialPushdown(t *testing.T) {
 		{
 			name:        "filter with printf action",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { printf "%s %s\n", $1, $2 }'`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, parent_span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{`awk 'LEVEL == "ERROR" { printf "%s %s\n", $1, $2 }'`},
 		},
 		// Regex pattern + non-default action
@@ -890,7 +890,7 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 		{
 			name:        "head source then awk filter",
 			pipeline:    `head -50 vimgym.log | awk 'LEVEL == "ERROR"'`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST LIMIT 50`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, parent_span_id, duration_ns FROM logs WHERE namespace = ? ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST LIMIT 50`,
 			wantCompute: []string{`awk 'LEVEL == "ERROR"'`},
 		},
 		// -n flag in mid-pipeline position
@@ -1082,7 +1082,7 @@ func TestEdge_NR(t *testing.T) {
 			// mixing blocks full pushdown), so it needs the real
 			// per-row value the same way an output read would — see
 			// docs/known-issues.md's (fixed) awk meta-variable entry.
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ?`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, parent_span_id, duration_ns FROM logs WHERE namespace = ?`,
 			wantCompute: []string{`awk 'NR >= 10 && LEVEL == "ERROR"'`},
 		},
 	}
@@ -1206,7 +1206,7 @@ func TestEdge_ProjectionSafety(t *testing.T) {
 		{
 			name:        "partial printf then awk print",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" { printf "%s=%s\n", $1, $2 }' | awk '{print $1}'`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, parent_span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{`awk 'LEVEL == "ERROR" { printf "%s=%s\n", $1, $2 }'`, `awk '{print $1}'`},
 		},
 		// END block produces entirely different output — cannot project past it.

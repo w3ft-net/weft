@@ -8,6 +8,50 @@ import (
 	"github.com/graybeardcorp/warp/pkg/jq"
 )
 
+// metaVar is one row meta-variable: its lower-case name, the shard column it
+// reads, whether jq reads that column as a number, and whether the shard
+// projects the column for compute to hand the stage. HOST stays an alias for
+// INSTANCE so users coming from OTel/Datadog vocabulary find what they
+// expect; an alias shares its column and is projected once. event_id and
+// line_no are not projected: every query already selects them as typed
+// columns, and compute reads them from there (see rowMetaVars). ts is not
+// either, for the same reason.
+type metaVar struct {
+	name    string
+	column  string
+	numeric bool
+	project bool
+}
+
+// metaVarTable is the one list of row meta-variables. awk spells the names
+// upper case (HOST), jq as variables ($host); MetaVarColumns is the
+// projected columns in table order, which fixes the generated SQL.
+var metaVarTable = []metaVar{
+	{name: "namespace", column: "namespace", project: true},
+	{name: "service", column: "service", project: true},
+	{name: "kind", column: "kind", project: true},
+	{name: "level", column: "level", project: true},
+	{name: "instance", column: "instance", project: true},
+	{name: "host", column: "instance"},
+	{name: "ts", column: "ts"},
+	{name: "deployment", column: "deployment", project: true},
+	{name: "env", column: "env", project: true},
+	{name: "version", column: "version", project: true},
+	{name: "region", column: "region", project: true},
+	{name: "cluster", column: "cluster", project: true},
+	{name: "k8s_namespace", column: "k8s_namespace", project: true},
+	{name: "pod", column: "pod", project: true},
+	{name: "container", column: "container", project: true},
+	{name: "node", column: "node", project: true},
+	{name: "trace_id", column: "trace_id", project: true},
+	{name: "span_name", column: "span_name", project: true},
+	{name: "span_id", column: "span_id", project: true},
+	{name: "parent_span_id", column: "parent_span_id", project: true},
+	{name: "duration_ns", column: "duration_ns", numeric: true, project: true},
+	{name: "event_id", column: "event_id"},
+	{name: "line_no", column: "line_no", numeric: true},
+}
+
 // JQMetaVars maps the jq variables a program may read ($level, $host) to
 // SQL column names. They're variables, not fields, so a payload key of
 // the same name (.level) stays distinct from the column, and a program
@@ -16,40 +60,11 @@ import (
 // projected MetaVarColumns to every alias a jq expression might read.
 var JQMetaVars = metaVarNames(strings.ToLower)
 
-// metaVars is the one list of row meta-variables: each name, lower case,
-// to the column it reads. awk spells them upper case (HOST) and jq as
-// variables ($host); HOST stays an alias for INSTANCE so users coming
-// from OTel/Datadog vocabulary find what they expect.
-var metaVars = map[string]string{
-	"namespace":     "namespace",
-	"service":       "service",
-	"kind":          "kind",
-	"level":         "level",
-	"instance":      "instance",
-	"host":          "instance",
-	"ts":            "ts",
-	"deployment":    "deployment",
-	"env":           "env",
-	"version":       "version",
-	"region":        "region",
-	"cluster":       "cluster",
-	"k8s_namespace": "k8s_namespace",
-	"pod":           "pod",
-	"container":     "container",
-	"node":          "node",
-	"trace_id":      "trace_id",
-	"span_name":     "span_name",
-	"span_id":       "span_id",
-	"duration_ns":   "duration_ns",
-	"event_id":      "event_id",
-	"line_no":       "line_no",
-}
-
-// metaVarNames spells metaVars in a language's case.
+// metaVarNames spells the table's names in a language's case.
 func metaVarNames(spell func(string) string) map[string]string {
-	m := make(map[string]string, len(metaVars))
-	for name, col := range metaVars {
-		m[spell(name)] = col
+	m := make(map[string]string, len(metaVarTable))
+	for _, v := range metaVarTable {
+		m[spell(v.name)] = v.column
 	}
 	return m
 }
@@ -57,24 +72,32 @@ func metaVarNames(spell func(string) string) map[string]string {
 // JQNumericMetaColumn reports whether jq reads a meta-variable's column
 // as a number; the rest are strings. A NULL duration_ns is null; a
 // one-line event is line 0.
-func JQNumericMetaColumn(col string) bool { return col == "duration_ns" || col == "line_no" }
+func JQNumericMetaColumn(col string) bool {
+	for _, v := range metaVarTable {
+		if v.column == col && v.numeric {
+			return true
+		}
+	}
+	return false
+}
 
-// event_id and line_no are in JQMetaVars but not MetaVarColumns: every
-// query already selects them as typed columns, and compute reads them
-// from there (see rowMetaVars).
-//
 // MetaVarColumns is the distinct, deterministically-ordered set of real
 // shard columns backing JQMetaVars (excluding "ts", which every query
 // already selects). Appended to the SELECT list whenever a remaining
-// jq compute stage might read a bare "._"-prefixed meta-variable for
-// output — see Plan's includeMetaVars detection and
-// docs/known-issues.md's (fixed) jq meta-variable entry. Order is
-// fixed, not map-iteration order, so generated SQL stays stable across
-// runs (planner tests pin exact SQL strings).
-var MetaVarColumns = []string{
-	"namespace", "service", "kind", "level", "instance", "deployment",
-	"env", "version", "region", "cluster", "k8s_namespace", "pod",
-	"container", "node", "trace_id", "span_name", "span_id", "duration_ns",
+// compute stage might read a meta-variable for output, so generated SQL
+// stays stable across runs (planner tests pin exact SQL strings).
+var MetaVarColumns = projectedMetaVarColumns()
+
+func projectedMetaVarColumns() []string {
+	var cols []string
+	seen := map[string]bool{}
+	for _, v := range metaVarTable {
+		if v.project && !seen[v.column] {
+			seen[v.column] = true
+			cols = append(cols, v.column)
+		}
+	}
+	return cols
 }
 
 // jqPath is a chain of field and index steps from the payload, as
