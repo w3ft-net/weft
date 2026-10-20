@@ -52,6 +52,8 @@ func main() {
 	// math so the self-time interval-union and percentile computation
 	// stay in one language rather than getting reimplemented in JS.
 	js.Global().Set("wasmRenderSpanRollup", js.FuncOf(wasmRenderSpanRollup))
+	js.Global().Set("wasmRenderSpanAggregate", js.FuncOf(wasmRenderSpanAggregate))
+	js.Global().Set("wasmRenderSpanSamples", js.FuncOf(wasmRenderSpanSamples))
 	js.Global().Set("wasmParseTraceRows", js.FuncOf(wasmParseTraceRows))
 	select {}
 }
@@ -80,15 +82,24 @@ func jsonResult(v any) any {
 }
 
 // wasmRenderSpanRollup(lines: string[]) → JSON string of
-// theme.SpanRollupRow[]. Covers both `trace <id> --spans` (Phase 1)
-// and `trace spans [name]` (Phase 2) — theme.RenderSpanRollup doesn't
-// care which; the caller (ShellTraceModal) picks singleTrace-vs-not
-// column rendering from the TraceRequest.Mode it already has, the same
-// distinction RenderSpanRollupIfApplicable (shell/shell.go) makes for
-// the CLI's one-shot path.
+// theme.SpanRollupRow[] for the JSON lines of `trace <id> --spans`.
 func wasmRenderSpanRollup(_ js.Value, args []js.Value) any {
 	lines := jsStringSlice(args[0])
 	return jsonResult(theme.RenderSpanRollup(lines))
+}
+
+// wasmRenderSpanAggregate(lines: string[]) → JSON string of
+// theme.SpanRollupRow[] for the JSON lines of `trace spans [name]`.
+func wasmRenderSpanAggregate(_ js.Value, args []js.Value) any {
+	lines := jsStringSlice(args[0])
+	return jsonResult(theme.RenderSpanAggregate(lines))
+}
+
+// wasmRenderSpanSamples(lines: string[]) → JSON string of
+// theme.SpanOccurrence[] for the JSON lines of `trace spans <name> --samples`.
+func wasmRenderSpanSamples(_ js.Value, args []js.Value) any {
+	lines := jsStringSlice(args[0])
+	return jsonResult(theme.RenderSpanSamples(lines, theme.SpanSamplesLimit))
 }
 
 // wasmParseTraceRows(lines: string[]) → JSON string of

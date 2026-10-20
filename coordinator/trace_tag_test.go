@@ -74,13 +74,10 @@ func TestExecuteForWatch_TraceDoesNotTagOutput(t *testing.T) {
 	}
 }
 
-// TestExecuteQuery_TraceSpansTagsInteractiveOutput mirrors
-// TestExecuteQuery_TraceTagsInteractiveOutput for Phase 2's cross-trace
-// aggregation (docs/plans/span-display.md): `trace spans [name]` reuses
-// the exact same buffer-then-emit path a bare `trace <id>` gets, so it
-// needs the same TraceTag=true.
-func TestExecuteQuery_TraceSpansTagsInteractiveOutput(t *testing.T) {
-	for _, pipeline := range []string{"trace spans", "trace spans shard.Query"} {
+// The span queries return JSON rows, so none of them is tagged: the summary
+// line and badges are for a bare `trace <id>` only.
+func TestExecuteQuery_SpanQueriesAreAggregatesNotTagged(t *testing.T) {
+	for _, pipeline := range []string{"trace spans", "trace spans shard.Query", "trace abc-123 --spans"} {
 		t.Run(pipeline, func(t *testing.T) {
 			c := setupTestCoordinator(t)
 			pool := &spyCompute{inner: c.Compute}
@@ -95,8 +92,11 @@ func TestExecuteQuery_TraceSpansTagsInteractiveOutput(t *testing.T) {
 			if pool.lastReq == nil {
 				t.Fatal("ExecuteQuery was never called")
 			}
-			if !pool.lastReq.TraceTag {
-				t.Errorf("interactive %q should set TraceTag=true, got false", pipeline)
+			if pool.lastReq.TraceTag {
+				t.Errorf("%q must not set TraceTag", pipeline)
+			}
+			if pool.lastReq.Aggregate == "" {
+				t.Errorf("%q should run as a shard-side aggregate", pipeline)
 			}
 		})
 	}

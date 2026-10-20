@@ -1,35 +1,12 @@
 package theme
 
 import (
+	"encoding/json"
 	"math"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-)
-
-// spanDoneRe/spanErrorRe match the two fixed log.Printf shapes weft-go's
-// Span type emits (span.go's End/RecordError) — no JSON, so a single
-// regex per shape is enough. "span start" lines carry nothing a rollup
-// needs beyond what "span done" repeats, so there's no pattern for it
-// here.
-//
-// Deliberately NOT anchored at the start (no `^`): a real ingested
-// row's raw text is never just the bare message — log.Printf prepends
-// Go's default timestamp ("2026/09/24 16:24:03 ") to every line, and
-// ingest.Parser.ParseLine stores that full original line as row.Raw
-// verbatim, never just the message. An earlier `^`-anchored version of
-// these patterns never matched a single real ingested span line in
-// production (every test fixture in span_rollup_test.go used a bare,
-// unprefixed string, which is why this shipped unnoticed) — see
-// TestRenderSpanRollup_MatchesRealIngestedLineWithTimestampPrefix.
-// spanDoneRe keeps its trailing `$` (status=ok is genuinely the last
-// field weft-go ever emits); spanErrorRe has no trailing anchor since
-// it only extracts a prefix before the free-form err= text.
-var (
-	spanDoneRe  = regexp.MustCompile(`span done name=(\S+) trace_id=(\S+) span_id=(\S+) parent_span_id=(\S*) duration=\S+ duration_ns=(\d+) status=(\S+)$`)
-	spanErrorRe = regexp.MustCompile(`span error name=(\S+) trace_id=(\S+) span_id=(\S+) err=`)
 )
 
 // SpanOccurrence is one "span done" event rolled into a SpanRollupRow —
@@ -81,14 +58,25 @@ type SpanOccurrence struct {
 // reading them.
 type SpanRollupRow struct {
 	Name                    string
+	Label                   string
+	Calls                   int
 	Occurrences             []SpanOccurrence
 	Errors                  int
+	Total                   time.Duration
 	Min, Avg, P50, P99, Max time.Duration
 	SelfTotal               time.Duration
 }
 
+// displayName is the span name, with its service when rows are grouped by it.
+func (r SpanRollupRow) displayName() string {
+	if r.Label == "" {
+		return r.Name
+	}
+	return r.Name + " (" + r.Label + ")"
+}
+
 // Count reports how many "span done" events this row aggregates.
-func (r SpanRollupRow) Count() int { return len(r.Occurrences) }
+func (r SpanRollupRow) Count() int { return r.Calls }
 
 // parsedOcc is a "span done" event as parsed, before self-time and
 // before grouping by name — the flat, cross-name shape
@@ -107,54 +95,72 @@ type parsedOcc struct {
 	status       string
 }
 
-// RenderSpanRollup parses lines — the same "<ts_unix_ns>\t<namespace/
-// service>\t<raw message>" shape compute.Job's
-// emitTraceTagged emits, and RenderTraceColumns already consumes — for
-// "span done"/"span error" lines, grouping them into one SpanRollupRow
-// per distinct span name. Every other line (ordinary log lines, the "#
-// N line(s)..." summary, malformed rows) is silently skipped: this is a
-// pure aggregation pass over data already fetched for a `trace <id>`
-// query, not a renderer, so there's nothing to pass through. Rows are
-// sorted by name for stable output. Self-time (see SpanOccurrence) is
-// computed from ParentSpanID relationships within lines itself — it's
-// only as complete as that line set (see SpanOccurrence's doc comment).
+// SpanSamplesLimit is how many occurrences `trace spans <name> --samples`
+// shows; the planner asks each shard for the same number.
+const SpanSamplesLimit = 50
+
+type spanOccurrenceJSON struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Service   string `json:"service"`
+	TraceID   string `json:"trace_id"`
+	SpanID    string `json:"span_id"`
+	ParentID  string `json:"parent_id"`
+	DurNs     int64  `json:"dur_ns"`
+	TsNs      int64  `json:"ts_ns"`
+	Level     string `json:"level"`
+}
+
+func (o spanOccurrenceJSON) label() string {
+	if o.Namespace == "" && o.Service == "" {
+		return "unknown"
+	}
+	return o.Namespace + "/" + o.Service
+}
+
+func parseSpanOccurrences(lines []string) []spanOccurrenceJSON {
+	var out []spanOccurrenceJSON
+	for _, l := range lines {
+		var o spanOccurrenceJSON
+		if json.Unmarshal([]byte(l), &o) != nil || o.Name == "" {
+			continue
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// RenderSpanRollup rolls the span rows of one trace (the JSON lines of
+// `trace <id> --spans`) up into one SpanRollupRow per span name. A row with a
+// duration is a finished span; a row at level ERROR is a span error, counted
+// against its name and marking its span as failed. Self time comes from the
+// parent and child relations among these rows, so it is only as complete as
+// the trace the rows came from.
 func RenderSpanRollup(lines []string) []SpanRollupRow {
 	var occs []parsedOcc
 	errorsByName := make(map[string]int)
+	failedSpans := make(map[string]bool)
 
-	for _, l := range lines {
-		parts := strings.SplitN(l, "\t", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		label, raw := parts[1], parts[2]
-
-		if m := spanDoneRe.FindStringSubmatch(raw); m != nil {
-			ns, err := strconv.ParseInt(m[5], 10, 64)
-			if err != nil {
-				continue
-			}
-			// endNs is this log line's own timestamp — emitted from
-			// Span.End(), so it's when the span finished, not when it
-			// started. tsErr != nil (a malformed timestamp field) just
-			// means self-time can't be computed for this occurrence;
-			// it still counts toward inclusive stats, with startNs=0
-			// (computeSelfDurations treats that as "no usable interval"
-			// and leaves SelfDuration at the Duration fallback below).
-			endNs, tsErr := strconv.ParseInt(parts[0], 10, 64)
-			duration := time.Duration(ns)
+	for _, o := range parseSpanOccurrences(lines) {
+		if o.DurNs > 0 {
 			var startNs int64
-			if tsErr == nil {
-				startNs = endNs - ns
+			if o.TsNs > 0 {
+				startNs = o.TsNs - o.DurNs
 			}
 			occs = append(occs, parsedOcc{
-				name: m[1], label: label, traceID: m[2], spanID: m[3], parentSpanID: m[4],
-				startNs: startNs, endNs: endNs, duration: duration, status: m[6],
+				name: o.Name, label: o.label(), traceID: o.TraceID, spanID: o.SpanID, parentSpanID: o.ParentID,
+				startNs: startNs, endNs: o.TsNs, duration: time.Duration(o.DurNs), status: "ok",
 			})
 			continue
 		}
-		if m := spanErrorRe.FindStringSubmatch(raw); m != nil {
-			errorsByName[m[1]]++
+		if strings.EqualFold(o.Level, "ERROR") {
+			errorsByName[o.Name]++
+			failedSpans[o.SpanID] = true
+		}
+	}
+	for i := range occs {
+		if failedSpans[occs[i].spanID] {
+			occs[i].status = "error"
 		}
 	}
 
@@ -176,12 +182,6 @@ func RenderSpanRollup(lines []string) []SpanRollupRow {
 			Duration: o.duration, SelfDuration: selfDurations[i], Status: o.status,
 		})
 	}
-	// A span name with only "span error" lines and no "span done" for
-	// it in this line set (a request that errored before it could
-	// finish, say) still needs a row — its Count() is 0 and duration
-	// fields stay zero, but Errors is nonzero. Without this, such a
-	// name would silently vanish from the table instead of surfacing
-	// the error.
 	for name := range errorsByName {
 		addName(name)
 	}
@@ -197,17 +197,77 @@ func RenderSpanRollup(lines []string) []SpanRollupRow {
 			selfTotal += o.SelfDuration
 		}
 		sort.Slice(durs, func(i, j int) bool { return durs[i] < durs[j] })
-		row := SpanRollupRow{Name: name, Occurrences: occ, Errors: errorsByName[name], SelfTotal: selfTotal}
+		row := SpanRollupRow{Name: name, Calls: len(occ), Occurrences: occ, Errors: errorsByName[name], SelfTotal: selfTotal}
 		if len(durs) > 0 {
+			row.Total = sumDuration(durs)
 			row.Min = durs[0]
 			row.Max = durs[len(durs)-1]
-			row.Avg = sumDuration(durs) / time.Duration(len(durs))
+			row.Avg = row.Total / time.Duration(len(durs))
 			row.P50 = percentileDuration(durs, 0.50)
 			row.P99 = percentileDuration(durs, 0.99)
 		}
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+type spanAggregateJSON struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Service   string `json:"service"`
+	Count     int    `json:"count"`
+	Errors    int    `json:"errors"`
+	TotalNs   int64  `json:"total_ns"`
+	AvgNs     int64  `json:"avg_ns"`
+	P50Ns     int64  `json:"p50_ns"`
+	P99Ns     int64  `json:"p99_ns"`
+	MinNs     int64  `json:"min_ns"`
+	MaxNs     int64  `json:"max_ns"`
+}
+
+// RenderSpanAggregate reads the JSON lines of `trace spans [name]` (one per
+// span name, or per name and service) into rollup rows. The percentiles are
+// approximate, as computed by the shards.
+func RenderSpanAggregate(lines []string) []SpanRollupRow {
+	var rows []SpanRollupRow
+	for _, l := range lines {
+		var a spanAggregateJSON
+		if json.Unmarshal([]byte(l), &a) != nil || a.Name == "" {
+			continue
+		}
+		row := SpanRollupRow{
+			Name: a.Name, Calls: a.Count, Errors: a.Errors,
+			Total: time.Duration(a.TotalNs), Avg: time.Duration(a.AvgNs),
+			P50: time.Duration(a.P50Ns), P99: time.Duration(a.P99Ns),
+			Min: time.Duration(a.MinNs), Max: time.Duration(a.MaxNs),
+		}
+		if a.Namespace != "" || a.Service != "" {
+			row.Label = a.Namespace + "/" + a.Service
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// RenderSpanSamples reads the JSON lines of `trace spans <name> --samples`
+// into occurrences, slowest first.
+func RenderSpanSamples(lines []string, limit int) []SpanOccurrence {
+	var occ []SpanOccurrence
+	for _, o := range parseSpanOccurrences(lines) {
+		status := "ok"
+		if strings.EqualFold(o.Level, "ERROR") {
+			status = "error"
+		}
+		occ = append(occ, SpanOccurrence{
+			Label: o.label(), TraceID: o.TraceID, SpanID: o.SpanID, ParentSpanID: o.ParentID,
+			Duration: time.Duration(o.DurNs), SelfDuration: time.Duration(o.DurNs), Status: status,
+		})
+	}
+	sort.SliceStable(occ, func(i, j int) bool { return occ[i].Duration > occ[j].Duration })
+	if limit > 0 && len(occ) > limit {
+		occ = occ[:limit]
+	}
+	return occ
 }
 
 // computeSelfDurations returns, parallel to occs, each occurrence's
@@ -501,7 +561,7 @@ func SpanRollupColumns(rows []SpanRollupRow, termWidth int, singleTrace bool) (h
 			barValue = r.SelfTotal
 		}
 		cells := []string{
-			color(pad(r.Name, nameWidth), Palette().Key),
+			color(pad(r.displayName(), nameWidth), Palette().Key),
 			renderSpanBar(barValue, barAgainst, spanBarWidth),
 			color(padLeft(strconv.Itoa(r.Count()), spanCountWidth), Palette().Number),
 		}

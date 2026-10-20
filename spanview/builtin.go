@@ -1,6 +1,8 @@
 package spanview
 
 import (
+	"strings"
+
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
 
@@ -56,23 +58,31 @@ func ParseSpansLine(parts []string) (*ListArgs, bool) {
 	}
 	rest := parts[1:]
 
-	// `trace spans` / `trace spans <name>` — Phase 2. Checked first:
-	// "spans" here is the sub-verb, not a trace id, and never carries
-	// --spans alongside it.
 	if len(rest) >= 1 && rest[0] == "spans" {
-		switch len(rest) {
-		case 1:
-			return &ListArgs{Pipeline: "trace spans", Title: "all spans"}, true
-		case 2:
-			name := rest[1]
-			return &ListArgs{Pipeline: "trace spans " + name, Title: name}, true
-		default:
-			return nil, false
+		var name string
+		byService := false
+		for i := 1; i < len(rest); i++ {
+			switch {
+			case rest[i] == "--by" && i+1 < len(rest) && rest[i+1] == "service":
+				byService = true
+				i++
+			case strings.HasPrefix(rest[i], "-") || name != "":
+				return nil, false
+			default:
+				name = rest[i]
+			}
 		}
+		pipeline, title := "trace spans", "all spans"
+		if name != "" {
+			pipeline, title = pipeline+" "+name, name
+		}
+		if byService {
+			pipeline += " --by service"
+			title += " by service"
+		}
+		return &ListArgs{Pipeline: pipeline, Title: title}, true
 	}
 
-	// `trace <id> --spans` — Phase 1. The flag can appear in either
-	// position relative to the id.
 	var spansOnly bool
 	var idParts []string
 	for _, p := range rest {
@@ -86,7 +96,7 @@ func ParseSpansLine(parts []string) (*ListArgs, bool) {
 		return nil, false
 	}
 	traceID := idParts[0]
-	return &ListArgs{Pipeline: "trace " + traceID, Title: traceID}, true
+	return &ListArgs{Pipeline: "trace " + traceID + " --spans", Title: traceID}, true
 }
 
 // Register wires spanview into the given shellcore at construction

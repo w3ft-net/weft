@@ -10,8 +10,8 @@ func TestParseSpansLine(t *testing.T) {
 		wantOK       bool
 	}{
 		// Phase 1: `trace <id> --spans`.
-		{[]string{"trace", "abc-123", "--spans"}, "trace abc-123", "abc-123", true},
-		{[]string{"trace", "--spans", "abc-123"}, "trace abc-123", "abc-123", true},
+		{[]string{"trace", "abc-123", "--spans"}, "trace abc-123 --spans", "abc-123", true},
+		{[]string{"trace", "--spans", "abc-123"}, "trace abc-123 --spans", "abc-123", true},
 		{[]string{"trace", "abc-123"}, "", "", false},                              // no --spans: falls through to plain trace
 		{[]string{"trace", "abc-123", "def-456", "--spans"}, "", "", false},        // wrong arity
 		{[]string{"trace", "--spans"}, "", "", false},                              // no id

@@ -15,6 +15,8 @@ declare global {
   interface Window {
     wasmParseTraceRows: (lines: string[]) => string
     wasmRenderSpanRollup: (lines: string[]) => string
+    wasmRenderSpanAggregate: (lines: string[]) => string
+    wasmRenderSpanSamples: (lines: string[]) => string
   }
 }
 
@@ -40,6 +42,8 @@ export interface SpanOccurrence {
 
 export interface SpanRollupRow {
   Name: string
+  Label: string
+  Calls: number
   Occurrences: SpanOccurrence[] | null
   Errors: number
   Min: number
@@ -65,4 +69,21 @@ export function renderSpanRollup(lines: string[]): SpanRollupRow[] {
     throw new Error((raw as { error: string }).error || 'wasmRenderSpanRollup failed')
   }
   return raw
+}
+
+function parseRows<T>(json: string, what: string): T[] {
+  const raw = JSON.parse(json) as T[] | null | { error: string }
+  if (raw == null) return []
+  if (!Array.isArray(raw)) {
+    throw new Error((raw as { error: string }).error || `${what} failed`)
+  }
+  return raw
+}
+
+export function renderSpanAggregate(lines: string[]): SpanRollupRow[] {
+  return parseRows<SpanRollupRow>(window.wasmRenderSpanAggregate(lines), 'wasmRenderSpanAggregate')
+}
+
+export function renderSpanSamples(lines: string[]): SpanOccurrence[] {
+  return parseRows<SpanOccurrence>(window.wasmRenderSpanSamples(lines), 'wasmRenderSpanSamples')
 }

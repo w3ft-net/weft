@@ -429,7 +429,7 @@ func (j *Job) feed(sink func(*pb.ResultRow) bool) {
 		}
 		defer func() {
 			a.flush()
-			j.feedErr = a.err
+			j.feedErr = a.failure()
 		}()
 		sink = a.push
 	}

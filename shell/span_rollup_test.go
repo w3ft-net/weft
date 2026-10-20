@@ -10,8 +10,8 @@ func TestExecNonInteractive_SpansFlagRendersRollupTable(t *testing.T) {
 	s := &Shell{
 		Query: func(pipeline, rangeSpec string, dirStack []string) (*QueryResult, error) {
 			return &QueryResult{Rows: []Row{
-				{Raw: "1000\tweft/coordinator\tspan done name=shard.Query trace_id=t1 span_id=s1 parent_span_id= duration=10ms duration_ns=10000000 status=ok"},
-				{Raw: "2000\tweft/shard-a\tspan done name=shard.Query trace_id=t1 span_id=s2 parent_span_id=s1 duration=20ms duration_ns=20000000 status=ok"},
+				{Raw: `{"name":"shard.Query","namespace":"weft","service":"coordinator","trace_id":"t1","span_id":"s1","parent_id":"","dur_ns":10000000,"ts_ns":1000,"level":"INFO"}`},
+				{Raw: `{"name":"shard.Query","namespace":"weft","service":"shard-a","trace_id":"t1","span_id":"s2","parent_id":"s1","dur_ns":20000000,"ts_ns":2000,"level":"INFO"}`},
 			}}, nil
 		},
 	}
@@ -60,8 +60,7 @@ func TestExecNonInteractive_TraceSpansRendersRollupTable(t *testing.T) {
 	s := &Shell{
 		Query: func(pipeline, rangeSpec string, dirStack []string) (*QueryResult, error) {
 			return &QueryResult{Rows: []Row{
-				{Raw: "1000\tweft/shard-a\tspan done name=shard.Query trace_id=trace-aaa span_id=s1 parent_span_id= duration=10ms duration_ns=10000000 status=ok"},
-				{Raw: "2000\tweft/shard-b\tspan done name=shard.Query trace_id=trace-bbb span_id=s2 parent_span_id= duration=20ms duration_ns=20000000 status=ok"},
+				{Raw: `{"name":"shard.Query","count":2,"errors":0,"total_ns":30000000,"avg_ns":15000000,"p50_ns":10000000,"p99_ns":20000000,"min_ns":10000000,"max_ns":20000000}`},
 			}}, nil
 		},
 	}
@@ -84,13 +83,16 @@ func TestExecNonInteractive_TraceSpansRendersRollupTable(t *testing.T) {
 
 func TestIsSpansPipeline(t *testing.T) {
 	cases := map[string]bool{
-		"trace abc-123 --spans":   true,
-		"trace --spans abc-123":   true,
-		"trace spans":             true,
-		"trace spans shard.Query": true,
-		"trace abc-123":           false,
-		"cat warp.log --spans":    false,
-		"":                        false,
+		"trace abc-123 --spans":    true,
+		"trace --spans abc-123":    true,
+		"trace spans":              true,
+		"trace spans shard.Query":  true,
+		"trace spans --by service": true,
+		"trace spans | jq .name":   false,
+		"trace spans > /tmp/x":     false,
+		"trace abc-123":            false,
+		"cat warp.log --spans":     false,
+		"":                         false,
 	}
 	for pipeline, want := range cases {
 		if got := isSpansPipeline(pipeline); got != want {

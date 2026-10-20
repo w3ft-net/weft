@@ -11,6 +11,8 @@ vi.mock('../wasm/network', () => ({
 vi.mock('../wasm/traceExports', () => ({
   parseTraceRows: () => [],
   renderSpanRollup: () => [],
+  renderSpanAggregate: () => [],
+  renderSpanSamples: () => [],
 }))
 
 import ShellTraceModal from '../components/ShellTraceModal'

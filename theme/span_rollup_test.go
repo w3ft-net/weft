@@ -1,55 +1,38 @@
 package theme
 
 import (
-	"strconv"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 )
 
-func spanDoneLine(name, traceID, spanID, parentID string, duration time.Duration, status string) string {
-	return "span done name=" + name + " trace_id=" + traceID + " span_id=" + spanID +
-		" parent_span_id=" + parentID + " duration=" + duration.String() +
-		" duration_ns=" + strconv.FormatInt(duration.Nanoseconds(), 10) + " status=" + status
+func spanDoneRow(tsNs int64, label, name, traceID, spanID, parentID string, duration time.Duration, status string) string {
+	ns, svc, _ := strings.Cut(label, "/")
+	out, _ := json.Marshal(map[string]any{
+		"name": name, "namespace": ns, "service": svc, "trace_id": traceID, "span_id": spanID,
+		"parent_id": parentID, "dur_ns": duration.Nanoseconds(), "ts_ns": tsNs, "level": "INFO",
+	})
+	return string(out)
 }
 
-func spanErrorLine(name, traceID, spanID, errText string) string {
-	return "span error name=" + name + " trace_id=" + traceID + " span_id=" + spanID + " err=" + errText
+func spanErrorRow(tsNs int64, label, name, traceID, spanID string) string {
+	ns, svc, _ := strings.Cut(label, "/")
+	out, _ := json.Marshal(map[string]any{
+		"name": name, "namespace": ns, "service": svc, "trace_id": traceID, "span_id": spanID,
+		"parent_id": nil, "dur_ns": nil, "ts_ns": tsNs, "level": "ERROR",
+	})
+	return string(out)
 }
 
-// TestRenderSpanRollup_MatchesRealIngestedLineWithTimestampPrefix is the
-// regression test for a real production gap found while dogfooding
-// span-display end to end (2026-09-25): every existing test in this
-// file built its span-line fixtures as a BARE "span done name=..."
-// string with nothing before it — but that's not what a real ingested
-// row's `raw` column ever contains. weft-go's Span.End()/RecordError
-// call log.Printf, which prepends Go's default timestamp
-// ("2026/09/24 16:24:03 ") to every line; ingest.Parser.ParseLine sets
-// row.Raw to that FULL original line, timestamp included, never just
-// the message. spanDoneRe/spanErrorRe were anchored with `^` — assuming
-// the line starts directly with "span done"/"span error" — so they
-// never matched a single real ingested span line in production: `trace
-// <id> --spans` and `trace spans` (which share this exact parser) both
-// silently rendered "no spans found" against perfectly real, present
-// data the whole time this shipped, confirmed live via `trace spans`
-// returning empty despite `tail | awk 'DURATION_NS > 0'` finding 26
-// real matching rows in the same window.
-func TestRenderSpanRollup_MatchesRealIngestedLineWithTimestampPrefix(t *testing.T) {
-	// Exact shape of a real ingested weft/coordinator row's raw text —
-	// copied from a live production trace.
-	realRaw := "2026/09/24 16:24:03 span done name=coordinator.Execute trace_id=cdb1c1463758ecb93aab9621ea604ed8 " +
-		"span_id=278356b7a799fb18 parent_span_id=6f7eb239b86d3267 duration=49.114313ms duration_ns=49114313 status=ok"
-	lines := []string{traceRow(1000, "weft/coordinator", realRaw)}
+// A span written by the SDK has its name, IDs and duration in columns and
+// only a JSON message as its body; the rollup reads the columns.
+func TestRenderSpanRollup_ReadsSpanColumns(t *testing.T) {
+	lines := []string{spanDoneRow(1000, "acme/api", "coordinator.Execute", "cdb1c1463758ecb93aab9621ea604ed8", "278356b7a799fb18", "6f7eb239b86d3267", 49114313*time.Nanosecond, "ok")}
 
 	rows := RenderSpanRollup(lines)
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 span name parsed from a realistic timestamp-prefixed line, got %d rows: %+v", len(rows), rows)
-	}
-	if rows[0].Name != "coordinator.Execute" {
-		t.Errorf("Name: got %q, want coordinator.Execute", rows[0].Name)
-	}
-	if rows[0].Count() != 1 {
-		t.Fatalf("expected 1 occurrence, got %d", rows[0].Count())
+	if len(rows) != 1 || rows[0].Name != "coordinator.Execute" || rows[0].Count() != 1 {
+		t.Fatalf("rolled up %+v", rows)
 	}
 	if rows[0].Occurrences[0].Duration != 49114313 {
 		t.Errorf("Duration: got %v, want 49114313ns", rows[0].Occurrences[0].Duration)
@@ -57,31 +40,54 @@ func TestRenderSpanRollup_MatchesRealIngestedLineWithTimestampPrefix(t *testing.
 	if rows[0].Occurrences[0].TraceID != "cdb1c1463758ecb93aab9621ea604ed8" {
 		t.Errorf("TraceID: got %q", rows[0].Occurrences[0].TraceID)
 	}
+	if rows[0].Occurrences[0].Label != "acme/api" {
+		t.Errorf("Label: got %q", rows[0].Occurrences[0].Label)
+	}
 }
 
-// TestRenderSpanRollup_MatchesRealIngestedErrorLineWithTimestampPrefix
-// is the "span error" sibling of the above — same real-world shape,
-// same anchoring bug.
-func TestRenderSpanRollup_MatchesRealIngestedErrorLineWithTimestampPrefix(t *testing.T) {
-	realRaw := "2026/09/24 16:24:03 span error name=shard.Query trace_id=cdb1c1463758ecb93aab9621ea604ed8 " +
-		"span_id=278356b7a799fb18 err=connection reset"
-	lines := []string{traceRow(1000, "weft/shard-a", realRaw)}
-
-	rows := RenderSpanRollup(lines)
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 span name parsed from a realistic timestamp-prefixed error line, got %d rows: %+v", len(rows), rows)
+func TestRenderSpanRollup_ErrorRowCountsAgainstNameOnly(t *testing.T) {
+	rows := RenderSpanRollup([]string{spanErrorRow(1000, "acme/shard-a", "shard.Query", "t1", "s1")})
+	if len(rows) != 1 || rows[0].Errors != 1 || rows[0].Count() != 0 {
+		t.Fatalf("expected one name with 1 error and no finished spans, got %+v", rows)
 	}
-	if rows[0].Errors != 1 {
-		t.Errorf("Errors: got %d, want 1", rows[0].Errors)
+}
+
+func TestRenderSpanAggregate_ReadsJSONLines(t *testing.T) {
+	lines := []string{
+		`{"name":"db.query","count":18,"errors":2,"total_ns":900,"avg_ns":50,"p50_ns":40,"p99_ns":90,"min_ns":10,"max_ns":100}`,
+		`{"name":"db.query","namespace":"acme","service":"api","count":1,"errors":0,"total_ns":5,"avg_ns":5,"p50_ns":5,"p99_ns":5,"min_ns":5,"max_ns":5}`,
+		`not json`,
+	}
+	rows := RenderSpanAggregate(lines)
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2: %+v", len(rows), rows)
+	}
+	if rows[0].Count() != 18 || rows[0].Errors != 2 || rows[0].P99 != 90 || rows[0].Label != "" {
+		t.Errorf("row 0 = %+v", rows[0])
+	}
+	if rows[1].Label != "acme/api" || rows[1].displayName() != "db.query (acme/api)" {
+		t.Errorf("row 1 = %+v", rows[1])
+	}
+}
+
+func TestRenderSpanSamples_SlowestFirst(t *testing.T) {
+	lines := []string{
+		spanDoneRow(1, "acme/api", "db.query", "t1", "s1", "", 10*time.Millisecond, "ok"),
+		spanDoneRow(2, "acme/api", "db.query", "t2", "s2", "", 30*time.Millisecond, "ok"),
+		spanDoneRow(3, "acme/api", "db.query", "t3", "s3", "", 20*time.Millisecond, "ok"),
+	}
+	occ := RenderSpanSamples(lines, 2)
+	if len(occ) != 2 || occ[0].TraceID != "t2" || occ[1].TraceID != "t3" {
+		t.Fatalf("got %+v, want t2 then t3", occ)
 	}
 }
 
 func TestRenderSpanRollup_GroupsByNameAndComputesStats(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/coordinator", spanDoneLine("shard.Query", "t1", "s1", "", 10*time.Millisecond, "ok")),
-		traceRow(2000, "weft/shard-a", spanDoneLine("shard.Query", "t1", "s2", "s1", 20*time.Millisecond, "ok")),
-		traceRow(3000, "weft/shard-b", spanDoneLine("shard.Query", "t1", "s3", "s1", 30*time.Millisecond, "ok")),
-		traceRow(4000, "weft/coordinator", spanDoneLine("api.Handle", "t1", "s4", "", 5*time.Millisecond, "ok")),
+		spanDoneRow(1000, "weft/coordinator", "shard.Query", "t1", "s1", "", 10*time.Millisecond, "ok"),
+		spanDoneRow(2000, "weft/shard-a", "shard.Query", "t1", "s2", "s1", 20*time.Millisecond, "ok"),
+		spanDoneRow(3000, "weft/shard-b", "shard.Query", "t1", "s3", "s1", 30*time.Millisecond, "ok"),
+		spanDoneRow(4000, "weft/coordinator", "api.Handle", "t1", "s4", "", 5*time.Millisecond, "ok"),
 	}
 
 	rows := RenderSpanRollup(lines)
@@ -115,8 +121,8 @@ func TestRenderSpanRollup_GroupsByNameAndComputesStats(t *testing.T) {
 // occurrence.
 func TestRenderSpanRollup_OccurrencesCarryTraceID(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/shard-a", spanDoneLine("shard.Query", "trace-aaa", "s1", "", 10*time.Millisecond, "ok")),
-		traceRow(2000, "weft/shard-b", spanDoneLine("shard.Query", "trace-bbb", "s2", "", 20*time.Millisecond, "ok")),
+		spanDoneRow(1000, "weft/shard-a", "shard.Query", "trace-aaa", "s1", "", 10*time.Millisecond, "ok"),
+		spanDoneRow(2000, "weft/shard-b", "shard.Query", "trace-bbb", "s2", "", 20*time.Millisecond, "ok"),
 	}
 	rows := RenderSpanRollup(lines)
 	if len(rows) != 1 || rows[0].Count() != 2 {
@@ -131,8 +137,8 @@ func TestRenderSpanRollup_OccurrencesCarryTraceID(t *testing.T) {
 
 func TestRenderSpanRollup_CountsErrorsByName(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/shard-a", spanDoneLine("shard.Query", "t1", "s1", "", 10*time.Millisecond, "error")),
-		traceRow(1500, "weft/shard-a", spanErrorLine("shard.Query", "t1", "s1", "connection reset")),
+		spanDoneRow(1000, "weft/shard-a", "shard.Query", "t1", "s1", "", 10*time.Millisecond, "error"),
+		spanErrorRow(1500, "weft/shard-a", "shard.Query", "t1", "s1"),
 	}
 
 	rows := RenderSpanRollup(lines)
@@ -151,7 +157,7 @@ func TestRenderSpanRollup_IgnoresNonSpanLines(t *testing.T) {
 	lines := []string{
 		"# 3 line(s) across 2 service(s), 2026-09-24T00:16:29Z to 2026-09-24T00:16:30Z",
 		traceRow(1000, "weft/api", "handling request"),
-		traceRow(2000, "weft/api", spanDoneLine("api.Handle", "t1", "s1", "", 1500*time.Microsecond, "ok")),
+		spanDoneRow(2000, "weft/api", "api.Handle", "t1", "s1", "", 1500*time.Microsecond, "ok"),
 	}
 
 	rows := RenderSpanRollup(lines)
@@ -167,7 +173,7 @@ func TestRenderSpanRollup_EmptyParentSpanID(t *testing.T) {
 	// A top-level span logs parent_span_id= with nothing after the
 	// equals sign — must still parse (the regex's \S* on that field).
 	lines := []string{
-		traceRow(1000, "weft/api", spanDoneLine("api.Handle", "t1", "s1", "", 1*time.Millisecond, "ok")),
+		spanDoneRow(1000, "weft/api", "api.Handle", "t1", "s1", "", 1*time.Millisecond, "ok"),
 	}
 	rows := RenderSpanRollup(lines)
 	if len(rows) != 1 || rows[0].Count() != 1 {
@@ -183,8 +189,8 @@ func TestRenderSpanRollup_EmptyParentSpanID(t *testing.T) {
 // 100ms - 50ms = 50ms; the leaf child's self equals its own duration.
 func TestRenderSpanRollup_SelfTimeSubtractsSequentialChild(t *testing.T) {
 	lines := []string{
-		traceRow(100_000_000, "weft/api", spanDoneLine("api.Handle", "t1", "p1", "", 100*time.Millisecond, "ok")),
-		traceRow(70_000_000, "weft/coordinator", spanDoneLine("coordinator.Execute", "t1", "c1", "p1", 50*time.Millisecond, "ok")),
+		spanDoneRow(100_000_000, "weft/api", "api.Handle", "t1", "p1", "", 100*time.Millisecond, "ok"),
+		spanDoneRow(70_000_000, "weft/coordinator", "coordinator.Execute", "t1", "c1", "p1", 50*time.Millisecond, "ok"),
 	}
 	rows := RenderSpanRollup(lines)
 	byName := map[string]SpanRollupRow{}
@@ -216,9 +222,9 @@ func TestRenderSpanRollup_SelfTimeSubtractsSequentialChild(t *testing.T) {
 // case.
 func TestRenderSpanRollup_SelfTimeUnionsOverlappingChildren(t *testing.T) {
 	lines := []string{
-		traceRow(100_000_000, "weft/coordinator", spanDoneLine("coordinator.Execute", "t1", "p2", "", 100*time.Millisecond, "ok")),
-		traceRow(70_000_000, "weft/shard-a", spanDoneLine("shard.Query", "t1", "c1", "p2", 60*time.Millisecond, "ok")),
-		traceRow(100_000_000, "weft/shard-b", spanDoneLine("shard.Query", "t1", "c2", "p2", 60*time.Millisecond, "ok")),
+		spanDoneRow(100_000_000, "weft/coordinator", "coordinator.Execute", "t1", "p2", "", 100*time.Millisecond, "ok"),
+		spanDoneRow(70_000_000, "weft/shard-a", "shard.Query", "t1", "c1", "p2", 60*time.Millisecond, "ok"),
+		spanDoneRow(100_000_000, "weft/shard-b", "shard.Query", "t1", "c2", "p2", 60*time.Millisecond, "ok"),
 	}
 	rows := RenderSpanRollup(lines)
 	var parentSelf time.Duration
@@ -241,7 +247,7 @@ func TestRenderSpanRollup_SelfTimeUnionsOverlappingChildren(t *testing.T) {
 // duration exactly.
 func TestRenderSpanRollup_SelfTimeLeafEqualsInclusive(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/shard-a", spanDoneLine("shard.Query", "t1", "s1", "", 15*time.Millisecond, "ok")),
+		spanDoneRow(1000, "weft/shard-a", "shard.Query", "t1", "s1", "", 15*time.Millisecond, "ok"),
 	}
 	rows := RenderSpanRollup(lines)
 	if rows[0].Occurrences[0].SelfDuration != 15*time.Millisecond {
@@ -268,7 +274,7 @@ func TestRenderSpanRollupTable_EmptyRowsRendersPlaceholder(t *testing.T) {
 // blank (no "BAR" text) in both modes.
 func TestRenderSpanRollupTable_SingleTraceShowsTotalNotAggregates(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/api", spanDoneLine("api.Handle", "t1", "s1", "", 1500*time.Microsecond, "ok")),
+		spanDoneRow(1000, "weft/api", "api.Handle", "t1", "s1", "", 1500*time.Microsecond, "ok"),
 	}
 	rows := RenderSpanRollup(lines)
 	out := RenderSpanRollupTable(rows, 100, true)
@@ -300,7 +306,7 @@ func TestRenderSpanRollupTable_SingleTraceShowsTotalNotAggregates(t *testing.T) 
 // show the full aggregate set and never a TOTAL column.
 func TestRenderSpanRollupTable_CrossTraceShowsAggregatesNotTotal(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/api", spanDoneLine("api.Handle", "t1", "s1", "", 1500*time.Microsecond, "ok")),
+		spanDoneRow(1000, "weft/api", "api.Handle", "t1", "s1", "", 1500*time.Microsecond, "ok"),
 	}
 	rows := RenderSpanRollup(lines)
 	out := RenderSpanRollupTable(rows, 100, false)
@@ -327,8 +333,8 @@ func TestRenderSpanRollupTable_CrossTraceShowsAggregatesNotTotal(t *testing.T) {
 // visible from string-content assertions alone.
 func TestSpanRollupColumns_RowsAreReverseVideoSafe(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/shard-a", spanDoneLine("shard.Query", "t1", "s1", "", 10*time.Millisecond, "ok")),
-		traceRow(1000, "weft/shard-a", spanErrorLine("shard.Query", "t2", "s2", "boom")),
+		spanDoneRow(1000, "weft/shard-a", "shard.Query", "t1", "s1", "", 10*time.Millisecond, "ok"),
+		spanErrorRow(1000, "weft/shard-a", "shard.Query", "t2", "s2"),
 	}
 	rows := RenderSpanRollup(lines)
 	_, rowTexts := SpanRollupColumns(rows, 100, true)
@@ -372,10 +378,10 @@ func TestRenderSpanBar_ScalesRelativeToMax(t *testing.T) {
 // 9-field layout) and both a wide and a name-truncating narrow width.
 func TestSpanRollupColumns_RowWidthMatchesTermWidthExactly(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/api", spanDoneLine("api.access", "t1", "s1", "", 669006*time.Nanosecond, "ok")),
-		traceRow(1000, "weft/coordinator", spanDoneLine("coordinator.Execute", "t2", "s2", "", 332681*time.Nanosecond, "ok")),
-		traceRow(1000, "weft/shard-a", spanDoneLine("shard.Query", "t3", "s3", "", 102305*time.Nanosecond, "ok")),
-		traceRow(1000, "weft/shard-a", spanDoneLine("shard.Query", "t4", "s4", "", 408665*time.Nanosecond, "ok")),
+		spanDoneRow(1000, "weft/api", "api.access", "t1", "s1", "", 669006*time.Nanosecond, "ok"),
+		spanDoneRow(1000, "weft/coordinator", "coordinator.Execute", "t2", "s2", "", 332681*time.Nanosecond, "ok"),
+		spanDoneRow(1000, "weft/shard-a", "shard.Query", "t3", "s3", "", 102305*time.Nanosecond, "ok"),
+		spanDoneRow(1000, "weft/shard-a", "shard.Query", "t4", "s4", "", 408665*time.Nanosecond, "ok"),
 	}
 	rows := RenderSpanRollup(lines)
 	for _, singleTrace := range []bool{true, false} {
@@ -422,7 +428,7 @@ func TestSpanRollupColumns_RowWidthMatchesTermWidthExactly(t *testing.T) {
 // function, so this only needs to check one.
 func TestSpanRollupColumns_MicrosecondDurationsKeepAllDigits(t *testing.T) {
 	lines := []string{
-		traceRow(1000, "weft/api", spanDoneLine("api.access", "t1", "s1", "", 669006*time.Nanosecond, "ok")),
+		spanDoneRow(1000, "weft/api", "api.access", "t1", "s1", "", 669006*time.Nanosecond, "ok"),
 	}
 	rows := RenderSpanRollup(lines)
 	_, rowTexts := SpanRollupColumns(rows, 100, true)

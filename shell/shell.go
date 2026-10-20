@@ -578,6 +578,11 @@ func isSpansPipeline(pipeline string) bool {
 	if len(fields) == 0 || fields[0] != "trace" {
 		return false
 	}
+	for _, f := range fields {
+		if f == "|" || f == ">" || f == ">>" {
+			return false
+		}
+	}
 	if len(fields) > 1 && fields[1] == "spans" {
 		return true
 	}
@@ -627,8 +632,10 @@ func RenderSpanRollupIfApplicable(pipeline string, result *QueryResult, termWidt
 	for i, row := range result.Rows {
 		lines[i] = row.Raw
 	}
-	singleTrace := !isSpansAggregatePipeline(pipeline)
-	return theme.RenderSpanRollupTable(theme.RenderSpanRollup(lines), termWidth, singleTrace), true
+	if isSpansAggregatePipeline(pipeline) {
+		return theme.RenderSpanRollupTable(theme.RenderSpanAggregate(lines), termWidth, false), true
+	}
+	return theme.RenderSpanRollupTable(theme.RenderSpanRollup(lines), termWidth, true), true
 }
 
 // queryResultLines flattens a *QueryResult into one trimmed input line

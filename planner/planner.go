@@ -183,6 +183,10 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 		c.nodes = append(c.nodes, ls.nodes...)
 	}
 
+	if agg := spanAggregateOf(info.source); agg != "" {
+		return planSpans(c, info.source, agg, customerID, start, end, alertArgs, redirTarget, redirAppend)
+	}
+
 	// Passes. Aggregate recognition and sort/limit fusion run below,
 	// once the SQL holds the pushed line count.
 	c.pushFilters()
@@ -353,33 +357,20 @@ func addSourcePredicates(sql *Query, src sourceInfo) {
 	if src.cmd == "trace" && src.traceID != "" {
 		sql.addPredicate("trace_id = ?", src.traceID)
 	}
-	if src.cmd == "trace_spans" {
-		// Cross-trace aggregation (docs/plans/span-display.md, Phase
-		// 2): no trace_id to anchor on — every "span done" (has a real
-		// duration_ns) or "span error" (matched off raw, the only
-		// signal that distinguishes it from a "span start" row, which
-		// also has duration_ns=0 — see the plan's "Aggregation
-		// mechanics") row in the queried time range, optionally
-		// narrowed to one span name. The projection is still plain
-		// `raw` (the default rawExpr) — no synthesized SQL expression
-		// needed, since raw already holds weft-go's exact "span done
-		// .../span error ..." text, which theme.RenderSpanRollup
-		// already knows how to parse (both phases share one parser).
-		sql.addPredicate("(duration_ns > 0 OR raw LIKE 'span error%')")
-		if src.spanName != "" {
-			sql.addPredicate("span_name = ?", src.spanName)
+	if src.cmd == "trace_spans" || (src.cmd == "trace" && src.spansOnly) {
+		sql.addPredicate("span_name IS NOT NULL")
+		if src.samples {
+			sql.addPredicate("duration_ns > 0")
+		} else {
+			sql.addPredicate("(duration_ns > 0 OR level = 'ERROR')")
 		}
 	}
-	if src.cmd == "trace" || src.cmd == "trace_spans" {
-		// A trace (or a cross-trace span aggregation) fans out across
-		// every service a request touched, with no shared context to
-		// identify which service produced which line — unlike cat/tail
-		// (single app, origin implicit from the path). Force the same
-		// MetaVarColumns projection normally reserved for an explicit
-		// awk/jq meta-var reference so NAMESPACE/SERVICE are always
-		// real, pipeline-filterable fields, and so compute/engine.go's
-		// trace-tag display branch has namespace/service available on
-		// every row (SpanOccurrence.Label).
+	if src.cmd == "trace_spans" && src.spanName != "" {
+		sql.addPredicate("span_name = ?", src.spanName)
+	}
+	if (src.cmd == "trace" || src.cmd == "trace_spans") && spanAggregateOf(src) == "" {
+		// A trace fans out across every service a request touched, so its
+		// rows always carry namespace and service.
 		sql.includeMetaVars = true
 	}
 }

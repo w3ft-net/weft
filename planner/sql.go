@@ -43,6 +43,11 @@ type Query struct {
 	// aggregate makes this the shard half of a QueryPlan.Aggregate: it
 	// groups the lines of its subquery's raw (see Aggregate).
 	aggregate string
+	// spanKind makes this a span query (see spans.go): the shard half of
+	// one of the AggregateSpan* aggregates, rendered straight from the
+	// table.
+	spanKind      string
+	spanByService bool
 }
 
 // PayloadColumn names the extra column carrying a row's payload JSON
@@ -339,6 +344,10 @@ func (q *Query) ToSQLWithSources() (sql string, args []any, sources []ArgSource)
 // public methods supply different callbacks to collect the form of
 // arg they need.
 func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
+	if q.spanKind != "" {
+		q.renderSpans(b, onArg)
+		return
+	}
 	b.WriteString("SELECT ")
 	if q.aggregate != "" {
 		key := "raw"

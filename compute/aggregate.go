@@ -23,8 +23,18 @@ type aggregator struct {
 	err  error
 }
 
-func newAggregator(fn string, sink func(*pb.ResultRow) bool) (*aggregator, error) {
+type rowAggregator interface {
+	push(*pb.ResultRow) bool
+	flush()
+	failure() error
+}
+
+func newAggregator(fn string, sink func(*pb.ResultRow) bool) (rowAggregator, error) {
 	switch fn {
+	case planner.AggregateSpans:
+		return &spanAggregator{sink: sink, groups: map[spanKey]*spanGroup{}}, nil
+	case planner.AggregateSpanRows, planner.AggregateSpanSamples:
+		return &spanRowAggregator{fn: fn, sink: sink}, nil
 	case planner.AggregateLines, planner.AggregateDistinct, planner.AggregateCountDistinct:
 		return &aggregator{fn: fn, sink: sink}, nil
 	}
@@ -48,6 +58,8 @@ func (a *aggregator) push(row *pb.ResultRow) bool {
 	a.n += n
 	return true
 }
+
+func (a *aggregator) failure() error { return a.err }
 
 // flush emits the last line. wc -l prints its total even with no rows.
 func (a *aggregator) flush() {

@@ -100,52 +100,44 @@ func TestPlanTrace_ArityErrors(t *testing.T) {
 	}
 }
 
-// TestPlanTrace_SpansFlag: `trace <id> --spans` plans identically to a
-// bare `trace <id>` — the flag is stripped before the argument-count
-// check and never reaches SQL. Position-independent (the flag can come
-// before or after the id) because docs/plans/span-display.md's Phase 1
-// rollup is entirely a client-side reinterpretation of the same rows.
 func TestPlanTrace_SpansFlag(t *testing.T) {
-	base, err := Plan(`trace abc-123`, 1, "", time.Time{}, time.Time{})
-	if err != nil {
-		t.Fatalf("Plan(bare): %v", err)
-	}
 	for _, pipeline := range []string{"trace abc-123 --spans", "trace --spans abc-123"} {
 		t.Run(pipeline, func(t *testing.T) {
 			plan, err := Plan(pipeline, 1, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", pipeline, err)
 			}
-			if plan.ShardSQL != base.ShardSQL {
-				t.Errorf("ShardSQL differs from bare trace:\n  bare:  %s\n  spans: %s", base.ShardSQL, plan.ShardSQL)
+			if plan.Aggregate != AggregateSpanRows {
+				t.Errorf("Aggregate = %q, want %q", plan.Aggregate, AggregateSpanRows)
+			}
+			for _, want := range []string{"trace_id = ?", "span_name IS NOT NULL", "(duration_ns > 0 OR level = 'ERROR')", "'parent_id', parent_span_id"} {
+				if !strings.Contains(plan.ShardSQL, want) {
+					t.Errorf("ShardSQL missing %q: %s", want, plan.ShardSQL)
+				}
+			}
+			if strings.Contains(plan.ShardSQL, "CAST(event_id") {
+				t.Errorf("ShardSQL still selects whole rows: %s", plan.ShardSQL)
 			}
 		})
 	}
 }
 
-// TestPlanTraceSpans_Predicate: `trace spans` (Phase 2's cross-trace
-// aggregation, docs/plans/span-display.md) filters to rows that carry
-// a real duration_ns or are a "span error" line, with no trace_id or
-// span_name predicate and no namespace/service/kind scoping — it fans
-// out the same way a bare `trace <id>` does, just without a trace_id
-// to anchor on.
-func TestPlanTraceSpans_Predicate(t *testing.T) {
+func TestPlanTraceSpans_Aggregate(t *testing.T) {
 	plan, err := Plan(`trace spans`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if !strings.Contains(plan.ShardSQL, "(duration_ns > 0 OR raw LIKE 'span error%')") {
-		t.Errorf("ShardSQL missing the done/error row filter: %s", plan.ShardSQL)
+	if plan.Aggregate != AggregateSpans {
+		t.Errorf("Aggregate = %q, want %q", plan.Aggregate, AggregateSpans)
 	}
-	if strings.Contains(plan.ShardSQL, "trace_id = ?") {
-		t.Errorf("ShardSQL unexpectedly scoped by trace_id: %s", plan.ShardSQL)
+	for _, want := range []string{"GROUP BY span_name, bucket", "span_name IS NOT NULL", "(duration_ns > 0 OR level = 'ERROR')", "count(*) FILTER (WHERE level = 'ERROR')"} {
+		if !strings.Contains(plan.ShardSQL, want) {
+			t.Errorf("ShardSQL missing %q: %s", want, plan.ShardSQL)
+		}
 	}
-	if strings.Contains(plan.ShardSQL, "span_name = ?") {
-		t.Errorf("ShardSQL unexpectedly scoped by span_name (no name given): %s", plan.ShardSQL)
-	}
-	for _, col := range []string{"namespace =", "service =", "kind =", "namespace IN", "service IN", "kind IN"} {
-		if strings.Contains(plan.ShardSQL, col) {
-			t.Errorf("ShardSQL unexpectedly scoped by %q: %s", col, plan.ShardSQL)
+	for _, unwanted := range []string{"trace_id = ?", "span_name = ?", "namespace =", "service =", "kind =", "namespace IN", "service IN", "kind IN", "raw LIKE"} {
+		if strings.Contains(plan.ShardSQL, unwanted) {
+			t.Errorf("ShardSQL unexpectedly contains %q: %s", unwanted, plan.ShardSQL)
 		}
 	}
 	if plan.SourceCmd != "trace_spans" {
@@ -153,8 +145,6 @@ func TestPlanTraceSpans_Predicate(t *testing.T) {
 	}
 }
 
-// TestPlanTraceSpans_WithName: `trace spans <name>` adds a parameterized
-// span_name predicate on top of the same done/error filter.
 func TestPlanTraceSpans_WithName(t *testing.T) {
 	plan, err := Plan(`trace spans shard.Query`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
@@ -174,16 +164,54 @@ func TestPlanTraceSpans_WithName(t *testing.T) {
 	}
 }
 
-// TestPlanTraceSpans_IncludeMetaVars: same forced NAMESPACE/SERVICE
-// projection as a bare trace — see TestPlanTrace_IncludeMetaVars.
-func TestPlanTraceSpans_IncludeMetaVars(t *testing.T) {
-	plan, err := Plan(`trace spans`, 1, "", time.Time{}, time.Time{})
+func TestPlanTraceSpans_ByService(t *testing.T) {
+	plan, err := Plan(`trace spans --by service`, 1, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	for _, col := range MetaVarColumns {
-		if !strings.Contains(plan.ShardSQL, ", "+col) {
-			t.Errorf("ShardSQL missing MetaVarColumns projection %q: %s", col, plan.ShardSQL)
+	if !strings.Contains(plan.ShardSQL, "GROUP BY span_name, namespace, service, bucket") {
+		t.Errorf("ShardSQL doesn't group by service: %s", plan.ShardSQL)
+	}
+	if !strings.Contains(plan.ShardSQL, "'namespace', namespace, 'service', service") {
+		t.Errorf("ShardSQL doesn't return the service: %s", plan.ShardSQL)
+	}
+}
+
+func TestPlanTraceSpans_Samples(t *testing.T) {
+	plan, err := Plan(`trace spans db.query --samples`, 1, "", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if plan.Aggregate != AggregateSpanSamples {
+		t.Errorf("Aggregate = %q, want %q", plan.Aggregate, AggregateSpanSamples)
+	}
+	for _, want := range []string{"span_name = ?", "duration_ns > 0", "ORDER BY duration_ns DESC LIMIT 50"} {
+		if !strings.Contains(plan.ShardSQL, want) {
+			t.Errorf("ShardSQL missing %q: %s", want, plan.ShardSQL)
+		}
+	}
+	if strings.Contains(plan.ShardSQL, "level = 'ERROR'") {
+		t.Errorf("samples include error rows: %s", plan.ShardSQL)
+	}
+}
+
+func TestPlanTraceSpans_StagesRunInCompute(t *testing.T) {
+	plan, err := Plan(`trace spans | jq 'select(.p99_ns > 1000000)'`, 1, "", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if strings.Contains(plan.ShardSQL, "p99_ns") {
+		t.Errorf("jq select was pushed into the shard: %s", plan.ShardSQL)
+	}
+	if len(plan.ComputeStages) != 1 || !strings.HasPrefix(plan.ComputeStages[0], "jq") {
+		t.Errorf("ComputeStages = %v, want the jq stage", plan.ComputeStages)
+	}
+}
+
+func TestPlanTraceSpans_OptionErrors(t *testing.T) {
+	for _, pipeline := range []string{"trace spans --by host", "trace spans --samples", "trace spans a --samples --by service", "trace spans --bogus"} {
+		if _, err := Plan(pipeline, 1, "", time.Time{}, time.Time{}); err == nil {
+			t.Errorf("Plan(%q): expected error, got nil", pipeline)
 		}
 	}
 }

@@ -58,8 +58,8 @@ func TestConfigureCore_TraceBuiltin_SpansFlag(t *testing.T) {
 	if r.Mode != "rollup" {
 		t.Errorf("Mode: got %q want rollup", r.Mode)
 	}
-	if r.Pipeline != "trace abc123" {
-		t.Errorf("Pipeline: got %q want %q", r.Pipeline, "trace abc123")
+	if r.Pipeline != "trace abc123 --spans" {
+		t.Errorf("Pipeline: got %q want %q", r.Pipeline, "trace abc123 --spans")
 	}
 	if r.Title != "abc123" {
 		t.Errorf("Title: got %q want abc123", r.Title)

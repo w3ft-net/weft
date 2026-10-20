@@ -59,6 +59,14 @@ type SpanView struct {
 	sampleFocus int // index into rows[focus].Occurrences, samples level
 
 	pending chan fetchResult // async data delivery (cap 1); nil once drained
+
+	samples        []theme.SpanOccurrence
+	samplesPending chan samplesResult
+}
+
+type samplesResult struct {
+	occ []theme.SpanOccurrence
+	err error
 }
 
 type fetchResult struct {
@@ -85,6 +93,8 @@ func (v *SpanView) OnEnter(c *shellcore.ShellCore, args any) error {
 	v.level = levelList
 	v.focus = 0
 	v.sampleFocus = 0
+	v.samples = nil
+	v.samplesPending = nil
 
 	c.Write([]byte("\x1b[?1049h"))
 
@@ -100,6 +110,10 @@ func (v *SpanView) OnEnter(c *shellcore.ShellCore, args any) error {
 		lines, err := query(pipeline)
 		if err != nil {
 			ch <- fetchResult{err: err}
+			return
+		}
+		if isSpansAggregatePipeline(pipeline) {
+			ch <- fetchResult{rows: theme.RenderSpanAggregate(lines)}
 			return
 		}
 		ch <- fetchResult{rows: theme.RenderSpanRollup(lines)}
@@ -139,6 +153,10 @@ func (v *SpanView) handleListKey(c *shellcore.ShellCore, ev shellcore.KeyEvent) 
 		if len(v.rows) > 0 && v.rows[v.focus].Count() > 0 {
 			v.level = levelSamples
 			v.sampleFocus = 0
+			v.samples = nil
+			if isSpansAggregatePipeline(v.pipeline) {
+				v.fetchSamples(v.rows[v.focus].Name)
+			}
 			v.Render(c)
 		}
 	}
@@ -205,14 +223,43 @@ func (v *SpanView) clampSample(occ []theme.SpanOccurrence) {
 }
 
 func (v *SpanView) currentOccurrences() []theme.SpanOccurrence {
+	if isSpansAggregatePipeline(v.pipeline) {
+		return v.samples
+	}
 	if v.focus < 0 || v.focus >= len(v.rows) {
 		return nil
 	}
 	return v.rows[v.focus].Occurrences
 }
 
+func (v *SpanView) fetchSamples(name string) {
+	ch := make(chan samplesResult, 1)
+	v.samplesPending = ch
+	go func(pipeline string, query QueryFunc) {
+		lines, err := query(pipeline)
+		if err != nil {
+			ch <- samplesResult{err: err}
+			return
+		}
+		ch <- samplesResult{occ: theme.RenderSpanSamples(lines, theme.SpanSamplesLimit)}
+	}("trace spans "+name+" --samples", v.query)
+}
+
 // Tick drains the async fetch result, if any, and repaints once.
 func (v *SpanView) Tick(c *shellcore.ShellCore) {
+	if v.samplesPending != nil {
+		select {
+		case res := <-v.samplesPending:
+			v.samplesPending = nil
+			if res.err != nil {
+				v.err = res.err.Error()
+			} else {
+				v.samples = res.occ
+			}
+			v.Render(c)
+		default:
+		}
+	}
 	if v.pending == nil {
 		return
 	}
@@ -249,6 +296,9 @@ func (v *SpanView) Render(c *shellcore.ShellCore) {
 		buf.WriteString("\r\n")
 	case v.pending != nil:
 		buf.WriteString(shellcore.DimText("fetching " + v.title + "..."))
+		buf.WriteString("\r\n")
+	case v.samplesPending != nil:
+		buf.WriteString(shellcore.DimText("fetching the slowest " + v.currentName() + " spans..."))
 		buf.WriteString("\r\n")
 	case v.level == levelSamples:
 		v.renderSamples(&buf, w, h)

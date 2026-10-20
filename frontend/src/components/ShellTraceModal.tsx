@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchPipelineLines } from '../wasm/network'
 import { useReportModalClosed } from '../lib/useReportModalClosed'
-import { parseTraceRows, renderSpanRollup, type TraceRow, type SpanRollupRow, type SpanOccurrence } from '../wasm/traceExports'
+import { parseTraceRows, renderSpanAggregate, renderSpanRollup, renderSpanSamples, type TraceRow, type SpanRollupRow, type SpanOccurrence } from '../wasm/traceExports'
 import { traceColorFor } from '../lib/traceColors'
 import './ShellTraceModal.css'
 
@@ -105,7 +105,7 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
   const rollupRows = useMemo<SpanRollupRow[]>(() => {
     if (spec.mode === 'gap' || !lines) return []
     try {
-      return renderSpanRollup(lines)
+      return spec.mode === 'aggregate' ? renderSpanAggregate(lines) : renderSpanRollup(lines)
     } catch (e) {
       setError(String((e as Error)?.message || e))
       return []
@@ -127,10 +127,16 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
   }, [rollupRows, singleTrace])
 
   const focusRow = focusIdx != null ? rollupRows[focusIdx] : null
+  const [samples, setSamples] = useState<SpanOccurrence[] | null>(null)
 
   function openSamples(i: number) {
     setFocusIdx(i)
     setLevel('samples')
+    setSamples(null)
+    if (spec.mode !== 'aggregate') return
+    fetchPipelineLines(`trace spans ${rollupRows[i].Name} --samples`)
+      .then(ls => setSamples(renderSpanSamples(ls)))
+      .catch(e => setError(String((e as Error)?.message || e)))
   }
 
   return (
@@ -173,7 +179,7 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
           ) : level === 'list' ? (
             <RollupListView rows={rollupRows} singleTrace={singleTrace} barAgainst={barAgainst} onSelect={openSamples} />
           ) : (
-            focusRow && <SamplesView row={focusRow} />
+            focusRow && <SamplesView occs={spec.mode === 'aggregate' ? samples : (focusRow.Occurrences ?? [])} />
           )}
         </div>
       </div>
@@ -262,16 +268,16 @@ function RollupListView({
           const pct = barAgainst > 0 ? Math.min(100, (barValue / barAgainst) * 100) : 0
           return (
             <tr
-              key={r.Name}
+              key={r.Name + r.Label}
               className="shell-trace-rollup-row"
               onClick={() => onSelect(i)}
               data-testid={`shell-trace-rollup-row-${r.Name}`}
             >
-              <td className="shell-trace-rollup-name">{r.Name}</td>
+              <td className="shell-trace-rollup-name">{r.Label ? `${r.Name} (${r.Label})` : r.Name}</td>
               <td className="shell-trace-rollup-bar-cell">
                 <div className="shell-trace-rollup-bar" style={{ width: `${pct}%` }} />
               </td>
-              <td className="shell-trace-rollup-num">{r.Occurrences?.length ?? 0}</td>
+              <td className="shell-trace-rollup-num">{r.Calls}</td>
               {singleTrace ? (
                 <td className="shell-trace-rollup-num">{formatDurationNs(r.SelfTotal)}</td>
               ) : (
@@ -294,8 +300,10 @@ function RollupListView({
   )
 }
 
-function SamplesView({ row }: { row: SpanRollupRow }) {
-  const occs: SpanOccurrence[] = row.Occurrences ?? []
+function SamplesView({ occs }: { occs: SpanOccurrence[] | null }) {
+  if (occs === null) {
+    return <div className="shell-trace-modal-loading tui-cursor">loading</div>
+  }
   if (occs.length === 0) {
     return <div className="shell-trace-modal-empty">#&nbsp;no occurrences</div>
   }

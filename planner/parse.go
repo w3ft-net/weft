@@ -26,15 +26,17 @@ type sourceInfo struct {
 	follow     bool     // tail -f
 	traceID    string   // trace_id predicate value; only set when cmd == "trace"
 	// spanName is `trace spans <name>`'s optional filter; only set
-	// when cmd == "trace_spans". Empty means "every span name in the
-	// queried time range" (`trace spans` with no argument).
+	// when cmd == "trace_spans". Empty means every span name in the
+	// queried time range.
 	spanName string
-	// spansOnly is `trace <id> --spans`'s flag. The SQL/row data this
-	// produces is identical to a bare `trace <id>` (see docs/plans/
-	// span-display.md, "Phase 1 in detail") — the rollup is a pure
-	// client-side reinterpretation of the same rows — so this field
-	// exists only so the flag doesn't fail sourceInfo's argument-count
-	// check below; nothing here changes the predicate or query shape.
+	// spansBy is `trace spans --by service`: group by service as well as
+	// span name.
+	spansBy string
+	// samples is `trace spans <name> --samples`: the slowest occurrences
+	// of one span name, not the aggregate.
+	samples bool
+	// spansOnly is `trace <id> --spans`: the trace's span rows, for the
+	// rollup, not every line of the trace.
 	spansOnly bool
 }
 
@@ -232,14 +234,29 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 		// at all — the query fans out across the customer's whole
 		// queried time range, not one request.
 		if len(args) > 0 && args[0] == "spans" {
-			switch len(args) {
-			case 1:
-				return &sourceInfo{cmd: "trace_spans"}, nil
-			case 2:
-				return &sourceInfo{cmd: "trace_spans", spanName: args[1]}, nil
-			default:
-				return nil, fmt.Errorf("trace spans: expected at most one span name argument")
+			info := &sourceInfo{cmd: "trace_spans"}
+			for i := 1; i < len(args); i++ {
+				switch a := args[i]; {
+				case a == "--samples":
+					info.samples = true
+				case a == "--by" && i+1 < len(args) && args[i+1] == "service":
+					info.spansBy = "service"
+					i++
+				case strings.HasPrefix(a, "-"):
+					return nil, fmt.Errorf("trace spans: unknown option %s (expected --by service or --samples)", a)
+				case info.spanName == "":
+					info.spanName = a
+				default:
+					return nil, fmt.Errorf("trace spans: expected at most one span name argument")
+				}
 			}
+			if info.samples && info.spanName == "" {
+				return nil, fmt.Errorf("trace spans: --samples needs a span name")
+			}
+			if info.samples && info.spansBy != "" {
+				return nil, fmt.Errorf("trace spans: --samples and --by don't combine")
+			}
+			return info, nil
 		}
 
 		// No path argument — a trace isn't scoped to one app, it fans out
