@@ -11,64 +11,21 @@ const tmp = {
     { level: 3, id: "lifetime-and-limits", text: "Lifetime and limits" },
   ],
   html: `<h2 id="scratch-space-tmp">Scratch space (/tmp)</h2>
-<p>Every weft account has a scratch area at <code>/tmp</code>. Use it to save the output
-of a pipeline, take notes during an incident, or hold a filtered result
-set long enough to slice it a few different ways. Write with <code>&gt;</code>, append
-with <code>&gt;&gt;</code>, edit with <code>vi</code>, list with <code>ls</code>, remove with <code>rm</code>.</p>
-<pre><code># Save a filtered result set
-cat /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
-
-# Take a look
-wc -l /tmp/errs
-grep timeout /tmp/errs | sort | uniq -c | sort -rn | head
-
-# Keep adding to it later (5xx responses among the last 200 rows)
-tail -n 200 /log/myco/api/main.log | awk '$6 ~ /status=5/' &gt;&gt; /tmp/errs
-
-# Organise an incident
-mkdir /tmp/incident-2026-04-22
-cat /log/myco/api/main.log | grep 'req_id=abc123' &gt; /tmp/incident-2026-04-22/trace
-vi /tmp/incident-2026-04-22/notes
-ls -l /tmp/incident-2026-04-22
-
-# Compare two result sets
-cp /tmp/errs /tmp/errs.bak
-tail -n 1000 /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs   # errors among the last 1000 rows
-diff /tmp/errs.bak /tmp/errs           # what's new in the most recent slice
-
-# comm and join need sorted input
-sort /tmp/errs.bak &gt; /tmp/errs.bak.sorted
-sort /tmp/errs &gt; /tmp/errs.sorted
-comm /tmp/errs.bak.sorted /tmp/errs.sorted   # three-column shared/unique view
-
-# Relate two saved files by their first column
-printf 'api 3\\nweb 1\\n' &gt; /tmp/errs-by-service
-printf 'api oncall-a\\nweb oncall-b\\n' &gt; /tmp/owners
-join /tmp/errs-by-service /tmp/owners        # api 3 oncall-a, web 1 oncall-b
-
-# Rename, keep alive
-mv /tmp/errs /tmp/incident-errs
-touch /tmp/incident-errs               # reset the 48h clock
-
-# Clean up when you're done
-rm -rf /tmp/incident-2026-04-22
+<p>Sometimes a 1-liner just isn't enough. When you need to stage the results of
+some grepping and awking, throw those lines in <code>/tmp</code>.</p>
+<pre><code>cat /log/myco/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' &gt; /tmp/errs
 </code></pre>
+<p>Take notes, diff outputs, run comm/join, etc. to your heart's content. Or almost maybe?</p>
 <h3 id="lifetime-and-limits">Lifetime and limits</h3>
 <ul>
-<li><strong>48 hours.</strong> <code>/tmp</code> is durable across logouts and shared by every member of
-your account (no other account sees it), but a file is deleted 48 hours after
-its last write. <code>&gt;</code>, <code>&gt;&gt;</code>, <code>cp</code>, <code>mv</code> and <code>touch</code> reset the clock; <code>ls -l</code>
-shows the mtime. For long-term results, save the pipeline as a cron instead
-(see <strong>Crons</strong>); cron results keep your plan's full history.</li>
+<li><strong>48 hours.</strong> We know your homedir hygiene is terrible, so <code>/tmp</code> files are
+deleted 48 hours after its last write. <code>&gt;</code>, <code>&gt;&gt;</code>, <code>cp</code>, <code>mv</code> and <code>touch</code>
+reset the clock; <code>ls -l</code> shows the mtime. If you want to accumulate longer-term
+results, use <a href="/manual/crons">crons</a> instead.</li>
 <li><strong>Size.</strong> A per-file cap and a total allowance, both set by your plan (see
-the <strong>Account</strong> page). A write that would exceed either fails and writes
-nothing. <code>ls -lh /tmp</code> shows sizes.</li>
-<li><strong>Not scripts.</strong> Files in <code>/tmp</code> are never executed; scripts live in <code>/bin</code>.</li>
-<li><strong>No follow.</strong> <code>tail -f ... &gt; /tmp/x</code> is refused; drop <code>-f</code>.</li>
-<li><strong>Crossing out.</strong> <code>cp</code> and <code>mv</code> work between <code>/tmp</code> and <code>/bin</code>, <code>/cron.d</code> and the <code>/etc</code> config files, and the destination checks the file as it would for <code>&gt;</code>: you need the group that manages it, and scripts and crons are validated on save.</li>
+the <strong>Account</strong> page). A write that would exceed either fails. <code>ls -lh /tmp</code> shows sizes.</li>
+<li><strong>No scripts.</strong> Files in <code>/tmp</code> are not executable. If you want to run it, put it in <code>/bin</code>.</li>
 </ul>
-<p>The Unix tools for comparing saved files (<code>diff</code>, <code>comm</code>, <code>join</code>, <code>paste</code>,
-<code>wc</code>) are listed in <a href="/manual/builtins#differences-and-limitations">Builtins</a>.</p>
 `,
 } as const;
 

@@ -9,11 +9,9 @@ const trace = {
   headings: [
     { level: 3, id: "getting-trace-ids-into-your-logs", text: "Getting trace IDs into your logs" },
     { level: 3, id: "finding-a-trace", text: "Finding a trace" },
-    { level: 3, id: "one-request", text: "One request" },
-    { level: 3, id: "where-one-requests-time-went", text: "Where one request's time went" },
-    { level: 3, id: "how-operations-behave-across-requests", text: "How operations behave across requests" },
-    { level: 3, id: "what-counts-as-a-span", text: "What counts as a span" },
-    { level: 3, id: "not-supported", text: "Not supported" },
+    { level: 3, id: "a-single-request", text: "A single request" },
+    { level: 3, id: "digging-into-spans-for-a-request", text: "Digging into spans for a request" },
+    { level: 3, id: "global-span-tracking", text: "Global span tracking" },
   ],
   html: `<p>The <code>trace</code> command aggregates lines across services in all your namespaces. A
 bare <code>trace</code> lists your most recent traces. Give it a trace ID with <code>--id</code> and it
@@ -57,24 +55,18 @@ those values.</p>
   3m   840ms    12      0 POST /checkout  acme/api, acme/orders                9c1d02e87a5b4f3d8e6a1b2c3d4e5f60
  11m     5ms     1      -                 acme/worker                          e07a4b9d1c2f43a58b6d7e8f90a1b2c3
 </code></pre>
-<p><code>AGE</code> is how long ago the trace's last line was written, and <code>DUR</code> is the time
-from its first line to its last. <code>LINES</code> and <code>ERRORS</code> count every line of the
-trace, on every service, and <code>SERVICES</code> lists the services that wrote one. <code>ROOT</code>
-is the name of the span that started the request, when there is one. The <code>TRACE</code>
-column is last because it is the one you copy: hand it to <code>--id</code>. In the browser,
-click a row to open that trace.</p>
-<p><code>ERRORS</code> counts lines at level <code>ERROR</code>. A <code>-</code> means none of the trace's lines
-carried a log level at all, so there's no way to know.</p>
 <p>The summary always covers the whole trace, even when you narrow the list with a
 scope: <code>trace acme/api</code> picks the traces that touched <code>acme/api</code>, then shows each
 one in full.</p>
-<p>Piped, you get one JSON line per trace, ready for jq (<code>errors</code> is <code>null</code> where
-the table shows <code>-</code>):</p>
+<p>Piped, you get one JSON line per trace, so you can go hunting for slowness with jq:</p>
 <pre><code>{&quot;trace_id&quot;:&quot;4bf92f3577b34da6a3ce929d0e0e4736&quot;,&quot;start_ns&quot;:1760882531000000000,&quot;end_ns&quot;:1760882532200000000,&quot;dur_ns&quot;:1200000000,&quot;lines&quot;:7,&quot;errors&quot;:2,&quot;services&quot;:[&quot;acme/api&quot;,&quot;acme/orders&quot;,&quot;acme/payments&quot;],&quot;root&quot;:&quot;GET /orders/812&quot;}
 </code></pre>
 <pre><code>trace | jq -r 'select(.errors &gt; 0) | .trace_id'
 </code></pre>
-<h3 id="one-request">One request</h3>
+<p>Alternatively, if you are looking at a particularly troubling log line via some
+1-liner involving jq or AWK, you can get your trace id via
+<a href="/manual/metavars">metavariable</a>.</p>
+<h3 id="a-single-request">A single request</h3>
 <pre><code>$ trace --id 4bf92f3577b34da6a3ce929d0e0e4736
 # 7 line(s) across 3 service(s), 2026-10-19T14:02:11Z to 2026-10-19T14:02:12Z
                  acme/api      GET /orders/812
@@ -88,15 +80,11 @@ the table shows <code>-</code>):</p>
 <p>The first column shows time elapsed since the previous line (the first line
 thus having no value there). On a narrow enough terminal, the time column is
 dropped.</p>
-<p>The table above is only how <code>trace</code> prints to a terminal. Put a pipe after it
-and you get the log lines themselves, without the summary, bars or badges, so
-you can filter them like any other source. Each row still knows where it came
-from: <code>$namespace</code> and <code>$service</code> hold the service that wrote it, so you can
-filter or print them:</p>
+<p>Like a bare <code>trace</code>, the form above returns JSON when piped, with <code>$namespace</code> and <code>$service</code> present as metavars:</p>
 <pre><code>trace --id 4bf92f3577b34da6a3ce929d0e0e4736 | grep -i error
 trace --id 4bf92f3577b34da6a3ce929d0e0e4736 | jq -r '$service + &quot;: &quot; + .msg'
 </code></pre>
-<h3 id="where-one-requests-time-went">Where one request's time went</h3>
+<h3 id="digging-into-spans-for-a-request">Digging into spans for a request</h3>
 <pre><code>$ trace --spans --id 4bf92f3577b34da6a3ce929d0e0e4736
 NAME                                   COUNT     TOTAL ERRORS
 api.handle (acme/api)               █      1       7ms      0
@@ -104,81 +92,34 @@ db.query (acme/orders)     ██████████      3      38ms      
 db.query (acme/payments)           ██      1       9ms      -
 orders.load (acme/orders)          ██      1      11ms      0
 </code></pre>
-<p>Spans are grouped by name <em>and</em> service, because the same name in two services
-is usually two different things (both <code>db.query</code> rows above). <code>TOTAL</code> is each
-group's self time: its own duration minus time spent in its child spans. The bar
-is scaled to the largest <code>TOTAL</code>, so it points at the real bottleneck of the
-request.</p>
-<p><code>ERRORS</code> counts a span's error lines: log lines at level <code>ERROR</code> that carry the
-span's name. The SDK writes one when you record an error on a span. An ordinary
-<code>ERROR</code> log line with no span name isn't counted, and neither is an error nobody
-recorded on the span, so a <code>0</code> means no span reported an error, not that the
-request succeeded. A <code>-</code> means none of that service's lines carried a log
-level at all, so there's no way to know. Without the SDK, your schema has to
-extract both the span name and the level for this column to fill in.</p>
-<p>In the browser, running <code>trace --spans --id &lt;id&gt;</code> will open a modal. In
-the terminal, it opens an interactive view. Both will let you drill down on
-specific spans. Piped, it gives one JSON line per finished span or span error,
-ready for jq:</p>
+<p>In the browser, running <code>trace --spans --id &lt;id&gt;</code> will open a modal. In the
+terminal, it opens an interactive view. Both will let you drill down on
+specific spans. Piped, it again gives one JSON line per finished span or span
+error:</p>
 <pre><code>{&quot;name&quot;:&quot;db.query&quot;,&quot;namespace&quot;:&quot;acme&quot;,&quot;service&quot;:&quot;orders&quot;,&quot;trace_id&quot;:&quot;4bf9…&quot;,&quot;span_id&quot;:&quot;a1&quot;,&quot;parent_id&quot;:&quot;b2&quot;,&quot;dur_ns&quot;:21000000,&quot;ts_ns&quot;:1760882531000000000,&quot;level&quot;:&quot;INFO&quot;}
 </code></pre>
 <p><code>ts_ns</code> is when the span ended, so it started at <code>ts_ns - dur_ns</code>.</p>
-<h3 id="how-operations-behave-across-requests">How operations behave across requests</h3>
+<h3 id="global-span-tracking">Global span tracking</h3>
 <pre><code>$ trace --spans
 NAME                                 COUNT       AVG       P50       P99       MIN       MAX ERRORS
 api.handle (acme/api)    ██████████   9102     1.2ms     1.1ms     4.8ms     410µs     9.9ms      0
 db.query (acme/orders)         ████  18420     500µs     410µs     2.3ms      90µs     8.1ms      3
 </code></pre>
-<p>Every span name in the current <code>range</code>, aggregated across all traces and
-grouped by the service that ran it, since the same name in two services is
-usually two different things. The bar is scaled to the largest <code>AVG</code>. Add
-<code>--name</code> to look at just one, and a scope to look at just one service:</p>
+<p><code>trace</code> can take the <code>--span</code> flag without a trace id to analyze span
+statistics across all traces in your current range. Add <code>--name</code> to look at
+just one, and a scope to look at just one service:</p>
 <pre><code>trace --spans --name db.query
 trace --spans acme/orders
 </code></pre>
 <p><code>COUNT</code>, <code>ERRORS</code>, <code>AVG</code>, <code>MIN</code> and <code>MAX</code> are exact. <code>P50</code> and <code>P99</code> are
 approximate (within 1% of the true value).</p>
-<p><code>trace --spans</code> has no self time here, since it sees spans one name at a time
-and can't see their children; use <code>trace --spans --id &lt;id&gt;</code> for that.</p>
-<p>The interactive view works like the one above. <code>Enter</code> on a name lists its
-slowest occurrences, each with the trace ID to hand to <code>--id</code>.</p>
-<pre><code>trace --spans --name db.query --samples
-</code></pre>
-<p>prints the same list: the 50 slowest finished occurrences of a name, one JSON
-line each in the shape above.</p>
 <h4 id="using-the-results">Using the results</h4>
-<p>Piped, <code>trace --spans</code> gives one JSON line per name and service:</p>
-<pre><code>{&quot;name&quot;:&quot;db.query&quot;,&quot;namespace&quot;:&quot;acme&quot;,&quot;service&quot;:&quot;orders&quot;,&quot;count&quot;:18420,&quot;errors&quot;:3,&quot;total_ns&quot;:9210000000,&quot;avg_ns&quot;:500000,
- &quot;p50_ns&quot;:410000,&quot;p99_ns&quot;:2300000,&quot;min_ns&quot;:90000,&quot;max_ns&quot;:8100000}
+<p>The fact that <code>trace</code> results yield JSON means you can filter, reshape, chart
+or alert on it like any other source:</p>
+<pre><code>trace --spans --name db.query | jq '.p99_ns / 1000000' | alert above 5000 --notify=ops
 </code></pre>
-<p><code>errors</code> is <code>null</code> where the table shows <code>-</code>: no line carried a log level, so
-the count is unknown, not zero. So you can filter, reshape, chart or alert on it
-like any other source:</p>
-<pre><code>trace --spans | jq -r 'select(.p99_ns &gt; 1000000000) | .name'
-trace --spans --name db.query | jq '.p99_ns / 1000000' | alert above 250 --notify=ops
-</code></pre>
-<p>The second line is a cron-ready check that pages when <code>db.query</code>'s 99th percentile
-passes 250ms.</p>
-<h3 id="what-counts-as-a-span">What counts as a span</h3>
-<p>A finished span is a row with a <code>DURATION_NS</code>; it counts toward <code>COUNT</code> and the
-timings. A span's start line has no duration and isn't counted. A row at level
-<code>ERROR</code> that names a span is a span error and counts toward <code>ERRORS</code>. A source
-with no span rows, such as one that logs plain text without the SDK or a schema
-that extracts spans, has nothing for <code>trace --spans</code> to find.</p>
-<h3 id="not-supported">Not supported</h3>
-<ul>
-<li>More than one trace ID per call, or a partial ID or pattern. The ID is
-matched whole.</li>
-<li>Following a trace live (<code>trace -f</code>), or narrowing by time with an option. Use
-<code>range</code> for time, and pipe to <code>grep</code> or <code>jq</code> for the rest.</li>
-<li>More than one scope per call.</li>
-<li><code>--samples</code> without a span name, and <code>--name</code> together with <code>--id</code>.</li>
-<li>Merging a span name across services: <code>trace --spans</code> always groups by service.</li>
-<li>Self time in <code>trace --spans</code> without <code>--id</code>; use <code>trace --spans --id &lt;id&gt;</code> for
-that.</li>
-</ul>
-<p>A trace ID is passed with <code>--id</code>. A bare word is a scope, so <code>trace 4bf92f3577b34da6a3ce929d0e0e4736</code> fails with <code>unknown source: 4bf9…</code>.</p>
-<p>Other options are rejected with <code>trace: unknown option &lt;flag&gt;</code>.</p>
+<p>Throw that in a <a href="/manual/crons">cron</a> and you get paged if the 99th percentile of you
+queries creeps past five seconds.</p>
 `,
 } as const;
 

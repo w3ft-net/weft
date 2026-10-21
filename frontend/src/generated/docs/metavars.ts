@@ -7,20 +7,15 @@ const metavars = {
   category: "weft-shell",
   order: 57,
   headings: [
-    { level: 2, id: "semantics", text: "Semantics" },
-    { level: 2, id: "naming", text: "Naming" },
-    { level: 2, id: "speed", text: "Speed" },
   ],
   html: `<h1 id="meta-variables">Meta-variables</h1>
-<p>Each stored row carries a fixed set of indexed columns beside its text and JSON
-payload. Meta-variables expose them in awk and jq. Filtering on one is the
-fast path: weft skips data that can't match instead of parsing every row.</p>
+<p>Each stored row carries a fixed set of indexed columns beside its text and/or JSON
+payload. They are exposed to AWK and jq under the variable names below.</p>
 <table>
 <thead>
 <tr>
 <th>awk</th>
 <th>jq</th>
-<th>Column</th>
 <th>Source</th>
 </tr>
 </thead>
@@ -28,165 +23,95 @@ fast path: weft skips data that can't match instead of parsing every row.</p>
 <tr>
 <td><code>NAMESPACE</code></td>
 <td><code>$namespace</code></td>
-<td><code>namespace</code></td>
 <td>the <code>&lt;namespace&gt;</code> path segment / agent token's namespace</td>
 </tr>
 <tr>
 <td><code>SERVICE</code></td>
 <td><code>$service</code></td>
-<td><code>service</code></td>
 <td>source declaration, log filename, or HTTP ingest payload</td>
 </tr>
 <tr>
 <td><code>KIND</code></td>
 <td><code>$kind</code></td>
-<td><code>kind</code></td>
 <td>the stream kind (<code>main</code>, <code>heartbeats</code>, <code>metrics</code>, <code>runtime</code>)</td>
 </tr>
 <tr>
 <td><code>HOST</code> <em>(alias <code>INSTANCE</code>)</em></td>
 <td><code>$host</code> <em>(alias <code>$instance</code>)</em></td>
-<td><code>instance</code></td>
 <td>the agent's hostname</td>
 </tr>
 <tr>
 <td><code>LEVEL</code></td>
 <td><code>$level</code></td>
-<td><code>level</code></td>
 <td>schema-extracted from the row</td>
 </tr>
 <tr>
 <td><code>TS</code></td>
 <td><code>$ts</code></td>
-<td><code>ts</code></td>
 <td>schema-extracted from the row</td>
 </tr>
 <tr>
 <td><code>DEPLOYMENT</code></td>
 <td><code>$deployment</code></td>
-<td><code>deployment</code></td>
 <td>weftd <code>deployment:</code> config (or k8s/ASG)</td>
 </tr>
 <tr>
 <td><code>ENV</code></td>
 <td><code>$env</code></td>
-<td><code>env</code></td>
 <td>bound to the agent token at mint time</td>
 </tr>
 <tr>
 <td><code>VERSION</code></td>
 <td><code>$version</code></td>
-<td><code>version</code></td>
-<td>weftd <code>metavariables.version:</code></td>
+<td>weftd <code>metavariables.version</code></td>
 </tr>
 <tr>
 <td><code>REGION</code></td>
 <td><code>$region</code></td>
-<td><code>region</code></td>
 <td>cloud metadata probe at agent startup</td>
-</tr>
-<tr>
-<td><code>CLUSTER</code></td>
-<td><code>$cluster</code></td>
-<td><code>cluster</code></td>
-<td>weftd k8s mode</td>
-</tr>
-<tr>
-<td><code>K8S_NAMESPACE</code></td>
-<td><code>$k8s_namespace</code></td>
-<td><code>k8s_namespace</code></td>
-<td>weftd k8s mode</td>
-</tr>
-<tr>
-<td><code>POD</code></td>
-<td><code>$pod</code></td>
-<td><code>pod</code></td>
-<td>weftd k8s mode</td>
-</tr>
-<tr>
-<td><code>CONTAINER</code></td>
-<td><code>$container</code></td>
-<td><code>container</code></td>
-<td>weftd k8s mode</td>
 </tr>
 <tr>
 <td><code>NODE</code></td>
 <td><code>$node</code></td>
-<td><code>node</code></td>
-<td>weftd <code>metavariables.node:</code> (never auto-derived)</td>
+<td>weftd <code>metavariables.node</code></td>
 </tr>
 <tr>
 <td><code>TRACE_ID</code></td>
 <td><code>$trace_id</code></td>
-<td><code>trace_id</code></td>
 <td>the SDK's trace ID, or schema-extracted from the row</td>
 </tr>
 <tr>
 <td><code>SPAN_NAME</code></td>
 <td><code>$span_name</code></td>
-<td><code>span_name</code></td>
 <td>on a span's lines, from the SDK header or the schema</td>
 </tr>
 <tr>
 <td><code>SPAN_ID</code></td>
 <td><code>$span_id</code></td>
-<td><code>span_id</code></td>
 <td>on a span's lines, from the SDK header or the schema</td>
 </tr>
 <tr>
 <td><code>PARENT_SPAN_ID</code></td>
 <td><code>$parent_span_id</code></td>
-<td><code>parent_span_id</code></td>
 <td>on a span's lines, the span that started it</td>
 </tr>
 <tr>
 <td><code>DURATION_NS</code></td>
 <td><code>$duration_ns</code></td>
-<td><code>duration_ns</code></td>
 <td>on the line that ends a span, its duration in nanoseconds</td>
 </tr>
 <tr>
 <td><code>EVENT_ID</code></td>
 <td><code>$event_id</code></td>
-<td><code>event_id</code></td>
 <td>shared by the lines of one multi-line event</td>
 </tr>
 <tr>
 <td><code>LINE_NO</code></td>
 <td><code>$line_no</code></td>
-<td><code>line_no</code></td>
 <td>the line's 0-based position within its event</td>
 </tr>
 </tbody>
 </table>
-<h2 id="semantics">Semantics</h2>
-<ul>
-<li>A row without a dimension carries an empty string: <code>ENV == &quot;prod&quot;</code> does not
-match it, <code>ENV != &quot;prod&quot;</code> does. In jq <code>$line_no</code> and <code>$duration_ns</code> are
-numbers (<code>$duration_ns</code> is null on a row without one); the rest are strings.</li>
-<li><code>EVENT_ID</code> / <code>LINE_NO</code> tie together the lines of a multi-line event (a stack
-trace): each line is its own row, sharing an <code>EVENT_ID</code>. A one-line event is
-line 0 with an empty <code>EVENT_ID</code>, so <code>LINE_NO == 0</code> selects the first line of
-every event and <code>EVENT_ID != &quot;&quot;</code> only lines of multi-line events.</li>
-<li><code>NAMESPACE</code> is weft's token grouping (the <code>/log/&lt;namespace&gt;/...</code> segment).
-The Kubernetes namespace is <code>K8S_NAMESPACE</code>.</li>
-<li><code>REGION</code>, <code>DEPLOYMENT</code>, <code>HOST</code>, <code>CLUSTER</code> and <code>POD</code> are query-time
-dimensions, not path segments. For which dimensions appear in the path, see
-<a href="/manual/introduction#paths">Paths</a>.</li>
-</ul>
-<h2 id="naming">Naming</h2>
-<p>awk names are bare uppercase globals (<code>ENV</code>, <code>POD</code>) — never <code>$ENV</code>, which in
-awk means &quot;field number ENV&quot;. jq names are lowercase variables (<code>$env</code>,
-<code>$pod</code>). <code>$pod</code> is always the indexed column and <code>.pod</code> always a key in the
-row's JSON payload, even when a producer writes <code>Pod</code> or <code>POD</code>. A jq program
-that rebinds a name (<code>. as $env | ...</code>) reads its own value.</p>
-<h2 id="speed">Speed</h2>
-<p>Meta-variable filters are fast: <code>awk 'ENV == &quot;prod&quot;'</code>, <code>awk 'POD ~ &quot;api-7f9b&quot;'</code>,
-<code>jq 'select($level == &quot;ERROR&quot;)'</code>. Anything else reads and parses every row in
-the time range: <code>jq 'select(.feature_flag == &quot;abc&quot;)'</code>, awk's numbered fields
-(<code>$3 == &quot;POST&quot;</code>). A pipeline can mix both; the meta-variable filters narrow the
-data first and the rest runs on what remains. For a dimension you query
-constantly, ask for it to be indexed rather than filtering on the payload.</p>
 `,
 } as const;
 
