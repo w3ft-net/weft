@@ -105,7 +105,7 @@ func TestRefreshFromStore_SyncsLaunchBookkeeping(t *testing.T) {
 	entry.LaunchAttempts = 0
 	entry.mu.Unlock()
 
-	newLeader.RefreshFromStore()
+	newLeader.RefreshFromStore(false)
 
 	entry.mu.RLock()
 	az, stripeIdx, attempts := entry.AZ, entry.StripeIndex, entry.LaunchAttempts
@@ -162,7 +162,7 @@ func TestRecordIngestFailure_PersistsAcrossCoordinators(t *testing.T) {
 	if err := leader.LoadFromStore(noReconstruct); err != nil {
 		t.Fatalf("LoadFromStore (leader): %v", err)
 	}
-	leader.RefreshFromStore()
+	leader.RefreshFromStore(false)
 
 	entry := leader.Get("shard-ingest-failures")
 	if entry == nil {
@@ -179,7 +179,7 @@ func TestRecordIngestFailure_PersistsAcrossCoordinators(t *testing.T) {
 	// doesn't see a stale non-zero count and refuse to re-admit a shard
 	// that's actually healthy again.
 	ingestRouter.ResetIngestFailures("shard-ingest-failures")
-	leader.RefreshFromStore()
+	leader.RefreshFromStore(false)
 	entry.mu.RLock()
 	got = entry.IngestFailures
 	entry.mu.RUnlock()

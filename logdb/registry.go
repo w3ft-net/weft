@@ -215,6 +215,9 @@ type ShardRegistry struct {
 	entries map[string]*Shard
 	robin   atomic.Uint64 // round-robin counter for write distribution
 	store   RegistryStore // optional persistence (nil in tests)
+	// reconstruct is LoadFromStore's live-handle builder, kept so
+	// RefreshFromStore attaches a shard it adopts the same way boot does.
+	reconstruct func(sh *Shard) (shard.Shard, error)
 }
 
 // NewShardRegistry creates an empty registry.
@@ -340,7 +343,18 @@ func (r *ShardRegistry) TouchHeartbeat(entry *Shard) {
 // manual edits, out-of-band state changes, or PersistState calls
 // from the heartbeat path that clobber a field changed underneath
 // all get corrected within one tick.
-func (r *ShardRegistry) RefreshFromStore() {
+//
+// A row the registry doesn't hold is adopted, loaded as LoadFromStore
+// would: only the shard-fsm-leader mints, so every other coordinator (and
+// a newly-elected leader) learns of a shard minted after its boot here.
+// Without it a follower never routes to a new cohort and DLQs every row
+// once the old one rotates out (the 2026-10-18 outage).
+//
+// dropDeleted removes entries whose row is gone. Only non-leaders pass it:
+// the leader is the one writer that deletes rows and removes its own entry
+// as it does (onEnterGone), and pruning there would race MintShard, whose
+// entry lands in the map before its row is written.
+func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 	if r.store == nil {
 		return
 	}
@@ -352,9 +366,35 @@ func (r *ShardRegistry) RefreshFromStore() {
 	svcByShard, svcOK := r.servicesByShard()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if dropDeleted {
+		inStore := make(map[string]bool, len(fresh))
+		for _, f := range fresh {
+			inStore[f.ID] = true
+		}
+		for id, e := range r.entries {
+			if inStore[id] {
+				continue
+			}
+			e.mu.Lock()
+			if e.Live != nil {
+				e.Live.Close()
+			}
+			e.mu.Unlock()
+			delete(r.entries, id)
+			weftsdk.Infof(context.Background(), "registry: dropped shard %s (its record was deleted)", id)
+		}
+	}
 	for _, f := range fresh {
 		entry, ok := r.entries[f.ID]
 		if !ok {
+			if svcOK {
+				f.Services = svcByShard[f.ID]
+			}
+			if r.reconstruct != nil {
+				f.Live, _ = r.reconstruct(f)
+			}
+			r.entries[f.ID] = f
+			weftsdk.Infof(context.Background(), "registry: adopted shard %s (%s) from store", f.ID, f.State)
 			continue
 		}
 		entry.mu.Lock()
@@ -444,6 +484,7 @@ func (r *ShardRegistry) servicesByShard() (map[string][]store.ShardService, bool
 // rotate-at-WindowEnd in particular). See
 // coordinator/zombie_repro_test.go for the cascade.
 func (r *ShardRegistry) LoadFromStore(reconstruct func(sh *Shard) (shard.Shard, error)) error {
+	r.reconstruct = reconstruct
 	if r.store == nil {
 		return nil
 	}

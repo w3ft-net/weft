@@ -720,7 +720,7 @@ func (p *Provisioner) OnboardService(namespaceID uint, service string) error {
 // into its own bucket) is disabled pending the redesign in
 // docs/plans/bucket-split-policy.md.
 func (p *Provisioner) check(ctx context.Context) {
-	p.registry.RefreshFromStore()
+	p.registry.RefreshFromStore(!p.isLeader())
 
 	// Service-drift: a service onboarded after a shard christened isn't on
 	// its stamp yet. The FSM cascade is deliberately lifecycle-only, so

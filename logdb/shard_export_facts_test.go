@@ -288,7 +288,7 @@ func TestRefreshFromStore_SyncsExportFacts(t *testing.T) {
 	_ = ss.SetExportInstance("s-test", "i-exp-7")
 	_ = db
 
-	reg.RefreshFromStore()
+	reg.RefreshFromStore(false)
 
 	entry.mu.RLock()
 	defer entry.mu.RUnlock()

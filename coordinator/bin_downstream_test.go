@@ -22,6 +22,9 @@ func committedInteriorFixture(t *testing.T) (*Coordinator, *store.Store, string,
 	}
 	adb := db.DB().WithContext(store.WithoutTenantScope(context.Background()))
 	t.Cleanup(func() {
+		// The fixture's shard row (shard_services cascades). Left behind, it
+		// is a phantom INGESTING shard for every later test on this pool slot.
+		adb.Exec(`DELETE FROM shard_records WHERE id = 'interior-test'`)
 		adb.Unscoped().Where("org_id = ?", org.ID).Delete(&store.ShellFunction{})
 		adb.Unscoped().Where("org_id = ?", org.ID).Delete(&store.Namespace{})
 		adb.Exec(`DELETE FROM organizations WHERE id = ?`, org.ID)

@@ -299,6 +299,88 @@ func TestProvisioner_Coordination_RestartReconnect(t *testing.T) {
 	}
 }
 
+// TestProvisioner_Coordination_FollowerRoutesToShardMintedAfterBoot pins the
+// 2026-10-18 prod outage: a follower coordinator booted, then the leader
+// minted and promoted the next window's cohort. The follower's
+// RefreshFromStore only updated entries it already held, and
+// ProcessHeartbeat drops heartbeats for unknown shard ids, so the new
+// cohort never entered the follower's registry. Once the old cohort left
+// INGESTING, every row the follower received was DLQ'd ("no shard serves
+// this service") for two days.
+func TestProvisioner_Coordination_FollowerRoutesToShardMintedAfterBoot(t *testing.T) {
+	db := openSMTestStore(t)
+	seedDefaultBucket(t, db, 1, time.Hour)
+	ctx := context.Background()
+
+	// The follower boots first, before the shard exists. Built by hand
+	// rather than with newFSMTestProvisioner: routing judges liveness by
+	// the wall clock (isStale), so the follower must keep its default clock
+	// instead of the fixture's pinned instant. It drives no FSMs.
+	reg := NewShardRegistry()
+	reg.SetStore(ShardStore{db})
+	if err := reg.LoadFromStore(noReconstruct); err != nil {
+		t.Fatalf("follower LoadFromStore: %v", err)
+	}
+	follower := NewProvisioner(reg, nil, ProvisionerConfig{PollInterval: time.Second})
+	follower.configurer = &stubConfigurer{}
+	follower.SetStore(db)
+	follower.leading.Store(false)
+
+	leader, launcher := newFSMTestProvisioner(t, db)
+	leader.check(ctx)
+	leader.evalWG.Wait() // shard Evaluates run in the background pool
+	drainLaunches(t, leader, launcher, 1)
+	simulateHeartbeats(leader)
+	if leader.registry.TotalIngesting() != 1 {
+		t.Fatalf("setup: leader expected 1 INGESTING, got %d", leader.registry.TotalIngesting())
+	}
+	var shardID, instanceID string
+	for _, e := range leader.registry.Entries() {
+		if e.State == StateIngesting {
+			shardID, instanceID = e.ID, e.InstanceID
+		}
+	}
+
+	org, err := db.FindOrCreateOrg("follower-test")
+	if err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	ns, err := db.FindOrCreateNamespace(org.ID, "anterior")
+	if err != nil {
+		t.Fatalf("namespace: %v", err)
+	}
+	if err := db.AddShardService(shardID, ns.ID, "django"); err != nil {
+		t.Fatalf("stamp service: %v", err)
+	}
+
+	// The shard keeps beating; its row is what the follower's sweep reads.
+	if err := db.RecordHeartbeat(&store.ShardHeartbeat{
+		ShardID:    shardID,
+		InstanceID: instanceID,
+		Addr:       instanceID + ":9000",
+		State:      "INGESTING",
+	}); err != nil {
+		t.Fatalf("record heartbeat: %v", err)
+	}
+
+	// The follower's provisioner tick, twice, in production order.
+	for i := 0; i < 2; i++ {
+		follower.adoptFromHeartbeats()
+		follower.check(ctx)
+	}
+
+	if follower.IngestingShard(ns.ID, "django") == nil {
+		e := follower.registry.Get(shardID)
+		if e == nil {
+			t.Fatalf("follower never adopted %s — every row it receives is DLQ'd", shardID)
+		}
+		e.mu.RLock()
+		defer e.mu.RUnlock()
+		t.Fatalf("follower has %s but won't route to it: state=%s live=%v stale=%v (last beat %v) services=%v",
+			shardID, e.State, e.Live != nil, e.isStale(), e.LastHeartbeatAt, e.Services)
+	}
+}
+
 // ── small helpers ───────────────────────────────────────────────
 
 func (l *inProcLauncher) launchCountSafe() int {

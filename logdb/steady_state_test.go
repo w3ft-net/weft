@@ -48,13 +48,43 @@ func TestRefreshFromStore_PicksUpExternalDBChanges(t *testing.T) {
 		t.Fatal("in-memory entry should NOT reflect DB edit before refresh")
 	}
 
-	reg.RefreshFromStore()
+	reg.RefreshFromStore(false)
 
 	// After refresh: in-memory matches the DB edit, so the next FSM tick
 	// sees the closed window and rotates the shard. (The rotation itself
 	// is covered by bucketsm_test; here we only assert the refresh lands.)
 	if got := reg.Get("shard-legacy").WindowEnd; !got.Equal(closedEnd) {
 		t.Fatalf("post-refresh WindowEnd: got %v want %v", got, closedEnd)
+	}
+}
+
+// TestRefreshFromStore_DropsDeletedRowsOnlyWhenAsked pins the follower half
+// of shard removal: the leader deletes a GONE shard's row and its own entry
+// (onEnterGone), but a follower only learns of it from the store. With
+// dropDeleted it lets the entry go and closes its handle; without it (the
+// leader's refresh) the entry stays, since a just-minted shard is in the
+// leader's map before its row is written.
+func TestRefreshFromStore_DropsDeletedRowsOnlyWhenAsked(t *testing.T) {
+	fake := newFakeRegistryStore()
+	reg := NewShardRegistry()
+	reg.SetStore(fake)
+	live := &fakeArchivableShard{id: "shard-gone"}
+	reg.Add(&Shard{ID: "shard-gone", BucketID: 1, State: StateArchived, Live: live})
+	fake.mu.Lock()
+	delete(fake.records, "shard-gone")
+	fake.mu.Unlock()
+
+	reg.RefreshFromStore(false)
+	if reg.Get("shard-gone") == nil {
+		t.Fatal("leader refresh must not drop an entry whose row is missing")
+	}
+
+	reg.RefreshFromStore(true)
+	if reg.Get("shard-gone") != nil {
+		t.Fatal("follower refresh should drop an entry whose row was deleted")
+	}
+	if !live.closed {
+		t.Error("dropped entry's live handle was not closed")
 	}
 }
 
@@ -81,7 +111,7 @@ func TestRefreshFromStore_PreservesShardPointer(t *testing.T) {
 	fake.records["shard-x"] = rec
 	fake.mu.Unlock()
 
-	reg.RefreshFromStore()
+	reg.RefreshFromStore(false)
 
 	entry := reg.Get("shard-x")
 	if entry.Tier != "large" {
