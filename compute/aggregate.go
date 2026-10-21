@@ -33,6 +33,10 @@ func newAggregator(fn string, sink func(*pb.ResultRow) bool) (rowAggregator, err
 	switch fn {
 	case planner.AggregateSpans:
 		return &spanAggregator{sink: sink, groups: map[spanKey]*spanGroup{}}, nil
+	case planner.AggregateTraceIDs:
+		return &traceIDsAggregator{sink: sink, last: map[string]int64{}}, nil
+	case planner.AggregateTraceList:
+		return &traceListAggregator{sink: sink, groups: map[string]*traceGroup{}}, nil
 	case planner.AggregateSpanRows, planner.AggregateSpanSamples:
 		return &spanRowAggregator{fn: fn, sink: sink}, nil
 	case planner.AggregateLines, planner.AggregateDistinct, planner.AggregateCountDistinct:

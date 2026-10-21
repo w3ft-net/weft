@@ -1,18 +1,53 @@
 ---
-id: manual-alerting-strategies
-title: Alerting strategies
+id: manual-alerts
+title: Alerts
+shell:
+  const: HelpAlerts
+  topics:
+    - "help alerts"
+    - "man alerts"
 web:
-  section: alerting-strategies
+  section: alerts
   category: analysis-alerting
-  order: 53
+  order: 51
 ---
 
-This page is the catalogue of *shapes* an alert can take in weft —
+An alert evaluates a value from stdin against a condition.
+When the condition holds, `alert` writes the alert message to stderr — in a
+cron, that stderr drives incidents and notifications.
+When the condition does not hold, stdin passes through to stdout
+unchanged.
+`alert` must be the last stage of a pipeline, and the last (or only)
+command of a script.
+
+If the pipeline ahead of `alert` fails (an unknown source, a bad stage),
+the alert is not evaluated: the shell shows the error, and a cron run is
+recorded with status `error` and opens no incident. Empty output from a
+pipeline that ran (a `grep` with no match) counts as empty input, and
+`absent` fires on it.
+
+## Conditions
+
+- `above <N>` — value greater than N
+- `below <N>` — value less than N
+- `eq <N>`, `neq <N>`
+- `changed` — value differs from previous run
+- `absent` — no input received in the window
+- `rising <N>%` — increase over baseline
+- `falling <N>%` — decrease over baseline
+- `any` — fires when stdin is non-empty. It is the default when no
+  condition is given.
+
+See `man alert` for the full grammar, `--duration`, `--average` and `--msg`.
+
+## Strategies
+
+The rest of this page catalogues the *shapes* an alert can take in weft —
 single-cron scalar alerts, multi-row per-tag alerts, composite
 alerts that fire on several conditions at once, and
 aggregated-value alerts over a window. The `alert` builtin's grammar
 lives in `man alert`; the `weft::*` family that backs predicates and
-aggregates lives in **Weft functions**. This page is about which
+aggregates lives in **Weft functions**. This section is about which
 shape fits which monitoring problem.
 
 A cron run reads only the logs from its own schedule interval: a

@@ -44,7 +44,12 @@ var manualCategories = []manualCategory{
 	{
 		ID:      "analysis-alerting",
 		Label:   "Analysis & alerting",
-		Summary: "Trace a request across services, chart results, run pipelines on a schedule with crons, choose an alerting strategy that suits the signal, and pin live queries to dashboards.",
+		Summary: "Trace a request across services, run pipelines on a schedule with crons, understand how alerts work, choose a strategy that suits the signal, route notifications, and pin live queries to dashboards.",
+	},
+	{
+		ID:      "command-reference",
+		Label:   "Command reference",
+		Summary: "Man pages for the alert, chart and dashboard commands: every option and condition.",
 	},
 	{
 		ID:      "customize",

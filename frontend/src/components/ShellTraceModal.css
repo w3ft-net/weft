@@ -86,8 +86,8 @@
 
 .shell-trace-modal-error { color: var(--red); }
 
-/* Gap mode (bare `trace <id>`): a flat list mirroring theme's 3-column
-   ANSI layout — bar, service badge, message. */
+/* Gap mode (bare `trace <id>`): a flat list mirroring theme's ANSI
+   layout — gap time, bar, service badge, message. */
 .shell-trace-gap-list {
   font-size: 12px;
   color: var(--text-primary);
@@ -102,6 +102,13 @@
 .shell-trace-gap-passthrough {
   color: var(--text-dim);
   padding: 4px 0;
+}
+
+.shell-trace-gap-time {
+  flex: 0 0 7ch;
+  text-align: right;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .shell-trace-gap-bar-col {
@@ -194,3 +201,35 @@
 }
 
 .shell-trace-samples-traceid { color: var(--text-dim); }
+
+/* List mode (bare `trace`): the recent traces, newest first. A row opens that
+   trace in the same modal. */
+.shell-trace-list-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.shell-trace-list-table th {
+  text-align: left;
+  color: var(--text-bright);
+  font-weight: 700;
+  padding: 0 1ch;
+}
+
+.shell-trace-list-table td {
+  padding: 0 1ch;
+  white-space: nowrap;
+}
+
+.shell-trace-list-row { cursor: pointer; }
+.shell-trace-list-row:hover td { background: var(--bg-elevated); }
+
+.shell-trace-list-root,
+.shell-trace-list-services {
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shell-trace-list-services { color: var(--text-dim); }

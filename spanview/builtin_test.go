@@ -9,19 +9,25 @@ func TestParseSpansLine(t *testing.T) {
 		wantTitle    string
 		wantOK       bool
 	}{
-		// Phase 1: `trace <id> --spans`.
-		{[]string{"trace", "abc-123", "--spans"}, "trace abc-123 --spans", "abc-123", true},
-		{[]string{"trace", "--spans", "abc-123"}, "trace abc-123 --spans", "abc-123", true},
-		{[]string{"trace", "abc-123"}, "", "", false},                              // no --spans: falls through to plain trace
-		{[]string{"trace", "abc-123", "def-456", "--spans"}, "", "", false},        // wrong arity
-		{[]string{"trace", "--spans"}, "", "", false},                              // no id
-		{[]string{"trace", "abc-123", "--spans", "|", "grep", "x"}, "", "", false}, // piped
+		// One request's breakdown: `trace --spans --id <id>`.
+		{[]string{"trace", "--spans", "--id", "abc-123"}, "trace --spans --id abc-123", "abc-123", true},
+		{[]string{"trace", "--id", "abc-123", "--spans"}, "trace --spans --id abc-123", "abc-123", true},
+		{[]string{"trace", "--id", "abc-123", "--spans", "acme/api"}, "trace --spans --id abc-123 acme/api", "abc-123", true},
+		{[]string{"trace", "--id", "abc-123"}, "", "", false},                              // no --spans: plain lines
+		{[]string{"trace", "--spans", "--id"}, "", "", false},                              // no id given
+		{[]string{"trace", "--spans", "--id", "abc-123", "|", "grep", "x"}, "", "", false}, // piped
 
-		// Phase 2: `trace spans [name]`.
-		{[]string{"trace", "spans"}, "trace spans", "all spans", true},
-		{[]string{"trace", "spans", "shard.Query"}, "trace spans shard.Query", "shard.Query", true},
-		{[]string{"trace", "spans", "shard.Query", "extra"}, "", "", false}, // wrong arity
-		{[]string{"trace", "spans", "shard.Query", "|", "grep", "x"}, "", "", false},
+		// Operations across requests: `trace --spans [--name <span>] [scope]`.
+		{[]string{"trace", "--spans"}, "trace --spans", "all spans", true},
+		{[]string{"trace", "--spans", "acme/api"}, "trace --spans acme/api", "all spans in acme/api", true},
+		{[]string{"trace", "--spans", "--name", "shard.Query"}, "trace --spans --name shard.Query", "shard.Query", true},
+		{[]string{"trace", "--spans", "--name", "shard.Query", "extra", "more"}, "", "", false}, // two scopes
+		{[]string{"trace", "--spans", "--name", "shard.Query", "|", "grep", "x"}, "", "", false},
+		{[]string{"trace", "--spans", "--name", "shard.Query", "--samples"}, "", "", false}, // the samples list is not a view of its own
+
+		// Not views: the recent-traces list and one request's lines.
+		{[]string{"trace"}, "", "", false},
+		{[]string{"trace", "acme"}, "", "", false},
 
 		{[]string{"cat", "warp.log"}, "", "", false},
 		{[]string{}, "", "", false},

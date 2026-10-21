@@ -73,10 +73,10 @@ func TestSDKWrittenSpansRollUp(t *testing.T) {
 		sdkSpanRow(7, "api", "db.query", "s3", "s1", "ERROR", 0, errorBody()),
 	})
 	b := newSpanShard(t, "span-b", []*pb.LogRow{
-		sdkSpanRow(6, "worker", "db.query", "s4", "s1", "INFO", 15_000_000, doneBody()),
+		sdkSpanRow(6, "api", "db.query", "s4", "s1", "INFO", 15_000_000, doneBody()),
 	})
 
-	rows := theme.RenderSpanAggregate(runSpanQuery(t, "trace spans", a, b))
+	rows := theme.RenderSpanAggregate(runSpanQuery(t, "trace --spans", a, b))
 	if len(rows) != 2 {
 		t.Fatalf("rolled up %d span names from SDK-written rows, want 2 (api.handle, db.query): %+v", len(rows), rows)
 	}
@@ -95,12 +95,12 @@ func TestSDKWrittenSpansRollUp(t *testing.T) {
 	}
 }
 
-func TestSpansByService(t *testing.T) {
+func TestSpansAreGroupedByService(t *testing.T) {
 	a := newSpanShard(t, "span-svc-a", []*pb.LogRow{
 		sdkSpanRow(5, "api", "db.query", "s2", "", "INFO", 5_000_000, doneBody()),
 		sdkSpanRow(6, "worker", "db.query", "s3", "", "INFO", 15_000_000, doneBody()),
 	})
-	rows := theme.RenderSpanAggregate(runSpanQuery(t, "trace spans --by service", a))
+	rows := theme.RenderSpanAggregate(runSpanQuery(t, "trace --spans", a))
 	if len(rows) != 2 || rows[0].Label != "acme/api" || rows[1].Label != "acme/worker" {
 		t.Fatalf("rows = %+v, want one per service", rows)
 	}
@@ -116,7 +116,7 @@ func TestSpanPercentilesMergeAcrossShards(t *testing.T) {
 			rowsB = append(rowsB, row)
 		}
 	}
-	rows := theme.RenderSpanAggregate(runSpanQuery(t, "trace spans", newSpanShard(t, "pa", rowsA), newSpanShard(t, "pb", rowsB)))
+	rows := theme.RenderSpanAggregate(runSpanQuery(t, "trace --spans", newSpanShard(t, "pa", rowsA), newSpanShard(t, "pb", rowsB)))
 	if len(rows) != 1 || rows[0].Count() != 1000 {
 		t.Fatalf("rows = %+v", rows)
 	}
@@ -137,7 +137,7 @@ func TestSpanRowsOfOneTraceKeepSelfTime(t *testing.T) {
 		sdkSpanRow(10, "api", "api.handle", "p", "", "INFO", 10_000_000, doneBody()),
 		sdkSpanRow(8, "api", "db.query", "c", "p", "INFO", 4_000_000, doneBody()),
 	})
-	rows := theme.RenderSpanRollup(runSpanQuery(t, "trace t1 --spans", a))
+	rows := theme.RenderSpanRollup(runSpanQuery(t, "trace --spans --id t1", a))
 	byName := map[string]theme.SpanRollupRow{}
 	for _, r := range rows {
 		byName[r.Name] = r
@@ -152,7 +152,7 @@ func TestSpanSamplesAreTheSlowest(t *testing.T) {
 	for i := 1; i <= 120; i++ {
 		rows = append(rows, sdkSpanRow(i, "api", "op", fmt.Sprintf("s%d", i), "", "INFO", int64(i)*1_000_000, doneBody()))
 	}
-	got := theme.RenderSpanSamples(runSpanQuery(t, "trace spans op --samples", newSpanShard(t, "samples", rows)), theme.SpanSamplesLimit)
+	got := theme.RenderSpanSamples(runSpanQuery(t, "trace --spans --name op --samples", newSpanShard(t, "samples", rows)), theme.SpanSamplesLimit)
 	if len(got) != theme.SpanSamplesLimit || got[0].Duration != 120*time.Millisecond || got[len(got)-1].Duration != 71*time.Millisecond {
 		t.Fatalf("samples = %d, first %v, last %v; want the %d slowest", len(got), got[0].Duration, got[len(got)-1].Duration, theme.SpanSamplesLimit)
 	}
@@ -163,7 +163,7 @@ func TestSpansPipeIntoJq(t *testing.T) {
 		sdkSpanRow(5, "api", "slow", "s1", "", "INFO", 3_000_000_000, doneBody()),
 		sdkSpanRow(6, "api", "fast", "s2", "", "INFO", 1_000_000, doneBody()),
 	})
-	out := runSpanQuery(t, `trace spans | jq -r 'select(.p99_ns > 1000000000) | .name'`, a)
+	out := runSpanQuery(t, `trace --spans | jq -r 'select(.p99_ns > 1000000000) | .name'`, a)
 	if len(out) != 1 || out[0] != "slow" {
 		t.Fatalf("jq over trace spans = %q, want just slow", out)
 	}
@@ -172,5 +172,42 @@ func TestSpansPipeIntoJq(t *testing.T) {
 func TestSpanSamplesLimit_PlannerMatchesTheme(t *testing.T) {
 	if planner.SpanSamplesLimit != theme.SpanSamplesLimit {
 		t.Errorf("planner asks shards for %d samples, theme shows %d", planner.SpanSamplesLimit, theme.SpanSamplesLimit)
+	}
+}
+
+// A service that records no level can't say whether its spans errored, so
+// the error count is null rather than a zero that looks like good news.
+func TestSpanErrorsAreNullWhenNoLevelIsRecorded(t *testing.T) {
+	ds := newSpanShard(t, "span-nolevel", []*pb.LogRow{
+		sdkSpanRow(1, "legacy", "job.run", "s1", "", "", 5_000_000, doneBody()),
+		sdkSpanRow(2, "api", "api.handle", "s2", "", "INFO", 5_000_000, doneBody()),
+	})
+	lines := runSpanQuery(t, "trace --spans", ds)
+	for _, l := range lines {
+		switch {
+		case strings.Contains(l, `"job.run"`) && !strings.Contains(l, `"errors":null`):
+			t.Errorf("job.run has no level, want errors:null: %s", l)
+		case strings.Contains(l, `"api.handle"`) && !strings.Contains(l, `"errors":0`):
+			t.Errorf("api.handle records levels, want errors:0: %s", l)
+		}
+	}
+	rows := theme.RenderSpanAggregate(lines)
+	if len(rows) != 2 || rows[0].NoLevel || !rows[1].NoLevel {
+		t.Fatalf("rows = %+v", rows)
+	}
+}
+
+func TestSpansScopedToAService(t *testing.T) {
+	ds := newSpanShard(t, "span-scope", []*pb.LogRow{
+		sdkSpanRow(1, "api", "db.query", "s1", "", "INFO", 5_000_000, doneBody()),
+		sdkSpanRow(2, "worker", "db.query", "s2", "", "INFO", 7_000_000, doneBody()),
+	})
+	rows := theme.RenderSpanAggregate(runSpanQuery(t, "trace --spans acme/api", ds))
+	if len(rows) != 1 || rows[0].Label != "acme/api" {
+		t.Fatalf("want only acme/api, got %+v", rows)
+	}
+	rows = theme.RenderSpanAggregate(runSpanQuery(t, "trace --spans acme", ds))
+	if len(rows) != 2 {
+		t.Fatalf("a namespace scope covers both services, got %+v", rows)
 	}
 }

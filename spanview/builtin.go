@@ -1,27 +1,22 @@
 package spanview
 
 import (
-	"strings"
-
 	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/tracecmd"
 )
 
-// Builtin returns a shellcore.BuiltinFunc that intercepts three typed
+// Builtin returns a shellcore.BuiltinFunc that intercepts two typed
 // shapes before they'd otherwise dispatch as a normal query pipeline,
 // entering the SpanView instead:
 //
-//   - `trace <id> --spans`     — Phase 1, per-trace rollup
-//   - `trace spans`            — Phase 2, every span name aggregated
+//   - `trace --spans --id <id>`            — one request's breakdown
+//   - `trace --spans [--name <span>]`      — every span name aggregated
 //     over the current time range
-//   - `trace spans <name>`     — Phase 2, filtered to one span name
 //
-// Any other line returns false so it falls through to the shell's
-// normal pipeline dispatch unchanged: plain `trace <id>` (no --spans
-// among parts), and a piped `trace <id> --spans | grep ...` too —
-// shellcore hands the whole line's fields here including a literal "|"
-// token, so that case fails the arity check below and ships to the
-// server like any other pipeline, --spans stripped there by
-// planner/parse.go same as a one-shot query.
+// either optionally followed by a <namespace>[/<service>] scope. Any other
+// line returns false so it falls through to the shell's normal pipeline
+// dispatch unchanged: see ParseSpansLine for which, and how the CLI then
+// renders them.
 //
 // Wire it via core.RegisterBuiltin("trace", spanview.Builtin(query)).
 func Builtin(query QueryFunc) shellcore.BuiltinFunc {
@@ -39,69 +34,32 @@ func Builtin(query QueryFunc) shellcore.BuiltinFunc {
 }
 
 // ParseSpansLine reports whether parts (a builtin dispatch's
-// whitespace-split command line) matches one of Builtin's three
-// trigger shapes, returning the pipeline to run and the status-bar
-// title. Any other shape — plain `trace <id>`, wrong arity, or a piped
-// line (shellcore hands the whole line's fields here, so a literal "|"
-// token lands in the non-flag remainder and fails the arity checks
-// below) — returns ok=false.
+// whitespace-split command line) is one of the two shapes Builtin enters
+// the SpanView for, returning the pipeline to run and the status-bar
+// title. Any other shape — the recent-traces list, one request's lines,
+// the `--samples` list, a piped line (shellcore hands the whole line's
+// fields here, so a literal "|" token fails the scope check), or a grammar
+// error — returns ok=false.
 //
-// Exported (not just for Builtin's own use) so shell's traceRequestBuiltin
-// (shell/shell.go, the browser's `Trace` hook — see
-// docs/plans/browser-span-view.md) can reuse this exact arg grammar for
-// the rollup/aggregate shapes rather than forking it. shell imports this
-// package directly since it pulls in nothing beyond shellcore/theme,
-// both already part of shell's WASM-safe import graph.
+// Exported (not just for Builtin's own use) so other embedders can reuse
+// the exact arg grammar rather than forking it; the grammar itself lives in
+// the tracecmd package.
 func ParseSpansLine(parts []string) (*ListArgs, bool) {
 	if len(parts) == 0 || parts[0] != "trace" {
 		return nil, false
 	}
-	rest := parts[1:]
-
-	if len(rest) >= 1 && rest[0] == "spans" {
-		var name string
-		byService := false
-		for i := 1; i < len(rest); i++ {
-			switch {
-			case rest[i] == "--by" && i+1 < len(rest) && rest[i+1] == "service":
-				byService = true
-				i++
-			case strings.HasPrefix(rest[i], "-") || name != "":
-				return nil, false
-			default:
-				name = rest[i]
-			}
-		}
-		pipeline, title := "trace spans", "all spans"
-		if name != "" {
-			pipeline, title = pipeline+" "+name, name
-		}
-		if byService {
-			pipeline += " --by service"
-			title += " by service"
-		}
-		return &ListArgs{Pipeline: pipeline, Title: title}, true
-	}
-
-	var spansOnly bool
-	var idParts []string
-	for _, p := range rest {
-		if p == "--spans" {
-			spansOnly = true
-			continue
-		}
-		idParts = append(idParts, p)
-	}
-	if !spansOnly || len(idParts) != 1 {
+	cmd, err := tracecmd.Parse(parts[1:])
+	if err != nil {
 		return nil, false
 	}
-	traceID := idParts[0]
-	return &ListArgs{Pipeline: "trace " + traceID + " --spans", Title: traceID}, true
+	if m := cmd.Mode(); m != tracecmd.ModeBreakdown && m != tracecmd.ModeSpans {
+		return nil, false
+	}
+	return &ListArgs{Pipeline: cmd.String(), Title: cmd.Title()}, true
 }
 
 // Register wires spanview into the given shellcore at construction
-// time — the View plus the `trace` builtin covering both span-display
-// phases.
+// time — the View plus the `trace` builtin covering both span views.
 func Register(c *shellcore.ShellCore, query QueryFunc) {
 	c.RegisterView(NewView())
 	c.RegisterBuiltin("trace", Builtin(query))

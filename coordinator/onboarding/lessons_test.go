@@ -43,17 +43,20 @@ func TestCheckPipeline(t *testing.T) {
 		// 32-lowercase-hex trace ID advances even though it's never
 		// literally equal to Action (which is an illustrative
 		// placeholder, not something any two users would share).
-		{"shell-trace", "trace 0123456789abcdef0123456789abcdef", true},
-		{"shell-trace", "  trace 0123456789abcdef0123456789abcdef  ", true},
+		{"shell-trace", "trace --id 0123456789abcdef0123456789abcdef", true},
+		{"shell-trace", "  trace --id 0123456789abcdef0123456789abcdef  ", true},
 		// The placeholder itself — re-pasted unedited — must NOT match;
 		// that would let a user "succeed" without ever substituting a
 		// real discovered ID.
-		{"shell-trace", "trace <paste the id you copied>", false},
+		{"shell-trace", "trace --id <paste the id you copied>", false},
 		// Malformed IDs: wrong length, uppercase, non-hex, missing arg.
-		{"shell-trace", "trace 0123456789abcdef", false},
-		{"shell-trace", "trace 0123456789ABCDEF0123456789ABCDEF", false},
-		{"shell-trace", "trace 0123456789abcdef0123456789abcdeg", false},
+		{"shell-trace", "trace --id 0123456789abcdef", false},
+		{"shell-trace", "trace --id 0123456789ABCDEF0123456789ABCDEF", false},
+		{"shell-trace", "trace --id 0123456789abcdef0123456789abcdeg", false},
+		{"shell-trace", "trace --id", false},
 		{"shell-trace", "trace", false},
+		// The old positional form is now a namespace scope, not a trace.
+		{"shell-trace", "trace 0123456789abcdef0123456789abcdef", false},
 
 		// Surrounding whitespace is forgiven.
 		{"shell-ls", "  ls /log  ", true},

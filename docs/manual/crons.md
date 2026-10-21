@@ -32,7 +32,7 @@ prompt first, set the window with `range` (see `man range`).
 
 The pipeline's stdout is captured as the cron result — numeric
 values are graphed on the dashboard as sparklines. Alerts are
-dispatched by the `alert` stage (see **Alerting strategies** for
+dispatched by the `alert` stage (see **Alerts** for
 the catalogue of alert shapes, plus `man alert` for the builtin's
 grammar).
 
@@ -68,7 +68,7 @@ hours (`1d`).
 The full reference (value funcs, predicates, stdin comparators,
 caps, numeric-parsing rules) is in **Weft functions**. Patterns
 that combine these into alerts of various shapes — multi-row
-per-tag, composite, anomaly-based — live in **Alerting strategies**.
+per-tag, composite, anomaly-based — live in **Alerts**.
 
 Tier limits (number of crons and minimum schedule interval) vary by
 plan — see the **Account** page for your current caps, or run

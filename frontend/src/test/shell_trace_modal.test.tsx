@@ -2,13 +2,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
-const fetchPipelineLines = vi.fn(() => new Promise<string[]>(() => {})) // stays loading by default
+const fetchPipelineLines = vi.fn((_pipeline?: string) => new Promise<string[]>(() => {})) // stays loading by default
 const reportModalClosed = vi.fn()
 vi.mock('../wasm/network', () => ({
-  fetchPipelineLines: () => fetchPipelineLines(),
+  fetchPipelineLines: (p: string) => fetchPipelineLines(p),
   reportModalClosed: (p: string) => reportModalClosed(p),
 }))
+const listRows = [
+  { TraceID: 't1', StartNs: 0, EndNs: 0, DurNs: 0, Dur: '1.2s', Age: '3m', Lines: 7, Errors: 2, NoLevel: false, Services: ['acme/api', 'acme/orders'], Root: 'GET /orders/812' },
+  { TraceID: 't2', StartNs: 0, EndNs: 0, DurNs: 0, Dur: '5ms', Age: '20s', Lines: 1, Errors: 0, NoLevel: true, Services: null, Root: '' },
+]
 vi.mock('../wasm/traceExports', () => ({
+  parseTraceList: () => listRows,
+  traceIDPipeline: (id: string) => `trace --id ${id}`,
+  samplesPipeline: () => 'trace --spans --name x --samples',
   parseTraceRows: () => [],
   renderSpanRollup: () => [],
   renderSpanAggregate: () => [],
@@ -17,7 +24,7 @@ vi.mock('../wasm/traceExports', () => ({
 
 import ShellTraceModal from '../components/ShellTraceModal'
 
-const spec = { pipeline: 'trace abc', title: 'trace abc', mode: 'gap' as const }
+const spec = { pipeline: 'trace --id abc', title: 'abc', mode: 'gap' as const }
 
 describe('ShellTraceModal dismissal', () => {
   afterEach(() => {
@@ -68,7 +75,7 @@ describe('ShellTraceModal tour report', () => {
     view.unmount()
     await new Promise(r => setTimeout(r, 20))
     expect(reportModalClosed).toHaveBeenCalledTimes(1)
-    expect(reportModalClosed).toHaveBeenCalledWith('trace abc')
+    expect(reportModalClosed).toHaveBeenCalledWith('trace --id abc')
   })
 
   it('does not report a trace that was dismissed before it loaded', () => {
@@ -83,5 +90,56 @@ describe('ShellTraceModal tour report', () => {
     await act(async () => {})
     view.unmount()
     expect(reportModalClosed).not.toHaveBeenCalled()
+  })
+})
+
+// A bare `trace` lists the recent traces; a row opens that trace in the same
+// modal, and Back returns to the list.
+describe('ShellTraceModal trace list', () => {
+  const listSpec = { pipeline: 'trace', title: 'recent traces', mode: 'list' as const }
+
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  it('renders a row per trace, with a - where errors are unknown', async () => {
+    fetchPipelineLines.mockResolvedValueOnce(['row'])
+    render(<ShellTraceModal spec={listSpec} onClose={() => {}} />)
+    await act(async () => {})
+    expect(screen.getByTestId('shell-trace-list-table')).toBeTruthy()
+    const first = screen.getByTestId('shell-trace-list-row-t1')
+    expect(first.textContent).toContain('GET /orders/812')
+    expect(first.textContent).toContain('acme/api, acme/orders')
+    expect(first.textContent).toContain('3m')
+    expect(screen.getByTestId('shell-trace-list-row-t2').textContent).toContain('-')
+  })
+
+  it('opens a trace on click and returns on Back', async () => {
+    fetchPipelineLines.mockResolvedValueOnce(['row'])
+    render(<ShellTraceModal spec={listSpec} onClose={() => {}} />)
+    await act(async () => {})
+
+    fetchPipelineLines.mockResolvedValueOnce([])
+    fireEvent.click(screen.getByTestId('shell-trace-list-row-t1'))
+    await act(async () => {})
+    expect(fetchPipelineLines).toHaveBeenLastCalledWith('trace --id t1')
+    expect(screen.queryByTestId('shell-trace-list-table')).toBeNull()
+    expect(screen.getByRole('heading').textContent).toContain('t1')
+
+    fetchPipelineLines.mockResolvedValueOnce(['row'])
+    fireEvent.click(screen.getByTestId('shell-trace-modal-back-button'))
+    await act(async () => {})
+    expect(fetchPipelineLines).toHaveBeenLastCalledWith('trace')
+    expect(screen.getByTestId('shell-trace-list-table')).toBeTruthy()
+  })
+
+  it('says so when there are no traces', async () => {
+    fetchPipelineLines.mockResolvedValueOnce([])
+    const mod = await import('../wasm/traceExports')
+    vi.spyOn(mod, 'parseTraceList').mockReturnValueOnce([])
+    render(<ShellTraceModal spec={listSpec} onClose={() => {}} />)
+    await act(async () => {})
+    expect(screen.getByText(/no traces in this range/)).toBeTruthy()
   })
 })

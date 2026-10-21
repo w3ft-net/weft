@@ -13,17 +13,15 @@ import builtins from './builtins';
 import fastPipelines from './fast-pipelines';
 import metavars from './metavars';
 import tmp from './tmp';
-import cookbook from './cookbook';
 import trace from './trace';
-import chart from './chart';
 import crons from './crons';
-import alert from './alert';
-import weftFuncs from './weft-funcs';
-import alertingStrategies from './alerting-strategies';
+import alerts from './alerts';
 import notify from './notify';
+import weftFuncs from './weft-funcs';
 import dashboards from './dashboards';
+import alert from './alert';
+import chart from './chart';
 import dashboard from './dashboard';
-import alerting from './alerting';
 import scripts from './scripts';
 import sharing from './sharing';
 import git from './git';
@@ -54,7 +52,8 @@ export const manualCategories: readonly ManualCategory[] = [
   { id: "getting-started", label: "Getting started", summary: `Carve out namespaces for your environments and mint the tokens that agents and drains use to authenticate.` },
   { id: "connect-source", label: "Connect a source", summary: `Wire up logs from a host agent (weftd), an AWS CloudWatch log group, a Heroku app, or any custom line format.` },
   { id: "weft-shell", label: "Weft shell", summary: `A bash-like shell over your logs: the Unix builtins that carry over and where they differ, meta-variables, and /tmp scratch space with a cookbook.` },
-  { id: "analysis-alerting", label: "Analysis & alerting", summary: `Trace a request across services, chart results, run pipelines on a schedule with crons, choose an alerting strategy that suits the signal, and pin live queries to dashboards.` },
+  { id: "analysis-alerting", label: "Analysis & alerting", summary: `Trace a request across services, run pipelines on a schedule with crons, understand how alerts work, choose a strategy that suits the signal, route notifications, and pin live queries to dashboards.` },
+  { id: "command-reference", label: "Command reference", summary: `Man pages for the alert, chart and dashboard commands: every option and condition.` },
   { id: "customize", label: "Customize", summary: `Build named weft functions, save reusable scripts, share them across the team, and review their history with git.` },
 ];
 
@@ -72,17 +71,15 @@ export const manualSections: readonly ManualSection[] = [
   fastPipelines,
   metavars,
   tmp,
-  cookbook,
   trace,
-  chart,
   crons,
-  alert,
-  weftFuncs,
-  alertingStrategies,
+  alerts,
   notify,
+  weftFuncs,
   dashboards,
+  alert,
+  chart,
   dashboard,
-  alerting,
   scripts,
   sharing,
   git,

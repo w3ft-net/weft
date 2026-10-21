@@ -175,9 +175,9 @@ Steps 1 to 5 land together, because 5 deletes the code the others replace.
 - **Percentile accuracy.** 1% relative error from a log histogram, or exact
   percentiles with a single-shard fast path and a documented caveat for
   multi-shard ranges?
-- **Per-service breakdown.** Should the aggregate also group by service
-  (`trace spans --by service`), since the same span name in two services is
-  usually two different things? The group-by key is cheap to add now.
+- **Per-service breakdown.** Decided: the aggregate always groups by service
+  (namespace and service are part of the group key), since the same span name in
+  two services is usually two different things. There is no `--by` option.
 - **Retention.** `trace spans` over a long range scans every span row in it.
   Whether to cap the range, as `trace <id>` does by default, or leave it to the
   shell's `range`.

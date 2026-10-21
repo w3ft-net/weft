@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"strconv"
@@ -40,7 +41,9 @@ import (
 // v10: an awk with an exactly-lowering pattern and a print SQL computes
 // (`$3 == "x" { print HOST, $0 }`) is Filter then Project in the shard,
 // not a prefilter plus a compute stage.
-const PlannerVersion = 10
+// v11: the span aggregates group by service and count the rows that carry a
+// level (null errors when none do), and a trace's arguments changed.
+const PlannerVersion = 11
 
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to
@@ -179,6 +182,10 @@ func Lower(pipeline string, customerID int64, tier string, resolveBin BinResolve
 	plan, err := Plan(expanded, customerID, "", sentinelStart, sentinelEnd)
 	if err != nil {
 		return nil, fmt.Errorf("lower: plan: %w", err)
+	}
+	if plan.TraceStats != nil {
+		// The trace list takes two queries; a lowered plan holds one.
+		return nil, errors.New("lower: the recent-traces list runs in two steps and can't be lowered")
 	}
 
 	return &LoweredPlan{

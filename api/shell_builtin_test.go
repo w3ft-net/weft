@@ -121,11 +121,11 @@ func TestShellBuiltin_ExitCodeGatesLessonAdvance(t *testing.T) {
 	}
 }
 
-// `trace <id>` opens a modal. Finishing the command must not move the tour on
+// `trace --id <id>` opens a modal. Finishing the command must not move the tour on
 // (the next prefill would land under the open modal); closing the modal does.
 func TestShellBuiltin_TraceLessonAdvancesOnModalClose(t *testing.T) {
 	setStep, stepNow, report := builtinHarness(t)
-	const line = "trace 0123456789abcdef0123456789abcdef"
+	const line = "trace --id 0123456789abcdef0123456789abcdef"
 
 	setStep("shell-trace")
 	if code := report(map[string]any{"pipeline": line, "exit_code": 0}); code != 204 {

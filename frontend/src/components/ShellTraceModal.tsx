@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchPipelineLines } from '../wasm/network'
 import { useReportModalClosed } from '../lib/useReportModalClosed'
-import { parseTraceRows, renderSpanAggregate, renderSpanRollup, renderSpanSamples, type TraceRow, type SpanRollupRow, type SpanOccurrence } from '../wasm/traceExports'
+import { parseTraceList, parseTraceRows, renderSpanAggregate, renderSpanRollup, renderSpanSamples, samplesPipeline, traceIDPipeline, type TraceListRow, type TraceRow, type SpanRollupRow, type SpanOccurrence } from '../wasm/traceExports'
 import { traceColorFor } from '../lib/traceColors'
 import './ShellTraceModal.css'
 
@@ -11,7 +11,7 @@ import './ShellTraceModal.css'
 export interface TraceSpec {
   pipeline: string
   title: string
-  mode: 'gap' | 'rollup' | 'aggregate'
+  mode: 'list' | 'gap' | 'rollup' | 'aggregate'
 }
 
 interface Props {
@@ -32,10 +32,10 @@ function formatDurationNs(ns: number): string {
   return `${trim(ns / 1_000_000_000)}s`
 }
 
-// ShellTraceModal is the React-side render target for `trace <id>`
-// (Mode "gap"), `trace <id> --spans` (Mode "rollup", Phase 1), and
-// `trace spans [name]` (Mode "aggregate", Phase 2) typed at the
-// browser shell — the browser half of docs/plans/span-display.md's
+// ShellTraceModal is the React-side render target for a bare `trace`
+// (Mode "list", the recent traces), `trace --id <id>` (Mode "gap"),
+// `trace --spans --id <id>` (Mode "rollup"), and `trace --spans
+// [--name <span>]` (Mode "aggregate") typed at the browser shell — the browser half of docs/plans/span-display.md's
 // vim-nav list->samples UX, rendered as a React table instead of an
 // ANSI shellcore.View. It re-fetches spec.pipeline itself (there's no
 // captured upstream snapshot the way `... | chart` has, since `trace`
@@ -49,6 +49,9 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
   const [lines, setLines] = useState<string[] | null>(null)
   const [level, setLevel] = useState<'list' | 'samples'>('list')
   const [focusIdx, setFocusIdx] = useState<number | null>(null)
+  // Clicking a trace in the list opens it in this same modal; Back returns.
+  const [drill, setDrill] = useState<{ pipeline: string; title: string } | null>(null)
+  const active = drill ? { pipeline: drill.pipeline, title: drill.title, mode: 'gap' as const } : spec
 
   // The tour waits for this modal to go away before moving on, but only for
   // a trace that loaded.
@@ -75,7 +78,7 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
     setLevel('list')
     setFocusIdx(null)
     const controller = new AbortController()
-    fetchPipelineLines(spec.pipeline, controller.signal)
+    fetchPipelineLines(active.pipeline, controller.signal)
       .then(ls => { setLines(ls); setLoading(false) })
       .catch(e => {
         // AbortError fires from our own cleanup below — expected under
@@ -90,29 +93,39 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
         setLoading(false)
       })
     return () => controller.abort()
-  }, [spec.pipeline])
+  }, [active.pipeline])
+
+  const listRows = useMemo<TraceListRow[]>(() => {
+    if (active.mode !== 'list' || !lines) return []
+    try {
+      return parseTraceList(lines)
+    } catch (e) {
+      setError(String((e as Error)?.message || e))
+      return []
+    }
+  }, [active.mode, lines])
 
   const gapRows = useMemo<TraceRow[]>(() => {
-    if (spec.mode !== 'gap' || !lines) return []
+    if (active.mode !== 'gap' || !lines) return []
     try {
       return parseTraceRows(lines)
     } catch (e) {
       setError(String((e as Error)?.message || e))
       return []
     }
-  }, [spec.mode, lines])
+  }, [active.mode, lines])
 
   const rollupRows = useMemo<SpanRollupRow[]>(() => {
-    if (spec.mode === 'gap' || !lines) return []
+    if ((active.mode !== 'aggregate' && active.mode !== 'rollup') || !lines) return []
     try {
-      return spec.mode === 'aggregate' ? renderSpanAggregate(lines) : renderSpanRollup(lines)
+      return active.mode === 'aggregate' ? renderSpanAggregate(lines) : renderSpanRollup(lines)
     } catch (e) {
       setError(String((e as Error)?.message || e))
       return []
     }
-  }, [spec.mode, lines])
+  }, [active.mode, lines])
 
-  const singleTrace = spec.mode === 'rollup'
+  const singleTrace = active.mode === 'rollup'
   const maxGapNs = useMemo(
     () => gapRows.reduce((m, r) => (r.IsData && r.GapNs > m ? r.GapNs : m), 0),
     [gapRows],
@@ -133,8 +146,8 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
     setFocusIdx(i)
     setLevel('samples')
     setSamples(null)
-    if (spec.mode !== 'aggregate') return
-    fetchPipelineLines(`trace spans ${rollupRows[i].Name} --samples`)
+    if (active.mode !== 'aggregate') return
+    fetchPipelineLines(samplesPipeline(spec.pipeline, rollupRows[i].Name, rollupRows[i].Label))
       .then(ls => setSamples(renderSpanSamples(ls)))
       .catch(e => setError(String((e as Error)?.message || e)))
   }
@@ -148,12 +161,12 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
       <div className="shell-trace-modal-panel" onClick={e => e.stopPropagation()}>
         <header className="shell-trace-modal-header">
           <h2 className="shell-trace-modal-title">
-            {level === 'samples' && focusRow ? `${spec.title} › ${focusRow.Name}` : spec.title}
+            {level === 'samples' && focusRow ? `${spec.title} › ${focusRow.Name}` : drill ? `${spec.title} › ${drill.title}` : spec.title}
           </h2>
-          {level === 'samples' && (
+          {(level === 'samples' || drill) && (
             <button
               className="shell-trace-modal-back tui-btn"
-              onClick={() => { setLevel('list'); setFocusIdx(null) }}
+              onClick={() => { if (level === 'samples') { setLevel('list'); setFocusIdx(null) } else { setDrill(null) } }}
               data-testid="shell-trace-modal-back-button"
             >
               back
@@ -174,12 +187,14 @@ export default function ShellTraceModal({ spec, onClose }: Props) {
             <div className="shell-trace-modal-loading tui-cursor">loading</div>
           ) : error ? (
             <div className="shell-trace-modal-error" data-testid="shell-trace-modal-error">{error}</div>
-          ) : spec.mode === 'gap' ? (
+          ) : active.mode === 'list' ? (
+            <TraceListView rows={listRows} onSelect={id => setDrill({ pipeline: traceIDPipeline(id), title: id })} />
+          ) : active.mode === 'gap' ? (
             <GapView rows={gapRows} maxGapNs={maxGapNs} />
           ) : level === 'list' ? (
             <RollupListView rows={rollupRows} singleTrace={singleTrace} barAgainst={barAgainst} onSelect={openSamples} />
           ) : (
-            focusRow && <SamplesView occs={spec.mode === 'aggregate' ? samples : (focusRow.Occurrences ?? [])} />
+            focusRow && <SamplesView occs={active.mode === 'aggregate' ? samples : (focusRow.Occurrences ?? [])} />
           )}
         </div>
       </div>
@@ -216,6 +231,9 @@ function GapView({ rows, maxGapNs }: { rows: TraceRow[]; maxGapNs: number }) {
         const pct = maxGapNs > 0 ? Math.min(100, (r.GapNs / maxGapNs) * 100) : 0
         return (
           <div key={i} className="shell-trace-gap-row" data-testid={`shell-trace-gap-row-${i}`}>
+            <div className="shell-trace-gap-time" data-testid={`shell-trace-gap-time-${i}`}>
+              {r.Gap}
+            </div>
             <div className="shell-trace-gap-bar-col">
               <div className="shell-trace-gap-bar" style={{ width: `${pct}%` }} />
             </div>
@@ -227,6 +245,47 @@ function GapView({ rows, maxGapNs }: { rows: TraceRow[]; maxGapNs: number }) {
         )
       })}
     </div>
+  )
+}
+
+function TraceListView({ rows, onSelect }: { rows: TraceListRow[]; onSelect: (id: string) => void }) {
+  if (rows.length === 0) {
+    return <div className="shell-trace-modal-empty">#&nbsp;no traces in this range</div>
+  }
+  return (
+    <table className="shell-trace-list-table" data-testid="shell-trace-list-table">
+      <thead>
+        <tr>
+          <th>AGE</th>
+          <th>DUR</th>
+          <th>LINES</th>
+          <th>ERRORS</th>
+          <th>ROOT</th>
+          <th>SERVICES</th>
+          <th>TRACE</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(r => (
+          <tr
+            key={r.TraceID}
+            className="shell-trace-list-row"
+            onClick={() => onSelect(r.TraceID)}
+            data-testid={`shell-trace-list-row-${r.TraceID}`}
+          >
+            <td className="shell-trace-rollup-num">{r.Age}</td>
+            <td className="shell-trace-rollup-num">{r.Dur}</td>
+            <td className="shell-trace-rollup-num">{r.Lines}</td>
+            <td className={`shell-trace-rollup-num${!r.NoLevel && r.Errors > 0 ? ' shell-trace-rollup-errors' : ''}`}>
+              {r.NoLevel ? '-' : r.Errors}
+            </td>
+            <td className="shell-trace-list-root">{r.Root}</td>
+            <td className="shell-trace-list-services">{(r.Services ?? []).join(', ')}</td>
+            <td className="shell-trace-samples-traceid">{r.TraceID}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }
 
@@ -271,7 +330,7 @@ function RollupListView({
               key={r.Name + r.Label}
               className="shell-trace-rollup-row"
               onClick={() => onSelect(i)}
-              data-testid={`shell-trace-rollup-row-${r.Name}`}
+              data-testid={`shell-trace-rollup-row-${r.Name}${r.Label ? `-${r.Label}` : ''}`}
             >
               <td className="shell-trace-rollup-name">{r.Label ? `${r.Name} (${r.Label})` : r.Name}</td>
               <td className="shell-trace-rollup-bar-cell">
@@ -289,8 +348,8 @@ function RollupListView({
                   <td className="shell-trace-rollup-num">{formatDurationNs(r.Max)}</td>
                 </>
               )}
-              <td className={`shell-trace-rollup-num${r.Errors > 0 ? ' shell-trace-rollup-errors' : ''}`}>
-                {r.Errors}
+              <td className={`shell-trace-rollup-num${!r.NoLevel && r.Errors > 0 ? ' shell-trace-rollup-errors' : ''}`}>
+                {r.NoLevel ? '-' : r.Errors}
               </td>
             </tr>
           )

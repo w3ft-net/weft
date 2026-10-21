@@ -8,13 +8,14 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/warp/pkg/syntax"
 	"github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/internal/timerange"
-	"github.com/graybeardcorp/weft/spanview"
 	"github.com/graybeardcorp/weft/theme"
+	"github.com/graybeardcorp/weft/tracecmd"
 )
 
 // Row is a single result row consumed by the shell. Carries only
@@ -93,9 +94,9 @@ type Shell struct {
 	// dashboard.Register if the FS satisfies dashboard.Provider —
 	// that's the CLI path.
 	Dashboard func(name string)
-	// Trace, when non-nil, takes over `trace <id>`, `trace <id>
-	// --spans`, and `trace spans [name]` instead of registering
-	// spanview's in-terminal View. The browser shell uses this to open
+	// Trace, when non-nil, takes over `trace` (the recent-traces list),
+	// `trace --id <id>`, `trace --spans --id <id>`, and `trace --spans
+	// [--name <span>]` instead of registering spanview's in-terminal View. The browser shell uses this to open
 	// a React modal (list/samples, mirroring spanview's own UX)
 	// instead of rendering ANSI into xterm scrollback. When nil,
 	// ConfigureCore leaves `trace` unregistered — cmd/weft/runner
@@ -341,14 +342,18 @@ func dashboardNavigateBuiltin(navigate func(name string)) shellcore.BuiltinFunc 
 }
 
 // TraceRequest is the payload Shell.Trace receives when the browser
-// shell intercepts a `trace` invocation. Mode distinguishes plain
-// `trace <id>` ("gap", the gap-histogram RenderTraceIfApplicable
-// renders for the CLI) from `trace <id> --spans` ("rollup", Phase 1's
-// single-trace span rollup, which gets the SELF/TOTAL column) from
-// `trace spans [name]` ("aggregate", Phase 2's cross-trace
-// aggregation, which gets the full percentile spread instead — see
-// theme.SpanRollupColumns' singleTrace doc comment for why the two
-// phases render different columns).
+// shell intercepts a `trace` invocation. Mode names the view the browser
+// opens, one per shape of the command (see the tracecmd package):
+//
+//	"list"      a bare `trace`: the recent traces
+//	"gap"       `trace --id <id>`: one request's lines, as the gap-histogram
+//	            RenderTraceIfApplicable renders for the CLI
+//	"rollup"    `trace --spans --id <id>`: one request's span breakdown, with
+//	            the self-time column
+//	"aggregate" `trace --spans [--name <span>]`: operations across requests,
+//	            with the percentile spread instead (see
+//	            theme.SpanRollupColumns' singleTrace doc comment for why the
+//	            two span views render different columns)
 type TraceRequest struct {
 	// Pipeline is the full "trace ..." pipeline to (re-)run — the
 	// browser modal fetches its own rows via the shell's existing
@@ -357,50 +362,43 @@ type TraceRequest struct {
 	// apply: `trace` is never a pipe-stage destination, always the
 	// pipeline's own source command.
 	Pipeline string
-	// Title is the trace ID (gap/rollup) or span name/"all spans"
-	// (aggregate) — the same status-bar text spanview.ListArgs.Title
-	// already carries for the CLI's interactive View.
+	// Title is the status-bar text: see tracecmd.Cmd.Title.
 	Title string
-	// Mode is "gap", "rollup", or "aggregate".
+	// Mode is "list", "gap", "rollup", or "aggregate".
 	Mode string
 }
 
 // traceRequestBuiltin returns a `trace` builtin that forwards the
-// parsed request to the embedder callback instead of entering
-// spanview's in-terminal View or falling through to normal pipeline
-// dispatch (which the CLI's one-shot mode instead recognizes after
-// the fact via isTracePipeline/isSpansPipeline). It reuses
-// spanview.ParseSpansLine for the rollup/aggregate shapes — the exact
-// arg grammar spanview.Builtin itself dispatches on — rather than
-// forking that parsing, and adds one predicate of its own for the
-// plain `trace <id>` shape, which ParseSpansLine deliberately leaves
-// unmatched (spanview.Builtin lets that shape fall through to normal
-// dispatch since the CLI renders it via RenderTraceIfApplicable, not
-// a View).
+// parsed request to the embedder callback instead of falling through to
+// normal pipeline dispatch (which the CLI's one-shot mode instead
+// recognizes after the fact, see RenderTraceIfApplicable). A line that
+// is not exactly one `trace` command — a pipe or redirect after it, a
+// grammar error, or the `--samples` view the browser has no modal for —
+// returns false and dispatches like any other pipeline.
 func traceRequestBuiltin(emit func(TraceRequest)) shellcore.BuiltinFunc {
 	return func(c *shellcore.ShellCore, args []string) bool {
 		if len(args) == 0 || args[0] != "trace" {
 			return false
 		}
-		if listArgs, ok := spanview.ParseSpansLine(args); ok {
-			mode := "rollup"
-			if len(args) > 1 && args[1] == "spans" {
-				mode = "aggregate"
-			}
-			emit(TraceRequest{Pipeline: listArgs.Pipeline, Title: listArgs.Title, Mode: mode})
-			return true
+		cmd, err := tracecmd.Parse(args[1:])
+		if err != nil {
+			return false
 		}
-		// Plain `trace <id>`: exactly one non-flag argument and it
-		// isn't the "spans" sub-verb (which ParseSpansLine already
-		// handles, including its own arity failures like `trace
-		// spans a b`  — falling through here for those would wrongly
-		// treat "spans" as a trace id).
-		if len(args) == 2 && args[1] != "spans" && !strings.HasPrefix(args[1], "-") {
-			traceID := args[1]
-			emit(TraceRequest{Pipeline: "trace " + traceID, Title: traceID, Mode: "gap"})
-			return true
+		var mode string
+		switch cmd.Mode() {
+		case tracecmd.ModeList:
+			mode = "list"
+		case tracecmd.ModeLines:
+			mode = "gap"
+		case tracecmd.ModeBreakdown:
+			mode = "rollup"
+		case tracecmd.ModeSpans:
+			mode = "aggregate"
+		default:
+			return false
 		}
-		return false
+		emit(TraceRequest{Pipeline: cmd.String(), Title: cmd.Title(), Mode: mode})
+		return true
 	}
 }
 
@@ -542,32 +540,25 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	return nil
 }
 
-// isTracePipeline reports whether pipeline's source command is the bare
-// `trace <id>` verb — the shape emitTraceTagged's delimited output is
-// meant for. A trace piped into further stages (`trace <id> | grep ...`)
-// never reaches this path at all (it has compute stages, so the
-// coordinator's zero-stage traceTag branch that emits the delimited
-// format doesn't fire for it), but checking here too means a client-side
-// bug in that routing fails safe — plain rows, not a garbled column
-// layout — rather than silently reformatting something that was never
-// meant for it.
-func isTracePipeline(pipeline string) bool {
-	fields := strings.Fields(pipeline)
-	return len(fields) > 0 && fields[0] == "trace"
-}
-
-// RenderTraceIfApplicable renders result's rows into theme's 3-column
-// gap-histogram display when pipeline is a bare `trace <id>` query and the
-// result hasn't already come back pre-rendered as Text. This is the one
-// place that decision gets made — every client entry point (ExecNonInteractive
-// here, and cmd/weft/runner's interactive REPL) calls it rather than each
-// re-deriving its own copy, which is how the REPL ended up missing this
-// rendering entirely the first time around. termWidth <= 0 falls back to 80,
-// matching pipe-stage chart's existing non-interactive default. Returns
-// (nil, false) when pipeline isn't a trace query, so the caller falls
-// through to its normal Text/Rows handling unchanged.
+// RenderTraceIfApplicable renders result's rows when pipeline is exactly
+// one `trace` command whose output has a table: the recent-traces list, or
+// one request's lines as a 3-column gap-histogram display. It does nothing
+// when the result has already come back pre-rendered as Text, and nothing for
+// a trace piped into further stages (those rows are the user's to shape) or
+// for the span views, which RenderSpanRollupIfApplicable renders. This is the
+// one place that decision gets made — every client entry point
+// (ExecNonInteractive here, and cmd/weft/runner's interactive REPL) calls it
+// rather than each re-deriving its own copy, which is how the REPL ended up
+// missing this rendering entirely the first time around. termWidth <= 0
+// falls back to 80, matching pipe-stage chart's existing non-interactive
+// default. Returns (nil, false) when there is nothing to render, so the
+// caller falls through to its normal Text/Rows handling unchanged.
 func RenderTraceIfApplicable(pipeline string, result *QueryResult, termWidth int) ([]string, bool) {
-	if result == nil || result.Text != "" || !isTracePipeline(pipeline) {
+	if result == nil || result.Text != "" {
+		return nil, false
+	}
+	cmd, ok := tracecmd.ParseLine(pipeline)
+	if !ok || (cmd.Mode() != tracecmd.ModeLines && cmd.Mode() != tracecmd.ModeList) {
 		return nil, false
 	}
 	if termWidth <= 0 {
@@ -576,66 +567,32 @@ func RenderTraceIfApplicable(pipeline string, result *QueryResult, termWidth int
 	lines := make([]string, len(result.Rows))
 	for i, row := range result.Rows {
 		lines[i] = row.Raw
+	}
+	if cmd.Mode() == tracecmd.ModeList {
+		return theme.RenderTraceList(time.Now(), lines, termWidth), true
 	}
 	return theme.RenderTraceColumns(lines, termWidth), true
 }
 
-// isSpansPipeline reports whether pipeline is a bare `trace <id>
-// --spans` query (Phase 1; the flag can appear anywhere among the
-// arguments — see planner/parse.go's case "trace") or a `trace spans
-// [name]` query (Phase 2's cross-trace aggregation). Checked
-// separately from, and before, isTracePipeline: every one of these is
-// also a trace query, but only the span rollup should render for it.
-func isSpansPipeline(pipeline string) bool {
-	fields := strings.Fields(pipeline)
-	if len(fields) == 0 || fields[0] != "trace" {
-		return false
-	}
-	for _, f := range fields {
-		if f == "|" || f == ">" || f == ">>" || f == "--samples" {
-			return false
-		}
-	}
-	if len(fields) > 1 && fields[1] == "spans" {
-		return true
-	}
-	for _, f := range fields[1:] {
-		if f == "--spans" {
-			return true
-		}
-	}
-	return false
-}
-
-// isSpansAggregatePipeline reports whether pipeline is specifically a
-// `trace spans [name]` query (Phase 2) as opposed to `trace <id>
-// --spans` (Phase 1). Callers already know it's some spans pipeline
-// (isSpansPipeline) before checking this; it exists to gate
-// self-time — see theme.SpanRollupColumns' singleTrace: Phase 1 fetches a
-// complete single trace so self-time is accurate, Phase 2 only fetches
-// rows matching one span name so it can't see cross-name children at
-// all and would understate delegation while looking complete.
-func isSpansAggregatePipeline(pipeline string) bool {
-	fields := strings.Fields(pipeline)
-	return len(fields) > 1 && fields[0] == "trace" && fields[1] == "spans"
-}
-
 // RenderSpanRollupIfApplicable renders result's rows into theme's flat
-// span-rollup table when pipeline is a `trace <id> --spans` (Phase 1)
-// or `trace spans [name]` (Phase 2) query and the result hasn't
-// already come back pre-rendered as Text. Both phases share one
-// parser/renderer — theme.RenderSpanRollup doesn't care whether the
-// rows it's handed came from one trace or many — but only Phase 1 gets
-// the SELF column (see isSpansAggregatePipeline and
-// theme.SpanRollupColumns' singleTrace doc comment). The interactive REPL
-// instead enters spanview's SpanView for the same query (see
-// cmd/weft/runner/runner.go), so this function is only wired into
-// ExecNonInteractive, not the REPL's runQuery. termWidth <= 0 falls
-// back to 80, matching RenderTraceIfApplicable. Returns (nil, false)
-// when pipeline isn't a spans query, so the caller falls through to
-// its normal trace/Text/Rows handling unchanged.
+// span-rollup table when pipeline is `trace --spans --id <id>` (one
+// request's breakdown, with the self-time column) or `trace --spans
+// [--name <span>]` (operations across requests, with the percentile
+// spread) and the result hasn't already come back pre-rendered as Text.
+// Both share one parser/renderer — theme.RenderSpanRollup doesn't care whether
+// the rows it's handed came from one trace or many — but only the first gets
+// the SELF column (see theme.SpanRollupColumns' singleTrace doc comment). The
+// interactive REPL instead enters spanview's SpanView for the same query
+// (see cmd/weft/runner/runner.go), so this function is only wired into
+// ExecNonInteractive, not the REPL's runQuery. termWidth <= 0 falls back to
+// 80, matching RenderTraceIfApplicable. Returns (nil, false) when pipeline
+// isn't one of those, so the caller falls through unchanged.
 func RenderSpanRollupIfApplicable(pipeline string, result *QueryResult, termWidth int) ([]string, bool) {
-	if result == nil || result.Text != "" || !isSpansPipeline(pipeline) {
+	if result == nil || result.Text != "" {
+		return nil, false
+	}
+	cmd, ok := tracecmd.ParseLine(pipeline)
+	if !ok || (cmd.Mode() != tracecmd.ModeBreakdown && cmd.Mode() != tracecmd.ModeSpans) {
 		return nil, false
 	}
 	if termWidth <= 0 {
@@ -645,7 +602,7 @@ func RenderSpanRollupIfApplicable(pipeline string, result *QueryResult, termWidt
 	for i, row := range result.Rows {
 		lines[i] = row.Raw
 	}
-	if isSpansAggregatePipeline(pipeline) {
+	if cmd.Mode() == tracecmd.ModeSpans {
 		return theme.RenderSpanRollupTable(theme.RenderSpanAggregate(lines), termWidth, false), true
 	}
 	return theme.RenderSpanRollupTable(theme.RenderSpanRollup(lines), termWidth, true), true

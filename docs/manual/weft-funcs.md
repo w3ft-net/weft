@@ -4,7 +4,7 @@ title: Weft functions
 web:
   section: weft-funcs
   category: analysis-alerting
-  order: 52
+  order: 54
 ---
 
 The `weft::*` family reads and reasons about your own cron history
@@ -29,7 +29,7 @@ Bash uses `::` as the namespace separator; Lua uses `.` for table
 access. The arguments are the same in both.
 
 For composing predicates into composite alerts, see
-**Alerting strategies**.
+**Alerts**.
 
 ## Value functions
 
@@ -140,7 +140,7 @@ In Lua, use the native `>` and `<` operators:
 
 - **Crons** — how cron results get persisted and which `weft::*`
   funcs read them back.
-- **Alerting strategies** — patterns for composing predicates into
+- **Alerts** — patterns for composing predicates into
   composite alerts, the multi-row tag-based form, debouncing, and
   outlier vs seasonal guidance.
 - **Custom scripts** — using `weft.*` from Lua `/bin/` scripts.

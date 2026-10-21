@@ -15,7 +15,7 @@ shell:
 
 - `help builtins` — every command: the Unix ones and weft's own
 - `help cron` — scheduled crons, result accessors, tier limits
-- `help alerts` — alert conditions, notify.yaml, dispatching
+- `help alerts` — alert conditions, strategies, dispatching
 
 ## Reference pages
 

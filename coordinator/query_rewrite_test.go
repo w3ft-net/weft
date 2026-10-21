@@ -124,12 +124,12 @@ func TestRewriteQueryPipelines_LeadingNonSourceCommandWithLogPath(t *testing.T) 
 	singleCallbackInScript(t, script)
 }
 
-// TestRewriteQueryPipelines_TraceRecognized pins that `trace <id>` is
+// TestRewriteQueryPipelines_TraceRecognized pins that `trace --id <id>` is
 // recognized as a query shape even though its argument isn't a
 // filesystem path — isQueryShape's "trace" case must stay in sync with
 // planner/parse.go's parseSource "trace" case.
 func TestRewriteQueryPipelines_TraceRecognized(t *testing.T) {
-	script, err := bash.Parse(`trace abc-123`)
+	script, err := bash.Parse(`trace --id abc-123`)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

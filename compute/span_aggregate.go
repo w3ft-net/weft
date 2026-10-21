@@ -17,6 +17,7 @@ type spanPartial struct {
 	Bucket    *int64 `json:"bucket"`
 	Count     int64  `json:"count"`
 	Errors    int64  `json:"errors"`
+	Levels    int64  `json:"levels"` // rows that carried a level
 	TotalNs   *int64 `json:"total_ns"`
 	MinNs     *int64 `json:"min_ns"`
 	MaxNs     *int64 `json:"max_ns"`
@@ -26,6 +27,7 @@ type spanKey struct{ namespace, service, name string }
 
 type spanGroup struct {
 	count, errors int64
+	levels        int64
 	total         float64
 	min, max      int64
 	buckets       map[int64]int64
@@ -36,7 +38,7 @@ type spanSummary struct {
 	Namespace string `json:"namespace,omitempty"`
 	Service   string `json:"service,omitempty"`
 	Count     int64  `json:"count"`
-	Errors    int64  `json:"errors"`
+	Errors    *int64 `json:"errors"` // null when no row carried a level
 	TotalNs   int64  `json:"total_ns"`
 	AvgNs     int64  `json:"avg_ns"`
 	P50Ns     int64  `json:"p50_ns"`
@@ -65,6 +67,7 @@ func (a *spanAggregator) push(row *pb.ResultRow) bool {
 	}
 	g.count += p.Count
 	g.errors += p.Errors
+	g.levels += p.Levels
 	if p.Count > 0 && p.TotalNs != nil && p.MinNs != nil && p.MaxNs != nil {
 		g.total += float64(*p.TotalNs)
 		if g.count == p.Count || *p.MinNs < g.min {
@@ -102,7 +105,10 @@ func (a *spanAggregator) flush() {
 	})
 	for _, k := range keys {
 		g := a.groups[k]
-		sum := spanSummary{Name: k.name, Namespace: k.namespace, Service: k.service, Count: g.count, Errors: g.errors}
+		sum := spanSummary{Name: k.name, Namespace: k.namespace, Service: k.service, Count: g.count}
+		if g.levels > 0 {
+			sum.Errors = &g.errors
+		}
 		if g.count > 0 {
 			sum.TotalNs = int64(g.total)
 			sum.AvgNs = int64(g.total / float64(g.count))

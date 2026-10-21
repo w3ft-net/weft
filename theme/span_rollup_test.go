@@ -85,8 +85,8 @@ func TestRenderSpanSamples_SlowestFirst(t *testing.T) {
 func TestRenderSpanRollup_GroupsByNameAndComputesStats(t *testing.T) {
 	lines := []string{
 		spanDoneRow(1000, "weft/coordinator", "shard.Query", "t1", "s1", "", 10*time.Millisecond, "ok"),
-		spanDoneRow(2000, "weft/shard-a", "shard.Query", "t1", "s2", "s1", 20*time.Millisecond, "ok"),
-		spanDoneRow(3000, "weft/shard-b", "shard.Query", "t1", "s3", "s1", 30*time.Millisecond, "ok"),
+		spanDoneRow(2000, "weft/coordinator", "shard.Query", "t1", "s2", "s1", 20*time.Millisecond, "ok"),
+		spanDoneRow(3000, "weft/coordinator", "shard.Query", "t1", "s3", "s1", 30*time.Millisecond, "ok"),
 		spanDoneRow(4000, "weft/coordinator", "api.Handle", "t1", "s4", "", 5*time.Millisecond, "ok"),
 	}
 
@@ -122,7 +122,7 @@ func TestRenderSpanRollup_GroupsByNameAndComputesStats(t *testing.T) {
 func TestRenderSpanRollup_OccurrencesCarryTraceID(t *testing.T) {
 	lines := []string{
 		spanDoneRow(1000, "weft/shard-a", "shard.Query", "trace-aaa", "s1", "", 10*time.Millisecond, "ok"),
-		spanDoneRow(2000, "weft/shard-b", "shard.Query", "trace-bbb", "s2", "", 20*time.Millisecond, "ok"),
+		spanDoneRow(2000, "weft/shard-a", "shard.Query", "trace-bbb", "s2", "", 20*time.Millisecond, "ok"),
 	}
 	rows := RenderSpanRollup(lines)
 	if len(rows) != 1 || rows[0].Count() != 2 {
@@ -447,5 +447,88 @@ func TestPercentileDuration_NearestRank(t *testing.T) {
 	}
 	if got := percentileDuration(sorted, 0.99); got != 5*time.Millisecond {
 		t.Errorf("p99: expected 5ms, got %s", got)
+	}
+}
+
+func spanDoneRowNoLevel(tsNs int64, label, name, traceID, spanID string, duration time.Duration) string {
+	ns, svc, _ := strings.Cut(label, "/")
+	out, _ := json.Marshal(map[string]any{
+		"name": name, "namespace": ns, "service": svc, "trace_id": traceID, "span_id": spanID,
+		"parent_id": nil, "dur_ns": duration.Nanoseconds(), "ts_ns": tsNs, "level": nil,
+	})
+	return string(out)
+}
+
+// The same span name in two services is two different things, so a single
+// trace keeps them apart and labels each with its namespace/service.
+func TestRenderSpanRollup_SameNameInTwoServicesStaysSeparate(t *testing.T) {
+	rows := RenderSpanRollup([]string{
+		spanDoneRow(10_000_000, "acme/orders", "db.query", "t1", "s1", "", 10*time.Millisecond, "ok"),
+		spanDoneRow(30_000_000, "acme/payments", "db.query", "t1", "s2", "", 20*time.Millisecond, "ok"),
+	})
+	if len(rows) != 2 {
+		t.Fatalf("expected one row per service, got %+v", rows)
+	}
+	if rows[0].Label != "acme/orders" || rows[1].Label != "acme/payments" {
+		t.Errorf("labels = %q, %q", rows[0].Label, rows[1].Label)
+	}
+	if got := rows[0].displayName(); got != "db.query (acme/orders)" {
+		t.Errorf("displayName = %q", got)
+	}
+	if rows[0].Count() != 1 || rows[1].Count() != 1 {
+		t.Errorf("counts = %d, %d, want 1 each", rows[0].Count(), rows[1].Count())
+	}
+}
+
+func TestRenderSpanRollup_ErrorRowsCountAgainstTheirOwnService(t *testing.T) {
+	rows := RenderSpanRollup([]string{
+		spanDoneRow(10_000_000, "acme/orders", "db.query", "t1", "s1", "", 10*time.Millisecond, "ok"),
+		spanDoneRow(30_000_000, "acme/payments", "db.query", "t1", "s2", "", 20*time.Millisecond, "ok"),
+		spanErrorRow(31_000_000, "acme/payments", "db.query", "t1", "s2"),
+	})
+	if len(rows) != 2 || rows[0].Errors != 0 || rows[1].Errors != 1 {
+		t.Fatalf("errors should land on acme/payments only: %+v", rows)
+	}
+}
+
+func TestRenderSpanRollup_NoLevelMeansErrorsUnknown(t *testing.T) {
+	rows := RenderSpanRollup([]string{
+		spanDoneRowNoLevel(10_000_000, "acme/legacy", "job.run", "t1", "s1", 10*time.Millisecond),
+		spanDoneRow(30_000_000, "acme/api", "api.handle", "t1", "s2", "", 20*time.Millisecond, "ok"),
+	})
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if rows[0].Name != "api.handle" || rows[0].NoLevel {
+		t.Errorf("a span with a level has known errors: %+v", rows[0])
+	}
+	if rows[1].Name != "job.run" || !rows[1].NoLevel {
+		t.Errorf("a span with no level has unknown errors: %+v", rows[1])
+	}
+}
+
+func TestRenderSpanAggregate_NullErrorsMeansUnknown(t *testing.T) {
+	rows := RenderSpanAggregate([]string{
+		`{"name":"a","count":1,"errors":null,"total_ns":5,"avg_ns":5,"p50_ns":5,"p99_ns":5,"min_ns":5,"max_ns":5}`,
+		`{"name":"b","count":1,"errors":0,"total_ns":5,"avg_ns":5,"p50_ns":5,"p99_ns":5,"min_ns":5,"max_ns":5}`,
+	})
+	if len(rows) != 2 || !rows[0].NoLevel || rows[1].NoLevel {
+		t.Fatalf("rows = %+v", rows)
+	}
+}
+
+func TestSpanRollupColumns_UnknownErrorsShowDash(t *testing.T) {
+	rows := []SpanRollupRow{
+		{Name: "a", Calls: 1, NoLevel: true},
+		{Name: "b", Calls: 1},
+	}
+	for _, singleTrace := range []bool{true, false} {
+		_, texts := SpanRollupColumns(rows, 100, singleTrace)
+		if got := strings.TrimRight(stripANSI(texts[0]), " "); !strings.HasSuffix(got, " -") {
+			t.Errorf("singleTrace=%v: unknown errors should end in \"-\": %q", singleTrace, got)
+		}
+		if got := strings.TrimRight(stripANSI(texts[1]), " "); !strings.HasSuffix(got, " 0") {
+			t.Errorf("singleTrace=%v: known zero errors should end in \"0\": %q", singleTrace, got)
+		}
 	}
 }

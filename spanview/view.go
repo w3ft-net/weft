@@ -16,6 +16,7 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/theme"
+	"github.com/graybeardcorp/weft/tracecmd"
 )
 
 const viewName = "span"
@@ -155,7 +156,7 @@ func (v *SpanView) handleListKey(c *shellcore.ShellCore, ev shellcore.KeyEvent) 
 			v.sampleFocus = 0
 			v.samples = nil
 			if isSpansAggregatePipeline(v.pipeline) {
-				v.fetchSamples(v.rows[v.focus].Name)
+				v.fetchSamples(v.rows[v.focus])
 			}
 			v.Render(c)
 		}
@@ -232,9 +233,10 @@ func (v *SpanView) currentOccurrences() []theme.SpanOccurrence {
 	return v.rows[v.focus].Occurrences
 }
 
-func (v *SpanView) fetchSamples(name string) {
+func (v *SpanView) fetchSamples(row theme.SpanRollupRow) {
 	ch := make(chan samplesResult, 1)
 	v.samplesPending = ch
+	pipeline := tracecmd.SamplesPipeline(v.pipeline, row.Name, row.Label)
 	go func(pipeline string, query QueryFunc) {
 		lines, err := query(pipeline)
 		if err != nil {
@@ -242,7 +244,7 @@ func (v *SpanView) fetchSamples(name string) {
 			return
 		}
 		ch <- samplesResult{occ: theme.RenderSpanSamples(lines, theme.SpanSamplesLimit)}
-	}("trace spans "+name+" --samples", v.query)
+	}(pipeline, v.query)
 }
 
 // Tick drains the async fetch result, if any, and repaints once.
@@ -408,18 +410,14 @@ const (
 // full reset at the row's end.
 var cursorMark = theme.Palette().Operator + "▸ " + theme.FgReset
 
-// isSpansAggregatePipeline reports whether pipeline is specifically a
-// `trace spans [name]` query (Phase 2) as opposed to `trace <id>`
-// (Phase 1) — mirrors shell/shell.go's function of the same name.
-// Duplicated rather than shared: it's a three-line check, and the two
-// packages' pipeline strings come from different builders (ParseSpansLine's
-// ListArgs.Pipeline here, planner-parsed pipeline text there) that only
-// happen to agree on this one shape. Gates theme.SpanRollupColumns'
-// singleTrace in renderList — see that function's doc comment for why
-// Phase 2 doesn't get self-time.
+// isSpansAggregatePipeline reports whether pipeline is `trace --spans
+// [--name <span>]` (operations across requests) as opposed to `trace
+// --spans --id <id>` (one request's breakdown). Gates
+// theme.SpanRollupColumns' singleTrace in renderList — see that function's
+// doc comment for why the aggregate doesn't get self-time.
 func isSpansAggregatePipeline(pipeline string) bool {
-	fields := strings.Fields(pipeline)
-	return len(fields) > 1 && fields[0] == "trace" && fields[1] == "spans"
+	cmd, ok := tracecmd.ParseLine(pipeline)
+	return ok && cmd.Mode() == tracecmd.ModeSpans
 }
 
 func (v *SpanView) renderSamples(buf *strings.Builder, w, h int) {

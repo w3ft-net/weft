@@ -57,11 +57,15 @@ type SpanOccurrence struct {
 // leaves the duration fields at 0 — callers check Count() before
 // reading them.
 type SpanRollupRow struct {
-	Name                    string
-	Label                   string
-	Calls                   int
-	Occurrences             []SpanOccurrence
-	Errors                  int
+	Name        string
+	Label       string
+	Calls       int
+	Occurrences []SpanOccurrence
+	Errors      int
+	// NoLevel is set when no row behind this name carried a log level, so
+	// whether any span errored is unknown rather than zero. The zero value
+	// (false) is the ordinary case: levels were recorded.
+	NoLevel                 bool
 	Total                   time.Duration
 	Min, Avg, P50, P99, Max time.Duration
 	SelfTotal               time.Duration
@@ -98,6 +102,10 @@ type parsedOcc struct {
 // SpanSamplesLimit is how many occurrences `trace spans <name> --samples`
 // shows; the planner asks each shard for the same number.
 const SpanSamplesLimit = 50
+
+// spanGroupKey identifies one rollup row of a single trace: the same span
+// name in two services is two different things, so the service is part of it.
+type spanGroupKey struct{ label, name string }
 
 type spanOccurrenceJSON struct {
 	Name      string `json:"name"`
@@ -138,10 +146,15 @@ func parseSpanOccurrences(lines []string) []spanOccurrenceJSON {
 // the trace the rows came from.
 func RenderSpanRollup(lines []string) []SpanRollupRow {
 	var occs []parsedOcc
-	errorsByName := make(map[string]int)
+	errorsByName := make(map[spanGroupKey]int)
+	leveled := make(map[spanGroupKey]bool)
 	failedSpans := make(map[string]bool)
 
 	for _, o := range parseSpanOccurrences(lines) {
+		key := spanGroupKey{o.label(), o.Name}
+		if o.Level != "" {
+			leveled[key] = true
+		}
 		if o.DurNs > 0 {
 			var startNs int64
 			if o.TsNs > 0 {
@@ -154,7 +167,7 @@ func RenderSpanRollup(lines []string) []SpanRollupRow {
 			continue
 		}
 		if strings.EqualFold(o.Level, "ERROR") {
-			errorsByName[o.Name]++
+			errorsByName[key]++
 			failedSpans[o.SpanID] = true
 		}
 	}
@@ -166,30 +179,36 @@ func RenderSpanRollup(lines []string) []SpanRollupRow {
 
 	selfDurations := computeSelfDurations(occs)
 
-	byName := make(map[string][]SpanOccurrence)
-	seen := make(map[string]bool)
-	var order []string
-	addName := func(name string) {
-		if !seen[name] {
-			seen[name] = true
-			order = append(order, name)
+	byKey := make(map[spanGroupKey][]SpanOccurrence)
+	seen := make(map[spanGroupKey]bool)
+	var order []spanGroupKey
+	addKey := func(k spanGroupKey) {
+		if !seen[k] {
+			seen[k] = true
+			order = append(order, k)
 		}
 	}
 	for i, o := range occs {
-		addName(o.name)
-		byName[o.name] = append(byName[o.name], SpanOccurrence{
+		k := spanGroupKey{o.label, o.name}
+		addKey(k)
+		byKey[k] = append(byKey[k], SpanOccurrence{
 			Label: o.label, TraceID: o.traceID, SpanID: o.spanID, ParentSpanID: o.parentSpanID,
 			Duration: o.duration, SelfDuration: selfDurations[i], Status: o.status,
 		})
 	}
-	for name := range errorsByName {
-		addName(name)
+	for k := range errorsByName {
+		addKey(k)
 	}
 
-	sort.Strings(order)
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].name != order[j].name {
+			return order[i].name < order[j].name
+		}
+		return order[i].label < order[j].label
+	})
 	rows := make([]SpanRollupRow, 0, len(order))
-	for _, name := range order {
-		occ := byName[name]
+	for _, k := range order {
+		occ := byKey[k]
 		durs := make([]time.Duration, len(occ))
 		var selfTotal time.Duration
 		for i, o := range occ {
@@ -197,7 +216,10 @@ func RenderSpanRollup(lines []string) []SpanRollupRow {
 			selfTotal += o.SelfDuration
 		}
 		sort.Slice(durs, func(i, j int) bool { return durs[i] < durs[j] })
-		row := SpanRollupRow{Name: name, Calls: len(occ), Occurrences: occ, Errors: errorsByName[name], SelfTotal: selfTotal}
+		row := SpanRollupRow{
+			Name: k.name, Label: k.label, Calls: len(occ), Occurrences: occ,
+			Errors: errorsByName[k], NoLevel: !leveled[k], SelfTotal: selfTotal,
+		}
 		if len(durs) > 0 {
 			row.Total = sumDuration(durs)
 			row.Min = durs[0]
@@ -216,7 +238,7 @@ type spanAggregateJSON struct {
 	Namespace string `json:"namespace"`
 	Service   string `json:"service"`
 	Count     int    `json:"count"`
-	Errors    int    `json:"errors"`
+	Errors    *int   `json:"errors"` // null when no row carried a level
 	TotalNs   int64  `json:"total_ns"`
 	AvgNs     int64  `json:"avg_ns"`
 	P50Ns     int64  `json:"p50_ns"`
@@ -236,10 +258,13 @@ func RenderSpanAggregate(lines []string) []SpanRollupRow {
 			continue
 		}
 		row := SpanRollupRow{
-			Name: a.Name, Calls: a.Count, Errors: a.Errors,
+			Name: a.Name, Calls: a.Count, NoLevel: a.Errors == nil,
 			Total: time.Duration(a.TotalNs), Avg: time.Duration(a.AvgNs),
 			P50: time.Duration(a.P50Ns), P99: time.Duration(a.P99Ns),
 			Min: time.Duration(a.MinNs), Max: time.Duration(a.MaxNs),
+		}
+		if a.Errors != nil {
+			row.Errors = *a.Errors
 		}
 		if a.Namespace != "" || a.Service != "" {
 			row.Label = a.Namespace + "/" + a.Service
@@ -553,7 +578,9 @@ func SpanRollupColumns(rows []SpanRollupRow, termWidth int, singleTrace bool) (h
 	rowTexts = make([]string, len(rows))
 	for i, r := range rows {
 		errs := padLeft(strconv.Itoa(r.Errors), spanErrWidth)
-		if r.Errors > 0 {
+		if r.NoLevel {
+			errs = padLeft("-", spanErrWidth)
+		} else if r.Errors > 0 {
 			errs = color(errs, Palette().Error)
 		}
 		barValue := r.Avg

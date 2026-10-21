@@ -4,7 +4,7 @@ title: Notifications
 web:
   section: notify
   category: analysis-alerting
-  order: 54
+  order: 53
 ---
 
 ## Define a notification alias

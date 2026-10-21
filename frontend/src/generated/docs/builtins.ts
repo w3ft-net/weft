@@ -240,9 +240,9 @@ which accepts options and ignores them.</p>
 <td><code>man explain</code></td>
 </tr>
 <tr>
-<td><code>trace &lt;id&gt;</code>, <code>trace &lt;id&gt; --spans</code>, <code>trace spans [name]</code></td>
-<td>Every line of one request across all your services, a per-span-name rollup of one request, or span latency across the whole time window.</td>
-<td><a href="/manual/trace">Tracing a request</a></td>
+<td><code>trace</code>, <code>trace --id &lt;id&gt;</code>, <code>trace --spans</code></td>
+<td>The recent traces, every line of one request across all your services, or a per-span rollup (of one request with <code>--id</code>, or of the whole time window without).</td>
+<td><a href="/manual/trace">Tracing</a></td>
 </tr>
 <tr>
 <td><code>chart</code></td>

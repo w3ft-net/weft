@@ -5,7 +5,7 @@ const weftFuncs = {
   section: "weft-funcs",
   title: "Weft functions",
   category: "analysis-alerting",
-  order: 52,
+  order: 54,
   headings: [
     { level: 2, id: "value-functions", text: "Value functions" },
     { level: 3, id: "caps", text: "Caps" },
@@ -53,7 +53,7 @@ multiple crons.</li>
 <p>Bash uses <code>::</code> as the namespace separator; Lua uses <code>.</code> for table
 access. The arguments are the same in both.</p>
 <p>For composing predicates into composite alerts, see
-<strong>Alerting strategies</strong>.</p>
+<strong>Alerts</strong>.</p>
 <h2 id="value-functions">Value functions</h2>
 <p>Each takes a cron name, returns a value, and (with the exception of
 <code>weft::latest</code> and <code>weft::previous</code>) a duration window. Durations are a
@@ -269,7 +269,7 @@ one of:</p>
 <ul>
 <li><strong>Crons</strong> — how cron results get persisted and which <code>weft::*</code>
 funcs read them back.</li>
-<li><strong>Alerting strategies</strong> — patterns for composing predicates into
+<li><strong>Alerts</strong> — patterns for composing predicates into
 composite alerts, the multi-row tag-based form, debouncing, and
 outlier vs seasonal guidance.</li>
 <li><strong>Custom scripts</strong> — using <code>weft.*</code> from Lua <code>/bin/</code> scripts.</li>

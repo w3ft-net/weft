@@ -46,8 +46,7 @@ type Query struct {
 	// spanKind makes this a span query (see spans.go): the shard half of
 	// one of the AggregateSpan* aggregates, rendered straight from the
 	// table.
-	spanKind      string
-	spanByService bool
+	spanKind string
 }
 
 // PayloadColumn names the extra column carrying a row's payload JSON

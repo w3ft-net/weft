@@ -365,7 +365,7 @@ func runOneShot(pipeline, rangeSpec string) {
 		s.Range = rangeSpec
 	}
 
-	// Only meaningful for `trace <id>` output (ExecNonInteractive's doc
+	// Only meaningful for `trace` output (ExecNonInteractive's doc
 	// on Shell.TermWidth) — stdout not being a real terminal (piped,
 	// redirected) is not an error here, just falls back to the field's
 	// own zero-value default.

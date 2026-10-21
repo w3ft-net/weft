@@ -4,8 +4,8 @@ const dashboard = {
   id: "man-dashboard",
   section: "dashboard",
   title: "dashboard",
-  category: "analysis-alerting",
-  order: 56,
+  category: "command-reference",
+  order: 72,
   headings: [
     { level: 2, id: "name", text: "NAME" },
     { level: 2, id: "synopsis", text: "SYNOPSIS" },

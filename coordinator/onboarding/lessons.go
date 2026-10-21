@@ -98,9 +98,9 @@ func AdvancesOnExit(step string, exitCode int) bool {
 	return false
 }
 
-// traceIDPipelinePattern matches `trace <id>` where <id> is exactly
+// traceIDPipelinePattern matches `trace --id <id>` where <id> is exactly
 // the shape weft-go's NewTraceID() produces: 32 lowercase hex chars.
-var traceIDPipelinePattern = regexp.MustCompile(`^trace [0-9a-f]{32}$`)
+var traceIDPipelinePattern = regexp.MustCompile(`^trace --id [0-9a-f]{32}$`)
 
 // lessons is the canonical, ordered list. The first 4 entries ship
 // with the initial onboarding cut; the rest are placeholders the
@@ -151,10 +151,10 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:            "shell-trace",
-		Action:          "trace $REPLACE_ME",
+		Action:          "trace --id $REPLACE_ME",
 		ActionPattern:   traceIDPipelinePattern,
 		ClosesWithModal: true,
-		Prompt:          "Let's run the `trace` command! Grab a trace id from the previous output and use it as the first argument to `trace`. Press Esc to close the trace view when you're done.",
+		Prompt:          "Let's run the `trace` command! Grab a trace id from the previous output and pass it to `trace` with `--id`. Press Esc to close the trace view when you're done.",
 	},
 	{
 		Step:   "shell-alert",

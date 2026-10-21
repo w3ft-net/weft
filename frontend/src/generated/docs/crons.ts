@@ -31,7 +31,7 @@ the cron undercounts. To try a cron's pipeline at the
 prompt first, set the window with <code>range</code> (see <code>man range</code>).</p>
 <p>The pipeline's stdout is captured as the cron result — numeric
 values are graphed on the dashboard as sparklines. Alerts are
-dispatched by the <code>alert</code> stage (see <strong>Alerting strategies</strong> for
+dispatched by the <code>alert</code> stage (see <strong>Alerts</strong> for
 the catalogue of alert shapes, plus <code>man alert</code> for the builtin's
 grammar).</p>
 <p>View and manage crons from the <strong>Dashboard</strong>.</p>
@@ -57,7 +57,7 @@ hours (<code>1d</code>).</p>
 <p>The full reference (value funcs, predicates, stdin comparators,
 caps, numeric-parsing rules) is in <strong>Weft functions</strong>. Patterns
 that combine these into alerts of various shapes — multi-row
-per-tag, composite, anomaly-based — live in <strong>Alerting strategies</strong>.</p>
+per-tag, composite, anomaly-based — live in <strong>Alerts</strong>.</p>
 <p>Tier limits (number of crons and minimum schedule interval) vary by
 plan — see the <strong>Account</strong> page for your current caps, or run
 <code>help cron</code> in the shell.</p>

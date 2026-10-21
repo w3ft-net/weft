@@ -8,7 +8,7 @@ import (
 )
 
 // TestExecuteQuery_TraceTagsInteractiveOutput: a bare, interactively-
-// typed `trace <id>` sets TraceTag on the request the coordinator
+// typed `trace --id <id>` sets TraceTag on the request the coordinator
 // hands to the compute pool, so compute/engine.go's display branch
 // (summary line + colored [namespace/service] badges) engages.
 func TestExecuteQuery_TraceTagsInteractiveOutput(t *testing.T) {
@@ -16,7 +16,7 @@ func TestExecuteQuery_TraceTagsInteractiveOutput(t *testing.T) {
 	pool := &spyCompute{inner: c.Compute}
 	c.Compute = pool
 
-	res, err := c.Execute(context.Background(), `trace abc-123`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `trace --id abc-123`, fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestExecuteQuery_TraceTagsInteractiveOutput(t *testing.T) {
 		t.Fatal("ExecuteQuery was never called")
 	}
 	if !pool.lastReq.TraceTag {
-		t.Error("interactive `trace abc-123` should set TraceTag=true, got false")
+		t.Error("interactive `trace --id abc-123` should set TraceTag=true, got false")
 	}
 }
 
@@ -48,7 +48,7 @@ func TestExecuteForWatch_TraceDoesNotTagOutput(t *testing.T) {
 		t.Fatalf("resolve test customer: %v", err)
 	}
 
-	pipeline := `trace abc-123`
+	pipeline := `trace --id abc-123`
 	w := &store.CronWatch{
 		OrgID:    cust.ID,
 		Name:     "trace-watch",
@@ -70,14 +70,14 @@ func TestExecuteForWatch_TraceDoesNotTagOutput(t *testing.T) {
 		t.Fatal("ExecuteQuery was never called")
 	}
 	if pool.lastReq.TraceTag {
-		t.Error("watch-fired `trace abc-123` must not set TraceTag — would corrupt AlertCommand/dashboard consumers")
+		t.Error("watch-fired `trace --id abc-123` must not set TraceTag — would corrupt AlertCommand/dashboard consumers")
 	}
 }
 
 // The span queries return JSON rows, so none of them is tagged: the summary
 // line and badges are for a bare `trace <id>` only.
 func TestExecuteQuery_SpanQueriesAreAggregatesNotTagged(t *testing.T) {
-	for _, pipeline := range []string{"trace spans", "trace spans shard.Query", "trace abc-123 --spans"} {
+	for _, pipeline := range []string{"trace --spans", "trace --spans --name shard.Query", "trace --spans --id abc-123", "trace"} {
 		t.Run(pipeline, func(t *testing.T) {
 			c := setupTestCoordinator(t)
 			pool := &spyCompute{inner: c.Compute}
@@ -115,7 +115,7 @@ func TestExecuteForWatch_TraceSpansDoesNotTagOutput(t *testing.T) {
 		t.Fatalf("resolve test customer: %v", err)
 	}
 
-	pipeline := `trace spans`
+	pipeline := `trace --spans`
 	w := &store.CronWatch{
 		OrgID:    cust.ID,
 		Name:     "trace-spans-watch",
@@ -134,6 +134,6 @@ func TestExecuteForWatch_TraceSpansDoesNotTagOutput(t *testing.T) {
 		t.Fatal("ExecuteQuery was never called")
 	}
 	if pool.lastReq.TraceTag {
-		t.Error("watch-fired `trace spans` must not set TraceTag — would corrupt AlertCommand/dashboard consumers")
+		t.Error("watch-fired `trace --spans` must not set TraceTag — would corrupt AlertCommand/dashboard consumers")
 	}
 }

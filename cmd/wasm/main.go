@@ -16,12 +16,14 @@ package main
 import (
 	"encoding/json"
 	"syscall/js"
+	"time"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/warp/pkg/shellcore/wasm"
 	"github.com/graybeardcorp/weft/internal/timerange"
 	"github.com/graybeardcorp/weft/shell"
 	"github.com/graybeardcorp/weft/theme"
+	"github.com/graybeardcorp/weft/tracecmd"
 )
 
 var jsCallbacks js.Value
@@ -55,6 +57,9 @@ func main() {
 	js.Global().Set("wasmRenderSpanAggregate", js.FuncOf(wasmRenderSpanAggregate))
 	js.Global().Set("wasmRenderSpanSamples", js.FuncOf(wasmRenderSpanSamples))
 	js.Global().Set("wasmParseTraceRows", js.FuncOf(wasmParseTraceRows))
+	js.Global().Set("wasmParseTraceList", js.FuncOf(wasmParseTraceList))
+	js.Global().Set("wasmSamplesPipeline", js.FuncOf(wasmSamplesPipeline))
+	js.Global().Set("wasmTraceIDPipeline", js.FuncOf(wasmTraceIDPipeline))
 	select {}
 }
 
@@ -82,21 +87,21 @@ func jsonResult(v any) any {
 }
 
 // wasmRenderSpanRollup(lines: string[]) → JSON string of
-// theme.SpanRollupRow[] for the JSON lines of `trace <id> --spans`.
+// theme.SpanRollupRow[] for the JSON lines of `trace --spans --id <id>`.
 func wasmRenderSpanRollup(_ js.Value, args []js.Value) any {
 	lines := jsStringSlice(args[0])
 	return jsonResult(theme.RenderSpanRollup(lines))
 }
 
 // wasmRenderSpanAggregate(lines: string[]) → JSON string of
-// theme.SpanRollupRow[] for the JSON lines of `trace spans [name]`.
+// theme.SpanRollupRow[] for the JSON lines of `trace --spans [--name <span>]`.
 func wasmRenderSpanAggregate(_ js.Value, args []js.Value) any {
 	lines := jsStringSlice(args[0])
 	return jsonResult(theme.RenderSpanAggregate(lines))
 }
 
 // wasmRenderSpanSamples(lines: string[]) → JSON string of
-// theme.SpanOccurrence[] for the JSON lines of `trace spans <name> --samples`.
+// theme.SpanOccurrence[] for the JSON lines of `trace --spans --name <span> --samples`.
 func wasmRenderSpanSamples(_ js.Value, args []js.Value) any {
 	lines := jsStringSlice(args[0])
 	return jsonResult(theme.RenderSpanSamples(lines, theme.SpanSamplesLimit))
@@ -108,6 +113,26 @@ func wasmRenderSpanSamples(_ js.Value, args []js.Value) any {
 func wasmParseTraceRows(_ js.Value, args []js.Value) any {
 	lines := jsStringSlice(args[0])
 	return jsonResult(theme.ParseTraceRows(lines))
+}
+
+// wasmParseTraceList(lines: string[], nowMs: number) → JSON string of
+// theme.TraceListRow[] for the JSON lines of a bare `trace`, with ages
+// relative to nowMs.
+func wasmParseTraceList(_ js.Value, args []js.Value) any {
+	lines := jsStringSlice(args[0])
+	now := time.UnixMilli(int64(args[1].Float()))
+	return jsonResult(theme.ParseTraceList(now, lines))
+}
+
+// wasmSamplesPipeline(aggregate, name, label: string) → the pipeline that
+// lists one aggregate row's slowest occurrences; see tracecmd.SamplesPipeline.
+func wasmSamplesPipeline(_ js.Value, args []js.Value) any {
+	return tracecmd.SamplesPipeline(args[0].String(), args[1].String(), args[2].String())
+}
+
+// wasmTraceIDPipeline(id: string) → the pipeline that shows one request.
+func wasmTraceIDPipeline(_ js.Value, args []js.Value) any {
+	return tracecmd.IDPipeline(args[0].String())
 }
 
 // buildSharedFS constructs (once) the MountFS shared by every pane.

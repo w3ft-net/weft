@@ -17,6 +17,9 @@ declare global {
     wasmRenderSpanRollup: (lines: string[]) => string
     wasmRenderSpanAggregate: (lines: string[]) => string
     wasmRenderSpanSamples: (lines: string[]) => string
+    wasmParseTraceList: (lines: string[], nowMs: number) => string
+    wasmSamplesPipeline: (aggregate: string, name: string, label: string) => string
+    wasmTraceIDPipeline: (id: string) => string
   }
 }
 
@@ -27,7 +30,23 @@ export interface TraceRow {
   Label: string
   Message: string
   GapNs: number
+  Gap: string // GapNs as text ("+24ms"); empty for the first data row
   ColorIdx: number
+}
+
+// One line of a bare `trace`, the recent-traces list (theme.TraceListRow).
+export interface TraceListRow {
+  TraceID: string
+  StartNs: number
+  EndNs: number
+  DurNs: number
+  Dur: string // DurNs as text ("1.2s")
+  Age: string // since the trace's last line ("3m")
+  Lines: number
+  Errors: number
+  NoLevel: boolean // no line carried a log level, so Errors is unknown, not zero
+  Services: string[] | null
+  Root: string
 }
 
 export interface SpanOccurrence {
@@ -46,6 +65,7 @@ export interface SpanRollupRow {
   Calls: number
   Occurrences: SpanOccurrence[] | null
   Errors: number
+  NoLevel: boolean // no row carried a log level, so Errors is unknown, not zero
   Min: number
   Avg: number
   P50: number
@@ -86,4 +106,19 @@ export function renderSpanAggregate(lines: string[]): SpanRollupRow[] {
 
 export function renderSpanSamples(lines: string[]): SpanOccurrence[] {
   return parseRows<SpanOccurrence>(window.wasmRenderSpanSamples(lines), 'wasmRenderSpanSamples')
+}
+
+export function parseTraceList(lines: string[], nowMs: number = Date.now()): TraceListRow[] {
+  return parseRows<TraceListRow>(window.wasmParseTraceList(lines, nowMs), 'wasmParseTraceList')
+}
+
+// The pipeline that lists one aggregate row's slowest occurrences, and the one
+// that shows a single request. Built in Go (tracecmd) so the grammar and the
+// quoting live in one place.
+export function samplesPipeline(aggregate: string, name: string, label: string): string {
+  return window.wasmSamplesPipeline(aggregate, name, label)
+}
+
+export function traceIDPipeline(id: string): string {
+  return window.wasmTraceIDPipeline(id)
 }

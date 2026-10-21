@@ -4,8 +4,8 @@ const alert = {
   id: "man-alert",
   section: "alert",
   title: "alert",
-  category: "analysis-alerting",
-  order: 51,
+  category: "command-reference",
+  order: 70,
   headings: [
     { level: 2, id: "name", text: "NAME" },
     { level: 2, id: "synopsis", text: "SYNOPSIS" },
@@ -99,7 +99,7 @@ strategies&quot;).</p>
 for <em>success</em>, matching the right-hand interpretation of <code>&amp;&amp;</code> chains).
 <code>--if-nonzero &lt;value&gt;</code> is the inverse. The two are mutually exclusive
 with the stdin condition keywords above.</p>
-<p>See the <strong>Alerting strategies</strong> manual page (<code>man alerting-strategies</code>) for the full pattern
+<p>See the <strong>Alerts</strong> manual page (<code>man alerting-strategies</code>) for the full pattern
 catalogue (single-cron scalar, multi-row per-tag, composite,
 aggregated-value).</p>
 <h2 id="options">OPTIONS</h2>

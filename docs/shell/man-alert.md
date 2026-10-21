@@ -9,8 +9,8 @@ shell:
   banner: "ALERT(1)"
 web:
   section: alert
-  category: analysis-alerting
-  order: 51
+  category: command-reference
+  order: 70
 ---
 
 ## NAME
@@ -119,7 +119,7 @@ for *success*, matching the right-hand interpretation of `&&` chains).
 `--if-nonzero <value>` is the inverse. The two are mutually exclusive
 with the stdin condition keywords above.
 
-See the **Alerting strategies** manual page (`man alerting-strategies`) for the full pattern
+See the **Alerts** manual page (`man alerting-strategies`) for the full pattern
 catalogue (single-cron scalar, multi-row per-tag, composite,
 aggregated-value).
 

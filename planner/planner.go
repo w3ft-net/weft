@@ -81,6 +81,11 @@ type QueryPlan struct {
 	// ComputeStages then read. One of the Aggregate* constants.
 	Aggregate string
 
+	// TraceStats, when set, is the second step of the trace list: the
+	// coordinator runs ShardSQL (Aggregate = AggregateTraceIDs) to find the
+	// newest trace IDs, then this query for exactly those traces.
+	TraceStats *TraceStatsQuery
+
 	// DirectShardSQL is the SQL compute sends to shards on the
 	// coordinator's behalf — same body as ShardSQL but with ShardOrderBy +
 	// ShardLimit substituted for the head/tail-derived "ts ASC"/
@@ -356,6 +361,10 @@ func addSourcePredicates(sql *Query, src sourceInfo) {
 
 	if src.cmd == "trace" && src.traceID != "" {
 		sql.addPredicate("trace_id = ?", src.traceID)
+	}
+	if src.cmd == "trace_list" {
+		sql.addPredicate("trace_id IS NOT NULL")
+		sql.addPredicate("trace_id <> ''")
 	}
 	if src.cmd == "trace_spans" || (src.cmd == "trace" && src.spansOnly) {
 		sql.addPredicate("span_name IS NOT NULL")

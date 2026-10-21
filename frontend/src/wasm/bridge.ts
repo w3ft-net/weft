@@ -61,9 +61,10 @@ export interface ChartOpenSpec {
 
 // TraceOpenSpec is the payload the Go-side `trace` handler hands us in
 // place of rendering ANSI/entering spanview's terminal View. `mode`
-// distinguishes plain `trace <id>` ("gap") from `trace <id> --spans`
-// ("rollup", Phase 1) from `trace spans [name]` ("aggregate", Phase
-// 2) — see shell.TraceRequest (shell/shell.go). Unlike ChartOpenSpec,
+// distinguishes a bare `trace` ("list", the recent traces) from
+// `trace --id <id>` ("gap") from `trace --spans --id <id>` ("rollup") from
+// `trace --spans [--name <span>]` ("aggregate") — see shell.TraceRequest
+// (shell/shell.go). Unlike ChartOpenSpec,
 // no rows travel with this payload: `trace` is always a pipeline's
 // source command, never a pipe-stage destination, so there's no
 // captured upstream snapshot to hand over the way `... | chart` does.
@@ -72,7 +73,7 @@ export interface ChartOpenSpec {
 export interface TraceOpenSpec {
   pipeline: string
   title: string
-  mode: 'gap' | 'rollup' | 'aggregate'
+  mode: 'list' | 'gap' | 'rollup' | 'aggregate'
 }
 
 export async function initShellWasm(

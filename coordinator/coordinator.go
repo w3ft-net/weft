@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
@@ -1140,7 +1141,11 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 			return nil, fmt.Errorf("validate source: %w", err)
 		}
 		if count == 0 {
-			return nil, fmt.Errorf("unknown source: %s", plan.SourceNamespace)
+			msg := "unknown source: " + plan.SourceNamespace
+			if strings.HasPrefix(plan.SourceCmd, "trace") {
+				msg += " (to show one trace, pass its id with --id)"
+			}
+			return nil, errors.New(msg)
 		}
 	}
 
@@ -1174,18 +1179,9 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	logQuery(ctx, "query: namespace=%s service=%s shards=%v compute=%v sql=%s",
 		plan.SourceNamespace, plan.SourceService, shardIDs, plan.ComputeStages, directSQL)
 
-	argStrs := make([]string, len(plan.Args))
-	for i, a := range plan.Args {
-		if s, ok := a.(string); ok {
-			argStrs[i] = s
-		} else {
-			// Today the planner only emits string args (customer name,
-			// namespace name, ISO timestamps). Non-string slips through
-			// as %v rendering — surface it as a typed bug if it ever
-			// happens rather than silent data loss.
-			argStrs[i] = fmt.Sprintf("%v", a)
-			logQuery(ctx, "query: non-string arg at position %d (%T %v) — bound via fmt", i, a, a)
-		}
+	argStrs := queryArgStrings(ctx, plan.Args)
+	if plan.TraceStats != nil {
+		return c.executeTraceList(ctx, plan, argStrs, descs, tr, tier)
 	}
 	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:               directSQL,
@@ -1209,6 +1205,79 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	})
 	if err != nil {
 		logQuery(ctx, "query: compute error: %v", err)
+		return nil, err
+	}
+	return &ExecuteResult{Stream: stream}, nil
+}
+
+// queryArgStrings renders a plan's args for the compute request.
+func queryArgStrings(ctx context.Context, args []any) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		if s, ok := a.(string); ok {
+			out[i] = s
+		} else {
+			// Today the planner only emits string args (customer name,
+			// namespace name, ISO timestamps). Non-string slips through
+			// as %v rendering — surface it as a typed bug if it ever
+			// happens rather than silent data loss.
+			out[i] = fmt.Sprintf("%v", a)
+			logQuery(ctx, "query: non-string arg at position %d (%T %v) — bound via fmt", i, a, a)
+		}
+	}
+	return out
+}
+
+// executeTraceList runs a bare `trace` in its two steps (see
+// planner/traces.go): the newest trace IDs from the shards the scope selects,
+// then those traces' summaries from every shard, since a trace's lines sit on
+// whichever shards its services write to and the summary covers all of them.
+func (c *Coordinator) executeTraceList(ctx context.Context, plan *planner.QueryPlan, argStrs []string, descs []*pb.ShardDescriptor, tr TimeRange, tier store.Tier) (*ExecuteResult, error) {
+	idStream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
+		Sql:       plan.DirectShardSQL,
+		Args:      argStrs,
+		Shards:    descs,
+		MergeKey:  plan.ShardOrderBy,
+		Aggregate: plan.Aggregate,
+	})
+	if err != nil {
+		logQuery(ctx, "query: trace list ids: compute error: %v", err)
+		return nil, err
+	}
+	defer idStream.Close()
+	var ids []string
+	for {
+		line, ok, err := idStream.Next(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("trace list: %w", err)
+		}
+		if !ok {
+			break
+		}
+		var row struct {
+			TraceID string `json:"trace_id"`
+		}
+		if err := json.Unmarshal([]byte(line.Raw), &row); err != nil {
+			return nil, fmt.Errorf("trace list: trace id row %q: %w", line.Raw, err)
+		}
+		ids = append(ids, row.TraceID)
+	}
+	if len(ids) == 0 {
+		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
+	}
+
+	all := c.Provisioner.ShardDescriptorsFor(ctx, tr, 0, "", tier)
+	logQuery(ctx, "query: trace list stats: traces=%d shards=%d sql=%s", len(ids), len(all), plan.TraceStats.SQL)
+	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
+		Sql:       plan.TraceStats.SQL,
+		Args:      queryArgStrings(ctx, plan.TraceStats.WithIDs(ids)),
+		Shards:    all,
+		Stages:    plan.ComputeStages,
+		MergeKey:  plan.ShardOrderBy,
+		Aggregate: plan.TraceStats.Aggregate,
+	})
+	if err != nil {
+		logQuery(ctx, "query: trace list stats: compute error: %v", err)
 		return nil, err
 	}
 	return &ExecuteResult{Stream: stream}, nil

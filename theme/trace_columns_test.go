@@ -174,3 +174,58 @@ func TestParseTraceRows_GapsAndPassthrough(t *testing.T) {
 		t.Errorf("row 3: ColorIdx should match TraceLabelColorIndex(Label); got %d want %d", rows[3].ColorIdx, TraceLabelColorIndex("weft/coordinator"))
 	}
 }
+
+func TestFormatTraceGap(t *testing.T) {
+	cases := []struct {
+		ns   int64
+		want string
+	}{
+		{0, "+0ns"},
+		{850, "+850ns"},
+		{1_500, "+1.5µs"},
+		{24_000, "+24µs"},
+		{1_000_000, "+1ms"},
+		{2_300_000, "+2.3ms"},
+		{160_000_000, "+160ms"},
+		{999_000_000, "+999ms"},
+		{1_200_000_000, "+1.2s"},
+		{42_000_000_000, "+42s"},
+		{90_000_000_000, "+1.5m"},
+	}
+	for _, c := range cases {
+		if got := formatTraceGap(c.ns); got != c.want {
+			t.Errorf("formatTraceGap(%d) = %q, want %q", c.ns, got, c.want)
+		}
+	}
+}
+
+func TestParseTraceRows_GapText(t *testing.T) {
+	rows := ParseTraceRows([]string{
+		traceRow(0, "weft/api", "a"),
+		traceRow(24_000_000, "weft/api", "b"),
+	})
+	if rows[0].Gap != "" {
+		t.Errorf("first data row has no previous line, want empty Gap, got %q", rows[0].Gap)
+	}
+	if rows[1].Gap != "+24ms" {
+		t.Errorf("second row Gap = %q, want +24ms", rows[1].Gap)
+	}
+}
+
+func TestRenderTraceColumns_ShowsGapDuration(t *testing.T) {
+	lines := []string{
+		traceRow(0, "weft/coordinator", "a"),
+		traceRow(1_000_000, "weft/coordinator", "small gap"),
+		traceRow(1_000_000_000, "weft/coordinator", "big gap"),
+	}
+	got := RenderTraceColumns(lines, 80)
+	if strings.Contains(stripANSI(got[0]), "+") {
+		t.Errorf("first row has no previous line, expected no duration: %q", stripANSI(got[0]))
+	}
+	if !strings.Contains(stripANSI(got[1]), "+1ms") {
+		t.Errorf("expected +1ms on the second row: %q", stripANSI(got[1]))
+	}
+	if !strings.Contains(stripANSI(got[2]), "+999ms") {
+		t.Errorf("expected +999ms on the third row: %q", stripANSI(got[2]))
+	}
+}

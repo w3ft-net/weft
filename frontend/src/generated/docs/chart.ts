@@ -4,8 +4,8 @@ const chart = {
   id: "man-chart",
   section: "chart",
   title: "chart",
-  category: "analysis-alerting",
-  order: 46,
+  category: "command-reference",
+  order: 71,
   headings: [
     { level: 2, id: "name", text: "NAME" },
     { level: 2, id: "synopsis", text: "SYNOPSIS" },

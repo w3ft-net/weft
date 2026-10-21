@@ -5,7 +5,7 @@ const notify = {
   section: "notify",
   title: "Notifications",
   category: "analysis-alerting",
-  order: 54,
+  order: 53,
   headings: [
     { level: 2, id: "define-a-notification-alias", text: "Define a notification alias" },
     { level: 2, id: "connecting-slack-and-pagerduty", text: "Connecting Slack and PagerDuty" },

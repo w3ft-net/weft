@@ -9,8 +9,8 @@ shell:
   banner: "DASHBOARD(1)"
 web:
   section: dashboard
-  category: analysis-alerting
-  order: 56
+  category: command-reference
+  order: 72
 ---
 
 ## NAME

@@ -183,7 +183,7 @@ run:
 	case c.source.follow:
 		c.logf(pass, "skipped %s: follow runs the stages on live rows", c.label(filters[0]))
 		return
-	case c.source.cmd == "trace" || c.source.cmd == "trace_spans":
+	case c.source.cmd == "trace" || c.source.cmd == "trace_spans" || c.source.cmd == "trace_list":
 		c.logf(pass, "skipped %s: a trace source", c.label(filters[0]))
 		return
 	case len(sorts) == 0 && end < len(c.nodes) && c.stage(c.nodes[end]).readsMeta:
@@ -378,7 +378,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 	case c.source.follow:
 		c.logf(pass, "skipped %s: follow runs the stages on live rows", label)
 		return
-	case c.source.cmd == "trace" || c.source.cmd == "trace_spans":
+	case c.source.cmd == "trace" || c.source.cmd == "trace_spans" || c.source.cmd == "trace_list":
 		c.logf(pass, "skipped %s: a trace source", label)
 		return
 	case len(c.compute) > n && c.compute[n].readsMeta:

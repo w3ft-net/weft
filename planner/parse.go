@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
+
+	"github.com/graybeardcorp/weft/tracecmd"
 )
 
 // sourceInfo describes the source command (cat/head/tail) at the start of a pipeline.
@@ -21,7 +23,7 @@ type sourceInfo struct {
 	services   []string // service column values for SQL predicates
 	kinds      []string // kind column values for SQL predicates
 	env        string   // env column value; shared across all args in one pipeline
-	cmd        string   // "cat", "head", "tail", "trace", or "trace_spans"
+	cmd        string   // "cat", "head", "tail", "trace", "trace_spans", or "trace_list"
 	limit      int      // for head/tail: line count (0 = unlimited for cat)
 	follow     bool     // tail -f
 	traceID    string   // trace_id predicate value; only set when cmd == "trace"
@@ -29,9 +31,6 @@ type sourceInfo struct {
 	// when cmd == "trace_spans". Empty means every span name in the
 	// queried time range.
 	spanName string
-	// spansBy is `trace spans --by service`: group by service as well as
-	// span name.
-	spansBy string
 	// samples is `trace spans <name> --samples`: the slowest occurrences
 	// of one span name, not the aggregate.
 	samples bool
@@ -228,67 +227,31 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "tail", limit: limit, follow: follow}, nil
 
 	case "trace":
-		// `trace spans` / `trace spans <name>` — Phase 2's cross-trace
-		// aggregation (docs/plans/span-display.md). Checked first and
-		// exclusively: "spans" as the very first argument is the
-		// sub-verb, never a trace ID (a real trace ID is opaque and
-		// never needs to equal that literal word in practice, and this
-		// keeps the grammar unambiguous rather than trying to guess
-		// from shape). Unlike `trace <id>`, there's no correlation ID
-		// at all — the query fans out across the customer's whole
-		// queried time range, not one request.
-		if len(args) > 0 && args[0] == "spans" {
-			info := &sourceInfo{cmd: "trace_spans"}
-			for i := 1; i < len(args); i++ {
-				switch a := args[i]; {
-				case a == "--samples":
-					info.samples = true
-				case a == "--by" && i+1 < len(args) && args[i+1] == "service":
-					info.spansBy = "service"
-					i++
-				case strings.HasPrefix(a, "-"):
-					return nil, fmt.Errorf("trace spans: unknown option %s (expected --by service or --samples)", a)
-				case info.spanName == "":
-					info.spanName = a
-				default:
-					return nil, fmt.Errorf("trace spans: expected at most one span name argument")
-				}
-			}
-			if info.samples && info.spanName == "" {
-				return nil, fmt.Errorf("trace spans: --samples needs a span name")
-			}
-			if info.samples && info.spansBy != "" {
-				return nil, fmt.Errorf("trace spans: --samples and --by don't combine")
-			}
-			return info, nil
+		// The arguments are a correlation ID and a scope, not pseudofile
+		// paths, so trace skips resolveSourcePath/IsLocalFSPath entirely
+		// (see the tracecmd package for the grammar).
+		tc, err := tracecmd.Parse(args)
+		if err != nil {
+			return nil, err
 		}
-
-		// No path argument — a trace isn't scoped to one app, it fans out
-		// across every source the customer can read. The argument is an
-		// opaque correlation ID, not a pseudofile path, so it skips
-		// resolveSourcePath/IsLocalFSPath entirely.
-		//
-		// --spans is stripped here (any position) so `trace <id> --spans`
-		// doesn't trip the argument-count check below — the flag is
-		// otherwise inert server-side; the client decides span-rollup
-		// rendering entirely on its own from the pipeline text it already
-		// has (see shell.RenderSpanRollupIfApplicable).
-		var spansOnly bool
-		var rest []string
-		for _, a := range args {
-			if a == "--spans" {
-				spansOnly = true
-				continue
-			}
-			if strings.HasPrefix(a, "-") {
-				return nil, fmt.Errorf("trace: unknown option %s", a)
-			}
-			rest = append(rest, a)
+		info := &sourceInfo{traceID: tc.ID, spanName: tc.Name, samples: tc.Samples}
+		if tc.Namespace != "" {
+			info.namespaces = []string{tc.Namespace}
 		}
-		if len(rest) != 1 {
-			return nil, fmt.Errorf("trace: expected exactly one trace id argument")
+		if tc.Service != "" {
+			info.services = []string{tc.Service}
 		}
-		return &sourceInfo{cmd: "trace", traceID: rest[0], spansOnly: spansOnly}, nil
+		switch tc.Mode() {
+		case tracecmd.ModeList:
+			info.cmd = "trace_list"
+		case tracecmd.ModeLines:
+			info.cmd = "trace"
+		case tracecmd.ModeBreakdown:
+			info.cmd, info.spansOnly = "trace", true
+		case tracecmd.ModeSpans, tracecmd.ModeSamples:
+			info.cmd = "trace_spans"
+		}
+		return info, nil
 
 	default:
 		// A leading command other than cat/head/tail can never

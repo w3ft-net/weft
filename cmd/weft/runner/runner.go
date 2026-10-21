@@ -81,11 +81,11 @@ func Run(s *shell.Shell) error {
 			dashboard.Register(r.core, dp)
 		}
 	}
-	// Span display's interactive rollup View — both phases of
-	// docs/plans/span-display.md (`trace <id> --spans` and `trace spans
-	// [name]`), plus plain `trace <id>` falls through spanview.Builtin
-	// to normal dispatch and is rendered by RenderTraceIfApplicable
-	// (shell.go). Grouped with chart/dashboard above for the same
+	// Span display's interactive rollup View — both shapes of
+	// docs/plans/span-display.md (`trace --spans --id <id>` and `trace
+	// --spans [--name <span>]`), while a bare `trace` (the recent-traces
+	// list) and `trace --id <id>` fall through spanview.Builtin to normal
+	// dispatch and are rendered by RenderTraceIfApplicable (shell.go). Grouped with chart/dashboard above for the same
 	// wasm-build reason: this needs shellcore's View machinery, which
 	// stays out of shell/'s import graph (shell/ imports spanview only
 	// for its ParseSpansLine arg-grammar helper, not the View).

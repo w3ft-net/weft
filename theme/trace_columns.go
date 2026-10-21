@@ -1,6 +1,7 @@
 package theme
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -17,7 +18,10 @@ const (
 	traceLabelMinWidth = 8
 	traceLabelMaxWidth = 24
 	traceMinMsgWidth   = 20
-	traceColumnSpacing = 1 // single space between each of the 3 columns
+	traceColumnSpacing = 1 // single space between each of the columns
+	// gapTextWidth fits the widest formatTraceGap output ("+999.9ms"
+	// never occurs: values of 10 or more print without a decimal).
+	gapTextWidth = 7
 )
 
 // TraceRow is one line of a `trace <id>` result, parsed. IsData is
@@ -30,12 +34,16 @@ const (
 // docs/plans/browser-span-view.md) doesn't need to re-derive the same
 // hash to color the badge consistently with the ANSI renderer.
 type TraceRow struct {
-	Raw      string
-	IsData   bool
-	TsNs     int64
-	Label    string
-	Message  string
-	GapNs    int64 // relative to the previous data row; 0 for the first
+	Raw     string
+	IsData  bool
+	TsNs    int64
+	Label   string
+	Message string
+	GapNs   int64 // relative to the previous data row; 0 for the first
+	// Gap is GapNs as text ("+24ms"); empty for the first data row,
+	// which has no previous line to be a gap from. Formatted here so
+	// the ANSI renderer and the browser show identical text.
+	Gap      string
 	ColorIdx int
 }
 
@@ -78,6 +86,7 @@ func ParseTraceRows(lines []string) []TraceRow {
 				gap = 0
 			}
 			rows[i].GapNs = gap
+			rows[i].Gap = formatTraceGap(gap)
 		}
 		firstData = false
 		prevTs = rows[i].TsNs
@@ -85,13 +94,36 @@ func ParseTraceRows(lines []string) []TraceRow {
 	return rows
 }
 
+// formatTraceGap renders a gap in ns as "+850ns", "+24µs", "+2.3ms",
+// "+1.2s" or "+1.5m": the largest unit that keeps the value at or above
+// 1, with one decimal below 10 and none above.
+func formatTraceGap(ns int64) string {
+	if ns < 1000 {
+		return "+" + strconv.FormatInt(ns, 10) + "ns"
+	}
+	v, unit := float64(ns)/1e3, "µs"
+	switch {
+	case ns >= 60_000_000_000:
+		v, unit = float64(ns)/6e10, "m"
+	case ns >= 1_000_000_000:
+		v, unit = float64(ns)/1e9, "s"
+	case ns >= 1_000_000:
+		v, unit = float64(ns)/1e6, "ms"
+	}
+	if v < 10 {
+		return "+" + strings.TrimSuffix(strconv.FormatFloat(v, 'f', 1, 64), ".0") + unit
+	}
+	return "+" + strconv.FormatFloat(v, 'f', 0, 64) + unit
+}
+
 // RenderTraceColumns re-renders the delimited rows compute.Job's
 // emitTraceTagged emits for a bare `trace <id>` ("<ts_unix_ns>\t<namespace/
 // service>\t<raw message>") into a 3-column display sized to termWidth:
 //
-//	<gap histogram, right-aligned> <service badge> <message, wrapped>
+//	<gap, e.g. +24ms> <gap histogram, right-aligned> <service badge> <message, wrapped>
 //
-// The bar in column 1 is scaled against the largest gap in this trace, so
+// The gap column is dropped when the terminal is too narrow to leave the
+// message its minimum width. The bar in column 2 is scaled against the largest gap in this trace, so
 // it reads as a relative "where did the time go between log lines" view
 // rather than an absolute duration axis. A line that doesn't match the
 // exact 3-field tab-delimited shape (the "# N line(s)..." summary line
@@ -128,11 +160,18 @@ func RenderTraceColumns(lines []string, termWidth int) []string {
 	}
 
 	msgWidth := termWidth - gapColWidth - labelWidth - 2*traceColumnSpacing
+	showGapText := msgWidth-gapTextWidth-traceColumnSpacing >= traceMinMsgWidth
+	if showGapText {
+		msgWidth -= gapTextWidth + traceColumnSpacing
+	}
 	if msgWidth < traceMinMsgWidth {
 		msgWidth = traceMinMsgWidth
 	}
 
 	blankGapCol := strings.Repeat(" ", gapColWidth)
+	if showGapText {
+		blankGapCol = strings.Repeat(" ", gapTextWidth+traceColumnSpacing+gapColWidth)
+	}
 	blankLabelCol := strings.Repeat(" ", labelWidth)
 	sep := strings.Repeat(" ", traceColumnSpacing)
 
@@ -143,6 +182,9 @@ func RenderTraceColumns(lines []string, termWidth int) []string {
 			continue
 		}
 		bar := renderGapBar(p.GapNs, maxGap, gapColWidth)
+		if showGapText {
+			bar = Palette().Comment + fmt.Sprintf("%*s", gapTextWidth, p.Gap) + "\x1b[0m" + sep + bar
+		}
 		badge := renderTraceLabelColumn(p.Label, labelWidth)
 		for j, wrapped := range wrapText(p.Message, msgWidth) {
 			if j == 0 {

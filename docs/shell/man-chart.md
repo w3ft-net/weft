@@ -9,8 +9,8 @@ shell:
   banner: "CHART(1)"
 web:
   section: chart
-  category: analysis-alerting
-  order: 46
+  category: command-reference
+  order: 71
 ---
 
 ## NAME

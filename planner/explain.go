@@ -154,6 +154,8 @@ func (c *compiled) scanDesc() string {
 		return "trace_id=" + src.traceID
 	case "trace_spans":
 		return "spans " + orAll(src.spanName)
+	case "trace_list":
+		return "recent traces"
 	}
 	desc := fmt.Sprintf("namespace=%s service=%s kind=%s",
 		orAll(strings.Join(src.namespaces, ",")),
