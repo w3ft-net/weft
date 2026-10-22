@@ -112,7 +112,7 @@ func (e *overdueEnv) executor(holder string) *CronExecutor {
 	return &CronExecutor{
 		Store:  e.db,
 		Holder: holder,
-		SendOverdue: func(_ context.Context, org store.OrgID, alias, _, body string) error {
+		SendSystem: func(_ context.Context, org store.OrgID, alias, _, body string) error {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			e.sent = append(e.sent, overduePage{org, alias, body})

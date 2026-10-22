@@ -59,6 +59,9 @@ the number of crons you can keep:
 
 Saving a cron with a schedule faster than your plan allows is rejected.
 
+Disabled crons (see [Runtime analysis](crons.md#runtime-analysis)) don't count
+against the number of crons your plan allows.
+
 ## Cron result persistence
 
 Since your cron monitors are just bash/Lua scripts against your logs, it's very
@@ -221,3 +224,54 @@ weft::avg error-rate 5m | weft::is_gt 50
 ```
 
 Both comparators treat empty or non-numeric input as false.
+
+## Static analysis
+
+Whenever you write a cron, weft analyzes its contents for a few types of correctness:
+
+* **Schedule** -- a schedule line must be present, confirm to the [accepted
+  grammar](crons.md#scheduling), and fire at a frequency allowed by your
+organization's plan
+* **Syntax** -- the script must parse as syntactically valid bash (and awk,
+  sed, or jq if using those interpreters)
+* **Aggregates** -- `weft::` aggregate functions read stored history and ignore
+  their input, so if they follow a pipe, you're doing something wrong
+* **Execution limits** -- `tail -f` is disallowed, since a script has to run to
+  completion, as is `range`, since the range of a cron is determined by its
+schedule
+
+If you run afoul of any of these rules, weft will refuse to write the contents
+to `/cron.d` (or `/bin`).
+
+## Runtime analysis
+
+Weft also watches how your crons behave once they are running. Each run has a
+budget of 2 seconds. A run that exceeds it is cancelled and recorded with the
+status `timeout`, and no further output from that run is saved.
+
+A notification target that doesn't accept an alert within 10 seconds also
+counts as a timeout for the cron that raised it (see [Delivery
+timeouts](alerts.md#delivery-timeouts)); it doesn't count against the 2
+seconds above.
+
+A cron that times out three ticks in a row, in either way, is benched: weft
+disables it, so it stops firing and stops counting against your plan's cron
+limit. A tick with no timeout resets the count. When weft benches a cron it
+notifies your [`system` alias](alerts.md#the-system-alias), naming the cron and
+saying how to turn it back on.
+
+A disabled cron stays in `/cron.d` with a marker at the top of its file:
+
+```
+# schedule: */5 * * * *
+# enabled: false
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l
+```
+
+You can also write `# enabled: false` yourself to pause a cron. To turn it back
+on, save the file without that line (or with `# enabled: true`). Re-enabling
+starts the count over, and is refused if you are already at your plan's cron
+limit.
+
+Before re-enabling a benched cron, narrow what it reads. A cron over a smaller
+`range` or a more specific log path will finish well inside its budget.

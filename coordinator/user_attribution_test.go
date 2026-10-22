@@ -130,8 +130,7 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 func TestCoordinatorExecuteForWatch_StoresNullCreator(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	if err := db.SaveCronWatch(custID, "", "scratchwrite", "every 1m",
-		`echo from-watch > /tmp/watchnote`, nil); err != nil {
+	if err := db.SaveCronWatch(custID, "", "scratchwrite", "every 1m", `echo from-watch > /tmp/watchnote`, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	w, err := db.GetCronWatch(custID, "scratchwrite")

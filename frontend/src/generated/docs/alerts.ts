@@ -13,16 +13,16 @@ const alerts = {
     { level: 2, id: "options", text: "Options" },
     { level: 2, id: "examples", text: "Examples" },
     { level: 3, id: "layering-crons-for-richer-alerts", text: "Layering crons for richer alerts" },
-    { level: 2, id: "validations", text: "Validations" },
-    { level: 3, id: "when-you-save", text: "When you save" },
-    { level: 3, id: "when-it-runs", text: "When it runs" },
+    { level: 2, id: "static-analysis", text: "Static analysis" },
     { level: 2, id: "notifications", text: "Notifications" },
     { level: 3, id: "define-a-notification-alias", text: "Define a notification alias" },
     { level: 3, id: "the-system-alias", text: "The system alias" },
     { level: 3, id: "connecting-slack-and-pagerduty", text: "Connecting Slack and PagerDuty" },
-    { level: 3, id: "webhook-and-email-need-no-account-connection", text: "Webhook and email need no account connection" },
+    { level: 3, id: "webhooks", text: "Webhooks" },
+    { level: 3, id: "email", text: "Email" },
     { level: 3, id: "testing-an-alias", text: "Testing an alias" },
     { level: 3, id: "debouncing", text: "Debouncing" },
+    { level: 3, id: "delivery-timeouts", text: "Delivery timeouts" },
     { level: 2, id: "see-also", text: "See also" },
   ],
   html: `<p>The <code>alert</code> function generates notifications based on stdin and other
@@ -144,109 +144,19 @@ our alerting cron:</p>
 <pre><code># schedule: every 1m
 deploy_danger | alert above 0 --notify=critical
 </code></pre>
-<h2 id="validations">Validations</h2>
-<p>Weft checks crons twice: when you save one, so a mistake is refused before it
-costs you a night of missed alerts, and while it runs, so a problem that only
-shows up with real data still reaches someone.</p>
-<h3 id="when-you-save">When you save</h3>
-<p>A save is refused, with a message saying why, if:</p>
-<table>
-<thead>
-<tr>
-<th>Check</th>
-<th>What's refused</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Schedule</td>
-<td>A missing schedule line, or one outside the <a href="/manual/crons#scheduling">accepted grammar</a>, such as a time of day or a weekday other than Monday</td>
-</tr>
-<tr>
-<td>Plan</td>
-<td>A schedule faster than your plan allows, or one more cron than your plan includes</td>
-</tr>
-<tr>
-<td>Syntax</td>
-<td>A pipeline that doesn't parse</td>
-</tr>
-<tr>
-<td>One alert, last</td>
-<td>An <code>alert</code> that isn't the final stage of the cron's last command: in a loop, a conditional, a group, an <code>&amp;&amp;</code> chain, or before more work. A cron has one alert stage</td>
-</tr>
-<tr>
-<td>One alias</td>
-<td>More than one <code>--notify</code> on an alert. To page several places, point <code>--notify</code> at one <code>notify.yaml</code> alias with several targets, or write one cron per alert</td>
-</tr>
-<tr>
-<td>Alert arguments</td>
-<td>An unknown condition or option, a non-numeric threshold or duration, or <code>-v</code> and <code>-t</code> that mix a column number with a JSON path</td>
-</tr>
-<tr>
-<td>Piped <code>weft::</code> functions</td>
-<td>A <code>weft::</code> function, other than <code>weft::is_gt</code> and <code>weft::is_lt</code>, that sits after a \`</td>
-</tr>
-<tr>
-<td>Scripts</td>
-<td>In <code>/bin</code> scripts, the same alert and <code>weft::</code> rules, plus <code>tail -f</code> and <code>range</code>, which have no place in a script that runs to completion</td>
-</tr>
-<tr>
-<td><code>notify.yaml</code></td>
-<td>A file that doesn't parse, an alias with no targets, a webhook-header placeholder with nothing stored behind it, or no <code>system</code> alias</td>
-</tr>
-</tbody>
-</table>
-<p>A few things are allowed but flagged. If a <code>head</code> or <code>tail</code> cap feeds a
-counting stage, so the count would silently cover only part of the interval,
-the save goes through with a warning. So does a pipeline with a stage that runs
-after retrieval, since it costs something on every run.</p>
-<h3 id="when-it-runs">When it runs</h3>
-<table>
-<thead>
-<tr>
-<th>Situation</th>
-<th>What happens</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>The pipeline fails before <code>alert</code></td>
-<td>The alert isn't evaluated. The run is recorded with status <code>error</code>, and no incident opens or closes</td>
-</tr>
-<tr>
-<td>The value isn't a number for a numeric condition</td>
-<td><code>alert</code> reports <code>non-numeric value</code> and exits non-zero</td>
-</tr>
-<tr>
-<td>A line has no tag under <code>-t</code></td>
-<td>That line is skipped, with a note in <code>stderr</code></td>
-</tr>
-<tr>
-<td>A notification can't be delivered</td>
-<td>The run exits non-zero, and each following tick of the incident retries the targets that missed it</td>
-</tr>
-<tr>
-<td>A predicate can't evaluate (no history yet, a non-numeric value, a bad window)</td>
-<td>It is false, not an error; see <a href="/manual/crons#predicates">Predicates</a>. Only <code>weft::is_absent</code> says why on <code>stderr</code></td>
-</tr>
-<tr>
-<td>A <code>weft::</code> function is given a window past its longest</td>
-<td>An error naming the limit, never a silently shorter window</td>
-</tr>
-<tr>
-<td>A cron stops running</td>
-<td>If a cron goes more than twice its interval without a run, weft notifies your <a href="#the-system-alias"><code>system</code> alias</a>. It does so once per episode, and one message per org even if many crons stopped together</td>
-</tr>
-</tbody>
-</table>
+<h2 id="static-analysis">Static analysis</h2>
+<p>In addition to the checks <a href="/manual/crons#static-analysis">run for every cron</a>, there are some specific checks run related to crons that contain <code>alert</code> invocations:</p>
+<ul>
+<li><strong>Alert positioning</strong> -- <code>alert</code> can only be invoked once per cron, and it has to be the last thing executed</li>
+<li><strong>Multiple aliases</strong> -- <code>alert</code> will bail if you provide <code>--notify</code> more than once (if you want several targets for an alert, you can configure your alias with as many as you like)</li>
+<li><strong>Bad arguments</strong> -- all conditions and flags must be known and stdin, positional arguments, and flag arguments must typecheck correctly, and <code>-v</code> and <code>-t</code> must not mix numeric field positions with a JSON path</li>
+</ul>
 <h2 id="notifications">Notifications</h2>
 <h3 id="define-a-notification-alias">Define a notification alias</h3>
-<p>When an <code>alert</code> fires in a cron, <code>--notify=&lt;alias&gt;</code> dispatches to a
-destination defined in <code>/etc/notify.yaml</code>. The alias is a name;
-it fans out to one or more targets across four service types — Slack,
-PagerDuty, webhook, and email.</p>
-<pre><code># /etc/notify.yaml
-ops:
+<p>When <code>alert</code> executes in a cron, <code>--notify=&lt;alias&gt;</code> dispatches to a destination
+defined in <code>/etc/notify.yaml</code>. One alias specifies one or more targets across
+four service types — Slack, PagerDuty, webhook, and email.</p>
+<pre><code>ops:
   slack:
     - &quot;#alerts&quot;
   pagerduty:
@@ -254,63 +164,125 @@ ops:
   email:
     - &quot;oncall@example.com&quot;
 </code></pre>
-<p>Edit it with <code>vi /etc/notify.yaml</code>. See <code>help alerts</code> for the full
-grammar (severities, webhook headers, per-target mappings).</p>
+<p>Edit it <code>/etc/notify.yaml</code> with vim in the weft shell.  Weft refuses to save
+<code>/etc/notify.yaml</code> if:</p>
+<ul>
+<li>the file doesn't parse</li>
+<li>an alias has no targets</li>
+<li>a webhook <code>url</code> or header refers to a <a href="#webhook-secrets"><code>\${secrets.NAME}</code></a> you haven't defined</li>
+<li>there is no <code>system</code></li>
+</ul>
 <h3 id="the-system-alias">The system alias</h3>
-<p>Every org has an alias named <code>system</code>. It receives the alerts weft raises on
-your behalf, as opposed to the ones your own <code>alert</code> stages raise. Today that
-is a cron that has stopped running: if a cron goes more than twice its interval
-without a run, weft notifies <code>system</code>.</p>
-<p>It starts out pointing at the email address of the person who created the org:</p>
+<p>Every org has an alias named <code>system</code>. It receives the alerts weft raises, as
+opposed to the ones your own <code>alert</code> stages raise. For example, weft pages
+<code>system</code> when a cron stops executing successfully, or when it disables a cron
+after repeated <a href="/manual/crons#runtime-analysis">timeouts</a>. Its initial target is the email
+address of the person who created the org:</p>
 <pre><code>system:
   email:
     - &quot;you@example.com&quot;
 </code></pre>
-<p>You can change its targets freely, to a Slack channel, a PagerDuty service, a
-shared mailbox, or several of them, but you can't remove it. A save of
-<code>/etc/notify.yaml</code> without a <code>system</code> alias is refused. Because ownership can't
-be transferred, point it at somewhere that outlives any one person, such as a
-team mailbox or a PagerDuty service.</p>
-<p>Email delivery needs SMTP configured for your deployment, as for any email
-target.</p>
+<p>You can change its target to any service type. You just can't remove the
+top-level key.</p>
 <h3 id="connecting-slack-and-pagerduty">Connecting Slack and PagerDuty</h3>
 <p><code>notify.yaml</code> names destinations — the credentials behind them
-live with your account. Connect them from the terminal with <code>weft integration</code> or under <strong>Account → Integrations</strong> in the browser;
-both do the same thing.</p>
-<pre><code># PagerDuty — paste an integration (routing) key, give it a name.
-# The name is what notify.yaml references under \`pagerduty:\`.
+live with your account. Connect them  under <strong>Account → Integrations</strong> in the browser or from the terminal with <code>weft integration</code>.</p>
+<pre><code># PagerDuty
 weft integration pagerduty add ops-daytime --key YOUR_ROUTING_KEY
 weft integration pagerduty rm  ops-daytime
 
-# Slack — authorize a workspace. Slack uses OAuth, so this opens a
-# browser tab to grant access (like \`weft login\`); the CLI waits and
-# confirms once the workspace is connected.
+# Slack
 weft integration slack connect
 weft integration slack rm
-
-# See what's connected, plus the PagerDuty names notify.yaml can use.
-weft integration list
 </code></pre>
-<p>A PagerDuty alias in <code>notify.yaml</code> must match a name you've registered
-with <code>weft integration pagerduty add</code>. Slack channels are named
-directly in <code>notify.yaml</code> (<code>&quot;#alerts&quot;</code>) once the workspace is
-connected.</p>
-<h3 id="webhook-and-email-need-no-account-connection">Webhook and email need no account connection</h3>
-<p>Webhook URLs and email addresses carry no account-level credential.
-They are written into <code>notify.yaml</code> per alias:</p>
-<p>Webhook <strong>header values</strong> are the exception: an <code>Authorization</code> token
-or a signing secret is a credential, so <code>cat /etc/notify.yaml</code> (and
-<code>git log -p /etc/notify.yaml</code>) shows each one as <code>&quot;&lt;redacted&gt;&quot;</code>. To edit,
-leave <code>&quot;&lt;redacted&gt;&quot;</code> where a value should stay unchanged, or write a real
-value to replace it. A <code>&quot;&lt;redacted&gt;&quot;</code> on a webhook, header or alias that
-has nothing stored is refused.</p>
+<p>A PagerDuty alias in <code>notify.yaml</code> must match a name you've registered with
+<code>weft integration pagerduty add</code>. Slack channels are named directly in
+<code>notify.yaml</code> (<code>&quot;#alerts&quot;</code>) once the workspace is connected, and you'll have to
+add weft to those channels for it to notify you.</p>
+<h3 id="webhooks">Webhooks</h3>
+<p>A webhook target is either a bare URL or a mapping with a <code>url</code> and optional
+<code>headers</code>:</p>
 <pre><code>pages:
   webhook:
     - &quot;https://hooks.example.com/weft&quot;
+    - url: &quot;https://api.example.com/alerts&quot;
+      headers:
+        Authorization: &quot;Bearer \${secrets.pages_token}&quot;
+        X-Team: ops
+</code></pre>
+<p>When an alert opens an incident, weft sends each webhook target one HTTP <code>POST</code>
+whose body is JSON:</p>
+<pre><code>{
+  &quot;v&quot;: 2,
+  &quot;cron&quot;: &quot;disk-use[web-1]&quot;,
+  &quot;alias&quot;: &quot;pages&quot;,
+  &quot;ts_unix&quot;: 1792677600,
+  &quot;body&quot;: &quot;disk-use[web-1]: 91.0 &gt; 80.0&quot;
+}
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>v</code></td>
+<td>The version of the weft webhooks protocol.</td>
+</tr>
+<tr>
+<td><code>cron</code></td>
+<td>The name of the cron that alerted. With <code>alert -t</code>, the tag is appended in brackets, as above, so each tag has its own name.</td>
+</tr>
+<tr>
+<td><code>alias</code></td>
+<td>The <code>notify.yaml</code> alias that routed the alert</td>
+</tr>
+<tr>
+<td><code>ts_unix</code></td>
+<td>When weft sent the request, in seconds since the epoch</td>
+</tr>
+<tr>
+<td><code>body</code></td>
+<td>The alert message: what the alert prints to <code>stderr</code>, or your <code>--msg</code> if you gave one. At most 1024 bytes, with <code>... (truncated)</code> appended when it was cut</td>
+</tr>
+</tbody>
+</table>
+<p>The request carries <code>Content-Type: application/json</code> and whatever you list under
+<code>headers</code>; nothing else is added. A header you list with the same name as a
+default (<code>Content-Type</code>, say) replaces it. Weft doesn't sign requests, so if
+your endpoint needs to know the request came from weft, send a token in a
+header.</p>
+<p>A webhook succeeds when it answers with a status below 300 within the
+<a href="#delivery-timeouts">delivery timeout</a>. Anything else is a failed delivery and
+is retried on the following ticks of the incident.</p>
+<h4 id="webhook-secrets">Webhook secrets</h4>
+<p>Anything written in <code>/etc/notify.yaml</code> is readable by whoever can read the
+file, and sits in its version history, so a token or signing secret doesn't
+belong there. Store it as a webhook secret instead and refer to it by name:</p>
+<pre><code>weft integration webhook-secret set pages_token --value s3cr3t
+</code></pre>
+<p>Then write <code>\${secrets.pages_token}</code> in a webhook's <code>url</code> or in a header value,
+as in the example above. Weft substitutes the value when it sends the request.</p>
+<ul>
+<li>Names use letters, digits, <code>_</code> and <code>-</code>.</li>
+<li>Values are write-only. <code>weft integration list</code> shows the names, and nothing
+shows the values. Setting a name again replaces the value for every alias
+that uses it.</li>
+<li>Saving <code>notify.yaml</code> is refused if it refers to a secret you haven't
+defined, and <code>weft integration webhook-secret rm &lt;name&gt;</code> is refused while an
+alias still refers to it.</li>
+<li>Error messages and logs show <code>\${secrets.pages_token}</code>, never the value.</li>
+</ul>
+<h3 id="email">Email</h3>
+<p>Email addresses carry no account-level credential. They are written into
+<code>notify.yaml</code> per alias:</p>
+<pre><code>pages:
   email:
     - &quot;oncall@example.com&quot;
 </code></pre>
-<p>Email delivery requires SMTP to be configured for your deployment.</p>
 <h3 id="testing-an-alias">Testing an alias</h3>
 <pre><code>echo &quot;test fire&quot; | alert --notify=ops
 </code></pre>
@@ -340,6 +312,13 @@ notified again.</li>
 nothing to list, acknowledge or close by hand. A run that errors neither opens
 nor closes one. Interactive runs have no cron, so they have no incidents and
 notify every time.</p>
+<h3 id="delivery-timeouts">Delivery timeouts</h3>
+<p>Each target gets 10 seconds to accept a notification, whatever kind it is:
+Slack, PagerDuty, a webhook or an email. A target that doesn't is a failed
+delivery, retried like any other. It also counts against the cron: one that
+times out on three ticks in a row is disabled, just as for a run that
+<a href="/manual/crons#runtime-analysis">exceeds its budget</a>. A tick whose deliveries all
+go through, or on which nothing needed sending, starts the count over.</p>
 <h2 id="see-also">See also</h2>
 <ul>
 <li><strong>Crons</strong> — scheduling, result history, and the reference for the

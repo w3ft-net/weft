@@ -154,56 +154,23 @@ our alerting cron:
 deploy_danger | alert above 0 --notify=critical
 ```
 
-## Validations
+## Static analysis
 
-Weft checks crons twice: when you save one, so a mistake is refused before it
-costs you a night of missed alerts, and while it runs, so a problem that only
-shows up with real data still reaches someone.
+In addition to the checks [run for every cron](crons.md#static-analysis), there are some specific checks run related to crons that contain `alert` invocations:
 
-### When you save
-
-A save is refused, with a message saying why, if:
-
-| Check | What's refused |
-|---|---|
-| Schedule | A missing schedule line, or one outside the [accepted grammar](crons.md#scheduling), such as a time of day or a weekday other than Monday |
-| Plan | A schedule faster than your plan allows, or one more cron than your plan includes |
-| Syntax | A pipeline that doesn't parse |
-| One alert, last | An `alert` that isn't the final stage of the cron's last command: in a loop, a conditional, a group, an `&&` chain, or before more work. A cron has one alert stage |
-| One alias | More than one `--notify` on an alert. To page several places, point `--notify` at one `notify.yaml` alias with several targets, or write one cron per alert |
-| Alert arguments | An unknown condition or option, a non-numeric threshold or duration, or `-v` and `-t` that mix a column number with a JSON path |
-| Piped `weft::` functions | A `weft::` function, other than `weft::is_gt` and `weft::is_lt`, that sits after a `|`. They read stored history and ignore their input, so the upstream stage would be discarded. To test a piped value, use the comparators |
-| Scripts | In `/bin` scripts, the same alert and `weft::` rules, plus `tail -f` and `range`, which have no place in a script that runs to completion |
-| `notify.yaml` | A file that doesn't parse, an alias with no targets, a webhook-header placeholder with nothing stored behind it, or no `system` alias |
-
-A few things are allowed but flagged. If a `head` or `tail` cap feeds a
-counting stage, so the count would silently cover only part of the interval,
-the save goes through with a warning. So does a pipeline with a stage that runs
-after retrieval, since it costs something on every run.
-
-### When it runs
-
-| Situation | What happens |
-|---|---|
-| The pipeline fails before `alert` | The alert isn't evaluated. The run is recorded with status `error`, and no incident opens or closes |
-| The value isn't a number for a numeric condition | `alert` reports `non-numeric value` and exits non-zero |
-| A line has no tag under `-t` | That line is skipped, with a note in `stderr` |
-| A notification can't be delivered | The run exits non-zero, and each following tick of the incident retries the targets that missed it |
-| A predicate can't evaluate (no history yet, a non-numeric value, a bad window) | It is false, not an error; see [Predicates](crons.md#predicates). Only `weft::is_absent` says why on `stderr` |
-| A `weft::` function is given a window past its longest | An error naming the limit, never a silently shorter window |
-| A cron stops running | If a cron goes more than twice its interval without a run, weft notifies your [`system` alias](#the-system-alias). It does so once per episode, and one message per org even if many crons stopped together |
+* **Alert positioning** -- `alert` can only be invoked once per cron, and it has to be the last thing executed 
+* **Multiple aliases** -- `alert` will bail if you provide `--notify` more than once (if you want several targets for an alert, you can configure your alias with as many as you like)
+* **Bad arguments** -- all conditions and flags must be known and stdin, positional arguments, and flag arguments must typecheck correctly, and `-v` and `-t` must not mix numeric field positions with a JSON path
 
 ## Notifications
 
 ### Define a notification alias
 
-When an `alert` fires in a cron, `--notify=<alias>` dispatches to a
-destination defined in `/etc/notify.yaml`. The alias is a name;
-it fans out to one or more targets across four service types — Slack,
-PagerDuty, webhook, and email.
+When `alert` executes in a cron, `--notify=<alias>` dispatches to a destination
+defined in `/etc/notify.yaml`. One alias specifies one or more targets across
+four service types — Slack, PagerDuty, webhook, and email.
 
 ```
-# /etc/notify.yaml
 ops:
   slack:
     - "#alerts"
@@ -213,17 +180,21 @@ ops:
     - "oncall@example.com"
 ```
 
-Edit it with `vi /etc/notify.yaml`. See `help alerts` for the full
-grammar (severities, webhook headers, per-target mappings).
+Edit it `/etc/notify.yaml` with vim in the weft shell.  Weft refuses to save
+`/etc/notify.yaml` if:
+
+* the file doesn't parse
+* an alias has no targets
+* a webhook `url` or header refers to a [`${secrets.NAME}`](#webhook-secrets) you haven't defined
+* there is no `system`
 
 ### The system alias
 
-Every org has an alias named `system`. It receives the alerts weft raises on
-your behalf, as opposed to the ones your own `alert` stages raise. Today that
-is a cron that has stopped running: if a cron goes more than twice its interval
-without a run, weft notifies `system`.
-
-It starts out pointing at the email address of the person who created the org:
+Every org has an alias named `system`. It receives the alerts weft raises, as
+opposed to the ones your own `alert` stages raise. For example, weft pages
+`system` when a cron stops executing successfully, or when it disables a cron
+after repeated [timeouts](crons.md#runtime-analysis). Its initial target is the email
+address of the person who created the org:
 
 ```
 system:
@@ -231,64 +202,108 @@ system:
     - "you@example.com"
 ```
 
-You can change its targets freely, to a Slack channel, a PagerDuty service, a
-shared mailbox, or several of them, but you can't remove it. A save of
-`/etc/notify.yaml` without a `system` alias is refused. Because ownership can't
-be transferred, point it at somewhere that outlives any one person, such as a
-team mailbox or a PagerDuty service.
-
-Email delivery needs SMTP configured for your deployment, as for any email
-target.
+You can change its target to any service type. You just can't remove the
+top-level key.
 
 ### Connecting Slack and PagerDuty
 
 `notify.yaml` names destinations — the credentials behind them
-live with your account. Connect them from the terminal with `weft
-integration` or under **Account → Integrations** in the browser;
-both do the same thing.
+live with your account. Connect them  under **Account → Integrations** in the browser or from the terminal with `weft
+integration`.
 
 ```
-# PagerDuty — paste an integration (routing) key, give it a name.
-# The name is what notify.yaml references under `pagerduty:`.
+# PagerDuty
 weft integration pagerduty add ops-daytime --key YOUR_ROUTING_KEY
 weft integration pagerduty rm  ops-daytime
 
-# Slack — authorize a workspace. Slack uses OAuth, so this opens a
-# browser tab to grant access (like `weft login`); the CLI waits and
-# confirms once the workspace is connected.
+# Slack
 weft integration slack connect
 weft integration slack rm
-
-# See what's connected, plus the PagerDuty names notify.yaml can use.
-weft integration list
 ```
 
-A PagerDuty alias in `notify.yaml` must match a name you've registered
-with `weft integration pagerduty add`. Slack channels are named
-directly in `notify.yaml` (`"#alerts"`) once the workspace is
-connected.
+A PagerDuty alias in `notify.yaml` must match a name you've registered with
+`weft integration pagerduty add`. Slack channels are named directly in
+`notify.yaml` (`"#alerts"`) once the workspace is connected, and you'll have to
+add weft to those channels for it to notify you.
 
-### Webhook and email need no account connection
+### Webhooks
 
-Webhook URLs and email addresses carry no account-level credential.
-They are written into `notify.yaml` per alias:
-
-Webhook **header values** are the exception: an `Authorization` token
-or a signing secret is a credential, so `cat /etc/notify.yaml` (and
-`git log -p /etc/notify.yaml`) shows each one as `"<redacted>"`. To edit,
-leave `"<redacted>"` where a value should stay unchanged, or write a real
-value to replace it. A `"<redacted>"` on a webhook, header or alias that
-has nothing stored is refused.
+A webhook target is either a bare URL or a mapping with a `url` and optional
+`headers`:
 
 ```
 pages:
   webhook:
     - "https://hooks.example.com/weft"
+    - url: "https://api.example.com/alerts"
+      headers:
+        Authorization: "Bearer ${secrets.pages_token}"
+        X-Team: ops
+```
+
+When an alert opens an incident, weft sends each webhook target one HTTP `POST`
+whose body is JSON:
+
+```
+{
+  "v": 2,
+  "cron": "disk-use[web-1]",
+  "alias": "pages",
+  "ts_unix": 1792677600,
+  "body": "disk-use[web-1]: 91.0 > 80.0"
+}
+```
+
+| Field | Value |
+|---|---|
+| `v` | The version of the weft webhooks protocol. |
+| `cron` | The name of the cron that alerted. With `alert -t`, the tag is appended in brackets, as above, so each tag has its own name. |
+| `alias` | The `notify.yaml` alias that routed the alert |
+| `ts_unix` | When weft sent the request, in seconds since the epoch |
+| `body` | The alert message: what the alert prints to `stderr`, or your `--msg` if you gave one. At most 1024 bytes, with `... (truncated)` appended when it was cut |
+
+The request carries `Content-Type: application/json` and whatever you list under
+`headers`; nothing else is added. A header you list with the same name as a
+default (`Content-Type`, say) replaces it. Weft doesn't sign requests, so if
+your endpoint needs to know the request came from weft, send a token in a
+header.
+
+A webhook succeeds when it answers with a status below 300 within the
+[delivery timeout](#delivery-timeouts). Anything else is a failed delivery and
+is retried on the following ticks of the incident.
+
+#### Webhook secrets
+
+Anything written in `/etc/notify.yaml` is readable by whoever can read the
+file, and sits in its version history, so a token or signing secret doesn't
+belong there. Store it as a webhook secret instead and refer to it by name:
+
+```
+weft integration webhook-secret set pages_token --value s3cr3t
+```
+
+Then write `${secrets.pages_token}` in a webhook's `url` or in a header value,
+as in the example above. Weft substitutes the value when it sends the request.
+
+* Names use letters, digits, `_` and `-`.
+* Values are write-only. `weft integration list` shows the names, and nothing
+  shows the values. Setting a name again replaces the value for every alias
+  that uses it.
+* Saving `notify.yaml` is refused if it refers to a secret you haven't
+  defined, and `weft integration webhook-secret rm <name>` is refused while an
+  alias still refers to it.
+* Error messages and logs show `${secrets.pages_token}`, never the value.
+
+### Email
+
+Email addresses carry no account-level credential. They are written into
+`notify.yaml` per alias:
+
+```
+pages:
   email:
     - "oncall@example.com"
 ```
-
-Email delivery requires SMTP to be configured for your deployment.
 
 ### Testing an alias
 
@@ -325,6 +340,15 @@ Incidents are bookkeeping for notification, not something you manage: there is
 nothing to list, acknowledge or close by hand. A run that errors neither opens
 nor closes one. Interactive runs have no cron, so they have no incidents and
 notify every time.
+
+### Delivery timeouts
+
+Each target gets 10 seconds to accept a notification, whatever kind it is:
+Slack, PagerDuty, a webhook or an email. A target that doesn't is a failed
+delivery, retried like any other. It also counts against the cron: one that
+times out on three ticks in a row is disabled, just as for a run that
+[exceeds its budget](crons.md#runtime-analysis). A tick whose deliveries all
+go through, or on which nothing needed sending, starts the count over.
 
 ## See also
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -562,15 +563,21 @@ func (s *Store) DeleteShellFunction(orgID OrgID, name string) error {
 // dot-prefixed JSON path (".foo.bar"); see shellcore.FieldSpec.
 type CronWatch struct {
 	gorm.Model
-	OrgID      OrgID  `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
-	Name       string `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
-	Schedule   string `gorm:"not null"` // "*/5 * * * *" or "every 1m"
-	Pipeline   string `gorm:"type:text;not null"`
-	Enabled    bool   `gorm:"not null;default:true"`
-	LastRunAt  *time.Time
-	LastStatus string  // "ok", "error", "stderr"
-	AlertKey   *string `gorm:"column:alert_key"`
-	AlertTag   *string `gorm:"column:alert_tag"`
+	OrgID    OrgID  `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
+	Name     string `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
+	Schedule string `gorm:"not null"` // "*/5 * * * *" or "every 1m"
+	Pipeline string `gorm:"type:text;not null"`
+	// Enabled has no gorm default: with one, gorm swaps an explicit false
+	// for true on create. The column's own default (schema.sql) covers raw SQL.
+	Enabled bool `gorm:"not null"`
+	// ConsecutiveTimeouts counts runs in a row that hit the run budget; at
+	// the bench threshold the cron is disabled. Any run that finishes in
+	// time, and any save that re-enables the cron, resets it.
+	ConsecutiveTimeouts int `gorm:"column:consecutive_timeouts;not null;default:0"`
+	LastRunAt           *time.Time
+	LastStatus          string  // "ok", "error", "stderr"
+	AlertKey            *string `gorm:"column:alert_key"`
+	AlertTag            *string `gorm:"column:alert_tag"`
 	// AlertCondition + AlertThreshold are the dashboard projection of
 	// the `alert` stage's numeric cutoff. Populated only for
 	// above/below/eq/neq — conditions without a single absolute
@@ -608,7 +615,7 @@ func computeCronWatchHash(schedule, pipeline string) string {
 // show the user. Today the only producer is the truncation lint
 // below, but this is a generic channel: any future save-time check
 // that wants to warn without blocking uses the same mechanism.
-func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline string, loweredPlan []byte) error {
+func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline string, enabled bool, loweredPlan []byte) error {
 	if _, err := ValidateSchedule(schedule); err != nil {
 		return err
 	}
@@ -632,7 +639,7 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 				Name:           name,
 				Schedule:       schedule,
 				Pipeline:       pipeline,
-				Enabled:        true,
+				Enabled:        enabled,
 				AlertKey:       compiled.AlertKey,
 				AlertTag:       compiled.AlertTag,
 				AlertCondition: compiled.AlertCondition,
@@ -646,7 +653,7 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 			return tx.Create(row).Error
 		}
 		// No-op save: skip the UPDATE. See SaveShellFunction for why.
-		if w.ContentHash == hash && !w.DeletedAt.Valid {
+		if w.ContentHash == hash && !w.DeletedAt.Valid && w.Enabled == enabled {
 			return nil
 		}
 		// Existing watches keep their original creator on overwrite.
@@ -660,9 +667,11 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 			"alert_condition": compiled.AlertCondition,
 			"alert_threshold": compiled.AlertThreshold,
 			"lowered_plan":    loweredPlan,
+			"enabled":         enabled,
 		}
-		if w.DeletedAt.Valid {
-			updates["enabled"] = true // a revived watch starts enabled, like a new one
+		if enabled && !w.Enabled {
+			// Turning a benched cron back on wipes its strikes.
+			updates["consecutive_timeouts"] = 0
 		}
 		return tx.Unscoped().Model(&w).Updates(updates).Error
 	}); err != nil {
@@ -815,11 +824,33 @@ func (s *Store) DeleteCronWatch(orgID OrgID, name string) error {
 	return s.scoped(orgID).Where("name = ?", name).Delete(&CronWatch{}).Error
 }
 
-// CountCronWatches returns the number of cron watches for a customer.
+// CountCronWatches returns the number of enabled cron watches for a customer:
+// a disabled cron is free, so it does not count against the plan limit.
 func (s *Store) CountCronWatches(orgID OrgID) (int, error) {
 	var count int64
-	err := s.scoped(orgID).Model(&CronWatch{}).Count(&count).Error
+	err := s.scoped(orgID).Model(&CronWatch{}).Where("enabled = ?", true).Count(&count).Error
 	return int(count), err
+}
+
+// RecordCronTimeout adds a strike to a cron whose run hit its budget and
+// disables it once it has strikes in a row, reporting whether this call
+// benched it. One UPDATE, so concurrent coordinators can't both miss the
+// threshold.
+func (s *Store) RecordCronTimeout(ctx context.Context, id uint, strikes int) (benched bool, err error) {
+	var enabled bool
+	res := s.DB().WithContext(WithoutTenantScope(ctx)).Raw(
+		`UPDATE cron_watches
+		    SET consecutive_timeouts = consecutive_timeouts + 1,
+		        enabled = enabled AND consecutive_timeouts + 1 < ?
+		  WHERE id = ?
+		  RETURNING enabled`, strikes, id).Scan(&enabled)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return false, fmt.Errorf("cron %d: no such watch", id)
+	}
+	return !enabled, nil
 }
 
 // --- Cron Results ---
@@ -1131,6 +1162,10 @@ func (s *Store) SaveSlackConfig(orgID OrgID, webhook, botToken, teamName string)
 // system alias.
 func (s *Store) SaveNotifyAliases(orgID OrgID, userID, aliasesYAML string) error {
 	if err := ValidateNotifyAliases(aliasesYAML); err != nil {
+		return err
+	}
+	aliases, _ := ParseNotifyAliases(aliasesYAML) // parsed once already by the validation above
+	if err := s.checkSecretRefs(orgID, aliases); err != nil {
 		return err
 	}
 	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {

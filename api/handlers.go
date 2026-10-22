@@ -302,6 +302,8 @@ func (s *Server) Handler() http.Handler {
 	auth.Handle("PUT /api/integrations/pagerduty", protected(s.handlePagerDutySave))
 	auth.Handle("DELETE /api/integrations/pagerduty", protected(s.handlePagerDutyDisconnect))
 	auth.Handle("DELETE /api/integrations/pagerduty/{name}", protected(s.handlePagerDutyDelete))
+	auth.Handle("PUT /api/integrations/webhook-secrets", protected(s.handleWebhookSecretSave))
+	auth.Handle("DELETE /api/integrations/webhook-secrets/{name}", protected(s.handleWebhookSecretDelete))
 	auth.HandleFunc("GET /api/namespaces", s.handleListNamespaces)
 	auth.Handle("POST /api/namespaces", protected(s.handleCreateNamespace))
 	auth.Handle("DELETE /api/namespaces/{name}", protected(s.handleDeleteNamespace))
@@ -1642,9 +1644,9 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check watch count (only for new watches, not updates).
-	if _, err := s.store.GetCronWatch(custID, name); err != nil {
-		// New watch — check count limit.
+	// A save through the API always leaves the cron enabled, so a new
+	// watch, or one that was benched, takes a slot.
+	if existing, err := s.store.GetCronWatch(custID, name); err != nil || !existing.Enabled {
 		count, err := s.store.CountCronWatches(custID)
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -1683,7 +1685,7 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 	// rejection, and — unlike before — a real rejection now carries
 	// its own message (bash syntax error, tier limit, ...) instead of
 	// a generic "internal error" that discarded it.
-	blocking, warnings := store.Split(s.store.SaveCronWatch(custID, session.UserID, name, req.Schedule, req.Pipeline, loweredJSON))
+	blocking, warnings := store.Split(s.store.SaveCronWatch(custID, session.UserID, name, req.Schedule, req.Pipeline, true, loweredJSON))
 	if len(blocking) > 0 {
 		http.Error(w, errors.Join(blocking...).Error(), http.StatusBadRequest)
 		return

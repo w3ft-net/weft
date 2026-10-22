@@ -914,7 +914,7 @@ func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.S
 	// it rather than misreporting a successful save as an RPC failure;
 	// the CLI/HTTP/MCP surfaces are where warnings actually reach a
 	// user today.
-	blocking, _ := store.Split(s.Store.SaveCronWatch(custID, callerUserID(ctx), req.Name, req.Schedule, req.Pipeline, loweredJSON))
+	blocking, _ := store.Split(s.Store.SaveCronWatch(custID, callerUserID(ctx), req.Name, req.Schedule, req.Pipeline, true, loweredJSON))
 	if len(blocking) > 0 {
 		return nil, errors.Join(blocking...)
 	}

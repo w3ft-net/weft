@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -23,9 +25,62 @@ var pdEventsURL = "https://events.pagerduty.com/v2/enqueue"
 // /etc/notify.yaml. A cron watch's `notify:` field names an alias; the alias
 // fans out to one or more Slack / PagerDuty targets.
 type Notifier struct {
-	Store  *store.Store
-	Email  *email.Config // nil = email notifications disabled (dev mode)
-	client *http.Client
+	Store *store.Store
+	Email *email.Config // nil = email notifications disabled (dev mode)
+	// Timeout is how long one target gets to accept a notification, whatever
+	// kind of target it is. Zero means notifyTimeout; tests shrink it.
+	Timeout time.Duration
+	client  *http.Client
+}
+
+// notifyTimeout is the default per-target delivery budget.
+const notifyTimeout = 10 * time.Second
+
+// ErrDeliveryTimeout marks a Send in which at least one target did not accept
+// the notification in time. A cron whose deliveries keep timing out is benched
+// the same way as one whose runs do (see CronExecutor.executeWatch).
+var ErrDeliveryTimeout = errors.New("delivery timed out")
+
+// scrubbedError reports msg in place of err's text, keeping err for errors.Is.
+type scrubbedError struct {
+	msg string
+	err error
+}
+
+func (e *scrubbedError) Error() string { return e.msg }
+func (e *scrubbedError) Unwrap() error { return e.err }
+
+// deliveryTimeoutError is the first failure of a Send that also timed out,
+// keeping its message while answering errors.Is(err, ErrDeliveryTimeout).
+type deliveryTimeoutError struct{ err error }
+
+func (e *deliveryTimeoutError) Error() string        { return e.err.Error() }
+func (e *deliveryTimeoutError) Unwrap() error        { return e.err }
+func (e *deliveryTimeoutError) Is(target error) bool { return target == ErrDeliveryTimeout }
+
+// deliver runs one target's send under the delivery budget. The budget is its
+// own: it neither inherits the cron run's deadline nor depends on the send
+// honoring its context (SMTP doesn't), so a stuck target is abandoned and
+// reported as ErrDeliveryTimeout whatever it is.
+func (n *Notifier) deliver(ctx context.Context, send func(context.Context) error) error {
+	budget := n.Timeout
+	if budget == 0 {
+		budget = notifyTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- send(ctx) }()
+	select {
+	case err := <-done:
+		var ne net.Error
+		if err != nil && (errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout())) {
+			return fmt.Errorf("%w after %s: %v", ErrDeliveryTimeout, budget, err)
+		}
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("%w after %s", ErrDeliveryTimeout, budget)
+	}
 }
 
 // NewNotifier creates a notifier with a default HTTP client.
@@ -33,7 +88,7 @@ func NewNotifier(s *store.Store, emailCfg *email.Config) *Notifier {
 	return &Notifier{
 		Store:  s,
 		Email:  emailCfg,
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: &http.Client{Timeout: notifyTimeout},
 	}
 }
 
@@ -69,11 +124,15 @@ func (n *Notifier) Send(ctx context.Context, orgID store.OrgID, aliasName, watch
 
 	var sent []string
 	var firstErr error
-	try := func(key, kind, name string, send func() error) {
+	timedOut := false
+	try := func(key, kind, name string, send func(context.Context) error) {
 		if delivered[key] {
 			return
 		}
-		if err := send(); err != nil {
+		if err := n.deliver(ctx, send); err != nil {
+			if errors.Is(err, ErrDeliveryTimeout) {
+				timedOut = true
+			}
 			weftsdk.Infof(ctx, "notify[%s]: %s %s: %v", watchName, kind, name, err)
 			if firstErr == nil {
 				firstErr = err
@@ -83,18 +142,32 @@ func (n *Notifier) Send(ctx context.Context, orgID store.OrgID, aliasName, watch
 		sent = append(sent, key)
 	}
 	for _, t := range alias.Slack {
-		try("slack:"+t.Channel, "slack", t.Channel, func() error { return n.sendSlack(ctx, nc, watchName, t, body) })
+		try("slack:"+t.Channel, "slack", t.Channel, func(ctx context.Context) error { return n.sendSlack(ctx, nc, watchName, t, body) })
 	}
 	for _, t := range alias.PagerDuty {
-		try("pagerduty:"+t.Name, "pagerduty", t.Name, func() error { return n.sendPagerDuty(ctx, orgID, watchName, t, body) })
+		try("pagerduty:"+t.Name, "pagerduty", t.Name, func(ctx context.Context) error { return n.sendPagerDuty(ctx, orgID, watchName, t, body) })
 	}
 	for _, t := range alias.Webhook {
 		// The URL can carry a secret, so the stored key is a digest of it.
+		// It is taken before substitution, from the ${secrets.NAME} text.
 		sum := sha256.Sum256([]byte(t.URL))
-		try("webhook:"+hex.EncodeToString(sum[:6]), "webhook", t.URL, func() error { return n.sendWebhook(ctx, aliasName, watchName, t, body) })
+		try("webhook:"+hex.EncodeToString(sum[:6]), "webhook", t.URL, func(ctx context.Context) error {
+			resolved, mask, err := n.Store.ResolveWebhookTarget(orgID, t)
+			if err != nil {
+				return err
+			}
+			if err := n.sendWebhook(ctx, aliasName, watchName, resolved, body); err != nil {
+				// An HTTP client's error carries the whole URL.
+				return &scrubbedError{msg: mask.Replace(err.Error()), err: err}
+			}
+			return nil
+		})
 	}
 	for _, t := range alias.Email {
-		try("email:"+t.Address, "email", t.Address, func() error { return n.sendEmail(ctx, watchName, t, body) })
+		try("email:"+t.Address, "email", t.Address, func(ctx context.Context) error { return n.sendEmail(ctx, watchName, t, body) })
+	}
+	if timedOut && !errors.Is(firstErr, ErrDeliveryTimeout) {
+		firstErr = &deliveryTimeoutError{firstErr}
 	}
 	return sent, firstErr
 }
@@ -298,7 +371,7 @@ func (n *Notifier) sendWebhook(ctx context.Context, aliasName, watchName string,
 		return fmt.Errorf("webhook returned %d", resp.StatusCode)
 	}
 
-	weftsdk.Infof(ctx, "notify: sent webhook alert for watch %s to %s", watchName, target.URL)
+	weftsdk.Infof(ctx, "notify: sent webhook alert for watch %s", watchName)
 	return nil
 }
 

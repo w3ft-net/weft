@@ -30,7 +30,7 @@ func TestDashboards_ListAndGet(t *testing.T) {
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	// Seed a watch and a dashboard that references it.
-	if err := s.SaveCronWatch(cust.ID, user.ID, "error-rate-hourly", "every 5m", "echo 1", nil); err != nil {
+	if err := s.SaveCronWatch(cust.ID, user.ID, "error-rate-hourly", "every 5m", "echo 1", true, nil); err != nil {
 		t.Fatalf("seed watch: %v", err)
 	}
 	dashYAML := `title: Production
@@ -153,7 +153,7 @@ func TestDashboards_Get_TileDisplay(t *testing.T) {
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	seed := func(name string, v *float64) {
-		if err := s.SaveCronWatch(cust.ID, user.ID, name, "every 5m", "echo 1", nil); err != nil {
+		if err := s.SaveCronWatch(cust.ID, user.ID, name, "every 5m", "echo 1", true, nil); err != nil {
 			t.Fatalf("seed %s: %v", name, err)
 		}
 		if v == nil {

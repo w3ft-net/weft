@@ -1,8 +1,6 @@
 package store
 
-import (
-	"testing"
-)
+import "testing"
 
 // These tests pin the creator-attribution contract: every Save / Write
 // path on the three user-content namespaces (/bin via shell_functions,
@@ -52,7 +50,7 @@ func TestSaveCronWatch_RecordsCreator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.SaveCronWatch(cust.ID, user.ID, "errors", "*/5 * * * *", "echo 1", nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, user.ID, "errors", "*/5 * * * *", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	w, err := db.GetCronWatch(cust.ID, "errors")

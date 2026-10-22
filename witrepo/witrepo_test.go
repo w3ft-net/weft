@@ -70,7 +70,7 @@ func (f *fixture) saveBin(t *testing.T, u *store.User, name, src string) {
 
 func (f *fixture) saveCron(t *testing.T, u *store.User, name, pipeline string) {
 	t.Helper()
-	if err := f.db.SaveCronWatch(f.org, u.ID, name, "*/10 * * * *", pipeline, nil); err != nil {
+	if err := f.db.SaveCronWatch(f.org, u.ID, name, "*/10 * * * *", pipeline, true, nil); err != nil {
 		t.Fatal(err)
 	}
 }

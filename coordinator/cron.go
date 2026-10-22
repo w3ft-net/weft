@@ -8,11 +8,40 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/store"
 )
+
+const (
+	// cronRunTimeout is the budget for one run of a cron.
+	cronRunTimeout = 2 * time.Second
+	// cronBenchStrikes is how many runs in a row may blow the budget before
+	// the cron is disabled.
+	cronBenchStrikes = 3
+)
+
+// runOutcome carries facts about one run back from deep inside it. The alert
+// stage is built inside ExecuteForWatch, out of the executor's reach, so it
+// reports through the run's context.
+type runOutcome struct{ deliveryTimedOut atomic.Bool }
+
+type runOutcomeKey struct{}
+
+func withRunOutcome(ctx context.Context) (context.Context, *runOutcome) {
+	o := &runOutcome{}
+	return context.WithValue(ctx, runOutcomeKey{}, o), o
+}
+
+// noteDeliveryTimeout records that a notification target timed out during the
+// run in ctx; outside a cron run it does nothing.
+func noteDeliveryTimeout(ctx context.Context) {
+	if o, ok := ctx.Value(runOutcomeKey{}).(*runOutcome); ok {
+		o.deliveryTimedOut.Store(true)
+	}
+}
 
 // CronExecutor runs scheduled cron watches in the background.
 // It follows the same goroutine-per-task pattern as the poller.
@@ -30,9 +59,12 @@ type CronExecutor struct {
 	// Claims is the slot-claim backend. Nil means Store; tests substitute it
 	// for fault injection.
 	Claims slotClaimer
-	// SendOverdue delivers an overdue page. Nil means Notifier.Send;
+	// RunTimeout is the budget for one run. Zero means cronRunTimeout;
+	// tests shrink it.
+	RunTimeout time.Duration
+	// SendSystem delivers an overdue page. Nil means Notifier.Send;
 	// tests substitute it.
-	SendOverdue func(ctx context.Context, orgID store.OrgID, alias, watchName, body string) error
+	SendSystem func(ctx context.Context, orgID store.OrgID, alias, watchName, body string) error
 
 	mu      sync.Mutex
 	cancels map[uint]context.CancelFunc // watchID → cancel
@@ -167,7 +199,14 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 	// interactive-mode synthetic one.
 	// ctx carries the trace ID minted when the slot claim was won (see
 	// claimTick), so everything this firing logs or calls out to shares it.
-	result, err := ce.Coord.ExecuteForWatch(ctx, pipeline, tr, &watch)
+	budget := ce.RunTimeout
+	if budget == 0 {
+		budget = cronRunTimeout
+	}
+	runCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	runCtx, outcome := withRunOutcome(runCtx)
+	result, err := ce.Coord.ExecuteForWatch(runCtx, pipeline, tr, &watch)
 
 	duration := time.Since(start)
 	status := "ok"
@@ -184,7 +223,7 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 		// the persistence path below. Buffered paths (alert, redirect,
 		// staged compute) short-circuit inside Drain when those fields
 		// are already set, so this is cheap in either case.
-		drained, drainErr := result.Drain(ctx)
+		drained, drainErr := result.Drain(runCtx)
 		if drainErr != nil {
 			status = "error"
 			stderr = drainErr.Error()
@@ -200,6 +239,14 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 		}
 	}
 
+	// A run that failed with its deadline spent timed out, whatever error
+	// the cancellation surfaced as.
+	timedOut := status == "error" && runCtx.Err() == context.DeadlineExceeded
+	if timedOut {
+		status = "timeout"
+		stderr = fmt.Sprintf("timed out after %s", budget)
+	}
+
 	// Persist result(s). Single-row mode: one cron_results row with
 	// tag='' and value auto-parsed from stdout. Multi-row mode (watch has
 	// alert_key set): split stdout into lines, extract value from field
@@ -210,15 +257,34 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 		weftsdk.Errorf(ctx, "cron[%s]: failed to save result: %v", watch.Name, saveErr)
 	}
 
-	// Update watch status.
-	if updateErr := func(id uint, status string) error {
-		now := time.Now()
-		return ce.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Model(&store.CronWatch{}).Where("id = ?", id).Updates(map[string]any{
-			"last_run_at": &now,
-			"last_status": status,
-		}).Error
-	}(watch.ID, status); updateErr != nil {
+	// Update watch status. A tick is a strike when the run blew its budget or
+	// a notification target timed out; any other tick clears the strikes, and
+	// the last strike disables the cron.
+	strike := timedOut || outcome.deliveryTimedOut.Load()
+	now := time.Now()
+	updates := map[string]any{"last_run_at": &now, "last_status": status}
+	if !strike {
+		updates["consecutive_timeouts"] = 0
+	}
+	if updateErr := ce.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Model(&store.CronWatch{}).Where("id = ?", watch.ID).Updates(updates).Error; updateErr != nil {
 		weftsdk.Errorf(ctx, "cron[%s]: failed to update run status: %v", watch.Name, updateErr)
+	}
+	if strike {
+		benched, benchErr := ce.Store.RecordCronTimeout(ctx, watch.ID, cronBenchStrikes)
+		switch {
+		case benchErr != nil:
+			weftsdk.Errorf(ctx, "cron[%s]: failed to record timeout: %v", watch.Name, benchErr)
+		case benched:
+			weftsdk.Warnf(ctx, "cron[%s]: disabled after %d timeouts in a row (run budget %s); re-enable it by saving /cron.d/%s without '# enabled: false'",
+				watch.Name, cronBenchStrikes, budget, watch.Name)
+			why := fmt.Sprintf("its run exceeded the %s budget", budget)
+			if !timedOut {
+				why = "a notification target did not accept its alert in time"
+			}
+			ce.pageSystem(ctx, watch.OrgID, "cron-benched", fmt.Sprintf(
+				"cron %q was disabled after %d timeouts in a row: %s.\nIt will not run again until you re-enable it: edit /cron.d/%s, remove the '# enabled: false' line, and save.",
+				watch.Name, cronBenchStrikes, why, watch.Name))
+		}
 	}
 
 	weftsdk.Infof(ctx, "cron[%s]: %s (%dms, stdout=%d bytes, stderr=%d bytes)",

@@ -147,6 +147,7 @@ func Connect(dsn string) (*Store, error) {
 		&OrgPermission{},
 		&NotifyConfig{},
 		&PagerDutyIntegration{},
+		&WebhookSecret{},
 		&CronWatch{},
 		&TmpFile{},
 		&Subscription{},

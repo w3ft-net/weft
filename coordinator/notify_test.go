@@ -92,3 +92,53 @@ func TestWebhookPayload_CronKeyAndVersion(t *testing.T) {
 		t.Errorf("payload = %s, want v=2 with a cron key and no watch key", got)
 	}
 }
+
+// A webhook target's ${secrets.NAME} references are filled in at send time:
+// the endpoint sees the real values, and nothing that comes back out of Send
+// (an error carries the request URL) does.
+func TestSendWebhookInterpolatesSecrets(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	var gotAuth, gotKey string
+	fail := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth, gotKey = r.Header.Get("Authorization"), r.URL.Query().Get("key")
+		if fail {
+			http.Error(w, "no", 500)
+		}
+	}))
+	defer srv.Close()
+
+	for name, v := range map[string]string{"token": "tok-123", "api_key": "key-456"} {
+		if err := db.SaveWebhookSecret(custID, name, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	yaml := "system:\n  email:\n    - ops@example.test\nhook:\n  webhook:\n    - url: \"" + srv.URL + "/in?key=${secrets.api_key}\"\n      headers:\n        Authorization: \"Bearer ${secrets.token}\"\n"
+	if err := db.SaveNotifyAliases(custID, "", yaml); err != nil {
+		t.Fatal(err)
+	}
+
+	n := NewNotifier(db, nil)
+	if _, err := n.Send(context.Background(), custID, "hook", "disk", "boom", nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if gotAuth != "Bearer tok-123" || gotKey != "key-456" {
+		t.Errorf("endpoint saw Authorization=%q key=%q, want the secrets filled in", gotAuth, gotKey)
+	}
+
+	fail = true
+	_, err := n.Send(context.Background(), custID, "hook", "disk", "boom", nil)
+	if err == nil {
+		t.Fatal("a 500 was not an error")
+	}
+	if strings.Contains(err.Error(), "key-456") || strings.Contains(err.Error(), "tok-123") {
+		t.Errorf("error leaks a secret: %v", err)
+	}
+
+	// A refused connection is the error that quotes the whole URL.
+	srv.Close()
+	_, err = n.Send(context.Background(), custID, "hook", "disk", "boom", nil)
+	if err == nil || !strings.Contains(err.Error(), "${secrets.api_key}") || strings.Contains(err.Error(), "key-456") {
+		t.Errorf("connection error = %v, want the URL shown with its placeholder, not the secret", err)
+	}
+}

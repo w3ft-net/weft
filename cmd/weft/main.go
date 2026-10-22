@@ -1250,7 +1250,7 @@ func runTokenRevoke(client *shell.HTTPCoordinator) {
 
 func runIntegration() {
 	if len(os.Args) < 3 {
-		usageln("usage: weft integration {list|slack|pagerduty}")
+		usageln("usage: weft integration {list|slack|pagerduty|webhook-secret}")
 		os.Exit(1)
 	}
 
@@ -1272,9 +1272,11 @@ func runIntegration() {
 		runIntegrationSlack(client)
 	case "pagerduty", "pd":
 		runIntegrationPagerDuty(client)
+	case "webhook-secret":
+		runIntegrationWebhookSecret(client)
 	default:
 		errorf("unknown integration command: %s\n", os.Args[2])
-		usageln("usage: weft integration {list|slack|pagerduty}")
+		usageln("usage: weft integration {list|slack|pagerduty|webhook-secret}")
 		os.Exit(1)
 	}
 }
@@ -1301,17 +1303,27 @@ func runIntegrationList(client *shell.HTTPCoordinator) {
 	fmt.Println("\n" + st.head.Render("PagerDuty"))
 	if len(status.PagerDuty.Integrations) == 0 {
 		fmt.Println(st.muted.Render("  no integrations — `weft integration pagerduty add <name> --key <key>`"))
+	} else {
+		rows := make([][]string, 0, len(status.PagerDuty.Integrations))
+		for _, it := range status.PagerDuty.Integrations {
+			rows = append(rows, []string{it.Name, status.PagerDuty.Keys[it.Name], it.LastError})
+		}
+		writeTable(os.Stdout, st, "  ", []column{
+			nameCol("NAME", 20), mutedCol("KEY", 16),
+			{title: "LAST ERROR", style: func(s styles, _ string) lipgloss.Style { return s.err }},
+		}, rows)
+		hintln("\nReference these names from /etc/notify.yaml under `pagerduty:`.")
+	}
+
+	fmt.Println("\n" + st.head.Render("Webhook secrets"))
+	if len(status.WebhookSecrets) == 0 {
+		fmt.Println(st.muted.Render("  none — `weft integration webhook-secret set <name> --value <value>`"))
 		return
 	}
-	rows := make([][]string, 0, len(status.PagerDuty.Integrations))
-	for _, it := range status.PagerDuty.Integrations {
-		rows = append(rows, []string{it.Name, status.PagerDuty.Keys[it.Name], it.LastError})
+	for _, n := range status.WebhookSecrets {
+		fmt.Println("  " + n)
 	}
-	writeTable(os.Stdout, st, "  ", []column{
-		nameCol("NAME", 20), mutedCol("KEY", 16),
-		{title: "LAST ERROR", style: func(s styles, _ string) lipgloss.Style { return s.err }},
-	}, rows)
-	hintln("\nReference these names from /etc/notify.yaml under `pagerduty:`.")
+	hintln("\nUse these as ${secrets.NAME} in a webhook url or header value in /etc/notify.yaml.")
 }
 
 func runIntegrationSlack(client *shell.HTTPCoordinator) {
@@ -1416,6 +1428,53 @@ func runIntegrationPagerDuty(client *shell.HTTPCoordinator) {
 		successf("PagerDuty integration %q removed.\n", name)
 	default:
 		errorf("unknown pagerduty command: %s\n", os.Args[3])
+		os.Exit(1)
+	}
+}
+
+func runIntegrationWebhookSecret(client *shell.HTTPCoordinator) {
+	if len(os.Args) < 4 {
+		usageln("usage: weft integration webhook-secret {set|rm} ...")
+		os.Exit(1)
+	}
+	switch os.Args[3] {
+	case "set", "add":
+		args := os.Args[4:]
+		var name, value string
+		for i := 0; i < len(args); i++ {
+			switch args[i] {
+			case "--value":
+				if i+1 < len(args) {
+					value = args[i+1]
+					i++
+				}
+			default:
+				if !strings.HasPrefix(args[i], "-") && name == "" {
+					name = args[i]
+				}
+			}
+		}
+		if name == "" || value == "" {
+			usageln("usage: weft integration webhook-secret set <name> --value <value>")
+			os.Exit(1)
+		}
+		if err := client.SaveWebhookSecret(name, value); err != nil {
+			errorf("save webhook secret: %v\n", err)
+			os.Exit(1)
+		}
+		successf("Webhook secret %q saved. Use ${secrets.%s} in a webhook url or header value in /etc/notify.yaml.\n", name, name)
+	case "rm", "delete":
+		if len(os.Args) < 5 {
+			usageln("usage: weft integration webhook-secret rm <name>")
+			os.Exit(1)
+		}
+		if err := client.DeleteWebhookSecret(os.Args[4]); err != nil {
+			errorf("delete webhook secret: %v\n", err)
+			os.Exit(1)
+		}
+		successf("Webhook secret %q removed.\n", os.Args[4])
+	default:
+		errorf("unknown webhook-secret command: %s\n", os.Args[3])
 		os.Exit(1)
 	}
 }

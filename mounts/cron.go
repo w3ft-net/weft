@@ -79,7 +79,7 @@ func (m *CronMount) Stat(rel string) (fs.FileInfo, error) {
 }
 
 func (m *CronMount) WriteFile(rel string, data []byte) error {
-	schedule, pipeline, err := ParseCron(string(data))
+	schedule, pipeline, enabled, err := ParseCron(string(data))
 	if err != nil {
 		return fmt.Errorf("/cron.d/%s: %w", rel, err)
 	}
@@ -89,7 +89,9 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 		return fmt.Errorf("crons are not available on the trial plan")
 	}
 
-	if _, err := m.cfg.Store.GetCronWatch(m.cfg.OrgID, rel); err != nil {
+	// A cron that is new, or being turned back on, takes a slot; disabled
+	// crons are free.
+	if existing, err := m.cfg.Store.GetCronWatch(m.cfg.OrgID, rel); enabled && (err != nil || !existing.Enabled) {
 		count, err := m.cfg.Store.CountCronWatches(m.cfg.OrgID)
 		if err != nil {
 			return fmt.Errorf("failed to check cron count: %w", err)
@@ -115,7 +117,7 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 	resolver := cronBinResolver{store: m.cfg.Store, orgID: m.cfg.OrgID}
 	loweredJSON := planner.LowerForStorage(m.cfg.ctx(), pipeline, int64(m.cfg.OrgID), string(m.cfg.Tier), resolver)
 
-	return m.cfg.Store.SaveCronWatch(m.cfg.OrgID, m.cfg.UserID, rel, schedule, pipeline, loweredJSON)
+	return m.cfg.Store.SaveCronWatch(m.cfg.OrgID, m.cfg.UserID, rel, schedule, pipeline, enabled, loweredJSON)
 }
 
 // cronBinResolver adapts the shell mount's store + customer scope to
@@ -164,14 +166,24 @@ func SerializeCron(w *store.CronWatch) string {
 	return b.String()
 }
 
-func ParseCron(content string) (schedule, pipeline string, err error) {
+// ParseCron splits a /cron.d file into its parts. Enabled is true unless the
+// file says `# enabled: false`: dropping the comment is how a user turns a
+// benched or paused cron back on.
+func ParseCron(content string) (schedule, pipeline string, enabled bool, err error) {
+	enabled = true
 	var pipelineLines []string
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "# schedule:") {
 			schedule = strings.TrimSpace(strings.TrimPrefix(trimmed, "# schedule:"))
 		} else if strings.HasPrefix(trimmed, "# enabled:") {
-			// Ignored on write.
+			switch v := strings.TrimSpace(strings.TrimPrefix(trimmed, "# enabled:")); v {
+			case "true":
+			case "false":
+				enabled = false
+			default:
+				return "", "", false, fmt.Errorf("'# enabled:' must be true or false, got %q", v)
+			}
 		} else if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
 			pipelineLines = append(pipelineLines, line)
 		}

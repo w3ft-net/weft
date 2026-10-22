@@ -16,7 +16,7 @@ func TestGetCronWatch_JSONPathAlertSelectors(t *testing.T) {
 	user, _ := db.CreateUser("alice-jp@example.test")
 
 	pipeline := `tail -n 12 /log/x/y_metrics.log | jq 'select(.type == "memory")' | alert above 70 -v .pct -t .host`
-	if err := db.SaveCronWatch(cust.ID, user.ID, "mem-pressure", "*/1 * * * *", pipeline, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, user.ID, "mem-pressure", "*/1 * * * *", pipeline, true, nil); err != nil {
 		t.Fatalf("SaveCronWatch: %v", err)
 	}
 

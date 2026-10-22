@@ -69,7 +69,7 @@ func (m *EtcMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	var notifySize int64
 	var notifyMtime time.Time
 	if nc, err := m.cfg.Store.GetNotifyConfig(m.cfg.OrgID); err == nil {
-		notifySize = int64(len(store.RedactNotifyYAML(nc.AliasesYAML)))
+		notifySize = int64(len(nc.AliasesYAML))
 		notifyMtime = nc.UpdatedAt
 	}
 	passwdSize, passwdMtime := m.passwdFileInfo()
@@ -89,7 +89,7 @@ func (m *EtcMount) ReadFile(rel string) ([]byte, error) {
 			return []byte(""), nil
 		}
 		// Webhook header values are credentials: read them redacted.
-		return []byte(store.RedactNotifyYAML(nc.AliasesYAML)), nil
+		return []byte(nc.AliasesYAML), nil
 	case rel == "passwd":
 		out, err := m.cfg.Store.RenderPasswd(m.cfg.OrgID)
 		if err != nil {
@@ -117,7 +117,7 @@ func (m *EtcMount) Stat(rel string) (fs.FileInfo, error) {
 	switch {
 	case rel == "notify.yaml":
 		if nc, err := m.cfg.Store.GetNotifyConfig(m.cfg.OrgID); err == nil {
-			return &vfsFileInfo{name: "notify.yaml", size: int64(len(store.RedactNotifyYAML(nc.AliasesYAML))), mtime: nc.UpdatedAt}, nil
+			return &vfsFileInfo{name: "notify.yaml", size: int64(len(nc.AliasesYAML)), mtime: nc.UpdatedAt}, nil
 		}
 		return &vfsFileInfo{name: "notify.yaml"}, nil
 	case rel == "passwd":
@@ -142,16 +142,7 @@ func (m *EtcMount) Stat(rel string) (fs.FileInfo, error) {
 func (m *EtcMount) WriteFile(rel string, data []byte) error {
 	switch {
 	case rel == "notify.yaml":
-		// What the user edited is the redacted view: a header still showing
-		// the placeholder gets its stored secret back, a new value is kept.
-		stored := ""
-		if nc, err := m.cfg.Store.GetNotifyConfig(m.cfg.OrgID); err == nil {
-			stored = nc.AliasesYAML
-		}
-		content, err := store.RestoreNotifyRedactions(string(data), stored)
-		if err != nil {
-			return fmt.Errorf("/etc/notify.yaml: %w", err)
-		}
+		content := string(data)
 		if err := store.ValidateNotifyAliases(content); err != nil {
 			return fmt.Errorf("/etc/notify.yaml: %w", err)
 		}

@@ -3,6 +3,7 @@ package coordinator
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
@@ -463,6 +464,9 @@ func (ac *AlertContext) notify(ctx context.Context, inc *store.AlertIncident, al
 		}
 	}
 	if err != nil {
+		if errors.Is(err, ErrDeliveryTimeout) {
+			noteDeliveryTimeout(ctx)
+		}
 		fmt.Fprintf(stderr, "alert: dispatch to %q failed: %v\n", alias, err)
 		return 1
 	}

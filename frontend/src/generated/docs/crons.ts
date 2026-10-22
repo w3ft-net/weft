@@ -15,6 +15,8 @@ const crons = {
     { level: 3, id: "aggregates", text: "Aggregates" },
     { level: 3, id: "predicates", text: "Predicates" },
     { level: 3, id: "stdin-comparators", text: "Stdin comparators" },
+    { level: 2, id: "static-analysis", text: "Static analysis" },
+    { level: 2, id: "runtime-analysis", text: "Runtime analysis" },
   ],
   html: `<p>In weft, crons have two primary purposes: generating summary timeseries data
 based on logs and metrics, and alerting on such data. Creating such a cron is
@@ -109,6 +111,8 @@ the number of crons you can keep:</p>
 </tbody>
 </table>
 <p>Saving a cron with a schedule faster than your plan allows is rejected.</p>
+<p>Disabled crons (see <a href="/manual/crons#runtime-analysis">Runtime analysis</a>) don't count
+against the number of crons your plan allows.</p>
 <h2 id="cron-result-persistence">Cron result persistence</h2>
 <p>Since your cron monitors are just bash/Lua scripts against your logs, it's very
 easy to test them out since you have a shell that executes in the exact same
@@ -451,6 +455,46 @@ provide a couple convenience functions that can handle numbers with dots in them
 <pre><code>weft::avg error-rate 5m | weft::is_gt 50
 </code></pre>
 <p>Both comparators treat empty or non-numeric input as false.</p>
+<h2 id="static-analysis">Static analysis</h2>
+<p>Whenever you write a cron, weft analyzes its contents for a few types of correctness:</p>
+<ul>
+<li><strong>Schedule</strong> -- a schedule line must be present, confirm to the <a href="/manual/crons#scheduling">accepted
+grammar</a>, and fire at a frequency allowed by your
+organization's plan</li>
+<li><strong>Syntax</strong> -- the script must parse as syntactically valid bash (and awk,
+sed, or jq if using those interpreters)</li>
+<li><strong>Aggregates</strong> -- <code>weft::</code> aggregate functions read stored history and ignore
+their input, so if they follow a pipe, you're doing something wrong</li>
+<li><strong>Execution limits</strong> -- <code>tail -f</code> is disallowed, since a script has to run to
+completion, as is <code>range</code>, since the range of a cron is determined by its
+schedule</li>
+</ul>
+<p>If you run afoul of any of these rules, weft will refuse to write the contents
+to <code>/cron.d</code> (or <code>/bin</code>).</p>
+<h2 id="runtime-analysis">Runtime analysis</h2>
+<p>Weft also watches how your crons behave once they are running. Each run has a
+budget of 2 seconds. A run that exceeds it is cancelled and recorded with the
+status <code>timeout</code>, and no further output from that run is saved.</p>
+<p>A notification target that doesn't accept an alert within 10 seconds also
+counts as a timeout for the cron that raised it (see <a href="/manual/alerts#delivery-timeouts">Delivery
+timeouts</a>); it doesn't count against the 2
+seconds above.</p>
+<p>A cron that times out three ticks in a row, in either way, is benched: weft
+disables it, so it stops firing and stops counting against your plan's cron
+limit. A tick with no timeout resets the count. When weft benches a cron it
+notifies your <a href="/manual/alerts#the-system-alias"><code>system</code> alias</a>, naming the cron and
+saying how to turn it back on.</p>
+<p>A disabled cron stays in <code>/cron.d</code> with a marker at the top of its file:</p>
+<pre><code># schedule: */5 * * * *
+# enabled: false
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l
+</code></pre>
+<p>You can also write <code># enabled: false</code> yourself to pause a cron. To turn it back
+on, save the file without that line (or with <code># enabled: true</code>). Re-enabling
+starts the count over, and is refused if you are already at your plan's cron
+limit.</p>
+<p>Before re-enabling a benched cron, narrow what it reads. A cron over a smaller
+<code>range</code> or a more specific log path will finish well inside its budget.</p>
 `,
 } as const;
 

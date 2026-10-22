@@ -55,8 +55,15 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 
+	// Names only: a webhook secret's value is never returned.
+	secretNames, _ := s.store.ListWebhookSecretNames(custID)
+	if secretNames == nil {
+		secretNames = []string{}
+	}
+
 	json.NewEncoder(w).Encode(map[string]any{
-		"slack": slackInfo,
+		"slack":           slackInfo,
+		"webhook_secrets": secretNames,
 		"pagerduty": map[string]any{
 			"connected":    len(pdItems) > 0,
 			"keys":         pdKeys,
@@ -258,6 +265,44 @@ func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleWebhookSecretSave creates or replaces a named webhook secret.
+// Body: {"name": "token", "value": "<secret>"}.
+func (s *Server) handleWebhookSecretSave(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	custID, ok := activeOrg(w, session)
+	if !ok {
+		return
+	}
+	var req struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Value == "" {
+		http.Error(w, "name and value required", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.SaveWebhookSecret(custID, req.Name, req.Value); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleWebhookSecretDelete removes a webhook secret that no alias uses.
+// Path: DELETE /api/integrations/webhook-secrets/{name}
+func (s *Server) handleWebhookSecretDelete(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	custID, ok := activeOrg(w, session)
+	if !ok {
+		return
+	}
+	if err := s.store.DeleteWebhookSecret(custID, r.PathValue("name")); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handlePagerDutyDisconnect removes all PagerDuty integrations for the customer.

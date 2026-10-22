@@ -164,7 +164,14 @@ func (ce *CronExecutor) notifyOverdue(ctx context.Context, org store.OrgID, cron
 		fmt.Fprintf(&b, "%d overdue in total.\n", totalOverdue)
 	}
 
-	send := ce.SendOverdue
+	ce.pageSystem(ctx, org, "cron-overdue", b.String())
+}
+
+// pageSystem sends body to an org's reserved `system` alias, for the alerts
+// weft raises on the tenant's behalf. An org that has not defined the alias
+// gets nothing; that is expected, so a failure is only logged.
+func (ce *CronExecutor) pageSystem(ctx context.Context, org store.OrgID, watchName, body string) {
+	send := ce.SendSystem
 	if send == nil && ce.Notifier != nil {
 		send = func(ctx context.Context, org store.OrgID, alias, watchName, body string) error {
 			_, err := ce.Notifier.Send(ctx, org, alias, watchName, body, nil)
@@ -174,7 +181,7 @@ func (ce *CronExecutor) notifyOverdue(ctx context.Context, org store.OrgID, cron
 	if send == nil {
 		return
 	}
-	if err := send(ctx, org, store.SystemAlias, "cron-overdue", b.String()); err != nil {
-		weftsdk.Infof(ctx, "cron_overdue not delivered for org %d: %v", org, err)
+	if err := send(ctx, org, store.SystemAlias, watchName, body); err != nil {
+		weftsdk.Infof(ctx, "%s not delivered for org %d: %v", strings.ReplaceAll(watchName, "-", "_"), org, err)
 	}
 }

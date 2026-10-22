@@ -414,6 +414,8 @@ type IntegrationsStatus struct {
 		Keys         map[string]string      `json:"keys"` // name → masked key
 		Integrations []PagerDutyIntegration `json:"integrations"`
 	} `json:"pagerduty"`
+	// WebhookSecrets are the names only; the server never returns a value.
+	WebhookSecrets []string `json:"webhook_secrets"`
 }
 
 // PagerDutyIntegration is one named PagerDuty target as returned in
@@ -500,6 +502,38 @@ func (h *HTTPCoordinator) SavePagerDuty(name, key string) error {
 // DeletePagerDuty removes a single PagerDuty integration by name.
 func (h *HTTPCoordinator) DeletePagerDuty(name string) error {
 	req, _ := http.NewRequest("DELETE", h.baseURL+"/api/integrations/pagerduty/"+url.PathEscape(name), nil)
+	h.setAuthHeaders(req)
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return httpError(resp)
+	}
+	return nil
+}
+
+// SaveWebhookSecret creates or replaces a named webhook secret.
+func (h *HTTPCoordinator) SaveWebhookSecret(name, value string) error {
+	body, _ := json.Marshal(map[string]string{"name": name, "value": value})
+	req, _ := http.NewRequest("PUT", h.baseURL+"/api/integrations/webhook-secrets", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h.setAuthHeaders(req)
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return httpError(resp)
+	}
+	return nil
+}
+
+// DeleteWebhookSecret removes a webhook secret by name.
+func (h *HTTPCoordinator) DeleteWebhookSecret(name string) error {
+	req, _ := http.NewRequest("DELETE", h.baseURL+"/api/integrations/webhook-secrets/"+url.PathEscape(name), nil)
 	h.setAuthHeaders(req)
 	resp, err := h.client.Do(req)
 	if err != nil {

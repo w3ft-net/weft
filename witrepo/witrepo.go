@@ -92,10 +92,6 @@ func versionContent(v store.ObjectVersion) string {
 	if v.Kind == "cron.d" {
 		return mounts.SerializeCron(&store.CronWatch{Schedule: v.Schedule, Pipeline: v.Pipeline, Enabled: true})
 	}
-	if v.Kind == "etc" {
-		// notify.yaml: history shows what cat shows, never a credential.
-		return store.RedactNotifyYAML(v.Source)
-	}
 	if v.Kind == "etc/dashboards" {
 		return v.Source
 	}
