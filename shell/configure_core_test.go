@@ -230,7 +230,7 @@ func TestConfigureCore_ManCommandsPointsAtRealPages(t *testing.T) {
 	if !strings.Contains(page, "Weft's own commands") {
 		t.Fatalf("no commands page in %q", page)
 	}
-	for _, topic := range []string{"range", "explain", "chart", "less", "alert", "notify", "weft-funcs", "dashboard", "git", "clipboard", "sharing", "passwd", "teams"} {
+	for _, topic := range []string{"range", "explain", "chart", "less", "alert", "crons", "dashboard", "git", "clipboard", "sharing", "passwd", "teams"} {
 		if !strings.Contains(page, "man "+topic) {
 			t.Errorf("commands page doesn't mention man %s", topic)
 		}

@@ -252,12 +252,12 @@ which accepts options and ignores them.</p>
 <tr>
 <td><code>alert</code></td>
 <td>Fire a notification from a pipeline's final number.</td>
-<td><a href="/manual/alert">alert</a>, <a href="/manual/notify">notify</a></td>
+<td>alert, <a href="/manual/alerts">notifications</a></td>
 </tr>
 <tr>
 <td><code>weft::latest</code>, <code>weft::avg</code>, <code>weft::max</code>, ...</td>
 <td>Read and reason about your own cron history from inside a pipeline.</td>
-<td><a href="/manual/weft-funcs">weft::*</a></td>
+<td><a href="/manual/crons">weft::*</a></td>
 </tr>
 <tr>
 <td><code>dashboard</code></td>

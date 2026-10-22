@@ -39,7 +39,7 @@ schedule interval, so count with no row limit. Do not use `head -n` or
 history; pass the cron's name, e.g. `weft::latest error-rate`. Windows
 are durations like `30m`, `1h` or `1d` (aggregates reach back 24 hours).
 The predicates (`weft::is_above`, `weft::is_outlier`, etc.) return
-exit codes for composing alerts. Full reference: `man weft-funcs`.
+exit codes for composing alerts. Full reference: `man crons`.
 
 ```
 echo $(weft::avg error-rate 1h) | alert above 50 --notify=ops

@@ -49,7 +49,7 @@ var manualCategories = []manualCategory{
 	{
 		ID:      "command-reference",
 		Label:   "Command reference",
-		Summary: "Man pages for the alert, chart and dashboard commands: every option and condition.",
+		Summary: "Man pages for the chart and dashboard commands: every option.",
 	},
 	{
 		ID:      "customize",

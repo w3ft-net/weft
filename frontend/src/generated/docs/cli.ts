@@ -74,7 +74,7 @@ plan.</p>
 </tr>
 <tr>
 <td><code>weft integration {list | slack | pagerduty}</code></td>
-<td>Connect <a href="/manual/notify">notification</a> destinations</td>
+<td>Connect <a href="/manual/alerts">notification</a> destinations</td>
 </tr>
 <tr>
 <td><code>weft mcp</code></td>

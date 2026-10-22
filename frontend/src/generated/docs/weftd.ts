@@ -410,7 +410,7 @@ tail /log/myns/web/host.log | jq '.memory.pct'
 # Per-host, per-mount disk usage, alerting above 80%
 tail /log/myns/web/disk.log \\
   | jq -r '&quot;\\($host):\\(.path) \\(.pct)&quot;' \\
-  | alert above 80 -k 2 -t 1 --notify=ops
+  | alert above 80 -v 2 -t 1 --notify=ops
 
 # Recent load averages by host
 tail -n 1000 /log/myns/web/host.log | jq '{host: $host, load5: .load.load5}'

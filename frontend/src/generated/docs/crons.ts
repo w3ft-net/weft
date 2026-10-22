@@ -7,67 +7,450 @@ const crons = {
   category: "analysis-alerting",
   order: 50,
   headings: [
-    { level: 2, id: "set-up-a-cron", text: "Set up a cron" },
-    { level: 3, id: "accessing-past-results", text: "Accessing past results" },
-    { level: 3, id: "cron-version-history", text: "Cron version history" },
+    { level: 2, id: "scheduling", text: "Scheduling" },
+    { level: 3, id: "limits-on-granularity", text: "Limits on granularity" },
+    { level: 2, id: "cron-result-persistence", text: "Cron result persistence" },
+    { level: 3, id: "retention", text: "Retention" },
+    { level: 2, id: "analyzing-cron-data", text: "Analyzing cron data" },
+    { level: 3, id: "aggregates", text: "Aggregates" },
+    { level: 3, id: "predicates", text: "Predicates" },
+    { level: 3, id: "stdin-comparators", text: "Stdin comparators" },
   ],
-  html: `<h2 id="set-up-a-cron">Set up a cron</h2>
-<p>Crons are saved pipelines that run on a schedule. Create one from
-the shell:</p>
-<pre><code># Open the cron editor
-vi /cron.d/error-count
-
-# Cron file format: a '# schedule:' directive plus a pipeline.
-# schedule: */5 * * * *
+  html: `<p>In weft, crons have two primary purposes: generating summary timeseries data
+based on logs and metrics, and alerting on such data. Creating such a cron is
+as simple as adding a bash or Lua script to <code>/cron.d</code>. Those scripts need a
+leading comment indicating the schedule on which the cron will fire.</p>
+<p>Let's take the following script as an example:</p>
+<pre><code># schedule: */5 * * * *
 cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 0 --notify=ops
 </code></pre>
-<p>The schedule is either a five-field expression (<code>*/5 * * * *</code>) or
-<code>every &lt;duration&gt;</code> (<code># schedule: every 5m</code>). Each run reads the
-logs from its own schedule interval: a <code>*/5</code> cron sees the last five
-minutes, so the pipeline above counts that interval's errors with no
-row limit. A cron must not use <code>head -n</code> or <code>tail -n</code>: a line count caps
-the rows read, and on a busy interval it silently cuts the window short, so
-the cron undercounts. To try a cron's pipeline at the
-prompt first, set the window with <code>range</code> (see <code>man range</code>).</p>
-<p>The pipeline's stdout is captured as the cron result — numeric
-values are graphed on the dashboard as sparklines. Alerts are
-dispatched by the <code>alert</code> stage (see <strong>Alerts</strong> for
-the catalogue of alert shapes, plus <code>man alert</code> for the builtin's
-grammar).</p>
-<p>View and manage crons from the <strong>Dashboard</strong>.</p>
-<h3 id="accessing-past-results">Accessing past results</h3>
-<p>Every cron run is stored. The <code>weft::*</code> family pulls summaries out
-of that history (aggregates like <code>weft::avg</code>, point reads like
-<code>weft::latest</code>) and a parallel predicate family (<code>weft::is_above</code>
-etc.) exits 0 (fire) or 1 (don't fire) for use in composite alerts. They're
-available at the shell prompt, inside <code>/bin/</code> scripts, and as
-pipeline stages in other crons:</p>
-<pre><code># Interactively, at the prompt
-weft::latest error-rate
-
-# Chained through a pipeline
-echo $(weft::avg error-rate 1h) | alert above 50 --notify=ops
+<h2 id="scheduling">Scheduling</h2>
+<p>There are two options for cron schedule syntax: OG crontab syntax, and an
+interval syntax. Crons fire on fixed intervals at round UTC times. Below are
+the accepted values for each:</p>
+<table>
+<thead>
+<tr>
+<th>crontab</th>
+<th>interval</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>* * * * *</code></td>
+<td>every minute</td>
+</tr>
+<tr>
+<td><code>*/N * * * *</code></td>
+<td>every N minutes</td>
+</tr>
+<tr>
+<td><code>0 * * * *</code></td>
+<td>every hour</td>
+</tr>
+<tr>
+<td><code>0 */H * * *</code></td>
+<td>every H hours</td>
+</tr>
+<tr>
+<td><code>0 0 * * *</code></td>
+<td>every day, at 00:00 UTC</td>
+</tr>
+<tr>
+<td><code>0 0 */N * *</code></td>
+<td>every N days</td>
+</tr>
+<tr>
+<td><code>0 0 * * 1</code></td>
+<td>every week, on Monday at 00:00 UTC</td>
+</tr>
+</tbody>
+</table>
+<p>Weft will refuse to save a file in <code>/cron.d</code> if the schedule line is missing or
+fails to conform to the scheduling options above.</p>
+<p>Weft sets the <code>range</code> for each run automatically based on the cron's schedule
+interval: a <code>*/5</code> cron sees the last five minutes, a daily cron sees the
+UTC day that just ended, and a weekly cron sees the week that just ended.
+For this reason, we recommend against using <code>head -n</code>, <code>tail -n</code>, etc.
+Imposing a limit on your lines might result in undercounting or other missed
+line problems.</p>
+<h3 id="limits-on-granularity">Limits on granularity</h3>
+<p>The shortest interval you can schedule depends on your plan, and so does
+the number of crons you can keep:</p>
+<table>
+<thead>
+<tr>
+<th>Plan</th>
+<th>Shortest interval</th>
+<th>Crons</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Trial</td>
+<td>5 minutes</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Swatch</td>
+<td>5 minutes</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Yard</td>
+<td>1 minute</td>
+<td>100</td>
+</tr>
+<tr>
+<td>Bolt</td>
+<td>1 minute</td>
+<td>500</td>
+</tr>
+</tbody>
+</table>
+<p>Saving a cron with a schedule faster than your plan allows is rejected.</p>
+<h2 id="cron-result-persistence">Cron result persistence</h2>
+<p>Since your cron monitors are just bash/Lua scripts against your logs, it's very
+easy to test them out since you have a shell that executes in the exact same
+way. But once you are done tweaking and get them saved to <code>/cron.d</code>, every cron
+run gets persisted. After they've been running for a bit, you'll have a
+portrait of what the runs look like over time.</p>
+<pre><code>weft::describe error-rate | jq -r 'select(.exit_code != 0) | .ran_at + &quot; &quot; + .stderr'
 </code></pre>
-<p>From a Lua <code>/bin/</code> script the return type is a number:</p>
-<pre><code class="language-lua">local rate = weft.avg(&quot;error-rate&quot;, &quot;1h&quot;)
+<p>The output of this function is NDJSON with the following values:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>stdout</code></td>
+<td>The pipeline's output, exactly as written</td>
+</tr>
+<tr>
+<td><code>stderr</code></td>
+<td>Alert firings (from an <code>alert</code> stage) or the error message if the run failed</td>
+</tr>
+<tr>
+<td><code>exit_code</code></td>
+<td><code>0</code>, or <code>1</code> if the pipeline errored</td>
+</tr>
+<tr>
+<td><code>duration_ms</code></td>
+<td>How long the run took, in milliseconds</td>
+</tr>
+<tr>
+<td><code>ran_at</code></td>
+<td>When the run started</td>
+</tr>
+<tr>
+<td><code>value</code></td>
+<td><code>stdout</code> parsed as a number, or empty if it isn't one</td>
+</tr>
+<tr>
+<td><code>tag</code></td>
+<td>The per-row label of a multi-row cron (see below), empty otherwise</td>
+</tr>
+</tbody>
+</table>
+<p>We'll cover more ways of analyzing cron data below.</p>
+<h3 id="retention">Retention</h3>
+<p>Raw results are rolled up into progressively coarser summaries as they age.
+Every summary stores the count, sum, sum of squares, and minimum and maximum
+per tag, so averages, minima, maxima and standard deviations stay exact when
+buckets are merged.  Only runs with a numeric <code>value</code> are summarised; text-only
+results exist in the raw history alone.</p>
+<table>
+<thead>
+<tr>
+<th>Granularity</th>
+<th>Kept for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Raw results (every run, full <code>stdout</code> and <code>stderr</code>)</td>
+<td>7 days</td>
+</tr>
+<tr>
+<td>Hourly summary</td>
+<td>14 days</td>
+</tr>
+<tr>
+<td>Four-hour summary</td>
+<td>35 days</td>
+</tr>
+<tr>
+<td>Daily summary</td>
+<td>400 days</td>
+</tr>
+</tbody>
+</table>
+<h2 id="analyzing-cron-data">Analyzing cron data</h2>
+<p>The <code>weft::*</code> family of functions reads your raw cron history from inside a
+script. They come in three flavors:</p>
+<ul>
+<li><strong>Aggregates</strong> return the most recent value, an aggregate over a
+window, or an anchor like the slope between two endpoints.</li>
+<li><strong>Predicates</strong> return a boolean — &quot;is this cron above 50?&quot;,
+&quot;did it just change?&quot;</li>
+<li><strong>Comparators</strong> turn a piped value into a boolean.</li>
+</ul>
+<p>With the exception of some comparators, each function is available in both bash
+and Lua.  Bash uses <code>::</code> as the namespace separator, and Lua uses <code>.</code>. The
+arguments are the same in both.</p>
+<p>For composing predicates into composite alerts, see
+<a href="/manual/alerts">Alerts</a>.</p>
+<h3 id="aggregates">Aggregates</h3>
+<p>All aggregates take a cron name and (with the exception of <code>weft::latest</code> and
+<code>weft::previous</code>) a duration window. Durations are a number and a unit: <code>30s</code>,
+<code>5m</code>, <code>1h</code>, <code>6h</code>, plus <code>d</code> for a day (24 hours) and <code>w</code> for a week (7 days).
+Units combine (e.g. <code>1d12h</code>). Some functions will truncate your duration to the
+raw data window (7 days) because the math doesn't work on the compressed cron
+results. For all others, the limiting factor is your plan's retention.</p>
+<p>The return type in the table below indicates not just what the function spits
+out but what it expects in the cron results -- if the stdout from the cron
+argument isn't coercible to a numeric value, the functions in the table below
+aren't going to work.</p>
+<table>
+<thead>
+<tr>
+<th>Bash</th>
+<th>Lua</th>
+<th>Returns</th>
+<th>Longest window</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>weft::avg &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.avg(cron, dur)</code></td>
+<td>number</td>
+<td>400d</td>
+<td>Mean of numeric results in window</td>
+</tr>
+<tr>
+<td><code>weft::count &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.count(cron, dur)</code></td>
+<td>number</td>
+<td>400d</td>
+<td>Count of numeric results in window</td>
+</tr>
+<tr>
+<td><code>weft::delta &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.delta(cron, dur)</code></td>
+<td>number</td>
+<td>7d</td>
+<td><code>latest − first</code> over window</td>
+</tr>
+<tr>
+<td><code>weft::first &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.first(cron, dur)</code></td>
+<td>number</td>
+<td>7d</td>
+<td>Oldest numeric value still in window</td>
+</tr>
+<tr>
+<td><code>weft::latest &lt;cron&gt;</code></td>
+<td><code>weft.latest(cron)</code></td>
+<td>string</td>
+<td>n/a</td>
+<td>Trimmed stdout of the most recent run</td>
+</tr>
+<tr>
+<td><code>weft::max &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.max(cron, dur)</code></td>
+<td>number</td>
+<td>400d</td>
+<td>Largest numeric result in window</td>
+</tr>
+<tr>
+<td><code>weft::min &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.min(cron, dur)</code></td>
+<td>number</td>
+<td>400d</td>
+<td>Smallest numeric result in window</td>
+</tr>
+<tr>
+<td><code>weft::percentile &lt;cron&gt; &lt;dur&gt; &lt;p&gt;</code></td>
+<td><code>weft.percentile(cron, dur, p)</code></td>
+<td>number</td>
+<td>7d</td>
+<td>Linearly-interpolated p-th percentile, p ∈ [0,100]</td>
+</tr>
+<tr>
+<td><code>weft::previous &lt;cron&gt;</code></td>
+<td><code>weft.previous(cron)</code></td>
+<td>string</td>
+<td>n/a</td>
+<td>Stdout of the second-most-recent run (<code>&quot;&quot;</code> if fewer than 2 exist)</td>
+</tr>
+<tr>
+<td><code>weft::rate &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.rate(cron, dur)</code></td>
+<td>number</td>
+<td>400d</td>
+<td><code>sum / window_seconds</code></td>
+</tr>
+<tr>
+<td><code>weft::slope &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.slope(cron, dur)</code></td>
+<td>number</td>
+<td>7d</td>
+<td><code>delta / window_seconds</code></td>
+</tr>
+<tr>
+<td><code>weft::stddev &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.stddev(cron, dur)</code></td>
+<td>number</td>
+<td>400d</td>
+<td>Population stddev; needs ≥2 results</td>
+</tr>
+<tr>
+<td><code>weft::sum &lt;cron&gt; &lt;dur&gt;</code></td>
+<td><code>weft.sum(cron, dur)</code></td>
+<td>number</td>
+<td>400d</td>
+<td>Sum of numeric results in window</td>
+</tr>
+</tbody>
+</table>
+<h3 id="predicates">Predicates</h3>
+<p>The following predicate functions are available:</p>
+<table>
+<thead>
+<tr>
+<th>Bash</th>
+<th>Lua</th>
+<th>True when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>weft::is_above &lt;cron&gt; &lt;thr&gt; [&lt;dur&gt; [--average]]</code></td>
+<td><code>weft.is_above(cron, thr, [dur, [avg]])</code></td>
+<td>latest &gt; thr (or min over dur &gt; thr, or avg &gt; thr with <code>--average</code>)</td>
+</tr>
+<tr>
+<td><code>weft::is_below &lt;cron&gt; &lt;thr&gt; [&lt;dur&gt; [--average]]</code></td>
+<td><code>weft.is_below(cron, thr, [dur, [avg]])</code></td>
+<td>latest &lt; thr (or max over dur &lt; thr, or avg &lt; thr with <code>--average</code>)</td>
+</tr>
+<tr>
+<td><code>weft::is_absent &lt;cron&gt; [&lt;dur&gt;]</code></td>
+<td><code>weft.is_absent(cron, [dur])</code></td>
+<td>the cron has no result: it doesn't exist, has never run, or its latest output is empty (with <code>dur</code>: no result landed in the last <code>dur</code>). A bad or over-cap <code>dur</code> (more than 7d) or an unreadable history is false; the bash form says why on stderr</td>
+</tr>
+<tr>
+<td><code>weft::has_changed &lt;cron&gt;</code></td>
+<td><code>weft.has_changed(cron)</code></td>
+<td>latest ≠ previous tick</td>
+</tr>
+<tr>
+<td><code>weft::is_rising &lt;cron&gt; [&lt;pct&gt; [&lt;dur&gt;]]</code></td>
+<td><code>weft.is_rising(cron, [pct, [dur]])</code></td>
+<td>(latest − baseline)/baseline ≥ pct% (baseline = prev tick, or window avg if dur given)</td>
+</tr>
+<tr>
+<td><code>weft::is_falling &lt;cron&gt; [&lt;pct&gt; [&lt;dur&gt;]]</code></td>
+<td><code>weft.is_falling(cron, [pct, [dur]])</code></td>
+<td>(baseline − latest)/baseline ≥ pct%</td>
+</tr>
+<tr>
+<td><code>weft::is_outlier &lt;cron&gt; &lt;n&gt; &lt;dur&gt; [--above|--below]</code></td>
+<td><code>weft.is_outlier(cron, n, dur, [dir])</code></td>
+<td>|latest − avg| &gt; n·stddev over dur</td>
+</tr>
+<tr>
+<td><code>weft::is_seasonal &lt;cron&gt; &lt;n&gt; &lt;period&gt; &lt;dur&gt;</code></td>
+<td><code>weft.is_seasonal(cron, n, period, dur)</code></td>
+<td>|latest − same-time-of-period avg| &gt; n·stddev</td>
+</tr>
+</tbody>
+</table>
+<h4 id="truthiness">Truthiness</h4>
+<p>In bash a predicate reports its result as an exit code, and in Lua as a plain bool.</p>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Exit code</th>
+<th>Lua</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Condition holds</td>
+<td><code>0</code> (true)</td>
+<td><code>true</code></td>
+</tr>
+<tr>
+<td>Condition doesn't hold</td>
+<td><code>1</code> (false)</td>
+<td><code>false</code></td>
+</tr>
+<tr>
+<td>Can't evaluate: the cron doesn't exist, its output isn't numeric, or there isn't enough history yet</td>
+<td><code>1</code> (false)</td>
+<td><code>false</code></td>
+</tr>
+<tr>
+<td>Bad arguments (a missing argument, an unparseable threshold or duration)</td>
+<td><code>2</code></td>
+<td>error raised on bad argument types, unparseable duration returns <code>false</code></td>
+</tr>
+</tbody>
+</table>
+<p>Because &quot;no&quot; and &quot;can't tell&quot; both exit 1, <code>!</code> turns an unknown into true. Rather than negating, use the opposite predicate, and pair it with <code>weft::is_absent</code> to catch a cron that has stopped reporting.</p>
+<h4 id="anomaly-guards">Anomaly guards</h4>
+<p><code>is_outlier</code> and <code>is_seasonal</code> both gate against zero-stddev histories:
+if the historical stddev drops below <code>0.01 · |avg|</code>, the predicate
+returns false. <code>is_seasonal</code>
+additionally requires at least 4 same-time samples.</p>
+<h4 id="seasonal-alignment">Seasonal alignment</h4>
+<p>For <code>is_seasonal</code>, the <code>period</code> is the recurring interval and
+<code>window</code> is how far back to sample. With <code>period=1d window=4d</code>, the
+predicate compares the latest value to the four values captured at
+this same hour on each of the last four days. Period alignment uses UTC.</p>
+<p>Because the window is limited to the 7 days of raw results (see the table
+above), a weekly period can never gather the 4 samples it needs, so
+<code>is_seasonal</code> is only useful with periods of a day or less.</p>
+<h3 id="stdin-comparators">Stdin comparators</h3>
+<p>Lua has comparison operators that everyone would expect, so you can write
+<code>weft.avg('error-rate', '5m') &gt; 50</code> and everyone knows what you mean. The
+unique beauty of bash adds a tasty bit of enigma:</p>
+<pre><code>[ &quot;$(weft::avg error-rate 5m)&quot; -gt 50 ]
 </code></pre>
-<p>Windows are Go durations plus <code>d</code> (a day) and <code>w</code> (a week), and they
-combine: <code>30m</code>, <code>1h</code>, <code>1d</code>, <code>1h30m</code>. Aggregates reach back at most 24
-hours (<code>1d</code>).</p>
-<p>The full reference (value funcs, predicates, stdin comparators,
-caps, numeric-parsing rules) is in <strong>Weft functions</strong>. Patterns
-that combine these into alerts of various shapes — multi-row
-per-tag, composite, anomaly-based — live in <strong>Alerts</strong>.</p>
-<p>Tier limits (number of crons and minimum schedule interval) vary by
-plan — see the <strong>Account</strong> page for your current caps, or run
-<code>help cron</code> in the shell.</p>
-<h3 id="cron-version-history">Cron version history</h3>
-<p>Every save to <code>/cron.d/&lt;name&gt;</code> is captured. After <code>:w</code>, the shell
-prompts for an optional commit message; <code>git log -- /cron.d/&lt;name&gt;</code>
-lists past versions, and <code>git restore --source=HEAD~2 /cron.d/&lt;name&gt;</code>
-makes an old version current again by saving it as a new version. The
-live version plus the five before it are kept. See <strong>git</strong> for the full
-surface.</p>
+<p>And while we love bash's quirky conditionals, they do not compose nicely in
+pipelines. Furthermore, bash comparisons only work on integers, whereas weft's
+aggregate functions return floats. Rather than ask you to pipe to <code>bc</code>, we
+provide a couple convenience functions that can handle numbers with dots in them:</p>
+<table>
+<thead>
+<tr>
+<th>Bash</th>
+<th>True when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>weft::is_gt &lt;thr&gt;</code></td>
+<td>stdin parses as float &gt; thr</td>
+</tr>
+<tr>
+<td><code>weft::is_lt &lt;thr&gt;</code></td>
+<td>stdin parses as float &lt; thr</td>
+</tr>
+</tbody>
+</table>
+<p>Thus, instead of the previous example, you can do:</p>
+<pre><code>weft::avg error-rate 5m | weft::is_gt 50
+</code></pre>
+<p>Both comparators treat empty or non-numeric input as false.</p>
 `,
 } as const;
 

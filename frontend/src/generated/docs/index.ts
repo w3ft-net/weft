@@ -16,10 +16,7 @@ import tmp from './tmp';
 import trace from './trace';
 import crons from './crons';
 import alerts from './alerts';
-import notify from './notify';
-import weftFuncs from './weft-funcs';
 import dashboards from './dashboards';
-import alert from './alert';
 import chart from './chart';
 import dashboard from './dashboard';
 import scripts from './scripts';
@@ -53,7 +50,7 @@ export const manualCategories: readonly ManualCategory[] = [
   { id: "connect-source", label: "Connect a source", summary: `Wire up logs from a host agent (weftd), an AWS CloudWatch log group, a Heroku app, or any custom line format.` },
   { id: "weft-shell", label: "Weft shell", summary: `A bash-like shell over your logs: the Unix builtins that carry over and where they differ, meta-variables, and /tmp scratch space with a cookbook.` },
   { id: "analysis-alerting", label: "Analysis & alerting", summary: `Trace a request across services, run pipelines on a schedule with crons, understand how alerts work, choose a strategy that suits the signal, route notifications, and pin live queries to dashboards.` },
-  { id: "command-reference", label: "Command reference", summary: `Man pages for the alert, chart and dashboard commands: every option and condition.` },
+  { id: "command-reference", label: "Command reference", summary: "Man pages for the chart and dashboard commands: every option." },
   { id: "customize", label: "Customize", summary: `Build named weft functions, save reusable scripts, share them across the team, and review their history with git.` },
 ];
 
@@ -74,10 +71,7 @@ export const manualSections: readonly ManualSection[] = [
   trace,
   crons,
   alerts,
-  notify,
-  weftFuncs,
   dashboards,
-  alert,
   chart,
   dashboard,
   scripts,

@@ -7,155 +7,123 @@ const alerts = {
   category: "analysis-alerting",
   order: 51,
   headings: [
+    { level: 2, id: "synopsis", text: "Synopsis" },
+    { level: 2, id: "how-alerts-work", text: "How alerts work" },
     { level: 2, id: "conditions", text: "Conditions" },
-    { level: 2, id: "strategies", text: "Strategies" },
-    { level: 2, id: "the-four-shapes", text: "The four shapes" },
-    { level: 3, id: "1-single-cron-scalar", text: "1. Single-cron scalar" },
-    { level: 3, id: "2-multi-row-per-tag", text: "2. Multi-row per-tag" },
-    { level: 3, id: "3-composite-more-than-one-condition", text: "3. Composite (more than one condition)" },
-    { level: 3, id: "4-aggregated-value-windowed-alerts", text: "4. Aggregated-value (windowed) alerts" },
-    { level: 2, id: "trend-anomaly-and-threshold-conditions", text: "Trend, anomaly and threshold conditions" },
-    { level: 2, id: "absent-and-zero-values", text: "Absent and zero values" },
-    { level: 2, id: "debouncing-flaps", text: "Debouncing flaps" },
-    { level: 2, id: "anti-patterns", text: "Anti-patterns" },
+    { level: 2, id: "options", text: "Options" },
+    { level: 2, id: "examples", text: "Examples" },
+    { level: 3, id: "layering-crons-for-richer-alerts", text: "Layering crons for richer alerts" },
+    { level: 2, id: "validations", text: "Validations" },
+    { level: 3, id: "when-you-save", text: "When you save" },
+    { level: 3, id: "when-it-runs", text: "When it runs" },
+    { level: 2, id: "notifications", text: "Notifications" },
+    { level: 3, id: "define-a-notification-alias", text: "Define a notification alias" },
+    { level: 3, id: "the-system-alias", text: "The system alias" },
+    { level: 3, id: "connecting-slack-and-pagerduty", text: "Connecting Slack and PagerDuty" },
+    { level: 3, id: "webhook-and-email-need-no-account-connection", text: "Webhook and email need no account connection" },
+    { level: 3, id: "testing-an-alias", text: "Testing an alias" },
+    { level: 3, id: "debouncing", text: "Debouncing" },
     { level: 2, id: "see-also", text: "See also" },
   ],
-  html: `<p>An alert evaluates a value from stdin against a condition.
-When the condition holds, <code>alert</code> writes the alert message to stderr — in a
-cron, that stderr drives incidents and notifications.
-When the condition does not hold, stdin passes through to stdout
-unchanged.
-<code>alert</code> must be the last stage of a pipeline, and the last (or only)
-command of a script.</p>
-<p>If the pipeline ahead of <code>alert</code> fails (an unknown source, a bad stage),
-the alert is not evaluated: the shell shows the error, and a cron run is
-recorded with status <code>error</code> and opens no incident. Empty output from a
-pipeline that ran (a <code>grep</code> with no match) counts as empty input, and
-<code>absent</code> fires on it.</p>
+  html: `<p>The <code>alert</code> function generates notifications based on stdin and other
+arguments. This page provides a reference for the function, a cookbook of
+alerting strategies, and how to route notifications.</p>
+<h2 id="synopsis">Synopsis</h2>
+<pre><code>&lt;pipeline&gt; | alert [&lt;condition&gt;] [--notify=&lt;alias&gt;]
+                   [-v &lt;field&gt;] [-t|--tag &lt;field&gt;]
+                   [--duration &lt;dur&gt;] [--average] [--msg &lt;text&gt;]
+
+&lt;pipeline&gt; | alert (--if-zero &lt;v&gt; | --if-nonzero &lt;v&gt;) [--notify=&lt;alias&gt;]
+</code></pre>
+<h2 id="how-alerts-work">How alerts work</h2>
+<p><code>alert</code> reads a value from stdin and evaluates it against a condition. If the
+condition holds, it writes the alert message to stderr and, when <code>--notify</code> is
+supplied, dispatches the alias from <code>/etc/notify.yaml</code> to its Slack, PagerDuty,
+webhook, and/or email targets (see <a href="#notifications">Notifications</a>). When the
+condition does not hold, stdin passes through to stdout unchanged.</p>
+<p>With no condition the default is <code>any</code>: the alert fires whenever stdin is
+non-empty. <code>alert</code> alone is a dry run that writes to stderr.</p>
+<p><code>alert</code> must be the last stage of its pipeline, and the last (or only) command
+of a script.</p>
 <h2 id="conditions">Conditions</h2>
 <ul>
-<li><code>above &lt;N&gt;</code> — value greater than N</li>
-<li><code>below &lt;N&gt;</code> — value less than N</li>
-<li><code>eq &lt;N&gt;</code>, <code>neq &lt;N&gt;</code></li>
+<li><code>any</code> — fires whenever stdin is non-empty (the default when no condition is given)</li>
+<li><code>above &lt;N&gt;</code> — current value is greater than N</li>
+<li><code>below &lt;N&gt;</code> — current value is less than N</li>
+<li><code>eq &lt;N&gt;</code> — current value equals N</li>
+<li><code>neq &lt;N&gt;</code> — current value does not equal N</li>
 <li><code>changed</code> — value differs from previous run</li>
 <li><code>absent</code> — no input received in the window</li>
-<li><code>rising &lt;N&gt;%</code> — increase over baseline</li>
-<li><code>falling &lt;N&gt;%</code> — decrease over baseline</li>
-<li><code>any</code> — fires when stdin is non-empty. It is the default when no
-condition is given.</li>
+<li><code>rising &lt;N&gt;%</code> — value increased by N% compared to previous/window average</li>
+<li><code>falling &lt;N&gt;%</code> — value decreased by N% compared to previous/window average</li>
 </ul>
-<p>See <code>man alert</code> for the full grammar, <code>--duration</code>, <code>--average</code> and <code>--msg</code>.</p>
-<h2 id="strategies">Strategies</h2>
-<p>The rest of this page catalogues the <em>shapes</em> an alert can take in weft —
-single-cron scalar alerts, multi-row per-tag alerts, composite
-alerts that fire on several conditions at once, and
-aggregated-value alerts over a window. The <code>alert</code> builtin's grammar
-lives in <code>man alert</code>; the <code>weft::*</code> family that backs predicates and
-aggregates lives in <strong>Weft functions</strong>. This section is about which
-shape fits which monitoring problem.</p>
-<p>A cron run reads only the logs from its own schedule interval: a
-<code>*/5</code> cron sees the last five minutes. The recipes here count with
-<code>grep ... | wc -l</code> and do not limit rows with <code>head -n</code> or
-<code>tail -n</code>: a line count caps the rows read, so on a busy interval it
-truncates the window and the cron undercounts. (At the prompt, <code>tail -n 500 | awk 'LEVEL==&quot;ERROR&quot;' | wc -l</code> counts errors among the last 500 rows
-only, and <code>grep ERROR | tail -n 5</code> is the last five matches.) To try a
-recipe interactively, set the window with <code>range</code> (see <code>man range</code>) and
-run the pipeline without its <code>alert</code> stage, or with <code>alert</code> as the last
-stage to see whether it fires.</p>
-<p>Every example sends its alert to an alias with <code>--notify=&lt;alias&gt;</code>.
-Aliases (<code>ops</code>, <code>critical</code> and so on) are defined in
-<code>/etc/notify.yaml</code>; see <strong>Notifications</strong>.</p>
-<h2 id="the-four-shapes">The four shapes</h2>
-<h3 id="1-single-cron-scalar">1. Single-cron scalar</h3>
-<p>The most common form. The cron's pipeline ends in <code>| alert &lt;cond&gt;</code>;
-each tick produces one numeric value that the alert evaluates.</p>
-<pre><code># /cron.d/error-rate
-# schedule: every 1m
-cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 50 --notify=ops
-</code></pre>
-<p>Use this when &quot;is the metric above a known threshold?&quot; answers
-your question and the metric is one number.</p>
-<h3 id="2-multi-row-per-tag">2. Multi-row per-tag</h3>
-<p>When a tick produces <em>multiple</em> values keyed by some dimension —
-&quot;disk usage per host,&quot; &quot;error count per service&quot; — use the
-<code>-k</code>/<code>-t</code> form of <code>alert</code>. Each row opens and closes incidents
-independently against its tag.</p>
-<pre><code># /cron.d/disk-per-host
-# schedule: every 1m
+<h2 id="options">Options</h2>
+<ul>
+<li><code>-v &lt;field&gt;</code>, <code>--value &lt;field&gt;</code> — column or JSON path holding the number to
+compare on each line. If unspecified, the value is the entire line.</li>
+<li><code>-t &lt;field&gt;</code>, <code>--tag &lt;field&gt;</code> — column or JSON path by which alerts should be
+grouped. Combine with <code>-v</code> when you want to alert separately by host, for
+example.</li>
+<li><code>--duration &lt;dur&gt;</code> — time window for sustained conditions. For
+<code>above</code>/<code>below</code>, condition must hold for all runs in the window. For
+<code>rising</code>/<code>falling</code>, compares against the window average. For <code>absent</code>, no
+non-empty output in the window. Units are s, m and h only.</li>
+<li><code>--average</code> — for <code>above</code>/<code>below</code> with <code>--duration</code>, compare the rolling
+average over the window against the threshold. No effect without
+<code>--duration</code>.</li>
+<li><code>--msg &lt;text&gt;</code> — override the default alert message.</li>
+<li><code>--notify=&lt;alias&gt;</code> — dispatch to the named alias in <code>/etc/notify.yaml</code> (see
+<a href="#notifications">Notifications</a>). Without <code>--notify</code>, alert writes to stderr.</li>
+<li><code>--if-zero &lt;status&gt;</code> / <code>--if-nonzero &lt;status&gt;</code> — fire based on a shell exit
+status instead of a stdin value. Pass the status of the command just before
+<code>alert</code> as <code>&quot;$?&quot;</code>. <code>--if-zero</code> fires when the status is <code>0</code>, <code>--if-nonzero</code> is
+the inverse. Mutually exclusive with the condition keywords. Useful in longer
+scripts.</li>
+</ul>
+<h2 id="examples">Examples</h2>
+<pre><code># Alert if the range holds any ERROR line.
+cat /log/myco/prod/api/main.log | grep ERROR | alert --notify=ops
+
+# Alert when the range holds more than 50 errors.
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 50 --notify=critical
+
+# check_errors is a script in /bin that prints a numeric
+check_errors | alert above 50 --duration 5m --average --notify=ops
+check_errors | alert rising 30% --notify=critical
+
+# Alert when the range holds no canary line at all.
+cat /log/myco/prod/canary/main.log | alert absent --notify=ops
+
+echo &quot;integration test&quot; | alert --notify=ops
+
+# One page if any host's disk use is above 80%.
 cat /log/myco/prod/api/disk.log \\
-  | jq -r '&quot;\\($host) \\(.pct)&quot;' \\
-  | alert above 80 -k 2 -t 1 --notify=ops
+    | awk '{print HOST, $5}' \\
+    | alert above 80 -v 2 --notify=ops
+
+# Alert per host whose disk use is above 80%.
+cat /log/myco/prod/api/disk.log \\
+    | awk '{print HOST, $5}' \\
+    | alert above 80 -v 2 -t 1 --notify=ops
+
+# Same idea with JSON rows
+cat /log/myco/prod/api/disk.log | jq -c '{host: $host, pct}' \\
+    | alert above 80 -v .pct -t .host --notify=ops
 </code></pre>
-<p><code>-k 2</code> says &quot;field 2 holds the numeric value&quot;; <code>-t 1</code> says &quot;field
-1 names this row&quot; (the host). Each host opens and closes incidents
-independently, giving one PagerDuty incident per affected host.</p>
-<p><code>-k</code> and <code>-t</code> also accept JSON paths, which skips the <code>jq -r</code>
-text formatting. The host is a column of the row, not a field in its
-JSON, so build the row with it, using <code>jq -c</code> so each row stays on one
-line; multi-line <code>jq</code> output is read one line per row:</p>
-<pre><code>cat /log/myco/prod/api/disk.log \\
-  | jq -c '{host: $host, pct}' \\
-  | alert above 80 -k .pct -t .host --notify=ops
-</code></pre>
-<p>A single alert may not mix the two forms — both <code>-k</code> and <code>-t</code> must
-be positional, or both must be <code>.</code>-prefixed paths.</p>
-<p>The same shape works with any field of the row as the tag — swap
-<code>.host</code> for <code>.deployment</code> or <code>.path</code>. The tag is one token, so to
-combine fields use the positional form and join them without a
-space: <code>&quot;\\(.deployment)/\\(.host) \\(.pct)&quot;</code> gives tags like
-<code>api/web-1</code>.</p>
-<h3 id="3-composite-more-than-one-condition">3. Composite (more than one condition)</h3>
-<p>When the alert depends on more than one thing — &quot;page me when errors
-are high <strong>and</strong> the canary stopped pinging&quot; — there are two ways to
-combine conditions. Both end in a single pipeline whose last stage is
-<code>alert</code>, because <code>alert</code> works only as the last (or only) command of a
-script.</p>
-<p><strong>Over the cron's time range.</strong> Read every source the condition
-needs, tally each leg in one <code>awk</code> pass, and print <code>1</code> when the whole
-condition holds and <code>0</code> otherwise. Use this when the legs are visible
-in the logs themselves:</p>
-<pre><code># /cron.d/deploy-danger
-# schedule: every 1m
-cat /log/myco/prod/api/main.log /log/myco/prod/canary/main.log \\
-  | awk 'LEVEL==&quot;ERROR&quot;{e++} SERVICE==&quot;canary&quot;{c++}
-         END{print (e&gt;50 &amp;&amp; c+0==0) ? 1 : 0}' \\
-  | alert above 0 --notify=critical
-</code></pre>
-<p><code>e</code> counts errors and <code>c</code> counts canary lines in the cron's interval;
-<code>c+0==0</code> is true when no canary line arrived at all. <code>&amp;&amp;</code> is AND,
-<code>||</code> is OR and <code>!</code> is NOT inside the <code>awk</code> expression:
-<code>print (e&gt;50 || p&gt;0) ? 1 : 0</code> fires when either leg is high, and
-<code>print (e&gt;50 &amp;&amp; !m) ? 1 : 0</code> fires only when the <code>m</code> leg is zero (say,
-a maintenance marker).</p>
-<p><strong>Across crons' history.</strong> When the legs are the stored results of other
-crons, compose the <code>weft::*</code> predicates with bash <code>&amp;&amp;</code> <code>||</code> <code>!</code> in a
-subshell, end it with an <code>echo</code>, and pipe that into <code>alert</code>. The
-subshell prints <code>fire</code> only when the whole condition holds, and
-<code>alert</code>'s default <code>any</code> condition fires on any output:</p>
+<h3 id="layering-crons-for-richer-alerts">Layering crons for richer alerts</h3>
+<p>A cron run, and thereby an alert reads only the logs from its own schedule
+interval: a <code>*/5</code> cron sees the last five minutes. However, you can leverage
+the stored results of other crons using the <code>weft::*</code> predicates.</p>
+<p>#FIXME simple example</p>
+<p>If you want to use boolean logic to add multiple such predicates, just add one
+more condition and echo if nothing's failed yet:#</p>
 <pre><code># /cron.d/deploy-danger
 # schedule: every 1m
 (weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping &amp;&amp; echo fire) | alert --notify=critical
 </code></pre>
-<p><code>weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping</code> succeeds
-(exit 0, the bash convention for <em>success</em>) when both predicates fire,
-so the <code>echo</code> runs. <code>weft::is_absent</code> fires when the named cron has no
-result: it doesn't exist, has never run, or its latest output is
-empty (with a window, such as <code>weft::is_absent canary-ping 10m</code>: no result
-landed in it). (A bad window, one over the 24h cap, or a history that can't
-be read doesn't fire; in a bash predicate the reason is printed on
-stderr.)</p>
-<p><code>||</code> (OR) and <code>!</code> (NOT) work the same way:</p>
-<pre><code>(weft::is_above error-rate 50 || weft::is_above payment-fail 0 &amp;&amp; echo fire) | alert --notify=critical
-
-(! weft::is_absent maintenance-flag &amp;&amp; weft::is_above error-rate 50 &amp;&amp; echo fire) | alert --notify=critical   # fires only outside maintenance
-</code></pre>
-<p>Lua mirrors the bash predicates one-for-one, with native <code>and</code> <code>or</code>
-<code>not</code>. Lua lives in a <code>/bin/</code> script (crons are bash), which prints <code>1</code>
-or <code>0</code> and which the cron pipes into <code>alert above 0</code>. Use Lua when the
-chain has more than two clauses, when the predicate uses computed values,
-or when you want a meaningful debug print:</p>
+<p>If your love of bash is less than it should be, you may want to stuff a Lua
+script in <code>/bin</code> and pipe that to <code>alert</code>.</p>
 <pre><code class="language-lua">#!/usr/bin/env lua
--- /bin/deploy_danger
 local rate = 0
 if not weft.is_absent(&quot;error-rate&quot;) then
   rate = tonumber(weft.latest(&quot;error-rate&quot;)) or 0
@@ -171,134 +139,211 @@ else
   print(0)
 end
 </code></pre>
-<pre><code># /cron.d/deploy-danger
-# schedule: every 1m
+<p>We'll write that script to <code>/bin/deploy_danger</code>, and then we can write this for
+our alerting cron:</p>
+<pre><code># schedule: every 1m
 deploy_danger | alert above 0 --notify=critical
 </code></pre>
-<h3 id="4-aggregated-value-windowed-alerts">4. Aggregated-value (windowed) alerts</h3>
-<p>When the question is &quot;what does the value look like over a window,&quot;
-use a <code>weft::*</code> aggregate in the cron body and alert against its
-stdout:</p>
-<pre><code># /cron.d/error-rate-hourly
-# schedule: every 5m
-echo $(weft::avg error-rate 1h) | alert above 50 --notify=ops
-</code></pre>
-<p>Or compose with the stdin comparators when chaining into a
-composite:</p>
-<pre><code>(weft::avg error-rate 5m | weft::is_gt 50 &amp;&amp; weft::is_absent canary-ping &amp;&amp; echo fire) | alert --notify=critical
-</code></pre>
-<p>The aggregates' window caps (24h for <code>avg</code>/<code>min</code>/<code>max</code>/etc., 14d for
-endpoint funcs) limit how far back the rolling window can reach.
-For longer-horizon comparisons, write a cron that itself runs an
-aggregate every 5 minutes — its stored history then <em>is</em> the
-longer-horizon series.</p>
-<h2 id="trend-anomaly-and-threshold-conditions">Trend, anomaly and threshold conditions</h2>
+<h2 id="validations">Validations</h2>
+<p>Weft checks crons twice: when you save one, so a mistake is refused before it
+costs you a night of missed alerts, and while it runs, so a problem that only
+shows up with real data still reaches someone.</p>
+<h3 id="when-you-save">When you save</h3>
+<p>A save is refused, with a message saying why, if:</p>
 <table>
 <thead>
 <tr>
-<th>Want to fire when...</th>
-<th>Use</th>
+<th>Check</th>
+<th>What's refused</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Value crosses a known threshold</td>
-<td><code>alert above</code> / <code>alert below</code> (or <code>weft::is_above</code> / <code>weft::is_below</code> in a composite)</td>
+<td>Schedule</td>
+<td>A missing schedule line, or one outside the <a href="/manual/crons#scheduling">accepted grammar</a>, such as a time of day or a weekday other than Monday</td>
 </tr>
 <tr>
-<td>Value differs from the previous tick at all</td>
-<td><code>weft::has_changed</code></td>
+<td>Plan</td>
+<td>A schedule faster than your plan allows, or one more cron than your plan includes</td>
 </tr>
 <tr>
-<td>No result came in</td>
-<td><code>weft::is_absent</code></td>
+<td>Syntax</td>
+<td>A pipeline that doesn't parse</td>
 </tr>
 <tr>
-<td>Value rose/fell by N% vs recent baseline</td>
-<td><code>alert rising</code> / <code>alert falling</code> (or <code>weft::is_rising</code> / <code>weft::is_falling</code>)</td>
+<td>One alert, last</td>
+<td>An <code>alert</code> that isn't the final stage of the cron's last command: in a loop, a conditional, a group, an <code>&amp;&amp;</code> chain, or before more work. A cron has one alert stage</td>
 </tr>
 <tr>
-<td>Value is unusual for <em>this cron's recent history</em></td>
-<td><code>weft::is_outlier</code></td>
+<td>One alias</td>
+<td>More than one <code>--notify</code> on an alert. To page several places, point <code>--notify</code> at one <code>notify.yaml</code> alias with several targets, or write one cron per alert</td>
 </tr>
 <tr>
-<td>Value is unusual for <em>this cron at this time of day/week</em></td>
-<td><code>weft::is_seasonal</code></td>
+<td>Alert arguments</td>
+<td>An unknown condition or option, a non-numeric threshold or duration, or <code>-v</code> and <code>-t</code> that mix a column number with a JSON path</td>
+</tr>
+<tr>
+<td>Piped <code>weft::</code> functions</td>
+<td>A <code>weft::</code> function, other than <code>weft::is_gt</code> and <code>weft::is_lt</code>, that sits after a \`</td>
+</tr>
+<tr>
+<td>Scripts</td>
+<td>In <code>/bin</code> scripts, the same alert and <code>weft::</code> rules, plus <code>tail -f</code> and <code>range</code>, which have no place in a script that runs to completion</td>
+</tr>
+<tr>
+<td><code>notify.yaml</code></td>
+<td>A file that doesn't parse, an alias with no targets, a webhook-header placeholder with nothing stored behind it, or no <code>system</code> alias</td>
 </tr>
 </tbody>
 </table>
-<p>The functions take different arguments:</p>
+<p>A few things are allowed but flagged. If a <code>head</code> or <code>tail</code> cap feeds a
+counting stage, so the count would silently cover only part of the interval,
+the save goes through with a warning. So does a pipeline with a stage that runs
+after retrieval, since it costs something on every run.</p>
+<h3 id="when-it-runs">When it runs</h3>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The pipeline fails before <code>alert</code></td>
+<td>The alert isn't evaluated. The run is recorded with status <code>error</code>, and no incident opens or closes</td>
+</tr>
+<tr>
+<td>The value isn't a number for a numeric condition</td>
+<td><code>alert</code> reports <code>non-numeric value</code> and exits non-zero</td>
+</tr>
+<tr>
+<td>A line has no tag under <code>-t</code></td>
+<td>That line is skipped, with a note in <code>stderr</code></td>
+</tr>
+<tr>
+<td>A notification can't be delivered</td>
+<td>The run exits non-zero, and each following tick of the incident retries the targets that missed it</td>
+</tr>
+<tr>
+<td>A predicate can't evaluate (no history yet, a non-numeric value, a bad window)</td>
+<td>It is false, not an error; see <a href="/manual/crons#predicates">Predicates</a>. Only <code>weft::is_absent</code> says why on <code>stderr</code></td>
+</tr>
+<tr>
+<td>A <code>weft::</code> function is given a window past its longest</td>
+<td>An error naming the limit, never a silently shorter window</td>
+</tr>
+<tr>
+<td>A cron stops running</td>
+<td>If a cron goes more than twice its interval without a run, weft notifies your <a href="#the-system-alias"><code>system</code> alias</a>. It does so once per episode, and one message per org even if many crons stopped together</td>
+</tr>
+</tbody>
+</table>
+<h2 id="notifications">Notifications</h2>
+<h3 id="define-a-notification-alias">Define a notification alias</h3>
+<p>When an <code>alert</code> fires in a cron, <code>--notify=&lt;alias&gt;</code> dispatches to a
+destination defined in <code>/etc/notify.yaml</code>. The alias is a name;
+it fans out to one or more targets across four service types — Slack,
+PagerDuty, webhook, and email.</p>
+<pre><code># /etc/notify.yaml
+ops:
+  slack:
+    - &quot;#alerts&quot;
+  pagerduty:
+    - ops-daytime
+  email:
+    - &quot;oncall@example.com&quot;
+</code></pre>
+<p>Edit it with <code>vi /etc/notify.yaml</code>. See <code>help alerts</code> for the full
+grammar (severities, webhook headers, per-target mappings).</p>
+<h3 id="the-system-alias">The system alias</h3>
+<p>Every org has an alias named <code>system</code>. It receives the alerts weft raises on
+your behalf, as opposed to the ones your own <code>alert</code> stages raise. Today that
+is a cron that has stopped running: if a cron goes more than twice its interval
+without a run, weft notifies <code>system</code>.</p>
+<p>It starts out pointing at the email address of the person who created the org:</p>
+<pre><code>system:
+  email:
+    - &quot;you@example.com&quot;
+</code></pre>
+<p>You can change its targets freely, to a Slack channel, a PagerDuty service, a
+shared mailbox, or several of them, but you can't remove it. A save of
+<code>/etc/notify.yaml</code> without a <code>system</code> alias is refused. Because ownership can't
+be transferred, point it at somewhere that outlives any one person, such as a
+team mailbox or a PagerDuty service.</p>
+<p>Email delivery needs SMTP configured for your deployment, as for any email
+target.</p>
+<h3 id="connecting-slack-and-pagerduty">Connecting Slack and PagerDuty</h3>
+<p><code>notify.yaml</code> names destinations — the credentials behind them
+live with your account. Connect them from the terminal with <code>weft integration</code> or under <strong>Account → Integrations</strong> in the browser;
+both do the same thing.</p>
+<pre><code># PagerDuty — paste an integration (routing) key, give it a name.
+# The name is what notify.yaml references under \`pagerduty:\`.
+weft integration pagerduty add ops-daytime --key YOUR_ROUTING_KEY
+weft integration pagerduty rm  ops-daytime
+
+# Slack — authorize a workspace. Slack uses OAuth, so this opens a
+# browser tab to grant access (like \`weft login\`); the CLI waits and
+# confirms once the workspace is connected.
+weft integration slack connect
+weft integration slack rm
+
+# See what's connected, plus the PagerDuty names notify.yaml can use.
+weft integration list
+</code></pre>
+<p>A PagerDuty alias in <code>notify.yaml</code> must match a name you've registered
+with <code>weft integration pagerduty add</code>. Slack channels are named
+directly in <code>notify.yaml</code> (<code>&quot;#alerts&quot;</code>) once the workspace is
+connected.</p>
+<h3 id="webhook-and-email-need-no-account-connection">Webhook and email need no account connection</h3>
+<p>Webhook URLs and email addresses carry no account-level credential.
+They are written into <code>notify.yaml</code> per alias:</p>
+<p>Webhook <strong>header values</strong> are the exception: an <code>Authorization</code> token
+or a signing secret is a credential, so <code>cat /etc/notify.yaml</code> (and
+<code>git log -p /etc/notify.yaml</code>) shows each one as <code>&quot;&lt;redacted&gt;&quot;</code>. To edit,
+leave <code>&quot;&lt;redacted&gt;&quot;</code> where a value should stay unchanged, or write a real
+value to replace it. A <code>&quot;&lt;redacted&gt;&quot;</code> on a webhook, header or alias that
+has nothing stored is refused.</p>
+<pre><code>pages:
+  webhook:
+    - &quot;https://hooks.example.com/weft&quot;
+  email:
+    - &quot;oncall@example.com&quot;
+</code></pre>
+<p>Email delivery requires SMTP to be configured for your deployment.</p>
+<h3 id="testing-an-alias">Testing an alias</h3>
+<pre><code>echo &quot;test fire&quot; | alert --notify=ops
+</code></pre>
+<p>This sends to every target in the <code>ops</code> alias.</p>
+<p>Interactive runs notify every time. Only crons have incidents, so nothing is
+suppressed.</p>
+<h3 id="debouncing">Debouncing</h3>
+<p>A cron checks its condition on every tick. To avoid paging you on each one,
+weft groups consecutive ticks during
+which the condition holds. Each cron has at most one open incident at a time
+(one per tag, with <code>-t</code>).</p>
 <ul>
-<li><code>weft::is_rising &lt;cron&gt; [&lt;pct&gt;] [&lt;window&gt;]</code>, and <code>weft::is_falling</code>
-likewise. <code>&lt;pct&gt;</code> is a bare number such as <code>50</code>; it takes no <code>%</code> suffix.</li>
-<li><code>weft::is_outlier &lt;cron&gt; &lt;n_stddev&gt; &lt;window&gt;</code></li>
-<li><code>weft::is_seasonal &lt;cron&gt; &lt;n_stddev&gt; &lt;period&gt; &lt;window&gt;</code></li>
+<li>The first tick where the condition holds opens an incident and sends the
+notification.</li>
+<li>Ticks while the incident is open send nothing more. The alert message still
+goes to the run's <code>stderr</code>, so it is in the run's recorded result.</li>
+<li>If a send fails (PagerDuty is unreachable, a Slack channel is gone), the run
+reports it and exits non-zero, and each following tick of the incident tries
+again. Delivery is tracked per target, so a retry goes only to the targets that
+missed it, not to the ones already told.</li>
+<li>The first tick where the condition doesn't hold closes the incident. Closing
+sends nothing, including to PagerDuty, where you resolve the page yourself.</li>
+<li>If the condition holds again after that, a new incident opens and you are
+notified again.</li>
 </ul>
-<p>Windows and periods are Go durations plus <code>d</code> (24 hours) and <code>w</code> (7
-days), and they combine: <code>30m</code>, <code>1h</code>, <code>1d</code>, <code>1w</code>, <code>1d12h</code>. See <strong>Weft
-functions</strong> for the caps on each function.</p>
-<p>Use <code>is_outlier</code> when &quot;what's normal&quot; doesn't depend on the clock —
-host memory, queue depth, error rate of a steady-state service. Use
-<code>is_seasonal</code> when traffic has weekly/daily cycles — a Tuesday-2pm
-threshold under-pages on Saturday at 3am and over-pages at the
-nightly batch job.</p>
-<h2 id="absent-and-zero-values">Absent and zero values</h2>
-<p>A cron with no usable value and a value of zero are different cases. In
-bash, <code>weft::latest</code> of a cron that doesn't exist is an error; in Lua, <code>tonumber(&quot;&quot;)</code> returns <code>nil</code> and arithmetic against
-<code>nil</code> errors. Always check for absence and guard the conversion:</p>
-<pre><code class="language-lua">local v = 0   -- treat absent as zero
-if not weft.is_absent(&quot;foo&quot;) then
-  v = tonumber(weft.latest(&quot;foo&quot;)) or 0
-end
-</code></pre>
-<p>In bash, predicate builtins handle this for you — <code>weft::is_above missing 50</code> exits 1 (no fire).</p>
-<p>To distinguish absent from zero, use
-<code>weft::is_absent</code> explicitly in the chain:</p>
-<pre><code>weft::is_absent error-rate    # exit 0 (fires) when error-rate has no result, or doesn't exist
-# ...whereas...
-weft::is_above error-rate 0   # fires only when there IS a result AND it's &gt; 0
-</code></pre>
-<h2 id="debouncing-flaps">Debouncing flaps</h2>
-<p>Composite conditions tend to flap — each leg individually crosses
-back and forth across its threshold, and the composite pops whenever
-any pair simultaneously trips. The <code>alert --duration &lt;dur&gt;</code>
-flag handles this: it requires the trigger to hold for the entire
-window before firing. Once the composite output is a scalar (1 or 0
-piped through alert), <code>--duration</code> works the same as for any other
-alert. (<code>--duration</code> takes <code>s</code>, <code>m</code> and <code>h</code>; <code>1d</code> is rejected.)</p>
-<pre><code>(weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping &amp;&amp; echo 1 || echo 0) | alert above 0 --duration 5m --notify=critical
-</code></pre>
-<p>Five minutes of sustained composite-true before the page.</p>
-<p>The same applies to multi-row alerts — <code>--duration</code> is per-tag, so
-<code>alert above 80 -k 2 -t 1 --duration 5m</code> requires each host's
-five-minute window to clear the threshold before that host's
-incident opens.</p>
-<h2 id="anti-patterns">Anti-patterns</h2>
-<ul>
-<li><strong>Don't fan out alerts from inside the chain.</strong> A predicate
-builtin is a test and has no side effects. To page multiple
-aliases from one cron, write multiple <code>/cron.d/</code> entries or use
-one <code>notify.yaml</code> alias that fans out to multiple destinations.</li>
-<li><strong>Don't put <code>weft::*</code> predicates on the right side of <code>|</code>.</strong> They
-read stored state. For stdin-driven comparisons, pipe values
-through <code>weft::is_gt</code> / <code>weft::is_lt</code>.</li>
-<li><strong>Don't compose state-mutating commands in the chain.</strong> Keep the
-predicate composition side-effect-free: join <code>weft::*</code> predicates
-with <code>&amp;&amp;</code>, <code>||</code> and <code>!</code>, and nothing else. Hanging an unrelated
-command off the chain couples alerting to unrelated I/O and makes
-failure modes harder to reason about.</li>
-<li><strong>Don't reuse a single-row alert for multi-row data.</strong> Multiple
-rows on stdin without <code>-k</code>/<code>-t</code> collapse into one scalar, which
-the alert will reject as non-numeric. Either reduce upstream with
-<code>wc -l</code> or <code>awk</code> (single-row), or add <code>-k</code>/<code>-t</code> (multi-row).</li>
-</ul>
+<p>Incidents are bookkeeping for notification, not something you manage: there is
+nothing to list, acknowledge or close by hand. A run that errors neither opens
+nor closes one. Interactive runs have no cron, so they have no incidents and
+notify every time.</p>
 <h2 id="see-also">See also</h2>
 <ul>
-<li><strong>Weft functions</strong> — full reference for the <code>weft::*</code> value funcs,
-predicates, and stdin comparators.</li>
-<li><strong>Crons</strong> — scheduled pipelines and incident lifecycle.</li>
-<li><code>man alert</code> — the alert builtin's full grammar.</li>
-<li><strong>Notifications</strong> — alias and destination configuration.</li>
+<li><strong>Crons</strong> — scheduling, result history, and the reference for the
+<code>weft::*</code> value funcs, predicates, and stdin comparators.</li>
 </ul>
 `,
 } as const;

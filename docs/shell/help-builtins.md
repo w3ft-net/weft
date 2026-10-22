@@ -71,8 +71,8 @@ Where a command can write depends on the directory. `/log` is read-only. `/tmp` 
 | `explain <pipeline>` | Say how much of a one-liner is optimized retrieval and what would speed it up. Runs nothing. See [Making pipelines fast](../manual/fast-pipelines.md). | `man explain` |
 | `trace`, `trace --id <id>`, `trace --spans` | The recent traces, every line of one request across all your services, or a per-span rollup (of one request with `--id`, or of the whole time window without). | [Tracing](../manual/trace.md) |
 | `chart` | Render a pipeline's output, or a cron's history, as a chart in the terminal. | [chart](../shell/man-chart.md) |
-| `alert` | Fire a notification from a pipeline's final number. | [alert](../shell/man-alert.md), [notify](../manual/notify.md) |
-| `weft::latest`, `weft::avg`, `weft::max`, ... | Read and reason about your own cron history from inside a pipeline. | [weft::\*](../manual/weft-funcs.md) |
+| `alert` | Fire a notification from a pipeline's final number. | [alert](../shell/man-alert.md), [notifications](../manual/alerts.md) |
+| `weft::latest`, `weft::avg`, `weft::max`, ... | Read and reason about your own cron history from inside a pipeline. | [weft::\*](../manual/crons.md) |
 | `dashboard` | Open a dashboard; the YAML grammar and tile kinds. | [dashboard](../shell/man-dashboard.md) |
 | `clipboard` | Copy a short, shareable link to a `/bin` script. | `man clipboard`, `man sharing` |
 

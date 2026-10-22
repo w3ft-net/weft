@@ -54,7 +54,7 @@ went into each bar. Line charts always fit and are never merged.
 
 In cron form, the data point for each result is the **last
 whitespace-separated field** of the cron's stdout, the same
-convention as multi-row alert (`alert -k <N>`). The cron's output must
+convention as per-tag alert (`alert -v <N>`). The cron's output must
 end in a number on each line; a cron that emits JSON rows cannot be
 charted. In pipe form, `-x` and
 `-y` pick fields explicitly; when omitted, x is the row sequence

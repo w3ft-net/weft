@@ -46,6 +46,10 @@ func main() {
 		}
 	}
 
+	if err := resolveIncludes(all); err != nil {
+		log.Fatalf("includes: %v", err)
+	}
+
 	all = withManualShellPages(all)
 	links = newLinkIndex(all)
 

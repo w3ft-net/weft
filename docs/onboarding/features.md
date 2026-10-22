@@ -128,8 +128,8 @@ Conditions: `above`, `below`, `eq`, `changed`, `rising N%`,
   against the pipeline output after execution.
 - Notification: `coordinator/notify.go` dispatches to channels
   defined in `/etc/notify.yaml` (Slack, PagerDuty).
-- Multi-row alerts: the `-k` flag groups results by a key column,
-  and `-t` sets the threshold per group.
+- Multi-row alerts: the `-v` flag picks the value column, and
+  `-t` names each row so every tag alerts independently.
 
 ## Dashboards
 

@@ -104,7 +104,7 @@ seconds.</p>
 </tr>
 <tr>
 <td><code>weft.*</code></td>
-<td>Cron aggregates and predicates — see <strong>Weft functions</strong></td>
+<td>Cron aggregates and predicates — see <strong>Crons</strong></td>
 </tr>
 </tbody>
 </table>

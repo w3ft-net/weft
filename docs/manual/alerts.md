@@ -12,148 +12,112 @@ web:
   order: 51
 ---
 
-An alert evaluates a value from stdin against a condition.
-When the condition holds, `alert` writes the alert message to stderr — in a
-cron, that stderr drives incidents and notifications.
-When the condition does not hold, stdin passes through to stdout
-unchanged.
-`alert` must be the last stage of a pipeline, and the last (or only)
-command of a script.
+The `alert` function generates notifications based on stdin and other
+arguments. This page provides a reference for the function, a cookbook of
+alerting strategies, and how to route notifications.
 
-If the pipeline ahead of `alert` fails (an unknown source, a bad stage),
-the alert is not evaluated: the shell shows the error, and a cron run is
-recorded with status `error` and opens no incident. Empty output from a
-pipeline that ran (a `grep` with no match) counts as empty input, and
-`absent` fires on it.
+## Synopsis
+
+```
+<pipeline> | alert [<condition>] [--notify=<alias>]
+                   [-v <field>] [-t|--tag <field>]
+                   [--duration <dur>] [--average] [--msg <text>]
+
+<pipeline> | alert (--if-zero <v> | --if-nonzero <v>) [--notify=<alias>]
+```
+
+## How alerts work
+
+`alert` reads a value from stdin and evaluates it against a condition. If the
+condition holds, it writes the alert message to stderr and, when `--notify` is
+supplied, dispatches the alias from `/etc/notify.yaml` to its Slack, PagerDuty,
+webhook, and/or email targets (see [Notifications](#notifications)). When the
+condition does not hold, stdin passes through to stdout unchanged.
+
+With no condition the default is `any`: the alert fires whenever stdin is
+non-empty. `alert` alone is a dry run that writes to stderr.
+
+`alert` must be the last stage of its pipeline, and the last (or only) command
+of a script.
 
 ## Conditions
 
-- `above <N>` — value greater than N
-- `below <N>` — value less than N
-- `eq <N>`, `neq <N>`
+- `any` — fires whenever stdin is non-empty (the default when no condition is given)
+- `above <N>` — current value is greater than N
+- `below <N>` — current value is less than N
+- `eq <N>` — current value equals N
+- `neq <N>` — current value does not equal N
 - `changed` — value differs from previous run
 - `absent` — no input received in the window
-- `rising <N>%` — increase over baseline
-- `falling <N>%` — decrease over baseline
-- `any` — fires when stdin is non-empty. It is the default when no
-  condition is given.
+- `rising <N>%` — value increased by N% compared to previous/window average
+- `falling <N>%` — value decreased by N% compared to previous/window average
 
-See `man alert` for the full grammar, `--duration`, `--average` and `--msg`.
+## Options
 
-## Strategies
+- `-v <field>`, `--value <field>` — column or JSON path holding the number to
+  compare on each line. If unspecified, the value is the entire line.
+- `-t <field>`, `--tag <field>` — column or JSON path by which alerts should be
+  grouped. Combine with `-v` when you want to alert separately by host, for
+  example.
+- `--duration <dur>` — time window for sustained conditions. For
+  `above`/`below`, condition must hold for all runs in the window. For
+  `rising`/`falling`, compares against the window average. For `absent`, no
+  non-empty output in the window. Units are s, m and h only.
+- `--average` — for `above`/`below` with `--duration`, compare the rolling
+  average over the window against the threshold. No effect without
+  `--duration`.
+- `--msg <text>` — override the default alert message.
+- `--notify=<alias>` — dispatch to the named alias in `/etc/notify.yaml` (see
+  [Notifications](#notifications)). Without `--notify`, alert writes to stderr.
+- `--if-zero <status>` / `--if-nonzero <status>` — fire based on a shell exit
+  status instead of a stdin value. Pass the status of the command just before
+  `alert` as `"$?"`. `--if-zero` fires when the status is `0`, `--if-nonzero` is
+  the inverse. Mutually exclusive with the condition keywords. Useful in longer
+  scripts.
 
-The rest of this page catalogues the *shapes* an alert can take in weft —
-single-cron scalar alerts, multi-row per-tag alerts, composite
-alerts that fire on several conditions at once, and
-aggregated-value alerts over a window. The `alert` builtin's grammar
-lives in `man alert`; the `weft::*` family that backs predicates and
-aggregates lives in **Weft functions**. This section is about which
-shape fits which monitoring problem.
-
-A cron run reads only the logs from its own schedule interval: a
-`*/5` cron sees the last five minutes. The recipes here count with
-`grep ... | wc -l` and do not limit rows with `head -n` or
-`tail -n`: a line count caps the rows read, so on a busy interval it
-truncates the window and the cron undercounts. (At the prompt, `tail -n 500
-| awk 'LEVEL=="ERROR"' | wc -l` counts errors among the last 500 rows
-only, and `grep ERROR | tail -n 5` is the last five matches.) To try a
-recipe interactively, set the window with `range` (see `man range`) and
-run the pipeline without its `alert` stage, or with `alert` as the last
-stage to see whether it fires.
-
-Every example sends its alert to an alias with `--notify=<alias>`.
-Aliases (`ops`, `critical` and so on) are defined in
-`/etc/notify.yaml`; see **Notifications**.
-
-## The four shapes
-
-### 1. Single-cron scalar
-
-The most common form. The cron's pipeline ends in `| alert <cond>`;
-each tick produces one numeric value that the alert evaluates.
+## Examples
 
 ```
-# /cron.d/error-rate
-# schedule: every 1m
-cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 50 --notify=ops
-```
+# Alert if the range holds any ERROR line.
+cat /log/myco/prod/api/main.log | grep ERROR | alert --notify=ops
 
-Use this when "is the metric above a known threshold?" answers
-your question and the metric is one number.
+# Alert when the range holds more than 50 errors.
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 50 --notify=critical
 
-### 2. Multi-row per-tag
+# check_errors is a script in /bin that prints a numeric
+check_errors | alert above 50 --duration 5m --average --notify=ops
+check_errors | alert rising 30% --notify=critical
 
-When a tick produces *multiple* values keyed by some dimension —
-"disk usage per host," "error count per service" — use the
-`-k`/`-t` form of `alert`. Each row opens and closes incidents
-independently against its tag.
+# Alert when the range holds no canary line at all.
+cat /log/myco/prod/canary/main.log | alert absent --notify=ops
 
-```
-# /cron.d/disk-per-host
-# schedule: every 1m
+echo "integration test" | alert --notify=ops
+
+# One page if any host's disk use is above 80%.
 cat /log/myco/prod/api/disk.log \
-  | jq -r '"\($host) \(.pct)"' \
-  | alert above 80 -k 2 -t 1 --notify=ops
-```
+    | awk '{print HOST, $5}' \
+    | alert above 80 -v 2 --notify=ops
 
-`-k 2` says "field 2 holds the numeric value"; `-t 1` says "field
-1 names this row" (the host). Each host opens and closes incidents
-independently, giving one PagerDuty incident per affected host.
-
-`-k` and `-t` also accept JSON paths, which skips the `jq -r`
-text formatting. The host is a column of the row, not a field in its
-JSON, so build the row with it, using `jq -c` so each row stays on one
-line; multi-line `jq` output is read one line per row:
-
-```
+# Alert per host whose disk use is above 80%.
 cat /log/myco/prod/api/disk.log \
-  | jq -c '{host: $host, pct}' \
-  | alert above 80 -k .pct -t .host --notify=ops
+    | awk '{print HOST, $5}' \
+    | alert above 80 -v 2 -t 1 --notify=ops
+
+# Same idea with JSON rows
+cat /log/myco/prod/api/disk.log | jq -c '{host: $host, pct}' \
+    | alert above 80 -v .pct -t .host --notify=ops
 ```
 
-A single alert may not mix the two forms — both `-k` and `-t` must
-be positional, or both must be `.`-prefixed paths.
+### Layering crons for richer alerts
 
-The same shape works with any field of the row as the tag — swap
-`.host` for `.deployment` or `.path`. The tag is one token, so to
-combine fields use the positional form and join them without a
-space: `"\(.deployment)/\(.host) \(.pct)"` gives tags like
-`api/web-1`.
+A cron run, and thereby an alert reads only the logs from its own schedule
+interval: a `*/5` cron sees the last five minutes. However, you can leverage
+the stored results of other crons using the `weft::*` predicates.
 
-### 3. Composite (more than one condition)
+#FIXME simple example
 
-When the alert depends on more than one thing — "page me when errors
-are high **and** the canary stopped pinging" — there are two ways to
-combine conditions. Both end in a single pipeline whose last stage is
-`alert`, because `alert` works only as the last (or only) command of a
-script.
-
-**Over the cron's time range.** Read every source the condition
-needs, tally each leg in one `awk` pass, and print `1` when the whole
-condition holds and `0` otherwise. Use this when the legs are visible
-in the logs themselves:
-
-```
-# /cron.d/deploy-danger
-# schedule: every 1m
-cat /log/myco/prod/api/main.log /log/myco/prod/canary/main.log \
-  | awk 'LEVEL=="ERROR"{e++} SERVICE=="canary"{c++}
-         END{print (e>50 && c+0==0) ? 1 : 0}' \
-  | alert above 0 --notify=critical
-```
-
-`e` counts errors and `c` counts canary lines in the cron's interval;
-`c+0==0` is true when no canary line arrived at all. `&&` is AND,
-`||` is OR and `!` is NOT inside the `awk` expression:
-`print (e>50 || p>0) ? 1 : 0` fires when either leg is high, and
-`print (e>50 && !m) ? 1 : 0` fires only when the `m` leg is zero (say,
-a maintenance marker).
-
-**Across crons' history.** When the legs are the stored results of other
-crons, compose the `weft::*` predicates with bash `&&` `||` `!` in a
-subshell, end it with an `echo`, and pipe that into `alert`. The
-subshell prints `fire` only when the whole condition holds, and
-`alert`'s default `any` condition fires on any output:
+If you want to use boolean logic to add multiple such predicates, just add one
+more condition and echo if nothing's failed yet:#
 
 ```
 # /cron.d/deploy-danger
@@ -161,32 +125,11 @@ subshell prints `fire` only when the whole condition holds, and
 (weft::is_above error-rate 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical
 ```
 
-`weft::is_above error-rate 50 && weft::is_absent canary-ping` succeeds
-(exit 0, the bash convention for *success*) when both predicates fire,
-so the `echo` runs. `weft::is_absent` fires when the named cron has no
-result: it doesn't exist, has never run, or its latest output is
-empty (with a window, such as `weft::is_absent canary-ping 10m`: no result
-landed in it). (A bad window, one over the 24h cap, or a history that can't
-be read doesn't fire; in a bash predicate the reason is printed on
-stderr.)
-
-`||` (OR) and `!` (NOT) work the same way:
-
-```
-(weft::is_above error-rate 50 || weft::is_above payment-fail 0 && echo fire) | alert --notify=critical
-
-(! weft::is_absent maintenance-flag && weft::is_above error-rate 50 && echo fire) | alert --notify=critical   # fires only outside maintenance
-```
-
-Lua mirrors the bash predicates one-for-one, with native `and` `or`
-`not`. Lua lives in a `/bin/` script (crons are bash), which prints `1`
-or `0` and which the cron pipes into `alert above 0`. Use Lua when the
-chain has more than two clauses, when the predicate uses computed values,
-or when you want a meaningful debug print:
+If your love of bash is less than it should be, you may want to stuff a Lua
+script in `/bin` and pipe that to `alert`.
 
 ```lua
 #!/usr/bin/env lua
--- /bin/deploy_danger
 local rate = 0
 if not weft.is_absent("error-rate") then
   rate = tonumber(weft.latest("error-rate")) or 0
@@ -203,134 +146,187 @@ else
 end
 ```
 
+We'll write that script to `/bin/deploy_danger`, and then we can write this for
+our alerting cron:
+
 ```
-# /cron.d/deploy-danger
 # schedule: every 1m
 deploy_danger | alert above 0 --notify=critical
 ```
 
-### 4. Aggregated-value (windowed) alerts
+## Validations
 
-When the question is "what does the value look like over a window,"
-use a `weft::*` aggregate in the cron body and alert against its
-stdout:
+Weft checks crons twice: when you save one, so a mistake is refused before it
+costs you a night of missed alerts, and while it runs, so a problem that only
+shows up with real data still reaches someone.
 
-```
-# /cron.d/error-rate-hourly
-# schedule: every 5m
-echo $(weft::avg error-rate 1h) | alert above 50 --notify=ops
-```
+### When you save
 
-Or compose with the stdin comparators when chaining into a
-composite:
+A save is refused, with a message saying why, if:
 
-```
-(weft::avg error-rate 5m | weft::is_gt 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical
-```
-
-The aggregates' window caps (24h for `avg`/`min`/`max`/etc., 14d for
-endpoint funcs) limit how far back the rolling window can reach.
-For longer-horizon comparisons, write a cron that itself runs an
-aggregate every 5 minutes — its stored history then *is* the
-longer-horizon series.
-
-## Trend, anomaly and threshold conditions
-
-| Want to fire when... | Use |
+| Check | What's refused |
 |---|---|
-| Value crosses a known threshold | `alert above` / `alert below` (or `weft::is_above` / `weft::is_below` in a composite) |
-| Value differs from the previous tick at all | `weft::has_changed` |
-| No result came in | `weft::is_absent` |
-| Value rose/fell by N% vs recent baseline | `alert rising` / `alert falling` (or `weft::is_rising` / `weft::is_falling`) |
-| Value is unusual for *this cron's recent history* | `weft::is_outlier` |
-| Value is unusual for *this cron at this time of day/week* | `weft::is_seasonal` |
+| Schedule | A missing schedule line, or one outside the [accepted grammar](crons.md#scheduling), such as a time of day or a weekday other than Monday |
+| Plan | A schedule faster than your plan allows, or one more cron than your plan includes |
+| Syntax | A pipeline that doesn't parse |
+| One alert, last | An `alert` that isn't the final stage of the cron's last command: in a loop, a conditional, a group, an `&&` chain, or before more work. A cron has one alert stage |
+| One alias | More than one `--notify` on an alert. To page several places, point `--notify` at one `notify.yaml` alias with several targets, or write one cron per alert |
+| Alert arguments | An unknown condition or option, a non-numeric threshold or duration, or `-v` and `-t` that mix a column number with a JSON path |
+| Piped `weft::` functions | A `weft::` function, other than `weft::is_gt` and `weft::is_lt`, that sits after a `|`. They read stored history and ignore their input, so the upstream stage would be discarded. To test a piped value, use the comparators |
+| Scripts | In `/bin` scripts, the same alert and `weft::` rules, plus `tail -f` and `range`, which have no place in a script that runs to completion |
+| `notify.yaml` | A file that doesn't parse, an alias with no targets, a webhook-header placeholder with nothing stored behind it, or no `system` alias |
 
-The functions take different arguments:
+A few things are allowed but flagged. If a `head` or `tail` cap feeds a
+counting stage, so the count would silently cover only part of the interval,
+the save goes through with a warning. So does a pipeline with a stage that runs
+after retrieval, since it costs something on every run.
 
-- `weft::is_rising <cron> [<pct>] [<window>]`, and `weft::is_falling`
-  likewise. `<pct>` is a bare number such as `50`; it takes no `%` suffix.
-- `weft::is_outlier <cron> <n_stddev> <window>`
-- `weft::is_seasonal <cron> <n_stddev> <period> <window>`
+### When it runs
 
-Windows and periods are Go durations plus `d` (24 hours) and `w` (7
-days), and they combine: `30m`, `1h`, `1d`, `1w`, `1d12h`. See **Weft
-functions** for the caps on each function.
+| Situation | What happens |
+|---|---|
+| The pipeline fails before `alert` | The alert isn't evaluated. The run is recorded with status `error`, and no incident opens or closes |
+| The value isn't a number for a numeric condition | `alert` reports `non-numeric value` and exits non-zero |
+| A line has no tag under `-t` | That line is skipped, with a note in `stderr` |
+| A notification can't be delivered | The run exits non-zero, and each following tick of the incident retries the targets that missed it |
+| A predicate can't evaluate (no history yet, a non-numeric value, a bad window) | It is false, not an error; see [Predicates](crons.md#predicates). Only `weft::is_absent` says why on `stderr` |
+| A `weft::` function is given a window past its longest | An error naming the limit, never a silently shorter window |
+| A cron stops running | If a cron goes more than twice its interval without a run, weft notifies your [`system` alias](#the-system-alias). It does so once per episode, and one message per org even if many crons stopped together |
 
-Use `is_outlier` when "what's normal" doesn't depend on the clock —
-host memory, queue depth, error rate of a steady-state service. Use
-`is_seasonal` when traffic has weekly/daily cycles — a Tuesday-2pm
-threshold under-pages on Saturday at 3am and over-pages at the
-nightly batch job.
+## Notifications
 
-## Absent and zero values
+### Define a notification alias
 
-A cron with no usable value and a value of zero are different cases. In
-bash, `weft::latest` of a cron that doesn't exist is an error; in Lua, `tonumber("")` returns `nil` and arithmetic against
-`nil` errors. Always check for absence and guard the conversion:
-
-```lua
-local v = 0   -- treat absent as zero
-if not weft.is_absent("foo") then
-  v = tonumber(weft.latest("foo")) or 0
-end
-```
-
-In bash, predicate builtins handle this for you — `weft::is_above
-missing 50` exits 1 (no fire).
-
-To distinguish absent from zero, use
-`weft::is_absent` explicitly in the chain:
+When an `alert` fires in a cron, `--notify=<alias>` dispatches to a
+destination defined in `/etc/notify.yaml`. The alias is a name;
+it fans out to one or more targets across four service types — Slack,
+PagerDuty, webhook, and email.
 
 ```
-weft::is_absent error-rate    # exit 0 (fires) when error-rate has no result, or doesn't exist
-# ...whereas...
-weft::is_above error-rate 0   # fires only when there IS a result AND it's > 0
+# /etc/notify.yaml
+ops:
+  slack:
+    - "#alerts"
+  pagerduty:
+    - ops-daytime
+  email:
+    - "oncall@example.com"
 ```
 
-## Debouncing flaps
+Edit it with `vi /etc/notify.yaml`. See `help alerts` for the full
+grammar (severities, webhook headers, per-target mappings).
 
-Composite conditions tend to flap — each leg individually crosses
-back and forth across its threshold, and the composite pops whenever
-any pair simultaneously trips. The `alert --duration <dur>`
-flag handles this: it requires the trigger to hold for the entire
-window before firing. Once the composite output is a scalar (1 or 0
-piped through alert), `--duration` works the same as for any other
-alert. (`--duration` takes `s`, `m` and `h`; `1d` is rejected.)
+### The system alias
+
+Every org has an alias named `system`. It receives the alerts weft raises on
+your behalf, as opposed to the ones your own `alert` stages raise. Today that
+is a cron that has stopped running: if a cron goes more than twice its interval
+without a run, weft notifies `system`.
+
+It starts out pointing at the email address of the person who created the org:
 
 ```
-(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo 1 || echo 0) | alert above 0 --duration 5m --notify=critical
+system:
+  email:
+    - "you@example.com"
 ```
 
-Five minutes of sustained composite-true before the page.
+You can change its targets freely, to a Slack channel, a PagerDuty service, a
+shared mailbox, or several of them, but you can't remove it. A save of
+`/etc/notify.yaml` without a `system` alias is refused. Because ownership can't
+be transferred, point it at somewhere that outlives any one person, such as a
+team mailbox or a PagerDuty service.
 
-The same applies to multi-row alerts — `--duration` is per-tag, so
-`alert above 80 -k 2 -t 1 --duration 5m` requires each host's
-five-minute window to clear the threshold before that host's
-incident opens.
+Email delivery needs SMTP configured for your deployment, as for any email
+target.
 
-## Anti-patterns
+### Connecting Slack and PagerDuty
 
-- **Don't fan out alerts from inside the chain.** A predicate
-  builtin is a test and has no side effects. To page multiple
-  aliases from one cron, write multiple `/cron.d/` entries or use
-  one `notify.yaml` alias that fans out to multiple destinations.
-- **Don't put `weft::*` predicates on the right side of `|`.** They
-  read stored state. For stdin-driven comparisons, pipe values
-  through `weft::is_gt` / `weft::is_lt`.
-- **Don't compose state-mutating commands in the chain.** Keep the
-  predicate composition side-effect-free: join `weft::*` predicates
-  with `&&`, `||` and `!`, and nothing else. Hanging an unrelated
-  command off the chain couples alerting to unrelated I/O and makes
-  failure modes harder to reason about.
-- **Don't reuse a single-row alert for multi-row data.** Multiple
-  rows on stdin without `-k`/`-t` collapse into one scalar, which
-  the alert will reject as non-numeric. Either reduce upstream with
-  `wc -l` or `awk` (single-row), or add `-k`/`-t` (multi-row).
+`notify.yaml` names destinations — the credentials behind them
+live with your account. Connect them from the terminal with `weft
+integration` or under **Account → Integrations** in the browser;
+both do the same thing.
+
+```
+# PagerDuty — paste an integration (routing) key, give it a name.
+# The name is what notify.yaml references under `pagerduty:`.
+weft integration pagerduty add ops-daytime --key YOUR_ROUTING_KEY
+weft integration pagerduty rm  ops-daytime
+
+# Slack — authorize a workspace. Slack uses OAuth, so this opens a
+# browser tab to grant access (like `weft login`); the CLI waits and
+# confirms once the workspace is connected.
+weft integration slack connect
+weft integration slack rm
+
+# See what's connected, plus the PagerDuty names notify.yaml can use.
+weft integration list
+```
+
+A PagerDuty alias in `notify.yaml` must match a name you've registered
+with `weft integration pagerduty add`. Slack channels are named
+directly in `notify.yaml` (`"#alerts"`) once the workspace is
+connected.
+
+### Webhook and email need no account connection
+
+Webhook URLs and email addresses carry no account-level credential.
+They are written into `notify.yaml` per alias:
+
+Webhook **header values** are the exception: an `Authorization` token
+or a signing secret is a credential, so `cat /etc/notify.yaml` (and
+`git log -p /etc/notify.yaml`) shows each one as `"<redacted>"`. To edit,
+leave `"<redacted>"` where a value should stay unchanged, or write a real
+value to replace it. A `"<redacted>"` on a webhook, header or alias that
+has nothing stored is refused.
+
+```
+pages:
+  webhook:
+    - "https://hooks.example.com/weft"
+  email:
+    - "oncall@example.com"
+```
+
+Email delivery requires SMTP to be configured for your deployment.
+
+### Testing an alias
+
+```
+echo "test fire" | alert --notify=ops
+```
+
+This sends to every target in the `ops` alias.
+
+Interactive runs notify every time. Only crons have incidents, so nothing is
+suppressed.
+
+### Debouncing
+
+A cron checks its condition on every tick. To avoid paging you on each one,
+weft groups consecutive ticks during
+which the condition holds. Each cron has at most one open incident at a time
+(one per tag, with `-t`).
+
+- The first tick where the condition holds opens an incident and sends the
+  notification.
+- Ticks while the incident is open send nothing more. The alert message still
+  goes to the run's `stderr`, so it is in the run's recorded result.
+- If a send fails (PagerDuty is unreachable, a Slack channel is gone), the run
+  reports it and exits non-zero, and each following tick of the incident tries
+  again. Delivery is tracked per target, so a retry goes only to the targets that
+  missed it, not to the ones already told.
+- The first tick where the condition doesn't hold closes the incident. Closing
+  sends nothing, including to PagerDuty, where you resolve the page yourself.
+- If the condition holds again after that, a new incident opens and you are
+  notified again.
+
+Incidents are bookkeeping for notification, not something you manage: there is
+nothing to list, acknowledge or close by hand. A run that errors neither opens
+nor closes one. Interactive runs have no cron, so they have no incidents and
+notify every time.
 
 ## See also
 
-- **Weft functions** — full reference for the `weft::*` value funcs,
-  predicates, and stdin comparators.
-- **Crons** — scheduled pipelines and incident lifecycle.
-- `man alert` — the alert builtin's full grammar.
-- **Notifications** — alias and destination configuration.
+- **Crons** — scheduling, result history, and the reference for the
+  `weft::*` value funcs, predicates, and stdin comparators.
