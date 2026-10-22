@@ -174,21 +174,22 @@ func evaluateAlertRow(ctx context.Context, r alertRow, parsed *alert.Args, ac *A
 	}
 
 	// Previous tick's value for this same tag (changed/rising/falling).
+	// The current tick isn't stored until persistResults runs after the
+	// pipeline, so the newest stored row is the previous tick.
 	var prevValue float64
-	var prevStdout string
+	var prevRaw string
 	var hasPrev bool
 	if ac.Store != nil && ac.Watch != nil {
-		results, err := ac.Store.ListCronResults(ac.Watch.ID, 2, r.tag)
+		results, err := ac.Store.ListCronResults(ac.Watch.ID, 1, r.tag)
 		if err != nil {
 			weftsdk.Infof(ctx, "alert: ListCronResults watch=%d tag=%q: %v", ac.Watch.ID, r.tag, err)
 		}
-		if len(results) >= 2 {
-			prevStdout = strings.TrimSpace(results[1].Stdout)
-			prevValueStr := prevStdout
-			if results[1].Value != nil {
-				prevValueStr = strconv.FormatFloat(*results[1].Value, 'f', -1, 64)
+		if len(results) == 1 {
+			prevRaw = strings.TrimSpace(results[0].Stdout)
+			if results[0].Value != nil {
+				prevRaw = strconv.FormatFloat(*results[0].Value, 'f', -1, 64)
 			}
-			if v, err := strconv.ParseFloat(prevValueStr, 64); err == nil {
+			if v, err := strconv.ParseFloat(prevRaw, 64); err == nil {
 				prevValue = v
 				hasPrev = true
 			}
@@ -256,10 +257,14 @@ func evaluateAlertRow(ctx context.Context, r alertRow, parsed *alert.Args, ac *A
 		reason = fmt.Sprintf("%.1f != %.1f", current, parsed.Threshold)
 
 	case alert.Changed:
-		if hasPrev || prevStdout != "" {
-			triggered = r.value != prevStdout
+		if prevRaw != "" {
+			if isNumeric && hasPrev {
+				triggered = current != prevValue
+			} else {
+				triggered = r.value != prevRaw
+			}
 			if triggered {
-				reason = fmt.Sprintf("changed from %q to %q", prevStdout, r.value)
+				reason = fmt.Sprintf("changed from %q to %q", prevRaw, r.value)
 			}
 		}
 
