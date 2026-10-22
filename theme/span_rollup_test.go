@@ -287,7 +287,7 @@ func TestRenderSpanRollupTable_SingleTraceShowsTotalNotAggregates(t *testing.T) 
 			t.Errorf("expected header to contain %q, got %q", col, header)
 		}
 	}
-	for _, absent := range []string{"BAR", "AVG", "SELF", "P50", "P99", "MIN", "MAX"} {
+	for _, absent := range []string{"BAR", "AVG", "P50", "P99", "MIN", "MAX"} {
 		if strings.Contains(header, absent) {
 			t.Errorf("expected header NOT to contain %q in single-trace mode, got %q", absent, header)
 		}

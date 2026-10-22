@@ -165,8 +165,8 @@ func TestPlanTraceSpans_WithName(t *testing.T) {
 	}
 }
 
-// Grouping by service is the only behavior: the same span name in two
-// services is two different things.
+// Spans group by service: the same span name in two services is two
+// different things.
 func TestPlanTraceSpans_GroupsByService(t *testing.T) {
 	plan, err := Plan(`trace --spans`, 1, "", time.Time{}, time.Time{})
 	if err != nil {

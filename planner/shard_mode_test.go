@@ -172,7 +172,7 @@ func TestClassifyShardMode_C(t *testing.T) {
 	}
 }
 
-// TestDirectShardSQL verifies op 6: the SQL compute sends to shards
+// TestDirectShardSQL verifies the SQL compute sends to shards
 // uses ShardOrderBy/ShardLimit instead of
 // the head/tail-derived ts ASC/DESC, and omits ORDER BY entirely in
 // Mode C.
@@ -195,8 +195,7 @@ func TestDirectShardSQL(t *testing.T) {
 		{
 			// tail wraps inner DESC+LIMIT in an outer ASC re-emit so the
 			// merge key (and the user-facing output) is ts ASC, not DESC.
-			// Per-shard CPU is unchanged from the pre-flip days; the
-			// outer SELECT is a cheap re-sort of the bounded inner.
+			// The outer SELECT is a cheap re-sort of the bounded inner.
 			name:     "mode A with tail — subquery flips to ts ASC display",
 			pipeline: `tail -10 vimgym.log`,
 			want:     `SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 10) AS t ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST`,

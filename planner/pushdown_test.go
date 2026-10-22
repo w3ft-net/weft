@@ -477,8 +477,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 			// itself pushable) and re-evaluates LEVEL == "ERROR" locally
 			// to gate count++ — that re-check needs the real per-row
 			// value the same way an output read would, or count++ would
-			// silently never fire. See docs/known-issues.md's (fixed)
-			// awk meta-variable entry.
+			// silently never fire.
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, parent_span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
 			wantCompute: []string{`awk 'LEVEL == "ERROR" { count++ } END { print count }'`},
 		},

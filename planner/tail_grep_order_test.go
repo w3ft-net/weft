@@ -43,8 +43,7 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 			name:     "head then awk inequality (not limit-safe)",
 			pipeline: `cat vimgym.log | head -n 100 | awk 'LEVEL != "ERROR"'`,
 			// The inequality isn't limit-safe, so the whole filter runs
-			// in compute and needs LEVEL's real per-row value — see
-			// docs/known-issues.md's (fixed) awk meta-variable entry.
+			// in compute and needs LEVEL's real per-row value.
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, parent_span_id, duration_ns FROM logs WHERE namespace = ? ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST LIMIT 100`,
 			wantCompute: []string{`awk 'LEVEL != "ERROR"'`},
 		},

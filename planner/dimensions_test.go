@@ -6,11 +6,10 @@ import (
 	"time"
 )
 
-// TestPushdown_NewDimensions verifies the seven new dimension meta-vars
+// TestPushdown_NewDimensions verifies the dimension meta-vars
 // (DEPLOYMENT, ENV, VERSION, REGION, CLUSTER, K8S_NAMESPACE, POD,
 // CONTAINER) plus the SERVICE/HOST aliases push down to direct column
-// predicates — the same shape LEVEL/INSTANCE produce. See
-// docs/plans/ingest-dimensions.md.
+// predicates — the same shape LEVEL/INSTANCE produce.
 func TestPushdown_NewDimensions(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -441,12 +441,10 @@ func TestEdge_Jq_NoMetaVarColumnsWithoutMetaVarRead(t *testing.T) {
 	}
 }
 
-// TestEdge_Awk_MetaVarInUnpushedStage pins the fix for the known-issues.md
-// entry "awk's reserved meta-variables ... silently print the whole raw
-// line when read as output": a bare meta-variable name (no longer
-// $-prefixed — see planner/awk.go's metaVars doc comment for why)
+// TestEdge_Awk_MetaVarInUnpushedStage pins that a bare meta-variable name
+// (not $-prefixed — see planner/awk.go's metaVars doc comment for why)
 // referenced anywhere in a compute stage that doesn't fully push down
-// — filter or output — needs the real per-row value once it reaches
+// — filter or output — gets the real per-row value once it reaches
 // warp's awk evaluator, which otherwise has no idea what "HOST" means.
 func TestEdge_Awk_MetaVarInUnpushedStage(t *testing.T) {
 	tests := []struct {
@@ -1106,8 +1104,7 @@ func TestEdge_NR(t *testing.T) {
 			pipeline: `cat vimgym.log | awk 'NR >= 10 && LEVEL == "ERROR"'`,
 			// LEVEL remains in the compute-stage-evaluated filter (NR
 			// mixing blocks full pushdown), so it needs the real
-			// per-row value the same way an output read would — see
-			// docs/known-issues.md's (fixed) awk meta-variable entry.
+			// per-row value the same way an output read would.
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, parent_span_id, duration_ns FROM logs WHERE namespace = ?`,
 			wantCompute: []string{`awk 'NR >= 10 && LEVEL == "ERROR"'`},
 		},
