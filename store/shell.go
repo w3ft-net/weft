@@ -329,6 +329,9 @@ func validateSource(lang, source string) error {
 		if err := validateNoRangeBuiltin(script); err != nil {
 			return err
 		}
+		if err := validateWeftFunctionsAreNotPiped(script); err != nil {
+			return err
+		}
 	case "lua":
 		if _, err := luaparse.Parse(strings.NewReader(source), "source"); err != nil {
 			return fmt.Errorf("lua syntax error: %w", err)
@@ -378,7 +381,50 @@ func validateAlertPosition(script *bash.Script) error {
 		return true
 	})
 	if offender != nil {
-		return fmt.Errorf("alert may only appear as the final stage of a /bin script body, not in a leading list, loop body, conditional, or nested command")
+		return fmt.Errorf("alert may only appear as the final stage of a script or cron body, not in a leading list, loop body, conditional, or nested command: it fires once per run, wherever it sits (to page several places, point --notify at one notify.yaml alias with several targets)")
+	}
+	return nil
+}
+
+// stdinWeftCommands are the weft:: commands that read standard input; every
+// other weft:: function takes its cron name and window as arguments and
+// ignores stdin.
+var stdinWeftCommands = map[string]bool{"weft::is_gt": true, "weft::is_lt": true}
+
+// validateWeftFunctionsAreNotPiped rejects a weft:: function that is not the
+// first stage of its pipeline. Those functions read stored cron history, never
+// their input, so whatever is piped in is silently thrown away, which is never
+// what the author meant. The stdin comparators are the way to test a piped
+// value.
+func validateWeftFunctionsAreNotPiped(script *bash.Script) error {
+	if script == nil {
+		return nil
+	}
+	var offender string
+	var stage int
+	bash.Walk(script, func(n bash.Node) bool {
+		if offender != "" {
+			return false
+		}
+		p, ok := n.(*bash.Pipeline)
+		if !ok {
+			return true
+		}
+		for i, c := range p.Commands {
+			sc, ok := c.(*bash.SimpleCommand)
+			if !ok || i == 0 || len(sc.Words) == 0 {
+				continue
+			}
+			name := sc.Words[0].Literal()
+			if strings.HasPrefix(name, "weft::") && !stdinWeftCommands[name] {
+				offender, stage = name, i+1
+				return false
+			}
+		}
+		return true
+	})
+	if offender != "" {
+		return fmt.Errorf("%s is stage %d of a pipeline, but it never reads its input, so what is piped into it is discarded; to test a piped value, use weft::is_gt or weft::is_lt", offender, stage)
 	}
 	return nil
 }
@@ -693,6 +739,12 @@ func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 	script, err := bash.Parse(pipeline)
 	if err != nil {
 		return out, fmt.Errorf("parse: %w", err)
+	}
+	if err := validateAlertPosition(script); err != nil {
+		return out, err
+	}
+	if err := validateWeftFunctionsAreNotPiped(script); err != nil {
+		return out, err
 	}
 	var alertCmds []*bash.SimpleCommand
 	bash.Walk(script, func(n bash.Node) bool {

@@ -10,6 +10,7 @@
 package alert
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -17,6 +18,11 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
+
+// errSecondNotify rejects a second --notify. An alert pages one alias; the
+// last of several used to win silently, so a cron meant to page two places
+// paged one.
+var errSecondNotify = errors.New("--notify may be given only once per alert: point it at one notify.yaml alias with several targets, or use one cron per alias")
 
 // Condition enumerates the recognized alert condition keywords.
 type Condition int
@@ -209,6 +215,9 @@ func ParseArgs(args []string) (*Args, error) {
 		a := args[i]
 		// Support --notify=foo as well as --notify foo.
 		if strings.HasPrefix(a, "--notify=") {
+			if parsed.Notify != "" {
+				return nil, errSecondNotify
+			}
 			parsed.Notify = strings.TrimPrefix(a, "--notify=")
 			i++
 			continue
@@ -236,6 +245,9 @@ func ParseArgs(args []string) (*Args, error) {
 			i++
 			if i >= len(args) {
 				return nil, fmt.Errorf("--notify requires a value")
+			}
+			if parsed.Notify != "" {
+				return nil, errSecondNotify
 			}
 			parsed.Notify = args[i]
 		case "-v", "--value":

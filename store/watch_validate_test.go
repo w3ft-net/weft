@@ -17,7 +17,7 @@ func TestValidateWatchPipeline(t *testing.T) {
 		{"two alerts in pipeline", `check_errors | alert above 50 | alert below 10`, true},
 		{"two alerts across lists", `alert above 1; alert below 2`, true},
 		{"alert inside command sub", `echo $(check | alert above 1) | alert below 2`, true},
-		{"alert inside if", `if true; then alert above 1; fi`, false},
+		{"alert inside if is refused: it fires per run wherever it sits", `if true; then alert above 1; fi`, true},
 		{"two alerts across if/for", `if true; then alert above 1; fi; for x in a; do alert below 2; done`, true},
 		// Malformed shell syntax now surfaces as a parse error from
 		// warp's tightened parser, so the validator rejects the
