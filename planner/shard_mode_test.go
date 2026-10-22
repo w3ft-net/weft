@@ -273,12 +273,6 @@ func TestClassifyShardMode_HeadAfterSort_StaysSafe(t *testing.T) {
 // `tail -N | … | sort` means "sort the newest N rows", so each shard
 // must return its ts DESC top-N and compute must keep the global newest
 // N by ts (TailMode / KeepLast) before sort runs.
-//
-// Today classifyShardMode ignores the tail limit once a sort is
-// present: plain `sort` first → ORDER BY raw LIMIT N (the
-// lexicographically smallest N, not the newest), and any transforming
-// stage before sort → no ORDER BY / LIMIT at all, so compute's KeepLast
-// keeps the last N rows to *arrive* — whichever shard finishes last wins.
 func TestTailThenSort_PushesNewestNByTs(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -286,17 +280,17 @@ func TestTailThenSort_PushesNewestNByTs(t *testing.T) {
 		wantLim  int
 	}{
 		{
-			name:     "tail | sort (mode B today: ORDER BY raw LIMIT N)",
+			name:     "tail | sort",
 			pipeline: `tail -10 vimgym.log | sort`,
 			wantLim:  10,
 		},
 		{
-			name:     "tail | jq -r | sort (mode B/C today)",
+			name:     "tail | jq -r | sort",
 			pipeline: `tail -n 200 vimgym.log | jq -r '.msg' | sort`,
 			wantLim:  200,
 		},
 		{
-			name:     "tail | jq | sort (mode B/C today)",
+			name:     "tail | jq | sort",
 			pipeline: `tail -n 200 vimgym.log | jq '.msg' | sort`,
 			wantLim:  200,
 		},

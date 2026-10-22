@@ -110,14 +110,10 @@ func TestExecute_StagedPipelinePopulatesText(t *testing.T) {
 	}
 }
 
-// TestExecute_ShardErrorSurfaces — a shard whose Query fails surfaces
-// its error through the rewriter callback to the result's Stderr.
 // TestExecute_ShardErrorReturnsPartialResults verifies that a shard
 // which produces no rows (simulating a failure) doesn't crash the
 // query — the coordinator returns partial results from the working
-// shard. Per-shard error surfacing in Stderr was removed with
-// shardErrAwareStream in d477ea2; the new compute path logs dial/
-// query failures server-side.
+// shard.
 func TestExecute_ShardErrorReturnsPartialResults(t *testing.T) {
 	c := setupTestCoordinator(t)
 	e := &logdb.Shard{

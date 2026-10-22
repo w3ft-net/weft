@@ -39,10 +39,9 @@ func addMember(t *testing.T, db *store.Store, custID store.OrgID, role string) *
 	return user
 }
 
-// TestBuildSession_OwnerGetsAllFlags: an owner has every flag. Note the
-// mechanism, which changed in migration 072: the flags are true because
-// becoming an active admin materializes an all-bits-true org_permissions
-// row, not because BuildSession bypasses the row for owners.
+// TestBuildSession_OwnerGetsAllFlags: an owner has every flag. They are true
+// because becoming an active admin materializes an all-bits-true
+// org_permissions row, not because BuildSession bypasses the row for owners.
 func TestBuildSession_OwnerGetsAllFlags(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-owner-%d", os.Getpid()))
@@ -66,10 +65,7 @@ func TestBuildSession_OwnerGetsAllFlags(t *testing.T) {
 // as having none of the four bits — proof that BuildSession consults the
 // row and nothing else.
 //
-// This is what "org_permissions is authoritative" means in practice, and
-// it is the case that used to be impossible to express: before migration
-// 072 an owner's bits were recomputed from the role on every request, so
-// clearing the row changed nothing.
+// This is what "org_permissions is authoritative" means in practice.
 func TestBuildSession_OwnerReadsBitsFromRow(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-owner-cleared-%d", os.Getpid()))

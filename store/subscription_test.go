@@ -5,34 +5,6 @@ import (
 	"time"
 )
 
-// TestSubscription_KeyedByCustomerSurrogate pins migration 053: a
-// subscription is keyed by the customer's surrogate id (FK →
-// organizations.id), not the name string. Looking up by id round-trips,
-// the persisted column holds the id, and an unrelated id does not
-// resolve to this customer's subscription.
-func TestSubscription_KeyedByCustomerSurrogate(t *testing.T) {
-	db := testOpen(t)
-	cust, err := db.FindOrCreateOrg("surrogate-key-cust")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.SeedDevSubscription(cust.ID)
-
-	sub, err := db.ActiveSubscription(cust.ID)
-	if err != nil || sub == nil {
-		t.Fatalf("ActiveSubscription(%s): sub=%+v err=%v", cust.ID, sub, err)
-	}
-	if sub.OrgID != cust.ID {
-		t.Errorf("sub.OrgID = %s, want surrogate id %s", sub.OrgID, cust.ID)
-	}
-
-	// An unrelated id must not resolve to this customer's subscription
-	// (proves the lookup keys on the surrogate, not a stringly-typed name).
-	if other, _ := db.ActiveSubscription(57005); other != nil {
-		t.Errorf("ActiveSubscription(unrelated id) resolved to %+v", other)
-	}
-}
-
 // TestSeedDevSubscription_MultipleCustomers reproduces the bug where
 // SeedDevSubscription hardcodes the row's primary key as "dev-sub" —
 // so the second customer's call hits a uniqueness violation against

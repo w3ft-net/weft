@@ -33,11 +33,6 @@ func stripANSI(s string) string {
 // user-visible contract: a Shell that hasn't set Customer renders
 // the prompt with `@weft` so weft's default tenancy is reflected
 // without the embedder having to set it on every construction.
-//
-// This test is the regression guard around the cleanup that moves
-// the "weft" default out of warp's shellcore (where it was a
-// hardcoded fallback for the customer field) into weft's
-// ConfigureCore (where the embedder owns its own naming).
 func TestConfigureCore_DefaultsToWeftCustomerWhenUnset(t *testing.T) {
 	var output strings.Builder
 	core := shellcore.NewShellCore(nil, 80, 24,
@@ -108,15 +103,8 @@ func TestConfigureCore_RangeBuiltinAcceptsSpec(t *testing.T) {
 
 // TestConfigureCore_HelpBuiltinsServesWeftCorpus locks in the
 // behavior that `help builtins` prints the weft-flavored corpus
-// (cat /log/<app>.log, ls /cron.d, git, alert, range, etc.). Test
-// is the regression guard around the move that takes the docs_gen
-// constants + dispatch out of warp's shellcore (where it was the
-// hardcoded default) and into weft (where it lives as the
-// HelpProvider weft installs via ConfigureCore).
-//
-// Pre-move: passes via warp's default shellDocTopics map.
-// Post-move: passes via weft's HelpProvider returning the same
-// corpus. Same observable result either way.
+// (cat /log/<app>.log, ls /cron.d, git, alert, range, etc.) through the
+// HelpProvider weft installs via ConfigureCore.
 func TestConfigureCore_HelpBuiltinsServesWeftCorpus(t *testing.T) {
 	var output strings.Builder
 	// Use a tall viewport so the help corpus renders inline rather

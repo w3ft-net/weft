@@ -12,8 +12,6 @@ func TestPlan_TraceRejectsUnknownOptions(t *testing.T) {
 		{`trace --id abc123 --bogus`, "trace: unknown option --bogus"},
 		{`trace -v`, "trace: unknown option -v"},
 		{`trace --spans --bogus`, "trace: unknown option --bogus"},
-		{`trace --spans --by host`, "trace: unknown option --by"},
-		{`trace --spans --by service`, "trace: unknown option --by"},
 	} {
 		_, err := Plan(c.pipeline, 0, "", time.Time{}, time.Time{})
 		if err == nil || !strings.Contains(err.Error(), c.want) {

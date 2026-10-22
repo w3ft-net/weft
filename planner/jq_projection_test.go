@@ -169,10 +169,7 @@ func TestRawExpr_JqArray(t *testing.T) {
 
 // TestRawExpr_JqInternalPipeBreak pins that a jq program whose head is
 // a path but whose tail isn't SQL runs whole, as written, over the
-// row's payload. The planner
-// used to project the path and re-render the tail (`.foo | length` →
-// SELECT $.foo, compute `jq 'length'`); re-rendering is gone (see
-// docs/plans/planner-ir.md, "Never regenerate source").
+// row's payload (see docs/plans/planner-ir.md, "Never regenerate source").
 func TestRawExpr_JqInternalPipeBreak(t *testing.T) {
 	for _, pipeline := range []string{
 		`cat vimgym.log | jq '.foo | length'`,

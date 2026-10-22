@@ -98,10 +98,9 @@ func TestHeartbeat_EmptyShardID_Christen(t *testing.T) {
 	}
 }
 
-// TestHeartbeat_EmptyToken_Rejected pins the post-grandfather behavior:
-// shards whose registry entry carries an empty HeartbeatToken can't be
-// authenticated, so we reject rather than waving them through. The
-// pre-migration-015 fleet that this clause used to cover has rotated.
+// TestHeartbeat_EmptyToken_Rejected: shards whose registry entry carries an
+// empty HeartbeatToken can't be authenticated, so we reject rather than
+// waving them through.
 func TestHeartbeat_EmptyToken_Rejected(t *testing.T) {
 	srv := newRegisteredShard(t, "shard-legacy", "")
 	_, err := srv.Heartbeat(context.Background(), &pb.ShardHeartbeatRequest{
@@ -116,10 +115,9 @@ func TestHeartbeat_EmptyToken_Rejected(t *testing.T) {
 	}
 }
 
-// TestHeartbeat_UnknownShardID_Rejected — once §8's grandfather clause
-// is gone, an unknown shard id (not in registry, not in Store) is an
-// unauthenticated request. The legitimate "registry empty after coord
-// restart" case is now handled by falling back to a Store lookup
+// TestHeartbeat_UnknownShardID_Rejected — an unknown shard id (not in
+// registry, not in Store) is an unauthenticated request. The legitimate
+// "registry empty after coord restart" case falls back to a Store lookup
 // (TestHeartbeat_UnknownInRegistry_LoadFromStore).
 func TestHeartbeat_UnknownShardID_Rejected(t *testing.T) {
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}})

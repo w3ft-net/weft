@@ -62,16 +62,9 @@ func newConfiguredCore(t *testing.T, fs shellcore.FS) *shellcore.ShellCore {
 	return core
 }
 
-// TestVimPopup_SaveOnBin_OpensMessagePopup is the regression guard for
-// the move that takes the post-save commit-message popup out of warp's
-// shellcore (where it was hardcoded as the default OnQuit branch on
-// versioned paths) and into weft (where it lives as embedder VimHooks
-// installed via ConfigureCore).
-//
-// Pre-move: passes via shellcore's default isVersionedPath +
-// openMessagePopup. Post-move: passes via weft's VimHooks. Same
-// observable outcome — :wq on /bin/scan re-enters ModeVim with a
-// message-prefixed buffer rather than returning to the prompt.
+// TestVimPopup_SaveOnBin_OpensMessagePopup pins the post-save commit-message
+// popup installed through weft's VimHooks: :wq on /bin/scan re-enters ModeVim
+// with a message-prefixed buffer rather than returning to the prompt.
 func TestVimPopup_SaveOnBin_OpensMessagePopup(t *testing.T) {
 	fs := newStubPopupFS()
 	c := newConfiguredCore(t, fs)

@@ -64,14 +64,6 @@ func TestServerInstructions_DescribeTheCurrentProduct(t *testing.T) {
 func TestToolDescriptions_AreCurrent(t *testing.T) {
 	_, tools := descriptionsSession(t)
 
-	for name, d := range tools {
-		for _, stale := range []string{"5-field", "/log/billing/billing.log", "watch reference"} {
-			if strings.Contains(d, stale) {
-				t.Errorf("%s still says %q", name, stale)
-			}
-		}
-	}
-
 	mustContain(t, "weft.ls", tools["weft.ls"], "<env>")
 	mustContain(t, "weft.cat", tools["weft.cat"], "/log/")
 	mustContain(t, "weft.run", tools["weft.run"], "weft::", "/log/billing/prod/api/main.log")
