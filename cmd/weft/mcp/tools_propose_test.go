@@ -159,7 +159,7 @@ func TestCronPropose_HappyPath(t *testing.T) {
 
 	res := callTool(t, s, "weft.cron_propose", map[string]any{
 		"name":     "nightly-error-summary",
-		"schedule": "0 2 * * *",
+		"schedule": "0 0 * * *",
 		"pipeline": "cat /log/billing/billing.log | grep ERROR | wc -l",
 	})
 	if res.IsError {
@@ -172,7 +172,7 @@ func TestCronPropose_HappyPath(t *testing.T) {
 	if ps[0].Kind != "cron" {
 		t.Errorf("kind = %q, want cron", ps[0].Kind)
 	}
-	if !strings.Contains(ps[0].Proposed, "0 2 * * *") {
+	if !strings.Contains(ps[0].Proposed, "0 0 * * *") {
 		t.Errorf("proposed body should embed schedule; got %q", ps[0].Proposed)
 	}
 	if !strings.Contains(ps[0].Proposed, "grep ERROR") {
@@ -189,7 +189,7 @@ func TestCronPropose_PipelineRejected(t *testing.T) {
 	s := testSession(t, cfg)
 	res := callTool(t, s, "weft.cron_propose", map[string]any{
 		"name":     "bad",
-		"schedule": "0 2 * * *",
+		"schedule": "0 0 * * *",
 		"pipeline": "rm -rf /log",
 	})
 	if !res.IsError {
@@ -488,5 +488,23 @@ func TestProposalDelete_Dashboard(t *testing.T) {
 	ps, _ := store.List()
 	if len(ps) != 1 || ps[0].SubKind != "dashboard" {
 		t.Errorf("expected 1 dashboard delete proposal; got %+v", ps)
+	}
+}
+
+func TestCronPropose_TimeOfDayScheduleRejected(t *testing.T) {
+	store, _ := proposals.New(t.TempDir())
+	cfg := Config{Run: neverRunFn(t), Proposals: store}
+	(&proposeBackend{}).wire(&cfg)
+	s := testSession(t, cfg)
+	res := callTool(t, s, "weft.cron_propose", map[string]any{
+		"name":     "morning",
+		"schedule": "0 9 * * *",
+		"pipeline": "cat /log/myco/prod/api/main.log | wc -l",
+	})
+	if !res.IsError {
+		t.Fatalf("expected IsError for a time-of-day schedule")
+	}
+	if ps, _ := store.List(); len(ps) != 0 {
+		t.Errorf("expected nothing staged; got %d", len(ps))
 	}
 }

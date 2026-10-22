@@ -100,7 +100,10 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 	}
 
 	minInterval := store.MinWatchInterval(m.cfg.Tier)
-	interval := store.ParseScheduleInterval(schedule)
+	interval, err := store.ValidateSchedule(schedule)
+	if err != nil {
+		return err
+	}
 	if interval < minInterval {
 		return fmt.Errorf("minimum schedule interval for %s plan is %s", m.cfg.Tier, minInterval)
 	}

@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,7 +25,7 @@ type ScriptProposeArgs struct {
 
 type CronProposeArgs struct {
 	Name      string `json:"name" jsonschema:"name of the cron entry (lands at cron.d/<name>)"`
-	Schedule  string `json:"schedule" jsonschema:"a 5-field cron expression (e.g. '0 2 * * *')"`
+	Schedule  string `json:"schedule" jsonschema:"a crontab such as '*/5 * * * *', '0 * * * *', '0 0 * * *' (daily) or '0 0 * * 1' (weekly, Monday), or an interval such as 'every 5m' or 'every 1d'; crons fire at UTC-aligned intervals, not at a chosen time of day"`
 	Pipeline  string `json:"pipeline" jsonschema:"the pipeline to run; same allowlist as weft.run"`
 	Rationale string `json:"rationale,omitempty"`
 }
@@ -113,19 +112,12 @@ func scriptProposeHandler(cfg Config, a ScriptProposeArgs) *mcp.CallToolResult {
 	})
 }
 
-// cronExprPattern is a permissive sanity check on cron expressions.
-// It accepts the common 5-field form where each field is a comma-
-// separated list of integer ranges, step values, or '*'. Real
-// validation happens at scheduler time; this just keeps obvious
-// garbage out of the proposal store.
-var cronExprPattern = regexp.MustCompile(`^[\d*,/\-]+ [\d*,/\-]+ [\d*,/\-]+ [\d*,/\-]+ [\d*,/\-]+$`)
-
 func cronProposeHandler(cfg Config, a CronProposeArgs) *mcp.CallToolResult {
 	if a.Name == "" || a.Schedule == "" || a.Pipeline == "" {
 		return errorResult("name, schedule, and pipeline are required")
 	}
-	if !cronExprPattern.MatchString(strings.TrimSpace(a.Schedule)) {
-		return errorResult(fmt.Sprintf("invalid cron schedule %q — expected 5 space-separated fields", a.Schedule))
+	if _, err := store.ValidateSchedule(strings.TrimSpace(a.Schedule)); err != nil {
+		return errorResult(err.Error())
 	}
 	// Two complementary validators. DefaultCronPolicy enforces the
 	// allowlist + path scoping (so `rm /log/x | alert above 1`

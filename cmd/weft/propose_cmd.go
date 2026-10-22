@@ -243,7 +243,7 @@ func applyProposal(b *shell.HTTPBackend, p proposals.Proposal) error {
 
 // parseCronBody reads the canonical cron-proposal body shape:
 //
-//	schedule: 0 2 * * *
+//	schedule: 0 0 * * *
 //	pipeline: cat /log/...
 func parseCronBody(body string) (schedule, pipeline string, err error) {
 	for _, line := range strings.Split(body, "\n") {

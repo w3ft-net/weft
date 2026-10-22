@@ -1658,7 +1658,11 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 
 	// Check minimum interval.
 	minInterval := store.MinWatchInterval(tier)
-	interval := store.ParseScheduleInterval(req.Schedule)
+	interval, err := store.ValidateSchedule(req.Schedule)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if interval < minInterval {
 		http.Error(w, fmt.Sprintf("minimum schedule interval for %s plan is %s", tier, minInterval), http.StatusForbidden)
 		return

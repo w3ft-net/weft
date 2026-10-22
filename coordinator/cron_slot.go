@@ -46,7 +46,19 @@ func cronJitter(watchID uint, interval time.Duration) time.Duration {
 
 // Boundary is the epoch-aligned instant this slot's window closes.
 func (s CronSlot) Boundary() time.Time {
-	return time.Unix(0, s.Index*int64(s.Interval)).UTC()
+	return time.Unix(0, s.Index*int64(s.Interval)+int64(gridOffset(s.Interval))).UTC()
+}
+
+// gridOffset shifts the slot grid of whole-week intervals. The Unix epoch is a
+// Thursday, so an unshifted 7d grid would close on Thursdays; four days moves
+// the boundary to Monday 00:00 UTC. Shorter intervals divide a day and need no
+// shift.
+func gridOffset(interval time.Duration) time.Duration {
+	const week = 7 * 24 * time.Hour
+	if interval%week == 0 {
+		return 4 * 24 * time.Hour
+	}
+	return 0
 }
 
 // Window is the span of data this firing covers. The planner's time bounds are
@@ -81,6 +93,6 @@ func LatestDueSlot(watchID uint, interval, settle time.Duration, now time.Time) 
 	if interval < time.Microsecond {
 		return CronSlot{}, false
 	}
-	t := now.Add(-settle).UnixNano() - int64(cronJitter(watchID, interval))
+	t := now.Add(-settle).UnixNano() - int64(cronJitter(watchID, interval)) - int64(gridOffset(interval))
 	return CronSlot{WatchID: watchID, Interval: interval, Index: t / int64(interval)}, true
 }
