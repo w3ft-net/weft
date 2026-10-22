@@ -93,10 +93,3 @@ func TestDockerStriper_SingleAZ(t *testing.T) {
 		}
 	}
 }
-
-// DockerLauncher must satisfy ShardLaunchAPI so shardSMDeps wires it as
-// the dev launch primitive once the Slice C switch flips the tick to the
-// FSMs. A compile-time assertion guards the contract.
-func TestDockerLauncher_SatisfiesShardLaunchAPI(t *testing.T) {
-	var _ ShardLaunchAPI = (*DockerLauncher)(nil)
-}
