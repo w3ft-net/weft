@@ -44,19 +44,25 @@ type ProposalDeleteArgs struct {
 const (
 	scriptProposeDescription = `Stage a new (or updated) bin/ script for human review.
 
-The body is parsed against weft's script policy: pure-pipeline form, allowed verbs only, paths under /log/ or positional ($1/$@). No redirects, command substitution, subshells, or function definitions.
+The body is parsed against weft's script policy: pure-pipeline form, allowed verbs only, paths under /log/ or positional ($1/$@). No redirects, command substitution, subshells, or function definitions. An alert, if present, must be the final stage, and a weft:: function may not follow a pipe (it never reads its input; weft::is_gt and weft::is_lt are the exceptions). tail -f and range are refused.
 
 Returns the proposal id and a unified diff against the current script (if any). The change is NOT committed — call weft.proposals_apply (which the user must approve) to land it.`
 
 	cronProposeDescription = `Stage a new (or updated) cron entry for human review.
 
-A cron is a scheduled pipeline. To make it an alert, end the pipeline with '| alert <condition>' (e.g. 'alert above 50', 'alert below 10', 'alert eq 0'). The schedule must be a 5-field cron expression.
+A cron is a scheduled pipeline. The schedule is one of these crontabs: '* * * * *' (every minute), '*/N * * * *' (every N minutes), '0 * * * *' (hourly), '0 */H * * *' (every H hours), '0 0 * * *' (daily at 00:00 UTC), '0 0 */N * *' (every N days), '0 0 * * 1' (weekly, Monday 00:00 UTC); or an interval such as 'every 5m', 'every 1d' or 'every 1w' (units w, d, h, m, s, which can combine). Crons fire at UTC-aligned times: there is no time of day and no weekday other than Monday. The user's plan sets the shortest interval and the number of crons, and a save over either limit is refused.
 
-Pipelines pass the same allowlist as weft.run plus the alert pipe stage. Returns proposal id + unified diff.`
+Each run reads only the logs from its own interval (a '*/5' cron sees the last five minutes). Count with 'grep ... | wc -l' and do NOT cap rows with 'head -n' or 'tail -n': a cap truncates the window and the cron undercounts.
+
+To make it an alert, end the pipeline with '| alert <condition>', where the condition is any, above N, below N, eq N, neq N, changed, absent, rising N% or falling N%. Rules, all enforced when the cron is saved: the alert is the final stage and the only one; it takes at most one --notify=<alias>, an alias defined in /etc/notify.yaml; --duration takes s, m or h. For one line per host or service, '-v <field>' names the field holding the number and '-t <field>' the field that names the line, so each tag alerts separately; give both as column numbers or both as .json.paths.
+
+To alert on the state of other crons, use weft:: functions. For a number: 'weft::avg error-rate 5m | alert above 50 --notify=ops'. To combine conditions: '(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical', where && || and ! join predicates and the subshell ends in echo; this is the only subshell form allowed. weft:: functions ignore piped input, except weft::is_gt and weft::is_lt.
+
+Pipelines pass the same allowlist as weft.run plus the alert stage and the composite form above. Returns proposal id + unified diff.`
 
 	dashboardProposeDescription = `Stage a new (or updated) dashboard for human review.
 
-The body is the dashboard YAML — top-level title plus a list of sections (each with a heading and tiles), or a flat top-level tiles: shorthand. Tiles have a kind (sparkline | counter | gauge | table), a watch reference, an optional size hint (sm | md | lg), and kind-specific fields like format, threshold, or columns.
+The body is the dashboard YAML — top-level title plus a list of sections (each with a heading and tiles), or a flat top-level tiles: shorthand. Tiles have a kind (sparkline | counter | gauge | table), a cron: key naming the cron whose results they show, an optional size hint (sm | md | lg), and kind-specific fields like format, threshold, or columns.
 
 The body is parsed against weft's dashboard YAML grammar and every tile's cron: reference is checked against the existing crons. Returns proposal id + unified diff.`
 

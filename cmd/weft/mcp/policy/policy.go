@@ -12,7 +12,6 @@
 // validator).
 package policy
 
-
 // Policy describes what a validated pipeline is allowed to contain.
 // A zero Policy rejects everything; use DefaultReadPolicy or
 // DefaultScriptPolicy as a starting point.
@@ -47,6 +46,19 @@ type Policy struct {
 	// AllowGroups controls whether { ...; } compound commands are
 	// permitted.
 	AllowGroups bool
+
+	// AllowPredicateSubshell admits one narrow shape of subshell, whatever
+	// AllowSubshells and AllowPipelineChain say: ( ... ) whose body is a
+	// single and-or list of pipelines made only of weft:: commands from
+	// AllowedCommands and literal echo, with at least one weft:: command, no
+	// redirects and no assignments. It is the composite-alert form,
+	//
+	//	(weft::is_above a 50 && weft::is_absent b && echo fire) | alert
+	//
+	// All reads of stored cron history, so it adds no reach to the log
+	// filesystem. The && / || inside it are allowed; elsewhere they stay
+	// governed by AllowPipelineChain.
+	AllowPredicateSubshell bool
 
 	// AllowCommandSub controls whether $(...) and `...` substitutions
 	// are permitted. For untrusted-input policies this should always be

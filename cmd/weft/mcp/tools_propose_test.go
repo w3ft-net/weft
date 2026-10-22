@@ -508,3 +508,20 @@ func TestCronPropose_TimeOfDayScheduleRejected(t *testing.T) {
 		t.Errorf("expected nothing staged; got %d", len(ps))
 	}
 }
+
+// The composite recipe from the alerts manual can be proposed.
+func TestCronPropose_CompositeAlert(t *testing.T) {
+	store, _ := proposals.New(t.TempDir())
+	cfg := Config{Run: neverRunFn(t), Proposals: store}
+	(&proposeBackend{}).wire(&cfg)
+	s := testSession(t, cfg)
+
+	res := callTool(t, s, "weft.cron_propose", map[string]any{
+		"name":     "deploy-danger",
+		"schedule": "every 1m",
+		"pipeline": "(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical",
+	})
+	if res.IsError {
+		t.Fatalf("composite alert rejected: %q", textContent(res))
+	}
+}

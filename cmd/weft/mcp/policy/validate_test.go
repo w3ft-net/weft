@@ -332,3 +332,79 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// A composite alert combines the state of several crons:
+//
+//	(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical
+//
+// The cron policy admits exactly that shape and nothing more general: a
+// subshell whose body is only weft:: reads, joined by && / || / !, ending in a
+// literal echo. Chains, subshells and echo stay forbidden everywhere else, and
+// the read-only policy behind weft.run never allows the subshell at all.
+func TestValidate_CronPolicy_PredicateSubshell(t *testing.T) {
+	type row struct {
+		name string
+		src  string
+		want []string
+	}
+	cases := []row{
+		{"and of two predicates",
+			`(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical`, nil},
+		{"or and not",
+			`(! weft::is_absent maintenance-flag && weft::is_above error-rate 50 || weft::is_above payment-fail 0 && echo fire) | alert --notify=critical`, nil},
+		{"stdin comparator inside",
+			`(weft::avg error-rate 5m | weft::is_gt 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical`, nil},
+		{"with a debounce window",
+			`(weft::is_above error-rate 50 && echo 1 || echo 0) | alert above 0 --duration 5m --notify=critical`, nil},
+
+		{"a log read inside the subshell",
+			`(cat /log/x/y/main.log && echo fire) | alert`, []string{"command_forbidden"}},
+		{"an unlisted command inside the subshell",
+			`(weft::is_above a 1 && rm /log/x && echo fire) | alert`, []string{"command_forbidden"}},
+		{"nested subshell",
+			`((weft::is_above a 1) && echo fire) | alert`, []string{"subshell_forbidden"}},
+		{"redirect inside",
+			`(weft::is_above a 1 && echo fire > /tmp/x) | alert`, []string{"redirect_forbidden"}},
+		{"redirect on the subshell",
+			`(weft::is_above a 1 && echo fire) > /tmp/x`, []string{"subshell_forbidden"}},
+		{"command substitution in echo",
+			`(weft::is_above a 1 && echo $(weft::latest x)) | alert`, []string{"command_sub_forbidden"}},
+		{"assignment inside",
+			`(X=1 weft::is_above a 1 && echo fire) | alert`, []string{"assignment_forbidden", "subshell_forbidden"}},
+		{"echo outside the subshell",
+			`echo fire | alert`, []string{"command_forbidden"}},
+		{"chain outside the subshell",
+			`weft::is_above a 1 && echo fire | alert`, []string{"chain_forbidden", "command_forbidden"}},
+		{"plain subshell of a read",
+			`(cat /log/x/y/main.log) | alert`, []string{"subshell_forbidden"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, vs := Validate(tc.src, DefaultCronPolicy())
+			got := kinds(vs)
+			if tc.want == nil {
+				if len(got) != 0 {
+					t.Errorf("Validate(%q) = %+v, want it accepted", tc.src, vs)
+				}
+				return
+			}
+			// A rejection must name the kinds below; it may name others too.
+			for _, k := range tc.want {
+				found := false
+				for _, g := range got {
+					found = found || g == k
+				}
+				if !found {
+					t.Errorf("Validate(%q) = %v, want it to include %q", tc.src, got, k)
+				}
+			}
+		})
+	}
+
+	t.Run("weft.run's read policy still refuses the subshell", func(t *testing.T) {
+		_, vs := Validate(`(weft::is_above a 1 && echo fire)`, DefaultReadPolicy())
+		if len(vs) == 0 {
+			t.Error("the read policy accepted a chained subshell")
+		}
+	})
+}

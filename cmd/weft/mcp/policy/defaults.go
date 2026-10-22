@@ -85,6 +85,9 @@ func DefaultReadPolicy() Policy {
 // a cron proposal. It is DefaultReadPolicy plus the `alert` pipe
 // stage, which crons use to register an alert condition.
 //
+// It also admits the composite-alert subshell (see
+// Policy.AllowPredicateSubshell).
+//
 // Crons that do *not* alert (pure scheduled jobs) pass this policy
 // trivially — they look the same as a one-shot read pipeline.
 // Crons that do alert end with `| alert <condition> [-v …] [-t …]
@@ -93,6 +96,7 @@ func DefaultReadPolicy() Policy {
 // `.latency_ms`) doesn't trip the path validator.
 func DefaultCronPolicy() Policy {
 	p := DefaultReadPolicy()
+	p.AllowPredicateSubshell = true
 	p.AllowedCommands["alert"] = CommandRule{
 		FlagsWithValue: map[string]bool{
 			"-v": true, "-t": true,

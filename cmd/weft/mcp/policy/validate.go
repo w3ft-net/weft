@@ -28,6 +28,8 @@ func Validate(src string, p Policy) (*bash.Script, []Violation) {
 		}
 	}()
 
+	shapes := predicateShapes(script, p)
+
 	bash.Walk(script, func(n bash.Node) bool {
 		// A nil typed pointer satisfies an interface case but
 		// dereferencing fields will panic. Treat any such node as a
@@ -47,7 +49,7 @@ func Validate(src string, p Policy) (*bash.Script, []Violation) {
 			}
 
 		case *bash.List:
-			if !p.AllowPipelineChain && len(x.Rest) > 0 {
+			if !p.AllowPipelineChain && len(x.Rest) > 0 && !shapes.lists[x] {
 				op := x.Rest[0].Op
 				vs = append(vs, Violation{
 					Kind:   "chain_forbidden",
@@ -64,10 +66,10 @@ func Validate(src string, p Policy) (*bash.Script, []Violation) {
 			}
 
 		case *bash.SimpleCommand:
-			checkSimple(x, p, &vs)
+			checkSimple(x, p, shapes.echoes[x], &vs)
 
 		case *bash.Subshell:
-			if !p.AllowSubshells {
+			if !p.AllowSubshells && !shapes.subshells[x] {
 				vs = append(vs, Violation{Kind: "subshell_forbidden"})
 			}
 
@@ -105,7 +107,11 @@ func Validate(src string, p Policy) (*bash.Script, []Violation) {
 // checkSimple inspects a single SimpleCommand against the policy:
 // command name allowlist, redirects, assignments, and (when the
 // matched rule supplies one) per-argument path validation.
-func checkSimple(c *bash.SimpleCommand, p Policy, vs *[]Violation) {
+//
+// allowedEcho exempts the literal echo that ends an admitted predicate
+// subshell from the command allowlist; its redirects, assignments and
+// substitutions are still checked.
+func checkSimple(c *bash.SimpleCommand, p Policy, allowedEcho bool, vs *[]Violation) {
 	if len(c.Assigns) > 0 && !p.AllowAssignments {
 		*vs = append(*vs, Violation{
 			Kind:   "assignment_forbidden",
@@ -124,6 +130,9 @@ func checkSimple(c *bash.SimpleCommand, p Policy, vs *[]Violation) {
 		return
 	}
 	name := c.Words[0].Literal()
+	if allowedEcho {
+		return
+	}
 	rule, ok := p.AllowedCommands[name]
 	if !ok {
 		// Fall back to user-defined bin/ scripts. Their bodies were
@@ -262,4 +271,87 @@ func itoa(n int) string {
 		b[i] = '-'
 	}
 	return string(b[i:])
+}
+
+// predicateShape records the nodes of the subshells Policy.AllowPredicateSubshell
+// admits, so the main walk can let them through.
+type predicateShape struct {
+	subshells map[*bash.Subshell]bool
+	lists     map[*bash.List]bool
+	echoes    map[*bash.SimpleCommand]bool
+}
+
+// predicateShapes finds every subshell in script that has the admitted form.
+// A subshell that is close but not exact (a log read inside, a redirect, a
+// nested subshell) is left out, and so is reported by the main walk.
+func predicateShapes(script *bash.Script, p Policy) predicateShape {
+	shapes := predicateShape{
+		subshells: map[*bash.Subshell]bool{},
+		lists:     map[*bash.List]bool{},
+		echoes:    map[*bash.SimpleCommand]bool{},
+	}
+	if !p.AllowPredicateSubshell {
+		return shapes
+	}
+	defer func() { _ = recover() }() // a malformed AST is reported by the main walk
+	bash.Walk(script, func(n bash.Node) bool {
+		sub, ok := n.(*bash.Subshell)
+		if !ok || sub == nil {
+			return true
+		}
+		list, echoes, ok := predicateBody(sub, p)
+		if !ok {
+			return true
+		}
+		shapes.subshells[sub] = true
+		shapes.lists[list] = true
+		for _, e := range echoes {
+			shapes.echoes[e] = true
+		}
+		return true
+	})
+	return shapes
+}
+
+// predicateBody reports whether sub is ( weft:: ... && ... || echo ... ): one
+// and-or list whose every command is an allowed weft:: command or a literal
+// echo, with at least one weft:: command. It returns the list and its echoes.
+func predicateBody(sub *bash.Subshell, p Policy) (*bash.List, []*bash.SimpleCommand, bool) {
+	if len(sub.Redirects) > 0 || sub.Body == nil || len(sub.Body.Commands) != 1 {
+		return nil, nil, false
+	}
+	list := sub.Body.Commands[0]
+	if list == nil || list.First == nil {
+		return nil, nil, false
+	}
+	pipes := []*bash.Pipeline{list.First}
+	for _, c := range list.Rest {
+		if c.Pipeline == nil {
+			return nil, nil, false
+		}
+		pipes = append(pipes, c.Pipeline)
+	}
+	var echoes []*bash.SimpleCommand
+	sawWeft := false
+	for _, pipe := range pipes {
+		for _, cmd := range pipe.Commands {
+			sc, ok := cmd.(*bash.SimpleCommand)
+			if !ok || sc == nil || len(sc.Words) == 0 || len(sc.Assigns) > 0 || len(sc.Redirects) > 0 {
+				return nil, nil, false
+			}
+			name := sc.Words[0].Literal()
+			switch {
+			case name == "echo":
+				echoes = append(echoes, sc)
+			case strings.HasPrefix(name, "weft::"):
+				if _, allowed := p.AllowedCommands[name]; !allowed {
+					return nil, nil, false
+				}
+				sawWeft = true
+			default:
+				return nil, nil, false
+			}
+		}
+	}
+	return list, echoes, sawWeft
 }

@@ -10,21 +10,24 @@ import (
 
 // LsArgs / CatArgs are the typed wire schemas for the FS tools.
 type LsArgs struct {
-	Path string `json:"path" jsonschema:"path under /log/ to list (e.g. /log/billing/)"`
+	Path string `json:"path" jsonschema:"path under /log/ to list (e.g. /log/billing/ or /log/billing/prod/api)"`
 }
 
 type CatArgs struct {
-	Path string `json:"path" jsonschema:"path to a log file under /log/ (e.g. /log/billing/billing.log)"`
+	Path string `json:"path" jsonschema:"path to a log file under /log/ (e.g. /log/billing/prod/api/main.log)"`
 }
 
 const lsDescription = `List entries directly under a /log path.
 
-Use this to discover what apps a namespace is shipping logs for, or what files an app is producing. The path must live under /log/.
+Use this to discover what a namespace is shipping and what files a service is producing. The path must live under /log/.
+
+A service is either directly under its namespace (/log/<namespace>/<service>, whose files read every environment) or under an environment (/log/<namespace>/<env>/<service>, whose files read just that one), depending on how its producer token was minted. Listing a namespace shows both forms side by side.
 
 Examples:
-  /log               list namespaces
-  /log/billing       list apps in the billing namespace
-  /log/billing/      same`
+  /log                    list namespaces
+  /log/billing            list the services and environments in the billing namespace
+  /log/billing/prod       list the services in the prod environment
+  /log/billing/prod/api   list the api service's files: main.log, and heartbeats.log, metrics.log or runtime.log if it emits them`
 
 const catDescription = `Read a log file under /log/.
 

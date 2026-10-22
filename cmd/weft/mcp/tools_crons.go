@@ -20,7 +20,7 @@ Read-only. Use this to audit what's scheduled — e.g. finding crons whose pipel
 
 Output is plain text, one block per cron:
   name: <name>
-  schedule: <5-field cron expression>
+  schedule: <the schedule as written: a crontab such as '0 * * * *', or an interval such as 'every 5m'>
   pipeline: <the pipeline, including any | alert ... stage>`
 
 func registerCronsList(server *mcp.Server, cfg Config) {
