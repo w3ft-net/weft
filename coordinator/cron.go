@@ -203,6 +203,11 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 	if budget == 0 {
 		budget = cronRunTimeout
 	}
+	if d, err := ce.Store.CronRunTimeout(watch.OrgID); err != nil {
+		weftsdk.Errorf(ctx, "cron[%s]: reading the org's run budget: %v", watch.Name, err)
+	} else if d > 0 {
+		budget = d
+	}
 	runCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	runCtx, outcome := withRunOutcome(runCtx)

@@ -580,6 +580,9 @@ level_field: "2"
 `, traceIDLine, app)
 }
 
+// loomCronRunTimeout is loom's per-run cron budget, above the 2s default.
+const loomCronRunTimeout = 10 * time.Second
+
 // --- pre-seeded /bin and /cron.d --------------------------------------
 
 func preseedScripts(s *store.Store, custID store.OrgID, customerName string, members []*store.User) error {
@@ -772,6 +775,12 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 	// sine in docker-compose.demo.yml, so synthetic and live datapoints
 	// line up continuously.
 	if customerName == "loom" {
+		// Tour users are read-only in loom, so nobody inside it could
+		// re-enable a cron benched for running long. Give the demo crons
+		// headroom over the default budget.
+		if err := s.SetCronRunTimeout(custID, loomCronRunTimeout); err != nil {
+			return fmt.Errorf("loom cron run timeout: %w", err)
+		}
 		if err := preseedLoomErrorRateHistory(s, custID); err != nil {
 			return fmt.Errorf("error-rate preseed: %w", err)
 		}
@@ -849,10 +858,15 @@ oncall:
   webhook:
     - url: "https://hooks.loom.test/weft/oncall"
       headers:
-        X-Signing-Secret: "loom-demo-secret"
+        X-Signing-Secret: "${secrets.oncall_signing}"
   email:
     - "oncall@loom.test"
 `
+	// notify.yaml holds only the reference; the demo value lives in the secret
+	// store, as a customer's would. It must exist before the document is saved.
+	if err := s.SaveWebhookSecret(custID, "oncall_signing", "loom-demo-secret"); err != nil {
+		return fmt.Errorf("webhook secret: %w", err)
+	}
 	if err := s.SaveNotifyAliases(custID, user1.ID, notifyYAML); err != nil {
 		return fmt.Errorf("notify.yaml: %w", err)
 	}

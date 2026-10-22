@@ -163,7 +163,7 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-notify",
-		Prompt: "When you aren't just playing around in the shell and you want alerts to go somewhere real, you create a mapping in `/etc/notify.yaml`. You can use the top level keys as aliased arguments to `alert` so you can have different behaviors for different alerts. ",
+		Prompt: "When you aren't just playing around in the shell and you want alerts to go somewhere real, you create a mapping in `/etc/notify.yaml`. You can use the top level keys as aliased arguments to `alert` so you can have different behaviors for different alerts. Credentials never go in this file: store them with `weft integration webhook-secret` and refer to them as `${secrets.NAME}`, like the `oncall` signing header below. ",
 		Action: "cat /etc/notify.yaml",
 	},
 	{

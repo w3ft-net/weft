@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strconv"
@@ -61,6 +62,10 @@ type Organization struct {
 	StripeSubscriptionID string
 	SeatCount            int `gorm:"not null;default:0"`
 
+	// CronRunTimeoutMs overrides the budget for one cron run; nil means the
+	// coordinator's default. Operator-set, never exposed to the org itself.
+	CronRunTimeoutMs *int `gorm:"column:cron_run_timeout_ms"`
+
 	Namespaces  []Namespace  `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
 	AgentTokens []AgentToken `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
 }
@@ -93,6 +98,29 @@ func (s *Store) GetOrgByID(id OrgID) (*Organization, error) {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// CronRunTimeout returns the org's override of the per-run cron budget, or 0
+// when it has none and the default applies.
+func (s *Store) CronRunTimeout(id OrgID) (time.Duration, error) {
+	var ms sql.NullInt64
+	err := s.db.Model(&Organization{}).Where("id = ?", id).Select("cron_run_timeout_ms").Row().Scan(&ms)
+	if err != nil || !ms.Valid {
+		return 0, err
+	}
+	return time.Duration(ms.Int64) * time.Millisecond, nil
+}
+
+// SetCronRunTimeout sets the org's per-run cron budget; zero clears it.
+func (s *Store) SetCronRunTimeout(id OrgID, d time.Duration) error {
+	if d < 0 {
+		return fmt.Errorf("cron run timeout must not be negative, got %s", d)
+	}
+	var ms any // nil clears the override
+	if d > 0 {
+		ms = d.Milliseconds()
+	}
+	return s.db.Model(&Organization{}).Where("id = ?", id).Update("cron_run_timeout_ms", ms).Error
 }
 
 // GetOrgByName returns an org by slug.

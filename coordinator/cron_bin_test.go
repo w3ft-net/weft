@@ -238,3 +238,29 @@ func TestNotifierDeliverTimesOutAnyTarget(t *testing.T) {
 		t.Fatalf("an ordinary failure was reported as a timeout: %v", err)
 	}
 }
+
+// An org's own run budget replaces the default for its crons.
+func TestCronRunUsesOrgBudget(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	if err := db.SaveShellFunction(custID, "", "spin", `while true; do :; done`, "bash"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveCronWatch(custID, "", "spinner", "every 5m", "spin", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetCronRunTimeout(custID, 150*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
+	ce := &CronExecutor{Store: db, Coord: c} // no RunTimeout: the default would be 2s
+	w, _ := db.GetCronWatch(custID, "spinner")
+	start := time.Now()
+	ce.executeWatch(context.Background(), *w, TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)})
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("run took %s; the org's 150ms budget was ignored", took)
+	}
+	if w, _ = db.GetCronWatch(custID, "spinner"); w.LastStatus != "timeout" {
+		t.Fatalf("last_status = %q, want timeout", w.LastStatus)
+	}
+}
