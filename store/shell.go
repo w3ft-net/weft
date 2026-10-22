@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -837,38 +838,141 @@ type CronBucket struct {
 	Max         float64
 }
 
-// QueryCronResults returns results for a named watch within a time range,
-// scoped to a customer. Used by weft.* functions in /bin/ scripts.
-//
-// Raw-only — the full CronResult row (with stdout/stderr/exit_code)
-// only exists in the unrolled raw table. `since` is clamped to the
-// caller's plan retention before the query runs.
-func (s *Store) QueryCronResults(orgID OrgID, watchName string, since time.Time) ([]CronResult, error) {
-	var watch CronWatch
-	if err := s.scoped(orgID).Where("name = ?", watchName).First(&watch).Error; err != nil {
-		return nil, err
-	}
-	since = ClampRetention(s.TierForOrg(orgID), since)
-	var results []CronResult
-	err := s.db.Where("cron_watch_id = ? AND ran_at >= ?", watch.ID, since).
-		Order("ran_at DESC").Find(&results).Error
-	return results, err
-}
+// How long each result tier is kept. These mirror the pg_partman retention
+// set on the cron_results tables in schema.sql; keep them in step.
+const (
+	RawRetention      = 7 * 24 * time.Hour
+	HourlyRetention   = 14 * 24 * time.Hour
+	FourHourRetention = 35 * 24 * time.Hour
+	DailyRetention    = 400 * 24 * time.Hour
+)
 
 // PickGranularity returns the coarsest rollup tier whose retention
-// covers the requested window. Boundaries match the pg_partman
-// retention ceilings in migration 026.
+// covers the requested window, for callers that read one tier (charts).
+// Statistics over a window use CronWindowStats, which stitches tiers.
 func PickGranularity(window time.Duration) string {
 	switch {
-	case window <= 7*24*time.Hour:
+	case window <= RawRetention:
 		return "raw"
-	case window <= 14*24*time.Hour:
+	case window <= HourlyRetention:
 		return "hourly"
-	case window <= 35*24*time.Hour:
+	case window <= FourHourRetention:
 		return "4h"
 	default:
 		return "daily"
 	}
+}
+
+// CronWindowStats is the exact sum-level statistics of a cron's numeric
+// results over a window. Count is 0 when the window held none.
+type CronWindowStats struct {
+	Count int64
+	Sum   float64
+	SumSq float64
+	Min   float64
+	Max   float64
+}
+
+// Mean is Sum/Count.
+func (c CronWindowStats) Mean() float64 { return c.Sum / float64(c.Count) }
+
+// Stddev is the population standard deviation, derived from the sums so it
+// stays exact however the buckets were merged.
+func (c CronWindowStats) Stddev() float64 {
+	mean := c.Mean()
+	v := c.SumSq/float64(c.Count) - mean*mean
+	if v < 0 {
+		v = 0 // float cancellation on near-constant series
+	}
+	return math.Sqrt(v)
+}
+
+// resultSegment is one tier's slice of a window. A zero `to` is open-ended.
+type resultSegment struct {
+	granularity string
+	from, to    time.Time
+}
+
+// windowSegments splits the window [since, now] across the result tiers,
+// finest tier for the most recent data: raw for the last RawRetention, then
+// hourly, 4-hour and daily buckets further back. The segments are disjoint
+// and meet at bucket boundaries, so every result is counted once. Only the
+// oldest edge is approximate: it is rounded up to a bucket boundary of the
+// tier it falls in, so the window can start up to one bucket (at most a day)
+// later than asked.
+func windowSegments(now, since time.Time) []resultSegment {
+	ceil := func(t time.Time, d time.Duration) time.Time {
+		if r := t.Truncate(d); r.Equal(t) {
+			return t
+		} else {
+			return r.Add(d)
+		}
+	}
+	const day = 24 * time.Hour
+	rawFrom := ceil(now.Add(-RawRetention), time.Hour)
+	hourlyFrom := ceil(now.Add(-HourlyRetention), 4*time.Hour)
+	fourHourFrom := ceil(now.Add(-FourHourRetention), day)
+
+	var out []resultSegment
+	add := func(gran string, floor, to time.Time, align time.Duration) {
+		from := floor
+		if lo := ceil(since, align); lo.After(from) {
+			from = lo
+		}
+		if !to.IsZero() && !from.Before(to) {
+			return
+		}
+		out = append(out, resultSegment{gran, from, to})
+	}
+	// Raw is exact: no alignment, and `since` bounds it directly.
+	if since.Before(now.Add(-RawRetention)) {
+		out = append(out, resultSegment{"raw", rawFrom, time.Time{}})
+	} else {
+		out = append(out, resultSegment{"raw", since, time.Time{}})
+	}
+	add("hourly", hourlyFrom, rawFrom, time.Hour)
+	add("4h", fourHourFrom, hourlyFrom, 4*time.Hour)
+	add("daily", time.Time{}, fourHourFrom, day)
+	// Oldest first.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
+// CronWindowStats aggregates every numeric result of a cron since `since`
+// (callers apply their plan's ClampRetention first), reading raw results for
+// recent data and the rollups for older data. All tags are combined.
+func (s *Store) CronWindowStats(cronWatchID uint, since time.Time) (CronWindowStats, error) {
+	var total CronWindowStats
+	for _, seg := range windowSegments(time.Now(), since) {
+		q := `SELECT COALESCE(SUM(count), 0) AS count, COALESCE(SUM(sum), 0) AS sum,
+			COALESCE(SUM(sum_sq), 0) AS sum_sq, COALESCE(MIN(min), 0) AS min, COALESCE(MAX(max), 0) AS max
+			FROM cron_results_all
+			WHERE granularity = ? AND cron_watch_id = ? AND bucket_start >= ?`
+		args := []any{seg.granularity, cronWatchID, seg.from}
+		if !seg.to.IsZero() {
+			q += " AND bucket_start < ?"
+			args = append(args, seg.to)
+		}
+		var part CronWindowStats
+		if err := s.db.Raw(q, args...).Scan(&part).Error; err != nil {
+			return CronWindowStats{}, err
+		}
+		if part.Count == 0 {
+			continue
+		}
+		if total.Count == 0 {
+			total = part
+			continue
+		}
+		total.Count += part.Count
+		total.Sum += part.Sum
+		total.SumSq += part.SumSq
+		total.Min = math.Min(total.Min, part.Min)
+		total.Max = math.Max(total.Max, part.Max)
+	}
+	return total, nil
 }
 
 // ClampRetention pushes `since` forward to (now - LogRetention(tier))

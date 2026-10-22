@@ -2,11 +2,11 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
+	"io"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,16 +17,16 @@ import (
 	"gorm.io/gorm"
 )
 
-// maxAggDuration is the cap for true aggregates (avg, max, min, sum,
-// stddev, count, percentile, rate) — funcs that touch every result
-// in the window. Bounds compute cost.
-const maxAggDuration = 24 * time.Hour
+// maxAggDuration is the longest window for the aggregates that can be built
+// from sums (avg, min, max, sum, stddev, count, rate): they read the rollup
+// tiers as well as raw results, so they reach as far back as the daily tier
+// is kept. Your plan's retention can shorten that further.
+const maxAggDuration = store.DailyRetention
 
-// maxEndpointDuration is the cap for endpoint funcs (first, delta,
-// slope) that read O(1) anchor results — the chronologically first
-// result still in the window plus the latest. They can safely span
-// a longer window, useful for trend / fill-prediction queries.
-const maxEndpointDuration = 14 * 24 * time.Hour
+// maxRawDuration is the longest window for funcs that need individual
+// results (percentile, first, delta, slope, is_seasonal, is_absent). Only
+// raw results hold those; rollups keep sums, not values.
+const maxRawDuration = store.RawRetention
 
 // dayWeekUnit matches a number followed by the d (day) or w (week) unit.
 var dayWeekUnit = regexp.MustCompile(`(\d+(?:\.\d+)?)([dw])`)
@@ -107,12 +107,18 @@ func (w *WeftFuncs) Latest(watchName string) (string, error) {
 // argument or a database hiccup can't page anyone.
 func (w *WeftFuncs) Absent(watchName string, window time.Duration) (bool, error) {
 	if window > 0 {
-		n, err := w.Count(watchName, window)
+		id, since, err := w.rawWindow("weft::is_absent", watchName, window)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return true, nil
 		}
 		if err != nil {
 			return false, err
+		}
+		// Every result counts here, numeric or not: a text-only canary that
+		// ran is not absent.
+		var n int64
+		if err := w.Store.DB().Raw(`SELECT COUNT(*) FROM cron_results WHERE cron_watch_id = ? AND ran_at >= ?`, id, since).Scan(&n).Error; err != nil {
+			return false, fmt.Errorf("weft::is_absent: cron %q: %w", watchName, err)
 		}
 		return n == 0, nil
 	}
@@ -124,6 +130,62 @@ func (w *WeftFuncs) Absent(watchName string, window time.Duration) (bool, error)
 		return false, err
 	}
 	return s == "", nil
+}
+
+// maxDescribeRuns caps how many runs weft::describe returns, matching the
+// most the cron detail page ever loads.
+const maxDescribeRuns = 50
+
+// defaultDescribeRuns is how many runs weft::describe returns when n is omitted.
+const defaultDescribeRuns = 10
+
+// RunRecord is one saved cron result as weft::describe reports it: every
+// field the run recorded, including the ones no other weft:: function
+// exposes (exit code, duration, stderr).
+type RunRecord struct {
+	RanAt      time.Time `json:"ran_at"`
+	ExitCode   int       `json:"exit_code"`
+	DurationMs int64     `json:"duration_ms"`
+	Tag        string    `json:"tag"`
+	Value      *float64  `json:"value"`
+	Stdout     string    `json:"stdout"`
+	Stderr     string    `json:"stderr"`
+}
+
+// Describe returns the n most recent saved results of a cron, newest first.
+// A multi-row cron saves one result per line, so n counts results, not
+// firings.
+func (w *WeftFuncs) Describe(watchName string, n int) ([]RunRecord, error) {
+	if n < 1 || n > maxDescribeRuns {
+		return nil, fmt.Errorf("weft::describe: n must be between 1 and %d", maxDescribeRuns)
+	}
+	var watch store.CronWatch
+	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+		return nil, fmt.Errorf("weft::describe: cron %q: %w", watchName, err)
+	}
+	results, err := w.Store.ListCronResults(watch.ID, n, "")
+	if err != nil {
+		return nil, fmt.Errorf("weft::describe: cron %q: %w", watchName, err)
+	}
+	out := make([]RunRecord, len(results))
+	for i, r := range results {
+		out[i] = RunRecord{
+			RanAt: r.RanAt.UTC(), ExitCode: r.ExitCode, DurationMs: r.DurationMs,
+			Tag: r.Tag, Value: r.Value, Stdout: r.Stdout, Stderr: r.Stderr,
+		}
+	}
+	return out, nil
+}
+
+// writeRunsJSONL writes one compact JSON object per run.
+func writeRunsJSONL(out io.Writer, runs []RunRecord) error {
+	enc := json.NewEncoder(out)
+	for _, r := range runs {
+		if err := enc.Encode(r); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Previous returns the trimmed stdout of the second-most-recent
@@ -145,173 +207,176 @@ func (w *WeftFuncs) Previous(watchName string) (string, error) {
 	return strings.TrimSpace(results[1].Stdout), nil
 }
 
-func (w *WeftFuncs) Avg(watchName string, dur time.Duration) (float64, error) {
-	vals, err := w.numericResults(watchName, dur)
+// windowStats aggregates a cron's numeric results over the last dur, reading
+// raw results for recent data and the rollups for older data. It is the
+// shared core of the sum-based funcs.
+func (w *WeftFuncs) windowStats(fn, watchName string, dur time.Duration) (store.CronWindowStats, error) {
+	if dur <= 0 {
+		return store.CronWindowStats{}, fmt.Errorf("duration must be positive")
+	}
+	if dur > maxAggDuration {
+		return store.CronWindowStats{}, fmt.Errorf("duration %s exceeds maximum of %s", dur, maxAggDuration)
+	}
+	var watch store.CronWatch
+	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+		return store.CronWindowStats{}, fmt.Errorf("%s: cron %q: %w", fn, watchName, err)
+	}
+	since := store.ClampRetention(w.Store.TierForOrg(w.OrgID), time.Now().Add(-dur))
+	st, err := w.Store.CronWindowStats(watch.ID, since)
 	if err != nil {
-		return 0, err
+		return store.CronWindowStats{}, fmt.Errorf("%s: cron %q: %w", fn, watchName, err)
 	}
-	if len(vals) == 0 {
-		return 0, fmt.Errorf("weft::avg: no numeric results for %q", watchName)
+	return st, nil
+}
+
+// nonEmptyStats is windowStats for funcs that have no answer without data.
+func (w *WeftFuncs) nonEmptyStats(fn, watchName string, dur time.Duration) (store.CronWindowStats, error) {
+	st, err := w.windowStats(fn, watchName, dur)
+	if err != nil {
+		return st, err
 	}
-	var sum float64
-	for _, v := range vals {
-		sum += v
+	if st.Count == 0 {
+		return st, fmt.Errorf("%s: no numeric results for %q", fn, watchName)
 	}
-	return sum / float64(len(vals)), nil
+	return st, nil
+}
+
+func (w *WeftFuncs) Avg(watchName string, dur time.Duration) (float64, error) {
+	st, err := w.nonEmptyStats("weft::avg", watchName, dur)
+	return st.Mean(), err
 }
 
 func (w *WeftFuncs) Max(watchName string, dur time.Duration) (float64, error) {
-	vals, err := w.numericResults(watchName, dur)
-	if err != nil {
-		return 0, err
-	}
-	if len(vals) == 0 {
-		return 0, fmt.Errorf("weft::max: no numeric results for %q", watchName)
-	}
-	max := vals[0]
-	for _, v := range vals[1:] {
-		if v > max {
-			max = v
-		}
-	}
-	return max, nil
+	st, err := w.nonEmptyStats("weft::max", watchName, dur)
+	return st.Max, err
 }
 
 func (w *WeftFuncs) Min(watchName string, dur time.Duration) (float64, error) {
-	vals, err := w.numericResults(watchName, dur)
-	if err != nil {
-		return 0, err
-	}
-	if len(vals) == 0 {
-		return 0, fmt.Errorf("weft::min: no numeric results for %q", watchName)
-	}
-	min := vals[0]
-	for _, v := range vals[1:] {
-		if v < min {
-			min = v
-		}
-	}
-	return min, nil
+	st, err := w.nonEmptyStats("weft::min", watchName, dur)
+	return st.Min, err
 }
 
 func (w *WeftFuncs) Sum(watchName string, dur time.Duration) (float64, error) {
-	vals, err := w.numericResults(watchName, dur)
-	if err != nil {
-		return 0, err
-	}
-	if len(vals) == 0 {
-		return 0, fmt.Errorf("weft::sum: no numeric results for %q", watchName)
-	}
-	var sum float64
-	for _, v := range vals {
-		sum += v
-	}
-	return sum, nil
+	st, err := w.nonEmptyStats("weft::sum", watchName, dur)
+	return st.Sum, err
 }
 
+// Stddev is the population standard deviation, computed from the sums.
 func (w *WeftFuncs) Stddev(watchName string, dur time.Duration) (float64, error) {
-	vals, err := w.numericResults(watchName, dur)
+	st, err := w.windowStats("weft::stddev", watchName, dur)
 	if err != nil {
 		return 0, err
 	}
-	if len(vals) < 2 {
+	if st.Count < 2 {
 		return 0, fmt.Errorf("weft::stddev: need at least 2 results for %q", watchName)
 	}
-	var sum float64
-	for _, v := range vals {
-		sum += v
-	}
-	mean := sum / float64(len(vals))
-	var variance float64
-	for _, v := range vals {
-		d := v - mean
-		variance += d * d
-	}
-	variance /= float64(len(vals))
-	return math.Sqrt(variance), nil
+	return st.Stddev(), nil
 }
 
-// First returns the chronologically oldest numeric stdout still in
-// the window — the anchor for delta/slope. Cap is the longer
-// maxEndpointDuration since this reads a single result, not an
-// aggregate.
+// Count returns the number of numeric results recorded within the window.
+// Results whose output wasn't a number are not counted, because the rollups
+// that serve long windows don't keep them.
+func (w *WeftFuncs) Count(watchName string, dur time.Duration) (float64, error) {
+	st, err := w.windowStats("weft::count", watchName, dur)
+	return float64(st.Count), err
+}
+
+// rawWindow finds the cron and the start of a raw-results window, enforcing
+// the raw cap shared by the funcs that need individual values.
+func (w *WeftFuncs) rawWindow(fn, watchName string, dur time.Duration) (watchID uint, since time.Time, err error) {
+	if dur <= 0 {
+		return 0, time.Time{}, fmt.Errorf("duration must be positive")
+	}
+	if dur > maxRawDuration {
+		return 0, time.Time{}, fmt.Errorf("duration %s exceeds maximum of %s", dur, maxRawDuration)
+	}
+	var watch store.CronWatch
+	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+		return 0, time.Time{}, fmt.Errorf("%s: cron %q: %w", fn, watchName, err)
+	}
+	return watch.ID, store.ClampRetention(w.Store.TierForOrg(w.OrgID), time.Now().Add(-dur)), nil
+}
+
+// First returns the chronologically oldest numeric result in the window, the
+// anchor for delta and slope.
 func (w *WeftFuncs) First(watchName string, dur time.Duration) (float64, error) {
-	vals, err := w.numericResultsCap(watchName, dur, maxEndpointDuration)
+	first, _, n, err := w.rawEnds("weft::first", watchName, dur)
 	if err != nil {
 		return 0, err
 	}
-	if len(vals) == 0 {
+	if n == 0 {
 		return 0, fmt.Errorf("weft::first: no numeric results for %q", watchName)
 	}
-	// QueryCronResults returns DESC (newest first); oldest is the last element.
-	return vals[len(vals)-1], nil
+	return first, nil
 }
 
-// Count returns the number of results recorded for the watch within
-// the window — numeric or not, since "how many times did the watch
-// fire" is the natural question. Returns float for interface uniformity.
-func (w *WeftFuncs) Count(watchName string, dur time.Duration) (float64, error) {
-	if dur > maxAggDuration {
-		return 0, fmt.Errorf("duration %s exceeds maximum of %s", dur, maxAggDuration)
-	}
-	if dur <= 0 {
-		return 0, fmt.Errorf("duration must be positive")
-	}
-	since := time.Now().Add(-dur)
-	results, err := w.Store.QueryCronResults(w.OrgID, watchName, since)
+// rawEnds returns the oldest and newest numeric result in the window and how
+// many there are.
+func (w *WeftFuncs) rawEnds(fn, watchName string, dur time.Duration) (first, last float64, n int64, err error) {
+	id, since, err := w.rawWindow(fn, watchName, dur)
 	if err != nil {
-		return 0, fmt.Errorf("weft::count: cron %q: %w", watchName, err)
+		return 0, 0, 0, err
 	}
-	return float64(len(results)), nil
+	var row struct {
+		First float64
+		Last  float64
+		N     int64
+	}
+	err = w.Store.DB().Raw(`
+		SELECT COUNT(*) AS n,
+		       COALESCE((ARRAY_AGG(value ORDER BY ran_at ASC))[1], 0)  AS first,
+		       COALESCE((ARRAY_AGG(value ORDER BY ran_at DESC))[1], 0) AS last
+		FROM cron_results
+		WHERE cron_watch_id = ? AND ran_at >= ? AND value IS NOT NULL`, id, since).Scan(&row).Error
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("%s: cron %q: %w", fn, watchName, err)
+	}
+	return row.First, row.Last, row.N, nil
 }
 
-// Percentile returns the p-th percentile (p in 0..100) of numeric
-// stdout values in the window using linear interpolation between
-// adjacent ranks (R-7 / Excel / numpy default). p=0 is min, p=50 is
-// median, p=100 is max.
+// Percentile returns the p-th percentile (p in 0..100) of numeric results in
+// the window using linear interpolation between adjacent ranks (R-7 / Excel /
+// numpy default; Postgres percentile_cont). p=0 is min, p=50 is median,
+// p=100 is max. Percentiles need individual values, so the window is limited
+// to raw results.
 func (w *WeftFuncs) Percentile(watchName string, dur time.Duration, p float64) (float64, error) {
 	if p < 0 || p > 100 {
 		return 0, fmt.Errorf("weft::percentile: p must be in [0, 100], got %v", p)
 	}
-	vals, err := w.numericResults(watchName, dur)
+	id, since, err := w.rawWindow("weft::percentile", watchName, dur)
 	if err != nil {
 		return 0, err
 	}
-	if len(vals) == 0 {
+	var row struct {
+		Pct *float64
+	}
+	if err := w.Store.DB().Raw(`
+		SELECT percentile_cont(?::float8) WITHIN GROUP (ORDER BY value) AS pct
+		FROM cron_results
+		WHERE cron_watch_id = ? AND ran_at >= ? AND value IS NOT NULL`, p/100.0, id, since).Scan(&row).Error; err != nil {
+		return 0, fmt.Errorf("weft::percentile: cron %q: %w", watchName, err)
+	}
+	if row.Pct == nil {
 		return 0, fmt.Errorf("weft::percentile: no numeric results for %q", watchName)
 	}
-	sort.Float64s(vals)
-	if len(vals) == 1 {
-		return vals[0], nil
-	}
-	rank := p / 100.0 * float64(len(vals)-1)
-	lo := int(rank)
-	frac := rank - float64(lo)
-	if lo+1 >= len(vals) {
-		return vals[len(vals)-1], nil
-	}
-	return vals[lo] + frac*(vals[lo+1]-vals[lo]), nil
+	return *row.Pct, nil
 }
 
-// Delta returns latest_numeric - first_numeric over the window.
-// Composite of weft::latest and weft::first; implemented natively for
-// performance and to share the single-fetch slice. Cap is
-// maxEndpointDuration since the underlying anchors are O(1).
+// Delta returns newest numeric result minus oldest numeric result in the
+// window. Composite of weft::latest and weft::first.
 func (w *WeftFuncs) Delta(watchName string, dur time.Duration) (float64, error) {
-	vals, err := w.numericResultsCap(watchName, dur, maxEndpointDuration)
+	first, last, n, err := w.rawEnds("weft::delta", watchName, dur)
 	if err != nil {
 		return 0, err
 	}
-	if len(vals) < 2 {
+	if n < 2 {
 		return 0, fmt.Errorf("weft::delta: need at least 2 numeric results for %q", watchName)
 	}
-	// vals[0] is newest, vals[len-1] is oldest.
-	return vals[0] - vals[len(vals)-1], nil
+	return last - first, nil
 }
 
-// Slope returns Delta / dur.Seconds() — the average rate of change
-// per second across the window. Caller multiplies for other units.
-// Cap is maxEndpointDuration.
+// Slope returns Delta / dur.Seconds(), the average rate of change per second
+// across the window. Caller multiplies for other units.
 func (w *WeftFuncs) Slope(watchName string, dur time.Duration) (float64, error) {
 	d, err := w.Delta(watchName, dur)
 	if err != nil {
@@ -320,10 +385,8 @@ func (w *WeftFuncs) Slope(watchName string, dur time.Duration) (float64, error) 
 	return d / dur.Seconds(), nil
 }
 
-// Rate returns Sum / dur.Seconds() — events-per-second when the
-// watch's stdout is a per-period count. Caller multiplies for
-// per-minute / per-hour. Cap is maxAggDuration since this is a true
-// aggregate over every result.
+// Rate returns Sum / dur.Seconds(): events per second when the cron's output
+// is a per-period count. Caller multiplies for per-minute / per-hour.
 func (w *WeftFuncs) Rate(watchName string, dur time.Duration) (float64, error) {
 	s, err := w.Sum(watchName, dur)
 	if err != nil {
@@ -334,14 +397,14 @@ func (w *WeftFuncs) Rate(watchName string, dur time.Duration) (float64, error) {
 
 // SeasonalStats returns avg/stddev/samples of the watch's history
 // restricted to "same time of period" — e.g. for period=1d and
-// window=4w it computes over the readings from this hour on each of
+// window=4d it computes over the readings from this hour on each of
 // the last four days. Used by the seasonal predicate and (future)
-// alert seasonal condition. Cap is maxEndpointDuration since the
-// window can legitimately span multiple weeks. The result type lives
+// alert seasonal condition. Cap is maxRawDuration since it needs
+// individual results. The result type lives
 // in warp's lua package to keep the WeftFuncs interface standalone.
 func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration) (SeasonalStatsResult, error) {
-	if window > maxEndpointDuration {
-		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window %s exceeds maximum of %s", window, maxEndpointDuration)
+	if window > maxRawDuration {
+		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window %s exceeds maximum of %s", window, maxRawDuration)
 	}
 	if window <= 0 || period <= 0 {
 		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window and period must be positive")
@@ -409,40 +472,12 @@ func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration
 	return SeasonalStatsResult{Avg: avg, Stddev: stddev, Samples: samples}, nil
 }
 
-// numericResults fetches results in a time range and parses numeric stdout values.
-func (w *WeftFuncs) numericResults(watchName string, dur time.Duration) ([]float64, error) {
-	return w.numericResultsCap(watchName, dur, maxAggDuration)
-}
-
-// numericResultsCap is numericResults with a caller-supplied cap, so
-// endpoint funcs can use a longer window than true aggregates.
-func (w *WeftFuncs) numericResultsCap(watchName string, dur time.Duration, maxDur time.Duration) ([]float64, error) {
-	if dur > maxDur {
-		return nil, fmt.Errorf("duration %s exceeds maximum of %s", dur, maxDur)
-	}
-	if dur <= 0 {
-		return nil, fmt.Errorf("duration must be positive")
-	}
-	since := time.Now().Add(-dur)
-	results, err := w.Store.QueryCronResults(w.OrgID, watchName, since)
-	if err != nil {
-		return nil, fmt.Errorf("cron %q: %w", watchName, err)
-	}
-	var vals []float64
-	for _, r := range results {
-		s := strings.TrimSpace(r.Stdout)
-		if v, err := strconv.ParseFloat(s, 64); err == nil {
-			vals = append(vals, v)
-		}
-	}
-	return vals, nil
-}
-
-// ParseAggDuration parses a duration string (30m, 1h, 6h, 24h, 1d) for aggregates.
+// ParseAggDuration parses a duration string (30m, 1h, 6h, 1d, 30d) for the
+// sum-based aggregates, allowing windows up to maxAggDuration.
 func ParseAggDuration(s string) (time.Duration, error) {
 	d, err := parseDuration(s)
 	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q (use e.g., 30m, 1h, 6h, 1d)", s)
+		return 0, fmt.Errorf("invalid duration %q (use e.g., 30m, 1h, 6h, 1d, 30d)", s)
 	}
 	if d > maxAggDuration {
 		return 0, fmt.Errorf("duration %s exceeds maximum of %s", d, maxAggDuration)
@@ -453,15 +488,16 @@ func ParseAggDuration(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// ParseEndpointDuration parses a duration string for endpoint funcs
-// (first, delta, slope), allowing windows up to maxEndpointDuration.
-func ParseEndpointDuration(s string) (time.Duration, error) {
+// ParseRawDuration parses a duration string for the funcs that need
+// individual results (percentile, first, delta, slope), allowing windows up
+// to maxRawDuration.
+func ParseRawDuration(s string) (time.Duration, error) {
 	d, err := parseDuration(s)
 	if err != nil {
-		return 0, fmt.Errorf("invalid duration %q (use e.g., 1h, 24h, 7d, 2w)", s)
+		return 0, fmt.Errorf("invalid duration %q (use e.g., 1h, 24h, 7d)", s)
 	}
-	if d > maxEndpointDuration {
-		return 0, fmt.Errorf("duration %s exceeds maximum of %s", d, maxEndpointDuration)
+	if d > maxRawDuration {
+		return 0, fmt.Errorf("duration %s exceeds maximum of %s", d, maxRawDuration)
 	}
 	if d <= 0 {
 		return 0, fmt.Errorf("duration must be positive")
@@ -475,6 +511,7 @@ func ParseEndpointDuration(s string) (time.Duration, error) {
 type weftQueryFuncs interface {
 	Latest(name string) (string, error)
 	Previous(name string) (string, error)
+	Describe(name string, n int) ([]RunRecord, error)
 	Avg(name string, dur time.Duration) (float64, error)
 	Max(name string, dur time.Duration) (float64, error)
 	Min(name string, dur time.Duration) (float64, error)
@@ -526,9 +563,9 @@ func buildWeftLuaExtension(w weftQueryFuncs) luapkg.Extension {
 			{"stddev", w.Stddev, maxAggDuration},
 			{"count", w.Count, maxAggDuration},
 			{"rate", w.Rate, maxAggDuration},
-			{"first", w.First, maxEndpointDuration},
-			{"delta", w.Delta, maxEndpointDuration},
-			{"slope", w.Slope, maxEndpointDuration},
+			{"first", w.First, maxRawDuration},
+			{"delta", w.Delta, maxRawDuration},
+			{"slope", w.Slope, maxRawDuration},
 		} {
 			fn := fn
 			mod.RawSetString(fn.name, L.NewFunction(func(L *lua.LState) int {
@@ -566,9 +603,9 @@ func buildWeftLuaExtension(w weftQueryFuncs) luapkg.Extension {
 				L.Push(lua.LString("invalid duration: " + durStr))
 				return 2
 			}
-			if dur > maxAggDuration || dur <= 0 {
+			if dur > maxRawDuration || dur <= 0 {
 				L.Push(lua.LNil)
-				L.Push(lua.LString(fmt.Sprintf("duration must be between 0 and %s", maxAggDuration)))
+				L.Push(lua.LString(fmt.Sprintf("duration must be between 0 and %s", maxRawDuration)))
 				return 2
 			}
 			val, err := w.Percentile(name, dur, p)
@@ -590,6 +627,33 @@ func buildWeftLuaExtension(w weftQueryFuncs) luapkg.Extension {
 				return 2
 			}
 			L.Push(lua.LString(val))
+			return 1
+		}))
+
+		mod.RawSetString("describe", L.NewFunction(func(L *lua.LState) int {
+			name := L.CheckString(1)
+			n := L.OptInt(2, defaultDescribeRuns)
+			runs, err := w.Describe(name, n)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			tbl := L.NewTable()
+			for _, r := range runs {
+				row := L.NewTable()
+				row.RawSetString("ran_at", lua.LString(r.RanAt.Format(time.RFC3339)))
+				row.RawSetString("exit_code", lua.LNumber(r.ExitCode))
+				row.RawSetString("duration_ms", lua.LNumber(r.DurationMs))
+				row.RawSetString("tag", lua.LString(r.Tag))
+				if r.Value != nil {
+					row.RawSetString("value", lua.LNumber(*r.Value))
+				}
+				row.RawSetString("stdout", lua.LString(r.Stdout))
+				row.RawSetString("stderr", lua.LString(r.Stderr))
+				tbl.Append(row)
+			}
+			L.Push(tbl)
 			return 1
 		}))
 
@@ -863,7 +927,7 @@ func optLuaDuration(L *lua.LState, idx int) (time.Duration, bool) {
 	if err != nil || d <= 0 {
 		return 0, false
 	}
-	if d > maxEndpointDuration {
+	if d > maxAggDuration {
 		return 0, false
 	}
 	return d, true

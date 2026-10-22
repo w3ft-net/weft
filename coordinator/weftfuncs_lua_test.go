@@ -17,6 +17,7 @@ type mockWeftFuncs struct {
 	prevVal   map[string]string
 	results   map[string][]float64
 	seasonal  map[string]SeasonalStatsResult
+	runs      map[string][]RunRecord
 }
 
 func (m *mockWeftFuncs) Latest(name string) (string, error) {
@@ -31,6 +32,7 @@ func (m *mockWeftFuncs) Previous(name string) (string, error) {
 	}
 	return "", nil
 }
+func (m *mockWeftFuncs) Describe(name string, _ int) ([]RunRecord, error) { return m.runs[name], nil }
 func (m *mockWeftFuncs) SeasonalStats(name string, _, _ time.Duration) (SeasonalStatsResult, error) {
 	if v, ok := m.seasonal[name]; ok {
 		return v, nil
@@ -329,7 +331,7 @@ if err then print("ERROR: " .. err) end
 
 func TestLuaWeftDurationTooLong(t *testing.T) {
 	script := `
-local val, err = weft.avg("cpu-check", "25h")
+local val, err = weft.avg("cpu-check", "401d")
 if err then print("ERROR: " .. err) end
 `
 	out, _, code := runLuaWithWeftMock(t, script, "", newMock())

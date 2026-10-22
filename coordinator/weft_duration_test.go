@@ -39,20 +39,21 @@ func TestParseDuration_DaysAndWeeks(t *testing.T) {
 	}
 }
 
-// The caps are unchanged: aggregates 24h, endpoint funcs 14d. Only the unit
-// spelling is wider, so "1d" is exactly the aggregate cap and "2d" is over it.
+// Sum-based aggregates reach as far back as the daily rollups (400d); funcs
+// that need individual results stop at the 7d of raw data. "1w" is exactly
+// the raw cap and "2w" is over it.
 func TestDurationCaps_WithDayAndWeekUnits(t *testing.T) {
-	if d, err := ParseAggDuration("1d"); err != nil || d != 24*time.Hour {
-		t.Errorf("ParseAggDuration(1d) = %v, %v", d, err)
+	if d, err := ParseAggDuration("400d"); err != nil || d != 400*24*time.Hour {
+		t.Errorf("ParseAggDuration(400d) = %v, %v", d, err)
 	}
-	if _, err := ParseAggDuration("2d"); err == nil || !strings.Contains(err.Error(), "exceeds maximum") {
-		t.Errorf("ParseAggDuration(2d) = %v, want the 24h cap error", err)
+	if _, err := ParseAggDuration("401d"); err == nil || !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Errorf("ParseAggDuration(401d) = %v, want the 400d cap error", err)
 	}
-	if d, err := ParseEndpointDuration("2w"); err != nil || d != 14*24*time.Hour {
-		t.Errorf("ParseEndpointDuration(2w) = %v, %v", d, err)
+	if d, err := ParseRawDuration("1w"); err != nil || d != 7*24*time.Hour {
+		t.Errorf("ParseRawDuration(1w) = %v, %v", d, err)
 	}
-	if _, err := ParseEndpointDuration("3w"); err == nil || !strings.Contains(err.Error(), "exceeds maximum") {
-		t.Errorf("ParseEndpointDuration(3w) = %v, want the 14d cap error", err)
+	if _, err := ParseRawDuration("2w"); err == nil || !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Errorf("ParseRawDuration(2w) = %v, want the 7d cap error", err)
 	}
 }
 

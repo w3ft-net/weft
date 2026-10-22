@@ -377,10 +377,12 @@ func TestParseAggDuration(t *testing.T) {
 		{"1h", time.Hour, false},
 		{"6h", 6 * time.Hour, false},
 		{"24h", 24 * time.Hour, false},
-		{"25h", 0, true}, // exceeds cap
-		{"-1h", 0, true}, // negative
-		{"abc", 0, true}, // invalid
-		{"0s", 0, true},  // zero
+		{"25h", 25 * time.Hour, false},
+		{"30d", 30 * 24 * time.Hour, false},
+		{"401d", 0, true}, // exceeds cap
+		{"-1h", 0, true},  // negative
+		{"abc", 0, true},  // invalid
+		{"0s", 0, true},   // zero
 	}
 	for _, tt := range tests {
 		d, err := ParseAggDuration(tt.input)
@@ -396,20 +398,13 @@ func TestParseAggDuration(t *testing.T) {
 	}
 }
 
-func TestParseEndpointDuration_AllowsLongerWindow(t *testing.T) {
-	// Endpoint funcs (first/delta/slope) should accept windows up to 14d
-	// where the agg cap rejects.
-	if _, err := ParseAggDuration("48h"); err == nil {
-		t.Fatal("precondition: ParseAggDuration should reject 48h")
+func TestParseRawDuration_CapsAtRawRetention(t *testing.T) {
+	if d, err := ParseRawDuration("48h"); err != nil || d != 48*time.Hour {
+		t.Errorf("ParseRawDuration(48h) = %v, %v", d, err)
 	}
-	if d, err := ParseEndpointDuration("48h"); err != nil {
-		t.Errorf("ParseEndpointDuration(48h): unexpected error: %v", err)
-	} else if d != 48*time.Hour {
-		t.Errorf("ParseEndpointDuration(48h): got %v, want 48h", d)
-	}
-	// 360h = 15d, just over the 14d cap — should reject.
-	if _, err := ParseEndpointDuration("360h"); err == nil {
-		t.Error("ParseEndpointDuration(360h=15d): expected reject, got nil")
+	// 192h = 8d, just over the 7d of raw results.
+	if _, err := ParseRawDuration("192h"); err == nil {
+		t.Error("ParseRawDuration(8d): expected reject, got nil")
 	}
 }
 
@@ -430,29 +425,30 @@ func TestWeftFuncs_First(t *testing.T) {
 }
 
 func TestWeftFuncs_First_AcceptsLongerWindow(t *testing.T) {
-	// First should accept a window > 24h (uses maxEndpointDuration cap).
+	// First should accept a window > 24h, up to the raw retention.
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "first-long", []string{"5"}, time.Minute)
 	wf := &WeftFuncs{Store: db, OrgID: custID}
 	if _, err := wf.First("first-long", 48*time.Hour); err != nil {
 		t.Errorf("First with 48h window: unexpected error: %v", err)
 	}
-	if _, err := wf.First("first-long", 15*24*time.Hour); err == nil {
-		t.Error("First with 15d window: expected cap error, got nil")
+	if _, err := wf.First("first-long", 8*24*time.Hour); err == nil {
+		t.Error("First with 8d window: expected cap error, got nil")
 	}
 }
 
 func TestWeftFuncs_Count(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	// Mix numeric and non-numeric — Count counts all, not just numeric.
+	// Mix numeric and non-numeric — Count counts numeric results only, since
+	// the rollups that serve long windows don't keep the others.
 	seedWatch(t, db, custID, "count-test", []string{"10", "ERROR", "30", "20"}, time.Minute)
 	wf := &WeftFuncs{Store: db, OrgID: custID}
 	got, err := wf.Count("count-test", 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != 4.0 {
-		t.Errorf("Count: expected 4, got %f", got)
+	if got != 3.0 {
+		t.Errorf("Count: expected 3, got %f", got)
 	}
 }
 

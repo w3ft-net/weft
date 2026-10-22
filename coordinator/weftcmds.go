@@ -8,7 +8,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/bash"
 )
 
-// RegisterWeftCommands registers weft::latest, weft::previous, weft::avg, weft::max,
+// RegisterWeftCommands registers weft::latest, weft::previous, weft::describe, weft::avg, weft::max,
 // weft::min, weft::sum, weft::stddev, weft::first, weft::count,
 // weft::percentile, weft::delta, weft::slope, weft::rate as bash
 // commands on the interpreter. Composite funcs (delta, slope, rate)
@@ -39,6 +39,38 @@ func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 			return 0
 		})
 	}
+
+	// describe prints how past runs went, one JSON object per line, newest
+	// first: the saved fields no other weft:: function exposes.
+	interp.RegisterCommandMeta("weft::describe", bash.ExternalCmd{
+		Strategy: bash.StageBarrier,
+		TypeDoc:  "weft::describe <name> [n]: the last n runs (default 10, max 50) as JSON lines: ran_at, exit_code, duration_ms, tag, value, stdout, stderr",
+		Run: func(args []string, _ io.Reader, stdout io.Writer, stderr io.Writer) int {
+			if len(args) < 1 || len(args) > 2 {
+				fmt.Fprintln(stderr, "usage: weft::describe <cron-name> [n]")
+				return 1
+			}
+			n := defaultDescribeRuns
+			if len(args) == 2 {
+				v, err := strconv.Atoi(args[1])
+				if err != nil {
+					fmt.Fprintf(stderr, "weft::describe: invalid n %q\n", args[1])
+					return 1
+				}
+				n = v
+			}
+			runs, err := wf.Describe(args[0], n)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			if err := writeRunsJSONL(stdout, runs); err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			return 0
+		},
+	})
 
 	register := func(name, typeDoc string, call func(name, dur string) (float64, error)) {
 		interp.RegisterCommandMeta(name, bash.ExternalCmd{
@@ -98,7 +130,7 @@ func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 	register("weft::first",
 		"weft::first <name> <dur>: oldest numeric stdout still in the window (anchor for delta/slope; cap 14d)",
 		func(name, dur string) (float64, error) {
-			d, err := ParseEndpointDuration(dur)
+			d, err := ParseRawDuration(dur)
 			if err != nil {
 				return 0, err
 			}
@@ -116,7 +148,7 @@ func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 	register("weft::delta",
 		"weft::delta is equivalent to:\n    $(weft::latest <name>) - $(weft::first <name> <dur>)",
 		func(name, dur string) (float64, error) {
-			d, err := ParseEndpointDuration(dur)
+			d, err := ParseRawDuration(dur)
 			if err != nil {
 				return 0, err
 			}
@@ -125,7 +157,7 @@ func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 	register("weft::slope",
 		"weft::slope is equivalent to:\n    $(weft::delta <name> <dur>) / <dur-in-seconds>",
 		func(name, dur string) (float64, error) {
-			d, err := ParseEndpointDuration(dur)
+			d, err := ParseRawDuration(dur)
 			if err != nil {
 				return 0, err
 			}
@@ -150,7 +182,7 @@ func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 				fmt.Fprintln(stderr, "usage: weft::percentile <cron-name> <duration> <p>")
 				return 1
 			}
-			d, err := ParseAggDuration(args[1])
+			d, err := ParseRawDuration(args[1])
 			if err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1

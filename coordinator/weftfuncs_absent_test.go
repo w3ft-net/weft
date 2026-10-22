@@ -69,8 +69,8 @@ func TestWeftFuncs_IsAbsent_OneRuleForEveryForm(t *testing.T) {
 
 	// The predicate doesn't fire on an over-cap window, and says why.
 	var stderr strings.Builder
-	if got := pred([]string{"fresh", "1w"}, nil, io.Discard, &stderr); got != 1 || !strings.Contains(stderr.String(), "exceeds maximum") {
-		t.Errorf("is_absent fresh 1w: exit %d, stderr %q; want exit 1 and the cap error", got, stderr.String())
+	if got := pred([]string{"fresh", "2w"}, nil, io.Discard, &stderr); got != 1 || !strings.Contains(stderr.String(), "exceeds maximum") {
+		t.Errorf("is_absent fresh 2w: exit %d, stderr %q; want exit 1 and the cap error", got, stderr.String())
 	}
 
 	// A window the history can't answer (over the cap) is "can't tell":

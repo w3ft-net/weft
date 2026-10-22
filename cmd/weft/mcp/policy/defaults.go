@@ -44,6 +44,7 @@ func DefaultReadPolicy() Policy {
 			// as one-shot reads via weft.run.
 			"weft::latest":     {},
 			"weft::previous":   {},
+			"weft::describe":   {},
 			"weft::avg":        {},
 			"weft::max":        {},
 			"weft::min":        {},

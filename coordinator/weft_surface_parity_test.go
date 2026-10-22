@@ -37,7 +37,7 @@ func TestWeftSurfaceParity_LuaAndBash(t *testing.T) {
 	for _, n := range lua {
 		inLua[n] = true
 	}
-	for _, name := range []string{"latest", "previous", "avg", "min", "max", "sum", "stddev", "count", "percentile", "first", "delta", "slope", "rate"} {
+	for _, name := range []string{"latest", "previous", "describe", "avg", "min", "max", "sum", "stddev", "count", "percentile", "first", "delta", "slope", "rate"} {
 		if !inLua[name] {
 			t.Errorf("weft::%s documented but weft.%s missing in Lua", name, name)
 		}
