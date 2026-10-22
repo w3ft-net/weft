@@ -185,7 +185,7 @@ func TestEtc_AmendVersionMessage(t *testing.T) {
 	if err := sfs.WriteFile("/etc/dashboards/prod.yaml", []byte(sampleDashboardYAML)); err != nil {
 		t.Fatal(err)
 	}
-	if err := sfs.WriteFile("/etc/notify.yaml", []byte("ops:\n  email:\n    - \"ops@loom.test\"\n")); err != nil {
+	if err := sfs.WriteFile("/etc/notify.yaml", []byte("system:\n  email:\n    - \"owner@loom.test\"\nops:\n  email:\n    - \"ops@loom.test\"\n")); err != nil {
 		t.Fatal(err)
 	}
 

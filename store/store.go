@@ -203,6 +203,11 @@ func Connect(dsn string) (*Store, error) {
 			weftsdk.Infof(context.Background(), "store: backfilled alert_condition/alert_threshold on %d cron_watches", backfilled)
 		}
 	}
+	// Orgs that predate the system alias get one, naming their owner.
+	// Idempotent: an org that has it is left alone.
+	if err := s.EnsureSystemAliases(); err != nil {
+		return nil, fmt.Errorf("ensure system aliases: %w", err)
+	}
 	return s, nil
 }
 

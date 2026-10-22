@@ -24,8 +24,8 @@ func (f *fixture) saveNotify(t *testing.T, body string) {
 	}
 }
 
-const notifyV1 = "ops:\n  email:\n    - \"ops@loom.test\"\n"
-const notifyV2 = "ops:\n  email:\n    - \"ops@loom.test\"\n    - \"kai@loom.test\"\n"
+const notifyV1 = "system:\n  email:\n    - \"owner@loom.test\"\nops:\n  email:\n    - \"ops@loom.test\"\n"
+const notifyV2 = "system:\n  email:\n    - \"owner@loom.test\"\nops:\n  email:\n    - \"ops@loom.test\"\n    - \"kai@loom.test\"\n"
 
 func logOldestFirst(t *testing.T, r *Repo, args ...string) []string {
 	t.Helper()

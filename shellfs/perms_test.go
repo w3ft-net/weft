@@ -100,7 +100,7 @@ func TestOrgPerms_EtcMount_WriteFile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := New(db, cust.ID, nil, WithTier("swatch"),
 				WithUser(fmt.Sprintf("u-%s", tc.name), tc.perms))
-			err := fs.WriteFile("/etc/notify.yaml", []byte(""))
+			err := fs.WriteFile("/etc/notify.yaml", []byte("system:\n  email:\n    - \"owner@perms.test\"\n"))
 			assertGate(t, err, tc.wantDeny)
 		})
 	}

@@ -834,7 +834,11 @@ sections:
 	}
 
 	// --- /etc/notify.yaml -------------------------------------------------
-	notifyYAML := `ops:
+	notifyYAML := `system:
+  email:
+    - "ops@loom.test"
+
+ops:
   webhook:
     - "https://hooks.loom.test/weft/ops"
   email:

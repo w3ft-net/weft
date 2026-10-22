@@ -1074,9 +1074,13 @@ func (s *Store) SaveSlackConfig(orgID OrgID, webhook, botToken, teamName string)
 	}).Error
 }
 
-// SaveNotifyAliases writes the raw /etc/notify.yaml YAML for a customer.
-// Callers must validate the YAML before invoking this.
+// SaveNotifyAliases writes the raw /etc/notify.yaml YAML for a customer. The
+// YAML must pass ValidateNotifyAliases, so it can never be saved without the
+// system alias.
 func (s *Store) SaveNotifyAliases(orgID OrgID, userID, aliasesYAML string) error {
+	if err := ValidateNotifyAliases(aliasesYAML); err != nil {
+		return err
+	}
 	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		// The history trigger records the acting user as the version's author.
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {

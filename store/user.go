@@ -433,8 +433,17 @@ func (s *Store) InviteTeamMember(orgID OrgID, email string, role orgs.Role, invi
 // The address is always passed: weft renders /etc/passwd from it and keys
 // adduser/deluser by it, so a membership without one would be invisible to
 // half the team surface.
+//
+// An org's owner is the address its system alias starts out pointing at, so
+// adding the owner also gives the org that alias.
 func (s *Store) AddTeamMemberWithEmail(orgID OrgID, userID string, email string, role orgs.Role) error {
-	return s.Orgs.AddMemberWithEmail(context.Background(), orgID.String(), userID, email, role)
+	if err := s.Orgs.AddMemberWithEmail(context.Background(), orgID.String(), userID, email, role); err != nil {
+		return err
+	}
+	if role == RoleOwner {
+		return s.ensureSystemAliases(&orgID)
+	}
+	return nil
 }
 
 // GetTeamMemberByEmail finds a non-removed member by email.

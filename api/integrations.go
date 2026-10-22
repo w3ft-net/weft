@@ -249,7 +249,7 @@ func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if _, err := store.ParseNotifyAliases(req.AliasesYAML); err != nil {
+	if err := store.ValidateNotifyAliases(req.AliasesYAML); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

@@ -8,11 +8,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SystemAlias is the reserved alias name a tenant defines in notify.yaml to
-// receive alerts the platform raises on their behalf, as opposed to alerts a
-// cron's own `alert` stage raises. It is an ordinary alias with ordinary
-// targets; a tenant that does not define it simply receives none. Today the
-// only such alert is a cron going overdue (coordinator/cron_overdue.go).
+// SystemAlias is the reserved alias name in notify.yaml that receives alerts
+// the platform raises on a tenant's behalf, as opposed to alerts a cron's own
+// `alert` stage raises. It is an ordinary alias with ordinary targets, except
+// that it always exists: it starts as the org owner's email
+// (ensureSystemAliases) and ValidateNotifyAliases refuses a save without it.
+// Today the only such alert is a cron going overdue
+// (coordinator/cron_overdue.go).
 const SystemAlias = "system"
 
 // AliasMap is the parsed form of /etc/notify.yaml. Keys are alias names
@@ -205,6 +207,21 @@ func ParseNotifyAliases(raw string) (AliasMap, error) {
 		}
 	}
 	return m, nil
+}
+
+// ValidateNotifyAliases is the check every write of notify.yaml goes through:
+// the document must parse, and it must keep a SystemAlias with at least one
+// target. The alias can be repointed freely but not removed, because it is the
+// one destination weft can count on for alerts it raises on the tenant's behalf.
+func ValidateNotifyAliases(raw string) error {
+	m, err := ParseNotifyAliases(raw)
+	if err != nil {
+		return err
+	}
+	if m[SystemAlias] == nil {
+		return fmt.Errorf("notify.yaml: the %q alias is required: it receives the alerts weft raises on your behalf. Change its targets, but don't remove it", SystemAlias)
+	}
+	return nil
 }
 
 // AliasNames returns the alias keys in sorted order (handy for UI display).

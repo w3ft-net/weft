@@ -7,7 +7,10 @@ import (
 	"testing"
 )
 
-const notifyYAMLWithSecret = `ops:
+const notifyYAMLWithSecret = `system:
+  email:
+    - "owner@redact.test"
+ops:
   slack:
     - "#ops"
   webhook:

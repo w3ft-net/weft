@@ -116,7 +116,7 @@ func TestCoordinatorQuery_LogQueryRedirectToTmp(t *testing.T) {
 func TestCoordinatorQuery_CatRedirectFromEtcToTmp(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	const conf = "weft-info:\n  slack:\n    - \"#weft-auto\"\n"
+	const conf = "system:\n  email:\n    - \"oncall@example.test\"\nweft-info:\n  slack:\n    - \"#weft-auto\"\n"
 	if err := db.SaveNotifyAliases(custID, "", conf); err != nil {
 		t.Fatalf("seed /etc/notify.yaml: %v", err)
 	}

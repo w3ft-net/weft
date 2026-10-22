@@ -152,7 +152,7 @@ func (m *EtcMount) WriteFile(rel string, data []byte) error {
 		if err != nil {
 			return fmt.Errorf("/etc/notify.yaml: %w", err)
 		}
-		if _, err := store.ParseNotifyAliases(content); err != nil {
+		if err := store.ValidateNotifyAliases(content); err != nil {
 			return fmt.Errorf("/etc/notify.yaml: %w", err)
 		}
 		return m.cfg.Store.SaveNotifyAliases(m.cfg.OrgID, m.cfg.UserID, content)

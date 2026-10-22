@@ -562,8 +562,9 @@ func TestNotifyConfig_PutAndGet(t *testing.T) {
 		AliasesYAML string `json:"aliases_yaml"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &got)
-	if got.AliasesYAML != "" {
-		t.Errorf("expected empty aliases_yaml, got %q", got.AliasesYAML)
+	// A new org's only alias is the system one, pointed at its owner.
+	if aliases, err := store.ParseNotifyAliases(got.AliasesYAML); err != nil || len(aliases) != 1 || aliases[store.SystemAlias] == nil {
+		t.Errorf("expected only the seeded system alias, got %q (%v)", got.AliasesYAML, err)
 	}
 
 	// PUT with missing targets → 400 (validation layer rejects).
@@ -577,7 +578,7 @@ func TestNotifyConfig_PutAndGet(t *testing.T) {
 	}
 
 	// PUT with a valid config succeeds, then GET returns exactly what we wrote.
-	valid := "ops:\n  slack:\n    - \"#ops\"\n"
+	valid := "system:\n  email:\n    - \"oncall@example.test\"\nops:\n  slack:\n    - \"#ops\"\n"
 	body, _ = json.Marshal(map[string]string{"aliases_yaml": valid})
 	req = httptest.NewRequest("PUT", "/api/notify", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+jwt)

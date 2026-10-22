@@ -71,12 +71,14 @@ func TestSaveSlackWebhook_LegacyPath(t *testing.T) {
 // TestDisconnectSlack clears webhook + team name while leaving the
 // row in place — `nc` is keyed (uniquely) by org_id and also
 // holds notify-aliases yaml, so we don't tear down the whole row.
+const aliasesKept = "system:\n  email:\n    - \"oncall@example.test\"\n"
+
 func TestDisconnectSlack(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateOrg("slack-disconnect-test")
 
 	db.SaveSlackConfig(cust.ID, "https://hooks.slack/X", "xoxb-x", "X Team")
-	db.SaveNotifyAliases(cust.ID, "", "page: oncall\n")
+	db.SaveNotifyAliases(cust.ID, "", aliasesKept)
 
 	if err := db.scoped(cust.ID).Model(&NotifyConfig{}).Updates(map[string]any{
 		"slack_webhook":   "",
@@ -88,7 +90,7 @@ func TestDisconnectSlack(t *testing.T) {
 	if nc.SlackWebhook != "" || nc.SlackTeamName != "" {
 		t.Errorf("slack fields not cleared: %+v", nc)
 	}
-	if nc.AliasesYAML != "page: oncall\n" {
+	if nc.AliasesYAML != aliasesKept {
 		t.Errorf("aliases should be preserved through DisconnectSlack: %q", nc.AliasesYAML)
 	}
 }
