@@ -10,18 +10,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/alert"
 	"github.com/graybeardcorp/weft/store"
-	"gorm.io/gorm"
 )
 
 // NotifyDispatcher is the subset of Notifier the alert stage calls.
 // Narrowed to an interface so tests can intercept Send without a live
 // HTTP endpoint. The concrete *Notifier satisfies it.
 type NotifyDispatcher interface {
-	Send(ctx context.Context, orgID store.OrgID, aliasName, watchName, body string) error
+	Send(ctx context.Context, orgID store.OrgID, aliasName, watchName, body string, delivered map[string]bool) (sent []string, err error)
 }
 
 // AlertContext provides the alert command with access to result history,
@@ -52,8 +50,6 @@ func AlertCommand(ctx context.Context, args []string, stdin io.Reader, stdout io
 		return 1
 	}
 
-	condStr := strings.Join(args, " ")
-
 	// --if-zero / --if-nonzero short-circuit the stdin path. The cron
 	// composed predicates with bash &&/|| and the resulting exit code
 	// arrived via `"$?"`. Treat that as the trigger signal directly.
@@ -66,7 +62,7 @@ func AlertCommand(ctx context.Context, args []string, stdin io.Reader, stdout io
 		case alert.IfNonzero:
 			fired = v != "0" && v != ""
 		}
-		return evaluateIfMode(ctx, fired, parsed, condStr, ac, stderr)
+		return evaluateIfMode(ctx, fired, parsed, ac, stderr)
 	}
 
 	rows := splitAlertRows(string(data), parsed)
@@ -87,7 +83,7 @@ func AlertCommand(ctx context.Context, args []string, stdin io.Reader, stdout io
 		if !parsed.Key.IsZero() && !parsed.Tag.IsZero() && r.tag == "" {
 			continue
 		}
-		rc := evaluateAlertRow(ctx, r, parsed, condStr, ac, stderr)
+		rc := evaluateAlertRow(ctx, r, parsed, ac, stderr)
 		if rc > exit {
 			exit = rc
 		}
@@ -140,7 +136,7 @@ func splitAlertRows(data string, parsed *alert.Args) []alertRow {
 // evaluateAlertRow runs condition evaluation + dedup + dispatch for one row.
 // Returns 1 on a hard parse/eval error that the caller should propagate as
 // the exit code.
-func evaluateAlertRow(ctx context.Context, r alertRow, parsed *alert.Args, condStr string, ac *AlertContext, stderr io.Writer) int {
+func evaluateAlertRow(ctx context.Context, r alertRow, parsed *alert.Args, ac *AlertContext, stderr io.Writer) int {
 	current, numErr := strconv.ParseFloat(r.value, 64)
 	isNumeric := numErr == nil
 
@@ -332,11 +328,7 @@ func evaluateAlertRow(ctx context.Context, r alertRow, parsed *alert.Args, condS
 	}
 
 	if !triggered {
-		// Still close any open incident for this (watch, condition, tag) —
-		// condition cleared.
-		if ac.Watch != nil && ac.Store != nil {
-			checkIncident(ctx, ac.Store, ac.Watch.ID, condStr, r.tag, false)
-		}
+		ac.closeIncident(ctx, r.tag)
 		return 0
 	}
 
@@ -352,27 +344,9 @@ func evaluateAlertRow(ctx context.Context, r alertRow, parsed *alert.Args, condS
 		msg = prefix + ": " + reason
 	}
 
-	shouldDispatch := true
-	if ac.Watch != nil && ac.Store != nil {
-		shouldDispatch = checkIncident(ctx, ac.Store, ac.Watch.ID, condStr, r.tag, true)
-	}
-
+	inc := ac.openIncident(ctx, r.tag)
 	fmt.Fprintln(stderr, msg)
-
-	if shouldDispatch && parsed.Notify != "" && ac.Notifier != nil {
-		// Dispatch the formatted alert message (what the shell prints to
-		// stderr), not the raw triggering row — Slack/PagerDuty users
-		// want "watchname[tag]: 5.12 > 5.00", not "5.12 disk" on its own.
-		body := truncateAlertBody(msg)
-		watchName, orgID := ac.dispatchIdentity(r.tag)
-		if err := ac.Notifier.Send(ctx, orgID, parsed.Notify, watchName, body); err != nil {
-			fmt.Fprintf(stderr, "alert: dispatch to %q failed: %v\n", parsed.Notify, err)
-			return 1
-		}
-	} else if parsed.Notify != "" && ac.Notifier == nil && ac.Interactive {
-		fmt.Fprintf(stderr, "alert: notifier unavailable — would dispatch to %q\n", parsed.Notify)
-	}
-	return 0
+	return ac.notify(ctx, inc, parsed.Notify, r.tag, msg, stderr)
 }
 
 // dispatchIdentity returns the (watchName, orgID) used by the Notifier
@@ -405,11 +379,9 @@ func truncateAlertBody(s string) string {
 // evaluateAlertRow so a composite predicate watch behaves identically
 // to a stdin-condition watch — alerts open when the predicate trips,
 // close when it stops tripping.
-func evaluateIfMode(ctx context.Context, triggered bool, parsed *alert.Args, condStr string, ac *AlertContext, stderr io.Writer) int {
+func evaluateIfMode(ctx context.Context, triggered bool, parsed *alert.Args, ac *AlertContext, stderr io.Writer) int {
 	if !triggered {
-		if ac.Watch != nil && ac.Store != nil {
-			checkIncident(ctx, ac.Store, ac.Watch.ID, condStr, "", false)
-		}
+		ac.closeIncident(ctx, "")
 		return 0
 	}
 
@@ -426,77 +398,73 @@ func evaluateIfMode(ctx context.Context, triggered bool, parsed *alert.Args, con
 		msg = prefix + ": predicate composite (" + mode + ") fired"
 	}
 
-	shouldDispatch := true
-	if ac.Watch != nil && ac.Store != nil {
-		shouldDispatch = checkIncident(ctx, ac.Store, ac.Watch.ID, condStr, "", true)
-	}
-
+	inc := ac.openIncident(ctx, "")
 	fmt.Fprintln(stderr, msg)
-
-	if shouldDispatch && parsed.Notify != "" && ac.Notifier != nil {
-		body := truncateAlertBody(msg)
-		watchName, orgID := ac.dispatchIdentity("")
-		if err := ac.Notifier.Send(ctx, orgID, parsed.Notify, watchName, body); err != nil {
-			fmt.Fprintf(stderr, "alert: dispatch to %q failed: %v\n", parsed.Notify, err)
-			return 1
-		}
-	} else if parsed.Notify != "" && ac.Notifier == nil && ac.Interactive {
-		fmt.Fprintf(stderr, "alert: notifier unavailable — would dispatch to %q\n", parsed.Notify)
-	}
-	return 0
+	return ac.notify(ctx, inc, parsed.Notify, "", msg, stderr)
 }
 
-// checkIncident manages per-tag incident dedup. Returns true if this is a
-// NEW incident and dispatch should fire; false if an incident is already
-// open (suppress) or the condition cleared (close).
-func checkIncident(ctx context.Context, s *store.Store, watchID uint, condition, tag string, triggered bool) bool {
-	existing, err := func() (*store.AlertIncident, error) {
-		var inc store.AlertIncident
-		err := s.DB().Where("cron_watch_id = ? AND condition = ? AND tag = ? AND closed_at IS NULL",
-			watchID, condition, tag).First(&inc).Error
-		if err == gorm.ErrRecordNotFound {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		return &inc, nil
-	}()
+// openIncident records that the alert holds on this tick and returns the
+// cron's open incident for tag, opening one if needed. It returns nil for
+// interactive runs, which have no cron and so no incidents.
+func (ac *AlertContext) openIncident(ctx context.Context, tag string) *store.AlertIncident {
+	if ac.Watch == nil || ac.Store == nil {
+		return nil
+	}
+	inc, err := ac.Store.OpenOrTouchIncident(ac.Watch.ID, tag)
 	if err != nil {
-		// A swallow here would silently double-fire on every tick;
-		// log loudly so we can spot DB-side regressions.
-		weftsdk.Infof(ctx, "alert: OpenIncident watch=%d condition=%q tag=%q: %v", watchID, condition, tag, err)
+		// Without the incident every tick would notify afresh; say so loudly
+		// rather than silently double-paging.
+		weftsdk.Infof(ctx, "alert: open incident watch=%d tag=%q: %v", ac.Watch.ID, tag, err)
+		return nil
 	}
-	if triggered {
-		if existing != nil {
-			now := time.Now()
-			s.DB().Model(&store.AlertIncident{}).Where("id = ?", existing.ID).Updates(map[string]any{
-				"last_seen_at": now,
-				"updated_at":   now,
-			})
-			return false
+	return inc
+}
+
+// closeIncident closes the cron's open incident for tag: the condition no
+// longer holds. Closing sends nothing.
+func (ac *AlertContext) closeIncident(ctx context.Context, tag string) {
+	if ac.Watch == nil || ac.Store == nil {
+		return
+	}
+	if err := ac.Store.CloseIncident(ac.Watch.ID, tag); err != nil {
+		weftsdk.Infof(ctx, "alert: close incident watch=%d tag=%q: %v", ac.Watch.ID, tag, err)
+	}
+}
+
+// notify sends msg to the alias named by --notify and returns the alert's
+// exit code. Within an incident, targets that already received it are
+// skipped, and any that missed it (a failed send on an earlier tick) are
+// tried again. Outside an incident (an interactive run) every send goes out.
+func (ac *AlertContext) notify(ctx context.Context, inc *store.AlertIncident, alias, tag, msg string, stderr io.Writer) int {
+	if alias == "" {
+		return 0
+	}
+	if ac.Notifier == nil {
+		if ac.Interactive {
+			fmt.Fprintf(stderr, "alert: notifier unavailable — would dispatch to %q\n", alias)
 		}
-		now := time.Now()
-		inc := store.AlertIncident{
-			ID:          uuid.New().String(),
-			CronWatchID: watchID,
-			Condition:   condition,
-			Tag:         tag,
-			OpenedAt:    now,
-			LastSeenAt:  now,
-			NotifiedAt:  &now,
-			CreatedAt:   now,
-			UpdatedAt:   now,
+		return 0
+	}
+	var delivered map[string]bool
+	if inc != nil {
+		var err error
+		if delivered, err = ac.Store.IncidentDeliveries(inc.ID); err != nil {
+			weftsdk.Infof(ctx, "alert: read deliveries incident=%s: %v", inc.ID, err)
 		}
-		s.DB().Create(&inc)
-		return true
 	}
-	if existing != nil {
-		now := time.Now()
-		s.DB().Model(&store.AlertIncident{}).Where("id = ?", existing.ID).Updates(map[string]any{
-			"closed_at":  &now,
-			"updated_at": now,
-		})
+	// Dispatch the formatted alert message (what the shell prints to
+	// stderr), not the raw triggering row — Slack/PagerDuty users
+	// want "watchname[tag]: 5.12 > 5.00", not "5.12 disk" on its own.
+	watchName, orgID := ac.dispatchIdentity(tag)
+	sent, err := ac.Notifier.Send(ctx, orgID, alias, watchName, truncateAlertBody(msg), delivered)
+	if inc != nil {
+		if rerr := ac.Store.RecordDeliveries(inc.ID, sent); rerr != nil {
+			weftsdk.Infof(ctx, "alert: record deliveries incident=%s: %v", inc.ID, rerr)
+		}
 	}
-	return false
+	if err != nil {
+		fmt.Fprintf(stderr, "alert: dispatch to %q failed: %v\n", alias, err)
+		return 1
+	}
+	return 0
 }

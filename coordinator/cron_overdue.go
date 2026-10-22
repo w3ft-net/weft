@@ -166,7 +166,10 @@ func (ce *CronExecutor) notifyOverdue(ctx context.Context, org store.OrgID, cron
 
 	send := ce.SendOverdue
 	if send == nil && ce.Notifier != nil {
-		send = ce.Notifier.Send
+		send = func(ctx context.Context, org store.OrgID, alias, watchName, body string) error {
+			_, err := ce.Notifier.Send(ctx, org, alias, watchName, body, nil)
+			return err
+		}
 	}
 	if send == nil {
 		return

@@ -22,14 +22,14 @@ type recordingNotifier struct {
 	}
 }
 
-func (r *recordingNotifier) Send(_ context.Context, orgID store.OrgID, alias, watch, body string) error {
+func (r *recordingNotifier) Send(_ context.Context, orgID store.OrgID, alias, watch, body string, _ map[string]bool) ([]string, error) {
 	r.sent = append(r.sent, struct {
 		orgID store.OrgID
 		alias string
 		watch string
 		body  string
 	}{orgID, alias, watch, body})
-	return nil
+	return nil, nil
 }
 
 // TestAlertDispatch_BodyIsFormattedMessageNotRawRow — regression guard.

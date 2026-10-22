@@ -3,6 +3,8 @@ package coordinator
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
@@ -41,59 +43,60 @@ func NewNotifier(s *store.Store, emailCfg *email.Config) *Notifier {
 // ad-hoc shell invocations should pass a fresh synthetic name (see
 // AlertContext.dispatchIdentity). body is the alert text; individual
 // channels may truncate further to satisfy per-service limits.
-func (n *Notifier) Send(ctx context.Context, orgID store.OrgID, aliasName, watchName, body string) error {
+//
+// Targets whose key is in delivered are skipped: they already heard about
+// this incident. Send returns the keys of the targets it reached, even when
+// it also returns an error for the ones it didn't, so the caller can record
+// the first without repeating it on the retry.
+func (n *Notifier) Send(ctx context.Context, orgID store.OrgID, aliasName, watchName, body string, delivered map[string]bool) ([]string, error) {
 	aliasName = strings.TrimSpace(aliasName)
 	if aliasName == "" {
-		return nil
+		return nil, nil
 	}
 
 	nc, err := n.Store.GetNotifyConfig(orgID)
 	if err != nil {
-		return fmt.Errorf("no notify.yaml configured")
+		return nil, fmt.Errorf("no notify.yaml configured")
 	}
 	aliases, err := store.ParseNotifyAliases(nc.AliasesYAML)
 	if err != nil {
-		return fmt.Errorf("parse notify.yaml: %w", err)
+		return nil, fmt.Errorf("parse notify.yaml: %w", err)
 	}
 	alias, ok := aliases[aliasName]
 	if !ok {
-		return fmt.Errorf("alias %q not defined in /etc/notify.yaml", aliasName)
+		return nil, fmt.Errorf("alias %q not defined in /etc/notify.yaml", aliasName)
 	}
 
+	var sent []string
 	var firstErr error
-	for _, t := range alias.Slack {
-		if err := n.sendSlack(ctx, nc, watchName, t, body); err != nil {
-			weftsdk.Infof(ctx, "notify[%s]: slack %s: %v", watchName, t.Channel, err)
+	try := func(key, kind, name string, send func() error) {
+		if delivered[key] {
+			return
+		}
+		if err := send(); err != nil {
+			weftsdk.Infof(ctx, "notify[%s]: %s %s: %v", watchName, kind, name, err)
 			if firstErr == nil {
 				firstErr = err
 			}
+			return
 		}
+		sent = append(sent, key)
+	}
+	for _, t := range alias.Slack {
+		try("slack:"+t.Channel, "slack", t.Channel, func() error { return n.sendSlack(ctx, nc, watchName, t, body) })
 	}
 	for _, t := range alias.PagerDuty {
-		if err := n.sendPagerDuty(ctx, orgID, watchName, t, body); err != nil {
-			weftsdk.Infof(ctx, "notify[%s]: pagerduty %s: %v", watchName, t.Name, err)
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
+		try("pagerduty:"+t.Name, "pagerduty", t.Name, func() error { return n.sendPagerDuty(ctx, orgID, watchName, t, body) })
 	}
 	for _, t := range alias.Webhook {
-		if err := n.sendWebhook(ctx, aliasName, watchName, t, body); err != nil {
-			weftsdk.Infof(ctx, "notify[%s]: webhook %s: %v", watchName, t.URL, err)
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
+		// The URL can carry a secret, so the stored key is a digest of it.
+		sum := sha256.Sum256([]byte(t.URL))
+		try("webhook:"+hex.EncodeToString(sum[:6]), "webhook", t.URL, func() error { return n.sendWebhook(ctx, aliasName, watchName, t, body) })
 	}
 	for _, t := range alias.Email {
-		if err := n.sendEmail(ctx, watchName, t, body); err != nil {
-			weftsdk.Infof(ctx, "notify[%s]: email %s: %v", watchName, t.Address, err)
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
+		try("email:"+t.Address, "email", t.Address, func() error { return n.sendEmail(ctx, watchName, t, body) })
 	}
-	return firstErr
+	return sent, firstErr
 }
 
 // ── Slack ─────────────────────────────────────────────
