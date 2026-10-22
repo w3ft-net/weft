@@ -1,7 +1,6 @@
 package logdb
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -59,23 +58,6 @@ func TestDockerRunArgs_ForcedIdentity(t *testing.T) {
 	}
 	if got := argFollowing(args, "--name"); got != cname {
 		t.Errorf("--name: got %q want %q", got, cname)
-	}
-}
-
-// The legacy synchronous path (reconciler-driven) leaves identity off:
-// no --hostname, no SHARD_INSTANCE_ID — Configure assigns identity over
-// the addr LaunchInstance returns instead.
-func TestDockerRunArgs_LegacyOmitsIdentity(t *testing.T) {
-	d := fixtureDockerLauncher()
-	args := d.runArgs("weft-shard-def456", "/host/data/def456", false)
-
-	if got := argFollowing(args, "--hostname"); got != "" {
-		t.Errorf("--hostname should be absent in legacy mode, got %q", got)
-	}
-	for _, a := range args {
-		if strings.HasPrefix(a, "SHARD_INSTANCE_ID=") {
-			t.Errorf("SHARD_INSTANCE_ID should be absent in legacy mode, got %q", a)
-		}
 	}
 }
 

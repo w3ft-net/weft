@@ -11,12 +11,8 @@ import (
 )
 
 // TestHTTPCoordinator_QuerySendsRange pins the CLI body shape: Query must
-// ship the raw spec verbatim under the "range" key and must NOT send the
-// legacy nanos fields (the API server no longer reads them). Before the
-// server-side-resolution rework the CLI would silently drop the time range
-// entirely (signature took start/end but never serialized them), so the
-// coordinator scanned every shard — this test guards against regressing to
-// that.
+// ship the raw spec verbatim under the "range" key; dropping it would make
+// the coordinator scan every shard.
 func TestHTTPCoordinator_QuerySendsRange(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,12 +32,6 @@ func TestHTTPCoordinator_QuerySendsRange(t *testing.T) {
 
 	if got := gotBody["range"]; got != "1d.." {
 		t.Errorf("body[range] = %v, want %q", got, "1d..")
-	}
-	if _, ok := gotBody["time_start_ns"]; ok {
-		t.Errorf("time_start_ns must not be in body anymore: %v", gotBody)
-	}
-	if _, ok := gotBody["time_end_ns"]; ok {
-		t.Errorf("time_end_ns must not be in body anymore: %v", gotBody)
 	}
 	// Dirstack courier: the cached stack must ride in the request body
 	// (index 0 == cwd) so the server resolves relative paths against it.

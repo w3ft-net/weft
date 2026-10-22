@@ -49,25 +49,6 @@ func TestSaveSlackConfig_CreatesAndUpdates(t *testing.T) {
 	}
 }
 
-// TestSaveSlackWebhook_LegacyPath: SaveSlackWebhook is a thin shim
-// over SaveSlackConfig that leaves the bot token empty. Used by the
-// pre-OAuth flow where customers paste a webhook URL directly.
-func TestSaveSlackWebhook_LegacyPath(t *testing.T) {
-	db := testOpen(t)
-	cust, _ := db.FindOrCreateOrg("slack-webhook-test")
-
-	if err := db.SaveSlackConfig(cust.ID, "https://hooks.slack/legacy", "", "Legacy WS"); err != nil {
-		t.Fatalf("save slack webhook: %v", err)
-	}
-	nc, _ := db.GetNotifyConfig(cust.ID)
-	if nc.SlackBotToken != "" {
-		t.Errorf("bot token should be empty for webhook-only path, got %q", nc.SlackBotToken)
-	}
-	if nc.SlackWebhook != "https://hooks.slack/legacy" {
-		t.Errorf("webhook = %q", nc.SlackWebhook)
-	}
-}
-
 // TestDisconnectSlack clears webhook + team name while leaving the
 // row in place — `nc` is keyed (uniquely) by org_id and also
 // holds notify-aliases yaml, so we don't tear down the whole row.

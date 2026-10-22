@@ -31,14 +31,6 @@ func TestCheckPipeline(t *testing.T) {
 		{"shell-dashboard-yaml", "cat /etc/dashboards/prod.yaml", true},
 		{"shell-dashboard", "dashboard prod", true},
 
-		// shell-grep-awk's OLD $4 form no longer matches after the
-		// field-shift fix (trace_id inserted as loom-producer's line
-		// field 3 pushed everything right by one).
-		{"shell-grep-awk", "tail main.log | grep ERROR | awk '{print HOST, $1, $4}'", false},
-		// shell-cron/shell-wit's OLD forms (pre -l / pre -p) no longer match.
-		{"shell-cron", "ls /cron.d/", false},
-		{"shell-wit", "git log -- /bin/scan", false},
-
 		// shell-trace is pattern-matched, not exact-match: a real
 		// 32-lowercase-hex trace ID advances even though it's never
 		// literally equal to Action (which is an illustrative

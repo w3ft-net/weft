@@ -161,8 +161,3 @@ func TestRegistry_IngestingShard(t *testing.T) {
 		t.Fatal("expected nil for unknown app")
 	}
 }
-
-// TestRegistry_ExpiringShardExcluded was removed alongside
-// StateExpiring itself — the state was declared but never written
-// under the prior model and is gone in the FSM rewrite. See
-// docs/plans/asg-as-api-stateless.md.

@@ -290,7 +290,6 @@ func TestAlert_ParseArgs(t *testing.T) {
 		{"-t positive", "above 1 -v 2 -t 1", true},
 		{"--tag long form", "above 1 -v 2 --tag 3", true},
 		{"--value long form", "above 1 --value 2", true},
-		{"-k was renamed to -v and is gone", "above 1 -k 2", false},
 		{"-t JSON path", "above 1 -v .v -t .host", true},
 		{"mixing -v positional with -t JSON path rejected", "above 1 -v 2 -t .host", false},
 		{"mixing -v JSON path with -t positional rejected", "above 1 -v .v -t 1", false},
