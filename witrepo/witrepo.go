@@ -15,6 +15,7 @@ package witrepo
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -394,8 +395,10 @@ func (r *Repo) WriteFile(p, content, message string) (gitcore.ObjectID, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := r.mountFS().WriteFile("/"+p, []byte(content)); err != nil {
-		return "", err
+	// A save can come back with non-blocking warnings (the save-time lints);
+	// the version was written, so only a rejection fails the write.
+	if blocking, _ := store.Split(r.mountFS().WriteFile("/"+p, []byte(content))); len(blocking) > 0 {
+		return "", errors.Join(blocking...)
 	}
 	id, err := r.latestFor(p, false)
 	if err != nil {

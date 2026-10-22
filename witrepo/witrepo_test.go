@@ -2,6 +2,7 @@ package witrepo
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -335,22 +336,27 @@ func TestEmptyOrg(t *testing.T) {
 	}
 }
 
+// writeCron saves a cron through the mounts. The save may come back with
+// non-blocking warnings (the save-time lints); only a rejection fails the test.
+func writeCron(t *testing.T, r *Repo, name, content string) {
+	t.Helper()
+	if blocking, _ := store.Split(r.mountFS().WriteFile("/cron.d/"+name, []byte(content))); len(blocking) > 0 {
+		t.Fatal(errors.Join(blocking...))
+	}
+}
+
 // A restored cron must be re-lowered like any other save: the stored plan
 // has to describe the restored pipeline, not the one it replaced.
 func TestWrites_RestoredCronIsRelowered(t *testing.T) {
 	f := newFixture(t)
 	r := f.repo(f.alice, "/cron.d")
 	// Seed through the mounts so the first version carries a lowered plan.
-	if err := r.mountFS().WriteFile("/cron.d/errs", []byte("# schedule: */10 * * * *\ntail /log/app/web/app.log | grep ERROR\n")); err != nil {
-		t.Fatal(err)
-	}
+	writeCron(t, r, "errs", "# schedule: */10 * * * *\ntail /log/app/web/app.log | grep ERROR\n")
 	first := lowered(t, f, "errs")
 	if first == "" {
 		t.Skip("pipeline did not lower; pick a lowerable shape")
 	}
-	if err := r.mountFS().WriteFile("/cron.d/errs", []byte("# schedule: */10 * * * *\ntail /log/app/web/app.log | grep WARN\n")); err != nil {
-		t.Fatal(err)
-	}
+	writeCron(t, r, "errs", "# schedule: */10 * * * *\ntail /log/app/web/app.log | grep WARN\n")
 	if lowered(t, f, "errs") == first {
 		t.Fatal("edit did not change the lowered plan")
 	}
