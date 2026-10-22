@@ -62,7 +62,7 @@ func RenderOneShot(wr WatchResultsProvider, name, kind string, limit, w, h int) 
 // watchResultsToPoints maps a slice of WatchResultValue into
 // chart.Point data. The numeric value is the *last
 // whitespace-separated field* of the trimmed stdout — that matches
-// the multi-row alert convention (`-k N` where field N is the
+// the multi-row alert convention (`-v N` where field N is the
 // value) for the common case where N is the last column. Single
 // scalar values are unaffected. The X coordinate is the RanAt
 // timestamp parsed as RFC3339; rows that fail to parse are

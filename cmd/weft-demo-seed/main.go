@@ -783,7 +783,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 		hostLog)
 	memPressureV2 := fmt.Sprintf(
 		"tail -n 12 %s | jq -c '{host: $host, pct: .memory.pct}' "+
-			"| alert above 70 -k .pct -t .host",
+			"| alert above 70 -v .pct -t .host",
 		hostLog)
 	if existing, _ := s.GetCronWatch(custID, "mem-pressure"); existing == nil || existing.Pipeline != memPressureV2 {
 		versions := []struct {

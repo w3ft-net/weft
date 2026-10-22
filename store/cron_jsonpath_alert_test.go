@@ -4,7 +4,7 @@ import "testing"
 
 // Regression: `cat /cron.d/<name>` and `ls /cron.d` were returning
 // nothing for watches whose `alert` stage uses .json.path selectors
-// (-k .pct -t .host), while watches without selectors (or with
+// (-v .pct -t .host), while watches without selectors (or with
 // positional ones) round-trip fine. Both Get and List failed in the
 // running coordinator after the multi-customer demo seed; only the
 // alert-selector shape distinguishes the two seeded watches.
@@ -15,7 +15,7 @@ func TestGetCronWatch_JSONPathAlertSelectors(t *testing.T) {
 	cust, _ := db.FindOrCreateOrg("cron-jsonpath")
 	user, _ := db.CreateUser("alice-jp@example.test")
 
-	pipeline := `tail -n 12 /log/x/y_metrics.log | jq 'select(.type == "memory")' | alert above 70 -k .pct -t .host`
+	pipeline := `tail -n 12 /log/x/y_metrics.log | jq 'select(.type == "memory")' | alert above 70 -v .pct -t .host`
 	if err := db.SaveCronWatch(cust.ID, user.ID, "mem-pressure", "*/1 * * * *", pipeline, nil); err != nil {
 		t.Fatalf("SaveCronWatch: %v", err)
 	}

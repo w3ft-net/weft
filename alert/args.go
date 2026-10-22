@@ -71,7 +71,7 @@ type Args struct {
 	Average   bool                // --average flag (above/below with duration)
 	Msg       string              // --msg override
 	Notify    string              // --notify=<alias> → notify.yaml lookup
-	Key       shellcore.FieldSpec // -k: 1-indexed column or .json.path; zero = "whole line"
+	Key       shellcore.FieldSpec // -v: 1-indexed column or .json.path; zero = "whole line"
 	Tag       shellcore.FieldSpec // -t/--tag: same shape; zero = no tag
 	// IfMode/IfValue support `alert --if-zero "$?"` and
 	// `alert --if-nonzero "$?"` — a cron composes predicates with
@@ -238,17 +238,17 @@ func ParseArgs(args []string) (*Args, error) {
 				return nil, fmt.Errorf("--notify requires a value")
 			}
 			parsed.Notify = args[i]
-		case "-k":
+		case "-v", "--value":
 			i++
 			if i >= len(args) {
-				return nil, fmt.Errorf("-k requires a field number or .json.path")
+				return nil, fmt.Errorf("%s requires a field number or .json.path", a)
 			}
 			spec, err := shellcore.ParseFieldSpec(args[i])
 			if err != nil {
-				return nil, fmt.Errorf("-k: %w", err)
+				return nil, fmt.Errorf("%s: %w", a, err)
 			}
 			if spec.IsZero() {
-				return nil, fmt.Errorf("-k requires a field number or .json.path, got empty value")
+				return nil, fmt.Errorf("%s requires a field number or .json.path, got empty value", a)
 			}
 			parsed.Key = spec
 		case "-t", "--tag":
@@ -290,11 +290,11 @@ func ParseArgs(args []string) (*Args, error) {
 		return nil, fmt.Errorf("--if-zero/--if-nonzero is exclusive with condition keywords")
 	}
 
-	// -k and -t must agree on positional vs JSON-path. Mixing them
+	// -v and -t must agree on positional vs JSON-path. Mixing them
 	// on the same line is incoherent — one parser sees whitespace
 	// columns, the other parses the line as JSON.
 	if !parsed.Key.IsZero() && !parsed.Tag.IsZero() && parsed.Key.IsJSON() != parsed.Tag.IsJSON() {
-		return nil, fmt.Errorf("-k and -t must both be positional or both .json.path")
+		return nil, fmt.Errorf("-v and -t must both be positional or both .json.path")
 	}
 
 	return parsed, nil

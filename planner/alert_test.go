@@ -34,9 +34,9 @@ func TestSplitAlertStage(t *testing.T) {
 		},
 		{
 			name:     "alert with multi-row flags",
-			pipeline: `cat foo.log | jq -r '"\(.host) \(.pct)"' | alert above 80 -k 2 -t 1 --notify=ops`,
+			pipeline: `cat foo.log | jq -r '"\(.host) \(.pct)"' | alert above 80 -v 2 -t 1 --notify=ops`,
 			wantQP:   `cat foo.log | jq -r '"\(.host) \(.pct)"'`,
-			wantArgs: []string{"above", "80", "-k", "2", "-t", "1", "--notify=ops"},
+			wantArgs: []string{"above", "80", "-v", "2", "-t", "1", "--notify=ops"},
 		},
 		{
 			name:     "alert only (no query)",

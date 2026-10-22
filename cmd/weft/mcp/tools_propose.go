@@ -122,7 +122,7 @@ func cronProposeHandler(cfg Config, a CronProposeArgs) *mcp.CallToolResult {
 	// Two complementary validators. DefaultCronPolicy enforces the
 	// allowlist + path scoping (so `rm /log/x | alert above 1`
 	// can't slip through); CompileWatchPipeline enforces alert
-	// shape (at most one alert; valid -k / -t args). Both run so
+	// shape (at most one alert; valid -v / -t args). Both run so
 	// the model sees every off-policy fact at once.
 	//
 	// User-defined bin/ scripts are looked up fresh per-call: a

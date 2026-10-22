@@ -509,7 +509,7 @@ func (s *Store) DeleteShellFunction(orgID OrgID, name string) error {
 // --- Cron Watches (/cron.d/) ---
 
 // CronWatch is a scheduled pipeline run. AlertKey and AlertTag are the
-// pre-parsed -k and -t selectors from the pipeline's `| alert` stage;
+// pre-parsed -v and -t selectors from the pipeline's `| alert` stage;
 // nil means single-row mode (no extraction). They're populated by
 // SaveCronWatch so the executor doesn't reparse the pipeline every tick.
 // Stored as text — either a 1-indexed column number ("3") or a

@@ -203,7 +203,7 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 	// Persist result(s). Single-row mode: one cron_results row with
 	// tag='' and value auto-parsed from stdout. Multi-row mode (watch has
 	// alert_key set): split stdout into lines, extract value from field
-	// alert_key and tag from alert_tag, one row per line. Lines whose -k
+	// alert_key and tag from alert_tag, one row per line. Lines whose -v
 	// field isn't numeric are persisted with Value=NULL so the debugging
 	// trail stays intact; aggregates ignore NULLs.
 	if saveErr := ce.persistResults(watch, start, stdout, stderr, exitCode, duration); saveErr != nil {

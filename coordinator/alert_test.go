@@ -47,12 +47,12 @@ func TestAlert_AnyEmpty(t *testing.T) {
 }
 
 func TestAlert_MultiRow_JSONPath_FiresPerRow(t *testing.T) {
-	// JSONL stdin (e.g. produced by jq); -k and -t are JSON paths.
+	// JSONL stdin (e.g. produced by jq); -v and -t are JSON paths.
 	stdin := `{"host":"shard-a","disk":85}
 {"host":"shard-b","disk":90}
 {"host":"shard-c","disk":50}
 `
-	_, stderr, code := runAlert("above 80 -k .disk -t .host", stdin)
+	_, stderr, code := runAlert("above 80 -v .disk -t .host", stdin)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 	}
@@ -71,7 +71,7 @@ func TestAlert_MultiRow_FiresPerRow(t *testing.T) {
 	// Three hosts; only the first two are above 80. Both should fire, each
 	// with its own tag prefix in the stderr line.
 	stdin := "shard-a 85\nshard-b 90\nshard-c 50\n"
-	_, stderr, code := runAlert("above 80 -k 2 -t 1", stdin)
+	_, stderr, code := runAlert("above 80 -v 2 -t 1", stdin)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
 	}
@@ -88,7 +88,7 @@ func TestAlert_MultiRow_FiresPerRow(t *testing.T) {
 
 func TestAlert_MultiRow_BelowThresholdSilent(t *testing.T) {
 	stdin := "shard-a 50\nshard-b 30\n"
-	_, stderr, code := runAlert("above 80 -k 2 -t 1", stdin)
+	_, stderr, code := runAlert("above 80 -v 2 -t 1", stdin)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
@@ -99,7 +99,7 @@ func TestAlert_MultiRow_BelowThresholdSilent(t *testing.T) {
 
 func TestAlert_MultiRow_SkipsBlankLines(t *testing.T) {
 	stdin := "\nshard-a 85\n\nshard-b 60\n\n"
-	_, stderr, _ := runAlert("above 80 -k 2 -t 1", stdin)
+	_, stderr, _ := runAlert("above 80 -v 2 -t 1", stdin)
 	// Only shard-a should fire.
 	if !strings.Contains(stderr, "shard-a") {
 		t.Errorf("expected shard-a alert, got %q", stderr)
@@ -113,7 +113,7 @@ func TestAlert_MultiRow_NonNumericFieldSkipped(t *testing.T) {
 	// Row 2 has a non-numeric "oops" in the value field. We still process
 	// the other rows; the bad one produces a stderr line and exit 1.
 	stdin := "shard-a 85\nshard-b oops\nshard-c 92\n"
-	_, stderr, code := runAlert("above 80 -k 2 -t 1", stdin)
+	_, stderr, code := runAlert("above 80 -v 2 -t 1", stdin)
 	if code != 1 {
 		t.Errorf("expected exit 1 from non-numeric row, got %d", code)
 	}
@@ -281,17 +281,19 @@ func TestAlert_ParseArgs(t *testing.T) {
 		{"unknown", "bogus 50", false},
 		{"above missing threshold", "above", false},
 		{"rising missing pct", "rising", false},
-		{"-k positive", "above 1 -k 2", true},
-		{"-k non-numeric", "above 1 -k abc", false},
-		{"-k zero rejected", "above 1 -k 0", false},
-		{"-k JSON path", "above 1 -k .latency_ms", true},
-		{"-k nested JSON path", "above 1 -k .req.latency_ms", true},
-		{"-k bare dot rejected", "above 1 -k .", false},
-		{"-t positive", "above 1 -k 2 -t 1", true},
-		{"--tag long form", "above 1 -k 2 --tag 3", true},
-		{"-t JSON path", "above 1 -k .v -t .host", true},
-		{"mixing -k positional with -t JSON path rejected", "above 1 -k 2 -t .host", false},
-		{"mixing -k JSON path with -t positional rejected", "above 1 -k .v -t 1", false},
+		{"-v positive", "above 1 -v 2", true},
+		{"-v non-numeric", "above 1 -v abc", false},
+		{"-v zero rejected", "above 1 -v 0", false},
+		{"-v JSON path", "above 1 -v .latency_ms", true},
+		{"-v nested JSON path", "above 1 -v .req.latency_ms", true},
+		{"-v bare dot rejected", "above 1 -v .", false},
+		{"-t positive", "above 1 -v 2 -t 1", true},
+		{"--tag long form", "above 1 -v 2 --tag 3", true},
+		{"--value long form", "above 1 --value 2", true},
+		{"-k was renamed to -v and is gone", "above 1 -k 2", false},
+		{"-t JSON path", "above 1 -v .v -t .host", true},
+		{"mixing -v positional with -t JSON path rejected", "above 1 -v 2 -t .host", false},
+		{"mixing -v JSON path with -t positional rejected", "above 1 -v .v -t 1", false},
 	}
 
 	for _, tt := range tests {
@@ -325,7 +327,7 @@ func TestRunAlertStage(t *testing.T) {
 
 	t.Run("rows multi-row tagged", func(t *testing.T) {
 		result := &QueryResult{Text: "shard-a 85\nshard-b 50\n"}
-		runAlertStage(context.Background(), result, []string{"above", "80", "-k", "2", "-t", "1"},
+		runAlertStage(context.Background(), result, []string{"above", "80", "-v", "2", "-t", "1"},
 			&AlertContext{Interactive: true})
 		if !strings.Contains(result.Stderr, "shard-a") {
 			t.Errorf("shard-a (85) should fire; stderr=%q", result.Stderr)

@@ -78,7 +78,7 @@ func TestAlertDispatch_BodyIncludesTagInMultiRowMode(t *testing.T) {
 
 	// stdin: two rows, value in field 1, tag in field 2. Alert above 5.
 	input := "7 disk\n3 cpu\n"
-	args := []string{"above", "5", "-k", "1", "-t", "2", "--notify=foo"}
+	args := []string{"above", "5", "-v", "1", "-t", "2", "--notify=foo"}
 
 	var stdout, stderr strings.Builder
 	code := AlertCommand(context.Background(), args, strings.NewReader(input), &stdout, &stderr, ctx)

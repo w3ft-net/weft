@@ -38,8 +38,8 @@ type AlertContext struct {
 
 // AlertCommand is the entry point for the `alert` pipeline command. It reads
 // stdin, writes it to stdout unchanged (tee), and evaluates the alert
-// condition. In single-row mode (no -k), stdin is one scalar per tick. In
-// multi-row mode (-k set), each non-blank line of stdin is evaluated
+// condition. In single-row mode (no -v), stdin is one scalar per tick. In
+// multi-row mode (-v set), each non-blank line of stdin is evaluated
 // independently, with the tag (if -t set) naming the row for per-tag
 // incident dedup.
 func AlertCommand(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, ac *AlertContext) int {
@@ -107,7 +107,7 @@ type alertRow struct {
 
 // splitAlertRows turns stdin into rows per the parser's extractors. Blank
 // lines are skipped; lines that fail field extraction produce a row with
-// an empty value/tag (evaluated as non-numeric downstream). When -k uses
+// an empty value/tag (evaluated as non-numeric downstream). When -v uses
 // a JSON-path spec each line is parsed as JSON; for positional specs
 // each line is split on whitespace.
 func splitAlertRows(data string, parsed *alert.Args) []alertRow {

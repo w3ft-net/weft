@@ -25,8 +25,8 @@ func TestValidateWatchPipeline(t *testing.T) {
 		// the desired behaviour — a typo in a saved watch should be
 		// caught at save time, not at run time.
 		{"malformed pipeline is rejected", `<<< broken syntax >>>`, true},
-		{"bad -k value", `foo | alert above 1 -k abc`, true},
-		{"bad -t value", `foo | alert above 1 -k 2 -t 0`, true},
+		{"bad -v value", `foo | alert above 1 -v abc`, true},
+		{"bad -t value", `foo | alert above 1 -v 2 -t 0`, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -49,12 +49,12 @@ func TestCompileWatchPipeline(t *testing.T) {
 		wantTag  *string
 	}{
 		{"no alert", `cat /log/app.log`, nil, nil},
-		{"alert without -k/-t", `foo | alert above 1`, nil, nil},
-		{"alert with -k only", `foo | alert above 1 -k 2`, strPtr("2"), nil},
-		{"alert with -k and -t", `foo | alert above 1 -k 2 -t 1`, strPtr("2"), strPtr("1")},
-		{"alert with --tag long form", `foo | alert above 1 -k 3 --tag 2`, strPtr("3"), strPtr("2")},
-		{"alert with JSON-path -k", `foo | alert above 1 -k .latency_ms`, strPtr(".latency_ms"), nil},
-		{"alert with JSON-path -k and -t", `foo | alert above 1 -k .v -t .host`, strPtr(".v"), strPtr(".host")},
+		{"alert without -v/-t", `foo | alert above 1`, nil, nil},
+		{"alert with -v only", `foo | alert above 1 -v 2`, strPtr("2"), nil},
+		{"alert with -v and -t", `foo | alert above 1 -v 2 -t 1`, strPtr("2"), strPtr("1")},
+		{"alert with --tag long form", `foo | alert above 1 -v 3 --tag 2`, strPtr("3"), strPtr("2")},
+		{"alert with JSON-path -v", `foo | alert above 1 -v .latency_ms`, strPtr(".latency_ms"), nil},
+		{"alert with JSON-path -v and -t", `foo | alert above 1 -v .v -t .host`, strPtr(".v"), strPtr(".host")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
