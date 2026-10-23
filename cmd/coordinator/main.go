@@ -449,6 +449,8 @@ func main() {
 	telemetryFields := map[string]any{"coordinator_id": holder}
 	go wc.HeartbeatWithFields(cfgCtx, "coordinator", weftsdk.DefaultHeartbeatInterval, telemetryFields)
 	go wc.RuntimeStatsWithFields(cfgCtx, "coordinator", weftsdk.DefaultRuntimeStatsInterval, telemetryFields)
+	// Every minute, so a cron on any schedule sees who holds each lease.
+	go db.LogLeaseStates(cfgCtx, holder, time.Minute)
 
 	// Signal handling. Needed so `go build -cover` binaries flush
 	// coverage counters on `docker compose down` — SIGKILL skips the

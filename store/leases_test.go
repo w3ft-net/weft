@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/internal/logtest"
 )
 
 // resetLease clears any row left behind for name by an earlier test.
@@ -161,5 +164,37 @@ func TestAcquireAndHold_FailsWhenAlreadyHeld(t *testing.T) {
 	}
 	if leaseCtx != nil {
 		t.Fatal("AcquireAndHold should return a nil context on failure")
+	}
+}
+
+// TestLogHeldLeases logs one lease_state line per lease the holder holds now,
+// skipping leases it let expire and leases someone else holds, so a cron can
+// read who holds what without a lease having changed hands in its window.
+func TestLogHeldLeases(t *testing.T) {
+	db := testOpen(t)
+	for _, n := range []string{"state-held", "state-expired", "state-other"} {
+		resetLease(t, db, n)
+	}
+	for _, l := range []struct {
+		name, holder string
+		ttl          time.Duration
+	}{
+		{"state-held", "coord-a", time.Minute},
+		{"state-expired", "coord-a", -time.Minute},
+		{"state-other", "coord-b", time.Minute},
+	} {
+		if _, err := db.AcquireLease(l.name, l.holder, l.ttl); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out := logtest.Capture(func() { db.logHeldLeases(context.Background(), "coord-a") })
+	if !strings.Contains(out, "lease_state lease=state-held holder=coord-a") {
+		t.Errorf("log = %q, want a lease_state line for state-held", out)
+	}
+	for _, n := range []string{"state-expired", "state-other"} {
+		if strings.Contains(out, "lease="+n) {
+			t.Errorf("log = %q, want no line for %s", out, n)
+		}
 	}
 }

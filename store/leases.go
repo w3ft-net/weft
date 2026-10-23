@@ -66,6 +66,37 @@ func LogLeaseEvent(name, holder, event string) {
 	weftsdk.Infof(context.Background(), "lease_event lease=%s holder=%s event=%s", name, holder, event)
 }
 
+// LogLeaseStates logs a lease_state line for each lease holder holds, every
+// interval until ctx ends. lease_event lines record only transitions, so a
+// cron whose window saw none can't tell from them who holds what; these
+// state lines can.
+func (s *Store) LogLeaseStates(ctx context.Context, holder string, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		s.logHeldLeases(ctx, holder)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// logHeldLeases logs one lease_state line per unexpired lease holder holds.
+func (s *Store) logHeldLeases(ctx context.Context, holder string) {
+	var names []string
+	if err := s.db.WithContext(ctx).Raw(
+		`SELECT name FROM leases WHERE holder = ? AND expires_at > ? ORDER BY name`,
+		holder, time.Now().UTC()).Scan(&names).Error; err != nil {
+		weftsdk.Warnf(ctx, "lease_state: listing leases held by %s: %v", holder, err)
+		return
+	}
+	for _, n := range names {
+		weftsdk.Infof(ctx, "lease_state lease=%s holder=%s", n, holder)
+	}
+}
+
 // AcquireAndHold tries once to acquire the named lease for holder. On
 // success it starts a background goroutine that renews the lease every
 // LeaseRenewInterval and returns a context derived from ctx that is
