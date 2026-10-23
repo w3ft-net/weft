@@ -62,11 +62,11 @@ func TestCompileWatchPipeline(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if !eqStrPtr(cw.AlertKey, c.wantKey) {
-				t.Errorf("AlertKey = %v, want %v", derefStr(cw.AlertKey), derefStr(c.wantKey))
+			if !eqStrPtr(cw.ValueField, c.wantKey) {
+				t.Errorf("AlertKey = %v, want %v", derefStr(cw.ValueField), derefStr(c.wantKey))
 			}
-			if !eqStrPtr(cw.AlertTag, c.wantTag) {
-				t.Errorf("AlertTag = %v, want %v", derefStr(cw.AlertTag), derefStr(c.wantTag))
+			if !eqStrPtr(cw.TagField, c.wantTag) {
+				t.Errorf("AlertTag = %v, want %v", derefStr(cw.TagField), derefStr(c.wantTag))
 			}
 		})
 	}

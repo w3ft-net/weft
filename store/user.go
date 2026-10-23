@@ -43,6 +43,21 @@ func WatchLimit(tier Tier) int {
 	}
 }
 
+// TagsPerRun returns how many distinct tags one run of a cron may print.
+// With the cron count and shortest interval it bounds stored rows per day.
+func TagsPerRun(tier Tier) int {
+	switch tier {
+	case TierSwatch:
+		return 50
+	case TierYard:
+		return 100
+	case TierBolt:
+		return 250
+	default:
+		return 10
+	}
+}
+
 // MinWatchInterval returns the minimum allowed schedule interval for a tier.
 func MinWatchInterval(tier Tier) time.Duration {
 	switch tier {

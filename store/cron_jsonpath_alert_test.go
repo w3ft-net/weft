@@ -30,11 +30,11 @@ func TestGetCronWatch_JSONPathAlertSelectors(t *testing.T) {
 	if w.Pipeline != pipeline {
 		t.Errorf("round-tripped pipeline: got %q, want %q", w.Pipeline, pipeline)
 	}
-	if w.AlertKey == nil || *w.AlertKey != ".pct" {
-		t.Errorf("AlertKey: got %v, want \".pct\"", w.AlertKey)
+	if w.ValueField == nil || *w.ValueField != ".pct" {
+		t.Errorf("AlertKey: got %v, want \".pct\"", w.ValueField)
 	}
-	if w.AlertTag == nil || *w.AlertTag != ".host" {
-		t.Errorf("AlertTag: got %v, want \".host\"", w.AlertTag)
+	if w.TagField == nil || *w.TagField != ".host" {
+		t.Errorf("AlertTag: got %v, want \".host\"", w.TagField)
 	}
 
 	all, err := db.ListCronWatches(cust.ID)

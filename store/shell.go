@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/alert"
 	"github.com/graybeardcorp/weft/planner"
 	luaparse "github.com/yuin/gopher-lua/parse"
@@ -555,12 +556,13 @@ func (s *Store) DeleteShellFunction(orgID OrgID, name string) error {
 
 // --- Cron Watches (/cron.d/) ---
 
-// CronWatch is a scheduled pipeline run. AlertKey and AlertTag are the
-// pre-parsed -v and -t selectors from the pipeline's `| alert` stage;
-// nil means single-row mode (no extraction). They're populated by
-// SaveCronWatch so the executor doesn't reparse the pipeline every tick.
-// Stored as text — either a 1-indexed column number ("3") or a
-// dot-prefixed JSON path (".foo.bar"); see shellcore.FieldSpec.
+// CronWatch is a scheduled pipeline run. ValueField and TagField are the
+// cron's output schema, from the alert stage's -v/-t or from the
+// `# value:`/`# tag:` headers; nil means the default text rule
+// (`<value> [<tag>]` per line). They're populated by SaveCronWatch so the
+// executor doesn't reparse the pipeline every tick. Stored as text —
+// either a 1-indexed column number ("3") or a dot-prefixed JSON path
+// (".foo.bar"); see shellcore.FieldSpec.
 type CronWatch struct {
 	gorm.Model
 	OrgID    OrgID  `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
@@ -570,14 +572,18 @@ type CronWatch struct {
 	// Enabled has no gorm default: with one, gorm swaps an explicit false
 	// for true on create. The column's own default (schema.sql) covers raw SQL.
 	Enabled bool `gorm:"not null"`
-	// ConsecutiveTimeouts counts runs in a row that hit the run budget; at
-	// the bench threshold the cron is disabled. Any run that finishes in
-	// time, and any save that re-enables the cron, resets it.
-	ConsecutiveTimeouts int `gorm:"column:consecutive_timeouts;not null;default:0"`
-	LastRunAt           *time.Time
-	LastStatus          string  // "ok", "error", "stderr"
-	AlertKey            *string `gorm:"column:alert_key"`
-	AlertTag            *string `gorm:"column:alert_tag"`
+	// ConsecutiveStrikes counts runs in a row that failed a runtime check
+	// (the run budget, a delivery timeout, output that breaks the output
+	// contract); at the bench threshold the cron is disabled. A clean run,
+	// and any save that re-enables the cron, resets it.
+	ConsecutiveStrikes int `gorm:"column:consecutive_strikes;not null;default:0"`
+	LastRunAt          *time.Time
+	LastStatus         string  // "ok", "error", "alert", "timeout", "invalid"
+	ValueField         *string `gorm:"column:value_field"`
+	TagField           *string `gorm:"column:tag_field"`
+	// HasAlert is true when the pipeline has an alert stage. A cron that
+	// alerts without -v stores its output as one untagged value.
+	HasAlert bool `gorm:"column:has_alert;not null;default:false"`
 	// AlertCondition + AlertThreshold are the dashboard projection of
 	// the `alert` stage's numeric cutoff. Populated only for
 	// above/below/eq/neq — conditions without a single absolute
@@ -640,8 +646,9 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 				Schedule:       schedule,
 				Pipeline:       pipeline,
 				Enabled:        enabled,
-				AlertKey:       compiled.AlertKey,
-				AlertTag:       compiled.AlertTag,
+				ValueField:     compiled.ValueField,
+				TagField:       compiled.TagField,
+				HasAlert:       compiled.HasAlert,
 				AlertCondition: compiled.AlertCondition,
 				AlertThreshold: compiled.AlertThreshold,
 				ContentHash:    hash,
@@ -662,8 +669,9 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 			"schedule":        schedule,
 			"pipeline":        pipeline,
 			"content_hash":    hash,
-			"alert_key":       compiled.AlertKey,
-			"alert_tag":       compiled.AlertTag,
+			"value_field":     compiled.ValueField,
+			"tag_field":       compiled.TagField,
+			"has_alert":       compiled.HasAlert,
 			"alert_condition": compiled.AlertCondition,
 			"alert_threshold": compiled.AlertThreshold,
 			"lowered_plan":    loweredPlan,
@@ -671,7 +679,7 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 		}
 		if enabled && !w.Enabled {
 			// Turning a benched cron back on wipes its strikes.
-			updates["consecutive_timeouts"] = 0
+			updates["consecutive_strikes"] = 0
 		}
 		return tx.Unscoped().Model(&w).Updates(updates).Error
 	}); err != nil {
@@ -714,31 +722,71 @@ func lintSavedWatch(pipeline string, loweredPlan []byte) error {
 	return errors.Join(warnings...)
 }
 
-// CompiledWatch holds the pre-parsed bits of an `alert` stage that we want
-// to stamp onto the watch row so the executor doesn't re-parse on every
-// tick. AlertKey/Tag are runtime-relevant (they shape how cron_results
-// gets written); AlertCondition/Threshold are dashboard projections for
-// threshold-line rendering and are only populated for conditions with a
-// single numeric cutoff (above, below, eq, neq).
+// CompiledWatch holds the pre-parsed bits of a cron that we want to stamp
+// onto the watch row so the executor doesn't re-parse on every tick.
+// ValueField/TagField/HasAlert are runtime-relevant (they shape how
+// cron_results gets written); AlertCondition/Threshold are dashboard
+// projections for threshold-line rendering and are only populated for
+// conditions with a single numeric cutoff (above, below, eq, neq).
 type CompiledWatch struct {
-	// AlertKey/AlertTag are stamped as the FieldSpec source form
-	// ("3" or ".foo.bar"); the executor re-parses them via
+	// ValueField/TagField are the output schema, stamped as the FieldSpec
+	// source form ("3" or ".foo.bar"); the executor re-parses them via
 	// shellcore.ParseFieldSpec to recover the FieldSpec.
-	AlertKey       *string
-	AlertTag       *string
+	ValueField     *string
+	TagField       *string
+	HasAlert       bool
 	AlertCondition *string
 	AlertThreshold *float64
 }
 
+// schemaHeaders reads a cron's `# value:` and `# tag:` header comments.
+// They name JSON paths only: text output has a fixed positional rule.
+func schemaHeaders(pipeline string) (value, tag shellcore.FieldSpec, err error) {
+	seen := map[string]bool{}
+	for _, line := range strings.Split(pipeline, "\n") {
+		trimmed := strings.TrimSpace(line)
+		var key string
+		switch {
+		case strings.HasPrefix(trimmed, "# value:"):
+			key = "value"
+		case strings.HasPrefix(trimmed, "# tag:"):
+			key = "tag"
+		default:
+			continue
+		}
+		if seen[key] {
+			return value, tag, fmt.Errorf("'# %s:' is given twice", key)
+		}
+		seen[key] = true
+		src := strings.TrimSpace(strings.TrimPrefix(trimmed, "# "+key+":"))
+		spec, perr := shellcore.ParseFieldSpec(src)
+		if perr != nil || !spec.IsJSON() {
+			return value, tag, fmt.Errorf("'# %s:' takes a JSON path like .host, got %q; text output is <value> [<tag>] per line and needs no header", key, src)
+		}
+		if key == "value" {
+			value = spec
+		} else {
+			tag = spec
+		}
+	}
+	if !tag.IsZero() && value.IsZero() {
+		return value, tag, fmt.Errorf("'# tag:' needs a '# value:' header")
+	}
+	return value, tag, nil
+}
+
 // CompileWatchPipeline validates pipeline-shape invariants and returns the
-// compiled extractor positions for the (at most one) `alert` stage.
+// cron's output schema and the compiled bits of its (at most one) `alert`
+// stage.
 //
 // Validation rules:
 //   - The pipeline must parse as bash.
 //   - `alert` may appear at most once in the pipeline. The single stage is
 //     the sole incident-dedup boundary per watch run.
-//   - `-k` / `-t` must be a positive integer or a `.`-prefixed JSON path
+//   - `-v` / `-t` must be a positive integer or a `.`-prefixed JSON path
 //     if present (enforced by alert.ParseArgs).
+//   - `# value:` / `# tag:` headers name JSON paths, and a cron with an
+//     alert stage declares its schema with -v/-t instead.
 //
 // The AST walk catches alerts nested in command substitutions, compound
 // commands, and function bodies so the only way past validation is alias
@@ -755,6 +803,10 @@ func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 	if err := validateWeftFunctionsAreNotPiped(script); err != nil {
 		return out, err
 	}
+	headerValue, headerTag, err := schemaHeaders(pipeline)
+	if err != nil {
+		return out, err
+	}
 	var alertCmds []*bash.SimpleCommand
 	bash.Walk(script, func(n bash.Node) bool {
 		if sc, ok := n.(*bash.SimpleCommand); ok {
@@ -767,33 +819,49 @@ func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 	if len(alertCmds) > 1 {
 		return out, fmt.Errorf("alert may only appear once in a pipeline (found %d)", len(alertCmds))
 	}
-	if len(alertCmds) == 1 {
-		argv := make([]string, 0, len(alertCmds[0].Words)-1)
-		for _, w := range alertCmds[0].Words[1:] {
-			argv = append(argv, w.Literal())
+	if len(alertCmds) == 0 {
+		if !headerValue.IsZero() {
+			s := headerValue.String()
+			out.ValueField = &s
 		}
-		parsed, perr := alert.ParseArgs(argv)
-		if perr != nil {
-			return out, fmt.Errorf("alert: %w", perr)
+		if !headerTag.IsZero() {
+			s := headerTag.String()
+			out.TagField = &s
 		}
-		if !parsed.Key.IsZero() {
-			s := parsed.Key.String()
-			out.AlertKey = &s
+		return out, nil
+	}
+	out.HasAlert = true
+	argv := make([]string, 0, len(alertCmds[0].Words)-1)
+	for _, w := range alertCmds[0].Words[1:] {
+		argv = append(argv, w.Literal())
+	}
+	parsed, perr := alert.ParseArgs(argv)
+	if perr != nil {
+		return out, fmt.Errorf("alert: %w", perr)
+	}
+	if !headerValue.IsZero() {
+		if !parsed.Key.IsZero() || !parsed.Tag.IsZero() {
+			return out, fmt.Errorf("this cron sets its schema twice (# value: and alert -v); keep one")
 		}
-		if !parsed.Tag.IsZero() {
-			s := parsed.Tag.String()
-			out.AlertTag = &s
-		}
-		// Stamp the condition + numeric threshold for dashboard line
-		// rendering. Only above/below/eq/neq carry a single absolute
-		// threshold — other conditions leave both fields nil.
-		switch parsed.Condition {
-		case alert.Above, alert.Below, alert.Eq, alert.Neq:
-			cond := parsed.Condition.String()
-			thr := parsed.Threshold
-			out.AlertCondition = &cond
-			out.AlertThreshold = &thr
-		}
+		return out, fmt.Errorf("a cron that alerts declares its schema with alert -v %s, not '# value:'", headerValue)
+	}
+	if !parsed.Key.IsZero() {
+		s := parsed.Key.String()
+		out.ValueField = &s
+	}
+	if !parsed.Tag.IsZero() {
+		s := parsed.Tag.String()
+		out.TagField = &s
+	}
+	// Stamp the condition + numeric threshold for dashboard line
+	// rendering. Only above/below/eq/neq carry a single absolute
+	// threshold — other conditions leave both fields nil.
+	switch parsed.Condition {
+	case alert.Above, alert.Below, alert.Eq, alert.Neq:
+		cond := parsed.Condition.String()
+		thr := parsed.Threshold
+		out.AlertCondition = &cond
+		out.AlertThreshold = &thr
 	}
 	return out, nil
 }
@@ -832,16 +900,16 @@ func (s *Store) CountCronWatches(orgID OrgID) (int, error) {
 	return int(count), err
 }
 
-// RecordCronTimeout adds a strike to a cron whose run hit its budget and
-// disables it once it has strikes in a row, reporting whether this call
+// RecordCronStrike adds a strike to a cron whose run failed a runtime check
+// and disables it once it has strikes in a row, reporting whether this call
 // benched it. One UPDATE, so concurrent coordinators can't both miss the
 // threshold.
-func (s *Store) RecordCronTimeout(ctx context.Context, id uint, strikes int) (benched bool, err error) {
+func (s *Store) RecordCronStrike(ctx context.Context, id uint, strikes int) (benched bool, err error) {
 	var enabled bool
 	res := s.DB().WithContext(WithoutTenantScope(ctx)).Raw(
 		`UPDATE cron_watches
-		    SET consecutive_timeouts = consecutive_timeouts + 1,
-		        enabled = enabled AND consecutive_timeouts + 1 < ?
+		    SET consecutive_strikes = consecutive_strikes + 1,
+		        enabled = enabled AND consecutive_strikes + 1 < ?
 		  WHERE id = ?
 		  RETURNING enabled`, strikes, id).Scan(&enabled)
 	if res.Error != nil {

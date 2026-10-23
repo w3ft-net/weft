@@ -99,7 +99,7 @@ func TestCronBenchedAfterRepeatedTimeouts(t *testing.T) {
 	if err := db.SaveShellFunction(custID, "", "slowpoke", `while true; do :; done`, "bash"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveShellFunction(custID, "", "quick", `echo ok`, "bash"); err != nil {
+	if err := db.SaveShellFunction(custID, "", "quick", `echo 1`, "bash"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveCronWatch(custID, "", "slow", "every 5m", "slowpoke", true, nil); err != nil {
@@ -147,8 +147,8 @@ func TestCronBenchedAfterRepeatedTimeouts(t *testing.T) {
 		t.Errorf("page should name the cron and say how to re-enable it:\n%s", pages[0])
 	}
 
-	if w := run("fast"); w.LastStatus != "ok" || !w.Enabled || w.ConsecutiveTimeouts != 0 {
-		t.Fatalf("fast cron: status=%q enabled=%v strikes=%d", w.LastStatus, w.Enabled, w.ConsecutiveTimeouts)
+	if w := run("fast"); w.LastStatus != "ok" || !w.Enabled || w.ConsecutiveStrikes != 0 {
+		t.Fatalf("fast cron: status=%q enabled=%v strikes=%d", w.LastStatus, w.Enabled, w.ConsecutiveStrikes)
 	}
 }
 
@@ -201,12 +201,12 @@ func TestCronBenchedAfterRepeatedDeliveryTimeouts(t *testing.T) {
 	}
 
 	run()
-	if w := run(); w.ConsecutiveTimeouts != 2 || !w.Enabled {
-		t.Fatalf("after two dead ticks: strikes=%d enabled=%v, want 2/true", w.ConsecutiveTimeouts, w.Enabled)
+	if w := run(); w.ConsecutiveStrikes != 2 || !w.Enabled {
+		t.Fatalf("after two dead ticks: strikes=%d enabled=%v, want 2/true", w.ConsecutiveStrikes, w.Enabled)
 	}
 	setHook(live.URL)
-	if w := run(); w.ConsecutiveTimeouts != 0 || !w.Enabled {
-		t.Fatalf("after a delivered tick: strikes=%d enabled=%v, want 0/true", w.ConsecutiveTimeouts, w.Enabled)
+	if w := run(); w.ConsecutiveStrikes != 0 || !w.Enabled {
+		t.Fatalf("after a delivered tick: strikes=%d enabled=%v, want 0/true", w.ConsecutiveStrikes, w.Enabled)
 	}
 
 	// The endpoint goes dead again; the incident is still open, and each
@@ -217,7 +217,7 @@ func TestCronBenchedAfterRepeatedDeliveryTimeouts(t *testing.T) {
 		w = run()
 	}
 	if w.Enabled {
-		t.Fatalf("still enabled after %d delivery timeouts in a row (strikes=%d)", cronBenchStrikes, w.ConsecutiveTimeouts)
+		t.Fatalf("still enabled after %d delivery timeouts in a row (strikes=%d)", cronBenchStrikes, w.ConsecutiveStrikes)
 	}
 	if pages != 1 {
 		t.Errorf("%d page(s) for the benched cron, want 1", pages)

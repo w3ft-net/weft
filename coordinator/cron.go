@@ -1,17 +1,15 @@
 package coordinator
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	weftsdk "github.com/w3ft-net/weft-go"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	weftsdk "github.com/w3ft-net/weft-go"
+
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -252,42 +250,53 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 		stderr = fmt.Sprintf("timed out after %s", budget)
 	}
 
-	// Persist result(s). Single-row mode: one cron_results row with
-	// tag='' and value auto-parsed from stdout. Multi-row mode (watch has
-	// alert_key set): split stdout into lines, extract value from field
-	// alert_key and tag from alert_tag, one row per line. Lines whose -v
-	// field isn't numeric are persisted with Value=NULL so the debugging
-	// trail stays intact; aggregates ignore NULLs.
-	if saveErr := ce.persistResults(watch, start, stdout, stderr, exitCode, duration); saveErr != nil {
+	// Split the output into points under the cron's output contract. Output
+	// that breaks it is a strike and stores none of its points.
+	var points []cronPoint
+	var invalid error
+	if status != "error" && status != "timeout" {
+		points, invalid = ce.checkOutput(watch, stdout)
+		if invalid != nil {
+			status = "invalid"
+			stderr = strings.TrimSpace(invalid.Error() + "\n" + stderr)
+			exitCode = 1
+		}
+	}
+	if saveErr := ce.persistResults(watch, start, points, stderr, exitCode, duration); saveErr != nil {
 		weftsdk.Errorf(ctx, "cron[%s]: failed to save result: %v", watch.Name, saveErr)
 	}
 
-	// Update watch status. A tick is a strike when the run blew its budget or
-	// a notification target timed out; any other tick clears the strikes, and
-	// the last strike disables the cron.
-	strike := timedOut || outcome.deliveryTimedOut.Load()
+	// Update watch status. A tick is a strike when the run blew its budget, a
+	// notification target timed out, or the output broke the contract; any
+	// other tick clears the strikes, and the last strike disables the cron.
+	var why string
+	switch {
+	case timedOut:
+		why = fmt.Sprintf("its run exceeded the %s budget", budget)
+	case invalid != nil:
+		why = "its output broke the output contract (" + invalid.Error() + ")"
+	case outcome.deliveryTimedOut.Load():
+		why = "a notification target did not accept its alert in time"
+	}
+	strike := why != ""
 	now := time.Now()
 	updates := map[string]any{"last_run_at": &now, "last_status": status}
 	if !strike {
-		updates["consecutive_timeouts"] = 0
+		updates["consecutive_strikes"] = 0
 	}
 	if updateErr := ce.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Model(&store.CronWatch{}).Where("id = ?", watch.ID).Updates(updates).Error; updateErr != nil {
 		weftsdk.Errorf(ctx, "cron[%s]: failed to update run status: %v", watch.Name, updateErr)
 	}
 	if strike {
-		benched, benchErr := ce.Store.RecordCronTimeout(ctx, watch.ID, cronBenchStrikes)
+		benched, benchErr := ce.Store.RecordCronStrike(ctx, watch.ID, cronBenchStrikes)
 		switch {
 		case benchErr != nil:
-			weftsdk.Errorf(ctx, "cron[%s]: failed to record timeout: %v", watch.Name, benchErr)
+			weftsdk.Errorf(ctx, "cron[%s]: failed to record strike: %v", watch.Name, benchErr)
 		case benched:
-			weftsdk.Warnf(ctx, "cron[%s]: disabled after %d timeouts in a row (run budget %s); re-enable it by saving /cron.d/%s without '# enabled: false'",
-				watch.Name, cronBenchStrikes, budget, watch.Name)
-			why := fmt.Sprintf("its run exceeded the %s budget", budget)
-			if !timedOut {
-				why = "a notification target did not accept its alert in time"
-			}
+			weftsdk.Warnf(ctx, "cron[%s]: disabled after %d strikes in a row (last: %s); re-enable it by saving /cron.d/%s without '# enabled: false'",
+				watch.Name, cronBenchStrikes, why, watch.Name)
 			ce.pageSystem(ctx, watch.OrgID, "cron-benched", fmt.Sprintf(
-				"cron %q was disabled after %d timeouts in a row: %s.\nIt will not run again until you re-enable it: edit /cron.d/%s, remove the '# enabled: false' line, and save.",
+				"cron %q was disabled after %d failed runs in a row. The last one failed because %s.\nIt will not run again until you re-enable it: edit /cron.d/%s, remove the '# enabled: false' line, and save.",
 				watch.Name, cronBenchStrikes, why, watch.Name))
 		}
 	}
@@ -296,83 +305,58 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 		watch.Name, status, duration.Milliseconds(), len(stdout), len(stderr))
 }
 
-// persistResults writes one or more cron_results rows for this tick. In
-// single-row mode (watch.AlertKey nil) we write a single row with tag=”
-// and let SaveCronResult auto-parse Stdout into Value. In multi-row mode
-// we split stdout into lines, resolve Value from the watch's -k spec
-// (positional or JSON path) and Tag from the -t spec, and write one row
-// per non-blank line. Lines whose value field isn't numeric are still
-// persisted — with Value=NULL — so the history stays a faithful record;
-// aggregates ignore NULLs. Stderr and exit_code are only attached to the
-// first row in multi-row mode (they describe the whole tick, not a row).
-func (ce *CronExecutor) persistResults(watch store.CronWatch, ranAt time.Time, stdout, stderr string, exitCode int, duration time.Duration) error {
-	if watch.AlertKey == nil {
-		result := &store.CronResult{
+// checkOutput splits a run's stdout into points and applies the runtime
+// checks: the output contract, then the plan's tag cap. A non-nil error is
+// the strike message.
+func (ce *CronExecutor) checkOutput(watch store.CronWatch, stdout string) ([]cronPoint, error) {
+	schema, err := schemaForWatch(watch)
+	if err != nil {
+		return nil, err
+	}
+	points, err := parseCronOutput(schema, stdout)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range points {
+		if p.tag != "" {
+			return points, checkTagCap(points, store.TagsPerRun(ce.tierForWatch(watch)))
+		}
+	}
+	return points, nil
+}
+
+// persistResults writes this tick's cron_results rows: one per point, with
+// stderr and exit code on the first (they describe the whole tick, not a
+// point). A tick with no points stores nothing unless it has something to
+// say, a failure or an alert firing, which goes on one untagged row with no
+// value so the rollups never see it.
+func (ce *CronExecutor) persistResults(watch store.CronWatch, ranAt time.Time, points []cronPoint, stderr string, exitCode int, duration time.Duration) error {
+	if len(points) == 0 {
+		if stderr == "" && exitCode == 0 {
+			return nil
+		}
+		return ce.Store.SaveCronResults([]store.CronResult{{
 			CronWatchID: watch.ID,
 			RanAt:       ranAt,
-			Stdout:      stdout,
 			Stderr:      stderr,
 			ExitCode:    exitCode,
 			DurationMs:  duration.Milliseconds(),
-		}
-		if result.Value == nil {
-			if v, err := strconv.ParseFloat(strings.TrimSpace(result.Stdout), 64); err == nil {
-				result.Value = &v
-			}
-		}
-		return ce.Store.DB().Create(result).Error
+		}})
 	}
-
-	keySpec, err := shellcore.ParseFieldSpec(*watch.AlertKey)
-	if err != nil {
-		return fmt.Errorf("alert_key %q: %w", *watch.AlertKey, err)
-	}
-	var tagSpec shellcore.FieldSpec
-	if watch.AlertTag != nil {
-		tagSpec, err = shellcore.ParseFieldSpec(*watch.AlertTag)
-		if err != nil {
-			return fmt.Errorf("alert_tag %q: %w", *watch.AlertTag, err)
-		}
-	}
-
-	var rows []store.CronResult
-	scanner := bufio.NewScanner(strings.NewReader(stdout))
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	first := true
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-
-		r := store.CronResult{
+	rows := make([]store.CronResult, len(points))
+	for i, p := range points {
+		v := p.value
+		rows[i] = store.CronResult{
 			CronWatchID: watch.ID,
 			RanAt:       ranAt,
-			Stdout:      line,
+			Stdout:      p.line,
 			ExitCode:    exitCode,
 			DurationMs:  duration.Milliseconds(),
+			Value:       &v,
+			Tag:         p.tag,
 		}
-		if first {
-			r.Stderr = stderr
-			first = false
-		}
-		if val, err := shellcore.ResolveField(keySpec, line); err == nil && val != "" {
-			if v, err := strconv.ParseFloat(val, 64); err == nil {
-				r.Value = &v
-			}
-		}
-		if !tagSpec.IsZero() {
-			if t, err := shellcore.ResolveField(tagSpec, line); err == nil {
-				r.Tag = t
-			}
-		}
-		rows = append(rows, r)
 	}
-
-	// Empty multi-row output = no rows written. That's fine; the watch's
-	// "last run" timestamp still updates via UpdateCronWatchRun. If we want
-	// an audit trail of empty ticks in multi-row mode we can add a sentinel
-	// row later.
+	rows[0].Stderr = stderr
 	return ce.Store.SaveCronResults(rows)
 }
 

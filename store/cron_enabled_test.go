@@ -42,7 +42,7 @@ func TestSaveCronWatch_EnabledFlag(t *testing.T) {
 	}
 }
 
-func TestRecordCronTimeout_BenchesAtThreshold(t *testing.T) {
+func TestRecordCronStrike_BenchesAtThreshold(t *testing.T) {
 	db := testOpen(t)
 	org, _ := db.FindOrCreateOrg("cron-bench")
 	if err := db.SaveCronWatch(org.ID, "", "slow", "every 5m", "true", true, nil); err != nil {
@@ -51,7 +51,7 @@ func TestRecordCronTimeout_BenchesAtThreshold(t *testing.T) {
 	w, _ := db.GetCronWatch(org.ID, "slow")
 
 	for i := 1; i <= 3; i++ {
-		benched, err := db.RecordCronTimeout(context.Background(), w.ID, 3)
+		benched, err := db.RecordCronStrike(context.Background(), w.ID, 3)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -69,7 +69,7 @@ func TestRecordCronTimeout_BenchesAtThreshold(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ = db.GetCronWatch(org.ID, "slow")
-	if !got.Enabled || got.ConsecutiveTimeouts != 0 {
-		t.Fatalf("after re-enable: enabled=%v strikes=%d, want true/0", got.Enabled, got.ConsecutiveTimeouts)
+	if !got.Enabled || got.ConsecutiveStrikes != 0 {
+		t.Fatalf("after re-enable: enabled=%v strikes=%d, want true/0", got.Enabled, got.ConsecutiveStrikes)
 	}
 }
