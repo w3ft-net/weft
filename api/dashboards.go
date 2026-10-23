@@ -11,15 +11,15 @@ import (
 	"gorm.io/gorm"
 )
 
-// dashboardWatchPayload bundles a cron's metadata, its recent results
-// (the latest feeds counter, gauge and table tiles) and its plot over
-// dashboardWindow (sparkline tiles), so a dashboard render needs no
-// follow-up requests. The plot is reduced like `chart <cron>`: one line
-// per stored tag, the rest folded into "other".
+// dashboardWatchPayload bundles a cron's metadata, its latest run (table,
+// counter and gauge tiles) and its plot over dashboardWindow (sparkline
+// tiles), so a dashboard render needs no follow-up requests. The latest
+// run is one point per tag in table order; the plot is reduced like
+// `chart <cron>`: one line per stored tag, the rest folded into "other".
 type dashboardWatchPayload struct {
-	Watch   *store.CronWatch   `json:"cron"`
-	Results []store.CronResult `json:"results"`
-	Plot    *chart.Plot        `json:"plot"`
+	Watch  *store.CronWatch    `json:"cron"`
+	Latest []chart.LatestPoint `json:"latest"`
+	Plot   *chart.Plot         `json:"plot"`
 }
 
 // dashboardWindow is how far back a dashboard's sparklines reach.
@@ -136,7 +136,7 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 				watches[tile.Watch] = nil
 				continue
 			}
-			results, err := s.store.ListCronResults(cw.ID, 50, "")
+			latest, err := s.latestPoints(cw.ID)
 			if err != nil {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
@@ -148,22 +148,24 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			watches[tile.Watch] = &dashboardWatchPayload{
-				Watch:   cw,
-				Results: results,
-				Plot:    plot,
+				Watch:  cw,
+				Latest: latest,
+				Plot:   plot,
 			}
 		}
 	}
 
 	// Format counter/gauge text here, once; clients render tile.display.
+	// The latest run is in table order, so on a tagged cron a counter
+	// shows its highest value.
 	for si := range spec.Sections {
 		tiles := spec.Sections[si].Tiles
 		for ti := range tiles {
 			var latest *float64
 			if wp := watches[tiles[ti].Watch]; wp != nil {
-				for _, r := range wp.Results {
-					if r.Value != nil {
-						latest = r.Value
+				for _, p := range wp.Latest {
+					if p.Value != nil {
+						latest = p.Value
 						break
 					}
 				}

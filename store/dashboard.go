@@ -41,16 +41,9 @@ type DashboardSection struct {
 
 // DashboardTile is one tile entry. Watch is the cron watch name to read
 // from. Size is one of "sm", "md", "lg" (default "md"). Kind-specific
-// fields (Format, Threshold, Columns) are optional.
-//
-// Tag and Y are sparkline-only: when Tag is set, the watch's stdout is
-// treated as multiple JSON rows per run (e.g. one per coordinator
-// instance) instead of a single scalar. Tag is the JSON path that
-// identifies which entity a row belongs to; Y is the JSON path to the
-// value to plot. Each row's run timestamp (not a per-row field) is the
-// x value, since a dashboard tile's history comes from the cron's
-// run history, not a live pipeline. The tile then renders one
-// line per distinct Tag value instead of one line for the whole cron.
+// fields (Format, Threshold) are optional. A tile draws the tags its cron
+// stores: a sparkline one line per tag, a table one row per tag of the
+// latest run.
 type DashboardTile struct {
 	Kind      string           `yaml:"kind" json:"kind"`
 	Watch     string           `yaml:"cron" json:"cron"`
@@ -58,7 +51,6 @@ type DashboardTile struct {
 	Size      string           `yaml:"size,omitempty" json:"size,omitempty"`
 	Format    string           `yaml:"format,omitempty" json:"format,omitempty"`
 	Threshold *DashboardThresh `yaml:"threshold,omitempty" json:"threshold,omitempty"`
-	Columns   []string         `yaml:"columns,omitempty" json:"columns,omitempty"`
 
 	// Display is filled by the API when serving a dashboard; never read from YAML.
 	Display *TileDisplay `yaml:"-" json:"display,omitempty"`
@@ -180,7 +172,7 @@ func FormatTileDisplay(t DashboardTile, v *float64) *TileDisplay {
 var knownKeys = map[string][]string{
 	"dashboardYAMLRaw": {"title", "sections", "tiles"},
 	"DashboardSection": {"title", "tiles"},
-	"DashboardTile":    {"kind", "cron", "title", "size", "format", "threshold", "columns"},
+	"DashboardTile":    {"kind", "cron", "title", "size", "format", "threshold"},
 	"DashboardThresh":  {"warn", "crit", "max"},
 }
 
@@ -206,6 +198,9 @@ func friendlyYAMLError(err error) error {
 
 	if typeName == "DashboardTile" && field == "watch" {
 		return fmt.Errorf("saw 'watch', expected 'cron': write `cron: <name>` — run `man dashboard` for the YAML grammar")
+	}
+	if typeName == "DashboardTile" && field == "columns" {
+		return fmt.Errorf("a tile has no 'columns' key: a table shows one row per tag of the cron's latest run, tag then value")
 	}
 	if typeName == "DashboardTile" && (field == "tag" || field == "y") {
 		return fmt.Errorf("a tile has no '%s' key: a sparkline draws one line per tag its cron stores. Declare the value and tag on the cron itself, with '# value:' and '# tag:' headers (JSON output) or alert -v/-t — run `help cron`", field)
@@ -277,9 +272,6 @@ func validateSpec(spec *DashboardSpec) error {
 			if tile.Size != "" && !validTileSizes[tile.Size] {
 				return fmt.Errorf("%s: unknown size %q (valid: sm, md, lg)", where, tile.Size)
 			}
-			if tile.Kind == "table" && len(tile.Columns) == 0 {
-				return fmt.Errorf("%s: table tile requires `columns:`", where)
-			}
 			if tile.Format != "" {
 				if tile.Kind != "counter" {
 					return fmt.Errorf("%s: `format:` is only supported on counter tiles", where)
@@ -293,9 +285,6 @@ func validateSpec(spec *DashboardSpec) error {
 			}
 			if tile.Threshold != nil && tile.Threshold.Max != nil && tile.Kind != "gauge" {
 				return fmt.Errorf("%s: `threshold.max:` is only supported on gauge tiles", where)
-			}
-			if len(tile.Columns) > 0 && tile.Kind != "table" {
-				return fmt.Errorf("%s: `columns:` is only supported on table tiles", where)
 			}
 			tileCount++
 		}
@@ -332,6 +321,9 @@ func (s *Store) ValidateDashboardWatchRefs(orgID OrgID, spec *DashboardSpec) err
 // ParseDashboardYAML and ValidateDashboardWatchRefs against the body.
 // userID is recorded as the creator on first write; ignored on update.
 func (s *Store) SaveDashboard(orgID OrgID, userID, name, yamlBody string) error {
+	if err := s.checkDashboardTypes(orgID, yamlBody); err != nil {
+		return err
+	}
 	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("SELECT set_config('weft.acting_user_id', ?, true)", userID).Error; err != nil {
 			return err

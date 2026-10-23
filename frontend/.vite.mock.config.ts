@@ -17,20 +17,23 @@ const watches: Record<string, any> = {
   'p95-latency': { watch: watch('p95-latency', 'cat /log/prod/web.log | awk \'{print $NF}\' | p95'), results: [...series('a', 48, 220, 60, 'web'), ...series('bbbb', 48, 140, 40, 'api')] },
   'ingest-rate': { watch: watch('ingest-rate', 'cat /log/**/*.log | wc -l'), results: series('ingest', 48, 12000, 3000) },
   'disk-used': { watch: watch('disk-used', 'cat /log/prod/node.log | jq .disk_pct | tail -1'), results: series('disk', 48, 71, 4) },
-  'top-paths': { watch: watch('top-paths', 'cat /log/prod/web.log | awk \'{print $7}\' | sort | uniq -c | sort -rn | head'), results: [{ ...series('t', 1)[0], Stdout: '  4120 /api/v1/orders\n  2981 /api/v1/cart\n  1877 /health\n   902 /api/v1/login\n   410 /static/app.js' }] },
+  'top-paths': { watch: watch('top-paths', 'cat /log/prod/web.log | awk \'{print $7}\' | sort | uniq -c | sort -rn | head'), results: [[4120, '/api/v1/orders'], [2981, '/api/v1/cart'], [1877, '/health'], [902, '/api/v1/login'], [410, '/static/app.js']].map(([v, tag]) => ({ ...series('t', 1)[0], Stdout: `${v} ${tag}`, Value: v, Tag: tag })) },
 }
-// The dashboard API also sends each cron's plot: one line per stored tag.
+// The dashboard API sends each cron's plot (one line per stored tag) and
+// its latest run (one point per tag, numbers highest first).
 for (const w of Object.values(watches)) {
   const byTag: Record<string, { x: number; label: string; y: number }[]> = {}
   for (const r of w.results) (byTag[r.Tag] ??= []).push({ x: Date.parse(r.RanAt) / 1000, label: '', y: r.Value })
   w.plot = { kind: 'line', timeX: true, series: Object.entries(byTag).map(([tag, points]) => ({ tag, points: points.sort((a, b) => a.x - b.x) })) }
+  const newest = w.results.reduce((m: string, r: any) => (r.RanAt > m ? r.RanAt : m), '')
+  w.latest = w.results.filter((r: any) => r.RanAt === newest).map((r: any) => ({ tag: r.Tag, value: r.Value })).sort((a: any, b: any) => b.value - a.value)
 }
 const user = { id: 'u1', email: 'paul@graybeardcorp.com', name: 'Paul', tier: 'team', customer: 'kevlar', orgs: [{ id: 'o1', name: 'kevlar', role: 'admin', active: true }, { id: 'o2', name: 'loom', role: 'member', active: false }], email_verified: true, has_seen_welcome: true, onboarding_step: 'done', onboarding_dismissed: true, is_superadmin: true }
 const routes: [RegExp, any][] = [
   [/^\/api\/auth\/me/, user],
   [/^\/api\/dashboards\/[^/?]+/, { name: 'prod', updated_at: iso(3600000), spec: { title: 'production overview', sections: [
     { title: 'traffic', tiles: [{ kind: 'counter', cron: 'ingest-rate', format: '%d lines/5m' }, { kind: 'sparkline', cron: 'errors-5m', size: 'md', threshold: { warn: 60, crit: 80 } }, { kind: 'gauge', cron: 'disk-used', threshold: { warn: 75, crit: 90, max: 100 }, format: '%' }] },
-    { title: 'latency', tiles: [{ kind: 'sparkline', cron: 'p95-latency', size: 'lg' }, { kind: 'table', cron: 'top-paths', columns: ['count', 'path'] }] },
+    { title: 'latency', tiles: [{ kind: 'sparkline', cron: 'p95-latency', size: 'lg' }, { kind: 'table', cron: 'top-paths' }] },
   ] }, crons: watches }],
   [/^\/api\/dashboards/, { dashboards: [{ name: 'prod', title: 'production overview', updated_at: iso(3600000) }, { name: 'billing', title: 'billing pipeline' }] }],
   [/^\/api\/crons\/[^/]+\/results/, series('errors-5m')],

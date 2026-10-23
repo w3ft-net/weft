@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,6 +98,36 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 	}
 	if s := dash.Crons["hosts"].Plot.Series; len(s) != 2 || s[0].Tag != "a" || s[1].Tag != "b" {
 		t.Fatalf("dashboard plot series = %+v, want lines a and b", s)
+	}
+
+	// A text cron has nothing to chart, and its latest run comes back as
+	// text points, on /latest and in a dashboard's table tile.
+	if err := s.SaveCronWatch(cust.ID, user.ID, "holders", "every 5m", "# type: text\necho i-0abc lease", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	hw, _ := s.GetCronWatch(cust.ID, "holders")
+	holder := "i-0abc"
+	if err := s.SaveCronResults([]store.CronResult{{CronWatchID: hw.ID, RanAt: now, TextValue: &holder, Tag: "lease"}}); err != nil {
+		t.Fatal(err)
+	}
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("Authorization", "Bearer "+jwt)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := get("/api/crons/holders/chart?spec=1h.."); rec.Code != 400 || !strings.Contains(rec.Body.String(), "no numbers to chart") {
+		t.Fatalf("chart of a text cron: %d %s", rec.Code, rec.Body)
+	}
+	if rec := get("/api/crons/holders/latest"); rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `[{"tag":"lease","text":"i-0abc"}]` {
+		t.Fatalf("latest of a text cron: %d %s", rec.Code, rec.Body)
+	}
+	if err := s.SaveDashboard(cust.ID, user.ID, "leases", "tiles:\n  - kind: table\n    cron: holders\n"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := get("/api/dashboards/leases"); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"latest":[{"tag":"lease","text":"i-0abc"}]`) {
+		t.Fatalf("dashboard latest: %d %s", rec.Code, rec.Body)
 	}
 
 	req = httptest.NewRequest("GET", "/api/crons/hosts/chart?spec=nonsense", nil)

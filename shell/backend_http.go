@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -212,39 +211,18 @@ func (b *HTTPBackend) GetCronSeries(name, rangeSpec string) (chart.CronSeries, e
 	return DecodeCronSeries(data)
 }
 
-// GetWatchResults returns recent cron runs, for dashboard table tiles.
-// limit is the server-side max; a limit of 0 tells the api to apply its
-// default.
-func (b *HTTPBackend) GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error) {
-	url := "/api/crons/" + name + "/results"
-	if limit > 0 {
-		url += "?limit=" + strconv.Itoa(limit)
-	}
-	data, err := b.apiGet(url)
+// GetLatestRun returns the points of a cron's latest run, in table order,
+// for dashboard table and counter tiles.
+func (b *HTTPBackend) GetLatestRun(name string) ([]chart.LatestPoint, error) {
+	data, err := b.apiGet("/api/crons/" + url.PathEscape(name) + "/latest")
 	if err != nil {
 		return nil, err
 	}
-	// Tags must match the API's GORM-default JSON shape exactly —
-	// `RanAt` (capital R, no underscore). A `json:"ran_at"` tag fails
-	// case-insensitive matching because of the underscore, leaving
-	// RanAt empty and chart_builtin's RFC3339 parse silently rejecting
-	// every row. (See api/handlers.go:1524: handleWatchResults dumps
-	// the model directly with json.NewEncoder.)
-	var rows []struct {
-		Stdout string `json:"Stdout"`
-		RanAt  string `json:"RanAt"`
-	}
-	if err := json.Unmarshal(data, &rows); err != nil {
+	var points []chart.LatestPoint
+	if err := json.Unmarshal(data, &points); err != nil {
 		return nil, err
 	}
-	out := make([]chart.WatchResultValue, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, chart.WatchResultValue{
-			Value: strings.TrimSpace(r.Stdout),
-			RanAt: r.RanAt,
-		})
-	}
-	return out, nil
+	return points, nil
 }
 
 // GetFile reads a file via the generic /api/fs/read endpoint.

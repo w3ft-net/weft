@@ -315,37 +315,20 @@ func TestHTTPBackend_GetDashboard(t *testing.T) {
 	}
 }
 
-func TestHTTPBackend_GetWatchResults_LimitInQuery(t *testing.T) {
+// GetLatestRun reads /api/crons/<name>/latest: numeric and text points.
+func TestHTTPBackend_GetLatestRun(t *testing.T) {
 	b, rec := newTestBackend(t, func(_ *recordedReq, w http.ResponseWriter) {
-		json.NewEncoder(w).Encode([]map[string]string{
-			{"Stdout": "42", "RanAt": "2026-04-01T12:00:00Z"},
-			{"Stdout": "  17  ", "RanAt": "2026-04-01T13:00:00Z"},
-		})
+		w.Write([]byte(`[{"tag":"web-1","value":42},{"tag":"lease","text":"i-0abc"}]`))
 	})
-	rows, err := b.GetWatchResults("err", 50)
+	points, err := b.GetLatestRun("hosts")
 	if err != nil {
-		t.Fatalf("GetWatchResults: %v", err)
+		t.Fatalf("GetLatestRun: %v", err)
 	}
-	if rec.rawQuery != "limit=50" {
-		t.Errorf("query = %q", rec.rawQuery)
+	if rec.path != "/api/crons/hosts/latest" {
+		t.Errorf("path = %q", rec.path)
 	}
-	if len(rows) != 2 || rows[0].Value != "42" || rows[1].Value != "17" {
-		t.Errorf("got %+v", rows)
-	}
-}
-
-// TestHTTPBackend_GetWatchResults_NoLimit: limit=0 omits the query
-// param so the API applies its server-side default. Pins this
-// because a stray `?limit=0` would force a hard cap of 0 results.
-func TestHTTPBackend_GetWatchResults_NoLimit(t *testing.T) {
-	b, rec := newTestBackend(t, func(_ *recordedReq, w http.ResponseWriter) {
-		w.Write([]byte("[]"))
-	})
-	if _, err := b.GetWatchResults("x", 0); err != nil {
-		t.Fatalf("GetWatchResults: %v", err)
-	}
-	if rec.rawQuery != "" {
-		t.Errorf("expected no query string, got %q", rec.rawQuery)
+	if len(points) != 2 || points[0].Display() != "42" || points[1].Display() != "i-0abc" || points[1].Tag != "lease" {
+		t.Errorf("got %+v", points)
 	}
 }
 

@@ -1,8 +1,6 @@
 package dashboard
 
 import (
-	"strings"
-
 	"github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -14,7 +12,7 @@ const seriesRange = "24h.."
 // fetchAllSeries pulls per-cron data for every distinct cron named in the
 // spec: the stored series over seriesRange, reduced like `chart <cron>`
 // (one line per tag, the rest folded into "other"), and the latest run's
-// stdout for table tiles. Missing crons end up absent from the map; the
+// points for table tiles. Missing crons end up absent from the map; the
 // renderer treats those as <no data>.
 func fetchAllSeries(p Provider, spec *store.DashboardSpec) map[string]WatchSeries {
 	out := map[string]WatchSeries{}
@@ -28,8 +26,8 @@ func fetchAllSeries(p Provider, spec *store.DashboardSpec) map[string]WatchSerie
 				continue
 			}
 			ws, _ := toWatchSeries(series)
-			if results, err := p.GetWatchResults(tile.Watch, 1); err == nil && len(results) > 0 {
-				ws.LatestText = strings.TrimSpace(results[0].Value)
+			if latest, err := p.GetLatestRun(tile.Watch); err == nil {
+				ws.Latest = latest
 			}
 			out[tile.Watch] = ws
 		}

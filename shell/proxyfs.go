@@ -74,9 +74,10 @@ func (p *ProxyFS) GetCronSeries(name, rangeSpec string) (chart.CronSeries, error
 	return DecodeCronSeries(body)
 }
 
-// GetWatchResults returns a cron's recent runs, for dashboard table tiles.
-func (p *ProxyFS) GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error) {
-	u := fmt.Sprintf("%s/api/crons/%s/results", p.baseURL, url.PathEscape(name))
+// GetLatestRun returns the points of a cron's latest run, in table order,
+// for dashboard table and counter tiles.
+func (p *ProxyFS) GetLatestRun(name string) ([]chart.LatestPoint, error) {
+	u := fmt.Sprintf("%s/api/crons/%s/latest", p.baseURL, url.PathEscape(name))
 	req, _ := http.NewRequest("GET", u, nil)
 	p.setAuth(req)
 
@@ -90,31 +91,11 @@ func (p *ProxyFS) GetWatchResults(name string, limit int) ([]chart.WatchResultVa
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("%s", strings.TrimSpace(string(body)))
 	}
-
-	var items []struct {
-		Stdout string `json:"Stdout"`
-		RanAt  string `json:"RanAt"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+	var points []chart.LatestPoint
+	if err := json.NewDecoder(resp.Body).Decode(&points); err != nil {
 		return nil, err
 	}
-
-	n := limit
-	if n <= 0 {
-		n = 20
-	}
-	if n > len(items) {
-		n = len(items)
-	}
-
-	results := make([]chart.WatchResultValue, n)
-	for i := 0; i < n; i++ {
-		results[i] = chart.WatchResultValue{
-			Value: items[i].Stdout,
-			RanAt: items[i].RanAt,
-		}
-	}
-	return results, nil
+	return points, nil
 }
 
 // GetDashboard satisfies dashboard.Provider.

@@ -107,7 +107,7 @@ func (w *WeftFuncs) Latest(watchName string) (string, error) {
 // argument or a database hiccup can't page anyone.
 func (w *WeftFuncs) Absent(watchName string, window time.Duration) (bool, error) {
 	if window > 0 {
-		id, since, err := w.rawWindow("weft::is_absent", watchName, window)
+		id, since, err := w.rawWindow("weft::is_absent", watchName, window, false)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return true, nil
 		}
@@ -221,6 +221,9 @@ func (w *WeftFuncs) windowStats(fn, watchName string, dur time.Duration) (store.
 	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
 		return store.CronWindowStats{}, fmt.Errorf("%s: cron %q: %w", fn, watchName, err)
 	}
+	if err := numericCron(fn, watch); err != nil {
+		return store.CronWindowStats{}, err
+	}
 	since := store.ClampRetention(w.Store.TierForOrg(w.OrgID), time.Now().Add(-dur))
 	st, err := w.Store.CronWindowStats(watch.ID, since)
 	if err != nil {
@@ -281,9 +284,19 @@ func (w *WeftFuncs) Count(watchName string, dur time.Duration) (float64, error) 
 	return float64(st.Count), err
 }
 
+// numericCron refuses a text cron for a function that needs numbers. Saves
+// refuse literal names already; this covers names built at run time.
+func numericCron(fn string, watch store.CronWatch) error {
+	if watch.ValueType == store.ValueText {
+		return fmt.Errorf("%s: cron %q stores text (# type: text), so it has no numbers; weft::latest reads it", fn, watch.Name)
+	}
+	return nil
+}
+
 // rawWindow finds the cron and the start of a raw-results window, enforcing
-// the raw cap shared by the funcs that need individual values.
-func (w *WeftFuncs) rawWindow(fn, watchName string, dur time.Duration) (watchID uint, since time.Time, err error) {
+// the raw cap shared by the funcs that need individual values; numeric
+// refuses a text cron.
+func (w *WeftFuncs) rawWindow(fn, watchName string, dur time.Duration, numeric bool) (watchID uint, since time.Time, err error) {
 	if dur <= 0 {
 		return 0, time.Time{}, fmt.Errorf("duration must be positive")
 	}
@@ -293,6 +306,11 @@ func (w *WeftFuncs) rawWindow(fn, watchName string, dur time.Duration) (watchID 
 	var watch store.CronWatch
 	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
 		return 0, time.Time{}, fmt.Errorf("%s: cron %q: %w", fn, watchName, err)
+	}
+	if numeric {
+		if err := numericCron(fn, watch); err != nil {
+			return 0, time.Time{}, err
+		}
 	}
 	return watch.ID, store.ClampRetention(w.Store.TierForOrg(w.OrgID), time.Now().Add(-dur)), nil
 }
@@ -313,7 +331,7 @@ func (w *WeftFuncs) First(watchName string, dur time.Duration) (float64, error) 
 // rawEnds returns the oldest and newest numeric result in the window and how
 // many there are.
 func (w *WeftFuncs) rawEnds(fn, watchName string, dur time.Duration) (first, last float64, n int64, err error) {
-	id, since, err := w.rawWindow(fn, watchName, dur)
+	id, since, err := w.rawWindow(fn, watchName, dur, true)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -343,7 +361,7 @@ func (w *WeftFuncs) Percentile(watchName string, dur time.Duration, p float64) (
 	if p < 0 || p > 100 {
 		return 0, fmt.Errorf("weft::percentile: p must be in [0, 100], got %v", p)
 	}
-	id, since, err := w.rawWindow("weft::percentile", watchName, dur)
+	id, since, err := w.rawWindow("weft::percentile", watchName, dur, true)
 	if err != nil {
 		return 0, err
 	}
@@ -415,6 +433,9 @@ func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration
 	avg, stddev, samples, err := func(orgID store.OrgID, watchName string, period, window time.Duration) (avg, stddev float64, samples int, err error) {
 		var watch store.CronWatch
 		if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+			return 0, 0, 0, err
+		}
+		if err := numericCron("weft::is_seasonal", watch); err != nil {
 			return 0, 0, 0, err
 		}
 		now := time.Now()

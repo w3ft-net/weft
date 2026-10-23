@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/config"
 	"github.com/graybeardcorp/weft/internal/timerange"
 
@@ -289,6 +290,7 @@ func (s *Server) Handler() http.Handler {
 	auth.Handle("PUT /api/crons/{name}", BodyCap(cfg.WatchBodyMax, protected(s.handleSaveWatch)))
 	auth.Handle("DELETE /api/crons/{name}", protected(s.handleDeleteWatch))
 	auth.HandleFunc("GET /api/crons/{name}/results", s.handleWatchResults)
+	auth.HandleFunc("GET /api/crons/{name}/latest", s.handleWatchLatest)
 	auth.HandleFunc("GET /api/crons/{name}/chart", s.handleWatchChart)
 	auth.HandleFunc("GET /api/shared-links/{slug}", s.handleGetSharedLink)
 	auth.HandleFunc("GET /api/dashboards", s.handleListDashboards)
@@ -1759,6 +1761,41 @@ func (s *Server) handleWatchResults(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(results)
 }
 
+// handleWatchLatest implements GET /api/crons/{name}/latest: the points of
+// the cron's latest run, one per tag in table order, for the terminal
+// dashboard's table and counter tiles.
+func (s *Server) handleWatchLatest(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	custID, ok := activeOrg(w, session)
+	if !ok {
+		return
+	}
+	watch, err := s.store.GetCronWatch(custID, r.PathValue("name"))
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	points, err := s.latestPoints(watch.ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(points)
+}
+
+// latestPoints is a cron's latest run as chart.LatestPoints.
+func (s *Server) latestPoints(cronWatchID uint) ([]chart.LatestPoint, error) {
+	rows, err := s.store.LatestCronRun(cronWatchID)
+	if err != nil {
+		return nil, err
+	}
+	points := make([]chart.LatestPoint, len(rows))
+	for i, r := range rows {
+		points[i] = chart.LatestPoint{Tag: r.Tag, Value: r.Value, Text: r.TextValue}
+	}
+	return points, nil
+}
+
 // rangeDurations maps the discrete range tokens accepted by the
 // chart endpoint to their wall-clock windows. Keep in sync with the
 // frontend's Watch page buttons — the server is the source of truth
@@ -1816,6 +1853,10 @@ func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
 	watch, err := s.store.GetCronWatch(custID, name)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if watch.ValueType == store.ValueText {
+		http.Error(w, fmt.Sprintf("cron %q stores text (# type: text), so it has no numbers to chart; a dashboard table tile shows its latest values", name), http.StatusBadRequest)
 		return
 	}
 	series, err := s.store.CronSeries(custID, watch.ID, start, end)

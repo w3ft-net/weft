@@ -343,17 +343,23 @@ func (ce *CronExecutor) persistResults(watch store.CronWatch, ranAt time.Time, p
 			DurationMs:  duration.Milliseconds(),
 		}})
 	}
+	text := watch.ValueType == store.ValueText
 	rows := make([]store.CronResult, len(points))
 	for i, p := range points {
-		v := p.value
 		rows[i] = store.CronResult{
 			CronWatchID: watch.ID,
 			RanAt:       ranAt,
 			Stdout:      p.line,
 			ExitCode:    exitCode,
 			DurationMs:  duration.Milliseconds(),
-			Value:       &v,
 			Tag:         p.tag,
+		}
+		if text {
+			t := p.text
+			rows[i].TextValue = &t
+		} else {
+			v := p.value
+			rows[i].Value = &v
 		}
 	}
 	rows[0].Stderr = stderr

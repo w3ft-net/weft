@@ -859,7 +859,6 @@ export interface DashboardTile {
   format?: string
   display?: DashboardTileDisplay
   threshold?: DashboardThreshold
-  columns?: string[]
 }
 
 export interface DashboardSection {
@@ -872,9 +871,18 @@ export interface DashboardSpec {
   sections: DashboardSection[]
 }
 
+// LatestPoint mirrors chart.LatestPoint: one tag of a cron's latest run,
+// with a number or, for a `# type: text` cron, text.
+export interface LatestPoint {
+  tag: string
+  value?: number
+  text?: string
+}
+
 export interface DashboardWatchPayload {
   cron: CronWatch
-  results: CronResult[]
+  // The latest run, one point per tag in table order.
+  latest: LatestPoint[]
   // The cron's stored series over the last day, one line per tag (the
   // rest folded into "other"), reduced by the server like `chart <cron>`.
   plot: ChartPlot | null

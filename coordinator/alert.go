@@ -186,8 +186,11 @@ func evaluateAlertRow(ctx context.Context, r alertRow, parsed *alert.Args, ac *A
 		}
 		if len(results) == 1 {
 			prevRaw = strings.TrimSpace(results[0].Stdout)
-			if results[0].Value != nil {
+			switch {
+			case results[0].Value != nil:
 				prevRaw = strconv.FormatFloat(*results[0].Value, 'f', -1, 64)
+			case results[0].TextValue != nil:
+				prevRaw = *results[0].TextValue
 			}
 			if v, err := strconv.ParseFloat(prevRaw, 64); err == nil {
 				prevValue = v

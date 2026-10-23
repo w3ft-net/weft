@@ -12,15 +12,17 @@ import (
 )
 
 // cronSchema is how a cron's stdout becomes stored rows: the value and tag
-// fields from alert -v/-t or the `# value:`/`# tag:` headers, and whether
-// the cron alerts. A zero value field means the default text rule.
+// fields from alert -v/-t or the `# value:`/`# tag:` headers, whether the
+// cron alerts, and whether its values are text (`# type: text`). A zero
+// value field means the default text rule.
 type cronSchema struct {
 	value, tag shellcore.FieldSpec
 	alerts     bool
+	text       bool
 }
 
 func schemaForWatch(w store.CronWatch) (cronSchema, error) {
-	s := cronSchema{alerts: w.HasAlert}
+	s := cronSchema{alerts: w.HasAlert, text: w.ValueType == store.ValueText}
 	var err error
 	if w.ValueField != nil {
 		if s.value, err = shellcore.ParseFieldSpec(*w.ValueField); err != nil {
@@ -44,10 +46,11 @@ func (s cronSchema) declaredBy() string {
 }
 
 // cronPoint is one stored point of a run: the line it came from, its value
-// and its tag ("" for untagged).
+// (number, or text for a text cron) and its tag ("" for untagged).
 type cronPoint struct {
 	line  string
 	value float64
+	text  string
 	tag   string
 }
 
@@ -74,16 +77,16 @@ func parseCronOutput(s cronSchema, stdout string) ([]cronPoint, error) {
 		var err error
 		switch {
 		case s.value.IsJSON():
-			p, err = jsonPoint(s, n, line)
+			p, err = s.jsonPoint(n, line)
 		case !s.value.IsZero():
-			p, err = positionalPoint(s, n, line)
+			p, err = s.positionalPoint(n, line)
 		case s.alerts:
 			if len(lines) > 1 {
 				return nil, fmt.Errorf("output has %d lines; an alert without -v reads one value, so give alert -v 1 -t 2 for one line per tag", len(lines))
 			}
-			p, err = flaglessAlertPoint(n, line)
+			p, err = s.flaglessAlertPoint(n, line)
 		default:
-			p, err = textPoint(n, line)
+			p, err = s.textPoint(n, line)
 		}
 		if err != nil {
 			return nil, err
@@ -97,16 +100,24 @@ func isJSONObject(line string) bool {
 	return strings.HasPrefix(line, "{") && gjson.Valid(line)
 }
 
-func parseValue(n int, v string) (float64, error) {
+// point builds the point for value v of line n: a number, or for a text
+// cron the text itself.
+func (s cronSchema) point(n int, line, v string) (cronPoint, error) {
+	p := cronPoint{line: line}
+	if s.text {
+		p.text = v
+		return p, nil
+	}
 	f, err := strconv.ParseFloat(v, 64)
 	if err != nil {
-		return 0, fmt.Errorf("line %d: value %q is not a number", n, v)
+		return cronPoint{}, fmt.Errorf("line %d: value %q is not a number", n, v)
 	}
-	return f, nil
+	p.value = f
+	return p, nil
 }
 
 // textPoint applies the default rule: `<value> [<tag>]`.
-func textPoint(n int, line string) (cronPoint, error) {
+func (s cronSchema) textPoint(n int, line string) (cronPoint, error) {
 	if isJSONObject(line) {
 		return cronPoint{}, fmt.Errorf("output is JSON; add # value: (and # tag:) headers, or alert -v")
 	}
@@ -114,11 +125,10 @@ func textPoint(n int, line string) (cronPoint, error) {
 	if len(fields) > 2 {
 		return cronPoint{}, fmt.Errorf("line %d has %d fields; text output is <value> [<tag>]", n, len(fields))
 	}
-	v, err := parseValue(n, fields[0])
+	p, err := s.point(n, line, fields[0])
 	if err != nil {
 		return cronPoint{}, err
 	}
-	p := cronPoint{line: line, value: v}
 	if len(fields) == 2 {
 		p.tag = fields[1]
 	}
@@ -126,7 +136,7 @@ func textPoint(n int, line string) (cronPoint, error) {
 }
 
 // flaglessAlertPoint reads the one value an alert without -v evaluates.
-func flaglessAlertPoint(n int, line string) (cronPoint, error) {
+func (s cronSchema) flaglessAlertPoint(n int, line string) (cronPoint, error) {
 	if isJSONObject(line) {
 		return cronPoint{}, fmt.Errorf("output is JSON; give alert -v <path>")
 	}
@@ -134,27 +144,22 @@ func flaglessAlertPoint(n int, line string) (cronPoint, error) {
 		if len(fields) == 2 {
 			return cronPoint{}, fmt.Errorf("line %d has a tag; give alert -v 1 -t 2", n)
 		}
-		return cronPoint{}, fmt.Errorf("line %d has %d fields; an alert without -v reads one number, so give alert -v <field>", n, len(fields))
+		return cronPoint{}, fmt.Errorf("line %d has %d fields; an alert without -v reads one value, so give alert -v <field>", n, len(fields))
 	}
-	v, err := parseValue(n, line)
-	if err != nil {
-		return cronPoint{}, err
-	}
-	return cronPoint{line: line, value: v}, nil
+	return s.point(n, line, line)
 }
 
 // positionalPoint reads alert -v N [-t M] columns. The two-field limit of
 // the default rule doesn't apply: the flags say which columns matter.
-func positionalPoint(s cronSchema, n int, line string) (cronPoint, error) {
+func (s cronSchema) positionalPoint(n int, line string) (cronPoint, error) {
 	raw, _ := shellcore.ResolveField(s.value, line)
 	if raw == "" {
 		return cronPoint{}, fmt.Errorf("line %d has no field %s for alert -v", n, s.value)
 	}
-	v, err := parseValue(n, raw)
+	p, err := s.point(n, line, raw)
 	if err != nil {
 		return cronPoint{}, err
 	}
-	p := cronPoint{line: line, value: v}
 	if !s.tag.IsZero() {
 		p.tag, _ = shellcore.ResolveField(s.tag, line)
 	}
@@ -163,7 +168,7 @@ func positionalPoint(s cronSchema, n int, line string) (cronPoint, error) {
 
 // jsonPoint reads one JSON row by the declared paths. A missing or null tag
 // leaves the row untagged; a missing value is a strike.
-func jsonPoint(s cronSchema, n int, line string) (cronPoint, error) {
+func (s cronSchema) jsonPoint(n int, line string) (cronPoint, error) {
 	if !isJSONObject(line) {
 		return cronPoint{}, fmt.Errorf("line %d is not JSON, but the cron declares %s", n, s.declaredBy())
 	}
@@ -171,10 +176,13 @@ func jsonPoint(s cronSchema, n int, line string) (cronPoint, error) {
 	if !val.Exists() || val.Type == gjson.Null {
 		return cronPoint{}, fmt.Errorf("line %d has no %s", n, s.value)
 	}
-	if val.Type != gjson.Number {
+	if !s.text && val.Type != gjson.Number {
 		return cronPoint{}, fmt.Errorf("line %d: value %q is not a number", n, val.String())
 	}
-	p := cronPoint{line: line, value: val.Float()}
+	p, err := s.point(n, line, val.String())
+	if err != nil {
+		return cronPoint{}, err
+	}
 	if !s.tag.IsZero() {
 		if t := gjson.Get(line, s.tag.Path); t.Exists() && t.Type != gjson.Null {
 			p.tag = t.String()

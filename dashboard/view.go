@@ -451,7 +451,7 @@ func (v *DashboardView) renderZoomed(buf *strings.Builder, w, h int) {
 
 	var body string
 	switch {
-	case len(series.Values) == 0 && series.LatestText == "":
+	case len(series.Values) == 0 && len(series.Tags) == 0 && len(series.Latest) == 0:
 		body = shellcore.DimText(fmt.Sprintf("(no data for %q)", t.Watch))
 	case t.Kind == "table":
 		body = v.renderZoomedTable(t, series, w, chartH)
@@ -522,7 +522,7 @@ func (v *DashboardView) renderZoomedChart(t store.DashboardTile, series WatchSer
 }
 
 func (v *DashboardView) renderZoomedTable(t store.DashboardTile, series WatchSeries, w, h int) string {
-	if series.LatestText == "" {
+	if len(series.Latest) == 0 {
 		return shellcore.DimText("(no data)")
 	}
 	var buf strings.Builder
@@ -530,26 +530,17 @@ func (v *DashboardView) renderZoomedTable(t store.DashboardTile, series WatchSer
 	buf.WriteString(t.Watch)
 	buf.WriteString("\x1b[0m\n\n")
 
-	headers := t.Columns
-	colCount := len(headers)
-	if colCount == 0 {
-		buf.WriteString(series.LatestText)
-		return buf.String()
-	}
-	colW := (w - 2) / colCount
-	if colW < 6 {
-		colW = 6
-	}
+	headers, rows := tableRows(series.Latest)
+	colW := max((w-2)/len(headers), 6)
 
 	// Header row
 	buf.WriteString(colorize(clrBlue, joinCols(headers, colW)))
 	buf.WriteString("\n")
-	buf.WriteString(strings.Repeat("─", colW*colCount))
+	buf.WriteString(strings.Repeat("─", colW*len(headers)))
 	buf.WriteString("\n")
 
-	for _, line := range strings.Split(strings.TrimSpace(series.LatestText), "\n") {
-		fields := strings.Fields(line)
-		buf.WriteString(joinCols(fields, colW))
+	for _, row := range rows {
+		buf.WriteString(joinCols(row, colW))
 		buf.WriteString("\n")
 	}
 	return buf.String()

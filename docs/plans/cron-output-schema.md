@@ -106,6 +106,42 @@ Headers are validated at save like `# schedule:` (well-formed paths, `# tag:`
 not without `# value:`). Whether the output matches can only be known at run
 time.
 
+### Text crons (`# type: text`)
+
+Some crons report state, not a measurement: which coordinator holds a lease,
+what version a host runs. `# type: text` declares that a cron's values are
+text. It is the only type header; a cron without one stores numbers.
+
+- The output rules are the same with text in the value slot: a text line is
+  `<text> [<tag>]`, a JSON row takes its value from `# value:` or `alert -v`.
+  More than two fields is still a strike (check 1); a missing value is still a
+  strike; a value that is not a number is not.
+- Values are stored as text next to the line (`cron_results.text_value`), with
+  no numeric value, so they never reach the rollups. Text history is raw only:
+  7 days.
+- The tag cap applies unchanged.
+
+Readers that need numbers refuse text crons, statically where they can:
+
+| Reader | When it refuses |
+|---|---|
+| `alert` numeric conditions (`above`, `below`, `eq`, `neq`, `rising`, `falling`) | At save: the stage is in the cron's own file. `any`, `absent`, `changed` work on text. |
+| `weft::` numeric functions and predicates | At save when the cron name is a literal; at run time otherwise (a variable, Lua, a `/bin` script). `weft::latest`, `weft::previous`, `weft::describe`, `weft::is_absent`, `weft::has_changed` take text. |
+| Dashboard `sparkline`, `counter`, `gauge` tiles | At dashboard save. |
+| `chart <cron>` | At invocation, before drawing. |
+
+Saving a cron as `# type: text` is refused while a numeric reader references
+it by name (another cron's literal `weft::` call, or a numeric dashboard tile),
+and the refusal lists them. The run-time check covers only the names a save
+can't see.
+
+### Table tiles
+
+A `table` tile shows the cron's latest run, one row per tag: tag and value,
+numeric or text. Numeric rows sort by value, highest first; text rows by tag.
+It reads stored points, not stdout, so `columns:` is gone. A table suits
+medium cardinality, where a sparkline legend would fold.
+
 ### Duplicate tags
 
 Allowed. Two lines with the same tag in one run are two points at the same run

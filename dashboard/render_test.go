@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	weftchart "github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -181,16 +182,23 @@ func TestRender_Table(t *testing.T) {
 tiles:
   - kind: table
     cron: top
-    columns: [host, count]
 `)
+	num := func(v float64) *float64 { return &v }
+	text := func(s string) *string { return &s }
 	results := map[string]WatchSeries{
-		"top": {LatestText: "alpha 12\nbeta 7\ngamma 3\n"},
+		"top": {Latest: []weftchart.LatestPoint{
+			{Tag: "alpha", Value: num(12)}, {Tag: "beta", Value: num(7)}, {Tag: "gamma", Text: text("draining")},
+		}},
 	}
-	out := Render(spec, results, 80)
-	for _, want := range []string{"host", "count", "alpha", "beta", "gamma"} {
+	out := stripANSI(Render(spec, results, 80))
+	for _, want := range []string{"tag", "value", "alpha", "12", "beta", "7", "gamma", "draining"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("table missing %q:\n%s", want, out)
 		}
+	}
+	// Rows keep the server's table order.
+	if strings.Index(out, "alpha") > strings.Index(out, "beta") {
+		t.Errorf("rows reordered:\n%s", out)
 	}
 }
 

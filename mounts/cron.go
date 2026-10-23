@@ -168,7 +168,7 @@ func SerializeCron(w *store.CronWatch) string {
 
 // ParseCron splits a /cron.d file into its parts. Enabled is true unless the
 // file says `# enabled: false`: dropping the comment is how a user turns a
-// benched or paused cron back on. The `# value:`/`# tag:` schema headers
+// benched or paused cron back on. The `# value:`/`# tag:`/`# type:` headers
 // stay in the pipeline, where store.CompileWatchPipeline reads them.
 func ParseCron(content string) (schedule, pipeline string, enabled bool, err error) {
 	enabled = true
@@ -176,7 +176,7 @@ func ParseCron(content string) (schedule, pipeline string, enabled bool, err err
 	hasCommand := false
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "# value:") || strings.HasPrefix(trimmed, "# tag:") {
+		if strings.HasPrefix(trimmed, "# value:") || strings.HasPrefix(trimmed, "# tag:") || strings.HasPrefix(trimmed, "# type:") {
 			pipelineLines = append(pipelineLines, trimmed)
 		} else if strings.HasPrefix(trimmed, "# schedule:") {
 			schedule = strings.TrimSpace(strings.TrimPrefix(trimmed, "# schedule:"))

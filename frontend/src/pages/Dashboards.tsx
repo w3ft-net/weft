@@ -347,31 +347,30 @@ function SparklineTile({ tile, payload }: {
 
 // ── Table ──────────────────────────────────────────────────────────────────
 
-function TableTile({ tile, payload }: {
+export function TableTile({ tile, payload }: {
   tile: DashboardTile
   payload: DashboardWatchPayload
 }) {
-  const cols = tile.columns ?? []
-  const rows = useMemo(() => {
-    if (payload.results.length === 0) return []
-    const stdout = payload.results[0].Stdout?.trim() ?? ''
-    if (!stdout) return []
-    return stdout.split('\n').slice(0, 8).map(line => line.trim().split(/\s+/))
-  }, [payload])
-
-  if (rows.length === 0) return <NoData />
+  // The latest run, one row per tag, already in table order (numbers
+  // highest first, text by tag).
+  const points = payload.latest
+  if (points.length === 0) return <NoData />
+  const tagged = points.some(p => p.tag !== '')
+  const numeric = points.every(p => p.value !== undefined && p.value !== null)
 
   return (
     <table className="tui-table dashboards-table" data-testid={`table-${tile.cron}`}>
       <thead>
-        <tr>{cols.map((c, ci) => <th key={c} className={isNumericCol(rows, ci) ? 'dashboards-num' : undefined}>{c}</th>)}</tr>
+        <tr>
+          {tagged && <th>tag</th>}
+          <th className={numeric ? 'dashboards-num' : undefined}>value</th>
+        </tr>
       </thead>
       <tbody>
-        {rows.map((row, i) => (
-          <tr key={i}>
-            {cols.map((_, ci) => (
-              <td key={ci} className={isNumericCol(rows, ci) ? 'dashboards-num' : undefined}>{row[ci] ?? ''}</td>
-            ))}
+        {points.map(p => (
+          <tr key={p.tag} data-testid={`table-${tile.cron}-row-${p.tag}`}>
+            {tagged && <td>{p.tag}</td>}
+            <td className={numeric ? 'dashboards-num' : undefined}>{p.text ?? (p.value ?? '')}</td>
           </tr>
         ))}
       </tbody>
@@ -380,10 +379,6 @@ function TableTile({ tile, payload }: {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-function isNumericCol(rows: string[][], ci: number): boolean {
-  return rows.length > 0 && rows.every(r => r[ci] === undefined || /^-?[\d.,]+%?$/.test(r[ci]))
-}
 
 // relTime renders a timestamp as a short "3m ago" the way top/k9s show age.
 function relTime(iso: string): string {
@@ -398,9 +393,11 @@ function relTime(iso: string): string {
   return `${Math.round(h / 24)}d ago`
 }
 
+// latestValue is the first number of the latest run: on a tagged cron, its
+// highest, since the run comes in table order.
 function latestValue(payload: DashboardWatchPayload): number | null {
-  for (const r of payload.results) {
-    if (r.Value !== null) return r.Value
+  for (const p of payload.latest) {
+    if (p.value !== undefined && p.value !== null) return p.value
   }
   return null
 }

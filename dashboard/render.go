@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
+	weftchart "github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -22,10 +23,10 @@ import (
 // tags — one sub-series per tag (the smallest folded into "other").
 // See toWatchSeries.
 type WatchSeries struct {
-	Values     []float64 // numeric values, newest-first
-	Times      []float64 // epoch seconds, parallel to Values, newest-first
-	LatestText string    // raw stdout of the most recent run (for table)
-	Tags       map[string]WatchSeries
+	Values []float64               // numeric values, newest-first
+	Times  []float64               // epoch seconds, parallel to Values, newest-first
+	Latest []weftchart.LatestPoint // the latest run, one point per tag in table order
+	Tags   map[string]WatchSeries
 }
 
 // Render lays out the spec into a single string sized to (w, h).
@@ -465,24 +466,38 @@ func seriesToPoints(series WatchSeries) (pts []chart.Point, hasTimes bool) {
 	return pts, hasTimes
 }
 
+// tableRows lays out a cron's latest run as a table: a tag column and a
+// value column, or the value alone for an untagged cron. Rows are already
+// in table order (numbers highest first, text by tag).
+func tableRows(latest []weftchart.LatestPoint) (headers []string, rows [][]string) {
+	tagged := false
+	for _, p := range latest {
+		tagged = tagged || p.Tag != ""
+	}
+	if tagged {
+		headers = []string{"tag", "value"}
+	} else {
+		headers = []string{"value"}
+	}
+	for _, p := range latest {
+		if tagged {
+			rows = append(rows, []string{p.Tag, p.Display()})
+		} else {
+			rows = append(rows, []string{p.Display()})
+		}
+	}
+	return headers, rows
+}
+
 func renderTable(t store.DashboardTile, series WatchSeries, w int) []string {
-	if series.LatestText == "" {
+	if len(series.Latest) == 0 {
 		return renderMissing(t, w)
 	}
-	headers := t.Columns
-	colCount := len(headers)
-	if colCount == 0 {
-		return renderMissing(t, w)
-	}
-	colW := (w - 2) / colCount
-	if colW < 4 {
-		colW = 4
-	}
-	headerLine := "  " + colorize(clrBlue, joinCols(headers, colW))
-	out := []string{padRight(headerLine, w)}
-	for _, line := range strings.Split(strings.TrimSpace(series.LatestText), "\n") {
-		fields := strings.Fields(line)
-		out = append(out, padRight("  "+joinCols(fields, colW), w))
+	headers, rows := tableRows(series.Latest)
+	colW := max((w-2)/len(headers), 4)
+	out := []string{padRight("  "+colorize(clrBlue, joinCols(headers, colW)), w)}
+	for _, row := range rows {
+		out = append(out, padRight("  "+joinCols(row, colW), w))
 		if len(out) > 6 {
 			break
 		}

@@ -584,6 +584,9 @@ type CronWatch struct {
 	// HasAlert is true when the pipeline has an alert stage. A cron that
 	// alerts without -v stores its output as one untagged value.
 	HasAlert bool `gorm:"column:has_alert;not null;default:false"`
+	// ValueType is ValueNumber, or ValueText for a `# type: text` cron,
+	// whose values are stored as text and refused by numeric readers.
+	ValueType string `gorm:"column:value_type;not null;default:number"`
 	// AlertCondition + AlertThreshold are the dashboard projection of
 	// the `alert` stage's numeric cutoff. Populated only for
 	// above/below/eq/neq — conditions without a single absolute
@@ -629,6 +632,9 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 	if err != nil {
 		return err
 	}
+	if err := s.checkValueTypes(orgID, name, compiled); err != nil {
+		return err
+	}
 	hash := computeCronWatchHash(schedule, pipeline)
 
 	if err := s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
@@ -649,6 +655,7 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 				ValueField:     compiled.ValueField,
 				TagField:       compiled.TagField,
 				HasAlert:       compiled.HasAlert,
+				ValueType:      compiled.ValueType,
 				AlertCondition: compiled.AlertCondition,
 				AlertThreshold: compiled.AlertThreshold,
 				ContentHash:    hash,
@@ -672,6 +679,7 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 			"value_field":     compiled.ValueField,
 			"tag_field":       compiled.TagField,
 			"has_alert":       compiled.HasAlert,
+			"value_type":      compiled.ValueType,
 			"alert_condition": compiled.AlertCondition,
 			"alert_threshold": compiled.AlertThreshold,
 			"lowered_plan":    loweredPlan,
@@ -735,8 +743,87 @@ type CompiledWatch struct {
 	ValueField     *string
 	TagField       *string
 	HasAlert       bool
+	ValueType      string // ValueNumber or ValueText
 	AlertCondition *string
 	AlertThreshold *float64
+	// NumericRefs are the crons this pipeline reads with a numeric weft::
+	// function, by literal name; a name built at run time isn't listed.
+	NumericRefs []string
+}
+
+// Cron value types: ValueNumber is the default, ValueText is `# type: text`.
+const (
+	ValueNumber = "number"
+	ValueText   = "text"
+)
+
+// numericWeftFuncs are the weft:: functions that need a cron's numeric
+// values. The rest (latest, previous, describe, is_absent, has_changed)
+// read text as well, and is_gt/is_lt test stdin, not a cron.
+var numericWeftFuncs = map[string]bool{
+	"weft::avg": true, "weft::max": true, "weft::min": true, "weft::sum": true,
+	"weft::stddev": true, "weft::first": true, "weft::count": true,
+	"weft::percentile": true, "weft::delta": true, "weft::slope": true, "weft::rate": true,
+	"weft::is_above": true, "weft::is_below": true, "weft::is_rising": true,
+	"weft::is_falling": true, "weft::is_outlier": true, "weft::is_seasonal": true,
+}
+
+// staticWord returns a word's text when it has no expansion, so save-time
+// checks can read a cron name only when it is spelled out.
+func staticWord(w bash.Word) (string, bool) {
+	var s string
+	for _, p := range w.Parts {
+		switch v := p.(type) {
+		case *bash.LiteralPart:
+			s += v.Value
+		case *bash.SingleQuotedPart:
+			s += v.Value
+		default:
+			return "", false
+		}
+	}
+	return s, s != ""
+}
+
+// numericRefs lists the literal cron names passed to numeric weft::
+// functions anywhere in script.
+func numericRefs(script *bash.Script) []string {
+	var out []string
+	seen := map[string]bool{}
+	bash.Walk(script, func(n bash.Node) bool {
+		sc, ok := n.(*bash.SimpleCommand)
+		if !ok || len(sc.Words) < 2 || !numericWeftFuncs[sc.Words[0].Literal()] {
+			return true
+		}
+		if name, ok := staticWord(sc.Words[1]); ok && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+		return true
+	})
+	return out
+}
+
+// valueTypeHeader reads a cron's `# type:` header; text is the only type
+// it names, and a cron without one stores numbers.
+func valueTypeHeader(pipeline string) (string, error) {
+	typ := ValueNumber
+	seen := false
+	for _, line := range strings.Split(pipeline, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "# type:") {
+			continue
+		}
+		if seen {
+			return "", fmt.Errorf("'# type:' is given twice")
+		}
+		seen = true
+		if v := strings.TrimSpace(strings.TrimPrefix(trimmed, "# type:")); v != ValueText {
+			return "", fmt.Errorf("'# type:' takes text, got %q; a cron without it stores numbers", v)
+		}
+		typ = ValueText
+	}
+	return typ, nil
 }
 
 // schemaHeaders reads a cron's `# value:` and `# tag:` header comments.
@@ -807,6 +894,10 @@ func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 	if err != nil {
 		return out, err
 	}
+	if out.ValueType, err = valueTypeHeader(pipeline); err != nil {
+		return out, err
+	}
+	out.NumericRefs = numericRefs(script)
 	var alertCmds []*bash.SimpleCommand
 	bash.Walk(script, func(n bash.Node) bool {
 		if sc, ok := n.(*bash.SimpleCommand); ok {
@@ -852,6 +943,13 @@ func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 	if !parsed.Tag.IsZero() {
 		s := parsed.Tag.String()
 		out.TagField = &s
+	}
+	if out.ValueType == ValueText {
+		switch parsed.Condition {
+		case alert.Any, alert.Absent, alert.Changed:
+		default:
+			return out, fmt.Errorf("this cron stores text (# type: text), and alert %s compares numbers; use any, absent or changed", parsed.Condition)
+		}
 	}
 	// Stamp the condition + numeric threshold for dashboard line
 	// rendering. Only above/below/eq/neq carry a single absolute
@@ -939,6 +1037,9 @@ type CronResult struct {
 	DurationMs  int64
 	Value       *float64 `gorm:"type:double precision"`
 	Tag         string   `gorm:"type:text;not null;default:''"`
+	// TextValue is the value of a `# type: text` cron's row; Value is
+	// NULL for those, so they never reach the rollups.
+	TextValue *string `gorm:"column:text_value"`
 }
 
 // SaveCronResults persists a batch of rows in one insert. Each row keeps

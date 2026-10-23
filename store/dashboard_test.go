@@ -16,7 +16,6 @@ sections:
         size: md
       - kind: table
         cron: top-errors-hourly
-        columns: [host, count]
   - title: Capacity
     tiles:
       - kind: counter
@@ -80,16 +79,15 @@ func TestParseDashboardYAML_Errors(t *testing.T) {
 		{"missing watch", "tiles:\n  - kind: sparkline\n", "missing `cron:`"},
 		{"missing kind", "tiles:\n  - cron: foo\n", "missing `kind:`"},
 		{"bad size", "tiles:\n  - kind: sparkline\n    cron: foo\n    size: huge\n", "unknown size"},
-		{"table no columns", "tiles:\n  - kind: table\n    cron: foo\n", "table tile requires `columns:`"},
+		{"columns is not a tile key", "tiles:\n  - kind: table\n    cron: foo\n    columns: [host, count]\n", "a tile has no 'columns' key"},
 		{"sections + flat tiles", "tiles:\n  - kind: counter\n    cron: foo\nsections:\n  - tiles:\n      - kind: counter\n        cron: bar\n", "cannot mix"},
 		{"empty section", "sections:\n  - title: foo\n    tiles: []\n", "no tiles"},
 		{"unknown field at top", "title: x\nfoo: bar\ntiles:\n  - kind: counter\n    cron: a\n", "not a valid key"},
 		{"unknown field in section", "sections:\n  - heading: Ops\n    tiles:\n      - kind: counter\n        cron: a\n", "'heading' is not a valid key"},
 		{"unknown field in tile", "tiles:\n  - kind: counter\n    cron: a\n    color: red\n", "'color' is not a valid key"},
 		{"format on gauge", "tiles:\n  - kind: gauge\n    cron: a\n    format: \"%.2f\"\n", "`format:` is only supported on counter"},
-		{"format on table", "tiles:\n  - kind: table\n    cron: a\n    columns: [x]\n    format: \"%d\"\n", "`format:` is only supported on counter"},
-		{"threshold on table", "tiles:\n  - kind: table\n    cron: a\n    columns: [x]\n    threshold: {warn: 1}\n", "`threshold:` is only supported on counter, gauge, sparkline"},
-		{"columns on counter", "tiles:\n  - kind: counter\n    cron: a\n    columns: [x]\n", "`columns:` is only supported on table"},
+		{"format on table", "tiles:\n  - kind: table\n    cron: a\n    format: \"%d\"\n", "`format:` is only supported on counter"},
+		{"threshold on table", "tiles:\n  - kind: table\n    cron: a\n    threshold: {warn: 1}\n", "`threshold:` is only supported on counter, gauge, sparkline"},
 		{"format non-string", "tiles:\n  - kind: counter\n    cron: a\n    format: 5\n", "`format:` must contain exactly one %d or %.Nf"},
 		{"format no verb", "tiles:\n  - kind: counter\n    cron: a\n    format: ms\n", "`format:` must contain exactly one %d or %.Nf"},
 		{"format two verbs", "tiles:\n  - kind: counter\n    cron: a\n    format: \"%d/%d\"\n", "`format:` must contain exactly one %d or %.Nf"},
@@ -131,7 +129,6 @@ tiles:
     threshold: {warn: 1}
   - kind: table
     cron: d
-    columns: [host, pct]
 `
 	if _, err := ParseDashboardYAML(body); err != nil {
 		t.Fatalf("valid per-kind fields rejected: %v", err)

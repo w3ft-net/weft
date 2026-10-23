@@ -18,7 +18,10 @@
 // (CronSource, /cron.d/ paths) lives here.
 package chart
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 // CronBucket is one stored point of a cron: a raw run, or a rollup bucket
 // holding the exact count/sum/min/max of the runs in it.
@@ -49,11 +52,24 @@ type CronSource interface {
 	GetCronSeries(name, rangeSpec string) (CronSeries, error)
 }
 
-// WatchResultValue is one recent run of a cron as stored: its stdout
-// (trimmed) and RanAt (RFC3339). Dashboard table tiles show the latest.
-type WatchResultValue struct {
-	Value string
-	RanAt string
+// LatestPoint is one point of a cron's latest run, as dashboard table and
+// counter tiles show it: its tag and either a number or, for a
+// `# type: text` cron, text.
+type LatestPoint struct {
+	Tag   string   `json:"tag"`
+	Value *float64 `json:"value,omitempty"`
+	Text  *string  `json:"text,omitempty"`
+}
+
+// Display is the point's value as a table cell.
+func (p LatestPoint) Display() string {
+	switch {
+	case p.Text != nil:
+		return *p.Text
+	case p.Value != nil:
+		return strconv.FormatFloat(*p.Value, 'f', -1, 64)
+	}
+	return ""
 }
 
 // WatchArgs holds a parsed `chart <cron> [...]` invocation (the cron

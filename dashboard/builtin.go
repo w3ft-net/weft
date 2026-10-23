@@ -12,13 +12,13 @@ import (
 //   - GetDashboard fetches the YAML body for a named dashboard.
 //   - GetDashboardSpec returns the cached parsed spec (avoids re-fetch + YAML parse).
 //   - ListDashboards returns available dashboard names.
-//   - GetWatchResults returns a cron's recent runs (the latest feeds
+//   - GetLatestRun returns the points of a cron's latest run (for
 //     counter, gauge and table tiles).
 //   - GetCronSeries (chart.CronSource) returns a cron's stored points
 //     per tag, for sparkline tiles.
 type Provider interface {
 	chart.CronSource
-	GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error)
+	GetLatestRun(name string) ([]chart.LatestPoint, error)
 	GetDashboard(name string) (string, error)
 	GetDashboardSpec(name string) (*store.DashboardSpec, error)
 	ListDashboards() ([]string, error)
