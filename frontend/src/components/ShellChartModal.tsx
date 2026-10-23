@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useReportModalClosed } from '../lib/useReportModalClosed'
 import { Sparkline, SparkLegend, formatSparkValue } from './Sparkline'
-import { plotToSpark, type ChartPlot } from '../lib/chartPlot'
+import { plotToSpark, plotXDomain, type ChartPlot } from '../lib/chartPlot'
 import './ShellChartModal.css'
 
 // ChartSpec mirrors bridge.ts ChartOpenSpec — kept here as a local
@@ -130,6 +130,7 @@ function PlotView({ plot }: { plot: ChartPlot }) {
         series={series}
         height={plot.kind === 'sparkline' ? 48 : 180}
         showTimeAxis={plot.timeX && plot.kind !== 'sparkline'}
+        xDomain={plotXDomain(plot)}
       />
       <SparkLegend series={series} />
     </>

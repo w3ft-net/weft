@@ -27,14 +27,15 @@ func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) 
 		if errMsg != "" {
 			return "", errMsg
 		}
+		b := chart.Line(w, h).XRange(plot.XMin, plot.XMax)
 		if len(plot.Series) > 1 || plot.Series[0].Tag != "" {
 			series := make([]chart.NamedSeries, 0, len(plot.Series))
 			for _, s := range plot.Series {
 				series = append(series, chart.NamedSeries{Label: s.Tag, Points: chartPoints(s.Points)})
 			}
-			return renderLine(chart.Line(w, h).Series(series), args, plot.TimeX)
+			return renderLine(b.Series(series), args, plot.TimeX)
 		}
-		return renderLine(chart.Line(w, h).Points(chartPoints(plot.Series[0].Points)), args, plot.TimeX)
+		return renderLine(b.Points(chartPoints(plot.Series[0].Points)), args, plot.TimeX)
 	}
 
 	// Bar and sparkline draw one cell column per point, so unlike a line
@@ -171,12 +172,17 @@ func resolveXY(line string, args PipeArgs, isTimeX bool, seq int) (xLabel string
 		}
 	}
 
-	// Y resolution. With no -y, y is the last whitespace field.
+	// Y resolution. With no -y, y is the first whitespace field that -x
+	// doesn't read: the value of a cron's `<value> [<tag>]` line, so a
+	// line reads the same piped into chart and stored by a cron.
 	yStr := ""
 	if args.YSpec.IsZero() {
-		fields := strings.Fields(line)
-		if len(fields) > 0 {
-			yStr = fields[len(fields)-1]
+		col := 1
+		if args.XSpec.Index == 1 {
+			col = max(args.XEnd, 1) + 1
+		}
+		if fields := strings.Fields(line); len(fields) >= col {
+			yStr = fields[col-1]
 		}
 	} else {
 		raw, err := shellcore.ResolveField(args.YSpec, line)
@@ -303,7 +309,8 @@ func groupRows(lines []string, args PipeArgs) (map[groupKey][]float64, []groupKe
 	}
 	if zeroFills(args) && len(ordered) > 0 {
 		var errMsg string
-		ordered, errMsg = fillEmptyBuckets(groups, ordered, args, ordered[0].x, ordered[len(ordered)-1].x)
+		lo, hi := args.span(ordered[0].x, ordered[len(ordered)-1].x)
+		ordered, errMsg = fillEmptyBuckets(groups, ordered, args, lo, hi)
 		if errMsg != "" {
 			return nil, nil, false, errMsg
 		}
@@ -324,11 +331,12 @@ func zeroFills(args PipeArgs) bool {
 }
 
 // fillEmptyBuckets adds a row-less group for every --bucket step in
-// [lo, hi] (unix seconds of bucket starts) that has none, so a stretch
-// with no logs draws as a hole at 0 instead of the line bridging it.
-// Returns the x-sorted keys including the filled ones.
+// [lo, hi] (unix seconds, floored to bucket starts) that has none, so a
+// stretch with no logs draws as a hole at 0 instead of the line bridging
+// it. Returns the x-sorted keys including the filled ones.
 func fillEmptyBuckets(groups map[groupKey][]float64, ordered []groupKey, args PipeArgs, lo, hi float64) ([]groupKey, string) {
-	start, end := time.Unix(int64(lo), 0), time.Unix(int64(hi), 0)
+	start := time.Unix(int64(lo), 0).Truncate(args.Bucket)
+	end := time.Unix(int64(hi), 0).Truncate(args.Bucket)
 	span := end.Sub(start)
 	if n := int64(span/args.Bucket) + 1; n > maxFilledBuckets {
 		return nil, fmt.Sprintf("--bucket %s over %s is %d buckets (max %d); use a wider --bucket", args.Bucket, span, n, maxFilledBuckets)
@@ -432,6 +440,9 @@ func groupRowsByTag(lines []string, args PipeArgs) ([]tagGroup, bool, string) {
 		for _, key := range st.ordered {
 			lo, hi = min(lo, key.x), max(hi, key.x)
 		}
+	}
+	if isTimeX {
+		lo, hi = args.span(lo, hi)
 	}
 
 	sort.Strings(tagOrder)

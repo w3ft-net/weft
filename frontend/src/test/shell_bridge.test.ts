@@ -296,15 +296,22 @@ describe('pipe-form chart (wasm)', () => {
   it('opens the chart with the bucketed series', async () => {
     const shell = await bootShell([])
     shell.exec('tail /log/a/b/main.log | chart -x 1 --bucket 5m')
+    // Rows inside the shell's default 1d.. range, in two 5-minute buckets.
+    const bucket = Math.floor(Date.now() / 300_000) * 300_000 - 3_600_000
+    const at = (ms: number) => new Date(bucket + ms).toISOString().replace(/\.\d+Z$/, 'Z')
     shell.queryResult([
-      '2026-10-10T12:00:01Z ERROR a',
-      '2026-10-10T12:02:40Z ERROR b',
-      '2026-10-10T12:07:00Z ERROR c',
+      `${at(1_000)} ERROR a`,
+      `${at(160_000)} ERROR b`,
+      `${at(420_000)} ERROR c`,
     ].join('\n') + '\n', '')
     const [spec] = shell.charts()
     expect(spec).toBeDefined()
     const plot = JSON.parse(spec.plot as string)
     expect(plot.timeX).toBe(true)
-    expect(plot.series[0].points.map((p: { y: number }) => p.y)).toEqual([2, 1])
+    const ys = plot.series[0].points.map((p: { y: number }) => p.y)
+    expect(ys.filter((y: number) => y > 0)).toEqual([2, 1])
+    // Zero-filled across the whole day, and the axis spans it.
+    expect(ys.length).toBeGreaterThan(280)
+    expect(plot.xMax - plot.xMin).toBeGreaterThanOrEqual(86_400)
   })
 })

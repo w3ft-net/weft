@@ -9,6 +9,15 @@ export interface ChartPlot {
     tag: string
     points: Array<{ x: number; label: string; y: number }>
   }>
+  // The shell's range (unix seconds) a time axis spans; absent = the data's own.
+  xMin?: number
+  xMax?: number
+}
+
+// plotXDomain is the plot's fixed time span in Sparkline's milliseconds.
+export function plotXDomain(plot: ChartPlot): [number, number] | undefined {
+  if (!plot.timeX || !plot.xMin || !plot.xMax || plot.xMin >= plot.xMax) return undefined
+  return [plot.xMin * 1000, plot.xMax * 1000]
 }
 
 // plotToSpark converts a plot to Sparkline's series shape. A time axis is

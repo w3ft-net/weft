@@ -149,18 +149,21 @@ interface SparklineProps {
   condition?: 'above' | 'below' | 'eq' | 'neq' | null
   height?: number
   showTimeAxis?: boolean
+  // xDomain fixes the time axis (ms) to a requested window, widened to any
+  // data outside it; absent = first to last point.
+  xDomain?: [number, number]
 }
 
 const TICK_STYLE = { fontSize: 10, fill: CHART_COLORS.tick, fontFamily: "'JetBrains Mono', monospace" }
 
-export function Sparkline({ series, bands = [], threshold, condition, height = 48, showTimeAxis = false }: SparklineProps) {
+export function Sparkline({ series, bands = [], threshold, condition, height = 48, showTimeAxis = false, xDomain }: SparklineProps) {
   const drawable = series.filter(s => s.points.length >= 2)
   const data = useMemo(() => mergeSeriesData(drawable), [drawable])
   if (data.length < 2) return null
 
   const hasThresh = typeof threshold === 'number' && !isNaN(threshold)
-  const tMin = data[0].ts
-  const tMax = data[data.length - 1].ts
+  const tMin = xDomain ? Math.min(xDomain[0], data[0].ts) : data[0].ts
+  const tMax = xDomain ? Math.max(xDomain[1], data[data.length - 1].ts) : data[data.length - 1].ts
   const spanMs = tMax - tMin
 
   let yMin = Infinity, yMax = -Infinity

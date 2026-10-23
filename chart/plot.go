@@ -1,5 +1,7 @@
 package chart
 
+import "math"
+
 // Plot is a pipe-form chart reduced to plain data: the grouped, bucketed and
 // aggregated points a renderer draws. The terminal renderer (RenderFromStream)
 // and the browser modal both start from it, so `-x`/`-y`/`--bucket`/`-a`/`--tag`
@@ -8,6 +10,25 @@ type Plot struct {
 	Kind   string       `json:"kind"`   // line | bar | sparkline
 	TimeX  bool         `json:"timeX"`  // X is unix seconds
 	Series []PlotSeries `json:"series"` // exactly one unnamed series unless --tag was given
+	// XMin/XMax fix a time axis to the shell's range (widened to any data
+	// outside it), so quiet stretches at either end show as such; both 0
+	// means the data's own span.
+	XMin float64 `json:"xMin,omitempty"`
+	XMax float64 `json:"xMax,omitempty"`
+}
+
+// fixTimeSpan sets XMin/XMax from the range in args and the data's extent.
+func (p *Plot) fixTimeSpan(args PipeArgs) {
+	if !p.TimeX || args.RangeStart.IsZero() {
+		return
+	}
+	lo, hi := math.Inf(1), math.Inf(-1)
+	for _, s := range p.Series {
+		for _, pt := range s.Points {
+			lo, hi = min(lo, pt.X), max(hi, pt.X)
+		}
+	}
+	p.XMin, p.XMax = args.span(lo, hi)
 }
 
 // PlotSeries is one line (or the single bar group). Tag is empty for an
@@ -42,6 +63,7 @@ func PlotFromStream(lines []string, args PipeArgs) (Plot, string) {
 		for _, tg := range tagGroups {
 			plot.Series = append(plot.Series, PlotSeries{Tag: tg.tag, Points: reduceGroups(tg.groups, tg.ordered, args.Aggregate)})
 		}
+		plot.fixTimeSpan(args)
 		return plot, ""
 	}
 
@@ -54,6 +76,7 @@ func PlotFromStream(lines []string, args PipeArgs) (Plot, string) {
 	}
 	plot.TimeX = isTimeX
 	plot.Series = []PlotSeries{{Points: reduceGroups(groups, ordered, args.Aggregate)}}
+	plot.fixTimeSpan(args)
 	return plot, ""
 }
 

@@ -6,7 +6,7 @@
 //	cv := chart.NewView(src, rangeSpec)
 //	core.RegisterView(cv)
 //	core.RegisterBuiltin("chart", chart.Builtin(src, rangeSpec))
-//	core.RegisterPipeStage("chart", chart.ParsePipeArgs, chart.RenderPipe)
+//	core.RegisterPipeStage("chart", chart.ParsePipeArgs, chart.RenderPipe(rangeSpec))
 //
 // Or, equivalently, the convenience entry point:
 //

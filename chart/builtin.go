@@ -52,26 +52,28 @@ func Builtin(src CronSource, rangeSpec func() string) shellcore.BuiltinFunc {
 	}
 }
 
-// RenderPipe is the shellcore.PipeStageRenderFunc for `... | chart`.
-// Receives the upstream output lines + the parsed PipeArgs and
-// writes the rendered chart to scrollback.
+// RenderPipe returns the shellcore.PipeStageRenderFunc for `... | chart`.
+// It receives the upstream output lines + the parsed PipeArgs and writes
+// the rendered chart to scrollback, spanning the shell's range.
 //
 // Wire it via:
 //
-//	core.RegisterPipeStage("chart", chart.ParsePipeArgs, chart.RenderPipe)
-func RenderPipe(c *shellcore.ShellCore, lines []string, parsed any) (string, string) {
-	args, ok := parsed.(PipeArgs)
-	if !ok {
-		return "", "chart: internal error: parsed args not PipeArgs"
+//	core.RegisterPipeStage("chart", chart.ParsePipeArgs, chart.RenderPipe(rangeSpec))
+func RenderPipe(rangeSpec func() string) shellcore.PipeStageRenderFunc {
+	return func(c *shellcore.ShellCore, lines []string, parsed any) (string, string) {
+		args, ok := parsed.(PipeArgs)
+		if !ok {
+			return "", "chart: internal error: parsed args not PipeArgs"
+		}
+		w, h := c.Width(), c.Height()-1
+		if w < 20 {
+			w = 20
+		}
+		if h < 6 {
+			h = 6
+		}
+		return RenderFromStream(lines, args.WithRange(rangeSpec()), w, h)
 	}
-	w, h := c.Width(), c.Height()-1
-	if w < 20 {
-		w = 20
-	}
-	if h < 6 {
-		h = 6
-	}
-	return RenderFromStream(lines, args, w, h)
 }
 
 // Register wires chart into the given shellcore at construction
@@ -83,5 +85,5 @@ func RenderPipe(c *shellcore.ShellCore, lines []string, parsed any) (string, str
 func Register(c *shellcore.ShellCore, src CronSource, rangeSpec func() string) {
 	c.RegisterView(NewView(src, rangeSpec))
 	c.RegisterBuiltin("chart", Builtin(src, rangeSpec))
-	c.RegisterPipeStage("chart", ParsePipeArgs, RenderPipe)
+	c.RegisterPipeStage("chart", ParsePipeArgs, RenderPipe(rangeSpec))
 }

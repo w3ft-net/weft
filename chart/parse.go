@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/internal/timerange"
 )
 
 // ParseWatchCmd parses a tokenised `chart …` command line into
@@ -104,6 +105,28 @@ type PipeArgs struct {
 	Bucket    time.Duration       // 0 = no bucketing
 	Kind      string              // line | bar | sparkline
 	Title     string
+	// RangeStart/RangeEnd are the shell's range, set by the caller (not
+	// parsed). With a time x-axis the chart spans the whole range, and
+	// zero-filled buckets reach both ends; zero means the data's own span.
+	RangeStart, RangeEnd time.Time
+}
+
+// WithRange returns args with the shell's range resolved from spec; an
+// unparseable spec leaves the data's own span.
+func (a PipeArgs) WithRange(spec string) PipeArgs {
+	if start, end, err := timerange.ParseRange(spec); err == nil {
+		a.RangeStart, a.RangeEnd = start, end
+	}
+	return a
+}
+
+// span returns the x extent a time chart spans: the range when one is set,
+// widened to any data outside it.
+func (a PipeArgs) span(lo, hi float64) (float64, float64) {
+	if a.RangeStart.IsZero() {
+		return lo, hi
+	}
+	return min(lo, float64(a.RangeStart.Unix())), max(hi, float64(a.RangeEnd.Unix()))
 }
 
 // usesJSONLines reports whether stdin should be parsed as one JSON

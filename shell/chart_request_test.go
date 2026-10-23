@@ -80,13 +80,13 @@ func TestConfigureCore_ChartBuiltin_FollowRejected(t *testing.T) {
 // don't want to stand up a query backend.
 func TestConfigureCore_ChartPipe_EmitsLinesRequest(t *testing.T) {
 	var got []ChartRequest
-	render := chartRequestPipe(func(r ChartRequest) { got = append(got, r) })
+	render := (&Shell{}).chartRequestPipe(func(r ChartRequest) { got = append(got, r) })
 
 	core := shellcore.NewShellCore(nil, 80, 24,
 		func(b []byte) {},
 		func(a shellcore.Action) {},
 	)
-	lines := []string{"1 200", "2 201", "3 199"}
+	lines := []string{"200 a", "201 b", "199 c"}
 	parsed, msg := chart.ParsePipeArgs([]string{"-t", "line", "--title", "latency"})
 	if msg != "" {
 		t.Fatal(msg)
@@ -162,7 +162,7 @@ func TestConfigureCore_ChartPipe_FallbackToAsciiWhenChartNil(t *testing.T) {
 // empty modal opened.
 func TestConfigureCore_ChartPipe_AppliesBucketAndReportsNoData(t *testing.T) {
 	var got []ChartRequest
-	render := chartRequestPipe(func(r ChartRequest) { got = append(got, r) })
+	render := (&Shell{}).chartRequestPipe(func(r ChartRequest) { got = append(got, r) })
 	core := shellcore.NewShellCore(nil, 80, 24, func(b []byte) {}, func(a shellcore.Action) {})
 
 	parsed, msg := chart.ParsePipeArgs([]string{"-x", "1", "--bucket", "5m"})
@@ -229,7 +229,7 @@ func TestChartPipe_StderrIsNotData(t *testing.T) {
 	core := shellcore.NewShellCore(nil, 80, 24, func([]byte) {}, func(shellcore.Action) {})
 
 	var got []ChartRequest
-	render := chartRequestPipe(func(r ChartRequest) { got = append(got, r) })
+	render := (&Shell{}).chartRequestPipe(func(r ChartRequest) { got = append(got, r) })
 
 	_, errMsg := render(core, []string{red + "query: no such file: main.log" + reset}, args)
 	if !strings.Contains(errMsg, "query: no such file: main.log") || strings.Contains(errMsg, "cannot parse") {

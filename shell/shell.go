@@ -157,7 +157,7 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 	}
 	if s.Chart != nil {
 		core.RegisterBuiltin("chart", s.chartRequestBuiltin(s.Chart))
-		core.RegisterPipeStage("chart", chart.ParsePipeArgs, chartRequestPipe(s.Chart))
+		core.RegisterPipeStage("chart", chart.ParsePipeArgs, s.chartRequestPipe(s.Chart))
 	}
 	if s.Trace != nil {
 		core.RegisterBuiltin("trace", traceRequestBuiltin(s.Trace))
@@ -303,7 +303,7 @@ func splitDiagnostics(lines []string) (rows, diagnostics []string) {
 // upstream pipeline snapshot to the embedder callback and writes a
 // terse placeholder to scrollback (so the user sees that something
 // happened — the chart itself appears in a separate React modal).
-func chartRequestPipe(emit func(ChartRequest)) shellcore.PipeStageRenderFunc {
+func (s *Shell) chartRequestPipe(emit func(ChartRequest)) shellcore.PipeStageRenderFunc {
 	return func(c *shellcore.ShellCore, lines []string, parsed any) (string, string) {
 		args, ok := parsed.(chart.PipeArgs)
 		if !ok {
@@ -316,7 +316,7 @@ func chartRequestPipe(emit func(ChartRequest)) shellcore.PipeStageRenderFunc {
 			return "", "chart: " + strings.Join(diagnostics, "; ")
 		}
 		lines = rows
-		plot, errMsg := chart.PlotFromStream(lines, args)
+		plot, errMsg := chart.PlotFromStream(lines, args.WithRange(s.Range))
 		if errMsg != "" {
 			return "", "chart: " + errMsg
 		}
@@ -533,7 +533,7 @@ func (s *Shell) ExecNonInteractive(line string, w io.Writer) error {
 	}
 	if chartArgs != nil {
 		lines := queryResultLines(result)
-		out, errMsg := chart.RenderFromStream(lines, *chartArgs, 80, 20)
+		out, errMsg := chart.RenderFromStream(lines, chartArgs.WithRange(s.Range), 80, 20)
 		if errMsg != "" {
 			return fmt.Errorf("chart: %s", errMsg)
 		}

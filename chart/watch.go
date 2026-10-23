@@ -198,6 +198,9 @@ func CronPlot(series CronSeries, args WatchArgs) (Plot, string) {
 		return Plot{}, errMsg
 	}
 	plot := Plot{Kind: args.Kind, TimeX: true}
+	if !series.Start.IsZero() && series.Start.Before(series.End) {
+		plot.XMin, plot.XMax = float64(series.Start.Unix()), float64(series.End.Unix())
+	}
 	for _, l := range lines {
 		s := PlotSeries{Tag: lineLabel(l.tag, len(lines))}
 		for _, a := range l.accs {
@@ -296,7 +299,7 @@ func RenderCron(name string, series CronSeries, args WatchArgs, w, h int) (strin
 		return out + footer, ""
 	default: // line
 		plot, _ := CronPlot(series, args)
-		b := chart.Line(w, h).Title(title).XAxisTime()
+		b := chart.Line(w, h).Title(title).XAxisTime().XRange(plot.XMin, plot.XMax)
 		if len(plot.Series) == 1 {
 			b = b.Points(chartPoints(plot.Series[0].Points))
 		} else {

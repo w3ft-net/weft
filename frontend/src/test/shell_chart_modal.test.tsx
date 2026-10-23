@@ -15,7 +15,7 @@ const reportModalClosed = vi.fn()
 vi.mock('../wasm/network', () => ({ reportModalClosed: (p: string) => reportModalClosed(p) }))
 
 import ShellChartModal from '../components/ShellChartModal'
-import { plotToSpark, type ChartPlot } from '../lib/chartPlot'
+import { plotToSpark, plotXDomain, type ChartPlot } from '../lib/chartPlot'
 
 const T0 = 1_791_633_600 // unix seconds
 const line = (ys: number[]): ChartPlot => ({
@@ -69,6 +69,13 @@ describe('plotToSpark', () => {
     })
     expect(s.tag).toBe('web')
     expect(s.points).toEqual([{ ts: T0 * 1000, value: 1 }])
+  })
+
+  it('spans the shell range in milliseconds when the plot carries one', () => {
+    const plot: ChartPlot = { kind: 'line', timeX: true, series: [], xMin: T0, xMax: T0 + 3600 }
+    expect(plotXDomain(plot)).toEqual([T0 * 1000, (T0 + 3600) * 1000])
+    expect(plotXDomain({ ...plot, timeX: false })).toBeUndefined()
+    expect(plotXDomain({ kind: 'line', timeX: true, series: [] })).toBeUndefined()
   })
 
   it('leaves an ordinal axis alone', () => {
