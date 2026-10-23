@@ -74,8 +74,8 @@ func Run(s *shell.Shell) error {
 	// transitive `store` dep) into the WASM build for code the
 	// browser path never runs.
 	if s.FS != nil {
-		if wr, ok := s.FS.(chart.WatchResultsProvider); ok && s.Chart == nil {
-			chart.Register(r.core, wr)
+		if src, ok := s.FS.(chart.CronSource); ok && s.Chart == nil {
+			chart.Register(r.core, src, func() string { return s.Range })
 		}
 		if dp, ok := s.FS.(dashboard.Provider); ok && s.Dashboard == nil {
 			dashboard.Register(r.core, dp)

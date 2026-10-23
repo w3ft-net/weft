@@ -10,12 +10,13 @@ import (
 )
 
 // ParseWatchCmd parses a tokenised `chart …` command line into
-// WatchArgs. The first non-flag token is the watch name (bare or
+// WatchArgs. The first non-flag token is the cron name (bare or
 // `/cron.d/<name>`). Returns an error message when the user types
 // something we don't grok — the message is what shows up in the
-// shell, so it should be terse.
+// shell, so it should be terse. The window is the shell's range, not
+// a flag.
 func ParseWatchCmd(args []string) (WatchArgs, string) {
-	out := WatchArgs{Limit: 50, Interval: time.Second}
+	out := WatchArgs{Interval: time.Second, Aggregate: "avg"}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -25,15 +26,30 @@ func ParseWatchCmd(args []string) (WatchArgs, string) {
 			}
 			out.Kind = args[i+1]
 			i++
-		case a == "-n" || a == "--limit":
+		case a == "-a" || a == "--aggregate":
 			if i+1 >= len(args) {
-				return out, "chart: -n requires a number"
+				return out, "chart: -a requires a function (count|sum|avg|min|max|p50|p95)"
 			}
-			n, err := strconv.Atoi(args[i+1])
-			if err != nil || n <= 0 {
-				return out, "chart: -n must be a positive integer"
+			out.Aggregate = args[i+1]
+			if !validAggregate(out.Aggregate) || out.Aggregate == "identity" {
+				return out, fmt.Sprintf("chart: unknown --aggregate %q", out.Aggregate)
 			}
-			out.Limit = n
+			i++
+		case a == "--bucket":
+			if i+1 >= len(args) {
+				return out, "chart: --bucket requires a duration (e.g. 1h, 30m)"
+			}
+			d, err := time.ParseDuration(args[i+1])
+			if err != nil || d <= 0 {
+				return out, fmt.Sprintf("chart: --bucket: invalid duration %q", args[i+1])
+			}
+			out.Bucket = d
+			i++
+		case a == "--title":
+			if i+1 >= len(args) {
+				return out, "chart: --title requires a value"
+			}
+			out.Title = args[i+1]
 			i++
 		case a == "-i" || a == "--interval":
 			if i+1 >= len(args) {
@@ -57,7 +73,7 @@ func ParseWatchCmd(args []string) (WatchArgs, string) {
 		}
 	}
 	if out.Name == "" {
-		return out, "usage: chart <cron> [-t TYPE] [-n LIMIT] [-i INTERVAL] [-f]"
+		return out, "usage: chart <cron> [-a FN] [--bucket DUR] [-t TYPE] [--title TEXT] [-f [-i DUR]]"
 	}
 	// Strip /cron.d/ prefix so the user can `chart /cron.d/foo` or `chart foo`.
 	out.Name = strings.TrimPrefix(out.Name, "/cron.d/")

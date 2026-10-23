@@ -14,10 +14,9 @@ import (
 //   - GetDashboard fetches the YAML body for a named dashboard.
 //   - GetDashboardSpec returns the cached parsed spec (avoids re-fetch + YAML parse).
 //   - ListDashboards returns available dashboard names.
-//   - GetWatchResults is the same hook chart.WatchResultsProvider uses
-//     so existing FS implementations satisfy it for free.
+//   - GetWatchResults returns a cron's recent runs.
 type Provider interface {
-	chart.WatchResultsProvider
+	GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error)
 	GetDashboard(name string) (string, error)
 	GetDashboardSpec(name string) (*store.DashboardSpec, error)
 	ListDashboards() ([]string, error)

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -11,8 +11,6 @@ vi.mock('../components/Sparkline', async importOriginal => ({
     <div data-testid="spark-stub">{series.map(s => s.points.length).join(',')}</div>
   ),
 }))
-const getWatchResults = vi.fn()
-vi.mock('../lib/api', () => ({ getWatchResults: (...a: unknown[]) => getWatchResults(...a) }))
 const reportModalClosed = vi.fn()
 vi.mock('../wasm/network', () => ({ reportModalClosed: (p: string) => reportModalClosed(p) }))
 
@@ -140,38 +138,26 @@ describe('ShellChartModal tour report', () => {
     expect(reportModalClosed).toHaveBeenCalledWith('cat x | chart')
   })
 
-  it('reports a cron chart once its results loaded, not before', async () => {
-    getWatchResults.mockResolvedValueOnce([])
-    const spec = { cron: 'error-rate', pipeline: 'chart error-rate' }
-    const early = render(
-      <MemoryRouter>
-        <ShellChartModal spec={spec} onClose={() => {}} />
-      </MemoryRouter>,
-    )
-    early.unmount() // closed while still loading
-    expect(reportModalClosed).not.toHaveBeenCalled()
-
-    getWatchResults.mockResolvedValueOnce([])
-    const loaded = render(
-      <MemoryRouter>
-        <ShellChartModal spec={spec} onClose={() => {}} />
-      </MemoryRouter>,
-    )
-    await act(async () => {})
-    loaded.unmount()
-    await new Promise(r => setTimeout(r, 20))
-    expect(reportModalClosed).toHaveBeenCalledWith('chart error-rate')
-  })
-
-  it('does not report a cron chart that failed to load', async () => {
-    getWatchResults.mockRejectedValueOnce(new Error('boom'))
+  // The shell reduces a cron's stored series to a plot before opening the
+  // modal, so a cron chart draws it like a pipe chart and links to its cron.
+  it('draws a cron chart from its plot, links the cron and reports the close', async () => {
+    const tagged: ChartPlot = {
+      kind: 'line',
+      timeX: true,
+      series: [
+        { tag: 'api-1', points: [{ x: T0, label: 'a', y: 1 }, { x: T0 + 300, label: 'b', y: 2 }] },
+        { tag: 'api-2', points: [{ x: T0, label: 'a', y: 3 }, { x: T0 + 300, label: 'b', y: 4 }] },
+      ],
+    }
     const view = render(
       <MemoryRouter>
-        <ShellChartModal spec={{ cron: 'error-rate', pipeline: 'chart error-rate' }} onClose={() => {}} />
+        <ShellChartModal spec={{ cron: 'hosts', plot: tagged, pipeline: 'chart hosts' }} onClose={() => {}} />
       </MemoryRouter>,
     )
-    await act(async () => {})
+    expect(screen.getByTestId('spark-stub').textContent).toBe('2,2')
+    expect(screen.getByTestId('shell-chart-modal-watch-link').getAttribute('href')).toBe('/cron/hosts')
     view.unmount()
-    expect(reportModalClosed).not.toHaveBeenCalled()
+    await new Promise(r => setTimeout(r, 20))
+    expect(reportModalClosed).toHaveBeenCalledWith('chart hosts')
   })
 })

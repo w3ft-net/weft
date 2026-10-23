@@ -1126,6 +1126,37 @@ func (s *Store) CronWindowStats(cronWatchID uint, since time.Time) (CronWindowSt
 	return total, nil
 }
 
+// CronSeries is one cron's stored points over a window, read from a single
+// tier: the coarsest whose retention still covers the window's start.
+type CronSeries struct {
+	Granularity string
+	Start, End  time.Time // the window after clamping to the plan's retention
+	Buckets     []CronBucket
+}
+
+// CronSeries returns a cron's buckets with start <= bucket_start < end,
+// oldest first, every tag included. start is clamped to the org's
+// retention first.
+func (s *Store) CronSeries(orgID OrgID, cronWatchID uint, start, end time.Time) (CronSeries, error) {
+	start = ClampRetention(s.TierForOrg(orgID), start)
+	out := CronSeries{Granularity: PickGranularity(time.Since(start)), Start: start, End: end}
+	if !start.Before(end) {
+		return out, nil
+	}
+	err := s.db.Raw(`
+		SELECT bucket_start, tag, count, sum, sum_sq, min, max
+		FROM cron_results_all
+		WHERE granularity = ?
+		  AND cron_watch_id = ?
+		  AND bucket_start >= ?
+		  AND bucket_start < ?
+		  AND count > 0
+		ORDER BY bucket_start ASC, tag ASC`,
+		out.Granularity, cronWatchID, start, end,
+	).Scan(&out.Buckets).Error
+	return out, err
+}
+
 // ClampRetention pushes `since` forward to (now - LogRetention(tier))
 // when the requested window exceeds the plan's retention, so callers
 // never read rows older than the plan allows — even though the rows

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
-	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
 )
 
 // View is the live-chart takeover screen. It implements
@@ -15,27 +14,30 @@ import (
 // args) where args is a WatchArgs value (typically produced by the
 // chart Builtin handler when --follow is set).
 type View struct {
-	wr WatchResultsProvider // results source
+	src       CronSource    // series source
+	rangeSpec func() string // the shell's range, re-read on every fetch
 
 	// Active session — non-nil only between OnEnter and OnExit.
 	session *session
 }
 
-// session is the per-takeover state: which watch we're charting,
-// the rendering args, last fetched points, and a heartbeat clock.
+// session is the per-takeover state: which cron we're charting,
+// the rendering args, the last fetched series, and a heartbeat clock.
 type session struct {
 	args     WatchArgs
-	lastTick time.Time     // when Tick last fired
-	lastErr  string        // most recent fetch error (shown in status)
-	pts      []chart.Point // currently-charted points
-	width    int           // captured at enter
-	height   int           // captured at enter
-	rendered bool          // first frame painted
+	lastTick time.Time  // when Tick last fired
+	lastErr  string     // most recent fetch error (shown in status)
+	series   CronSeries // currently-charted series
+	width    int        // captured at enter
+	height   int        // captured at enter
+	rendered bool       // first frame painted
 }
 
-// NewView constructs a chart View backed by the given
-// WatchResultsProvider. Pass it to core.RegisterView at startup.
-func NewView(wr WatchResultsProvider) *View { return &View{wr: wr} }
+// NewView constructs a chart View backed by the given CronSource and
+// range. Pass it to core.RegisterView at startup.
+func NewView(src CronSource, rangeSpec func() string) *View {
+	return &View{src: src, rangeSpec: rangeSpec}
+}
 
 // Name implements shellcore.View.
 func (v *View) Name() string { return "chart" }
@@ -117,12 +119,13 @@ func (v *View) fetchAndDraw(c *shellcore.ShellCore) {
 	}
 	st.lastTick = time.Now()
 
-	results, err := v.wr.GetWatchResults(st.args.Name, st.args.Limit)
+	// Resolving the range per fetch is what makes a relative start slide
+	// and an absolute start with an open end grow.
+	series, err := v.src.GetCronSeries(st.args.Name, v.rangeSpec())
 	if err != nil {
 		st.lastErr = err.Error()
 	} else {
-		pts, _ := watchResultsToPoints(results)
-		st.pts = pts
+		st.series = series
 		st.lastErr = ""
 	}
 	v.paint(c)
@@ -153,44 +156,13 @@ func (v *View) paint(c *shellcore.ShellCore) {
 		chartH = 5
 	}
 
-	title := st.args.Name
-	if len(st.pts) > 0 {
-		title = fmt.Sprintf("%s  (last %d, every %s)",
-			st.args.Name, len(st.pts), st.args.Interval)
-	}
-
 	var body string
-	switch {
-	case st.lastErr != "":
+	if st.lastErr != "" {
 		body = shellcore.ErrorText("chart: "+st.lastErr) + "\r\n"
-	case len(st.pts) == 0:
-		body = shellcore.DimText(fmt.Sprintf("(no numeric results for %q)", st.args.Name)) + "\r\n"
-	default:
-		var rendered string
-		var err error
-		switch st.args.Kind {
-		case "sparkline":
-			values := make([]float64, len(st.pts))
-			for i, p := range st.pts {
-				values[i] = p.Y
-			}
-			rendered = chart.Sparkline(values) + "\n"
-		case "bar":
-			labels := make([]string, len(st.pts))
-			vals := make([]float64, len(st.pts))
-			for i, p := range st.pts {
-				labels[i] = formatChartTime(p.X)
-				vals[i] = p.Y
-			}
-			rendered, err = chart.Bar(w, chartH).Title(title).BarValues(labels, vals).Render()
-		default:
-			rendered, err = chart.Line(w, chartH).Title(title).XAxisTime().Points(st.pts).Render()
-		}
-		if err != nil {
-			body = shellcore.ErrorText("chart: "+err.Error()) + "\r\n"
-		} else {
-			body = strings.ReplaceAll(rendered, "\n", "\r\n")
-		}
+	} else if rendered, msg := RenderCron(st.args.Name, st.series, st.args, w, chartH); msg != "" {
+		body = shellcore.DimText("("+msg+")") + "\r\n"
+	} else {
+		body = strings.ReplaceAll(rendered, "\n", "\r\n")
 	}
 
 	var b strings.Builder

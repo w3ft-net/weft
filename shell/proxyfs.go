@@ -54,7 +54,27 @@ func (p *ProxyFS) setAuth(req *http.Request) {
 	}
 }
 
-// GetWatchResults satisfies chart.WatchResultsProvider.
+// GetCronSeries satisfies chart.CronSource.
+func (p *ProxyFS) GetCronSeries(name, rangeSpec string) (chart.CronSeries, error) {
+	u := fmt.Sprintf("%s/api/crons/%s/chart?spec=%s", p.baseURL, url.PathEscape(name), url.QueryEscape(rangeSpec))
+	req, _ := http.NewRequest("GET", u, nil)
+	p.setAuth(req)
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return chart.CronSeries{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return chart.CronSeries{}, err
+	}
+	if resp.StatusCode >= 400 {
+		return chart.CronSeries{}, fmt.Errorf("%s", strings.TrimSpace(string(body)))
+	}
+	return DecodeCronSeries(body)
+}
+
+// GetWatchResults returns a cron's recent runs, for dashboard table tiles.
 func (p *ProxyFS) GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error) {
 	u := fmt.Sprintf("%s/api/crons/%s/results", p.baseURL, url.PathEscape(name))
 	req, _ := http.NewRequest("GET", u, nil)

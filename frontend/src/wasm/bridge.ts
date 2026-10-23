@@ -56,7 +56,6 @@ export interface ChartOpenSpec {
   plot?: ChartPlot
   kind?: string
   title?: string
-  limit?: number
 }
 
 // TraceOpenSpec is the payload the Go-side `trace` handler hands us in
@@ -116,7 +115,7 @@ export async function initShellWasm(
 
     getCustomer: () => identity?.customer ?? '',
     getServices: () => services,
-    fsGetWatchResults: (name: string, limit: number) => fsGetWatchResults(name, limit),
+    fsGetCronSeries: (name: string, rangeSpec: string) => fsGetCronSeries(name, rangeSpec),
     // The Go-side wasm bridge calls onRangeChange(rawSpec, label):
     //   rawSpec  — un-resolved spec ("1d..", "30m..", ISO pair, etc).
     //              Stored for the network layer to ship on every fetch.
@@ -230,7 +229,7 @@ export async function initShellPane(
     getUser: () => identity?.user ?? '',
     getCustomer: () => identity?.customer ?? '',
     getServices: () => services,
-    fsGetWatchResults: (name: string, limit: number) => fsGetWatchResults(name, limit),
+    fsGetCronSeries: (name: string, rangeSpec: string) => fsGetCronSeries(name, rangeSpec),
 
     // Panes don't own the header range chip; still record the spec so
     // the network layer ships a sane window on each fetch.
@@ -330,21 +329,14 @@ function fsRemove(path: string): { error?: string } {
   return {}
 }
 
-function fsGetWatchResults(name: string, limit: number): { results?: { stdout: string; ran_at: string }[]; error?: string } {
+// fsGetCronSeries backs `chart <cron>`: a cron's stored points over the
+// shell's range spec, which the server resolves. The Go side decodes the
+// body, so it is passed through as text.
+function fsGetCronSeries(name: string, rangeSpec: string): { body?: string; error?: string } {
   const xhr = new XMLHttpRequest()
-  xhr.open('GET', `${API_BASE}/api/crons/${encodeURIComponent(name)}/results`, false)
+  xhr.open('GET', `${API_BASE}/api/crons/${encodeURIComponent(name)}/chart?spec=${encodeURIComponent(rangeSpec)}`, false)
   for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v)
   try { xhr.send() } catch { return { error: 'network error' } }
-  if (xhr.status >= 400) return { error: xhr.responseText || `HTTP ${xhr.status}` }
-  try {
-    const items = JSON.parse(xhr.responseText) as { Stdout: string; RanAt: string }[]
-    return {
-      results: (items || []).slice(0, limit || 20).map(r => ({
-        stdout: r.Stdout,
-        ran_at: r.RanAt,
-      }))
-    }
-  } catch {
-    return { results: [] }
-  }
+  if (xhr.status >= 400) return { error: xhr.responseText.trim() || `HTTP ${xhr.status}` }
+  return { body: xhr.responseText }
 }

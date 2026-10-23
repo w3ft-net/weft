@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/config"
+	"github.com/graybeardcorp/weft/internal/timerange"
 
 	"github.com/google/uuid"
 	"github.com/graybeardcorp/saaskit/stripekit"
@@ -1784,14 +1785,29 @@ func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
+	// The window is either one of the Watch page's range buttons or, from
+	// the shell's `chart <cron>`, the shell's own range spec, resolved here
+	// against the server's clock like every other query.
 	rangeKey := r.URL.Query().Get("range")
-	if rangeKey == "" {
-		rangeKey = "24h"
-	}
-	dur, ok := rangeDurations[rangeKey]
-	if !ok {
-		http.Error(w, "unknown range", http.StatusBadRequest)
-		return
+	var start, end time.Time
+	if spec := r.URL.Query().Get("spec"); spec != "" {
+		var err error
+		if start, end, err = timerange.ParseRange(spec); err != nil {
+			http.Error(w, "range: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		rangeKey = spec
+	} else {
+		if rangeKey == "" {
+			rangeKey = "24h"
+		}
+		dur, ok := rangeDurations[rangeKey]
+		if !ok {
+			http.Error(w, "unknown range", http.StatusBadRequest)
+			return
+		}
+		end = time.Now()
+		start = end.Add(-dur)
 	}
 	custID, ok := activeOrg(w, session)
 	if !ok {
@@ -1802,52 +1818,45 @@ func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	since := store.ClampRetention(s.store.TierForOrg(custID), time.Now().Add(-dur))
-	gran := store.PickGranularity(time.Since(since))
-	var buckets []store.CronBucket
-	err = s.store.DB().Raw(`
-		SELECT bucket_start, tag, count, sum, sum_sq, min, max
-		FROM cron_results_all
-		WHERE granularity = ?
-		  AND cron_watch_id = ?
-		  AND bucket_start >= ?
-		ORDER BY bucket_start ASC`,
-		gran, watch.ID, since,
-	).Scan(&buckets).Error
+	series, err := s.store.CronSeries(custID, watch.ID, start, end)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	buckets := series.Buckets
 
 	// Shape for the wire: flat points, avg computed here so the client
 	// doesn't have to re-do sum/count division. Keep count/min/max so
 	// legends can show per-tag stats without a second request.
+	// Sum rides along so a reader can merge buckets exactly (avg of a
+	// merged bucket is total sum / total count).
 	type point struct {
 		Ts    int64   `json:"ts"`
 		Tag   string  `json:"tag"`
 		Value float64 `json:"value"` // avg = sum/count (or raw value for raw tier)
 		Count int64   `json:"count"`
+		Sum   float64 `json:"sum"`
 		Min   float64 `json:"min"`
 		Max   float64 `json:"max"`
 	}
 	points := make([]point, 0, len(buckets))
 	for _, b := range buckets {
-		if b.Count == 0 {
-			continue
-		}
 		points = append(points, point{
 			Ts:    b.BucketStart.UnixMilli(),
 			Tag:   b.Tag,
 			Value: b.Sum / float64(b.Count),
 			Count: b.Count,
+			Sum:   b.Sum,
 			Min:   b.Min,
 			Max:   b.Max,
 		})
 	}
 	json.NewEncoder(w).Encode(map[string]any{
 		"points":      points,
-		"granularity": gran,
+		"granularity": series.Granularity,
 		"range":       rangeKey,
+		"start":       series.Start.UnixMilli(),
+		"end":         series.End.UnixMilli(),
 	})
 }
 

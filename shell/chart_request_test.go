@@ -9,21 +9,23 @@ import (
 )
 
 // TestConfigureCore_ChartBuiltin_EmitsWatchRequest verifies that
-// `chart api-errors -n 100 -t bar` at the browser prompt fires
-// Shell.Chart with a watch-form ChartRequest. The CLI's ASCII
-// renderer is not registered when Shell.Chart is set.
+// `chart api-errors -t bar -a max` at the browser prompt reads the cron's
+// series over the shell's range and fires Shell.Chart with the plot
+// already reduced, so the modal draws what the CLI would. The CLI's
+// ASCII renderer is not registered when Shell.Chart is set.
 func TestConfigureCore_ChartBuiltin_EmitsWatchRequest(t *testing.T) {
 	var got []ChartRequest
 	core := shellcore.NewShellCore(nil, 80, 24,
 		func(b []byte) {},
 		func(a shellcore.Action) {},
 	)
-	s := &Shell{User: "alice", Chart: func(r ChartRequest) {
+	src := &chartTestFS{series: rawSeries(1, 5, 3)}
+	s := &Shell{User: "alice", FS: src, Range: "6h..", Chart: func(r ChartRequest) {
 		got = append(got, r)
 	}}
 	s.ConfigureCore(core)
 
-	for _, r := range "chart api-errors -n 100 -t bar" {
+	for _, r := range "chart api-errors -t bar -a max --bucket 1h" {
 		core.HandleEvent(shellcore.KeyEvent{Rune: r})
 	}
 	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
@@ -32,17 +34,14 @@ func TestConfigureCore_ChartBuiltin_EmitsWatchRequest(t *testing.T) {
 		t.Fatalf("expected 1 chart request, got %d", len(got))
 	}
 	r := got[0]
-	if r.Watch != "api-errors" {
-		t.Errorf("Watch: got %q want %q", r.Watch, "api-errors")
+	if r.Watch != "api-errors" || r.Kind != "bar" {
+		t.Errorf("request = %+v, want cron api-errors as a bar chart", r)
 	}
-	if r.Limit != 100 {
-		t.Errorf("Limit: got %d want 100", r.Limit)
+	if src.gotRange != "6h.." {
+		t.Errorf("read the series over %q, want the shell's 6h..", src.gotRange)
 	}
-	if r.Kind != "bar" {
-		t.Errorf("Kind: got %q want bar", r.Kind)
-	}
-	if r.Plot != nil {
-		t.Errorf("watch form should not carry a Plot; got %v", r.Plot)
+	if r.Plot == nil || len(r.Plot.Series) != 1 || len(r.Plot.Series[0].Points) != 1 || r.Plot.Series[0].Points[0].Y != 5 {
+		t.Errorf("Plot = %+v, want one hourly bucket holding max 5", r.Plot)
 	}
 }
 
@@ -128,7 +127,7 @@ func TestConfigureCore_ChartPipe_EmitsLinesRequest(t *testing.T) {
 
 // TestConfigureCore_ChartPipe_FallbackToAsciiWhenChartNil confirms
 // the CLI path: when Shell.Chart is nil, ConfigureCore registers the
-// stock chart.Builtin against the FS's WatchResultsProvider, so a
+// stock chart.Builtin against the FS's CronSource, so a
 // `chart <name>` invocation renders ASCII via the FS instead of
 // emitting the browser-style ChartRequest. We can't easily probe
 // shellcore's registered pipe stages externally; this test instead
@@ -195,7 +194,7 @@ func TestConfigureCore_ChartPipe_AppliesBucketAndReportsNoData(t *testing.T) {
 func TestConfigureCore_ChartRequestsCarryTheTypedLine(t *testing.T) {
 	var got []ChartRequest
 	core := shellcore.NewShellCore(nil, 80, 24, func(b []byte) {}, func(a shellcore.Action) {})
-	s := &Shell{User: "alice", Chart: func(r ChartRequest) { got = append(got, r) }}
+	s := &Shell{User: "alice", FS: &chartTestFS{series: rawSeries(1, 2)}, Chart: func(r ChartRequest) { got = append(got, r) }}
 	s.ConfigureCore(core)
 
 	type_ := func(line string) {

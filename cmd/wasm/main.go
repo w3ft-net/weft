@@ -15,11 +15,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"syscall/js"
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/warp/pkg/shellcore/wasm"
+	"github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/internal/timerange"
 	"github.com/graybeardcorp/weft/shell"
 	"github.com/graybeardcorp/weft/theme"
@@ -150,6 +152,22 @@ func buildSharedFS(cb js.Value) *shellcore.MountFS {
 	return mfs
 }
 
+// cronFS adds chart.CronSource to the shared MountFS: the pane's
+// fsGetCronSeries callback fetches /api/crons/<name>/chart synchronously,
+// like the mounts' file callbacks.
+type cronFS struct {
+	*shellcore.MountFS
+	cb js.Value
+}
+
+func (f cronFS) GetCronSeries(name, rangeSpec string) (chart.CronSeries, error) {
+	res := f.cb.Call("fsGetCronSeries", name, rangeSpec)
+	if e := res.Get("error"); e.Truthy() {
+		return chart.CronSeries{}, errors.New(e.String())
+	}
+	return shell.DecodeCronSeries([]byte(res.Get("body").String()))
+}
+
 // buildShell wires a *shell.Shell for one core against the shared FS.
 // The range/dashboard/chart hooks fire JS callbacks; each pane gets its
 // own callbacks object (own write target) so output lands in its own
@@ -157,7 +175,7 @@ func buildSharedFS(cb js.Value) *shellcore.MountFS {
 func buildShell(cb js.Value, apps []string, mfs *shellcore.MountFS) *shell.Shell {
 	s := &shell.Shell{
 		Apps:     apps,
-		FS:       mfs,
+		FS:       cronFS{MountFS: mfs, cb: cb},
 		Customer: readCustomer(cb),
 		Range:    "1d..",
 		Dashboard: func(name string) {
@@ -169,7 +187,6 @@ func buildShell(cb js.Value, apps []string, mfs *shellcore.MountFS) *shell.Shell
 				"cron":     r.Watch,
 				"kind":     r.Kind,
 				"title":    r.Title,
-				"limit":    r.Limit,
 			}
 			if r.Plot != nil {
 				// JSON keeps the nested series out of syscall/js's

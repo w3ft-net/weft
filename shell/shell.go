@@ -156,7 +156,7 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 		core.RegisterBuiltin("dashboard", dashboardNavigateBuiltin(s.Dashboard))
 	}
 	if s.Chart != nil {
-		core.RegisterBuiltin("chart", chartRequestBuiltin(s.Chart))
+		core.RegisterBuiltin("chart", s.chartRequestBuiltin(s.Chart))
 		core.RegisterPipeStage("chart", chart.ParsePipeArgs, chartRequestPipe(s.Chart))
 	}
 	if s.Trace != nil {
@@ -209,36 +209,35 @@ func (s *Shell) ConfigureCore(core *shellcore.ShellCore) {
 }
 
 // ChartRequest is the payload Shell.Chart receives when the browser
-// shell intercepts a `chart` invocation. Exactly one of Watch or
-// Lines is set — Watch for the standalone `chart <name>` form, Lines
-// for the pipe-stage `... | chart` form. The remaining fields carry
-// the parsed render options so the modal can fully reproduce what
-// the CLI would have drawn to scrollback.
+// shell intercepts a `chart` invocation. Plot is always set; Watch
+// names the cron for the standalone `chart <name>` form. The remaining
+// fields carry the parsed render options so the modal can fully
+// reproduce what the CLI would have drawn to scrollback.
 type ChartRequest struct {
 	// Pipeline is the line the user typed to open the chart, so the surface
 	// that renders it can report itself closed against that command.
 	Pipeline string
-	// Watch is the watch name when the user typed `chart <name>`.
-	// Empty when the request originates from `... | chart`.
+	// Watch is the cron name when the user typed `chart <name>`, so the
+	// modal can link to it. Empty when the request originates from
+	// `... | chart`.
 	Watch string
-	// Plot is the grouped, bucketed and aggregated data for `... | chart`,
-	// reduced per the flags the user typed. The browser modal draws it
-	// directly; nil for the watch form.
+	// Plot is the grouped, bucketed and aggregated data, reduced per the
+	// flags the user typed: from the upstream lines for `... | chart`, from
+	// the cron's stored series over the shell's range for `chart <name>`.
+	// The browser modal draws it directly.
 	Plot *chart.Plot
 	// Kind is line / bar / sparkline / area / table.
 	Kind string
-	// Title is the user-supplied title for pipe form (--title);
-	// empty for watch form.
+	// Title is the user-supplied title (--title).
 	Title string
-	// Limit is the watch-history depth for the watch form
-	// (`chart <name> -n N`); ignored for pipe form.
-	Limit int
 }
 
-// chartRequestBuiltin returns a `chart` builtin that forwards the
-// parsed watch args to the embedder callback. Used by the browser
-// shell; the CLI registers chart.Builtin (ASCII renderer) instead.
-func chartRequestBuiltin(emit func(ChartRequest)) shellcore.BuiltinFunc {
+// chartRequestBuiltin returns a `chart` builtin that reads the cron's
+// series over the shell's range, reduces it with chart.CronPlot (the same
+// reduction the CLI draws) and hands the plot to the embedder callback.
+// Used by the browser shell; the CLI registers chart.Builtin (ASCII
+// renderer) instead.
+func (s *Shell) chartRequestBuiltin(emit func(ChartRequest)) shellcore.BuiltinFunc {
 	return func(c *shellcore.ShellCore, args []string) bool {
 		if len(args) == 0 || args[0] != "chart" {
 			return false
@@ -252,11 +251,30 @@ func chartRequestBuiltin(emit func(ChartRequest)) shellcore.BuiltinFunc {
 			c.AppendScrollback(shellcore.ErrorText("chart: --follow is not supported in the browser; open the cron page instead") + "\n")
 			return true
 		}
+		src, ok := s.FS.(chart.CronSource)
+		if !ok {
+			c.AppendScrollback(shellcore.ErrorText("chart: cron results not supported in this backend") + "\n")
+			return true
+		}
+		series, err := src.GetCronSeries(parsed.Name, s.Range)
+		if err != nil {
+			c.AppendScrollback(shellcore.ErrorText("chart: "+err.Error()) + "\n")
+			return true
+		}
+		plot, msg := chart.CronPlot(series, parsed)
+		if msg == "" && len(plot.Series) == 0 {
+			msg = fmt.Sprintf("no numeric results for cron %q in this range", parsed.Name)
+		}
+		if msg != "" {
+			c.AppendScrollback(shellcore.ErrorText("chart: "+msg) + "\n")
+			return true
+		}
 		emit(ChartRequest{
 			Pipeline: c.RunningPipeline(),
 			Watch:    parsed.Name,
+			Plot:     &plot,
 			Kind:     parsed.Kind,
-			Limit:    parsed.Limit,
+			Title:    parsed.Title,
 		})
 		return true
 	}
@@ -653,7 +671,7 @@ func (s *Shell) execFSBuiltin(line string) (bool, string, error) {
 		// Non-interactive chart: render a single frame and return.
 		// `--follow` is meaningless here (no terminal to redraw into),
 		// so we ignore the flag and just paint the latest frame.
-		wr, ok := s.FS.(chart.WatchResultsProvider)
+		src, ok := s.FS.(chart.CronSource)
 		if !ok {
 			return true, "chart: cron results not supported in this backend\n", nil
 		}
@@ -664,7 +682,7 @@ func (s *Shell) execFSBuiltin(line string) (bool, string, error) {
 		if perr != "" {
 			return true, "", errors.New(perr)
 		}
-		out, errMsg := chart.RenderOneShot(wr, parsed.Name, parsed.Kind, parsed.Limit, 80, 20)
+		out, errMsg := chart.RenderOneShot(src, s.Range, parsed, 80, 20)
 		if errMsg != "" {
 			return true, "chart: " + errMsg + "\n", nil
 		}

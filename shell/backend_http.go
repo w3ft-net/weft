@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -201,9 +202,19 @@ func (b *HTTPBackend) DeleteDashboard(name string) error {
 	return b.apiDelete("/api/dashboards/" + name)
 }
 
-// GetWatchResults returns recent watch runs. Used by the shell to render
-// sparkline / last-run values inside the interactive UI. limit is the
-// server-side max; a limit of 0 tells the api to apply its default.
+// GetCronSeries satisfies chart.CronSource: the cron's stored points over
+// the range spec, which the server resolves.
+func (b *HTTPBackend) GetCronSeries(name, rangeSpec string) (chart.CronSeries, error) {
+	data, err := b.apiGet("/api/crons/" + url.PathEscape(name) + "/chart?spec=" + url.QueryEscape(rangeSpec))
+	if err != nil {
+		return chart.CronSeries{}, err
+	}
+	return DecodeCronSeries(data)
+}
+
+// GetWatchResults returns recent cron runs, for dashboard table tiles.
+// limit is the server-side max; a limit of 0 tells the api to apply its
+// default.
 func (b *HTTPBackend) GetWatchResults(name string, limit int) ([]chart.WatchResultValue, error) {
 	url := "/api/crons/" + name + "/results"
 	if limit > 0 {

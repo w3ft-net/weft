@@ -5,53 +5,49 @@ import (
 	"io/fs"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/graybeardcorp/weft/chart"
 )
 
+// rawSeries is a raw-tier series of one untagged run per minute.
+func rawSeries(values ...float64) chart.CronSeries {
+	start := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	s := chart.CronSeries{Granularity: "raw", Start: start, End: start.Add(time.Hour)}
+	for i, v := range values {
+		s.Buckets = append(s.Buckets, chart.CronBucket{
+			Start: start.Add(time.Duration(i) * time.Minute), Count: 1, Sum: v, Min: v, Max: v,
+		})
+	}
+	return s
+}
+
 // TestExecNonInteractiveChart is the documented smoke test from the
 // shell-charts plan: `weft sh -c "chart errors"` should print a chart
 // to stdout and return cleanly without entering any persistent mode.
+// The window is the shell's range, handed to the source as typed.
 func TestExecNonInteractiveChart(t *testing.T) {
-	s := &Shell{
-		FS: &chartTestFS{
-			results: []chart.WatchResultValue{
-				{Value: "1", RanAt: "2026-04-25T12:00:00Z"},
-				{Value: "5", RanAt: "2026-04-25T12:01:00Z"},
-				{Value: "3", RanAt: "2026-04-25T12:02:00Z"},
-				{Value: "8", RanAt: "2026-04-25T12:03:00Z"},
-				{Value: "12", RanAt: "2026-04-25T12:04:00Z"},
-			},
-		},
-	}
+	src := &chartTestFS{series: rawSeries(1, 5, 3, 8, 12)}
+	s := &Shell{FS: src, Range: "2h.."}
 	var buf bytes.Buffer
 	if err := s.ExecNonInteractive("chart errors", &buf); err != nil {
 		t.Fatalf("ExecNonInteractive: %v", err)
 	}
 	out := buf.String()
-	if out == "" {
-		t.Fatal("expected non-empty chart output")
-	}
-	// Title appears verbatim (after stripping ANSI it's "errors  (last 5)").
 	if !strings.Contains(out, "errors") {
-		t.Errorf("output missing watch name 'errors':\n%s", out)
+		t.Errorf("output missing cron name 'errors':\n%s", out)
 	}
 	// Time-axis labels: HH:MM colon-separated.
 	if !strings.Contains(out, ":") {
 		t.Errorf("output missing time-axis colon:\n%s", out)
 	}
+	if src.gotRange != "2h.." {
+		t.Errorf("source got range %q, want the shell's 2h..", src.gotRange)
+	}
 }
 
 func TestExecNonInteractiveChartSparkline(t *testing.T) {
-	s := &Shell{
-		FS: &chartTestFS{
-			results: []chart.WatchResultValue{
-				{Value: "1", RanAt: "2026-04-25T12:00:00Z"},
-				{Value: "5", RanAt: "2026-04-25T12:01:00Z"},
-				{Value: "3", RanAt: "2026-04-25T12:02:00Z"},
-			},
-		},
-	}
+	s := &Shell{FS: &chartTestFS{series: rawSeries(1, 5, 3)}}
 	var buf bytes.Buffer
 	if err := s.ExecNonInteractive("chart errors -t sparkline", &buf); err != nil {
 		t.Fatalf("ExecNonInteractive: %v", err)
@@ -72,14 +68,7 @@ func TestExecNonInteractiveChartSparkline(t *testing.T) {
 func TestExecNonInteractiveChartFollowFlagIgnored(t *testing.T) {
 	// --follow has no meaning in non-interactive mode (no terminal to
 	// redraw into); the runner should treat it as a one-shot anyway.
-	s := &Shell{
-		FS: &chartTestFS{
-			results: []chart.WatchResultValue{
-				{Value: "5", RanAt: "2026-04-25T12:00:00Z"},
-				{Value: "8", RanAt: "2026-04-25T12:01:00Z"},
-			},
-		},
-	}
+	s := &Shell{FS: &chartTestFS{series: rawSeries(5, 8)}}
 	var buf bytes.Buffer
 	if err := s.ExecNonInteractive("chart errors -f -i 1s", &buf); err != nil {
 		t.Fatalf("ExecNonInteractive: %v", err)
@@ -90,23 +79,21 @@ func TestExecNonInteractiveChartFollowFlagIgnored(t *testing.T) {
 }
 
 func TestExecNonInteractiveChartUnknownWatch(t *testing.T) {
-	s := &Shell{
-		FS: &chartTestFS{results: nil}, // no results for any name
-	}
+	s := &Shell{FS: &chartTestFS{}} // no points for any name
 	var buf bytes.Buffer
 	if err := s.ExecNonInteractive("chart ghost", &buf); err != nil {
 		t.Fatalf("ExecNonInteractive: %v", err)
 	}
-	out := buf.String()
-	if !strings.Contains(out, "no numeric results") {
+	if out := buf.String(); !strings.Contains(out, "no numeric results") {
 		t.Errorf("expected 'no numeric results' message, got:\n%s", out)
 	}
 }
 
-// chartTestFS implements FS + WatchResultsProvider for non-interactive
-// shell tests.
+// chartTestFS implements FS + chart.CronSource for non-interactive shell
+// tests, recording the range it was asked for.
 type chartTestFS struct {
-	results []chart.WatchResultValue
+	series   chart.CronSeries
+	gotRange string
 }
 
 func (f *chartTestFS) ReadFile(string) ([]byte, error)       { return nil, nil }
@@ -114,8 +101,9 @@ func (f *chartTestFS) WriteFile(string, []byte) error        { return nil }
 func (f *chartTestFS) ReadDir(string) ([]fs.DirEntry, error) { return nil, nil }
 func (f *chartTestFS) Stat(string) (fs.FileInfo, error)      { return nil, fs.ErrNotExist }
 func (f *chartTestFS) Remove(string) error                   { return nil }
-func (f *chartTestFS) GetWatchResults(string, int) ([]chart.WatchResultValue, error) {
-	return f.results, nil
+func (f *chartTestFS) GetCronSeries(_ string, rangeSpec string) (chart.CronSeries, error) {
+	f.gotRange = rangeSpec
+	return f.series, nil
 }
 
 // TestExecNonInteractiveChartRejectsBadArgs pins that the one-shot cron form
@@ -126,15 +114,13 @@ func TestExecNonInteractiveChartRejectsBadArgs(t *testing.T) {
 		"chart errors -x":            "chart: unknown option -x",
 		"chart errors --kind bar":    "chart: unknown option --kind",
 		"chart errors -t pie":        "unknown type",
-		"chart errors -n abc":        "-n must be a positive integer",
-		"chart errors -n":            "-n requires a number",
+		"chart errors -n 20":         "chart: unknown option -n",
+		"chart errors -a":            "-a requires a function",
 		"chart errors other":         "unexpected argument",
 		"chart errors --type bar -q": "chart: unknown option -q",
 	}
 	for line, want := range cases {
-		s := &Shell{FS: &chartTestFS{results: []chart.WatchResultValue{
-			{Value: "1", RanAt: "2026-04-25T12:00:00Z"},
-		}}}
+		s := &Shell{FS: &chartTestFS{series: rawSeries(1)}}
 		var buf bytes.Buffer
 		err := s.ExecNonInteractive(line, &buf)
 		if err == nil {

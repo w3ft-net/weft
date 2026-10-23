@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { getWatchResults, type CronResult } from '../lib/api'
 import { useReportModalClosed } from '../lib/useReportModalClosed'
-import { Sparkline, SparkLegend, groupResultsByTag, formatSparkValue } from './Sparkline'
+import { Sparkline, SparkLegend, formatSparkValue } from './Sparkline'
 import { plotToSpark, type ChartPlot } from '../lib/chartPlot'
 import './ShellChartModal.css'
 
@@ -15,7 +14,6 @@ export interface ChartSpec {
   plot?: ChartPlot
   kind?: string
   title?: string
-  limit?: number
 }
 
 interface Props {
@@ -24,31 +22,17 @@ interface Props {
 }
 
 // ShellChartModal is the React-side render target for both
-// `chart <name>` and `... | chart` typed at the browser shell. The
-// watch form re-fetches results from /api/crons/<name>/results
-// (matching the dashboard tile flow) so the modal stays live;
-// the pipe form draws the plot the shell computed from its pipeline.
+// `chart <name>` and `... | chart` typed at the browser shell. Either
+// way the shell has already reduced the data to a plot: from the
+// pipeline's lines, or from the cron's stored series over the shell's
+// range. A cron chart also links to its cron page.
 export default function ShellChartModal({ spec, onClose }: Props) {
-  const isWatch = !!spec.cron
   const title = spec.title || spec.cron || 'chart'
 
-  const [results, setResults] = useState<CronResult[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!isWatch || !spec.cron) return
-    let cancelled = false
-    getWatchResults(spec.cron)
-      .then(r => { if (!cancelled) setResults(r) })
-      .catch(e => { if (!cancelled) setError(String(e)) })
-    return () => { cancelled = true }
-  }, [spec.cron, isWatch])
-
   // The tour completes a chart lesson when this modal goes away, but only
-  // once it showed something (a cron chart still loading or failed did not
-  // teach the lesson).
+  // once it showed something.
   const shown = useRef(false)
-  shown.current = isWatch ? results !== null && !error : !!spec.plot
+  shown.current = !!spec.plot
   useReportModalClosed(spec.pipeline, shown)
 
   // Esc closes, matching the label on the close button. Capture phase:
@@ -64,8 +48,6 @@ export default function ShellChartModal({ spec, onClose }: Props) {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
-  const series = isWatch && results ? groupResultsByTag(results) : []
-
   return (
     <div
       className="shell-chart-modal-backdrop"
@@ -78,7 +60,7 @@ export default function ShellChartModal({ spec, onClose }: Props) {
       >
         <header className="shell-chart-modal-header">
           <h2 className="shell-chart-modal-title">{title}</h2>
-          {isWatch && spec.cron && (
+          {spec.cron && (
             <Link
               to={`/cron/${encodeURIComponent(spec.cron)}`}
               className="shell-chart-modal-link"
@@ -98,22 +80,7 @@ export default function ShellChartModal({ spec, onClose }: Props) {
         </header>
 
         <div className="shell-chart-modal-body">
-          {isWatch ? (
-            error ? (
-              <div className="shell-chart-modal-error">{error}</div>
-            ) : results === null ? (
-              <div className="shell-chart-modal-loading">loading…</div>
-            ) : series.length === 0 ? (
-              <div className="shell-chart-modal-empty">no numeric data yet</div>
-            ) : (
-              <>
-                <Sparkline series={series} height={180} showTimeAxis />
-                <SparkLegend series={series} />
-              </>
-            )
-          ) : spec.plot ? (
-            <PlotView plot={spec.plot} />
-          ) : null}
+          {spec.plot ? <PlotView plot={spec.plot} /> : null}
         </div>
       </div>
     </div>

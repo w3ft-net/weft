@@ -7,16 +7,11 @@ import (
 	"time"
 )
 
-// stubWR is a fixed list of WatchResultValues for tests that don't need a
-// full backing store.
-type stubWR struct{ rows []WatchResultValue }
+// stubSource is a fixed series for tests that don't need a full backing
+// store.
+type stubSource struct{ series CronSeries }
 
-func (s stubWR) GetWatchResults(_ string, limit int) ([]WatchResultValue, error) {
-	if limit > 0 && limit < len(s.rows) {
-		return s.rows[:limit], nil
-	}
-	return s.rows, nil
-}
+func (s stubSource) GetCronSeries(string, string) (CronSeries, error) { return s.series, nil }
 
 // TestLandingSparkline reproduces the exact ANSI/Unicode output that a
 // realistic `chart error-rate -w 1h -t sparkline` would emit. The
@@ -36,18 +31,15 @@ func TestLandingSparkline(t *testing.T) {
 	}
 
 	// Round-trip through the same code path the shell takes.
-	t0 := time.Date(2026, 5, 13, 13, 0, 0, 0, time.UTC)
-	rows := make([]WatchResultValue, len(values))
-	for i := range values {
-		// API contract: newest-first.
-		idx := len(values) - 1 - i
-		rows[i] = WatchResultValue{
-			Value: fmt.Sprintf("%d", int(values[idx])),
-			RanAt: t0.Add(time.Duration(idx) * time.Minute).Format(time.RFC3339),
-		}
+	start := time.Date(2026, 5, 13, 13, 0, 0, 0, time.UTC)
+	series := CronSeries{Granularity: "raw", Start: start, End: start.Add(time.Hour)}
+	for i, v := range values {
+		series.Buckets = append(series.Buckets, CronBucket{
+			Start: start.Add(time.Duration(i) * time.Minute), Count: 1, Sum: v, Min: v, Max: v,
+		})
 	}
 
-	out, errMsg := RenderOneShot(stubWR{rows: rows}, "error-rate", "sparkline", 0, 0, 0)
+	out, errMsg := RenderOneShot(stubSource{series}, "1h..", WatchArgs{Name: "error-rate", Kind: "sparkline", Aggregate: "avg"}, 80, 20)
 	if errMsg != "" {
 		t.Fatalf("render failed: %s", errMsg)
 	}

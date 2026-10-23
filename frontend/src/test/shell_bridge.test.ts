@@ -122,7 +122,7 @@ async function bootShell(files: File[]): Promise<{
     getUser: () => 'test',
     getCustomer: () => 'testco',
     getServices: () => ['myapp'],
-    fsGetWatchResults: () => ({ results: [] }),
+    fsGetCronSeries: () => ({ body: '{"granularity":"raw","points":[]}' }),
     onRangeChange: () => {},
     chartOpen: (spec: Record<string, unknown>) => { charts.push(spec) },
     builtinExecuted: () => {},
