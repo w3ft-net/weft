@@ -10,6 +10,7 @@ import (
 
 	"github.com/graybeardcorp/weft/cmd/weft/mcp/proposals"
 	"github.com/graybeardcorp/weft/shell"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // runPropose dispatches `weft propose <subcommand>`. The CLI is the
@@ -151,19 +152,9 @@ func runProposeApply() {
 		return
 	}
 
-	var applied, failed []string
-	for _, p := range ps {
-		if err := applyProposal(backend, p); err != nil {
-			errorf("✗ %s %s/%s: %v\n", p.ID, p.Kind, p.Name, err)
-			failed = append(failed, p.ID)
-			break
-		}
-		successf("✓ %s %s/%s\n", p.ID, p.Kind, p.Name)
-		applied = append(applied, p.ID)
-		if err := store.Remove(p.ID); err != nil {
-			warnf("warning: applied but failed to remove %s: %v\n", p.ID, err)
-		}
-	}
+	applied, failed := applyStaged(ps,
+		func(p proposals.Proposal) error { return applyProposal(backend, p) },
+		store.Remove)
 
 	if len(failed) > 0 {
 		errorf("\napply stopped at first failure (%s). %d applied, remaining still staged.\n",
@@ -205,6 +196,30 @@ func runProposeClear() {
 		os.Exit(1)
 	}
 	successf("discarded %d proposal(s)\n", removed)
+}
+
+// applyStaged applies ps in order and unstages each one that lands. A save
+// that comes back with only warnings landed (the server stored it and has
+// something to say), so it gets a ⚠ and the queue carries on; a refusal gets a
+// ✗ and stops the queue, leaving it and the rest staged.
+func applyStaged(ps []proposals.Proposal, apply func(proposals.Proposal) error, remove func(id string) error) (applied, failed []string) {
+	for _, p := range ps {
+		blocking, warnings := store.Split(apply(p))
+		if len(blocking) > 0 {
+			errorf("✗ %s %s/%s: %v\n", p.ID, p.Kind, p.Name, errors.Join(blocking...))
+			return applied, append(failed, p.ID)
+		}
+		if len(warnings) > 0 {
+			warnf("⚠ %s %s/%s: %s\n", p.ID, p.Kind, p.Name, strings.Join(warnings, "\n"))
+		} else {
+			successf("✓ %s %s/%s\n", p.ID, p.Kind, p.Name)
+		}
+		applied = append(applied, p.ID)
+		if err := remove(p.ID); err != nil {
+			warnf("warning: applied but failed to remove %s: %v\n", p.ID, err)
+		}
+	}
+	return applied, failed
 }
 
 // applyProposal commits one proposal to the backend. Crons land
