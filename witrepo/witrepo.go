@@ -138,9 +138,10 @@ func (r *Repo) load() (*history, error) {
 	for _, v := range versions {
 		events = append(events, event{v: v, at: v.AuthoredAt})
 		if v.DeletedAt != nil {
-			// deleted_at is stamped by the app clock and authored_at by the
-			// database's; never let a deletion sort before its own version
-			// or after the version that revived the name.
+			// The database stamps deleted_at and authored_at alike, but
+			// rows deleted before migration 103 carry the app's clock:
+			// never let a deletion sort before its own version or after
+			// the version that revived the name.
 			at := *v.DeletedAt
 			if at.Before(v.AuthoredAt) {
 				at = v.AuthoredAt
