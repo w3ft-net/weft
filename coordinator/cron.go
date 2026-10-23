@@ -16,8 +16,8 @@ import (
 const (
 	// cronRunTimeout is the budget for one run of a cron.
 	cronRunTimeout = 2 * time.Second
-	// cronBenchStrikes is how many runs in a row may blow the budget before
-	// the cron is disabled.
+	// cronBenchStrikes is how many runs in a row may run out of time (the
+	// run budget, a delivery timeout) before the cron is disabled.
 	cronBenchStrikes = 3
 )
 
@@ -27,8 +27,8 @@ const (
 type runOutcome struct {
 	deliveryTimedOut atomic.Bool
 	// typeError is set when the run tripped a check that a save would have
-	// made had it seen the name (a numeric read of a text cron). It fails
-	// the same way every run, so it disables the cron at once.
+	// made had it seen the name (a numeric read of a text cron). Like output
+	// that breaks the contract, it disables the cron at once.
 	typeError atomic.Pointer[string]
 }
 
@@ -266,7 +266,7 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 	}
 
 	// Split the output into points under the cron's output contract. Output
-	// that breaks it is a strike and stores none of its points.
+	// that breaks it stores none of its points and disables the cron.
 	var points []cronPoint
 	var invalid error
 	if status != "error" && status != "timeout" {
@@ -281,24 +281,26 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 		weftsdk.Errorf(ctx, "cron[%s]: failed to save result: %v", watch.Name, saveErr)
 	}
 
-	// Update watch status. A tick is a strike when the run blew its budget, a
-	// notification target timed out, or the output broke the contract; any
-	// other tick clears the strikes, and the last strike disables the cron.
-	//
-	// A run that failed a check a save would have made (a numeric read of
-	// a text cron, through a name only known at run time) isn't struck: it
-	// would fail the same way every run, so the cron is disabled at once.
-	typeErr := outcome.typeError.Load()
-	if typeErr != nil {
+	// Update watch status. A run whose output's shape is wrong is disabled at
+	// once: output that broke the contract or the plan's tag cap, or a check
+	// a save would have made (a numeric read of a text cron, through a name
+	// only known at run time). Time is struck instead: a tick that blew its
+	// budget or whose notification target timed out is a strike, any other
+	// tick clears the strikes, and the last strike disables the cron.
+	var disableWhy, disableHint string
+	if typeErr := outcome.typeError.Load(); typeErr != nil {
 		status = "error"
+		disableWhy = *typeErr
+		disableHint = "Saving it would have been refused had the cron's name been spelled out."
+	} else if invalid != nil {
+		disableWhy = invalid.Error()
+		disableHint = "Its output didn't match what the cron declares, so none of it was stored."
 	}
 	var why string
 	switch {
-	case typeErr != nil:
+	case disableWhy != "":
 	case timedOut:
 		why = fmt.Sprintf("its run exceeded the %s budget", budget)
-	case invalid != nil:
-		why = "its output broke the output contract (" + invalid.Error() + ")"
 	case outcome.deliveryTimedOut.Load():
 		why = "a notification target did not accept its alert in time"
 	}
@@ -311,16 +313,16 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 	if updateErr := ce.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Model(&store.CronWatch{}).Where("id = ?", watch.ID).Updates(updates).Error; updateErr != nil {
 		weftsdk.Errorf(ctx, "cron[%s]: failed to update run status: %v", watch.Name, updateErr)
 	}
-	if typeErr != nil {
+	if disableWhy != "" {
 		disabled, err := ce.Store.DisableCron(ctx, watch.ID)
 		switch {
 		case err != nil:
-			weftsdk.Errorf(ctx, "cron[%s]: failed to disable after a type error: %v", watch.Name, err)
+			weftsdk.Errorf(ctx, "cron[%s]: failed to disable: %v", watch.Name, err)
 		case disabled:
-			weftsdk.Warnf(ctx, "cron[%s]: disabled: %s", watch.Name, *typeErr)
+			weftsdk.Warnf(ctx, "cron[%s]: disabled: %s", watch.Name, disableWhy)
 			ce.pageSystem(ctx, watch.OrgID, "cron-disabled", fmt.Sprintf(
-				"cron %q was disabled after one run: %s.\nSaving it would have been refused had the cron's name been spelled out, and every run would fail the same way. Fix it, then re-enable it: edit /cron.d/%s, remove the '# enabled: false' line, and save.",
-				watch.Name, *typeErr, watch.Name))
+				"cron %q was disabled after one run: %s.\n%s Fix it, then re-enable it: edit /cron.d/%s, remove the '# enabled: false' line, and save.",
+				watch.Name, disableWhy, disableHint, watch.Name))
 		}
 	}
 	if strike {
@@ -342,8 +344,8 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 }
 
 // checkOutput splits a run's stdout into points and applies the runtime
-// checks: the output contract, then the plan's tag cap. A non-nil error is
-// the strike message.
+// checks: the output contract, then the plan's tag cap. A non-nil error says
+// why the cron is disabled.
 func (ce *CronExecutor) checkOutput(watch store.CronWatch, stdout string) ([]cronPoint, error) {
 	schema, err := schemaForWatch(watch)
 	if err != nil {

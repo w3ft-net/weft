@@ -82,7 +82,7 @@ runtime. By default, a cron is assumed to return one numeric value per line,
 with an optional tag following whitespace. You can declare richer types with
 comments at the top of the file. With or without explicit type declarations, a
 cron that fails runtime analysis will be automatically disabled. Here's how
-weft analyzes stdout for a cron with now type declarations:
+weft analyzes stdout for a cron with no type declarations:
 
 | Line |  Outcome |
 |---|---|
@@ -93,13 +93,14 @@ weft analyzes stdout for a cron with now type declarations:
 
 #### Declaring text output
 
-If you've got a series of strings in your logs you want to roll up in some way, you can, you just have to tell weft that you're expecting text.
+If you've got a series of strings in your logs you want to roll up in some way,
+you can, you just have to tell weft that you're expecting text. For example:
 
-#FIXME an inline example that isn't right out of weft internals please
 ```
-# schedule: */2 * * * *
+# schedule: */5 * * * *
 # type: text
-lease-holders
+cat /log/myco/prod/api/main.log | grep 'starting version' \
+    | awk '{v[HOST]=$NF} END {for (h in v) print v[h], h}'
 ```
 
 Downstream of this cron, `alert`, `chart`, `dashboard`, and aggregate functions
@@ -118,10 +119,8 @@ indicating the JSON path:
 cat /log/myco/prod/api/host.log | jq -c '{host: $host, pct: .memory.pct}'
 ```
 
-#FIXME verify if the text typing here is true
-If there are more JSON keys, they will be ignored and discarded for storage
-purposes. A `type: text` declaration will apply to whatever JSON path you've
-pointed `value` at.
+A `type: text` declaration applies to whatever JSON path you've pointed `value`
+at if you want to extract a string from an object.
 
 ### Plan limits on crons
 
@@ -183,7 +182,7 @@ raw data window (7 days) because the math doesn't work on the compressed cron
 results. For all others, the limiting factor is your plan's retention.
 
 Depending on the context, weft will verify either statically or at runtime that
-its first argument is a cron and returns a type that matchs the signature of
+its first argument is a cron and returns a type that matches the signature of
 the aggregate. 
 
 | Bash | Lua | Accepts/Returns | Longest window | Notes |
@@ -227,8 +226,6 @@ In bash a predicate reports its result as an exit code, and in Lua as a plain bo
 | Condition doesn't hold | `1` (false) | `false` |
 | Can't evaluate: the cron doesn't exist, its output isn't numeric, or there isn't enough history yet | `1` (false) | `false` |
 | Bad arguments (a missing argument, an unparseable threshold or duration) | `2` | error raised on bad argument types, unparseable duration returns `false` |
-#FIXME this should just be disallowed statically
-| A numeric predicate on a [text cron](crons.md#declaring-text-output) | `2`, saying so on stderr | error raised |
 
 Because "no" and "can't tell" both exit 1, `!` turns an unknown into true. Rather than negating, use the opposite predicate, and pair it with `weft::is_absent` to catch a cron that has stopped reporting.
 
@@ -282,9 +279,9 @@ Both comparators treat empty or non-numeric input as false.
 
 Whenever you write a cron, weft analyzes its contents for a few types of correctness:
 
-* **Schedule** -- a schedule line must be present, confirm to the [accepted
+* **Schedule** -- a schedule line must be present, conform to the [accepted
   grammar](crons.md#scheduling), and fire at a frequency allowed by your
-organization's plan
+  organization's plan
 * **Syntax** -- the script must parse as syntactically valid bash (and awk,
   sed, jq or Lua if using those interpreters)
 * **Aggregates** -- beyond type signatures, `weft::` aggregate functions read
@@ -292,8 +289,10 @@ organization's plan
   something wrong
 * **Execution limits** -- `tail -f` is disallowed, since a script has to run to
   completion, as is `range`, since the range of a cron is determined by its
-schedule
+  schedule
 * **Output schema** -- `# tag:` cannot be set without `# value:`
+* **Types** -- weft will enforce correct typing of cron arguments to aggregate
+  and predicate functions
 
 If you run afoul of any of these rules, weft will refuse to write the contents
 to `/cron.d` (or `/bin`).
@@ -312,6 +311,10 @@ Each run's output is evaluated against [its type
 declaration](crons.md#type-declarations). A run whose output breaks the rules
 is recorded with the status `invalid` and the reason in its `stderr`, and is
 disabled.
+
+A type mismatch between aggregate or predicate functions and their cron
+argument is normally checked statically, but in cases where the mismatch is
+known only at runtime by passing a variable, the  cron will be disabled then. 
 
 As described above, type declarations are verified and enforced, including JSON
 extraction. Empty output is treated as conformant.

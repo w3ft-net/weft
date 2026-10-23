@@ -24,7 +24,7 @@ const dashboards = {
     { level: 3, id: "tile-kinds", text: "Tile kinds" },
     { level: 3, id: "tile-fields", text: "Tile fields" },
     { level: 3, id: "threshold-colors", text: "Threshold colors" },
-    { level: 3, id: "multi-line-sparklines-tag", text: "Multi-line sparklines (tag:)" },
+    { level: 3, id: "tagged-crons", text: "Tagged crons" },
     { level: 2, id: "layout", text: "Layout" },
     { level: 2, id: "validation", text: "Validation" },
     { level: 2, id: "delete-a-dashboard", text: "Delete a dashboard" },
@@ -37,26 +37,36 @@ and as durable dashboards you come back to routinely.</p>
 with the <code>chart</code> command.</p>
 <h2 id="the-chart-command">The <code>chart</code> command</h2>
 <h3 id="synopsis">Synopsis</h3>
-<pre><code>chart &lt;cron&gt; [-t TYPE] [-n LIMIT] [-i INTERVAL] [-f|--follow]
+<pre><code>chart &lt;cron&gt;       [-a &lt;fn&gt;] [--bucket &lt;dur&gt;] [-t TYPE] [--title &lt;text&gt;]
+                   [-f|--follow [-i INTERVAL]]
 &lt;pipeline&gt; | chart [-x &lt;field&gt;] [-y &lt;field&gt;] [-a &lt;fn&gt;] [--tag &lt;field&gt;]
                    [--bucket &lt;dur&gt;] [-t TYPE] [--title &lt;text&gt;]
 </code></pre>
 <h3 id="how-chart-draws">How chart draws</h3>
-<p><code>chart</code> has two forms.</p>
-<p><strong>Standalone</strong>: <code>chart &lt;cron&gt;</code> draws a cron's stored results, one point per
-run, so it can cover days or weeks instead of the current range. Give the
-name bare (<code>chart error-rate</code>) or as a path (<code>chart /cron.d/error-rate</code>).
-The point for each run is the last whitespace-separated field of its
-output, the same rule <code>alert -v</code> uses, so each run's output has to end in a
-number. With <code>--follow</code>, the chart redraws every <code>INTERVAL</code>
-until you exit.</p>
+<p><code>chart</code> has two forms, and both draw the current
+<code>range</code>: change the range and run it again to see a
+different window.</p>
+<p><strong>Standalone</strong>: <code>chart &lt;cron&gt;</code> draws what a cron <a href="/manual/crons#cron-result-persistence">has
+stored</a> over the range. Give the name bare
+(<code>chart error-rate</code>) or as a path (<code>chart /cron.d/error-rate</code>). A range that
+reaches back past the 7 days of raw results reads the cron's hourly, four-hour
+or daily summaries instead, so a <code>range 90d..</code> chart is as quick as a
+<code>range 2h..</code> one. A tagged cron draws one line per tag; when it has more
+than 8, the 8 busiest keep their own lines and the rest share one <code>other</code>
+line. A <a href="/manual/crons#declaring-text-output">text cron</a> has no numbers to chart.</p>
+<p>With <code>--follow</code>, the chart redraws every <code>INTERVAL</code> until you exit, working
+the range out again each time: a relative start such as <code>range 2h..</code> slides
+along, so you always see the last two hours, and an absolute start stays put
+while the chart grows. A range that ended in the past has nothing to follow,
+so <code>--follow</code> refuses it.</p>
 <p><strong>Pipe form</strong>: <code>&lt;pipeline&gt; | chart [...]</code> draws the pipeline's output once
 and returns to the prompt. <code>chart</code> must be the last stage; piping its
 output onward is an error. <code>-x</code> and <code>-y</code> pick the fields to plot. Without
-them, x is the row number and y is the last whitespace-separated field of
-each line, drawn as one bar per line. The chart covers whatever the current
-<code>range</code> covers, so change the range and run it
-again to see a different window.</p>
+them, x is the row number and y is the first whitespace-separated field of
+each line, drawn as one bar per line: the same <code>&lt;value&gt; [&lt;tag&gt;]</code> shape a cron
+stores, so a line reads the same piped into <code>chart</code> and printed by a cron.
+With a time x-axis the chart spans the whole range, so quiet stretches at
+either end show as such.</p>
 <p>Charts fit the terminal and are never paged through <code>less</code>. There is no
 zoom or scroll. When a bar chart or sparkline has more points than the
 terminal has columns, neighbouring points merge into one bar, re-applying
@@ -82,8 +92,9 @@ with a space before parsing, for stamps that span two fields:
 <code>-x '1-2::time(%Y/%m/%d %H:%M:%S)'</code>.</li>
 </ul>
 </li>
-<li><code>-y &lt;field&gt;</code>: the y field, same grammar as <code>-x</code>. Default: the last
-whitespace field of each line. Casts are only supported on <code>-x</code>.</li>
+<li><code>-y &lt;field&gt;</code>: the y field, same grammar as <code>-x</code>. Default: the first
+whitespace field of each line, or the first one after <code>-x</code>'s columns when
+<code>-x</code> starts at column 1. Casts are only supported on <code>-x</code>.</li>
 <li><code>-a</code>, <code>--aggregate</code> <code>&lt;fn&gt;</code>: how to combine the y values that share an x.
 One of <code>count</code>, <code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code>, <code>p50</code>, <code>p95</code>, <code>identity</code>.
 Default <code>identity</code>, or <code>count</code> when <code>--bucket</code> is set.</li>
@@ -93,8 +104,8 @@ one per host. Same field grammar as <code>-x</code> and <code>-y</code>. Only va
 and a legend row.</li>
 <li><code>--bucket &lt;DURATION&gt;</code>: group rows into time buckets on x. x must parse as
 RFC3339, epoch seconds, or the <code>-x</code> cast's format. With <code>-a count</code> (the
-default) or <code>sum</code>, a bucket with no rows is drawn as 0, so a stretch with
-no logs shows as a hole.</li>
+default) or <code>sum</code>, a bucket with no rows is drawn as 0, from the start of
+the range to its end, so a stretch with no logs shows as a hole.</li>
 <li><code>-t</code>, <code>--type</code> <code>&lt;line|sparkline|bar&gt;</code>: chart kind. Default <code>bar</code>, or
 <code>line</code> when <code>--bucket</code> or <code>--tag</code> is set.</li>
 <li><code>--title &lt;text&gt;</code>: chart title.</li>
@@ -103,16 +114,29 @@ no logs shows as a hole.</li>
 needs one JSON object per line, so use <code>jq -c</code>.</p>
 <h3 id="chart-options-for-crons">chart options for crons</h3>
 <ul>
+<li><code>-a</code>, <code>--aggregate</code> <code>&lt;fn&gt;</code>: how to combine the points that share an x:
+two lines with the same tag in one run, every run in a <code>--bucket</code>, and
+neighbouring points merged to fit the terminal. One of <code>count</code>, <code>sum</code>,
+<code>avg</code>, <code>min</code>, <code>max</code>, <code>p50</code>, <code>p95</code>. Default <code>avg</code>. <code>count</code>, <code>sum</code>, <code>avg</code>,
+<code>min</code> and <code>max</code> are exact whatever the range; <code>p50</code> and <code>p95</code> need every
+run, so they only work over the last 7 days.</li>
+<li><code>--bucket &lt;DURATION&gt;</code>: one point per bucket instead of one per run, e.g.
+<code>--bucket 1h</code> for hourly averages. A range past 7 days reads summaries
+that are already an hour (or four hours, or a day) wide, so a finer
+bucket is refused there.</li>
 <li><code>-t</code>, <code>--type</code> <code>&lt;line|sparkline|bar&gt;</code>: chart kind. Default <code>line</code>.
-<code>sparkline</code> is a single-line ramp; <code>bar</code> draws one bar per run with its
-timestamp under it.</li>
-<li><code>-n</code>, <code>--limit</code> <code>&lt;N&gt;</code>: how many recent runs to draw. Default 50.</li>
+<code>sparkline</code> is a single-line ramp, one per tag; <code>bar</code> draws one bar per
+point with its time under it, and needs an untagged cron.</li>
+<li><code>--title &lt;text&gt;</code>: chart title. Default: the cron's name, the aggregate,
+the window and which stored results it read.</li>
 <li><code>-f</code>, <code>--follow</code>: redraw until you press <strong>q</strong>.</li>
 <li><code>-i</code>, <code>--interval</code> <code>&lt;DURATION&gt;</code>: redraw interval with <code>--follow</code>.
 Default <code>1s</code>, minimum <code>100ms</code>.</li>
 </ul>
+<p><code>-x</code>, <code>-y</code> and <code>--tag</code> are pipe-only: a cron's x is the time of each run,
+and its value and tag were fixed when the run was stored.</p>
 <h3 id="chart-examples">chart examples</h3>
-<pre><code># One bar per line: each line's last field.
+<pre><code># One bar per line: each line's number.
 cat /log/myco/prod/api/host.log | jq '.memory.pct' | chart
 
 # Error lines per five minutes. The stamp &quot;2026/10/13 15:04:05&quot; spans
@@ -143,10 +167,17 @@ one point. Create it with <code>vi /cron.d/error-rate</code>:</p>
 cat /log/myco/prod/api/main.log | grep ERROR | wc -l
 </code></pre>
 <p>Once it has run a few times, chart it by name:</p>
-<pre><code>chart error-rate                  line chart of the last 50 runs
-chart error-rate -n 200           the last 200 runs
-chart error-rate -t sparkline     a one-line glyph
-chart error-rate --follow         redraw every second; press q to exit
+<pre><code>chart error-rate                       line chart of every run in the range
+range 30d..; chart error-rate          the last month, from the stored summaries
+chart error-rate --bucket 1h -a max    the worst five minutes of each hour
+chart error-rate -t sparkline          a one-line glyph
+chart error-rate --follow              redraw every second; press q to exit
+</code></pre>
+<p>A cron that prints <code>&lt;value&gt; &lt;host&gt;</code> lines stores one series per host, and
+its chart draws a line for each. A host that reports several times in one
+run gets the average:</p>
+<pre><code># schedule: */5 * * * *
+cat /log/myco/prod/api/host.log | jq -r '&quot;\\(.memory.pct) \\($host)&quot;'
 </code></pre>
 <p><code>ls -l /cron.d/</code> shows a small sparkline next to each cron, so you can scan
 every cron at once.</p>
@@ -155,25 +186,25 @@ every cron at once.</p>
 <li>Chart kinds other than <code>line</code>, <code>sparkline</code> and <code>bar</code>: no pie, area or
 table.</li>
 <li>Aggregates other than <code>count</code>, <code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code>, <code>p50</code>, <code>p95</code>
-and <code>identity</code> (no <code>p99</code>).</li>
-<li><code>--follow</code>, <code>-i</code> and <code>-n</code> in pipe form, and <code>-x</code>, <code>-y</code>, <code>-a</code>, <code>--bucket</code>,
-<code>--tag</code> and <code>--title</code> in cron form.</li>
-<li><code>--tag</code> with <code>bar</code> or <code>sparkline</code>; it draws one line per value, so it
-needs <code>line</code>.</li>
+and <code>identity</code> (no <code>p99</code>), and <code>identity</code> in cron form.</li>
+<li><code>p50</code> and <code>p95</code> in cron form over a range that reaches past 7 days.</li>
+<li><code>--follow</code> and <code>-i</code> in pipe form, <code>-x</code>, <code>-y</code> and <code>--tag</code> in cron form, and
+<code>--follow</code> over a range that has already ended.</li>
+<li><code>--tag</code> with <code>bar</code> or <code>sparkline</code> in pipe form, and <code>bar</code> for a tagged
+cron.</li>
+<li>Charting a <a href="/manual/crons#declaring-text-output">text cron</a>.</li>
 <li>Casts on <code>-y</code> or <code>--tag</code>, and a <code>-x</code> column range without <code>::time</code>.</li>
 <li>Mixing column numbers and <code>.json.path</code> fields in one call.</li>
-<li>Charting a cron whose output is JSON rows (a dashboard can, with
-<a href="#multi-line-sparklines-tag"><code>tag:</code></a>), and piping the output of <code>chart</code>
-into another command.</li>
-<li><code>--flag=value</code> and attached short forms (<code>--type=bar</code>, <code>-n5</code>). Write the
+<li>Piping the output of <code>chart</code> into another command.</li>
+<li><code>--flag=value</code> and attached short forms (<code>--type=bar</code>, <code>-a5</code>). Write the
 flag and its value as separate words.</li>
 <li>Zoom and scroll.</li>
 </ul>
 <p>Other options are rejected with <code>chart: unknown option &lt;flag&gt;</code>.</p>
 <h2 id="put-charts-on-a-dashboard">Put charts on a dashboard</h2>
 <p>A dashboard arranges crons into tiles. Each tile names a cron and how to
-draw it: a sparkline of its history, its latest value as a counter or
-gauge, or its last output as a table.</p>
+draw it: a sparkline of its last day, its latest value as a counter or
+gauge, or its latest run as a table with a row per tag.</p>
 <p>Dashboards are YAML files under <code>/etc/dashboards/</code>. Writing under <code>/etc</code>
 requires the <code>configmgr</code> group. Create one with <code>vi</code>:</p>
 <pre><code>vi /etc/dashboards/prod.yaml
@@ -230,7 +261,6 @@ sections:
 
       - kind: table
         cron: top-errors
-        columns: [host, count]
         size: lg
 
   - title: Capacity
@@ -246,12 +276,17 @@ sections:
         threshold: { warn: 70, crit: 90, max: 100 }
         size: md
 </code></pre>
-<p>Each cron here has to exist first. A <code>table</code> tile shows the cron's last
-output split into whitespace-separated columns, so <code>top-errors</code> might be:</p>
+<p>Each cron here has to exist first. A <code>table</code> tile shows the cron's latest
+run, one row per tag, highest value first, so <code>top-errors</code> might count
+errors per host. <code>uniq -c</code> already prints <code>&lt;count&gt; &lt;host&gt;</code>, the shape a
+cron stores:</p>
 <pre><code># schedule: */5 * * * *
 cat /log/myco/prod/api/main.log | grep ERROR | jq -r '$host' \\
-  | sort | uniq -c | sort -rn | awk '{print $2, $1}'
+  | sort | uniq -c | sort -rn | head -20
 </code></pre>
+<p>A table also shows a <a href="/manual/crons#declaring-text-output">text cron</a>, one row per tag
+sorted by tag, which is how you put state such as which coordinator holds
+each lease on a dashboard.</p>
 <h3 id="top-level-fields">Top-level fields</h3>
 <table>
 <thead>
@@ -292,12 +327,12 @@ cat /log/myco/prod/api/main.log | grep ERROR | jq -r '$host' \\
 <tbody>
 <tr>
 <td><code>sparkline</code></td>
-<td>The cron's recent results over time.</td>
+<td>The cron's last day, one line per tag.</td>
 <td><code>cron</code></td>
 </tr>
 <tr>
 <td><code>counter</code></td>
-<td>The latest numeric value.</td>
+<td>The latest value (on a tagged cron, the highest).</td>
 <td><code>cron</code></td>
 </tr>
 <tr>
@@ -307,11 +342,13 @@ cat /log/myco/prod/api/main.log | grep ERROR | jq -r '$host' \\
 </tr>
 <tr>
 <td><code>table</code></td>
-<td>The last output, split into whitespace-separated columns.</td>
-<td><code>cron</code>, <code>columns</code></td>
+<td>The latest run, a row per tag: the tag and its value.</td>
+<td><code>cron</code></td>
 </tr>
 </tbody>
 </table>
+<p>Sparklines, counters and gauges draw numbers, so they need a cron that
+stores them; a <a href="/manual/crons#declaring-text-output">text cron</a> goes in a table.</p>
 <h3 id="tile-fields">Tile fields</h3>
 <table>
 <thead>
@@ -352,37 +389,30 @@ cat /log/myco/prod/api/main.log | grep ERROR | jq -r '$host' \\
 <td>counter, gauge, sparkline</td>
 <td><code>warn</code>, <code>crit</code> cutoffs; <code>max</code> (gauge) sets full scale.</td>
 </tr>
-<tr>
-<td><code>columns</code></td>
-<td>table</td>
-<td>Header labels for the whitespace-separated columns.</td>
-</tr>
-<tr>
-<td><code>tag</code>, <code>y</code></td>
-<td>sparkline</td>
-<td>Multi-line mode, see below. Set both or neither.</td>
-</tr>
 </tbody>
 </table>
 <p>A field on a kind it doesn't apply to is rejected when the file is saved
-(<code>format</code> on a gauge, <code>columns</code> on a counter, <code>threshold</code> on a table).</p>
+(<code>format</code> on a gauge, <code>threshold</code> on a table).</p>
 <h3 id="threshold-colors">Threshold colors</h3>
 <p>Values at or above <code>crit</code> render red; values at or above <code>warn</code> (and below
 <code>crit</code>) render yellow. A gauge also uses <code>max</code> as its full-scale value
 (default 100).</p>
-<h3 id="multi-line-sparklines-tag">Multi-line sparklines (<code>tag:</code>)</h3>
-<p>A plain sparkline plots one number per cron run, the same as
-<code>chart &lt;cron&gt;</code>. When a cron prints several JSON rows per run, one per
-host or instance, set <code>tag:</code> to the field that names the row and <code>y:</code> to
-the field to plot. The tile draws one line per tag value:</p>
+<h3 id="tagged-crons">Tagged crons</h3>
+<p>A tile draws the tags its cron stores; the dashboard has nothing to
+configure. A sparkline of a cron that prints one line per host draws a line
+per host, with a legend and a color each, folding past the 8 busiest into
+<code>other</code> like <code>chart &lt;cron&gt;</code>. A cron that prints JSON rows says which field
+is the value and which the tag with <a href="/manual/crons#extracting-values-and-tags-from-json"><code># value:</code> and <code># tag:</code>
+headers</a>:</p>
+<pre><code># schedule: */1 * * * *
+# value: .mem_pct
+# tag: .coordinator_id
+cat /log/weft/coordinator/runtime.log | jq -c '{coordinator_id, mem_pct}'
+</code></pre>
 <pre><code class="language-yaml">- kind: sparkline
   cron: coordinator-mem-pct
-  tag: .coordinator_id
-  y: .mem_pct
   size: lg
 </code></pre>
-<p>Each row's x value is the time of the run that printed it. Lines get a
-legend and a distinct color per tag.</p>
 <h2 id="layout">Layout</h2>
 <p>Tiles appear in YAML order, flowing left to right and then down. <code>size:</code>
 is a hint that each screen interprets for its own width:</p>
@@ -394,9 +424,9 @@ each tile gets its own row.</li>
 </ul>
 <h2 id="validation">Validation</h2>
 <p>Saving a dashboard checks that the YAML parses, every <code>kind:</code> and <code>size:</code>
-is valid, every <code>table</code> tile has <code>columns:</code>, and every <code>cron:</code> exists. A
-bad file is rejected when you save it, and the previous version stays in
-place.</p>
+is valid, every <code>cron:</code> exists, and no sparkline, counter or gauge names a
+<a href="/manual/crons#declaring-text-output">text cron</a>. A bad file is rejected when you save it,
+and the previous version stays in place.</p>
 <h2 id="delete-a-dashboard">Delete a dashboard</h2>
 <pre><code>rm /etc/dashboards/old.yaml
 </code></pre>

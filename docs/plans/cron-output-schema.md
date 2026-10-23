@@ -39,8 +39,9 @@ becomes those rows, and who gets to decide.
 - A cron's output alone determines what is stored, whether or not it alerts.
 - One declaration of tag and value, read by storage, `chart`, dashboards and
   `alert`.
-- Output that breaks the contract is caught at run time and handled by the
-  same strike-and-bench mechanism as timeouts.
+- Output that breaks the contract is caught at run time and disables the cron
+  at once; only running out of time (the run budget, a delivery timeout) is
+  struck and benched.
 - Storage is bounded by plan limits on every factor.
 - `chart <cron>` reads `range`, draws tagged crons as one line per tag, and
   shares the pipe form's flags wherever they mean the same thing.
@@ -154,11 +155,15 @@ the default is `avg`, the same as when points merge to fit the terminal.
 ## Runtime checks
 
 Each run's output is checked when it is stored. A failing run stores no rows,
-so a bad run can't half-populate the rollups, and counts as a strike. Three
-strikes in a row bench the cron and page the `system` alias, as timeouts do
-today. A clean run resets the count.
+so a bad run can't half-populate the rollups, and disables the cron at once
+with a page to the `system` alias. A check on the output's shape is a type
+check the save couldn't make: a run that fails it, even on one odd log line,
+is a bug in the cron, and striking it would let an intermittent one drop
+points forever without ever reaching three in a row. Strikes are kept for
+time: three runs in a row over the budget or with a timed-out delivery bench
+the cron, and a clean run resets the count.
 
-| # | Check | Strike message (draft) |
+| # | Check | Disable message (draft) |
 |---|---|---|
 | 1 | Text line has more than two fields (default rule only) | `line 3 has 3 fields; text output is <value> [<tag>]` |
 | 2 | Schema uses JSON paths, output not JSON | `line 1 is not JSON, but the cron declares # value: .pct` |
@@ -170,8 +175,7 @@ today. A clean run resets the count.
 Empty output stays legal: it stores nothing, as multi-row mode does today.
 
 `consecutive_timeouts` and `RecordCronTimeout` generalize to strikes with a
-reason, so the bench notice says which check failed. The bench message and the
-docs stop calling every strike a timeout.
+reason (the run budget or a delivery timeout), so the bench notice says which.
 
 ### Tag cap
 

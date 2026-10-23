@@ -68,12 +68,12 @@ func TestParseCronOutput(t *testing.T) {
 			points, err := parseCronOutput(c.schema, c.stdout)
 			if c.strike != "" {
 				if err == nil || !strings.Contains(err.Error(), c.strike) {
-					t.Fatalf("err = %v, want a strike containing %q", err, c.strike)
+					t.Fatalf("err = %v, want an error containing %q", err, c.strike)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("unexpected strike: %v", err)
+				t.Fatalf("unexpected error: %v", err)
 			}
 			got := make([]pt, len(points))
 			for i, p := range points {
@@ -101,18 +101,22 @@ func TestCheckTagCap(t *testing.T) {
 	}
 }
 
-// TestCronOutputStrikes runs crons through the executor: output that breaks
-// the contract stores no points, strikes, and benches on the third run with a
-// page that names the check; a clean run clears the count.
-func TestCronOutputStrikes(t *testing.T) {
+// TestCronOutputDisables runs crons through the executor: output that breaks
+// the contract, or prints more tags than the plan allows, stores no points
+// and disables the cron on its first run with a page that names the check.
+func TestCronOutputDisables(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	if err := db.SaveShellFunction(custID, "", "wide", `echo "1 a extra"`, "bash"); err != nil {
+		t.Fatal(err)
+	}
+	// Eleven tags; a trial org may print ten per run.
+	if err := db.SaveShellFunction(custID, "", "many", `printf '1 h1\n1 h2\n1 h3\n1 h4\n1 h5\n1 h6\n1 h7\n1 h8\n1 h9\n1 h10\n1 h11\n'`, "bash"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveShellFunction(custID, "", "hosts", `printf '3 api-1\n4 api-2\n'`, "bash"); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"wide", "hosts"} {
+	for _, name := range []string{"wide", "many", "hosts"} {
 		if err := db.SaveCronWatch(custID, "", name, "every 5m", name, true, nil); err != nil {
 			t.Fatal(err)
 		}
@@ -137,13 +141,17 @@ func TestCronOutputStrikes(t *testing.T) {
 		return *w
 	}
 
-	for i := 1; i <= cronBenchStrikes; i++ {
-		if w := run("wide"); w.LastStatus != "invalid" || w.Enabled != (i < cronBenchStrikes) {
-			t.Fatalf("run %d: status=%q enabled=%v", i, w.LastStatus, w.Enabled)
+	for _, c := range []struct{ name, check string }{
+		{"wide", "line 1 has 3 fields"},
+		{"many", "run printed 11 tags"},
+	} {
+		pages = nil
+		if w := run(c.name); w.LastStatus != "invalid" || w.Enabled || w.ConsecutiveStrikes != 0 {
+			t.Fatalf("%s: status=%q enabled=%v strikes=%d, want invalid, disabled, no strike", c.name, w.LastStatus, w.Enabled, w.ConsecutiveStrikes)
 		}
-	}
-	if len(pages) != 1 || !strings.Contains(pages[0], "line 1 has 3 fields") {
-		t.Fatalf("bench pages = %q, want one naming the failed check", pages)
+		if len(pages) != 1 || !strings.Contains(pages[0], c.check) {
+			t.Fatalf("%s: pages = %q, want one naming %q", c.name, pages, c.check)
+		}
 	}
 	w, _ := db.GetCronWatch(custID, "wide")
 	rows, err := db.ListCronResults(w.ID, 10, "")
@@ -152,7 +160,7 @@ func TestCronOutputStrikes(t *testing.T) {
 	}
 	for _, r := range rows {
 		if r.Value != nil || r.Stdout != "" || !strings.Contains(r.Stderr, "3 fields") {
-			t.Fatalf("an invalid run stored %+v; want only the strike message, no value", r)
+			t.Fatalf("an invalid run stored %+v; want only the reason it was disabled, no value", r)
 		}
 	}
 

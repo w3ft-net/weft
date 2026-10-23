@@ -12,6 +12,7 @@ package alert
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,7 @@ const (
 	Absent
 	Rising
 	Falling
+	Matches
 )
 
 // String is the lowercase keyword form of a condition as it appears
@@ -61,6 +63,8 @@ func (c Condition) String() string {
 		return "rising"
 	case Falling:
 		return "falling"
+	case Matches:
+		return "matches"
 	default:
 		return "any"
 	}
@@ -73,6 +77,7 @@ type Args struct {
 	Condition Condition
 	Threshold float64             // value for above/below/eq/neq
 	PctChange float64             // rising/falling, as a fraction (1.0 = 100%)
+	Pattern   *regexp.Regexp      // matches
 	Duration  time.Duration       // --duration window; 0 means no window
 	Average   bool                // --average flag (above/below with duration)
 	Msg       string              // --msg override
@@ -201,6 +206,19 @@ func ParseArgs(args []string) (*Args, error) {
 			return nil, fmt.Errorf("invalid percentage: %s", args[i])
 		}
 		parsed.PctChange = v / 100.0
+		i++
+
+	case "matches":
+		parsed.Condition = Matches
+		i++
+		if i >= len(args) {
+			return nil, fmt.Errorf("matches requires a regular expression")
+		}
+		re, err := regexp.Compile(args[i])
+		if err != nil {
+			return nil, fmt.Errorf("invalid pattern %q: %w", args[i], err)
+		}
+		parsed.Pattern = re
 		i++
 
 	default:

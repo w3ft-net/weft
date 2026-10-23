@@ -271,6 +271,12 @@ func evaluateAlertRow(ctx context.Context, r alertRow, parsed *alert.Args, ac *A
 			}
 		}
 
+	case alert.Matches:
+		triggered = r.value != "" && parsed.Pattern.MatchString(r.value)
+		if triggered {
+			reason = fmt.Sprintf("%q matches %s", r.value, parsed.Pattern)
+		}
+
 	case alert.Absent:
 		if parsed.Duration == 0 {
 			triggered = r.value == ""

@@ -20,6 +20,9 @@ func TestCompileWatchPipeline_TextType(t *testing.T) {
 		{"text alert changed", "# type: text\necho a | alert changed", "", ValueText},
 		{"text alert absent", "# type: text\necho a | alert absent", "", ValueText},
 		{"text alert above", "# type: text\necho a | alert above 5", "this cron stores text (# type: text), and alert above compares numbers", ""},
+		{"text alert matches", "# type: text\ncat /log/myco/prod/api/main.log | grep 'starting version' | awk '{v[HOST]=$NF} END {for (h in v) print v[h], h}' | alert matches '-rc[0-9]*$' -v 1 -t 2", "", ValueText},
+		{"number alert matches", "echo 1 | alert matches '^1'", "alert matches reads text; add '# type: text'", ""},
+		{"text alert above lists matches", "# type: text\necho a | alert below 5", "use any, absent, changed or matches", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

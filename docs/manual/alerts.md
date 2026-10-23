@@ -43,7 +43,6 @@ of a script.
 
 ## Conditions
 
-#FIXME now that we we have text types, we should add a `matches` condition that takes a regex?
 - `any` — fires whenever stdin is non-empty (the default when no condition is given)
 - `above <N>` — current value is greater than N
 - `below <N>` — current value is less than N
@@ -53,6 +52,7 @@ of a script.
 - `absent` — no input received in the window
 - `rising <N>%` — value increased by N% compared to previous/window average
 - `falling <N>%` — value decreased by N% compared to previous/window average
+- `matches <regex>` — value matches a regular expression (RE2)
 
 ## Options
 
@@ -68,7 +68,7 @@ headers](crons.md#extracting-values-and-tags-from-json) a cron without `alert` w
 alerts on tagged lines or JSON must give `-v`; without it, output will fail
 [runtime type checks](crons.md#runtime-analysis) and automatically be disabled.
 If the stdin to `alert` is [typed as text](crons.md#declaring-text-output), the condition
-must be one of `any`, `absent` and `changed`.
+must be one of `any`, `absent`, `changed` and `matches`.
 
 - `--duration <dur>` — time window for sustained conditions. For
   `above`/`below`, condition must hold for all runs in the window. For
@@ -108,6 +108,14 @@ cat /log/myco/prod/canary/main.log | wc -l | alert eq 0 --notify=ops
 #   # type: text
 lease-holders | alert changed -v 1 -t 2 --notify=ops
 
+# Page when any host boots a release candidate; the cron still stores every
+# host's build.
+#   # schedule: */5 * * * *
+#   # type: text
+cat /log/myco/prod/api/main.log | grep 'starting version' \
+    | awk '{v[HOST]=$NF} END {for (h in v) print v[h], h}' \
+    | alert matches '-rc[0-9]*$' -v 1 -t 2 --notify=ops
+
 # One page if any host's disk use is above 80%.
 cat /log/myco/prod/api/disk.log \
     | awk '{print HOST, $5}' \
@@ -129,15 +137,22 @@ A cron run, and thereby an alert reads only the logs from its own schedule
 interval: a `*/5` cron sees the last five minutes. However, you can leverage
 the stored results of other crons using the `weft::*` predicates.
 
-#FIXME simple example plz
+The simplest layer reads another cron's history with an aggregate and pipes
+the number to `alert`:
+
+```
+# /cron.d/error-rate-hourly
+# schedule: every 5m
+weft::avg error-rate 1h | alert above 50 --notify=ops
+```
 
 If you want to use boolean logic to add multiple such predicates, just add one
-more condition and echo if nothing's failed yet:#
+more condition and echo if nothing's failed yet:
 
 ```
 # /cron.d/deploy-danger
 # schedule: every 1m
-(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical
+(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo 1) | alert --notify=critical
 ```
 
 If your love of bash is less than it should be, you may want to stuff a Lua
@@ -173,11 +188,19 @@ deploy_danger | alert above 0 --notify=critical
 
 In addition to the checks [run for every cron](crons.md#static-analysis), there are some specific checks run related to crons that contain `alert` invocations:
 
-* **Alert positioning** -- `alert` can only be invoked once per cron, and it has to be the last thing executed 
-* **Multiple aliases** -- `alert` will bail if you provide `--notify` more than once (if you want several targets for an alert, you can configure your alias with as many as you like)
-* **Bad arguments** -- all conditions and flags must be known and stdin, positional arguments, and flag arguments must typecheck correctly, and `-v` and `-t` must not mix numeric field positions with a JSON path
-* **One schema** -- a cron that alerts must declare its value and tagging with `-v`/`-t`, not `# value:`/`# tag:` headers
-* **Types** -- on a [crons with non-numeric output](crons.md#declaring-text-output), the condition must be `any`, `absent` or `changed`
+* **Alert positioning** -- `alert` can only be invoked once per cron, and it
+  has to be the last thing executed 
+* **Multiple aliases** -- `alert` will bail if you provide `--notify` more than
+  once (if you want several targets for an alert, you can configure your alias
+with as many as you like)
+* **Bad arguments** -- all conditions and flags must be known and stdin,
+  positional arguments, and flag arguments must typecheck correctly, and `-v`
+and `-t` must not mix numeric field positions with a JSON path
+* **One schema** -- a cron that alerts must declare its value and tagging with
+  `-v`/`-t`, not `# value:`/`# tag:` headers
+* **Types** -- on a [cron with non-numeric
+  output](crons.md#declaring-text-output), the condition must be `any`,
+`absent`, `changed` or `matches`, and `matches` must not receive numeric input
 
 ## Notifications
 

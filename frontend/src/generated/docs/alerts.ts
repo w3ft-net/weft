@@ -37,8 +37,9 @@ alerting strategies, and how to route notifications.</p>
 <p><code>alert</code> reads a value from stdin and evaluates it against a condition. If the
 condition holds, it writes the alert message to stderr and, when <code>--notify</code> is
 supplied, dispatches the alias from <code>/etc/notify.yaml</code> to its Slack, PagerDuty,
-webhook, and/or email targets (see <a href="#notifications">Notifications</a>). When the
-condition does not hold, stdin passes through to stdout unchanged.</p>
+webhook, and/or email targets (see <a href="#notifications">Notifications</a>). Its value
+and tag flags can serve as a shorthand for shaping what <a href="/manual/crons#cron-result-persistence">gets persisted in a
+cron</a>.</p>
 <p>With no condition the default is <code>any</code>: the alert fires whenever stdin is
 non-empty. <code>alert</code> alone is a dry run that writes to stderr.</p>
 <p><code>alert</code> must be the last stage of its pipeline, and the last (or only) command
@@ -54,14 +55,24 @@ of a script.</p>
 <li><code>absent</code> — no input received in the window</li>
 <li><code>rising &lt;N&gt;%</code> — value increased by N% compared to previous/window average</li>
 <li><code>falling &lt;N&gt;%</code> — value decreased by N% compared to previous/window average</li>
+<li><code>matches &lt;regex&gt;</code> — value matches a regular expression (RE2)</li>
 </ul>
 <h2 id="options">Options</h2>
 <ul>
 <li><code>-v &lt;field&gt;</code>, <code>--value &lt;field&gt;</code> — column or JSON path holding the number to
-compare on each line. If unspecified, the value is the entire line.</li>
+compare on each line. If unspecified, the whole input must parse as a float,
+unless the condition is <code>any</code>, <code>absent</code> and <code>changed</code>.</li>
 <li><code>-t &lt;field&gt;</code>, <code>--tag &lt;field&gt;</code> — column or JSON path by which alerts should be
 grouped. Combine with <code>-v</code> when you want to alert separately by host, for
 example.</li>
+</ul>
+<p>In a cron, <code>-v</code> and <code>-t</code> obviate the need for the <a href="/manual/crons#extracting-values-and-tags-from-json"><code># value:</code>/<code># tag:</code>
+headers</a> a cron without <code>alert</code> would use. A cron that
+alerts on tagged lines or JSON must give <code>-v</code>; without it, output will fail
+<a href="/manual/crons#runtime-analysis">runtime type checks</a> and automatically be disabled.
+If the stdin to <code>alert</code> is <a href="/manual/crons#declaring-text-output">typed as text</a>, the condition
+must be one of <code>any</code>, <code>absent</code>, <code>changed</code> and <code>matches</code>.</p>
+<ul>
 <li><code>--duration &lt;dur&gt;</code> — time window for sustained conditions. For
 <code>above</code>/<code>below</code>, condition must hold for all runs in the window. For
 <code>rising</code>/<code>falling</code>, compares against the window average. For <code>absent</code>, no
@@ -80,7 +91,7 @@ scripts.</li>
 </ul>
 <h2 id="examples">Examples</h2>
 <pre><code># Alert if the range holds any ERROR line.
-cat /log/myco/prod/api/main.log | grep ERROR | alert --notify=ops
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 0 --notify=ops
 
 # Alert when the range holds more than 50 errors.
 cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 50 --notify=critical
@@ -90,9 +101,21 @@ check_errors | alert above 50 --duration 5m --average --notify=ops
 check_errors | alert rising 30% --notify=critical
 
 # Alert when the range holds no canary line at all.
-cat /log/myco/prod/canary/main.log | alert absent --notify=ops
+cat /log/myco/prod/canary/main.log | wc -l | alert eq 0 --notify=ops
 
-echo &quot;integration test&quot; | alert --notify=ops
+# Alert when a lease changes hands: a text cron, where lease-holders is a
+# /bin script printing &quot;&lt;holder&gt; &lt;lease&gt;&quot; lines.
+#   # schedule: */2 * * * *
+#   # type: text
+lease-holders | alert changed -v 1 -t 2 --notify=ops
+
+# Page when any host boots a release candidate; the cron still stores every
+# host's build.
+#   # schedule: */5 * * * *
+#   # type: text
+cat /log/myco/prod/api/main.log | grep 'starting version' \\
+    | awk '{v[HOST]=$NF} END {for (h in v) print v[h], h}' \\
+    | alert matches '-rc[0-9]*$' -v 1 -t 2 --notify=ops
 
 # One page if any host's disk use is above 80%.
 cat /log/myco/prod/api/disk.log \\
@@ -112,12 +135,17 @@ cat /log/myco/prod/api/disk.log | jq -c '{host: $host, pct}' \\
 <p>A cron run, and thereby an alert reads only the logs from its own schedule
 interval: a <code>*/5</code> cron sees the last five minutes. However, you can leverage
 the stored results of other crons using the <code>weft::*</code> predicates.</p>
-<p>#FIXME simple example</p>
+<p>The simplest layer reads another cron's history with an aggregate and pipes
+the number to <code>alert</code>:</p>
+<pre><code># /cron.d/error-rate-hourly
+# schedule: every 5m
+weft::avg error-rate 1h | alert above 50 --notify=ops
+</code></pre>
 <p>If you want to use boolean logic to add multiple such predicates, just add one
-more condition and echo if nothing's failed yet:#</p>
+more condition and echo if nothing's failed yet:</p>
 <pre><code># /cron.d/deploy-danger
 # schedule: every 1m
-(weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping &amp;&amp; echo fire) | alert --notify=critical
+(weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping &amp;&amp; echo 1) | alert --notify=critical
 </code></pre>
 <p>If your love of bash is less than it should be, you may want to stuff a Lua
 script in <code>/bin</code> and pipe that to <code>alert</code>.</p>
@@ -145,9 +173,19 @@ deploy_danger | alert above 0 --notify=critical
 <h2 id="static-analysis">Static analysis</h2>
 <p>In addition to the checks <a href="/manual/crons#static-analysis">run for every cron</a>, there are some specific checks run related to crons that contain <code>alert</code> invocations:</p>
 <ul>
-<li><strong>Alert positioning</strong> -- <code>alert</code> can only be invoked once per cron, and it has to be the last thing executed</li>
-<li><strong>Multiple aliases</strong> -- <code>alert</code> will bail if you provide <code>--notify</code> more than once (if you want several targets for an alert, you can configure your alias with as many as you like)</li>
-<li><strong>Bad arguments</strong> -- all conditions and flags must be known and stdin, positional arguments, and flag arguments must typecheck correctly, and <code>-v</code> and <code>-t</code> must not mix numeric field positions with a JSON path</li>
+<li><strong>Alert positioning</strong> -- <code>alert</code> can only be invoked once per cron, and it
+has to be the last thing executed</li>
+<li><strong>Multiple aliases</strong> -- <code>alert</code> will bail if you provide <code>--notify</code> more than
+once (if you want several targets for an alert, you can configure your alias
+with as many as you like)</li>
+<li><strong>Bad arguments</strong> -- all conditions and flags must be known and stdin,
+positional arguments, and flag arguments must typecheck correctly, and <code>-v</code>
+and <code>-t</code> must not mix numeric field positions with a JSON path</li>
+<li><strong>One schema</strong> -- a cron that alerts must declare its value and tagging with
+<code>-v</code>/<code>-t</code>, not <code># value:</code>/<code># tag:</code> headers</li>
+<li><strong>Types</strong> -- on a <a href="/manual/crons#declaring-text-output">cron with non-numeric
+output</a>, the condition must be <code>any</code>,
+<code>absent</code>, <code>changed</code> or <code>matches</code>, and <code>matches</code> must not receive numeric input</li>
 </ul>
 <h2 id="notifications">Notifications</h2>
 <h3 id="define-a-notification-alias">Define a notification alias</h3>
@@ -168,14 +206,14 @@ four service types — Slack, PagerDuty, webhook, and email.</p>
 <li>the file doesn't parse</li>
 <li>an alias has no targets</li>
 <li>a webhook <code>url</code> or header refers to a <a href="#webhook-secrets"><code>\${secrets.NAME}</code></a> you haven't defined</li>
-<li>there is no <code>system</code></li>
+<li>you removed the <code>system</code> alias</li>
 </ul>
 <h3 id="the-system-alias">The system alias</h3>
 <p>Every org has an alias named <code>system</code>. It receives the alerts weft raises, as
 opposed to the ones your own <code>alert</code> stages raise. For example, weft pages
 <code>system</code> when a cron stops executing successfully, or when it disables a cron
-after repeated <a href="/manual/crons#runtime-analysis">timeouts</a>. Its initial target is the email
-address of the person who created the org:</p>
+after <a href="/manual/crons#runtime-analysis">runtime analysis failures</a>. Weft initially
+populates it with the email address of the person who created the org:</p>
 <pre><code>system:
   email:
     - &quot;you@example.com&quot;
@@ -183,8 +221,9 @@ address of the person who created the org:</p>
 <p>You can change its target to any service type. You just can't remove the
 top-level key.</p>
 <h3 id="connecting-slack-and-pagerduty">Connecting Slack and PagerDuty</h3>
-<p><code>notify.yaml</code> names destinations — the credentials behind them
-live with your account. Connect them  under <strong>Account → Integrations</strong> in the browser or from the terminal with <code>weft integration</code>.</p>
+<p><code>notify.yaml</code> names destinations — the credentials behind them live with your
+account. Connect them  under <strong>Account → Integrations</strong> in the browser or from
+the terminal with <code>weft integration</code>.</p>
 <pre><code># PagerDuty
 weft integration pagerduty add ops-daytime --key YOUR_ROUTING_KEY
 weft integration pagerduty rm  ops-daytime
@@ -250,7 +289,7 @@ whose body is JSON:</p>
 </table>
 <p>You bring your own HTTP headers, with the exception of <code>Content-Type: application/json</code>, which you can override should you need to.</p>
 <p>A webhook succeeds when it answers with a status below 300 within the
-<a href="#delivery-timeouts">delivery timeout</a>. Anything else is a failed delivery and
+<a href="#key-behaviors">delivery timeout</a>. Anything else is a failed delivery and
 is retried on the following ticks of the incident.</p>
 <h4 id="webhook-secrets">Webhook secrets</h4>
 <p>If you need to use a token in an auth header for a webhook but would rather not
@@ -279,18 +318,17 @@ will fail if an alias still refers to it.</p>
 <p>Interactive runs notify every time. Only crons have incidents, so nothing is
 suppressed.</p>
 <h3 id="key-behaviors">Key behaviors</h3>
-<p>A cron checks its condition on every tick. To avoid paging you on each one,
-weft groups consecutive ticks during which the condition holds. A cron will
-only notify once per entrance into a failed state (or one per tag, with <code>-t</code>).
-The alert message still goes to the run's <code>stderr</code>, so it is in the run's
-recorded result.  If a send fails (PagerDuty is unreachable, a Slack channel is
-gone), the run reports it and exits non-zero, and each following tick of the
-incident tries again. Delivery is tracked per target, so a retry goes only to
-the targets that missed it, not to the ones already told.  The first tick where
-the condition doesn't hold sets it to green. It won't autoresolve in PagerDuty
-when it does so.</p>
-<p>Each target gets 10 seconds to accept a notification, regardless of service.
-Three failed deliveries in a row will disable the cron.</p>
+<p>A cron checks its condition on every tick. To avoid pagestorming you, weft
+groups consecutive ticks during which the condition holds. A cron will only
+notify once per entrance into a failed state (or per tag if specified).  If a
+send fails (PagerDuty is unreachable, a Slack channel is gone), the run reports
+it and exits non-zero, and each following tick of the incident tries again.
+Delivery is tracked per target, so a retry goes only to the targets that missed
+it, not to the ones already told.  The first tick where the condition doesn't
+hold sets it to green. It won't autoresolve in PagerDuty when it does so.</p>
+<p>Each target gets 10 seconds to accept a notification, regardless of service.  A
+target that doesn't is flagged as failed, and three consecutive failed
+deliveries disable the cron.</p>
 `,
 } as const;
 

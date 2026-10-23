@@ -15,7 +15,7 @@ const dashboard = {
     { level: 3, id: "tile-kinds", text: "Tile kinds" },
     { level: 3, id: "tile-fields", text: "Tile fields" },
     { level: 3, id: "threshold-colors", text: "Threshold colors" },
-    { level: 3, id: "multi-line-sparklines-tag", text: "Multi-line sparklines (tag:)" },
+    { level: 3, id: "tagged-crons", text: "Tagged crons" },
     { level: 2, id: "layout", text: "LAYOUT" },
     { level: 2, id: "validation", text: "VALIDATION" },
     { level: 2, id: "examples", text: "EXAMPLES" },
@@ -51,7 +51,6 @@ sections:
 
       - kind: table
         cron: top-errors
-        columns: [host, count]
         size: lg
 
   - title: Capacity
@@ -67,12 +66,17 @@ sections:
         threshold: { warn: 70, crit: 90, max: 100 }
         size: md
 </code></pre>
-<p>Each cron here has to exist first. A <code>table</code> tile shows the cron's last
-output split into whitespace-separated columns, so <code>top-errors</code> might be:</p>
+<p>Each cron here has to exist first. A <code>table</code> tile shows the cron's latest
+run, one row per tag, highest value first, so <code>top-errors</code> might count
+errors per host. <code>uniq -c</code> already prints <code>&lt;count&gt; &lt;host&gt;</code>, the shape a
+cron stores:</p>
 <pre><code># schedule: */5 * * * *
 cat /log/myco/prod/api/main.log | grep ERROR | jq -r '$host' \\
-  | sort | uniq -c | sort -rn | awk '{print $2, $1}'
+  | sort | uniq -c | sort -rn | head -20
 </code></pre>
+<p>A table also shows a <a href="/manual/crons#declaring-text-output">text cron</a>, one row per tag
+sorted by tag, which is how you put state such as which coordinator holds
+each lease on a dashboard.</p>
 <h3 id="top-level-fields">Top-level fields</h3>
 <table>
 <thead>
@@ -113,12 +117,12 @@ cat /log/myco/prod/api/main.log | grep ERROR | jq -r '$host' \\
 <tbody>
 <tr>
 <td><code>sparkline</code></td>
-<td>The cron's recent results over time.</td>
+<td>The cron's last day, one line per tag.</td>
 <td><code>cron</code></td>
 </tr>
 <tr>
 <td><code>counter</code></td>
-<td>The latest numeric value.</td>
+<td>The latest value (on a tagged cron, the highest).</td>
 <td><code>cron</code></td>
 </tr>
 <tr>
@@ -128,11 +132,13 @@ cat /log/myco/prod/api/main.log | grep ERROR | jq -r '$host' \\
 </tr>
 <tr>
 <td><code>table</code></td>
-<td>The last output, split into whitespace-separated columns.</td>
-<td><code>cron</code>, <code>columns</code></td>
+<td>The latest run, a row per tag: the tag and its value.</td>
+<td><code>cron</code></td>
 </tr>
 </tbody>
 </table>
+<p>Sparklines, counters and gauges draw numbers, so they need a cron that
+stores them; a <a href="/manual/crons#declaring-text-output">text cron</a> goes in a table.</p>
 <h3 id="tile-fields">Tile fields</h3>
 <table>
 <thead>
@@ -173,37 +179,30 @@ cat /log/myco/prod/api/main.log | grep ERROR | jq -r '$host' \\
 <td>counter, gauge, sparkline</td>
 <td><code>warn</code>, <code>crit</code> cutoffs; <code>max</code> (gauge) sets full scale.</td>
 </tr>
-<tr>
-<td><code>columns</code></td>
-<td>table</td>
-<td>Header labels for the whitespace-separated columns.</td>
-</tr>
-<tr>
-<td><code>tag</code>, <code>y</code></td>
-<td>sparkline</td>
-<td>Multi-line mode, see below. Set both or neither.</td>
-</tr>
 </tbody>
 </table>
 <p>A field on a kind it doesn't apply to is rejected when the file is saved
-(<code>format</code> on a gauge, <code>columns</code> on a counter, <code>threshold</code> on a table).</p>
+(<code>format</code> on a gauge, <code>threshold</code> on a table).</p>
 <h3 id="threshold-colors">Threshold colors</h3>
 <p>Values at or above <code>crit</code> render red; values at or above <code>warn</code> (and below
 <code>crit</code>) render yellow. A gauge also uses <code>max</code> as its full-scale value
 (default 100).</p>
-<h3 id="multi-line-sparklines-tag">Multi-line sparklines (<code>tag:</code>)</h3>
-<p>A plain sparkline plots one number per cron run, the same as
-<code>chart &lt;cron&gt;</code>. When a cron prints several JSON rows per run, one per
-host or instance, set <code>tag:</code> to the field that names the row and <code>y:</code> to
-the field to plot. The tile draws one line per tag value:</p>
+<h3 id="tagged-crons">Tagged crons</h3>
+<p>A tile draws the tags its cron stores; the dashboard has nothing to
+configure. A sparkline of a cron that prints one line per host draws a line
+per host, with a legend and a color each, folding past the 8 busiest into
+<code>other</code> like <code>chart &lt;cron&gt;</code>. A cron that prints JSON rows says which field
+is the value and which the tag with <a href="/manual/crons#extracting-values-and-tags-from-json"><code># value:</code> and <code># tag:</code>
+headers</a>:</p>
+<pre><code># schedule: */1 * * * *
+# value: .mem_pct
+# tag: .coordinator_id
+cat /log/weft/coordinator/runtime.log | jq -c '{coordinator_id, mem_pct}'
+</code></pre>
 <pre><code class="language-yaml">- kind: sparkline
   cron: coordinator-mem-pct
-  tag: .coordinator_id
-  y: .mem_pct
   size: lg
 </code></pre>
-<p>Each row's x value is the time of the run that printed it. Lines get a
-legend and a distinct color per tag.</p>
 <h2 id="layout">LAYOUT</h2>
 <p>Tiles appear in YAML order, flowing left to right and then down. <code>size:</code>
 is a hint that each screen interprets for its own width:</p>
@@ -215,9 +214,9 @@ each tile gets its own row.</li>
 </ul>
 <h2 id="validation">VALIDATION</h2>
 <p>Saving a dashboard checks that the YAML parses, every <code>kind:</code> and <code>size:</code>
-is valid, every <code>table</code> tile has <code>columns:</code>, and every <code>cron:</code> exists. A
-bad file is rejected when you save it, and the previous version stays in
-place.</p>
+is valid, every <code>cron:</code> exists, and no sparkline, counter or gauge names a
+<a href="/manual/crons#declaring-text-output">text cron</a>. A bad file is rejected when you save it,
+and the previous version stays in place.</p>
 <h2 id="examples">EXAMPLES</h2>
 <pre><code>dashboard                   list dashboards
 dashboard ops               open the &quot;ops&quot; dashboard (create it first)

@@ -37,7 +37,7 @@ func schemaForWatch(w store.CronWatch) (cronSchema, error) {
 	return s, nil
 }
 
-// declaredBy names where the schema came from, for strike messages.
+// declaredBy names where the schema came from, for disable messages.
 func (s cronSchema) declaredBy() string {
 	if s.alerts {
 		return "alert -v " + s.value.String()
@@ -55,8 +55,8 @@ type cronPoint struct {
 }
 
 // parseCronOutput splits one run's stdout into points under the output
-// contract. A non-nil error is a strike: the output breaks the contract and
-// the run stores none of it. Empty output is legal and yields no points.
+// contract. A non-nil error means the output breaks the contract: the run
+// stores none of it and the cron is disabled. Empty output is legal and yields no points.
 func parseCronOutput(s cronSchema, stdout string) ([]cronPoint, error) {
 	var lines []string
 	scanner := bufio.NewScanner(strings.NewReader(stdout))
@@ -167,7 +167,7 @@ func (s cronSchema) positionalPoint(n int, line string) (cronPoint, error) {
 }
 
 // jsonPoint reads one JSON row by the declared paths. A missing or null tag
-// leaves the row untagged; a missing value is a strike.
+// leaves the row untagged; a missing value breaks the contract.
 func (s cronSchema) jsonPoint(n int, line string) (cronPoint, error) {
 	if !isJSONObject(line) {
 		return cronPoint{}, fmt.Errorf("line %d is not JSON, but the cron declares %s", n, s.declaredBy())

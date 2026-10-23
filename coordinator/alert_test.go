@@ -275,6 +275,9 @@ func TestAlert_ParseArgs(t *testing.T) {
 		{"absent", "absent", true},
 		{"rising", "rising 100%", true},
 		{"falling", "falling 50%", true},
+		{"matches", "matches ^old-", true},
+		{"matches missing pattern", "matches", false},
+		{"matches bad pattern", "matches (", false},
 		{"above with duration", "above 50 --duration 5m", true},
 		{"above with average", "above 50 --duration 10m --average", true},
 		{"above with msg", "above 50 --msg alert!", true},
@@ -396,5 +399,26 @@ func TestAlert_IfMode_RejectsConditionKeyword(t *testing.T) {
 	parsed, err := alert.ParseArgs(strings.Fields("above 50 --if-zero 0"))
 	if err == nil {
 		t.Errorf("expected parse error mixing condition + --if-zero, got %+v", parsed)
+	}
+}
+
+// TestAlert_Matches fires per tag on the rows whose value matches, and
+// ignores the rest.
+func TestAlert_Matches(t *testing.T) {
+	stdin := "old-7 lease-a\nnew-2 lease-b\nold-9 lease-c\n"
+	stdout, stderr, code := runAlert("matches ^old- -v 1 -t 2", stdin)
+	if code != 0 || stdout != stdin {
+		t.Fatalf("code=%d stdout=%q, want 0 and stdin passed through", code, stdout)
+	}
+	for _, want := range []string{`weft[lease-a]: "old-7" matches ^old-`, `weft[lease-c]: "old-9" matches ^old-`} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr %q, want %q", stderr, want)
+		}
+	}
+	if strings.Contains(stderr, "lease-b") {
+		t.Errorf("lease-b (new-2) should not have fired: %q", stderr)
+	}
+	if _, stderr, _ := runAlert("matches ^old-", ""); stderr != "" {
+		t.Errorf("empty stdin fired: %q", stderr)
 	}
 }

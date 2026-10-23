@@ -579,9 +579,9 @@ type CronWatch struct {
 	// Enabled has no gorm default: with one, gorm swaps an explicit false
 	// for true on create. The column's own default (schema.sql) covers raw SQL.
 	Enabled bool `gorm:"not null"`
-	// ConsecutiveStrikes counts runs in a row that failed a runtime check
-	// (the run budget, a delivery timeout, output that breaks the output
-	// contract); at the bench threshold the cron is disabled. A clean run,
+	// ConsecutiveStrikes counts runs in a row that ran out of time (the run
+	// budget, a delivery timeout); at the bench threshold the cron is
+	// disabled. A clean run,
 	// and any save that re-enables the cron, resets it.
 	ConsecutiveStrikes int `gorm:"column:consecutive_strikes;not null;default:0"`
 	LastRunAt          *time.Time
@@ -906,11 +906,15 @@ func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 		s := parsed.Tag.String()
 		out.TagField = &s
 	}
-	if out.ValueType == ValueText {
-		switch parsed.Condition {
-		case alert.Any, alert.Absent, alert.Changed:
-		default:
-			return out, fmt.Errorf("this cron stores text (# type: text), and alert %s compares numbers; use any, absent or changed", parsed.Condition)
+	switch parsed.Condition {
+	case alert.Any, alert.Absent, alert.Changed:
+	case alert.Matches:
+		if out.ValueType != ValueText {
+			return out, fmt.Errorf("alert matches reads text; add '# type: text' to store this cron's values as text")
+		}
+	default:
+		if out.ValueType == ValueText {
+			return out, fmt.Errorf("this cron stores text (# type: text), and alert %s compares numbers; use any, absent, changed or matches", parsed.Condition)
 		}
 	}
 	// Stamp the condition + numeric threshold for dashboard line
@@ -960,8 +964,8 @@ func (s *Store) CountCronWatches(orgID OrgID) (int, error) {
 	return int(count), err
 }
 
-// RecordCronStrike adds a strike to a cron whose run failed a runtime check
-// and disables it once it has strikes in a row, reporting whether this call
+// RecordCronStrike adds a strike to a cron whose run ran out of time and
+// disables it once it has strikes in a row, reporting whether this call
 // benched it. One UPDATE, so concurrent coordinators can't both miss the
 // threshold.
 func (s *Store) RecordCronStrike(ctx context.Context, id uint, strikes int) (benched bool, err error) {

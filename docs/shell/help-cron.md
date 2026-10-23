@@ -9,14 +9,17 @@ shell:
 
 ## Crons
 
-A cron runs a pipeline on a schedule. Its stdout is recorded
-as the cron result; writes to stderr are treated as alert firings
-(if the cron has a `| alert` stage — see `help alerts`).
+A cron runs a pipeline on a schedule. Each line of its stdout is
+stored as `<value> [<tag>]`: a number, optionally followed by a tag
+such as a host name. Output in any other shape disables the cron, as
+do three runs in a row that time out. Writes to stderr are
+treated as alert firings (if the cron has a `| alert` stage — see
+`help alerts`).
 
 - `vi /cron.d/<name>` — create or edit a cron
 - `cat /cron.d/<name>` — view a cron definition
 - `ls /cron.d` — list existing crons; `ls -l /cron.d/` adds a sparkline column
-- `chart <name>` — chart recent results (`man chart`)
+- `chart <name>` — chart its results over the current range (`man chart`)
 - `rm /cron.d/<name>` — delete a cron (stops the schedule)
 
 ## Cron file format
@@ -29,8 +32,14 @@ cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 50 --notify=o
 `# schedule:` takes `every <duration>` or a five-field expression such
 as `*/5 * * * *`. Notification targets come from the `alert` stage's
 `--notify=<alias>`. Each run reads only the logs from its own
-schedule interval, so count with no row limit. Do not use `head -n` or
-`tail -n` in a cron: they can cut the interval short.
+schedule interval, so count with no row limit: `head -n` or `tail -n`
+on the input can cut the interval short. Trimming the output, as in
+`uniq -c | sort -rn | head -20`, is fine.
+
+A cron that prints JSON names its fields with `# value: .pct` and
+`# tag: .host` lines under `# schedule:`; one that alerts uses
+`alert -v`/`-t` instead. `# type: text` stores text values rather
+than numbers. Full rules: `man crons`.
 
 ## Accessing past results
 
