@@ -4,10 +4,28 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
+
+// FillJSONPayload makes a JSON object line its own payload when the row
+// arrived without one. jq reads the payload, and an SDK record (weft-go
+// Send, heartbeats, runtime stats) reaches here as a bare JSON line: its
+// socket frame carries no fmt=json header and its source has no schema,
+// so nothing upstream set one. Rows are changed in place.
+func FillJSONPayload(rows []*pb.LogRow) {
+	for _, r := range rows {
+		if len(r.PayloadJson) > 0 {
+			continue
+		}
+		raw := strings.TrimSpace(r.Raw)
+		if strings.HasPrefix(raw, "{") && gjson.Valid(raw) {
+			r.PayloadJson = []byte(raw)
+		}
+	}
+}
 
 // SplitLines stores a multi-line text event as one row per line, so a row
 // is a line to the shard and to grep alike (docs/plans/line-storage.md).

@@ -756,8 +756,10 @@ func (s *Server) authenticateStream(ctx context.Context) (*store.AgentAuthResult
 }
 
 func (s *Server) ingestBatch(ctx context.Context, rows []*pb.LogRow) {
-	// Store a multi-line text event as one row per line, here, so the
-	// shards' buffer and live tail see the same rows.
+	// A JSON line is its own payload, so jq reads its fields; a filled
+	// row is never split. Then store a multi-line text event as one row
+	// per line, here, so the shards' buffer and live tail see the same rows.
+	ingest.FillJSONPayload(rows)
 	rows = ingest.SplitLines(rows)
 
 	// Write to ring buffer (non-blocking). Background drain pushes to

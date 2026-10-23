@@ -60,3 +60,40 @@ func TestIngestBatch_SplitsMultiLineEvents(t *testing.T) {
 		t.Fatalf("JSON row got event_id %q", buffered[3].EventId)
 	}
 }
+
+// TestIngestBatch_JSONRawFillsPayload: an SDK record (weft-go Send, a
+// heartbeat) reaches the coordinator as a JSON line with no payload, since
+// its socket frame carries no fmt=json header and its source has no schema.
+// jq reads the payload, so without one every field reads as null. A JSON
+// object line becomes its own payload; anything else is left alone.
+func TestIngestBatch_JSONRawFillsPayload(t *testing.T) {
+	tx, cleanup := testStore(t)
+	defer cleanup()
+	cust, err := tx.FindOrCreateOrg("kevlar")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{
+		Compute: &compute.Engine{}, Store: tx, Tail: coordinator.NewTailBroker()})
+	srv := &Server{Coord: coord, Store: tx}
+
+	record := `{"coordinator_id":"i-1","goroutines":244}`
+	srv.ingestBatch(context.Background(), []*pb.LogRow{
+		{Namespace: "weft", Service: "coordinator", Kind: "runtime", CustomerId: int64(cust.ID), Raw: record, TsUnixNs: 1},
+		{Namespace: "weft", Service: "coordinator", CustomerId: int64(cust.ID), Raw: `[1,2]`, TsUnixNs: 2},
+		{Namespace: "weft", Service: "coordinator", CustomerId: int64(cust.ID), Raw: `{not json`, TsUnixNs: 3},
+		{Namespace: "weft", Service: "coordinator", CustomerId: int64(cust.ID), Raw: `level=info {"a":1}`, PayloadJson: []byte(`{"a":1}`), TsUnixNs: 4},
+	})
+
+	want := []string{record, "", "", `{"a":1}`}
+	buffered := coord.Ingest.Drain(500)
+	if len(buffered) != len(want) {
+		t.Fatalf("buffer got %d rows, want %d", len(buffered), len(want))
+	}
+	for i, w := range want {
+		if got := string(buffered[i].PayloadJson); got != w {
+			t.Errorf("row %d (%q) payload = %q, want %q", i, buffered[i].Raw, got, w)
+		}
+	}
+}
