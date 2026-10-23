@@ -910,7 +910,7 @@ func (c *Coordinator) refreshLoweredSync(ctx context.Context, watch *store.CronW
 	}
 	if err := c.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Model(&store.CronWatch{}).
 		Where("id = ?", watch.ID).
-		Update("lowered_plan", loweredJSON).
+		Update("lowered_plan", store.JSONB(loweredJSON)).
 		Error; err != nil {
 		weftsdk.Infof(ctx, "watch %d: refresh lowered_plan: %v", watch.ID, err)
 		return

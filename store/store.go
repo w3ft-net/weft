@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/saaskit/orgs"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -116,8 +118,20 @@ func Open(dsn string) (*Store, error) {
 // session-scoped advisory lock and the schema.sql restore's session
 // settings would stay behind on a transaction-mode pooler's server
 // connections.
+//
+// Queries run in pgx's exec mode: an unnamed statement, described and run in
+// one round trip, with nothing cached. The default caches a named prepared
+// statement per query, and a migration that changes a table's columns makes
+// Postgres refuse every cached statement that reads it ("cached plan must not
+// change result type") until each is retried, on this process's connections
+// and on PgBouncer's server connections alike.
 func Connect(dsn string) (*Store, error) {
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+	pgxCfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("store: parse dsn: %w", err)
+	}
+	pgxCfg.DefaultQueryExecMode = pgx.QueryExecModeExec
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: stdlib.OpenDB(*pgxCfg)}), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 		// A single INSERT/UPDATE/DELETE is already atomic; GORM's default
 		// BEGIN/COMMIT wrap would add two round trips per write. Nothing here

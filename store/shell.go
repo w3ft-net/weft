@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -609,7 +610,33 @@ type CronWatch struct {
 	// path falls back to inline planner.Plan() in that case. JSONB
 	// in Postgres so operators can introspect via `SELECT
 	// lowered_plan -> 'shard_sql' FROM cron_watches`.
-	LoweredPlan []byte `gorm:"column:lowered_plan;type:jsonb"`
+	LoweredPlan JSONB `gorm:"column:lowered_plan;type:jsonb"`
+}
+
+// JSONB is JSON bytes bound for a jsonb column. Queries run in pgx's exec mode
+// (see Connect), which sends parameters as text, so a plain []byte would go as
+// bytea hex that jsonb can't parse; JSONB goes as the JSON text itself.
+type JSONB []byte
+
+func (j JSONB) Value() (driver.Value, error) {
+	if j == nil {
+		return nil, nil
+	}
+	return string(j), nil
+}
+
+func (j *JSONB) Scan(src any) error {
+	switch v := src.(type) {
+	case nil:
+		*j = nil
+	case []byte:
+		*j = append(JSONB(nil), v...)
+	case string:
+		*j = JSONB(v)
+	default:
+		return fmt.Errorf("jsonb: cannot scan %T", src)
+	}
+	return nil
 }
 
 // computeCronWatchHash returns the canonical content hash for a
@@ -689,7 +716,7 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 			"value_type":      compiled.ValueType,
 			"alert_condition": compiled.AlertCondition,
 			"alert_threshold": compiled.AlertThreshold,
-			"lowered_plan":    loweredPlan,
+			"lowered_plan":    JSONB(loweredPlan),
 			"enabled":         enabled,
 		}
 		if enabled && !w.Enabled {
