@@ -18,22 +18,12 @@ var numericTileKinds = map[string]bool{"sparkline": true, "counter": true, "gaug
 // function, or this cron turning text while numeric readers name it.
 func (s *Store) checkValueTypes(orgID OrgID, name string, compiled CompiledWatch) error {
 	for _, ref := range compiled.NumericRefs {
-		if ref == name {
-			if compiled.ValueType == ValueText {
-				return fmt.Errorf("this cron stores text (# type: text), so it can't read itself with a numeric weft:: function")
-			}
-			continue
+		if ref == name && compiled.ValueType == ValueText {
+			return fmt.Errorf("this cron stores text (# type: text), so it can't read itself with a numeric weft:: function")
 		}
-		target, err := s.GetCronWatch(orgID, ref)
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if target.ValueType == ValueText {
-			return fmt.Errorf("cron %q stores text (# type: text); numeric weft:: functions can't read it, but weft::latest can", ref)
-		}
+	}
+	if err := s.refuseTextRefs(orgID, compiled.NumericRefs, name); err != nil {
+		return err
 	}
 	if compiled.ValueType != ValueText {
 		return nil
@@ -51,10 +41,50 @@ func (s *Store) checkValueTypes(orgID OrgID, name string, compiled CompiledWatch
 	return nil
 }
 
-// numericReaders lists what reads cron name as numbers: other crons'
-// literal numeric weft:: calls and dashboards' numeric tiles.
+// refuseTextRefs refuses numeric reads, by literal name, of crons that
+// store text. skip is the cron being saved, whose own type is checked by
+// the caller.
+func (s *Store) refuseTextRefs(orgID OrgID, refs []string, skip string) error {
+	for _, ref := range refs {
+		if ref == skip {
+			continue
+		}
+		target, err := s.GetCronWatch(orgID, ref)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if target.ValueType == ValueText {
+			return fmt.Errorf("cron %q stores text (# type: text); numeric weft functions can't read it, but weft::latest (weft.latest in Lua) can", ref)
+		}
+	}
+	return nil
+}
+
+// numericReaders lists what reads cron name as numbers: other crons' and
+// /bin scripts' literal numeric weft calls (bash or Lua), and dashboards'
+// numeric tiles.
 func (s *Store) numericReaders(orgID OrgID, name string) ([]string, error) {
 	var out []string
+	reads := func(refs []string) bool {
+		for _, ref := range refs {
+			if ref == name {
+				return true
+			}
+		}
+		return false
+	}
+	fns, err := s.ListShellFunctions(orgID)
+	if err != nil {
+		return nil, err
+	}
+	for _, fn := range fns {
+		if refs, err := scriptRefs(fn.Language, fn.Source); err == nil && reads(refs) {
+			out = append(out, "/bin/"+fn.Name)
+		}
+	}
 	crons, err := s.ListCronWatches(orgID)
 	if err != nil {
 		return nil, err
@@ -64,14 +94,8 @@ func (s *Store) numericReaders(orgID OrgID, name string) ([]string, error) {
 			continue
 		}
 		compiled, err := CompileWatchPipeline(c.Pipeline)
-		if err != nil {
-			continue
-		}
-		for _, ref := range compiled.NumericRefs {
-			if ref == name {
-				out = append(out, "/cron.d/"+c.Name)
-				break
-			}
+		if err == nil && reads(compiled.NumericRefs) {
+			out = append(out, "/cron.d/"+c.Name)
 		}
 	}
 	dashboards, err := s.ListDashboards(orgID)

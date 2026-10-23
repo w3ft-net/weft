@@ -25,12 +25,12 @@ func RegisterWeftPredicates(interp *bash.Interpreter, wf *WeftFuncs) {
 	interp.RegisterCommandMeta("weft::is_above", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
 		TypeDoc:  "weft::is_above <cron> <threshold> [<window> [--average]]: exit 0 if the cron's value is above the threshold",
-		Run:      predicateAbove(wf),
+		Run:      numericPredicate(wf, "weft::is_above", predicateAbove(wf)),
 	})
 	interp.RegisterCommandMeta("weft::is_below", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
 		TypeDoc:  "weft::is_below <cron> <threshold> [<window> [--average]]: exit 0 if the cron's value is below the threshold",
-		Run:      predicateBelow(wf),
+		Run:      numericPredicate(wf, "weft::is_below", predicateBelow(wf)),
 	})
 	interp.RegisterCommandMeta("weft::is_absent", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
@@ -45,22 +45,22 @@ func RegisterWeftPredicates(interp *bash.Interpreter, wf *WeftFuncs) {
 	interp.RegisterCommandMeta("weft::is_rising", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
 		TypeDoc:  "weft::is_rising <cron> [<pct>] [<window>]: exit 0 if the cron rose by at least pct% (default 0) vs baseline (prev tick by default; avg over window if given)",
-		Run:      predicateRising(wf),
+		Run:      numericPredicate(wf, "weft::is_rising", predicateRising(wf)),
 	})
 	interp.RegisterCommandMeta("weft::is_falling", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
 		TypeDoc:  "weft::is_falling <cron> [<pct>] [<window>]: exit 0 if the cron fell by at least pct% (default 0) vs baseline (prev tick by default; avg over window if given)",
-		Run:      predicateFalling(wf),
+		Run:      numericPredicate(wf, "weft::is_falling", predicateFalling(wf)),
 	})
 	interp.RegisterCommandMeta("weft::is_outlier", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
 		TypeDoc:  "weft::is_outlier <cron> <n_stddev> <window> [--above|--below]: exit 0 if |latest - avg(window)| > n_stddev * stddev(window). --above/--below restricts to one direction.",
-		Run:      predicateOutlier(wf),
+		Run:      numericPredicate(wf, "weft::is_outlier", predicateOutlier(wf)),
 	})
 	interp.RegisterCommandMeta("weft::is_seasonal", bash.ExternalCmd{
 		Strategy: bash.StageBarrier,
 		TypeDoc:  "weft::is_seasonal <cron> <n_stddev> <period> <window>: exit 0 if latest is n_stddev away from same-time-of-period mean over window (e.g. period=1d window=4w compares to same hour over last 4 days)",
-		Run:      predicateSeasonal(wf),
+		Run:      numericPredicate(wf, "weft::is_seasonal", predicateSeasonal(wf)),
 	})
 
 	// Stdin comparators — read a float from stdin, compare to threshold.
@@ -68,6 +68,21 @@ func RegisterWeftPredicates(interp *bash.Interpreter, wf *WeftFuncs) {
 	//   weft::avg foo 5m | weft::is_gt 50 && ...
 	interp.RegisterCommand("weft::is_gt", stdinComparator(func(x, t float64) bool { return x > t }))
 	interp.RegisterCommand("weft::is_lt", stdinComparator(func(x, t float64) bool { return x < t }))
+}
+
+// numericPredicate refuses a text cron before run: exit 2 with a message,
+// like a usage error, since a predicate otherwise answers "can't tell"
+// (exit 1) and a type mistake would look like the condition not holding.
+func numericPredicate(wf *WeftFuncs, fn string, run func([]string, io.Reader, io.Writer, io.Writer) int) func([]string, io.Reader, io.Writer, io.Writer) int {
+	return func(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+		if len(args) > 0 {
+			if err := wf.CheckNumeric(fn, args[0]); err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
+		}
+		return run(args, stdin, stdout, stderr)
+	}
 }
 
 // predicateUsage prints a usage line for a predicate command and returns 2 —

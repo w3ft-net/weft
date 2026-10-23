@@ -33,6 +33,7 @@ func (m *mockWeftFuncs) Previous(name string) (string, error) {
 	return "", nil
 }
 func (m *mockWeftFuncs) Describe(name string, _ int) ([]RunRecord, error) { return m.runs[name], nil }
+func (m *mockWeftFuncs) CheckNumeric(string, string) error                 { return nil }
 func (m *mockWeftFuncs) SeasonalStats(name string, _, _ time.Duration) (SeasonalStatsResult, error) {
 	if v, ok := m.seasonal[name]; ok {
 		return v, nil

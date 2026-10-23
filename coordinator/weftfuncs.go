@@ -148,6 +148,7 @@ type RunRecord struct {
 	DurationMs int64     `json:"duration_ms"`
 	Tag        string    `json:"tag"`
 	Value      *float64  `json:"value"`
+	Text       *string   `json:"text,omitempty"` // a `# type: text` cron's value
 	Stdout     string    `json:"stdout"`
 	Stderr     string    `json:"stderr"`
 }
@@ -171,7 +172,7 @@ func (w *WeftFuncs) Describe(watchName string, n int) ([]RunRecord, error) {
 	for i, r := range results {
 		out[i] = RunRecord{
 			RanAt: r.RanAt.UTC(), ExitCode: r.ExitCode, DurationMs: r.DurationMs,
-			Tag: r.Tag, Value: r.Value, Stdout: r.Stdout, Stderr: r.Stderr,
+			Tag: r.Tag, Value: r.Value, Text: r.TextValue, Stdout: r.Stdout, Stderr: r.Stderr,
 		}
 	}
 	return out, nil
@@ -284,13 +285,28 @@ func (w *WeftFuncs) Count(watchName string, dur time.Duration) (float64, error) 
 	return float64(st.Count), err
 }
 
+// errTextCron marks a numeric read of a `# type: text` cron: a mistake in
+// the script, not missing data, so callers that answer "can't tell" for
+// missing data report it instead.
+var errTextCron = errors.New("stores text")
+
 // numericCron refuses a text cron for a function that needs numbers. Saves
 // refuse literal names already; this covers names built at run time.
 func numericCron(fn string, watch store.CronWatch) error {
 	if watch.ValueType == store.ValueText {
-		return fmt.Errorf("%s: cron %q stores text (# type: text), so it has no numbers; weft::latest reads it", fn, watch.Name)
+		return fmt.Errorf("%s: cron %q %w (# type: text), so it has no numbers; weft::latest reads it", fn, watch.Name, errTextCron)
 	}
 	return nil
+}
+
+// CheckNumeric refuses a text cron for fn. A cron that doesn't exist, or
+// can't be read, passes: fn itself reports those.
+func (w *WeftFuncs) CheckNumeric(fn, watchName string) error {
+	var watch store.CronWatch
+	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+		return nil
+	}
+	return numericCron(fn, watch)
 }
 
 // rawWindow finds the cron and the start of a raw-results window, enforcing
@@ -533,6 +549,7 @@ type weftQueryFuncs interface {
 	Latest(name string) (string, error)
 	Previous(name string) (string, error)
 	Describe(name string, n int) ([]RunRecord, error)
+	CheckNumeric(fn, name string) error
 	Avg(name string, dur time.Duration) (float64, error)
 	Max(name string, dur time.Duration) (float64, error)
 	Min(name string, dur time.Duration) (float64, error)
@@ -670,6 +687,9 @@ func buildWeftLuaExtension(w weftQueryFuncs) luapkg.Extension {
 				if r.Value != nil {
 					row.RawSetString("value", lua.LNumber(*r.Value))
 				}
+				if r.Text != nil {
+					row.RawSetString("text", lua.LString(*r.Text))
+				}
 				row.RawSetString("stdout", lua.LString(r.Stdout))
 				row.RawSetString("stderr", lua.LString(r.Stderr))
 				tbl.Append(row)
@@ -679,6 +699,24 @@ func buildWeftLuaExtension(w weftQueryFuncs) luapkg.Extension {
 		}))
 
 		registerWeftLuaPredicates(L, mod, w)
+
+		// A numeric function on a text cron raises a Lua error rather than
+		// returning nil, err (or false, for a predicate): it is a mistake
+		// in the script, not missing data, and must not read as one.
+		mod.ForEach(func(k, v lua.LValue) {
+			name := k.String()
+			fn, ok := v.(*lua.LFunction)
+			if !ok || !store.NumericWeftFunc(name) {
+				return
+			}
+			orig := fn.GFunction
+			mod.RawSetString(name, L.NewFunction(func(L *lua.LState) int {
+				if err := w.CheckNumeric("weft."+name, L.CheckString(1)); err != nil {
+					L.RaiseError("%s", err.Error())
+				}
+				return orig(L)
+			}))
+		})
 
 		L.SetGlobal("weft", mod)
 	}

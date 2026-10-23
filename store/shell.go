@@ -251,6 +251,13 @@ func (s *Store) SaveShellFunction(orgID OrgID, userID, name, source, language st
 	if err := validateSource(language, source); err != nil {
 		return err
 	}
+	refs, err := scriptRefs(language, source)
+	if err != nil {
+		return err
+	}
+	if err := s.refuseTextRefs(orgID, refs, ""); err != nil {
+		return err
+	}
 	hash := computeShellFunctionHash(source)
 
 	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
@@ -757,53 +764,6 @@ const (
 	ValueText   = "text"
 )
 
-// numericWeftFuncs are the weft:: functions that need a cron's numeric
-// values. The rest (latest, previous, describe, is_absent, has_changed)
-// read text as well, and is_gt/is_lt test stdin, not a cron.
-var numericWeftFuncs = map[string]bool{
-	"weft::avg": true, "weft::max": true, "weft::min": true, "weft::sum": true,
-	"weft::stddev": true, "weft::first": true, "weft::count": true,
-	"weft::percentile": true, "weft::delta": true, "weft::slope": true, "weft::rate": true,
-	"weft::is_above": true, "weft::is_below": true, "weft::is_rising": true,
-	"weft::is_falling": true, "weft::is_outlier": true, "weft::is_seasonal": true,
-}
-
-// staticWord returns a word's text when it has no expansion, so save-time
-// checks can read a cron name only when it is spelled out.
-func staticWord(w bash.Word) (string, bool) {
-	var s string
-	for _, p := range w.Parts {
-		switch v := p.(type) {
-		case *bash.LiteralPart:
-			s += v.Value
-		case *bash.SingleQuotedPart:
-			s += v.Value
-		default:
-			return "", false
-		}
-	}
-	return s, s != ""
-}
-
-// numericRefs lists the literal cron names passed to numeric weft::
-// functions anywhere in script.
-func numericRefs(script *bash.Script) []string {
-	var out []string
-	seen := map[string]bool{}
-	bash.Walk(script, func(n bash.Node) bool {
-		sc, ok := n.(*bash.SimpleCommand)
-		if !ok || len(sc.Words) < 2 || !numericWeftFuncs[sc.Words[0].Literal()] {
-			return true
-		}
-		if name, ok := staticWord(sc.Words[1]); ok && !seen[name] {
-			seen[name] = true
-			out = append(out, name)
-		}
-		return true
-	})
-	return out
-}
-
 // valueTypeHeader reads a cron's `# type:` header; text is the only type
 // it names, and a cron without one stores numbers.
 func valueTypeHeader(pipeline string) (string, error) {
@@ -897,7 +857,9 @@ func CompileWatchPipeline(pipeline string) (CompiledWatch, error) {
 	if out.ValueType, err = valueTypeHeader(pipeline); err != nil {
 		return out, err
 	}
-	out.NumericRefs = numericRefs(script)
+	if out.NumericRefs, err = bashRefs(script); err != nil {
+		return out, err
+	}
 	var alertCmds []*bash.SimpleCommand
 	bash.Walk(script, func(n bash.Node) bool {
 		if sc, ok := n.(*bash.SimpleCommand); ok {

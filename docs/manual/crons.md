@@ -9,8 +9,12 @@ web:
 
 In weft, crons have two primary purposes: generating summary timeseries data
 based on logs and metrics, and alerting on such data. Creating such a cron is
-as simple as adding a bash or Lua script to `/cron.d`. Those scripts need a
-leading comment indicating the schedule on which the cron will fire.
+as simple as adding a bash script to `/cron.d`. Those scripts need a leading
+comment indicating the schedule on which the cron will fire.
+
+A cron is always bash, but it can run Lua: inline, the way you'd run awk
+(`lua 'print(weft.avg("error-rate", "1h"))'`), or by calling a Lua script
+you keep in `/bin`.
 
 Let's take the following script as an example:
 
@@ -41,9 +45,11 @@ fails to conform to the scheduling options above.
 Weft sets the `range` for each run automatically based on the cron's schedule
 interval: a `*/5` cron sees the last five minutes, a daily cron sees the
 UTC day that just ended, and a weekly cron sees the week that just ended.
-For this reason, we recommend against using `head -n`, `tail -n`, etc.
-Imposing a limit on your lines might result in undercounting or other missed
-line problems.
+For this reason, we recommend against limiting the lines a cron *reads*:
+`tail -n 500 main.log | grep ERROR | wc -l` counts errors in the last 500
+lines, not in the last five minutes. Limiting what it *prints* is fine, and
+it's how you keep a high-cardinality cron inside your plan's [tag
+cap](crons.md#tags): `… | sort | uniq -c | sort -rn | head -50`.
 
 ### Limits on granularity
 
@@ -62,6 +68,95 @@ Saving a cron with a schedule faster than your plan allows is rejected.
 Disabled crons (see [Runtime analysis](crons.md#runtime-analysis)) don't count
 against the number of crons your plan allows.
 
+## What a cron stores
+
+Every run of a cron stores *points*: a value, optionally labelled with a tag.
+The stdout of the run decides what they are, by these rules.
+
+### Plain text: `<value> [<tag>]`
+
+Each non-blank line is a value, then optionally a tag, separated by
+whitespace:
+
+| Line | Stored as |
+|---|---|
+| `42` | value 42, untagged |
+| `42 api-1` | value 42, tagged `api-1` |
+| `42 api-1 extra` | nothing: the run [strikes](crons.md#runtime-analysis) for having more than two fields |
+| `n/a api-1` | nothing: the run strikes, since `n/a` isn't a number |
+
+A cron that prints one number (`wc -l`) is the one-line case. A cron that
+prints one line per host is a tagged cron, and charts draw one line per tag.
+The value comes first so that `uniq -c` output is already in shape, and so a
+cron that prints a single number can grow a tag column later without
+splitting its history.
+
+Two lines with the same tag in one run are fine: both are kept, and charts
+average them.
+
+### JSON: `# value:` and `# tag:`
+
+A cron whose output is JSON says which field is which with header comments
+next to its schedule:
+
+```
+# schedule: */5 * * * *
+# value: .pct
+# tag: .host
+cat /log/myco/prod/api/host.log | jq -c '{host: $host, pct: .memory.pct}'
+```
+
+`# value:` is required and `# tag:` is optional; both take a `.`-prefixed
+path. Each line must be a JSON object. A row whose tag is missing or null is
+stored untagged; a row whose value is missing or not a number strikes the
+run.
+
+### Crons that alert
+
+A cron that ends in an `alert` stage declares its fields with `alert -v` and
+`-t` instead of headers (see [Alerts](alerts.md)). `alert -v 3 -t 1` stores
+field 3 tagged by field 1, however many columns the line has. An alert
+without `-v` reads one value, so its cron must print a single number. A cron
+can't use both headers and `alert -v`; if you want to store one field and
+alert on another, use two crons, the second reading the first with
+`weft::*`.
+
+### Text crons
+
+Some things worth tracking aren't numbers: which coordinator holds a lease,
+what version a host runs. `# type: text` says a cron's values are text:
+
+```
+# schedule: */2 * * * *
+# type: text
+lease-holders
+```
+
+The same rules apply, with text where the number goes: a line is
+`<text> [<tag>]`, or a JSON row's `# value:` field. A [table
+tile](dashboards.md) shows a text cron's latest run, one row per tag.
+
+Text has no average, so anything that needs numbers refuses a text cron:
+`alert above` and its numeric friends (`any`, `absent` and `changed` work),
+the numeric `weft::*` functions, `chart`, and sparkline, counter and gauge
+tiles. `weft::latest`, `weft::previous`, `weft::describe`, `weft::is_absent`
+and `weft::has_changed` all read text crons. Text values are kept with the
+raw results only, for 7 days.
+
+### Tags
+
+Each run may print a limited number of distinct tags:
+
+| Plan | Tags per run |
+|---|---|
+| Trial | 10 |
+| Swatch | 50 |
+| Yard | 100 |
+| Bolt | 250 |
+
+A run over the cap strikes. Charts draw the 8 busiest tags and fold the rest
+into one `other` line.
+
 ## Cron result persistence
 
 Since your cron monitors are just bash/Lua scripts against your logs, it's very
@@ -78,13 +173,17 @@ The output of this function is NDJSON with the following values:
 
 | Field | Contents |
 |---|---|
-| `stdout` | The pipeline's output, exactly as written |
-| `stderr` | Alert firings (from an `alert` stage) or the error message if the run failed |
-| `exit_code` | `0`, or `1` if the pipeline errored |
+| `stdout` | The line the point came from |
+| `stderr` | Alert firings (from an `alert` stage), or why the run failed or struck |
+| `exit_code` | `0`, or `1` if the run failed or struck |
 | `duration_ms` | How long the run took, in milliseconds |
 | `ran_at` | When the run started |
-| `value` | `stdout` parsed as a number, or empty if it isn't one |
-| `tag` | The per-row label of a multi-row cron (see below), empty otherwise |
+| `value` | The point's value, empty for a text cron |
+| `text` | A [text cron](crons.md#text-crons)'s value, absent otherwise |
+| `tag` | The point's tag, empty if untagged |
+
+A run that prints several points has one entry per point. A run that fails
+or strikes has a single entry, with no value, saying why in `stderr`.
 
 We'll cover more ways of analyzing cron data below.
 
@@ -131,9 +230,11 @@ raw data window (7 days) because the math doesn't work on the compressed cron
 results. For all others, the limiting factor is your plan's retention.
 
 The return type in the table below indicates not just what the function spits
-out but what it expects in the cron results -- if the stdout from the cron
-argument isn't coercible to a numeric value, the functions in the table below
-aren't going to work.
+out but what it expects in the cron results: the functions that return a
+number need a cron that stores numbers. Pointing one at a [text
+cron](crons.md#text-crons) is refused when you save, if the name is
+spelled out (`weft::avg holders 1h`, `weft.avg("holders", "1h")`), and is an
+error when it runs otherwise (`weft::avg "$name" 1h`).
 
 | Bash | Lua | Returns | Longest window | Notes |
 |---|---|---|---|---|
@@ -176,6 +277,7 @@ In bash a predicate reports its result as an exit code, and in Lua as a plain bo
 | Condition doesn't hold | `1` (false) | `false` |
 | Can't evaluate: the cron doesn't exist, its output isn't numeric, or there isn't enough history yet | `1` (false) | `false` |
 | Bad arguments (a missing argument, an unparseable threshold or duration) | `2` | error raised on bad argument types, unparseable duration returns `false` |
+| A numeric predicate on a [text cron](crons.md#text-crons) | `2`, saying so on stderr | error raised |
 
 Because "no" and "can't tell" both exit 1, `!` turns an unknown into true. Rather than negating, use the opposite predicate, and pair it with `weft::is_absent` to catch a cron that has stopped reporting.
 
@@ -233,12 +335,20 @@ Whenever you write a cron, weft analyzes its contents for a few types of correct
   grammar](crons.md#scheduling), and fire at a frequency allowed by your
 organization's plan
 * **Syntax** -- the script must parse as syntactically valid bash (and awk,
-  sed, or jq if using those interpreters)
+  sed, jq or Lua if using those interpreters)
 * **Aggregates** -- `weft::` aggregate functions read stored history and ignore
   their input, so if they follow a pipe, you're doing something wrong
 * **Execution limits** -- `tail -f` is disallowed, since a script has to run to
   completion, as is `range`, since the range of a cron is determined by its
 schedule
+* **Output schema** -- `# value:` and `# tag:` must name JSON paths, `# tag:`
+  needs `# value:`, and a cron that alerts declares its fields with `alert
+  -v`/`-t` rather than headers
+* **Types** -- nothing may read a [text cron](crons.md#text-crons)
+  as numbers: not this cron's `alert`, not a numeric `weft::` call by name
+  (in bash or Lua, inline or in `/bin`), not a dashboard's sparkline, counter
+  or gauge tile. Making an existing cron `# type: text` is refused while
+  anything reads it as numbers, and the refusal lists what does
 
 If you run afoul of any of these rules, weft will refuse to write the contents
 to `/cron.d` (or `/bin`).
@@ -250,15 +360,31 @@ budget of 2 seconds. A run that exceeds it is cancelled and recorded with the
 status `timeout`, and no further output from that run is saved.
 
 A notification target that doesn't accept an alert within 10 seconds also
-counts as a timeout for the cron that raised it (see [Delivery
+strikes the cron that raised it (see [Delivery
 timeouts](alerts.md#delivery-timeouts)); it doesn't count against the 2
 seconds above.
 
-A cron that times out three ticks in a row, in either way, is benched: weft
-disables it, so it stops firing and stops counting against your plan's cron
-limit. A tick with no timeout resets the count. When weft benches a cron it
-notifies your [`system` alias](alerts.md#the-system-alias), naming the cron and
-saying how to turn it back on.
+Each run's output is also checked against [what a cron
+stores](crons.md#what-a-cron-stores). A run whose output breaks the rules is
+recorded with the status `invalid` and the reason in its `stderr`, stores
+none of its points, and strikes:
+
+| Check | Example reason |
+|---|---|
+| A text line has more than two fields | `line 3 has 3 fields; text output is <value> [<tag>]` |
+| A cron with `# value:` printed something that isn't JSON | `line 1 is not JSON, but the cron declares # value: .pct` |
+| A cron without a schema printed JSON | `output is JSON; add # value: (and # tag:) headers, or alert -v` |
+| A value isn't a number (outside a text cron) | `line 5: value "n/a" is not a number` |
+| More distinct tags than your plan allows | `run printed 140 tags; your plan allows 100 per run` |
+| Tagged lines or JSON reached an `alert` with no `-v` | `line 1 has a tag; give alert -v 1 -t 2` |
+
+Empty output is fine: the run stores nothing and doesn't strike.
+
+A cron that strikes three ticks in a row, for any of these reasons, is
+benched: weft disables it, so it stops firing and stops counting against your
+plan's cron limit. A clean tick resets the count. When weft benches a cron it
+notifies your [`system` alias](alerts.md#the-system-alias), naming the cron,
+saying why its last run failed, and how to turn it back on.
 
 A disabled cron stays in `/cron.d` with a marker at the top of its file:
 
@@ -273,5 +399,7 @@ on, save the file without that line (or with `# enabled: true`). Re-enabling
 starts the count over, and is refused if you are already at your plan's cron
 limit.
 
-Before re-enabling a benched cron, narrow what it reads. A cron over a smaller
-`range` or a more specific log path will finish well inside its budget.
+Before re-enabling a benched cron, fix what made it strike. For a timeout,
+narrow what it reads: a cron over a smaller `range` or a more specific log
+path will finish well inside its budget. For invalid output, `weft::describe`
+shows each struck run's reason.
