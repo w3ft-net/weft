@@ -7,40 +7,229 @@ const dashboards = {
   category: "analysis-alerting",
   order: 55,
   headings: [
-    { level: 2, id: "what-dashboards-are", text: "What dashboards are" },
-    { level: 2, id: "yaml-grammar", text: "YAML grammar" },
-    { level: 2, id: "tile-kinds", text: "Tile kinds" },
+    { level: 2, id: "the-chart-command", text: "The chart command" },
+    { level: 3, id: "synopsis", text: "Synopsis" },
+    { level: 3, id: "how-chart-draws", text: "How chart draws" },
+    { level: 3, id: "chart-options-for-pipelines", text: "chart options for pipelines" },
+    { level: 3, id: "chart-options-for-crons", text: "chart options for crons" },
+    { level: 3, id: "chart-examples", text: "chart examples" },
+    { level: 3, id: "chart-limitations", text: "chart limitations" },
+    { level: 2, id: "put-charts-on-a-dashboard", text: "Put charts on a dashboard" },
+    { level: 2, id: "the-dashboard-command", text: "The dashboard command" },
+    { level: 3, id: "dashboard-synopsis", text: "dashboard synopsis" },
+    { level: 3, id: "opening-a-dashboard", text: "Opening a dashboard" },
+    { level: 3, id: "dashboard-limitations", text: "dashboard limitations" },
+    { level: 2, id: "dashboard-yaml", text: "Dashboard YAML" },
+    { level: 3, id: "top-level-fields", text: "Top-level fields" },
+    { level: 3, id: "tile-kinds", text: "Tile kinds" },
+    { level: 3, id: "tile-fields", text: "Tile fields" },
+    { level: 3, id: "threshold-colors", text: "Threshold colors" },
     { level: 3, id: "multi-line-sparklines-tag", text: "Multi-line sparklines (tag:)" },
-    { level: 2, id: "threshold-colors", text: "Threshold colors" },
-    { level: 2, id: "sections", text: "Sections" },
     { level: 2, id: "layout", text: "Layout" },
-    { level: 2, id: "navigation", text: "Navigation" },
-    { level: 2, id: "deletion", text: "Deletion" },
     { level: 2, id: "validation", text: "Validation" },
-    { level: 2, id: "authoring-via-the-mcp-server", text: "Authoring via the MCP server" },
+    { level: 2, id: "delete-a-dashboard", text: "Delete a dashboard" },
+    { level: 2, id: "authoring-with-an-ai-assistant", text: "Authoring with an AI assistant" },
   ],
-  html: `<h2 id="what-dashboards-are">What dashboards are</h2>
-<p>A dashboard is a named view that arranges existing crons into tiles.
-Each tile reads from a cron. The cron's schedule and history
-define what the tile shows; the dashboard arranges the tiles into a
-layout.</p>
-<p>Dashboards live as YAML files under <code>/etc/dashboards/</code>. Create one from
-the shell:</p>
+  html: `<p>Weft allows you to visualize the results of your crons in the terminal and in
+the browser, both as ad hoc charts as you are in the middle of an investigation
+and as durable dashboards you come back to routinely.</p>
+<p>Since dashboards are built on some of the same grammar as charts, let's start
+with the <code>chart</code> command.</p>
+<h2 id="the-chart-command">The <code>chart</code> command</h2>
+<h3 id="synopsis">Synopsis</h3>
+<pre><code>chart &lt;cron&gt; [-t TYPE] [-n LIMIT] [-i INTERVAL] [-f|--follow]
+&lt;pipeline&gt; | chart [-x &lt;field&gt;] [-y &lt;field&gt;] [-a &lt;fn&gt;] [--tag &lt;field&gt;]
+                   [--bucket &lt;dur&gt;] [-t TYPE] [--title &lt;text&gt;]
+</code></pre>
+<h3 id="how-chart-draws">How chart draws</h3>
+<p><code>chart</code> has two forms.</p>
+<p><strong>Standalone</strong>: <code>chart &lt;cron&gt;</code> draws a cron's stored results, one point per
+run, so it can cover days or weeks instead of the current range. Give the
+name bare (<code>chart error-rate</code>) or as a path (<code>chart /cron.d/error-rate</code>).
+The point for each run is the last whitespace-separated field of its
+output, the same rule <code>alert -v</code> uses, so each run's output has to end in a
+number. With <code>--follow</code>, the chart redraws every <code>INTERVAL</code>
+until you exit.</p>
+<p><strong>Pipe form</strong>: <code>&lt;pipeline&gt; | chart [...]</code> draws the pipeline's output once
+and returns to the prompt. <code>chart</code> must be the last stage; piping its
+output onward is an error. <code>-x</code> and <code>-y</code> pick the fields to plot. Without
+them, x is the row number and y is the last whitespace-separated field of
+each line, drawn as one bar per line. The chart covers whatever the current
+<code>range</code> covers, so change the range and run it
+again to see a different window.</p>
+<p>Charts fit the terminal and are never paged through <code>less</code>. There is no
+zoom or scroll. When a bar chart or sparkline has more points than the
+terminal has columns, neighbouring points merge into one bar, re-applying
+<code>-a</code> to their rows (<code>count</code> and <code>sum</code> add up, <code>min</code> and <code>max</code> keep dips and
+spikes; with no <code>-a</code>, values are averaged), and a footer line says how many
+points went into each bar. Line charts always fit and never merge.</p>
+<h3 id="chart-options-for-pipelines">chart options for pipelines</h3>
+<ul>
+<li><code>-x &lt;field&gt;[::time[(&lt;format&gt;)]]</code>: the x field. <code>&lt;field&gt;</code> is either a
+1-indexed whitespace column (<code>-x 1</code>) or a <code>.</code>-prefixed JSON path
+(<code>-x .ts</code>). Default: the row number (0, 1, 2, …). An RFC3339 timestamp
+is read as a time on its own; anything else is a plain number or label
+unless cast:
+<ul>
+<li><code>::time</code>: x is a time, RFC3339 or epoch seconds (<code>-x 1::time</code>).</li>
+<li><code>::time(&lt;format&gt;)</code>: x is a time in a strftime format: <code>%Y</code> year,
+<code>%m</code> month, <code>%d</code> day, <code>%H</code> hour, <code>%M</code> minute, <code>%S</code> second, <code>%b</code>
+month name, <code>%z</code> UTC offset, <code>%s</code> epoch seconds, and the rest of the
+usual <code>date +FORMAT</code> codes. A stamp with no zone is read as UTC. A row
+that doesn't match the format stops the chart with an error.</li>
+<li>With a time cast, a column range <code>&lt;start&gt;-&lt;end&gt;</code> joins those columns
+with a space before parsing, for stamps that span two fields:
+<code>-x '1-2::time(%Y/%m/%d %H:%M:%S)'</code>.</li>
+</ul>
+</li>
+<li><code>-y &lt;field&gt;</code>: the y field, same grammar as <code>-x</code>. Default: the last
+whitespace field of each line. Casts are only supported on <code>-x</code>.</li>
+<li><code>-a</code>, <code>--aggregate</code> <code>&lt;fn&gt;</code>: how to combine the y values that share an x.
+One of <code>count</code>, <code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code>, <code>p50</code>, <code>p95</code>, <code>identity</code>.
+Default <code>identity</code>, or <code>count</code> when <code>--bucket</code> is set.</li>
+<li><code>--tag &lt;field&gt;</code>: draw one line per distinct value of <code>&lt;field&gt;</code>, such as
+one per host. Same field grammar as <code>-x</code> and <code>-y</code>. Only valid with
+<code>-t line</code> (the default when <code>--tag</code> is set). Each line gets its own color
+and a legend row.</li>
+<li><code>--bucket &lt;DURATION&gt;</code>: group rows into time buckets on x. x must parse as
+RFC3339, epoch seconds, or the <code>-x</code> cast's format. With <code>-a count</code> (the
+default) or <code>sum</code>, a bucket with no rows is drawn as 0, so a stretch with
+no logs shows as a hole.</li>
+<li><code>-t</code>, <code>--type</code> <code>&lt;line|sparkline|bar&gt;</code>: chart kind. Default <code>bar</code>, or
+<code>line</code> when <code>--bucket</code> or <code>--tag</code> is set.</li>
+<li><code>--title &lt;text&gt;</code>: chart title.</li>
+</ul>
+<p><code>-x</code>, <code>-y</code> and <code>--tag</code> must all be columns or all be JSON paths. <code>--tag</code>
+needs one JSON object per line, so use <code>jq -c</code>.</p>
+<h3 id="chart-options-for-crons">chart options for crons</h3>
+<ul>
+<li><code>-t</code>, <code>--type</code> <code>&lt;line|sparkline|bar&gt;</code>: chart kind. Default <code>line</code>.
+<code>sparkline</code> is a single-line ramp; <code>bar</code> draws one bar per run with its
+timestamp under it.</li>
+<li><code>-n</code>, <code>--limit</code> <code>&lt;N&gt;</code>: how many recent runs to draw. Default 50.</li>
+<li><code>-f</code>, <code>--follow</code>: redraw until you press <strong>q</strong>.</li>
+<li><code>-i</code>, <code>--interval</code> <code>&lt;DURATION&gt;</code>: redraw interval with <code>--follow</code>.
+Default <code>1s</code>, minimum <code>100ms</code>.</li>
+</ul>
+<h3 id="chart-examples">chart examples</h3>
+<pre><code># One bar per line: each line's last field.
+cat /log/myco/prod/api/host.log | jq '.memory.pct' | chart
+
+# Error lines per five minutes. The stamp &quot;2026/10/13 15:04:05&quot; spans
+# columns 1 and 2; an empty bucket draws as 0.
+cat /log/myco/prod/api/main.log | grep ERROR \\
+  | chart -x '1-2::time(%Y/%m/%d %H:%M:%S)' --bucket 5m
+
+# 95th-percentile memory use per minute, from JSON fields.
+cat /log/myco/prod/api/host.log \\
+  | jq -c '{ts: $ts, pct: .memory.pct}' \\
+  | chart -x .ts -y .pct --bucket 1m -a p95
+
+# One bar per host: average memory use.
+cat /log/myco/prod/api/host.log | jq -c '{host: $host, pct: .memory.pct}' \\
+  | chart -x .host -y .pct -a avg
+
+# One line per host over time.
+cat /log/myco/prod/api/host.log \\
+  | jq -c '{ts: $ts, host: $host, pct: .memory.pct}' \\
+  | chart -x .ts -y .pct --tag .host --bucket 1m -a avg
+</code></pre>
+<p>To keep the errors-per-five-minutes chart, save it as a cron that runs
+every five minutes and prints that interval's count. Each run sees only the
+five minutes since the last one (see <a href="/manual/crons#scheduling">Crons</a>), so the
+cron drops the <code>--bucket</code> and the timestamp field; each run's count becomes
+one point. Create it with <code>vi /cron.d/error-rate</code>:</p>
+<pre><code># schedule: */5 * * * *
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l
+</code></pre>
+<p>Once it has run a few times, chart it by name:</p>
+<pre><code>chart error-rate                  line chart of the last 50 runs
+chart error-rate -n 200           the last 200 runs
+chart error-rate -t sparkline     a one-line glyph
+chart error-rate --follow         redraw every second; press q to exit
+</code></pre>
+<p><code>ls -l /cron.d/</code> shows a small sparkline next to each cron, so you can scan
+every cron at once.</p>
+<h3 id="chart-limitations">chart limitations</h3>
+<ul>
+<li>Chart kinds other than <code>line</code>, <code>sparkline</code> and <code>bar</code>: no pie, area or
+table.</li>
+<li>Aggregates other than <code>count</code>, <code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code>, <code>p50</code>, <code>p95</code>
+and <code>identity</code> (no <code>p99</code>).</li>
+<li><code>--follow</code>, <code>-i</code> and <code>-n</code> in pipe form, and <code>-x</code>, <code>-y</code>, <code>-a</code>, <code>--bucket</code>,
+<code>--tag</code> and <code>--title</code> in cron form.</li>
+<li><code>--tag</code> with <code>bar</code> or <code>sparkline</code>; it draws one line per value, so it
+needs <code>line</code>.</li>
+<li>Casts on <code>-y</code> or <code>--tag</code>, and a <code>-x</code> column range without <code>::time</code>.</li>
+<li>Mixing column numbers and <code>.json.path</code> fields in one call.</li>
+<li>Charting a cron whose output is JSON rows (a dashboard can, with
+<a href="#multi-line-sparklines-tag"><code>tag:</code></a>), and piping the output of <code>chart</code>
+into another command.</li>
+<li><code>--flag=value</code> and attached short forms (<code>--type=bar</code>, <code>-n5</code>). Write the
+flag and its value as separate words.</li>
+<li>Zoom and scroll.</li>
+</ul>
+<p>Other options are rejected with <code>chart: unknown option &lt;flag&gt;</code>.</p>
+<h2 id="put-charts-on-a-dashboard">Put charts on a dashboard</h2>
+<p>A dashboard arranges crons into tiles. Each tile names a cron and how to
+draw it: a sparkline of its history, its latest value as a counter or
+gauge, or its last output as a table.</p>
+<p>Dashboards are YAML files under <code>/etc/dashboards/</code>. Writing under <code>/etc</code>
+requires the <code>configmgr</code> group. Create one with <code>vi</code>:</p>
 <pre><code>vi /etc/dashboards/prod.yaml
 </code></pre>
-<p>Writing under <code>/etc</code> requires the <code>configmgr</code> group.</p>
-<p>Each customer can have any number of dashboards, distinguished by name.</p>
-<h2 id="yaml-grammar">YAML grammar</h2>
+<pre><code class="language-yaml">title: Production
+tiles:
+  - kind: sparkline
+    cron: error-rate
+    title: Errors per 5 minutes
+    threshold: { warn: 50, crit: 200 }
+</code></pre>
+<p>Every <code>cron:</code> must name a cron that already exists (<code>ls /cron.d</code>); a
+dashboard that names an unknown cron is rejected when you save it.</p>
+<p>Open it in the terminal:</p>
+<pre><code>dashboard prod
+</code></pre>
+<p>It also appears on the <strong>Dashboards</strong> page of the web app. You can have as
+many dashboards as you like, each in its own file. When one grows, group
+its tiles into sections; <a href="#dashboard-yaml">Dashboard YAML</a> has a full
+example and every key.</p>
+<h2 id="the-dashboard-command">The dashboard command</h2>
+<h3 id="dashboard-synopsis">dashboard synopsis</h3>
+<pre><code>dashboard
+dashboard &lt;name&gt;
+</code></pre>
+<h3 id="opening-a-dashboard">Opening a dashboard</h3>
+<p>With no arguments, <code>dashboard</code> lists your dashboards. With a name, it opens
+<code>/etc/dashboards/&lt;name&gt;.yaml</code> full screen. Arrow keys move between tiles,
+<strong>Enter</strong> zooms the selected tile to full screen, and <strong>Esc</strong> leaves the
+zoom or the dashboard.</p>
+<p>On the <strong>Dashboards</strong> page of the web app, each tile's header links to its
+cron's page, which shows the full run history with zoom, range selection
+and a per-tag legend.</p>
+<h3 id="dashboard-limitations">dashboard limitations</h3>
+<ul>
+<li>Creating or editing a dashboard with the command; use <code>vi</code> on
+<code>/etc/dashboards/&lt;name&gt;.yaml</code>.</li>
+<li>Options (<code>dashboard -x</code>) and more than one name. Both are rejected with
+<code>dashboard: unknown option</code> or <code>dashboard: unexpected argument</code>.</li>
+<li>Tile kinds other than <code>sparkline</code>, <code>counter</code>, <code>gauge</code> and <code>table</code>, and
+tiles fed by anything but a cron. Keys not listed in
+<a href="#dashboard-yaml">Dashboard YAML</a> are rejected when the file is saved.</li>
+<li>Mixing <code>sections:</code> and top-level <code>tiles:</code> in one file.</li>
+</ul>
+<h2 id="dashboard-yaml">Dashboard YAML</h2>
+<p>A dashboard with sections:</p>
 <pre><code class="language-yaml">title: Production
 sections:
   - title: Errors
     tiles:
       - kind: sparkline
-        cron: error-rate-hourly
+        cron: error-rate
         size: md
 
       - kind: table
-        cron: top-errors-hourly
+        cron: top-errors
         columns: [host, count]
         size: lg
 
@@ -57,8 +246,13 @@ sections:
         threshold: { warn: 70, crit: 90, max: 100 }
         size: md
 </code></pre>
-<p>Each tile's <code>cron:</code> key names a cron. Create the crons first; a dashboard that references an unknown cron is rejected.</p>
-<p>Top-level fields:</p>
+<p>Each cron here has to exist first. A <code>table</code> tile shows the cron's last
+output split into whitespace-separated columns, so <code>top-errors</code> might be:</p>
+<pre><code># schedule: */5 * * * *
+cat /log/myco/prod/api/main.log | grep ERROR | jq -r '$host' \\
+  | sort | uniq -c | sort -rn | awk '{print $2, $1}'
+</code></pre>
+<h3 id="top-level-fields">Top-level fields</h3>
 <table>
 <thead>
 <tr>
@@ -75,50 +269,50 @@ sections:
 </tr>
 <tr>
 <td><code>sections</code></td>
-<td>yes*</td>
-<td>List of grouped tile sections.</td>
+<td>one of</td>
+<td>List of sections, each with an optional <code>title</code> and a required <code>tiles</code> list.</td>
 </tr>
 <tr>
 <td><code>tiles</code></td>
-<td>yes*</td>
-<td>Shorthand: a flat tile list = one untitled section.</td>
+<td>one of</td>
+<td>A flat tile list: one untitled section.</td>
 </tr>
 </tbody>
 </table>
-<p>* Use one of <code>sections:</code> or top-level <code>tiles:</code>.</p>
-<h2 id="tile-kinds">Tile kinds</h2>
+<p>Use either <code>sections:</code> or a top-level <code>tiles:</code>, not both.</p>
+<h3 id="tile-kinds">Tile kinds</h3>
 <table>
 <thead>
 <tr>
 <th>Kind</th>
-<th>Body</th>
+<th>Shows</th>
 <th>Required fields</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>sparkline</code></td>
-<td>Time-series glyph from the cron's recent results.</td>
+<td>The cron's recent results over time.</td>
 <td><code>cron</code></td>
 </tr>
 <tr>
 <td><code>counter</code></td>
-<td>Latest numeric value.</td>
+<td>The latest numeric value.</td>
 <td><code>cron</code></td>
 </tr>
 <tr>
 <td><code>gauge</code></td>
-<td>Bar from 0 to <code>threshold.max</code> (default 100).</td>
+<td>The latest value as a bar from 0 to <code>threshold.max</code> (default 100).</td>
 <td><code>cron</code></td>
 </tr>
 <tr>
 <td><code>table</code></td>
-<td>Multi-row stdout parsed as whitespace-split columns.</td>
+<td>The last output, split into whitespace-separated columns.</td>
 <td><code>cron</code>, <code>columns</code></td>
 </tr>
 </tbody>
 </table>
-<p>Tile fields:</p>
+<h3 id="tile-fields">Tile fields</h3>
 <table>
 <thead>
 <tr>
@@ -146,99 +340,71 @@ sections:
 <tr>
 <td><code>size</code></td>
 <td>all</td>
-<td><code>sm</code>, <code>md</code>, or <code>lg</code>. Default <code>md</code>. Layout hint.</td>
+<td><code>sm</code>, <code>md</code>, or <code>lg</code>. Default <code>md</code>. See <a href="#layout">Layout</a>.</td>
 </tr>
 <tr>
 <td><code>format</code></td>
 <td>counter</td>
-<td>Optional. Text with exactly one <code>%d</code> (rounded integer) or <code>%.2f</code> (any decimals, <code>%.Nf</code>); <code>%%</code> is a literal <code>%</code>. E.g. <code>&quot;%d ms&quot;</code>, <code>&quot;%.1f%%&quot;</code>.</td>
+<td>Text with exactly one <code>%d</code> (rounded integer) or <code>%.Nf</code> (N decimals); <code>%%</code> is a literal <code>%</code>. E.g. <code>&quot;%d ms&quot;</code>, <code>&quot;%.1f%%&quot;</code>.</td>
 </tr>
 <tr>
 <td><code>threshold</code></td>
 <td>counter, gauge, sparkline</td>
-<td><code>warn</code>, <code>crit</code> numeric cutoffs; <code>max</code> (gauge) sets full scale.</td>
+<td><code>warn</code>, <code>crit</code> cutoffs; <code>max</code> (gauge) sets full scale.</td>
 </tr>
 <tr>
 <td><code>columns</code></td>
 <td>table</td>
-<td>Header labels; columns parse as whitespace-split fields.</td>
+<td>Header labels for the whitespace-separated columns.</td>
 </tr>
 <tr>
 <td><code>tag</code>, <code>y</code></td>
 <td>sparkline</td>
-<td>Multi-line mode — see below. Must be set together.</td>
+<td>Multi-line mode, see below. Set both or neither.</td>
 </tr>
 </tbody>
 </table>
-<p>A field on a kind it does not apply to is rejected when the file is saved
+<p>A field on a kind it doesn't apply to is rejected when the file is saved
 (<code>format</code> on a gauge, <code>columns</code> on a counter, <code>threshold</code> on a table).</p>
+<h3 id="threshold-colors">Threshold colors</h3>
+<p>Values at or above <code>crit</code> render red; values at or above <code>warn</code> (and below
+<code>crit</code>) render yellow. A gauge also uses <code>max</code> as its full-scale value
+(default 100).</p>
 <h3 id="multi-line-sparklines-tag">Multi-line sparklines (<code>tag:</code>)</h3>
-<p>A sparkline plots one scalar per cron run (the cron's last
-whitespace field). When a cron's stdout is multiple JSON rows
-per run — one per tagged entity, e.g. one row per instance — set <code>tag:</code>
-(which field identifies the row) and <code>y:</code> (which field to plot) to draw
-one line per distinct tag value:</p>
+<p>A plain sparkline plots one number per cron run, the same as
+<code>chart &lt;cron&gt;</code>. When a cron prints several JSON rows per run, one per
+host or instance, set <code>tag:</code> to the field that names the row and <code>y:</code> to
+the field to plot. The tile draws one line per tag value:</p>
 <pre><code class="language-yaml">- kind: sparkline
   cron: coordinator-mem-pct
   tag: .coordinator_id
   y: .mem_pct
   size: lg
 </code></pre>
-<p>Each row's x value is its run's timestamp from the cron run history. Lines
-get a legend and a distinct color per tag; <code>tag:</code>/<code>y:</code> are rejected on
-any kind other than <code>sparkline</code>.</p>
-<p>The <code>size:</code> field is a layout hint. Each renderer
-(browser / terminal) maps the hint onto its own viewport. On a wide
-browser an <code>lg</code> tile spans the full row; on a narrow terminal it falls
-back to single-column.</p>
-<h2 id="threshold-colors">Threshold colors</h2>
-<p><code>counter</code>, <code>gauge</code>, and <code>sparkline</code> accept a <code>threshold:</code> map:</p>
-<pre><code class="language-yaml">threshold: { warn: 70, crit: 90 }
-</code></pre>
-<p>Values at or above <code>crit</code> render in red; values at or above <code>warn</code> (and
-below <code>crit</code>) render in yellow. <code>gauge</code> additionally uses
-<code>threshold.max</code> to pick its full-scale value (default 100).</p>
-<h2 id="sections">Sections</h2>
-<p>Each section gets its own heading and grid. Sections split a
-dashboard into groups such as &quot;Errors&quot;, &quot;Capacity&quot; and &quot;Throughput&quot;.</p>
-<p>For a dashboard without sections, use a flat top-level <code>tiles:</code> list:</p>
-<pre><code class="language-yaml">title: Quick view
-tiles:
-  - kind: counter
-    cron: pending-jobs
-  - kind: sparkline
-    cron: error-rate
-</code></pre>
+<p>Each row's x value is the time of the run that printed it. Lines get a
+legend and a distinct color per tag.</p>
 <h2 id="layout">Layout</h2>
-<p>Dashboards describe layout intent. The renderer
-flows tiles row-major and chooses how many fit per row based on the
-viewport and each tile's <code>size:</code> hint.</p>
+<p>Tiles appear in YAML order, flowing left to right and then down. <code>size:</code>
+is a hint that each screen interprets for its own width:</p>
 <ul>
-<li><strong>Browser</strong>: CSS grid with 6 tracks on wide screens, collapsing to 2
-on tablet and 1 on phone. <code>sm</code> spans 2 tracks, <code>md</code> spans 3, <code>lg</code>
-spans 6.</li>
-<li><strong>Terminal</strong>: greedy row packing using kind-specific minimum widths.
-Below ~60 columns the layout collapses to one tile per row.</li>
+<li><strong>Browser</strong>: a 6-column grid on wide screens, 2 on a tablet and 1 on a
+phone. <code>sm</code> spans 2 columns, <code>md</code> 3, and <code>lg</code> all 6.</li>
+<li><strong>Terminal</strong>: tiles pack into rows as they fit. Below about 60 columns,
+each tile gets its own row.</li>
 </ul>
-<p>Tiles are placed by size hint and YAML order. The order
-in YAML is the order on screen.</p>
-<h2 id="navigation">Navigation</h2>
-<p>Tile headers link to the cron's detail page (<code>/cron/&lt;name&gt;</code>) so
-clicking a tile takes you to its full history with zoom, range
-selection, and per-tag legend.</p>
-<h2 id="deletion">Deletion</h2>
-<p>Remove a dashboard from the shell:</p>
+<h2 id="validation">Validation</h2>
+<p>Saving a dashboard checks that the YAML parses, every <code>kind:</code> and <code>size:</code>
+is valid, every <code>table</code> tile has <code>columns:</code>, and every <code>cron:</code> exists. A
+bad file is rejected when you save it, and the previous version stays in
+place.</p>
+<h2 id="delete-a-dashboard">Delete a dashboard</h2>
 <pre><code>rm /etc/dashboards/old.yaml
 </code></pre>
-<h2 id="validation">Validation</h2>
-<p>Saving a dashboard checks the YAML parses, every <code>kind:</code> is recognized,
-every <code>size:</code> is one of <code>sm</code> / <code>md</code> / <code>lg</code>, every <code>table</code> tile has
-<code>columns:</code>, and every referenced cron exists. A bad file is rejected
-at write time — your previous version stays intact.</p>
-<h2 id="authoring-via-the-mcp-server">Authoring via the MCP server</h2>
+<p>Deleting a dashboard leaves its crons running; remove them from
+<code>/cron.d</code> separately if you no longer need them.</p>
+<h2 id="authoring-with-an-ai-assistant">Authoring with an AI assistant</h2>
 <p>Connect Claude Code (or any MCP host) to the weft MCP server and the
-model can stage dashboards through the same review-and-apply pipeline
-as scripts and crons:</p>
+assistant can draft dashboards for you to review before they take effect:</p>
 <table>
 <thead>
 <tr>
@@ -249,7 +415,7 @@ as scripts and crons:</p>
 <tbody>
 <tr>
 <td><code>weft.dashboard_propose</code></td>
-<td>Stage a new or updated dashboard. Validates YAML + cron refs. Returns a unified diff against any existing version.</td>
+<td>Stage a new or updated dashboard and show a diff against the current version.</td>
 </tr>
 <tr>
 <td><code>weft.proposal_delete</code></td>
@@ -257,12 +423,12 @@ as scripts and crons:</p>
 </tr>
 <tr>
 <td><code>weft.proposals_apply</code></td>
-<td>Commit one or more staged proposals after human review.</td>
+<td>Apply staged proposals once you've reviewed them.</td>
 </tr>
 </tbody>
 </table>
-<p>Cron references are checked against the live cron list; a dashboard
-that names an unknown cron cannot be staged.</p>
+<p>Staged dashboards go through the same checks as a saved file, including
+that every cron exists.</p>
 `,
 } as const;
 

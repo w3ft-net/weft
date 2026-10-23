@@ -11,12 +11,15 @@ const dashboard = {
     { level: 2, id: "synopsis", text: "SYNOPSIS" },
     { level: 2, id: "description", text: "DESCRIPTION" },
     { level: 2, id: "yaml-grammar", text: "YAML GRAMMAR" },
-    { level: 2, id: "top-level-keys", text: "TOP-LEVEL KEYS" },
-    { level: 2, id: "section-keys", text: "SECTION KEYS" },
-    { level: 2, id: "tile-keys", text: "TILE KEYS" },
-    { level: 2, id: "threshold-keys", text: "THRESHOLD KEYS" },
-    { level: 2, id: "not-supported", text: "NOT SUPPORTED" },
+    { level: 3, id: "top-level-fields", text: "Top-level fields" },
+    { level: 3, id: "tile-kinds", text: "Tile kinds" },
+    { level: 3, id: "tile-fields", text: "Tile fields" },
+    { level: 3, id: "threshold-colors", text: "Threshold colors" },
+    { level: 3, id: "multi-line-sparklines-tag", text: "Multi-line sparklines (tag:)" },
+    { level: 2, id: "layout", text: "LAYOUT" },
+    { level: 2, id: "validation", text: "VALIDATION" },
     { level: 2, id: "examples", text: "EXAMPLES" },
+    { level: 2, id: "not-supported", text: "NOT SUPPORTED" },
     { level: 2, id: "see-also", text: "SEE ALSO" },
   ],
   html: `<h2 id="name">NAME</h2>
@@ -26,87 +29,214 @@ const dashboard = {
 dashboard &lt;name&gt;
 </code></pre>
 <h2 id="description">DESCRIPTION</h2>
-<p>With no arguments, lists available dashboards.</p>
-<p>With a name, enters an interactive full-screen view. Arrow keys
-move focus between tiles; Enter zooms the focused tile to full
-screen; Esc exits zoom or the view.</p>
-<p>Dashboards are YAML files under <code>/etc/dashboards/</code>. Create one
-with <code>vi /etc/dashboards/&lt;name&gt;.yaml</code>; writing under <code>/etc</code> needs the
+<p>With no arguments, <code>dashboard</code> lists your dashboards. With a name, it opens
+<code>/etc/dashboards/&lt;name&gt;.yaml</code> full screen. Arrow keys move between tiles,
+<strong>Enter</strong> zooms the selected tile to full screen, and <strong>Esc</strong> leaves the
+zoom or the dashboard.</p>
+<p>On the <strong>Dashboards</strong> page of the web app, each tile's header links to its
+cron's page, which shows the full run history with zoom, range selection
+and a per-tag legend.</p>
+<p>Dashboards are YAML files under <code>/etc/dashboards/</code>. Create one with
+<code>vi /etc/dashboards/&lt;name&gt;.yaml</code>; writing under <code>/etc</code> needs the
 <code>configmgr</code> group.</p>
 <h2 id="yaml-grammar">YAML GRAMMAR</h2>
-<pre><code>title: Production
+<p>A dashboard with sections:</p>
+<pre><code class="language-yaml">title: Production
 sections:
   - title: Errors
     tiles:
       - kind: sparkline
         cron: error-rate
         size: md
-      - kind: counter
-        cron: pending-jobs
-        threshold: { warn: 100, crit: 500 }
-        format: &quot;%d jobs&quot;
-        size: sm
+
       - kind: table
         cron: top-errors
         columns: [host, count]
         size: lg
+
   - title: Capacity
     tiles:
+      - kind: counter
+        cron: pending-jobs
+        format: &quot;%d jobs&quot;
+        threshold: { warn: 100, crit: 500 }
+        size: sm
+
       - kind: gauge
-        cron: disk-pct
-        threshold: { warn: 80, crit: 95, max: 100 }
+        cron: cpu-usage
+        threshold: { warn: 70, crit: 90, max: 100 }
+        size: md
 </code></pre>
-<p>Each <code>cron:</code> must name a cron that already exists (<code>ls /cron.d</code>); the
-names above are examples.</p>
-<p>A flat <code>tiles:</code> list (no <code>sections:</code>) is shorthand for one untitled
-section. You cannot mix <code>sections:</code> and top-level <code>tiles:</code>.</p>
-<h2 id="top-level-keys">TOP-LEVEL KEYS</h2>
+<p>Each cron here has to exist first. A <code>table</code> tile shows the cron's last
+output split into whitespace-separated columns, so <code>top-errors</code> might be:</p>
+<pre><code># schedule: */5 * * * *
+cat /log/myco/prod/api/main.log | grep ERROR | jq -r '$host' \\
+  | sort | uniq -c | sort -rn | awk '{print $2, $1}'
+</code></pre>
+<h3 id="top-level-fields">Top-level fields</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Required</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>title</code></td>
+<td>no</td>
+<td>Heading at the top of the dashboard.</td>
+</tr>
+<tr>
+<td><code>sections</code></td>
+<td>one of</td>
+<td>List of sections, each with an optional <code>title</code> and a required <code>tiles</code> list.</td>
+</tr>
+<tr>
+<td><code>tiles</code></td>
+<td>one of</td>
+<td>A flat tile list: one untitled section.</td>
+</tr>
+</tbody>
+</table>
+<p>Use either <code>sections:</code> or a top-level <code>tiles:</code>, not both.</p>
+<h3 id="tile-kinds">Tile kinds</h3>
+<table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Shows</th>
+<th>Required fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sparkline</code></td>
+<td>The cron's recent results over time.</td>
+<td><code>cron</code></td>
+</tr>
+<tr>
+<td><code>counter</code></td>
+<td>The latest numeric value.</td>
+<td><code>cron</code></td>
+</tr>
+<tr>
+<td><code>gauge</code></td>
+<td>The latest value as a bar from 0 to <code>threshold.max</code> (default 100).</td>
+<td><code>cron</code></td>
+</tr>
+<tr>
+<td><code>table</code></td>
+<td>The last output, split into whitespace-separated columns.</td>
+<td><code>cron</code>, <code>columns</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="tile-fields">Tile fields</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Applies to</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kind</code></td>
+<td>all</td>
+<td>One of <code>sparkline</code>, <code>counter</code>, <code>gauge</code>, <code>table</code>.</td>
+</tr>
+<tr>
+<td><code>cron</code></td>
+<td>all</td>
+<td>Name of an existing cron (must exist when the file is saved).</td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td>all</td>
+<td>Optional label for the tile.</td>
+</tr>
+<tr>
+<td><code>size</code></td>
+<td>all</td>
+<td><code>sm</code>, <code>md</code>, or <code>lg</code>. Default <code>md</code>. See <a href="/manual/dashboards#layout">Layout</a>.</td>
+</tr>
+<tr>
+<td><code>format</code></td>
+<td>counter</td>
+<td>Text with exactly one <code>%d</code> (rounded integer) or <code>%.Nf</code> (N decimals); <code>%%</code> is a literal <code>%</code>. E.g. <code>&quot;%d ms&quot;</code>, <code>&quot;%.1f%%&quot;</code>.</td>
+</tr>
+<tr>
+<td><code>threshold</code></td>
+<td>counter, gauge, sparkline</td>
+<td><code>warn</code>, <code>crit</code> cutoffs; <code>max</code> (gauge) sets full scale.</td>
+</tr>
+<tr>
+<td><code>columns</code></td>
+<td>table</td>
+<td>Header labels for the whitespace-separated columns.</td>
+</tr>
+<tr>
+<td><code>tag</code>, <code>y</code></td>
+<td>sparkline</td>
+<td>Multi-line mode, see below. Set both or neither.</td>
+</tr>
+</tbody>
+</table>
+<p>A field on a kind it doesn't apply to is rejected when the file is saved
+(<code>format</code> on a gauge, <code>columns</code> on a counter, <code>threshold</code> on a table).</p>
+<h3 id="threshold-colors">Threshold colors</h3>
+<p>Values at or above <code>crit</code> render red; values at or above <code>warn</code> (and below
+<code>crit</code>) render yellow. A gauge also uses <code>max</code> as its full-scale value
+(default 100).</p>
+<h3 id="multi-line-sparklines-tag">Multi-line sparklines (<code>tag:</code>)</h3>
+<p>A plain sparkline plots one number per cron run, the same as
+<code>chart &lt;cron&gt;</code>. When a cron prints several JSON rows per run, one per
+host or instance, set <code>tag:</code> to the field that names the row and <code>y:</code> to
+the field to plot. The tile draws one line per tag value:</p>
+<pre><code class="language-yaml">- kind: sparkline
+  cron: coordinator-mem-pct
+  tag: .coordinator_id
+  y: .mem_pct
+  size: lg
+</code></pre>
+<p>Each row's x value is the time of the run that printed it. Lines get a
+legend and a distinct color per tag.</p>
+<h2 id="layout">LAYOUT</h2>
+<p>Tiles appear in YAML order, flowing left to right and then down. <code>size:</code>
+is a hint that each screen interprets for its own width:</p>
 <ul>
-<li><code>title</code> — optional heading at the top of the dashboard.</li>
-<li><code>sections</code> — list of tile groups, each with an optional <code>title</code> and a <code>tiles</code> list.</li>
-<li><code>tiles</code> — shorthand for a single untitled section.</li>
+<li><strong>Browser</strong>: a 6-column grid on wide screens, 2 on a tablet and 1 on a
+phone. <code>sm</code> spans 2 columns, <code>md</code> 3, and <code>lg</code> all 6.</li>
+<li><strong>Terminal</strong>: tiles pack into rows as they fit. Below about 60 columns,
+each tile gets its own row.</li>
 </ul>
-<h2 id="section-keys">SECTION KEYS</h2>
-<ul>
-<li><code>title</code> — optional heading rendered above the section's tiles.</li>
-<li><code>tiles</code> — required list of tile entries.</li>
-</ul>
-<h2 id="tile-keys">TILE KEYS</h2>
-<ul>
-<li><code>kind</code> — one of <code>sparkline</code>, <code>counter</code>, <code>gauge</code>, <code>table</code>.</li>
-<li><code>cron</code> — required; name of an existing cron (must exist when saved).
-A tile that uses <code>watch:</code> is an error that names <code>cron:</code>.</li>
-<li><code>title</code> — optional label for the tile.</li>
-<li><code>size</code> — <code>sm</code>, <code>md</code>, or <code>lg</code>. Default <code>md</code>. A layout hint.</li>
-<li><code>format</code> — (counter only) printf-style format, e.g. <code>&quot;%d jobs&quot;</code>, <code>&quot;%.1f%%&quot;</code>.</li>
-<li><code>threshold</code> — (counter, gauge, sparkline) <code>warn</code> and <code>crit</code> cutoffs; gauge also takes <code>max</code>.</li>
-<li><code>columns</code> — (table only, required) header labels; rows are whitespace-split from the cron stdout.</li>
-<li><code>tag</code>, <code>y</code> — (sparkline only, set together) for a cron that prints JSON rows: <code>tag</code>
-names the field that says which line a row belongs to, <code>y</code> the field to plot.</li>
-</ul>
-<h2 id="threshold-keys">THRESHOLD KEYS</h2>
-<ul>
-<li><code>warn</code> — value at or above this renders yellow.</li>
-<li><code>crit</code> — value at or above this renders red.</li>
-<li><code>max</code> — (gauge only) upper bound of the bar. Default 100.</li>
-</ul>
+<h2 id="validation">VALIDATION</h2>
+<p>Saving a dashboard checks that the YAML parses, every <code>kind:</code> and <code>size:</code>
+is valid, every <code>table</code> tile has <code>columns:</code>, and every <code>cron:</code> exists. A
+bad file is rejected when you save it, and the previous version stays in
+place.</p>
+<h2 id="examples">EXAMPLES</h2>
+<pre><code>dashboard                   list dashboards
+dashboard ops               open the &quot;ops&quot; dashboard (create it first)
+vi /etc/dashboards/ops.yaml create or edit it
+rm /etc/dashboards/ops.yaml delete it (its crons keep running)
+</code></pre>
 <h2 id="not-supported">NOT SUPPORTED</h2>
 <ul>
-<li>Creating or editing a dashboard from the command; use <code>vi</code> on
+<li>Creating or editing a dashboard with the command; use <code>vi</code> on
 <code>/etc/dashboards/&lt;name&gt;.yaml</code>.</li>
 <li>Options (<code>dashboard -x</code>) and more than one name. Both are rejected with
 <code>dashboard: unknown option</code> or <code>dashboard: unexpected argument</code>.</li>
 <li>Tile kinds other than <code>sparkline</code>, <code>counter</code>, <code>gauge</code> and <code>table</code>, and
-tiles fed by anything but a cron. Keys not listed above are rejected
-when the file is saved.</li>
+tiles fed by anything but a cron. Keys not listed in
+<a href="/manual/dashboards#dashboard-yaml">Dashboard YAML</a> are rejected when the file is saved.</li>
 <li>Mixing <code>sections:</code> and top-level <code>tiles:</code> in one file.</li>
 </ul>
-<h2 id="examples">EXAMPLES</h2>
-<pre><code>dashboard ops               open the &quot;ops&quot; dashboard (create it first)
-vi /etc/dashboards/ops.yaml create or edit it
-</code></pre>
 <h2 id="see-also">SEE ALSO</h2>
-<p>help, help cron, man chart, and <a href="/manual/dashboards">Dashboards</a> for the YAML grammar and tile kinds</p>
+<p><code>help cron</code>, <code>man chart</code>, and <a href="/manual/dashboards">Dashboards</a> for a walkthrough from one-off charts to dashboards</p>
 `,
 } as const;
 

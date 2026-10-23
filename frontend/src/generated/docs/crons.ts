@@ -613,7 +613,7 @@ to <code>/cron.d</code> (or <code>/bin</code>).</p>
 budget of 2 seconds. A run that exceeds it is cancelled and recorded with the
 status <code>timeout</code>, and no further output from that run is saved.</p>
 <p>A notification target that doesn't accept an alert within 10 seconds also
-strikes the cron that raised it (see <a href="/manual/alerts#delivery-timeouts">Delivery
+strikes the cron that raised it (see <a href="alerts.md#delivery-timeouts">Delivery
 timeouts</a>); it doesn't count against the 2
 seconds above.</p>
 <p>Each run's output is also checked against <a href="/manual/crons#what-a-cron-stores">what a cron

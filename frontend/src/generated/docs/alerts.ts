@@ -21,9 +21,7 @@ const alerts = {
     { level: 3, id: "webhooks", text: "Webhooks" },
     { level: 3, id: "email", text: "Email" },
     { level: 3, id: "testing-an-alias", text: "Testing an alias" },
-    { level: 3, id: "debouncing", text: "Debouncing" },
-    { level: 3, id: "delivery-timeouts", text: "Delivery timeouts" },
-    { level: 2, id: "see-also", text: "See also" },
+    { level: 3, id: "key-behaviors", text: "Key behaviors" },
   ],
   html: `<p>The <code>alert</code> function generates notifications based on stdin and other
 arguments. This page provides a reference for the function, a cookbook of
@@ -250,32 +248,23 @@ whose body is JSON:</p>
 </tr>
 </tbody>
 </table>
-<p>The request carries <code>Content-Type: application/json</code> and whatever you list under
-<code>headers</code>; nothing else is added. A header you list with the same name as a
-default (<code>Content-Type</code>, say) replaces it. Weft doesn't sign requests, so if
-your endpoint needs to know the request came from weft, send a token in a
-header.</p>
+<p>You bring your own HTTP headers, with the exception of <code>Content-Type: application/json</code>, which you can override should you need to.</p>
 <p>A webhook succeeds when it answers with a status below 300 within the
 <a href="#delivery-timeouts">delivery timeout</a>. Anything else is a failed delivery and
 is retried on the following ticks of the incident.</p>
 <h4 id="webhook-secrets">Webhook secrets</h4>
-<p>Anything written in <code>/etc/notify.yaml</code> is readable by whoever can read the
-file, and sits in its version history, so a token or signing secret doesn't
-belong there. Store it as a webhook secret instead and refer to it by name:</p>
-<pre><code>weft integration webhook-secret set pages_token --value s3cr3t
+<p>If you need to use a token in an auth header for a webhook but would rather not
+shove a secret somewhere broadly readable, store it as a webhook secret instead
+and refer to it by name:</p>
+<pre><code>weft integration webhook-secret set my_token --value s3cr3t
 </code></pre>
-<p>Then write <code>\${secrets.pages_token}</code> in a webhook's <code>url</code> or in a header value,
-as in the example above. Weft substitutes the value when it sends the request.</p>
-<ul>
-<li>Names use letters, digits, <code>_</code> and <code>-</code>.</li>
-<li>Values are write-only. <code>weft integration list</code> shows the names, and nothing
-shows the values. Setting a name again replaces the value for every alias
-that uses it.</li>
-<li>Saving <code>notify.yaml</code> is refused if it refers to a secret you haven't
-defined, and <code>weft integration webhook-secret rm &lt;name&gt;</code> is refused while an
-alias still refers to it.</li>
-<li>Error messages and logs show <code>\${secrets.pages_token}</code>, never the value.</li>
-</ul>
+<p>You can then interpolate it with <code>\${secrets.my_token}</code> in a webhook's <code>url</code> or
+in a header value, as in the example above. Weft substitutes the value when it
+sends the request.  Error messages, logs, catting <code>/etc/notify.yaml</code> etc. show
+<code>\${secrets.pages_token}</code> instead of the value.</p>
+<p>Secret names must be <code>[\\w_-]*</code>. You can't write <code>notify.yaml</code> if it refers to a
+secret you haven't defined, and <code>weft integration webhook-secret rm &lt;name&gt;</code>
+will fail if an alias still refers to it.</p>
 <h3 id="email">Email</h3>
 <p>Email addresses carry no account-level credential. They are written into
 <code>notify.yaml</code> per alias:</p>
@@ -289,41 +278,19 @@ alias still refers to it.</li>
 <p>This sends to every target in the <code>ops</code> alias.</p>
 <p>Interactive runs notify every time. Only crons have incidents, so nothing is
 suppressed.</p>
-<h3 id="debouncing">Debouncing</h3>
+<h3 id="key-behaviors">Key behaviors</h3>
 <p>A cron checks its condition on every tick. To avoid paging you on each one,
-weft groups consecutive ticks during
-which the condition holds. Each cron has at most one open incident at a time
-(one per tag, with <code>-t</code>).</p>
-<ul>
-<li>The first tick where the condition holds opens an incident and sends the
-notification.</li>
-<li>Ticks while the incident is open send nothing more. The alert message still
-goes to the run's <code>stderr</code>, so it is in the run's recorded result.</li>
-<li>If a send fails (PagerDuty is unreachable, a Slack channel is gone), the run
-reports it and exits non-zero, and each following tick of the incident tries
-again. Delivery is tracked per target, so a retry goes only to the targets that
-missed it, not to the ones already told.</li>
-<li>The first tick where the condition doesn't hold closes the incident. Closing
-sends nothing, including to PagerDuty, where you resolve the page yourself.</li>
-<li>If the condition holds again after that, a new incident opens and you are
-notified again.</li>
-</ul>
-<p>Incidents are bookkeeping for notification, not something you manage: there is
-nothing to list, acknowledge or close by hand. A run that errors neither opens
-nor closes one. Interactive runs have no cron, so they have no incidents and
-notify every time.</p>
-<h3 id="delivery-timeouts">Delivery timeouts</h3>
-<p>Each target gets 10 seconds to accept a notification, whatever kind it is:
-Slack, PagerDuty, a webhook or an email. A target that doesn't is a failed
-delivery, retried like any other. It also counts against the cron: one that
-times out on three ticks in a row is disabled, just as for a run that
-<a href="/manual/crons#runtime-analysis">exceeds its budget</a>. A tick whose deliveries all
-go through, or on which nothing needed sending, starts the count over.</p>
-<h2 id="see-also">See also</h2>
-<ul>
-<li><strong>Crons</strong> — scheduling, result history, and the reference for the
-<code>weft::*</code> value funcs, predicates, and stdin comparators.</li>
-</ul>
+weft groups consecutive ticks during which the condition holds. A cron will
+only notify once per entrance into a failed state (or one per tag, with <code>-t</code>).
+The alert message still goes to the run's <code>stderr</code>, so it is in the run's
+recorded result.  If a send fails (PagerDuty is unreachable, a Slack channel is
+gone), the run reports it and exits non-zero, and each following tick of the
+incident tries again. Delivery is tracked per target, so a retry goes only to
+the targets that missed it, not to the ones already told.  The first tick where
+the condition doesn't hold sets it to green. It won't autoresolve in PagerDuty
+when it does so.</p>
+<p>Each target gets 10 seconds to accept a notification, regardless of service.
+Three failed deliveries in a row will disable the cron.</p>
 `,
 } as const;
 

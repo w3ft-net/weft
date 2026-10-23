@@ -31,8 +31,9 @@ alerting strategies, and how to route notifications.
 `alert` reads a value from stdin and evaluates it against a condition. If the
 condition holds, it writes the alert message to stderr and, when `--notify` is
 supplied, dispatches the alias from `/etc/notify.yaml` to its Slack, PagerDuty,
-webhook, and/or email targets (see [Notifications](#notifications)). When the
-condition does not hold, stdin passes through to stdout unchanged.
+webhook, and/or email targets (see [Notifications](#notifications)). Its value
+and tag flags can serve as a shorthand for shaping what [gets persisted in a
+cron](crons.md#cron-result-persistence).
 
 With no condition the default is `any`: the alert fires whenever stdin is
 non-empty. `alert` alone is a dry run that writes to stderr.
@@ -42,6 +43,7 @@ of a script.
 
 ## Conditions
 
+#FIXME now that we we have text types, we should add a `matches` condition that takes a regex?
 - `any` — fires whenever stdin is non-empty (the default when no condition is given)
 - `above <N>` — current value is greater than N
 - `below <N>` — current value is less than N
@@ -55,10 +57,19 @@ of a script.
 ## Options
 
 - `-v <field>`, `--value <field>` — column or JSON path holding the number to
-  compare on each line. If unspecified, the value is the entire line.
+  compare on each line. If unspecified, the whole input must parse as a float,
+  unless the condition is `any`, `absent` and `changed`.
 - `-t <field>`, `--tag <field>` — column or JSON path by which alerts should be
   grouped. Combine with `-v` when you want to alert separately by host, for
   example.
+
+In a cron, `-v` and `-t` obviate the need for the [`# value:`/`# tag:`
+headers](crons.md#extracting-values-and-tags-from-json) a cron without `alert` would use. A cron that
+alerts on tagged lines or JSON must give `-v`; without it, output will fail
+[runtime type checks](crons.md#runtime-analysis) and automatically be disabled.
+If the stdin to `alert` is [typed as text](crons.md#declaring-text-output), the condition
+must be one of `any`, `absent` and `changed`.
+
 - `--duration <dur>` — time window for sustained conditions. For
   `above`/`below`, condition must hold for all runs in the window. For
   `rising`/`falling`, compares against the window average. For `absent`, no
@@ -79,7 +90,7 @@ of a script.
 
 ```
 # Alert if the range holds any ERROR line.
-cat /log/myco/prod/api/main.log | grep ERROR | alert --notify=ops
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 0 --notify=ops
 
 # Alert when the range holds more than 50 errors.
 cat /log/myco/prod/api/main.log | grep ERROR | wc -l | alert above 50 --notify=critical
@@ -89,9 +100,13 @@ check_errors | alert above 50 --duration 5m --average --notify=ops
 check_errors | alert rising 30% --notify=critical
 
 # Alert when the range holds no canary line at all.
-cat /log/myco/prod/canary/main.log | alert absent --notify=ops
+cat /log/myco/prod/canary/main.log | wc -l | alert eq 0 --notify=ops
 
-echo "integration test" | alert --notify=ops
+# Alert when a lease changes hands: a text cron, where lease-holders is a
+# /bin script printing "<holder> <lease>" lines.
+#   # schedule: */2 * * * *
+#   # type: text
+lease-holders | alert changed -v 1 -t 2 --notify=ops
 
 # One page if any host's disk use is above 80%.
 cat /log/myco/prod/api/disk.log \
@@ -114,7 +129,7 @@ A cron run, and thereby an alert reads only the logs from its own schedule
 interval: a `*/5` cron sees the last five minutes. However, you can leverage
 the stored results of other crons using the `weft::*` predicates.
 
-#FIXME simple example
+#FIXME simple example plz
 
 If you want to use boolean logic to add multiple such predicates, just add one
 more condition and echo if nothing's failed yet:#
@@ -161,6 +176,8 @@ In addition to the checks [run for every cron](crons.md#static-analysis), there 
 * **Alert positioning** -- `alert` can only be invoked once per cron, and it has to be the last thing executed 
 * **Multiple aliases** -- `alert` will bail if you provide `--notify` more than once (if you want several targets for an alert, you can configure your alias with as many as you like)
 * **Bad arguments** -- all conditions and flags must be known and stdin, positional arguments, and flag arguments must typecheck correctly, and `-v` and `-t` must not mix numeric field positions with a JSON path
+* **One schema** -- a cron that alerts must declare its value and tagging with `-v`/`-t`, not `# value:`/`# tag:` headers
+* **Types** -- on a [crons with non-numeric output](crons.md#declaring-text-output), the condition must be `any`, `absent` or `changed`
 
 ## Notifications
 
@@ -186,15 +203,15 @@ Edit it `/etc/notify.yaml` with vim in the weft shell.  Weft refuses to save
 * the file doesn't parse
 * an alias has no targets
 * a webhook `url` or header refers to a [`${secrets.NAME}`](#webhook-secrets) you haven't defined
-* there is no `system`
+* you removed the `system` alias
 
 ### The system alias
 
 Every org has an alias named `system`. It receives the alerts weft raises, as
 opposed to the ones your own `alert` stages raise. For example, weft pages
 `system` when a cron stops executing successfully, or when it disables a cron
-after repeated [timeouts](crons.md#runtime-analysis). Its initial target is the email
-address of the person who created the org:
+after [runtime analysis failures](crons.md#runtime-analysis). Weft initially
+populates it with the email address of the person who created the org:
 
 ```
 system:
@@ -207,9 +224,9 @@ top-level key.
 
 ### Connecting Slack and PagerDuty
 
-`notify.yaml` names destinations — the credentials behind them
-live with your account. Connect them  under **Account → Integrations** in the browser or from the terminal with `weft
-integration`.
+`notify.yaml` names destinations — the credentials behind them live with your
+account. Connect them  under **Account → Integrations** in the browser or from
+the terminal with `weft integration`.
 
 ```
 # PagerDuty
@@ -262,37 +279,32 @@ whose body is JSON:
 | `ts_unix` | When weft sent the request, in seconds since the epoch |
 | `body` | The alert message: what the alert prints to `stderr`, or your `--msg` if you gave one. At most 1024 bytes, with `... (truncated)` appended when it was cut |
 
-The request carries `Content-Type: application/json` and whatever you list under
-`headers`; nothing else is added. A header you list with the same name as a
-default (`Content-Type`, say) replaces it. Weft doesn't sign requests, so if
-your endpoint needs to know the request came from weft, send a token in a
-header.
+You bring your own HTTP headers, with the exception of `Content-Type:
+application/json`, which you can override should you need to.
 
 A webhook succeeds when it answers with a status below 300 within the
-[delivery timeout](#delivery-timeouts). Anything else is a failed delivery and
+[delivery timeout](#key-behaviors). Anything else is a failed delivery and
 is retried on the following ticks of the incident.
 
 #### Webhook secrets
 
-Anything written in `/etc/notify.yaml` is readable by whoever can read the
-file, and sits in its version history, so a token or signing secret doesn't
-belong there. Store it as a webhook secret instead and refer to it by name:
+If you need to use a token in an auth header for a webhook but would rather not
+shove a secret somewhere broadly readable, store it as a webhook secret instead
+and refer to it by name:
 
 ```
-weft integration webhook-secret set pages_token --value s3cr3t
+weft integration webhook-secret set my_token --value s3cr3t
 ```
 
-Then write `${secrets.pages_token}` in a webhook's `url` or in a header value,
-as in the example above. Weft substitutes the value when it sends the request.
+You can then interpolate it with `${secrets.my_token}` in a webhook's `url` or
+in a header value, as in the example above. Weft substitutes the value when it
+sends the request.  Error messages, logs, catting `/etc/notify.yaml` etc. show
+`${secrets.pages_token}` instead of the value.
 
-* Names use letters, digits, `_` and `-`.
-* Values are write-only. `weft integration list` shows the names, and nothing
-  shows the values. Setting a name again replaces the value for every alias
-  that uses it.
-* Saving `notify.yaml` is refused if it refers to a secret you haven't
-  defined, and `weft integration webhook-secret rm <name>` is refused while an
-  alias still refers to it.
-* Error messages and logs show `${secrets.pages_token}`, never the value.
+Secret names must be `[\w_-]*`. You can't write `notify.yaml` if it refers to a
+secret you haven't defined, and `weft integration webhook-secret rm <name>`
+will fail if an alias still refers to it.
+
 
 ### Email
 
@@ -316,41 +328,17 @@ This sends to every target in the `ops` alias.
 Interactive runs notify every time. Only crons have incidents, so nothing is
 suppressed.
 
-### Debouncing
+### Key behaviors
 
-A cron checks its condition on every tick. To avoid paging you on each one,
-weft groups consecutive ticks during
-which the condition holds. Each cron has at most one open incident at a time
-(one per tag, with `-t`).
+A cron checks its condition on every tick. To avoid pagestorming you, weft
+groups consecutive ticks during which the condition holds. A cron will only
+notify once per entrance into a failed state (or per tag if specified).  If a
+send fails (PagerDuty is unreachable, a Slack channel is gone), the run reports
+it and exits non-zero, and each following tick of the incident tries again.
+Delivery is tracked per target, so a retry goes only to the targets that missed
+it, not to the ones already told.  The first tick where the condition doesn't
+hold sets it to green. It won't autoresolve in PagerDuty when it does so.
 
-- The first tick where the condition holds opens an incident and sends the
-  notification.
-- Ticks while the incident is open send nothing more. The alert message still
-  goes to the run's `stderr`, so it is in the run's recorded result.
-- If a send fails (PagerDuty is unreachable, a Slack channel is gone), the run
-  reports it and exits non-zero, and each following tick of the incident tries
-  again. Delivery is tracked per target, so a retry goes only to the targets that
-  missed it, not to the ones already told.
-- The first tick where the condition doesn't hold closes the incident. Closing
-  sends nothing, including to PagerDuty, where you resolve the page yourself.
-- If the condition holds again after that, a new incident opens and you are
-  notified again.
-
-Incidents are bookkeeping for notification, not something you manage: there is
-nothing to list, acknowledge or close by hand. A run that errors neither opens
-nor closes one. Interactive runs have no cron, so they have no incidents and
-notify every time.
-
-### Delivery timeouts
-
-Each target gets 10 seconds to accept a notification, whatever kind it is:
-Slack, PagerDuty, a webhook or an email. A target that doesn't is a failed
-delivery, retried like any other. It also counts against the cron: one that
-times out on three ticks in a row is disabled, just as for a run that
-[exceeds its budget](crons.md#runtime-analysis). A tick whose deliveries all
-go through, or on which nothing needed sending, starts the count over.
-
-## See also
-
-- **Crons** — scheduling, result history, and the reference for the
-  `weft::*` value funcs, predicates, and stdin comparators.
+Each target gets 10 seconds to accept a notification, regardless of service.  A
+target that doesn't is flagged as failed, and three consecutive failed
+deliveries disable the cron. 

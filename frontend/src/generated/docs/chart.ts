@@ -10,158 +10,150 @@ const chart = {
     { level: 2, id: "name", text: "NAME" },
     { level: 2, id: "synopsis", text: "SYNOPSIS" },
     { level: 2, id: "description", text: "DESCRIPTION" },
-    { level: 2, id: "options-cron-form", text: "OPTIONS (cron form)" },
     { level: 2, id: "options-pipe-form", text: "OPTIONS (pipe form)" },
+    { level: 2, id: "options-cron-form", text: "OPTIONS (cron form)" },
     { level: 2, id: "examples", text: "EXAMPLES" },
     { level: 2, id: "not-supported", text: "NOT SUPPORTED" },
-    { level: 2, id: "related", text: "RELATED" },
     { level: 2, id: "see-also", text: "SEE ALSO" },
   ],
   html: `<h2 id="name">NAME</h2>
-<p>chart — render a chart in the terminal, from a cron or a pipeline</p>
+<p>chart — render a chart in the terminal, from a pipeline or a cron</p>
 <h2 id="synopsis">SYNOPSIS</h2>
 <pre><code>chart &lt;cron&gt; [-t TYPE] [-n LIMIT] [-i INTERVAL] [-f|--follow]
 &lt;pipeline&gt; | chart [-x &lt;field&gt;] [-y &lt;field&gt;] [-a &lt;fn&gt;] [--tag &lt;field&gt;]
                    [--bucket &lt;dur&gt;] [-t TYPE] [--title &lt;text&gt;]
 </code></pre>
 <h2 id="description">DESCRIPTION</h2>
-<p><code>chart</code> runs in two forms:</p>
-<p><strong>Cron form</strong> — <code>chart &lt;cron&gt;</code> reads recent results from a
-<code>/cron.d/&lt;cron&gt;</code> and paints a chart in the terminal. The cron
-name can be given bare (<code>chart errors</code>) or as a path
-(<code>chart /cron.d/errors</code>). One-shot renders a single frame and
-returns; <code>--follow</code> enters a live-redraw mode that refreshes every
-<code>&lt;INTERVAL&gt;</code> until you press <strong>q</strong> (or <strong>Esc</strong>, <strong>Ctrl+C</strong>,
-<strong>Ctrl+D</strong>).</p>
-<p><strong>Pipe form</strong> — <code>&lt;pipeline&gt; | chart [...]</code> renders the upstream
-output once and returns to the prompt. The chart stage is the
-last stage of the pipeline; piping its output onward is an error.
-Use it to sketch a chart before saving the pipeline as a cron.
-<code>--follow</code> is not supported in pipe form.</p>
-<p>Charts fit the terminal and are never paged through <code>less</code>. A resize
-re-fits in cron <code>--follow</code> mode on the next tick. There is no zoom or
-scroll; the chart shows the configured window of data. When a bar
-chart or sparkline has more points than the terminal has columns,
-neighbouring points are merged into one bar each, re-applying <code>-a</code> to
-their rows (<code>count</code>/<code>sum</code> add up, <code>min</code>/<code>max</code> keep dips and spikes; with
-no <code>-a</code>, values are averaged), and a footer line says how many points
-went into each bar. Line charts always fit and are never merged.</p>
-<p>In cron form, the data point for each result is the <strong>last
-whitespace-separated field</strong> of the cron's stdout, the same
-convention as per-tag alert (<code>alert -v &lt;N&gt;</code>). The cron's output must
-end in a number on each line; a cron that emits JSON rows cannot be
-charted. In pipe form, <code>-x</code> and
-<code>-y</code> pick fields explicitly; when omitted, x is the row sequence
-and y is the last whitespace field of each line.</p>
-<h2 id="options-cron-form">OPTIONS (cron form)</h2>
-<ul>
-<li><code>-t</code>, <code>--type</code> <code>&lt;line|sparkline|bar&gt;</code> — chart kind. Default <code>line</code>.
-<code>sparkline</code> is a single-line ramp; <code>bar</code> plots one bar per result
-with the timestamp under it.</li>
-<li><code>-n</code>, <code>--limit</code> <code>&lt;N&gt;</code> — number of recent results to fetch. Default 50.</li>
-<li><code>-i</code>, <code>--interval</code> <code>&lt;DURATION&gt;</code> — redraw interval in <code>--follow</code>
-mode. Default <code>1s</code>. Minimum <code>100ms</code>.</li>
-<li><code>-f</code>, <code>--follow</code> — drop into live-redraw mode. The chart re-fetches
-and repaints every <code>&lt;INTERVAL&gt;</code> until you press <code>q</code>.</li>
-</ul>
+<p><code>chart</code> has two forms.</p>
+<p><strong>Standalone</strong>: <code>chart &lt;cron&gt;</code> draws a cron's stored results, one point per
+run, so it can cover days or weeks instead of the current range. Give the
+name bare (<code>chart error-rate</code>) or as a path (<code>chart /cron.d/error-rate</code>).
+The point for each run is the last whitespace-separated field of its
+output, the same rule <code>alert -v</code> uses, so each run's output has to end in a
+number. With <code>--follow</code>, the chart redraws every <code>INTERVAL</code>
+until you exit.</p>
+<p><strong>Pipe form</strong>: <code>&lt;pipeline&gt; | chart [...]</code> draws the pipeline's output once
+and returns to the prompt. <code>chart</code> must be the last stage; piping its
+output onward is an error. <code>-x</code> and <code>-y</code> pick the fields to plot. Without
+them, x is the row number and y is the last whitespace-separated field of
+each line, drawn as one bar per line. The chart covers whatever the current
+<code>range</code> covers, so change the range and run it
+again to see a different window.</p>
+<p>Charts fit the terminal and are never paged through <code>less</code>. There is no
+zoom or scroll. When a bar chart or sparkline has more points than the
+terminal has columns, neighbouring points merge into one bar, re-applying
+<code>-a</code> to their rows (<code>count</code> and <code>sum</code> add up, <code>min</code> and <code>max</code> keep dips and
+spikes; with no <code>-a</code>, values are averaged), and a footer line says how many
+points went into each bar. Line charts always fit and never merge.</p>
 <h2 id="options-pipe-form">OPTIONS (pipe form)</h2>
 <ul>
-<li><code>-x &lt;field&gt;[::time[(&lt;format&gt;)]]</code> — x source. <code>&lt;field&gt;</code> is either a
+<li><code>-x &lt;field&gt;[::time[(&lt;format&gt;)]]</code>: the x field. <code>&lt;field&gt;</code> is either a
 1-indexed whitespace column (<code>-x 1</code>) or a <code>.</code>-prefixed JSON path
-(<code>-x .ts</code>). Default: row sequence (0, 1, 2, …). An RFC3339 timestamp
-is recognised as time on its own; anything else is a plain number or
-label unless cast:
+(<code>-x .ts</code>). Default: the row number (0, 1, 2, …). An RFC3339 timestamp
+is read as a time on its own; anything else is a plain number or label
+unless cast:
 <ul>
-<li><code>::time</code> — x is a time: RFC3339 or epoch seconds (<code>-x 1::time</code>).</li>
-<li><code>::time(&lt;format&gt;)</code> — x is a time in a strftime format: <code>%Y</code> year,
+<li><code>::time</code>: x is a time, RFC3339 or epoch seconds (<code>-x 1::time</code>).</li>
+<li><code>::time(&lt;format&gt;)</code>: x is a time in a strftime format: <code>%Y</code> year,
 <code>%m</code> month, <code>%d</code> day, <code>%H</code> hour, <code>%M</code> minute, <code>%S</code> second, <code>%b</code>
-month name, <code>%z</code> UTC offset, <code>%s</code> epoch seconds, and the rest of
-the usual <code>date +FORMAT</code> codes. A stamp with no zone is read as
-UTC. A row that doesn't match the format stops the chart with an
-error.</li>
-<li>With a time cast, a column range <code>&lt;start&gt;-&lt;end&gt;</code> joins those
-columns with a space before parsing, for stamps that span two
-fields: <code>-x '1-2::time(%Y/%m/%d %H:%M:%S)'</code>.</li>
+month name, <code>%z</code> UTC offset, <code>%s</code> epoch seconds, and the rest of the
+usual <code>date +FORMAT</code> codes. A stamp with no zone is read as UTC. A row
+that doesn't match the format stops the chart with an error.</li>
+<li>With a time cast, a column range <code>&lt;start&gt;-&lt;end&gt;</code> joins those columns
+with a space before parsing, for stamps that span two fields:
+<code>-x '1-2::time(%Y/%m/%d %H:%M:%S)'</code>.</li>
 </ul>
 </li>
-<li><code>-y &lt;field&gt;</code> — y source. Same grammar as <code>-x</code>. Default: last
-whitespace field of each line. <code>-x</code> and <code>-y</code> may not mix
-positional with JSON-path in the same call. Casts are only
-supported on <code>-x</code>.</li>
-<li><code>-a</code>, <code>--aggregate</code> <code>&lt;fn&gt;</code> — y reduction within an x-group.
-One of <code>count</code>, <code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code>, <code>p50</code>, <code>p95</code>,
-<code>identity</code>. Default <code>identity</code>, or <code>count</code> when <code>--bucket</code> is set.</li>
-<li><code>--tag &lt;field&gt;</code> — split output into one line per distinct value of
-<code>&lt;field&gt;</code> — e.g. one line per host, one per
-coordinator instance. Same field grammar as <code>-x</code>/<code>-y</code>; all three
-must agree on positional vs JSON-path. Only valid with <code>-t line</code>
-(the default when <code>--tag</code> is set). Each line gets its own color and
-a legend row.</li>
-<li><code>--bucket &lt;DURATION&gt;</code> — group rows into time buckets on x.
-Implies <code>-x …::time</code>: x must parse as RFC3339, epoch seconds, or the
-cast's format. With <code>-a count</code> (the default) or <code>sum</code>, a bucket with
-no rows is drawn as 0, so a stretch with no logs shows as a hole.
-Switches the default chart kind to <code>line</code>.</li>
-<li><code>-t</code>, <code>--type</code> <code>&lt;line|sparkline|bar&gt;</code> — chart kind. Default <code>bar</code>,
-or <code>line</code> when <code>--bucket</code> or <code>--tag</code> is set.</li>
-<li><code>--title &lt;text&gt;</code> — chart title.</li>
+<li><code>-y &lt;field&gt;</code>: the y field, same grammar as <code>-x</code>. Default: the last
+whitespace field of each line. Casts are only supported on <code>-x</code>.</li>
+<li><code>-a</code>, <code>--aggregate</code> <code>&lt;fn&gt;</code>: how to combine the y values that share an x.
+One of <code>count</code>, <code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code>, <code>p50</code>, <code>p95</code>, <code>identity</code>.
+Default <code>identity</code>, or <code>count</code> when <code>--bucket</code> is set.</li>
+<li><code>--tag &lt;field&gt;</code>: draw one line per distinct value of <code>&lt;field&gt;</code>, such as
+one per host. Same field grammar as <code>-x</code> and <code>-y</code>. Only valid with
+<code>-t line</code> (the default when <code>--tag</code> is set). Each line gets its own color
+and a legend row.</li>
+<li><code>--bucket &lt;DURATION&gt;</code>: group rows into time buckets on x. x must parse as
+RFC3339, epoch seconds, or the <code>-x</code> cast's format. With <code>-a count</code> (the
+default) or <code>sum</code>, a bucket with no rows is drawn as 0, so a stretch with
+no logs shows as a hole.</li>
+<li><code>-t</code>, <code>--type</code> <code>&lt;line|sparkline|bar&gt;</code>: chart kind. Default <code>bar</code>, or
+<code>line</code> when <code>--bucket</code> or <code>--tag</code> is set.</li>
+<li><code>--title &lt;text&gt;</code>: chart title.</li>
+</ul>
+<p><code>-x</code>, <code>-y</code> and <code>--tag</code> must all be columns or all be JSON paths. <code>--tag</code>
+needs one JSON object per line, so use <code>jq -c</code>.</p>
+<h2 id="options-cron-form">OPTIONS (cron form)</h2>
+<ul>
+<li><code>-t</code>, <code>--type</code> <code>&lt;line|sparkline|bar&gt;</code>: chart kind. Default <code>line</code>.
+<code>sparkline</code> is a single-line ramp; <code>bar</code> draws one bar per run with its
+timestamp under it.</li>
+<li><code>-n</code>, <code>--limit</code> <code>&lt;N&gt;</code>: how many recent runs to draw. Default 50.</li>
+<li><code>-f</code>, <code>--follow</code>: redraw until you press <strong>q</strong>.</li>
+<li><code>-i</code>, <code>--interval</code> <code>&lt;DURATION&gt;</code>: redraw interval with <code>--follow</code>.
+Default <code>1s</code>, minimum <code>100ms</code>.</li>
 </ul>
 <h2 id="examples">EXAMPLES</h2>
-<pre><code># Cron form
-chart error-rate                        one-shot line chart
-chart error-rate -t sparkline           one-line glyph
-chart error-rate -t bar                 vertical bars by timestamp
-chart error-rate --follow               live; press q to exit
+<pre><code># One bar per line: each line's last field.
+cat /log/myco/prod/api/host.log | jq '.memory.pct' | chart
 
-# Pipe form: a quick distribution by host
-cat /log/myco/prod/api/host.log | jq -c '{host: $host, pct: .memory.pct}' \\
-  | chart -x .host -y .pct -a avg
+# Error lines per five minutes. The stamp &quot;2026/10/13 15:04:05&quot; spans
+# columns 1 and 2; an empty bucket draws as 0.
+cat /log/myco/prod/api/main.log | grep ERROR \\
+  | chart -x '1-2::time(%Y/%m/%d %H:%M:%S)' --bucket 5m
 
-# Pipe form: time-bucketed p95 over the current range
+# 95th-percentile memory use per minute, from JSON fields.
 cat /log/myco/prod/api/host.log \\
   | jq -c '{ts: $ts, pct: .memory.pct}' \\
   | chart -x .ts -y .pct --bucket 1m -a p95
 
-# Pipe form: log lines per minute, to spot a window with no logs.
-# The stamp &quot;2026/10/13 15:04:05&quot; spans columns 1 and 2.
-cat /log/myco/prod/api/main.log \\
-  | chart -x '1-2::time(%Y/%m/%d %H:%M:%S)' --bucket 1m
+# One bar per host: average memory use.
+cat /log/myco/prod/api/host.log | jq -c '{host: $host, pct: .memory.pct}' \\
+  | chart -x .host -y .pct -a avg
 
-# Pipe form: plot a stream of numbers from jq
-cat /log/myco/prod/api/host.log | jq '.memory.pct' | chart
-
-# Pipe form: one line per instance
+# One line per host over time.
 cat /log/myco/prod/api/host.log \\
   | jq -c '{ts: $ts, host: $host, pct: .memory.pct}' \\
   | chart -x .ts -y .pct --tag .host --bucket 1m -a avg
-
-# --tag requires one JSON object per line, so use jq -c
 </code></pre>
+<p>To keep the errors-per-five-minutes chart, save it as a cron that runs
+every five minutes and prints that interval's count. Each run sees only the
+five minutes since the last one (see <a href="/manual/crons#scheduling">Crons</a>), so the
+cron drops the <code>--bucket</code> and the timestamp field; each run's count becomes
+one point. Create it with <code>vi /cron.d/error-rate</code>:</p>
+<pre><code># schedule: */5 * * * *
+cat /log/myco/prod/api/main.log | grep ERROR | wc -l
+</code></pre>
+<p>Once it has run a few times, chart it by name:</p>
+<pre><code>chart error-rate                  line chart of the last 50 runs
+chart error-rate -n 200           the last 200 runs
+chart error-rate -t sparkline     a one-line glyph
+chart error-rate --follow         redraw every second; press q to exit
+</code></pre>
+<p><code>ls -l /cron.d/</code> shows a small sparkline next to each cron, so you can scan
+every cron at once.</p>
 <h2 id="not-supported">NOT SUPPORTED</h2>
 <ul>
 <li>Chart kinds other than <code>line</code>, <code>sparkline</code> and <code>bar</code>: no pie, area or
 table.</li>
-<li><code>--follow</code> and <code>-i</code> in pipe form, and <code>-n</code> in pipe form. They belong to
-the cron form only; the pipe-form options (<code>-x</code>, <code>-y</code>, <code>-a</code>, <code>--bucket</code>,
-<code>--tag</code>, <code>--title</code>) are rejected in the cron form.</li>
 <li>Aggregates other than <code>count</code>, <code>sum</code>, <code>avg</code>, <code>min</code>, <code>max</code>, <code>p50</code>, <code>p95</code>
 and <code>identity</code> (no <code>p99</code>).</li>
+<li><code>--follow</code>, <code>-i</code> and <code>-n</code> in pipe form, and <code>-x</code>, <code>-y</code>, <code>-a</code>, <code>--bucket</code>,
+<code>--tag</code> and <code>--title</code> in cron form.</li>
 <li><code>--tag</code> with <code>bar</code> or <code>sparkline</code>; it draws one line per value, so it
 needs <code>line</code>.</li>
 <li>Casts on <code>-y</code> or <code>--tag</code>, and a <code>-x</code> column range without <code>::time</code>.</li>
 <li>Mixing column numbers and <code>.json.path</code> fields in one call.</li>
-<li>Charting a cron whose output is JSON rows, and piping the output of
-<code>chart</code> into another command.</li>
+<li>Charting a cron whose output is JSON rows (a dashboard can, with
+<a href="/manual/dashboards#multi-line-sparklines-tag"><code>tag:</code></a>), and piping the output of <code>chart</code>
+into another command.</li>
 <li><code>--flag=value</code> and attached short forms (<code>--type=bar</code>, <code>-n5</code>). Write the
 flag and its value as separate words.</li>
 <li>Zoom and scroll.</li>
 </ul>
 <p>Other options are rejected with <code>chart: unknown option &lt;flag&gt;</code>.</p>
-<h2 id="related">RELATED</h2>
-<p><code>ls -l /cron.d/</code> adds a colored sparkline beside each cron name
-using the same rendering primitives.</p>
 <h2 id="see-also">SEE ALSO</h2>
-<p><code>help</code>, <code>help cron</code>, <code>vi</code>, <code>cat</code></p>
+<p><code>help cron</code>, <code>man dashboard</code>, <code>man range</code>, and <a href="/manual/dashboards">Dashboards</a> for a walkthrough from one-off charts to dashboards</p>
 `,
 } as const;
 
