@@ -598,6 +598,14 @@ func (sh *Shard) evaluateDegraded(ctx context.Context) error {
 	if !degradedAt.IsZero() && sh.deps.Clock().Sub(degradedAt) < ingestRecoveryCooldown {
 		return nil // still cooling down
 	}
+	// Persist the reset before making it in memory: RefreshFromStore copies
+	// ingest_failures from the row every tick, so a reset only in memory
+	// comes straight back and the shard re-degrades without retrying a write.
+	if sh.deps.Store != nil {
+		if err := sh.deps.Store.SetShardIngestFailures(sh.ID, 0); err != nil {
+			weftsdk.Infof(ctx, "shardsm %s: persist half-open ingest failure reset: %v", sh.ID, err)
+		}
+	}
 	sh.mu.Lock()
 	sh.IngestFailures = 0
 	sh.reconnectFailures = 0

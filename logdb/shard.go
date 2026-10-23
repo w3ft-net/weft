@@ -19,6 +19,7 @@ type shardRowStore interface {
 	DeleteShard(id string) error
 	SetShardState(id string, state ShardState) error
 	SetShardAddr(id, addr string) error
+	SetShardIngestFailures(id string, n int) error
 	SetShardLaunchResult(id, instanceID, az, volumeID string, stripeIndex *int) error
 	IncrementShardLaunchAttempts(id string) error
 	SetShardParquetPath(id, path string) error

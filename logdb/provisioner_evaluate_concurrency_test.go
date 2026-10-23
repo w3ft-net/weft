@@ -67,6 +67,15 @@ func (f *fakeConcurrentShardStore) SetShardAddr(id, addr string) error {
 	return nil
 }
 
+func (f *fakeConcurrentShardStore) SetShardIngestFailures(id string, n int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.rows[id]; ok {
+		r.IngestFailures = n
+	}
+	return nil
+}
+
 func (f *fakeConcurrentShardStore) SetShardLaunchResult(id, instanceID, az, volumeID string, stripeIndex *int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

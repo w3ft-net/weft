@@ -388,6 +388,35 @@ func TestShardSM_EvaluateDegradedRecoversAfterCooldown(t *testing.T) {
 	}
 }
 
+// TestShardSM_EvaluateDegradedRecoveryPersistsReset: the half-open reset must
+// reach the shard's row, not just memory. RefreshFromStore copies
+// ingest_failures from the row every tick, so an in-memory-only reset came
+// straight back and the shard re-degraded before it could retry a write; on
+// 2026-10-23 the count climbed past 14,000 that way.
+func TestShardSM_EvaluateDegradedRecoveryPersistsReset(t *testing.T) {
+	sm, db, entry := makeFixtureShardSM(t, StateDegraded)
+	const stuck = 14000
+	if err := (ShardStore{db}).SetShardIngestFailures("s-test", stuck); err != nil {
+		t.Fatal(err)
+	}
+	entry.IngestFailures = stuck
+	entry.degradedAt = time.Date(2026, 5, 21, 11, 55, 0, 0, time.UTC) // 5m ago > 2m cooldown
+
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateIngesting {
+		t.Fatalf("state: got %q want INGESTING (half-open)", st)
+	}
+	row, ok, err := (ShardStore{db}).GetShard("s-test")
+	if err != nil || !ok {
+		t.Fatalf("GetShard: ok=%v err=%v", ok, err)
+	}
+	if row.IngestFailures != 0 {
+		t.Fatalf("persisted ingest_failures = %d after half-open, want 0", row.IngestFailures)
+	}
+}
+
 func TestShardSM_EvaluateDegradedStaysDuringCooldown(t *testing.T) {
 	sm, _, entry := makeFixtureShardSM(t, StateDegraded)
 	entry.IngestFailures = SuspendFailureThreshold
