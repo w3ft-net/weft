@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
-import { Sparkline, SparkLegend, groupResultsByTag, type SparkBand } from '../components/Sparkline'
+import { Sparkline, SparkLegend, type SparkBand } from '../components/Sparkline'
+import { plotToSpark, plotXDomain } from '../lib/chartPlot'
 import {
   listDashboards, getDashboard,
   type DashboardListItem, type DashboardResponse,
@@ -307,7 +308,7 @@ function SparklineTile({ tile, payload }: {
   payload: DashboardWatchPayload
 }) {
   const series = useMemo(
-    () => groupResultsByTag(payload.results.slice(0, 50)),
+    () => (payload.plot ? plotToSpark(payload.plot) : []),
     [payload],
   )
 
@@ -337,6 +338,7 @@ function SparklineTile({ tile, payload }: {
         condition={payload.cron.AlertCondition}
         height={80}
         showTimeAxis
+        xDomain={payload.plot ? plotXDomain(payload.plot) : undefined}
       />
       {tagged && <SparkLegend series={series} />}
     </div>

@@ -19,6 +19,12 @@ const watches: Record<string, any> = {
   'disk-used': { watch: watch('disk-used', 'cat /log/prod/node.log | jq .disk_pct | tail -1'), results: series('disk', 48, 71, 4) },
   'top-paths': { watch: watch('top-paths', 'cat /log/prod/web.log | awk \'{print $7}\' | sort | uniq -c | sort -rn | head'), results: [{ ...series('t', 1)[0], Stdout: '  4120 /api/v1/orders\n  2981 /api/v1/cart\n  1877 /health\n   902 /api/v1/login\n   410 /static/app.js' }] },
 }
+// The dashboard API also sends each cron's plot: one line per stored tag.
+for (const w of Object.values(watches)) {
+  const byTag: Record<string, { x: number; label: string; y: number }[]> = {}
+  for (const r of w.results) (byTag[r.Tag] ??= []).push({ x: Date.parse(r.RanAt) / 1000, label: '', y: r.Value })
+  w.plot = { kind: 'line', timeX: true, series: Object.entries(byTag).map(([tag, points]) => ({ tag, points: points.sort((a, b) => a.x - b.x) })) }
+}
 const user = { id: 'u1', email: 'paul@graybeardcorp.com', name: 'Paul', tier: 'team', customer: 'kevlar', orgs: [{ id: 'o1', name: 'kevlar', role: 'admin', active: true }, { id: 'o2', name: 'loom', role: 'member', active: false }], email_verified: true, has_seen_welcome: true, onboarding_step: 'done', onboarding_dismissed: true, is_superadmin: true }
 const routes: [RegExp, any][] = [
   [/^\/api\/auth\/me/, user],

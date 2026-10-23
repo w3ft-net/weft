@@ -59,8 +59,6 @@ type DashboardTile struct {
 	Format    string           `yaml:"format,omitempty" json:"format,omitempty"`
 	Threshold *DashboardThresh `yaml:"threshold,omitempty" json:"threshold,omitempty"`
 	Columns   []string         `yaml:"columns,omitempty" json:"columns,omitempty"`
-	Tag       string           `yaml:"tag,omitempty" json:"tag,omitempty"`
-	Y         string           `yaml:"y,omitempty" json:"y,omitempty"`
 
 	// Display is filled by the API when serving a dashboard; never read from YAML.
 	Display *TileDisplay `yaml:"-" json:"display,omitempty"`
@@ -182,7 +180,7 @@ func FormatTileDisplay(t DashboardTile, v *float64) *TileDisplay {
 var knownKeys = map[string][]string{
 	"dashboardYAMLRaw": {"title", "sections", "tiles"},
 	"DashboardSection": {"title", "tiles"},
-	"DashboardTile":    {"kind", "cron", "title", "size", "format", "threshold", "columns", "tag", "y"},
+	"DashboardTile":    {"kind", "cron", "title", "size", "format", "threshold", "columns"},
 	"DashboardThresh":  {"warn", "crit", "max"},
 }
 
@@ -208,6 +206,9 @@ func friendlyYAMLError(err error) error {
 
 	if typeName == "DashboardTile" && field == "watch" {
 		return fmt.Errorf("saw 'watch', expected 'cron': write `cron: <name>` — run `man dashboard` for the YAML grammar")
+	}
+	if typeName == "DashboardTile" && (field == "tag" || field == "y") {
+		return fmt.Errorf("a tile has no '%s' key: a sparkline draws one line per tag its cron stores. Declare the value and tag on the cron itself, with '# value:' and '# tag:' headers (JSON output) or alert -v/-t — run `help cron`", field)
 	}
 	valid := knownKeys[typeName]
 	if len(valid) == 0 {
@@ -295,14 +296,6 @@ func validateSpec(spec *DashboardSpec) error {
 			}
 			if len(tile.Columns) > 0 && tile.Kind != "table" {
 				return fmt.Errorf("%s: `columns:` is only supported on table tiles", where)
-			}
-			if tile.Tag != "" || tile.Y != "" {
-				if tile.Kind != "sparkline" {
-					return fmt.Errorf("%s: `tag:`/`y:` are only supported on sparkline tiles", where)
-				}
-				if tile.Tag == "" || tile.Y == "" {
-					return fmt.Errorf("%s: `tag:` and `y:` must be set together (tag identifies which line a row belongs to, y is the field to plot)", where)
-				}
 			}
 			tileCount++
 		}

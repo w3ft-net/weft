@@ -4,17 +4,43 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
+	"github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/store"
 	"gorm.io/gorm"
 )
 
-// dashboardWatchPayload bundles a watch's metadata and its recent
-// results so a dashboard render needs no follow-up requests. Mirrors
-// the shape that handleWatchResults returns for the single-watch view.
+// dashboardWatchPayload bundles a cron's metadata, its recent results
+// (the latest feeds counter, gauge and table tiles) and its plot over
+// dashboardWindow (sparkline tiles), so a dashboard render needs no
+// follow-up requests. The plot is reduced like `chart <cron>`: one line
+// per stored tag, the rest folded into "other".
 type dashboardWatchPayload struct {
 	Watch   *store.CronWatch   `json:"cron"`
 	Results []store.CronResult `json:"results"`
+	Plot    *chart.Plot        `json:"plot"`
+}
+
+// dashboardWindow is how far back a dashboard's sparklines reach.
+const dashboardWindow = 24 * time.Hour
+
+// cronPlot reads a cron's stored series over [start, end) and reduces it
+// to the plot the chart renderers draw.
+func (s *Server) cronPlot(orgID store.OrgID, cronWatchID uint, start, end time.Time) (*chart.Plot, error) {
+	series, err := s.store.CronSeries(orgID, cronWatchID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	cs := chart.CronSeries{Granularity: series.Granularity, Start: series.Start, End: series.End, Buckets: make([]chart.CronBucket, len(series.Buckets))}
+	for i, b := range series.Buckets {
+		cs.Buckets[i] = chart.CronBucket{Start: b.BucketStart, Tag: b.Tag, Count: b.Count, Sum: b.Sum, Min: b.Min, Max: b.Max}
+	}
+	plot, msg := chart.CronPlot(cs, chart.WatchArgs{Kind: "line", Aggregate: "avg"})
+	if msg != "" {
+		return nil, errors.New(msg)
+	}
+	return &plot, nil
 }
 
 // dashboardGetResponse is the wire shape for GET /api/dashboards/{name}.
@@ -115,9 +141,16 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
+			now := time.Now()
+			plot, err := s.cronPlot(custID, cw.ID, now.Add(-dashboardWindow), now)
+			if err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
 			watches[tile.Watch] = &dashboardWatchPayload{
 				Watch:   cw,
 				Results: results,
+				Plot:    plot,
 			}
 		}
 	}

@@ -72,6 +72,33 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 		t.Errorf("end = %s, want about 30m ago", got)
 	}
 
+	// A dashboard tile on the cron gets its plot: one line per stored tag.
+	if err := s.SaveDashboard(cust.ID, user.ID, "fleet", "tiles:\n  - kind: sparkline\n    cron: hosts\n"); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest("GET", "/api/dashboards/fleet", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("dashboard status %d: %s", rec.Code, rec.Body)
+	}
+	var dash struct {
+		Crons map[string]struct {
+			Plot struct {
+				Series []struct {
+					Tag string `json:"tag"`
+				} `json:"series"`
+			} `json:"plot"`
+		} `json:"crons"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &dash); err != nil {
+		t.Fatal(err)
+	}
+	if s := dash.Crons["hosts"].Plot.Series; len(s) != 2 || s[0].Tag != "a" || s[1].Tag != "b" {
+		t.Fatalf("dashboard plot series = %+v, want lines a and b", s)
+	}
+
 	req = httptest.NewRequest("GET", "/api/crons/hosts/chart?spec=nonsense", nil)
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	rec = httptest.NewRecorder()

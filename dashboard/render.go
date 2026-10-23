@@ -18,9 +18,9 @@ import (
 // the most recent stdout (for table). Newest sample is index 0; the
 // renderer reverses for left-to-right time when needed.
 //
-// Tags is populated instead of Values/Times/LatestText for a tagged
-// sparkline tile (tile.Tag set) — one sub-series per distinct tag
-// value found across the watch's run history. See toTaggedSeries.
+// Tags is populated instead of Values/Times for a cron that stores
+// tags — one sub-series per tag (the smallest folded into "other").
+// See toWatchSeries.
 type WatchSeries struct {
 	Values     []float64 // numeric values, newest-first
 	Times      []float64 // epoch seconds, parallel to Values, newest-first
@@ -407,7 +407,7 @@ func renderSparkline(series WatchSeries, w int) []string {
 	return out
 }
 
-// renderSparklineTagged is renderSparkline's --tag counterpart: one
+// renderSparklineTagged is renderSparkline for a tagged cron: one
 // warp chart.NamedSeries per distinct tag value, sharing one x/y scale
 // (warp's Builder.Series already handles per-series color + legend).
 // Unlike the single-series path, lines are NOT force-colorized here —

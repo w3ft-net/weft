@@ -97,9 +97,8 @@ func TestParseDashboardYAML_Errors(t *testing.T) {
 		{"format bare %f", "tiles:\n  - kind: counter\n    cron: a\n    format: \"%f\"\n", "`format:` must contain exactly one %d or %.Nf"},
 		{"format stray percent", "tiles:\n  - kind: counter\n    cron: a\n    format: \"%d %\"\n", "`format:` must contain exactly one %d or %.Nf"},
 		{"max on counter", "tiles:\n  - kind: counter\n    cron: a\n    threshold: {max: 5}\n", "`threshold.max:` is only supported on gauge"},
-		{"tag on non-sparkline", "tiles:\n  - kind: counter\n    cron: a\n    tag: .host\n    y: .v\n", "only supported on sparkline"},
-		{"tag without y", "tiles:\n  - kind: sparkline\n    cron: a\n    tag: .host\n", "must be set together"},
-		{"y without tag", "tiles:\n  - kind: sparkline\n    cron: a\n    y: .v\n", "must be set together"},
+		{"tile tag points at the cron's schema", "tiles:\n  - kind: sparkline\n    cron: a\n    tag: .host\n", "a tile has no 'tag' key: a sparkline draws one line per tag its cron stores"},
+		{"tile y points at the cron's schema", "tiles:\n  - kind: sparkline\n    cron: a\n    y: .v\n", "'# value:' and '# tag:' headers"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -136,28 +135,6 @@ tiles:
 `
 	if _, err := ParseDashboardYAML(body); err != nil {
 		t.Fatalf("valid per-kind fields rejected: %v", err)
-	}
-}
-
-func TestParseDashboardYAML_TaggedSparkline(t *testing.T) {
-	body := `
-tiles:
-  - kind: sparkline
-    cron: coordinator-mem-pct
-    tag: .coordinator_id
-    y: .mem_pct
-    size: lg
-`
-	spec, err := ParseDashboardYAML(body)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	tile := spec.Sections[0].Tiles[0]
-	if tile.Tag != ".coordinator_id" {
-		t.Errorf("tag: got %q", tile.Tag)
-	}
-	if tile.Y != ".mem_pct" {
-		t.Errorf("y: got %q", tile.Y)
 	}
 }
 

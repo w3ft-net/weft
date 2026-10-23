@@ -1,3 +1,5 @@
+import type { ChartPlot } from './chartPlot'
+
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
 // ApiError surfaces structured codes from the backend (e.g.
@@ -873,6 +875,9 @@ export interface DashboardSpec {
 export interface DashboardWatchPayload {
   cron: CronWatch
   results: CronResult[]
+  // The cron's stored series over the last day, one line per tag (the
+  // rest folded into "other"), reduced by the server like `chart <cron>`.
+  plot: ChartPlot | null
 }
 
 export interface DashboardListItem {

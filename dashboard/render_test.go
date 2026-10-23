@@ -135,8 +135,6 @@ func TestRender_SparklineTagged(t *testing.T) {
 tiles:
   - kind: sparkline
     cron: coordinator-mem-pct
-    tag: .coordinator_id
-    y: .mem_pct
     size: lg
 `)
 	results := map[string]WatchSeries{
@@ -171,8 +169,6 @@ func TestRender_SparklineTaggedMissingData(t *testing.T) {
 tiles:
   - kind: sparkline
     cron: ghost
-    tag: .coordinator_id
-    y: .mem_pct
 `)
 	out := Render(spec, map[string]WatchSeries{}, 80)
 	if !strings.Contains(out, "<no data>") {
