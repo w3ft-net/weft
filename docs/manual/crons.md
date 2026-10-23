@@ -233,8 +233,9 @@ The return type in the table below indicates not just what the function spits
 out but what it expects in the cron results: the functions that return a
 number need a cron that stores numbers. Pointing one at a [text
 cron](crons.md#text-crons) is refused when you save, if the name is
-spelled out (`weft::avg holders 1h`, `weft.avg("holders", "1h")`), and is an
-error when it runs otherwise (`weft::avg "$name" 1h`).
+spelled out (`weft::avg holders 1h`, `weft.avg("holders", "1h")`). If it
+isn't (`weft::avg "$name" 1h`), the first run that tries
+[disables the cron](crons.md#runtime-analysis).
 
 | Bash | Lua | Returns | Longest window | Notes |
 |---|---|---|---|---|
@@ -385,6 +386,12 @@ benched: weft disables it, so it stops firing and stops counting against your
 plan's cron limit. A clean tick resets the count. When weft benches a cron it
 notifies your [`system` alias](alerts.md#the-system-alias), naming the cron,
 saying why its last run failed, and how to turn it back on.
+
+Some mistakes fail every run the same way, so weft doesn't wait for three.
+When a run trips a check that [static analysis](crons.md#static-analysis)
+would have made had it seen the name, such as reading a [text
+cron](crons.md#text-crons) as numbers through `weft::avg "$name" 1h`, the cron
+is disabled after that one run, and your `system` alias hears why.
 
 A disabled cron stays in `/cron.d` with a marker at the top of its file:
 

@@ -341,8 +341,9 @@ results. For all others, the limiting factor is your plan's retention.</p>
 out but what it expects in the cron results: the functions that return a
 number need a cron that stores numbers. Pointing one at a <a href="/manual/crons#text-crons">text
 cron</a> is refused when you save, if the name is
-spelled out (<code>weft::avg holders 1h</code>, <code>weft.avg(&quot;holders&quot;, &quot;1h&quot;)</code>), and is an
-error when it runs otherwise (<code>weft::avg &quot;$name&quot; 1h</code>).</p>
+spelled out (<code>weft::avg holders 1h</code>, <code>weft.avg(&quot;holders&quot;, &quot;1h&quot;)</code>). If it
+isn't (<code>weft::avg &quot;$name&quot; 1h</code>), the first run that tries
+<a href="/manual/crons#runtime-analysis">disables the cron</a>.</p>
 <table>
 <thead>
 <tr>
@@ -659,6 +660,11 @@ benched: weft disables it, so it stops firing and stops counting against your
 plan's cron limit. A clean tick resets the count. When weft benches a cron it
 notifies your <a href="/manual/alerts#the-system-alias"><code>system</code> alias</a>, naming the cron,
 saying why its last run failed, and how to turn it back on.</p>
+<p>Some mistakes fail every run the same way, so weft doesn't wait for three.
+When a run trips a check that <a href="/manual/crons#static-analysis">static analysis</a>
+would have made had it seen the name, such as reading a <a href="/manual/crons#text-crons">text
+cron</a> as numbers through <code>weft::avg &quot;$name&quot; 1h</code>, the cron
+is disabled after that one run, and your <code>system</code> alias hears why.</p>
 <p>A disabled cron stays in <code>/cron.d</code> with a marker at the top of its file:</p>
 <pre><code># schedule: */5 * * * *
 # enabled: false

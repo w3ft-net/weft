@@ -981,6 +981,15 @@ func (s *Store) RecordCronStrike(ctx context.Context, id uint, strikes int) (ben
 	return !enabled, nil
 }
 
+// DisableCron turns a cron off at once, for a run that failed in a way
+// every run would, reporting whether this call disabled it (false if it
+// was already off), so concurrent coordinators page about it once.
+func (s *Store) DisableCron(ctx context.Context, id uint) (disabled bool, err error) {
+	res := s.DB().WithContext(WithoutTenantScope(ctx)).Exec(
+		`UPDATE cron_watches SET enabled = false WHERE id = ? AND enabled`, id)
+	return res.RowsAffected == 1, res.Error
+}
+
 // --- Cron Results ---
 
 // CronResult stores the output of a completed cron watch run. Value holds the

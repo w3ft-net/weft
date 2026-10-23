@@ -131,9 +131,11 @@ Readers that need numbers refuse text crons, statically where they can:
 | `chart <cron>` | At invocation, before drawing. |
 
 Saving a cron as `# type: text` is refused while a numeric reader references
-it by name (another cron's literal `weft::` call, or a numeric dashboard tile),
-and the refusal lists them. The run-time check covers only the names a save
-can't see.
+it by name (a cron's or `/bin` script's literal call, in bash or Lua, inline
+`lua '…'` included, or a numeric dashboard tile), and the refusal lists them.
+The run-time check covers only the names a save can't see, and a run that
+trips it disables its cron at once instead of striking: it is the static
+check arriving late, and every run would fail the same way.
 
 ### Table tiles
 

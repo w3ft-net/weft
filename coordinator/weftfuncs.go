@@ -222,7 +222,7 @@ func (w *WeftFuncs) windowStats(fn, watchName string, dur time.Duration) (store.
 	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
 		return store.CronWindowStats{}, fmt.Errorf("%s: cron %q: %w", fn, watchName, err)
 	}
-	if err := numericCron(fn, watch); err != nil {
+	if err := w.numericCron(fn, watch); err != nil {
 		return store.CronWindowStats{}, err
 	}
 	since := store.ClampRetention(w.Store.TierForOrg(w.OrgID), time.Now().Add(-dur))
@@ -291,12 +291,16 @@ func (w *WeftFuncs) Count(watchName string, dur time.Duration) (float64, error) 
 var errTextCron = errors.New("stores text")
 
 // numericCron refuses a text cron for a function that needs numbers. Saves
-// refuse literal names already; this covers names built at run time.
-func numericCron(fn string, watch store.CronWatch) error {
-	if watch.ValueType == store.ValueText {
-		return fmt.Errorf("%s: cron %q %w (# type: text), so it has no numbers; weft::latest reads it", fn, watch.Name, errTextCron)
+// refuse literal names already; this covers names built at run time. In a
+// cron run the refusal disables the cron (noteTypeError): it would fail
+// the same way every run.
+func (w *WeftFuncs) numericCron(fn string, watch store.CronWatch) error {
+	if watch.ValueType != store.ValueText {
+		return nil
 	}
-	return nil
+	err := fmt.Errorf("%s: cron %q %w (# type: text), so it has no numbers; weft::latest reads it", fn, watch.Name, errTextCron)
+	noteTypeError(w.ctx(), err)
+	return err
 }
 
 // CheckNumeric refuses a text cron for fn. A cron that doesn't exist, or
@@ -306,7 +310,7 @@ func (w *WeftFuncs) CheckNumeric(fn, watchName string) error {
 	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
 		return nil
 	}
-	return numericCron(fn, watch)
+	return w.numericCron(fn, watch)
 }
 
 // rawWindow finds the cron and the start of a raw-results window, enforcing
@@ -324,7 +328,7 @@ func (w *WeftFuncs) rawWindow(fn, watchName string, dur time.Duration, numeric b
 		return 0, time.Time{}, fmt.Errorf("%s: cron %q: %w", fn, watchName, err)
 	}
 	if numeric {
-		if err := numericCron(fn, watch); err != nil {
+		if err := w.numericCron(fn, watch); err != nil {
 			return 0, time.Time{}, err
 		}
 	}
@@ -451,7 +455,7 @@ func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration
 		if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
 			return 0, 0, 0, err
 		}
-		if err := numericCron("weft::is_seasonal", watch); err != nil {
+		if err := w.numericCron("weft::is_seasonal", watch); err != nil {
 			return 0, 0, 0, err
 		}
 		now := time.Now()

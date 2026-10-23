@@ -23,7 +23,12 @@ func TestCron_InlineLuaReadsCronHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
-	ce := &CronExecutor{Store: db, Coord: c, RunTimeout: 5 * time.Second}
+	var pages []string
+	ce := &CronExecutor{Store: db, Coord: c, RunTimeout: 5 * time.Second,
+		SendSystem: func(_ context.Context, _ store.OrgID, _, _, body string) error {
+			pages = append(pages, body)
+			return nil
+		}}
 	run := func(name string) store.CronWatch {
 		t.Helper()
 		w, err := db.GetCronWatch(custID, name)
@@ -54,12 +59,29 @@ func TestCron_InlineLuaReadsCronHistory(t *testing.T) {
 		`lua 'print(weft.avg("hol" .. "ders", "1h"))'`, true, nil); err != nil {
 		t.Fatalf("a name built at run time can't be checked at save: %v", err)
 	}
-	if w := run("holder-avg"); w.LastStatus == "ok" {
-		t.Fatalf("holder-avg status = %q, want the run-time check to fail it", w.LastStatus)
+	// The run-time check fails it the way a save would have, so one run
+	// disables it, with one page saying why, rather than three strikes.
+	if w := run("holder-avg"); w.LastStatus != "error" || w.Enabled || w.ConsecutiveStrikes != 0 {
+		t.Fatalf("holder-avg status=%q enabled=%v strikes=%d, want error, disabled, no strike", w.LastStatus, w.Enabled, w.ConsecutiveStrikes)
+	}
+	if len(pages) != 1 || !strings.Contains(pages[0], `cron "holders" stores text`) || !strings.Contains(pages[0], "# enabled: false") {
+		t.Fatalf("pages = %q, want one naming the text cron and how to re-enable", pages)
 	}
 	hw, _ := db.GetCronWatch(custID, "holder-avg")
 	if res, _ := db.ListCronResults(hw.ID, 1, ""); len(res) != 1 || !strings.Contains(res[0].Stderr, "stores text") {
 		t.Fatalf("holder-avg stored %+v, want the stores-text error", res)
+	}
+	// Bash gets there the same way.
+	if err := db.SaveCronWatch(custID, "", "holder-avg-bash", "every 5m", `n=holders; weft::avg "$n" 1h`, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if w := run("holder-avg-bash"); w.Enabled || len(pages) != 2 {
+		t.Fatalf("bash dynamic name: enabled=%v pages=%d, want disabled with a second page", w.Enabled, len(pages))
+	}
+
+	// A clean cron is untouched by it.
+	if w := run("error-avg"); !w.Enabled || len(pages) != 2 {
+		t.Fatalf("error-avg enabled=%v pages=%d after another cron's type error", w.Enabled, len(pages))
 	}
 }
 

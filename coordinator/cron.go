@@ -24,7 +24,13 @@ const (
 // runOutcome carries facts about one run back from deep inside it. The alert
 // stage is built inside ExecuteForWatch, out of the executor's reach, so it
 // reports through the run's context.
-type runOutcome struct{ deliveryTimedOut atomic.Bool }
+type runOutcome struct {
+	deliveryTimedOut atomic.Bool
+	// typeError is set when the run tripped a check that a save would have
+	// made had it seen the name (a numeric read of a text cron). It fails
+	// the same way every run, so it disables the cron at once.
+	typeError atomic.Pointer[string]
+}
 
 type runOutcomeKey struct{}
 
@@ -38,6 +44,15 @@ func withRunOutcome(ctx context.Context) (context.Context, *runOutcome) {
 func noteDeliveryTimeout(ctx context.Context) {
 	if o, ok := ctx.Value(runOutcomeKey{}).(*runOutcome); ok {
 		o.deliveryTimedOut.Store(true)
+	}
+}
+
+// noteTypeError records that the run in ctx failed a check a save would
+// have made; outside a cron run it does nothing. The first one wins.
+func noteTypeError(ctx context.Context, err error) {
+	if o, ok := ctx.Value(runOutcomeKey{}).(*runOutcome); ok {
+		msg := err.Error()
+		o.typeError.CompareAndSwap(nil, &msg)
 	}
 }
 
@@ -269,8 +284,17 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 	// Update watch status. A tick is a strike when the run blew its budget, a
 	// notification target timed out, or the output broke the contract; any
 	// other tick clears the strikes, and the last strike disables the cron.
+	//
+	// A run that failed a check a save would have made (a numeric read of
+	// a text cron, through a name only known at run time) isn't struck: it
+	// would fail the same way every run, so the cron is disabled at once.
+	typeErr := outcome.typeError.Load()
+	if typeErr != nil {
+		status = "error"
+	}
 	var why string
 	switch {
+	case typeErr != nil:
 	case timedOut:
 		why = fmt.Sprintf("its run exceeded the %s budget", budget)
 	case invalid != nil:
@@ -286,6 +310,18 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 	}
 	if updateErr := ce.Store.DB().WithContext(store.WithoutTenantScope(ctx)).Model(&store.CronWatch{}).Where("id = ?", watch.ID).Updates(updates).Error; updateErr != nil {
 		weftsdk.Errorf(ctx, "cron[%s]: failed to update run status: %v", watch.Name, updateErr)
+	}
+	if typeErr != nil {
+		disabled, err := ce.Store.DisableCron(ctx, watch.ID)
+		switch {
+		case err != nil:
+			weftsdk.Errorf(ctx, "cron[%s]: failed to disable after a type error: %v", watch.Name, err)
+		case disabled:
+			weftsdk.Warnf(ctx, "cron[%s]: disabled: %s", watch.Name, *typeErr)
+			ce.pageSystem(ctx, watch.OrgID, "cron-disabled", fmt.Sprintf(
+				"cron %q was disabled after one run: %s.\nSaving it would have been refused had the cron's name been spelled out, and every run would fail the same way. Fix it, then re-enable it: edit /cron.d/%s, remove the '# enabled: false' line, and save.",
+				watch.Name, *typeErr, watch.Name))
+		}
 	}
 	if strike {
 		benched, benchErr := ce.Store.RecordCronStrike(ctx, watch.ID, cronBenchStrikes)
