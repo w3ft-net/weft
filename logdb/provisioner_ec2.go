@@ -440,6 +440,31 @@ func (p *EC2Provisioner) TerminateInstance(ctx context.Context, id, _ string) er
 	return p.Terminate(ctx, id)
 }
 
+// InstanceGone reports whether instanceID is dead or dying: anything but
+// pending or running, including unknown to EC2. The stale check asks it
+// before treating a briefly silent shard as dead.
+func (p *EC2Provisioner) InstanceGone(ctx context.Context, instanceID string) (bool, error) {
+	out, err := p.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{instanceID}})
+	if err != nil {
+		if instanceAlreadyGone(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("describe %s: %w", instanceID, err)
+	}
+	for _, r := range out.Reservations {
+		for _, inst := range r.Instances {
+			if inst.State == nil {
+				continue
+			}
+			switch inst.State.Name {
+			case ec2types.InstanceStateNamePending, ec2types.InstanceStateNameRunning:
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
 // instanceAlreadyGone reports whether a terminate error means the instance is
 // already absent (a benign race we treat as success).
 func instanceAlreadyGone(err error) bool {

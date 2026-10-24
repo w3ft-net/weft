@@ -54,9 +54,11 @@ const (
 	// anyway: a pool that can't launch must not wedge the roll.
 	upgradeReplacementBudget = 15 * time.Minute
 	// defaultUpgradeRouteGrace is how long the demoted instance keeps
-	// redirecting after the swap: every coordinator re-reads the row (and
-	// repoints its handle) once per provisioner tick, so two ticks.
+	// redirecting after the swap when no tick is known: every coordinator
+	// re-reads the row (and repoints its handle) once per provisioner tick,
+	// so the provisioner sets it to routeGraceTicks of its own tick.
 	defaultUpgradeRouteGrace = 2 * time.Minute
+	routeGraceTicks          = 3
 
 	pauseRPCTimeout  = time.Minute
 	resumeRPCTimeout = 2 * time.Minute

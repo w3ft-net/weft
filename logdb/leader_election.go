@@ -26,6 +26,12 @@ const shardFSMLeaseName = "shard-fsm-leader"
 // doc.
 const progressStaleFactor = 2
 
+// progressStaleFloor is the least time without progress the deadman's
+// switch tolerates, however fast the tick: one tick may legitimately wait
+// on AWS (the warm pool's reconcile, a launch) for longer than a few
+// short ticks.
+const progressStaleFloor = 2 * time.Minute
+
 // startLeaderElection starts the shard-fsm-leader election loop in a
 // background goroutine, unless Holder or the store is unset — the
 // expected shape for every test that builds a Provisioner directly via
@@ -115,10 +121,10 @@ func (p *Provisioner) leaderTick() {
 }
 
 // progressStale reports whether this process has gone more than
-// progressStaleFactor*PollInterval since evaluateStateMachines last made
-// any observed progress (see markProgress).
+// progressStaleFactor*PollInterval (at least progressStaleFloor) since
+// evaluateStateMachines last made any observed progress (see markProgress).
 func (p *Provisioner) progressStale() bool {
-	return time.Since(p.lastProgressTime()) > progressStaleFactor*p.config.PollInterval
+	return time.Since(p.lastProgressTime()) > max(progressStaleFactor*p.config.PollInterval, progressStaleFloor)
 }
 
 func (p *Provisioner) lastProgressTime() time.Time {

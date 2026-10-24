@@ -165,7 +165,7 @@ christen│     └─────────────┘   │  │
 |---|---|---|
 | `WindowDuration` | `7d` | One hot window |
 | `RetentionPeriod` | `0` (archive disabled) | How long READ_ONLY lingers past WindowEnd before archive |
-| `PollInterval` | `5min` | Reconciliation tick; inline christen via `Heartbeat` RPC runs on every heartbeat |
+| `PollInterval` | `5s` | Reconciliation tick (ARCHIVED and GONE shards are skipped); inline christen via `Heartbeat` RPC runs on every heartbeat. A shard is stale after 60s of silence, or after 30s if EC2 reports its instance gone |
 | `ConfigureRetries` / `ConfigureBackoff` | `12` × `5s` | gRPC retry on shard startup |
 
 Dev/docker uses shorter values via `DevProvisionerConfig`. The

@@ -29,6 +29,23 @@ const (
 	archiveTimeout   = 10 * time.Minute
 )
 
+// suspectStaleAfter is the silence (three missed 10s heartbeats) after
+// which the stale check asks EC2 whether the shard's instance is gone. A
+// gone instance is stale now; a running one waits out StaleThreshold, since
+// recovery force-detaches the volume and a paused or cut-off process may
+// still hold it.
+const suspectStaleAfter = 30 * time.Second
+
+// InstanceChecker reports whether an instance is dead or dying.
+type InstanceChecker interface {
+	InstanceGone(ctx context.Context, instanceID string) (bool, error)
+}
+
+// launchRetryBackoff is the production LaunchRetryBackoff: with the
+// default budget of 5 attempts, a shard rides out at least four minutes
+// of failing launches before it is given up.
+const launchRetryBackoff = time.Minute
+
 // The shard IS its own finite state machine. The methods below operate
 // on *Shard directly (the sm/deps/launchInFlight fields live on the
 // struct in registry.go); collapsing the old ShardSM wrapper into the
@@ -82,6 +99,14 @@ type ShardDeps struct {
 	// LaunchRetryBudget caps LaunchAttempts before LAUNCHING fires
 	// LaunchFailed and transitions to GONE. Zero defaults to 5.
 	LaunchRetryBudget int
+	// LaunchRetryBackoff spaces a failed launch from the next attempt, so
+	// the retry budget spans time rather than ticks (a fast tick would
+	// otherwise spend it on one short capacity blip). Zero retries at the
+	// next tick (tests).
+	LaunchRetryBackoff time.Duration
+	// Instances confirms a silent shard's instance is gone before
+	// StaleThreshold (see suspectStaleAfter). Nil waits out the threshold.
+	Instances InstanceChecker
 	// VolumeSizesGB maps tier → fresh data-volume size in GiB, sourced from
 	// Terraform (SHARD_<TIER>_VOLUME_GB) at boot. A tier absent here — or in
 	// dev/test, where it's nil — falls back to defaultShardVolumeGB. Ignored
@@ -237,6 +262,13 @@ func (sh *Shard) writeState(ctx context.Context, st stateless.State) error {
 	sh.State = newState
 	sh.mu.Unlock()
 	return nil
+}
+
+// stateNow is the in-memory mirror of the persisted state.
+func (sh *Shard) stateNow() ShardState {
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	return sh.State
 }
 
 // configureSM wires every state's permits + entry/exit actions. Reads
@@ -433,11 +465,36 @@ func (sh *Shard) postRecoveryTarget() (stateless.State, error) {
 // (ShardRegistry.LivenessAsOf), so a sweep that runs late can't suspend a
 // shard that was beating when last read; the clock stands in only when no
 // sweep has run.
-func (sh *Shard) actuallyStale(context.Context, ...any) bool {
+//
+// Past suspectStaleAfter it asks EC2: an instance that is gone (terminated,
+// stopped) is stale at once, without waiting out the threshold.
+func (sh *Shard) actuallyStale(ctx context.Context, _ ...any) bool {
+	silent, instanceID := sh.silence()
+	if silent > sh.deps.StaleThreshold {
+		return true
+	}
+	if silent <= suspectStaleAfter || sh.deps.Instances == nil || instanceID == "" {
+		return false
+	}
+	gone, err := sh.deps.Instances.InstanceGone(ctx, instanceID)
+	if err != nil {
+		weftsdk.Infof(ctx, "shardsm %s: silent %s; can't tell whether %s is gone: %v", sh.ID, silent, instanceID, err)
+		return false
+	}
+	if gone {
+		weftsdk.Infof(ctx, "shardsm %s: silent %s and instance %s is gone", sh.ID, silent, instanceID)
+	}
+	return gone
+}
+
+// silence is how long the shard has gone without a heartbeat, and the
+// instance it is on. Zero for a shard never observed: fresh until a
+// heartbeat or evaluator clears it.
+func (sh *Shard) silence() (time.Duration, string) {
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
 	if sh.LastHeartbeatAt.IsZero() {
-		return false // never observed — treat as fresh until a heartbeat or evaluator clears it
+		return 0, sh.InstanceID
 	}
 	// Anchor at boot: a heartbeat from before this coordinator started (a
 	// shard loaded after a restart, its persisted last_heartbeat_at predating
@@ -453,7 +510,7 @@ func (sh *Shard) actuallyStale(context.Context, ...any) bool {
 	if sh.deps.Registry != nil && sh.deps.Registry.livenessReadAt.Load() != 0 {
 		asOf = sh.deps.Registry.LivenessAsOf()
 	}
-	return asOf.Sub(ref) > sh.deps.StaleThreshold
+	return asOf.Sub(ref), sh.InstanceID
 }
 
 // staleTargetFromActive picks SUSPENDED when the shard has an EBS volume
@@ -567,6 +624,9 @@ func (sh *Shard) runLaunch() {
 		sh.mu.Lock()
 		sh.LaunchAttempts++
 		sh.mu.Unlock()
+		// Hold the in-flight flag through the backoff: Evaluate starts no
+		// new attempt until it clears.
+		time.Sleep(sh.deps.LaunchRetryBackoff)
 		return
 	}
 

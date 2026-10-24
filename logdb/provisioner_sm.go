@@ -76,6 +76,13 @@ func (p *Provisioner) shardDeps() *ShardDeps {
 		}
 		if api, ok := p.launcher.(ShardLaunchAPI); ok {
 			d.Launcher = api
+			d.LaunchRetryBackoff = launchRetryBackoff
+		}
+		if ic, ok := p.launcher.(InstanceChecker); ok {
+			d.Instances = ic
+		}
+		if p.config.PollInterval > 0 {
+			d.UpgradeRouteGrace = routeGraceTicks * p.config.PollInterval
 		}
 		if p.spares != nil {
 			d.Spares = p.spares

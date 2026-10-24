@@ -141,17 +141,17 @@ const defaultCloseRebindGrace = 5 * time.Second
 // the DB (migration 020).
 //
 // PollInterval governs the cadence at which both bucket SM and shard
-// SM Evaluate runs. Each Evaluate is cheap (a few indexed SELECTs) and
-// AWS side-effects only fire on transitions, not every tick — so this
-// can run a lot faster than the original 5-minute value without
-// meaningful load. At 1 minute, a kill-and-recover cascade (3 ticks
-// + ~2 min staleness window + ~30-60s boot) lands in ~4-7 min
-// end-to-end rather than the ~10-17 min the 5-minute interval
-// produced. Aligns with the 60-second shard→coordinator heartbeat
-// cadence: a missed beat is detectable within a couple of ticks.
+// SM Evaluate runs. Each Evaluate is cheap (prod, 2026-10-24: a 3ms mean
+// per shard, ~120ms of database time for a whole tick) and AWS
+// side-effects only fire on transitions, so the tick is set by how fast
+// the cluster should react, not by load: at 5s a dead shard is noticed
+// within a tick of its stale threshold and recovery's steps follow each
+// other in seconds. Shards heartbeat every 10s. Anything that must not
+// shrink with the tick is a duration of its own (progressStaleFloor,
+// launchRetryBackoff), never a count of ticks.
 func DefaultProvisionerConfig() ProvisionerConfig {
 	return ProvisionerConfig{
-		PollInterval:   1 * time.Minute,
+		PollInterval:   5 * time.Second,
 		WindowDuration: 7 * 24 * time.Hour,
 	}
 }
@@ -853,7 +853,9 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 	evaluateConcurrently(buckets, limit, func(b *BucketSM) {
 		start := time.Now()
 		err := b.Evaluate(ctx)
-		store.LogEvaluateEvent("bucket", fmt.Sprint(b.ID), time.Since(start), err)
+		if took := time.Since(start); err != nil || took >= slowEvaluate {
+			store.LogEvaluateEvent("bucket", fmt.Sprint(b.ID), took, err)
+		}
 		if err != nil {
 			weftsdk.Infof(ctx, "provisioner: bucket %d Evaluate: %v", b.ID, err)
 		}
@@ -864,10 +866,28 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 	// resized this tick is covered now.
 	p.reconcileSpares(ctx)
 
-	shards := p.registry.Entries()
+	shards := convergingShards(p.registry.Entries())
 	p.enqueueShardEvaluations(ctx, shards)
 	store.LogEvaluateTick(len(buckets), len(shards), time.Since(tickStart))
 }
+
+// convergingShards drops the shards with nothing left to converge:
+// ARCHIVED (data in S3, served by a ColdShard, no instance to be up or
+// down) and GONE. Neither has an outbound transition Evaluate drives.
+func convergingShards(all []*Shard) []*Shard {
+	out := make([]*Shard, 0, len(all))
+	for _, e := range all {
+		if st := e.stateNow(); st != StateArchived && st != StateGone {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// slowEvaluate is the Evaluate duration worth a log line on its own. A
+// shard's Evaluate runs every tick and is a few milliseconds when there is
+// nothing to do; only errors, state changes, and slow passes are logged.
+const slowEvaluate = 50 * time.Millisecond
 
 // enqueueShardEvaluations hands shards to the Evaluate worker pool and
 // returns without waiting for any of them. maxConcurrentEvaluate (or
@@ -914,9 +934,12 @@ func (p *Provisioner) runShardEvaluate(ctx context.Context, e *Shard) {
 	// driven: the new leader owns convergence.
 	if p.isLeader() {
 		e.ensureSM(p.shardDeps())
+		before := e.stateNow()
 		start := time.Now()
 		err := e.Evaluate(ctx)
-		store.LogEvaluateEvent("shard", e.ID, time.Since(start), err)
+		if took := time.Since(start); err != nil || took >= slowEvaluate || e.stateNow() != before {
+			store.LogEvaluateEvent("shard", e.ID, took, err)
+		}
 		if err != nil {
 			weftsdk.Infof(ctx, "provisioner: shard %s Evaluate: %v", e.ID, err)
 		}

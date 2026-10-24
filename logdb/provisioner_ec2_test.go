@@ -426,3 +426,17 @@ func TestEC2Provisioner_StripeAZ(t *testing.T) {
 		t.Fatalf("unknown tier: got %q", got)
 	}
 }
+
+// InstanceGone reads an instance's EC2 state: only pending and running
+// count as alive; terminated, shutting down, stopped or unknown are gone.
+func TestEC2Provisioner_InstanceGone(t *testing.T) {
+	f := newFakeEC2()
+	f.insts = []*fakeEC2Instance{{id: "i-run", state: "running"}, {id: "i-dead", state: "terminated"}, {id: "i-stop", state: "stopped"}}
+	p := newTestEC2Provisioner(f, &fakeVolumeManager{})
+	for id, want := range map[string]bool{"i-run": false, "i-dead": true, "i-stop": true, "i-none": true} {
+		got, err := p.InstanceGone(context.Background(), id)
+		if err != nil || got != want {
+			t.Errorf("InstanceGone(%s) = %v, %v; want %v", id, got, err, want)
+		}
+	}
+}
