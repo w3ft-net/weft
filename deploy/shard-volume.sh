@@ -44,21 +44,22 @@ resolve_device() {
     fi
 }
 
-# wait_for_device prints the device once it appears. within=0 waits
+# wait_for_device prints the device once it appears, checking every 100ms:
+# on a spare this is inside an upgrade's hold window. within=0 waits
 # forever; otherwise it gives up after roughly that many seconds.
 wait_for_device() {
-    local within="$1" waited=0 dev
+    local within="$1" polls=0 dev
     while :; do
         dev=$(resolve_device)
         if [ -n "$dev" ]; then
             echo "$dev"
             return 0
         fi
-        if [ "$within" -gt 0 ] && [ "$waited" -ge "$within" ]; then
+        if [ "$within" -gt 0 ] && [ "$polls" -ge $((within * 10)) ]; then
             return 1
         fi
-        sleep 2
-        waited=$((waited + 2))
+        sleep 0.1
+        polls=$((polls + 1))
     done
 }
 

@@ -58,8 +58,14 @@ const (
 
 	pauseRPCTimeout  = time.Minute
 	resumeRPCTimeout = 2 * time.Minute
-	swapProbeTimeout = 15 * time.Second
+	swapProbeRetry   = 100 * time.Millisecond
 )
+
+// swapProbeTimeout is how long one tick keeps asking the spare whether it
+// has opened the shard. It matches the provisioner tick, so the spare is
+// asked every swapProbeRetry from the attach until it answers, rather than
+// once a tick: callers are holding meanwhile. A var for tests.
+var swapProbeTimeout = time.Minute
 
 // ShardPauser drives one shard instance's gate at addr. It dials the
 // instance directly, never through the shard's live handle: a pause
@@ -371,14 +377,22 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 	// yields the coordinator's new handle.
 	start := sh.deps.Clock()
 	pctx, pcancel := context.WithTimeout(ctx, swapProbeTimeout)
-	dialed, err := sh.dialConfigure(pctx, store.ShardHeartbeat{Addr: f.SuccessorAddr})
-	pcancel()
-	if err != nil {
-		weftsdk.Infof(ctx, "shardsm %s: spare %s not open yet: %v", sh.ID, f.SuccessorAddr, err)
-		return sh.giveUpIfOver(ctx, f, upgradeSwapBudget)
+	defer pcancel()
+	for {
+		dialed, err := sh.dialConfigure(pctx, store.ShardHeartbeat{Addr: f.SuccessorAddr})
+		if err == nil {
+			weftsdk.Infof(ctx, "shardsm %s: upgrade timing: spare %s answered as the shard after %s", sh.ID, f.SuccessorAddr, sh.deps.Clock().Sub(start))
+			return sh.completeSwap(ctx, f, dialed)
+		}
+		if pctx.Err() != nil {
+			weftsdk.Infof(ctx, "shardsm %s: spare %s not open yet: %v", sh.ID, f.SuccessorAddr, err)
+			return sh.giveUpIfOver(ctx, f, upgradeSwapBudget)
+		}
+		select {
+		case <-pctx.Done():
+		case <-time.After(swapProbeRetry):
+		}
 	}
-	weftsdk.Infof(ctx, "shardsm %s: upgrade timing: spare %s answered as the shard after %s", sh.ID, f.SuccessorAddr, sh.deps.Clock().Sub(start))
-	return sh.completeSwap(ctx, f, dialed)
 }
 
 // completeSwap moves the shard's instance and address to the spare.

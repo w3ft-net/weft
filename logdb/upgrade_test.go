@@ -150,6 +150,9 @@ const (
 // attached there, with one heartbeating current-image spare in its pair.
 func newUpgradeFixture(t *testing.T, origin ShardState, withSpare bool) *upgradeFixture {
 	t.Helper()
+	prevProbe := swapProbeTimeout
+	swapProbeTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { swapProbeTimeout = prevProbe })
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	f := &upgradeFixture{now: &now, pauser: &fakePauser{}, cfg: &readyConfigurer{}, ec2: newFakeSpareEC2("ami-1"), launch: &fakeLauncher{}}
 	clock := func() time.Time { return *f.now }
@@ -458,6 +461,29 @@ func TestUpgrade_ADifferentLeaderFinishesIt(t *testing.T) {
 	f.evaluate(t)
 	if f.phase() != PhaseResumed {
 		t.Fatalf("new leader's phase: %q, want resumed", f.phase())
+	}
+}
+
+// A spare that opens while the swap is waiting on it is picked up in that
+// same tick, not a provisioner tick later: callers are holding.
+func TestUpgrade_SwapKeepsAskingTheSpareWithinTheTick(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	if err := f.sh.startUpgrade(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate(t) // → swapping, spare not ready yet
+	if f.phase() != PhaseSwapping {
+		t.Fatalf("phase: %q, want swapping", f.phase())
+	}
+
+	swapProbeTimeout = 10 * time.Second
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		f.cfg.setReady(spareAddr)
+	}()
+	f.evaluate(t)
+	if f.phase() != PhaseResumed {
+		t.Fatalf("phase: %q, want resumed within the tick the spare opened in", f.phase())
 	}
 }
 

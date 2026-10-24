@@ -56,9 +56,11 @@ assert_eq "falls back to a literal /dev/sdf" "$WORK/dev/sdf" "$(resolve_device)"
 rm "$WORK/dev/sdf"
 
 section "wait_for_device"
-sleep() { :; } # don't actually wait in tests
+slept=0
+sleep() { [ "$1" = "0.1" ] && slept=$((slept + 1)); } # count, don't wait
 wait_for_device 4 >/dev/null
 assert_eq "gives up after --within with nothing attached" "1" "$?"
+assert_eq "polls every 100ms for --within seconds" "40" "$slept"
 touch "$WORK/dev/sdf"
 assert_eq "returns the device once it appears" "$WORK/dev/sdf" "$(wait_for_device 0)"
 unset -f sleep

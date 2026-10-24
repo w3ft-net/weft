@@ -80,8 +80,11 @@ func NewEC2VolumeManager(region string) (*EC2VolumeManager, error) {
 func NewEC2VolumeManagerWithClient(client EC2VolumesAPI) *EC2VolumeManager {
 	return &EC2VolumeManager{
 		client:       client,
-		pollInterval: 2 * time.Second,
-		pollAttempts: 60, // up to ~2 min — attach/detach can be slow under load
+		// 100ms: an upgrade's detach and attach sit inside the window in
+		// which callers hold. DescribeVolumes at 10/s per wait stays well
+		// inside EC2's request budget, and a throttled poll just retries.
+		pollInterval: 100 * time.Millisecond,
+		pollAttempts: 1200, // up to ~2 min — attach/detach can be slow under load
 	}
 }
 
