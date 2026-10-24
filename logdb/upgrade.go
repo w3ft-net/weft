@@ -105,6 +105,7 @@ type UpgradeFacts struct {
 	Phase               UpgradePhase
 	Origin              ShardState
 	PhaseAt             *time.Time
+	PausedAt            *time.Time // first Pause sent: when callers start holding
 	SuccessorInstanceID string
 	SuccessorAddr       string
 	DemotedInstanceID   string
@@ -118,6 +119,7 @@ func (sh *Shard) upgradeFacts() UpgradeFacts {
 		Phase:               sh.UpgradePhase,
 		Origin:              sh.UpgradeOrigin,
 		PhaseAt:             copyTimePtr(sh.UpgradePhaseAt),
+		PausedAt:            copyTimePtr(sh.UpgradePausedAt),
 		SuccessorInstanceID: sh.UpgradeSuccessorInstanceID,
 		SuccessorAddr:       sh.UpgradeSuccessorAddr,
 		DemotedInstanceID:   sh.UpgradeDemotedInstanceID,
@@ -135,6 +137,7 @@ func (sh *Shard) setUpgradeFacts(f UpgradeFacts) error {
 	sh.UpgradePhase = f.Phase
 	sh.UpgradeOrigin = f.Origin
 	sh.UpgradePhaseAt = copyTimePtr(f.PhaseAt)
+	sh.UpgradePausedAt = copyTimePtr(f.PausedAt)
 	sh.UpgradeSuccessorInstanceID = f.SuccessorInstanceID
 	sh.UpgradeSuccessorAddr = f.SuccessorAddr
 	sh.UpgradeDemotedInstanceID = f.DemotedInstanceID
@@ -300,6 +303,14 @@ func (sh *Shard) upgradeClaim(ctx context.Context, f UpgradeFacts) error {
 // to the spare, drain, close DuckDB and release the volume. Pause is
 // idempotent, so a lost reply is simply retried.
 func (sh *Shard) upgradePause(ctx context.Context, f UpgradeFacts) error {
+	if f.PausedAt == nil {
+		now := sh.deps.Clock()
+		f.PausedAt = &now
+		if err := sh.setUpgradeFacts(f); err != nil {
+			return err
+		}
+	}
+	start := sh.deps.Clock()
 	pctx, cancel := context.WithTimeout(ctx, pauseRPCTimeout)
 	err := sh.deps.Pauser.Pause(pctx, f.DemotedAddr, f.SuccessorAddr)
 	cancel()
@@ -307,6 +318,7 @@ func (sh *Shard) upgradePause(ctx context.Context, f UpgradeFacts) error {
 		weftsdk.Infof(ctx, "shardsm %s: pause %s toward %s, retrying: %v", sh.ID, f.DemotedAddr, f.SuccessorAddr, err)
 		return sh.giveUpIfOver(ctx, f, upgradePauseBudget)
 	}
+	weftsdk.Infof(ctx, "shardsm %s: upgrade timing: old instance %s drained and released its volume in %s", sh.ID, f.DemotedInstanceID, sh.deps.Clock().Sub(start))
 	f, err = sh.enterPhase(f, PhaseSwapping)
 	if err != nil {
 		return err
@@ -332,16 +344,20 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 	defer cancel()
 	switch info.InstanceID {
 	case f.DemotedInstanceID:
+		start := sh.deps.Clock()
 		if err := sh.deps.Volumes.DetachFromInstance(vctx, info.VolumeID, false); err != nil {
 			weftsdk.Infof(ctx, "shardsm %s: detach %s from %s: %v", sh.ID, info.VolumeID, f.DemotedInstanceID, err)
 			return sh.giveUpIfOver(ctx, f, upgradeSwapBudget)
 		}
+		weftsdk.Infof(ctx, "shardsm %s: upgrade timing: detached %s in %s", sh.ID, info.VolumeID, sh.deps.Clock().Sub(start))
 		fallthrough
 	case "":
+		start := sh.deps.Clock()
 		if err := sh.deps.Volumes.AttachToInstance(vctx, info.VolumeID, f.SuccessorInstanceID, shardVolumeDevice); err != nil {
 			weftsdk.Infof(ctx, "shardsm %s: attach %s to %s: %v", sh.ID, info.VolumeID, f.SuccessorInstanceID, err)
 			return sh.giveUpIfOver(ctx, f, upgradeSwapBudget)
 		}
+		weftsdk.Infof(ctx, "shardsm %s: upgrade timing: attached %s to %s in %s", sh.ID, info.VolumeID, f.SuccessorInstanceID, sh.deps.Clock().Sub(start))
 	case f.SuccessorInstanceID:
 	default:
 		weftsdk.Errorf(ctx, "shardsm %s: volume %s is attached to %s, neither the old instance %s nor the spare %s; rolling back",
@@ -353,6 +369,7 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 	// The spare admits Configure (same id: a no-op) only once its database
 	// is open, so a successful dial is the "DuckDB open" signal, and it
 	// yields the coordinator's new handle.
+	start := sh.deps.Clock()
 	pctx, pcancel := context.WithTimeout(ctx, swapProbeTimeout)
 	dialed, err := sh.dialConfigure(pctx, store.ShardHeartbeat{Addr: f.SuccessorAddr})
 	pcancel()
@@ -360,6 +377,7 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 		weftsdk.Infof(ctx, "shardsm %s: spare %s not open yet: %v", sh.ID, f.SuccessorAddr, err)
 		return sh.giveUpIfOver(ctx, f, upgradeSwapBudget)
 	}
+	weftsdk.Infof(ctx, "shardsm %s: upgrade timing: spare %s answered as the shard after %s", sh.ID, f.SuccessorAddr, sh.deps.Clock().Sub(start))
 	return sh.completeSwap(ctx, f, dialed)
 }
 
@@ -394,10 +412,13 @@ func (sh *Shard) completeSwap(ctx context.Context, f UpgradeFacts, dialed shard.
 			closeShard(old)
 		}()
 	}
-	if _, err := sh.enterPhase(f, PhaseResumed); err != nil {
+	swapAge := sh.phaseAge(f)
+	resumed, err := sh.enterPhase(f, PhaseResumed)
+	if err != nil {
 		return err
 	}
 	weftsdk.Infof(ctx, "shardsm %s: now on %s (%s); %s keeps redirecting until routes converge", sh.ID, f.SuccessorInstanceID, f.SuccessorAddr, f.DemotedInstanceID)
+	sh.logHoldWindow(ctx, resumed, "moved volume", swapAge)
 	return nil
 }
 
@@ -490,6 +511,7 @@ func (sh *Shard) upgradeRollBack(ctx context.Context, f UpgradeFacts) error {
 			sh.ID, info.VolumeID, info.InstanceID, f.DemotedInstanceID, f.SuccessorInstanceID)
 		return nil
 	}
+	sh.logHoldWindow(ctx, f, "rolled back", sh.phaseAge(f))
 
 	if err := sh.abandonSuccessor(ctx, f); err != nil {
 		weftsdk.Infof(ctx, "shardsm %s: terminate spare %s after rollback (the pool reconciler will retry): %v", sh.ID, f.SuccessorInstanceID, err)
@@ -531,6 +553,18 @@ func (sh *Shard) abortForDeadInstance(ctx context.Context, f UpgradeFacts, why s
 		}
 	}
 	return sh.endUpgrade(ctx, "abandoned: instance "+serving+" died; recovery takes over")
+}
+
+// logHoldWindow logs how long callers held: from the first Pause to now,
+// when the shard serves again (on the spare, or back on the old instance).
+// lastPhase is how long the phase that just ended took. One line per
+// upgrade, so the window can be read off the coordinator's log.
+func (sh *Shard) logHoldWindow(ctx context.Context, f UpgradeFacts, outcome string, lastPhase time.Duration) {
+	if f.PausedAt == nil {
+		weftsdk.Infof(ctx, "shardsm %s: upgrade hold window unknown (%s; no pause recorded)", sh.ID, outcome)
+		return
+	}
+	weftsdk.Infof(ctx, "shardsm %s: upgrade hold window %s (%s; last phase took %s)", sh.ID, sh.deps.Clock().Sub(*f.PausedAt), outcome, lastPhase)
 }
 
 // abandonSuccessor terminates the claimed spare and drops its claim.

@@ -88,6 +88,7 @@ type Shard struct {
 	UpgradePhase               UpgradePhase `gorm:"column:upgrade_phase"`
 	UpgradeOrigin              ShardState   `gorm:"column:upgrade_origin"`
 	UpgradePhaseAt             *time.Time   `gorm:"column:upgrade_phase_at"`
+	UpgradePausedAt            *time.Time   `gorm:"column:upgrade_paused_at"`
 	UpgradeSuccessorInstanceID string       `gorm:"column:upgrade_successor_instance_id"`
 	UpgradeSuccessorAddr       string       `gorm:"column:upgrade_successor_addr"`
 	UpgradeDemotedInstanceID   string       `gorm:"column:upgrade_demoted_instance_id"`
@@ -369,6 +370,7 @@ func (e *Shard) persistedCopy() *Shard {
 		UpgradePhase:               e.UpgradePhase,
 		UpgradeOrigin:              e.UpgradeOrigin,
 		UpgradePhaseAt:             copyTimePtr(e.UpgradePhaseAt),
+		UpgradePausedAt:            copyTimePtr(e.UpgradePausedAt),
 		UpgradeSuccessorInstanceID: e.UpgradeSuccessorInstanceID,
 		UpgradeSuccessorAddr:       e.UpgradeSuccessorAddr,
 		UpgradeDemotedInstanceID:   e.UpgradeDemotedInstanceID,
@@ -526,6 +528,7 @@ func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 		entry.UpgradePhase = f.UpgradePhase
 		entry.UpgradeOrigin = f.UpgradeOrigin
 		entry.UpgradePhaseAt = f.UpgradePhaseAt
+		entry.UpgradePausedAt = f.UpgradePausedAt
 		entry.UpgradeSuccessorInstanceID = f.UpgradeSuccessorInstanceID
 		entry.UpgradeSuccessorAddr = f.UpgradeSuccessorAddr
 		entry.UpgradeDemotedInstanceID = f.UpgradeDemotedInstanceID

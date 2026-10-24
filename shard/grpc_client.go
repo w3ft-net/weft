@@ -182,11 +182,25 @@ func (s *GRPCShard) homeAddr() string {
 // attempt reports progressed once it has delivered anything (a row to a
 // sink); after that nothing is retried, since a retry would deliver it
 // twice.
-func (s *GRPCShard) call(ctx context.Context, op string, retryTransport bool, attempt func() (progressed bool, err error)) error {
-	var holdUntil time.Time
+//
+// A held call logs once, when it ends, with how long it held: that line is
+// what a pause cost a caller.
+func (s *GRPCShard) call(ctx context.Context, op string, retryTransport bool, attempt func() (progressed bool, err error)) (err error) {
+	var holdStart, holdUntil time.Time
+	defer func() {
+		if holdStart.IsZero() {
+			return
+		}
+		if err != nil {
+			weftsdk.Infof(ctx, "shard %s: %s held %s by a pause, then failed: %v", s.id, op, time.Since(holdStart), err)
+			return
+		}
+		weftsdk.Infof(ctx, "shard %s: %s held %s by a pause, then went through at %s", s.id, op, time.Since(holdStart), s.Addr())
+	}()
 	transportFailures := 0
 	for {
-		progressed, err := attempt()
+		var progressed bool
+		progressed, err = attempt()
 		if err == nil || progressed {
 			return err
 		}
@@ -195,8 +209,8 @@ func (s *GRPCShard) call(ctx context.Context, op string, retryTransport bool, at
 		switch {
 		case kind != NotRefused:
 			if !holding {
-				holdUntil = time.Now().Add(pauseHoldTimeout)
-				weftsdk.Infof(ctx, "shard %s: %s refused (%v); holding up to %s", s.id, op, err, pauseHoldTimeout)
+				holdStart = time.Now()
+				holdUntil = holdStart.Add(pauseHoldTimeout)
 			}
 			if kind == RefusedPaused && successor != "" {
 				s.redirect(successor)

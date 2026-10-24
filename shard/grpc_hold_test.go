@@ -4,12 +4,14 @@ import (
 	"context"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 
+	"github.com/graybeardcorp/weft/internal/logtest"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	shardsvc "github.com/graybeardcorp/weft/shard/service"
@@ -145,16 +147,24 @@ func TestGRPCShard_HoldsThroughAPauseAndLandsOnTheSuccessor(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 
-	attach()
-	select {
-	case err := <-ingested:
-		if err != nil {
-			t.Fatalf("held ingest: %v", err)
+	out := logtest.Capture(func() {
+		attach()
+		select {
+		case err := <-ingested:
+			if err != nil {
+				t.Fatalf("held ingest: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("held ingest never completed on the successor")
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("held ingest never completed on the successor")
+		<-queried
+	})
+	// Each held call reports what the pause cost it.
+	for _, op := range []string{"Ingest", "QueryToSink"} {
+		if !strings.Contains(out, op+" held ") || !strings.Contains(out, "went through at "+spareAddr) {
+			t.Fatalf("no hold line for %s in the log:\n%s", op, out)
+		}
 	}
-	<-queried
 	if sink.failed != nil {
 		t.Fatalf("held query failed: %v", sink.failed)
 	}

@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/internal/logtest"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
@@ -456,6 +458,36 @@ func TestUpgrade_ADifferentLeaderFinishesIt(t *testing.T) {
 	f.evaluate(t)
 	if f.phase() != PhaseResumed {
 		t.Fatalf("new leader's phase: %q, want resumed", f.phase())
+	}
+}
+
+// The hold window runs from the first Pause to the spare serving, and is
+// measured from the persisted pause time, so it comes out right even when
+// a different leader completes the swap.
+func TestUpgrade_LogsTheHoldWindowFromTheFirstPause(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	if err := f.sh.startUpgrade(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate(t) // pause sent; → swapping, spare not ready yet
+
+	row, ok, err := ShardStore{f.db}.GetShard(f.sh.ID)
+	if err != nil || !ok {
+		t.Fatalf("reload: %v %v", ok, err)
+	}
+	if row.UpgradePausedAt == nil {
+		t.Fatal("pause time not persisted")
+	}
+	f.advance(20 * time.Second)
+	row.ensureSM(f.sh.deps)
+	f.sh = row
+	f.cfg.setReady(spareAddr)
+	out := logtest.Capture(func() { f.evaluate(t) })
+	if f.phase() != PhaseResumed {
+		t.Fatalf("phase: %q, want resumed", f.phase())
+	}
+	if !strings.Contains(out, "upgrade hold window 20s (moved volume") {
+		t.Fatalf("no 20s hold window in the log:\n%s", out)
 	}
 }
 

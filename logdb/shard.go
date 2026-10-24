@@ -353,11 +353,16 @@ func (s ShardStore) SetShardUpgrade(id string, f UpgradeFacts) error {
 	if f.PhaseAt != nil {
 		phaseAt = *f.PhaseAt
 	}
+	var pausedAt any
+	if f.PausedAt != nil {
+		pausedAt = *f.PausedAt
+	}
 	return s.db().Model(&Shard{}).Where("id = ?", id).
 		Updates(map[string]any{
 			"upgrade_phase":                 null(string(f.Phase)),
 			"upgrade_origin":                null(string(f.Origin)),
 			"upgrade_phase_at":              phaseAt,
+			"upgrade_paused_at":             pausedAt,
 			"upgrade_successor_instance_id": null(f.SuccessorInstanceID),
 			"upgrade_successor_addr":        null(f.SuccessorAddr),
 			"upgrade_demoted_instance_id":   null(f.DemotedInstanceID),

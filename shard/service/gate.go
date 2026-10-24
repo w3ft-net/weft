@@ -129,6 +129,7 @@ func (s *Server) Activate(ctx context.Context) error {
 	if err := s.Volume.Mount(ctx); err != nil {
 		return fmt.Errorf("mount: %w", err)
 	}
+	opening := time.Now()
 	if err := s.openFromDisk(); err != nil {
 		return err
 	}
@@ -137,7 +138,7 @@ func (s *Server) Activate(ctx context.Context) error {
 	s.spare = false
 	s.mode = modeServing
 	s.gateMu.Unlock()
-	weftsdk.Infof(ctx, "spare activated as %q", s.Identity())
+	weftsdk.Infof(ctx, "spare activated as %q; opening its database took %s", s.Identity(), time.Since(opening))
 	return nil
 }
 
@@ -179,9 +180,11 @@ func (s *Server) Pause(ctx context.Context, req *pb.PauseRequest) (*pb.PauseResp
 	s.successor = req.SuccessorAddr
 	s.gateMu.Unlock()
 
+	start := time.Now()
 	if err := s.waitDrained(ctx); err != nil {
 		return nil, err
 	}
+	drained := time.Now()
 
 	if ds := s.Shard(); ds != nil {
 		if err := ds.Checkpoint(ctx); err != nil {
@@ -194,6 +197,7 @@ func (s *Server) Pause(ctx context.Context, req *pb.PauseRequest) (*pb.PauseResp
 		s.shard = nil
 		s.mu.Unlock()
 	}
+	closed := time.Now()
 
 	s.gateMu.Lock()
 	released := s.released
@@ -206,7 +210,8 @@ func (s *Server) Pause(ctx context.Context, req *pb.PauseRequest) (*pb.PauseResp
 		s.released = true
 		s.gateMu.Unlock()
 	}
-	weftsdk.Infof(ctx, "shard %s: paused and released its volume; redirecting to %s", s.Identity(), req.SuccessorAddr)
+	weftsdk.Infof(ctx, "shard %s: paused and released its volume in %s (drain %s, checkpoint and close %s, unmount %s); redirecting to %s",
+		s.Identity(), time.Since(start), drained.Sub(start), closed.Sub(drained), time.Since(closed), req.SuccessorAddr)
 	return &pb.PauseResponse{}, nil
 }
 
@@ -244,6 +249,7 @@ func (s *Server) Resume(ctx context.Context, _ *pb.ResumeRequest) (*pb.ResumeRes
 	s.mode = modeNotReady
 	released := s.released
 	s.gateMu.Unlock()
+	start := time.Now()
 
 	if released && s.Volume != nil {
 		if err := s.Volume.Mount(ctx); err != nil {
@@ -262,6 +268,6 @@ func (s *Server) Resume(ctx context.Context, _ *pb.ResumeRequest) (*pb.ResumeRes
 	s.mode = modeServing
 	s.successor = ""
 	s.gateMu.Unlock()
-	weftsdk.Infof(ctx, "shard %s: resumed", s.Identity())
+	weftsdk.Infof(ctx, "shard %s: resumed in %s", s.Identity(), time.Since(start))
 	return &pb.ResumeResponse{}, nil
 }
