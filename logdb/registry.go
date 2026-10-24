@@ -159,15 +159,46 @@ const SuspendFailureThreshold = 3
 // permit still resurrects healthy shards whose beats hiccup briefly).
 const heartbeatStaleThreshold = 1 * time.Minute
 
-// isStale reports whether this entry's last observed heartbeat is
-// older than heartbeatStaleThreshold. Zero (never set) counts as
-// fresh — see the LastHeartbeatAt field comment. Caller must hold
-// e.mu (read).
-func (e *Shard) isStale() bool {
+// isStale reports whether this entry's last observed heartbeat was
+// older than heartbeatStaleThreshold as of asOf, the last moment this
+// coordinator could have seen a newer beat (see LivenessAsOf). Zero (never
+// set) counts as fresh — see the LastHeartbeatAt field comment. Caller must
+// hold e.mu (read).
+func (e *Shard) isStale(asOf time.Time) bool {
 	if e.LastHeartbeatAt.IsZero() {
 		return false
 	}
-	return time.Since(e.LastHeartbeatAt) > heartbeatStaleThreshold
+	return asOf.Sub(e.LastHeartbeatAt) > heartbeatStaleThreshold
+}
+
+// MarkLivenessRead records that a read of every shard's latest heartbeat
+// (the shard_heartbeats sweep) started at at and has been applied to the
+// entries. Only moves forward.
+func (r *ShardRegistry) MarkLivenessRead(at time.Time) {
+	n := at.UnixNano()
+	for {
+		cur := r.livenessReadAt.Load()
+		if n <= cur || r.livenessReadAt.CompareAndSwap(cur, n) {
+			return
+		}
+	}
+}
+
+// LivenessAsOf is the moment this coordinator's heartbeat knowledge is
+// current as of: the start of the last applied heartbeat sweep, or now when
+// no sweep has run (no store wired). A shard's heartbeat stream is pinned to
+// one coordinator, so every other coordinator learns of its beats only from
+// the sweep; judging their copy against the wall clock would let a late
+// sweep (a slow FSM tick, a GC pause, a DB hiccup) drop healthy shards. A
+// shard is stale only once a read shows it went quiet, so the sweep cadence
+// sets how fast a dead shard is noticed, never whether a live one is
+// routed. The coordinator holding the stream stamps each beat as it lands,
+// later than any sweep, so it stays fresh between sweeps too.
+func (r *ShardRegistry) LivenessAsOf() time.Time {
+	if n := r.livenessReadAt.Load(); n != 0 {
+		return time.Unix(0, n)
+	}
+	return time.Now()
 }
 
 // serves reports whether this entry serves the given (namespaceID,
@@ -214,7 +245,9 @@ type ShardRegistry struct {
 	mu      sync.RWMutex
 	entries map[string]*Shard
 	robin   atomic.Uint64 // round-robin counter for write distribution
-	store   RegistryStore // optional persistence (nil in tests)
+	// livenessReadAt is MarkLivenessRead's time in unix nanos; 0 = never.
+	livenessReadAt atomic.Int64
+	store          RegistryStore // optional persistence (nil in tests)
 	// reconstruct is LoadFromStore's live-handle builder, kept so
 	// RefreshFromStore attaches a shard it adopts the same way boot does.
 	reconstruct func(sh *Shard) (shard.Shard, error)
@@ -723,9 +756,10 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	asOf := r.LivenessAsOf()
 	var out []*Shard
 	for _, e := range r.entries {
-		if e.queryable(tr, serving) {
+		if e.queryable(tr, serving, asOf) {
 			out = append(out, e)
 		}
 	}
@@ -736,7 +770,7 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{
 // read lock. Note: the entry pointer it qualifies is still returned to
 // the caller, which must take e.mu before reading its fields (e.g.
 // ShardDescriptorsFor does).
-func (e *Shard) queryable(tr TimeRange, serving map[string]struct{}) bool {
+func (e *Shard) queryable(tr TimeRange, serving map[string]struct{}, asOf time.Time) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.Addr == "" && e.Live == nil {
@@ -759,7 +793,7 @@ func (e *Shard) queryable(tr TimeRange, serving map[string]struct{}) bool {
 	// every coordinator restart. Applying isStale() here excluded every
 	// archived shard from queries the moment the coordinator next
 	// restarted — silently, with no error or log trace.
-	if e.State != StateArchived && e.isStale() {
+	if e.State != StateArchived && e.isStale(asOf) {
 		return false
 	}
 	// An ARCHIVED / ARCHIVING / READ_ONLY shard with zero rows has nothing
@@ -790,9 +824,10 @@ func (r *ShardRegistry) IngestingShard(namespaceID uint, service string) shard.S
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	asOf := r.LivenessAsOf()
 	var candidates []shard.Shard
 	for _, e := range r.entries {
-		if sh := e.ingestCandidate(namespaceID, service); sh != nil {
+		if sh := e.ingestCandidate(namespaceID, service, asOf); sh != nil {
 			candidates = append(candidates, sh)
 		}
 	}
@@ -806,10 +841,10 @@ func (r *ShardRegistry) IngestingShard(namespaceID uint, service string) shard.S
 
 // ingestCandidate returns the live shard handle if this entry is an
 // INGESTING, fresh, serving shard, else nil. Takes the entry read lock.
-func (e *Shard) ingestCandidate(namespaceID uint, service string) shard.Shard {
+func (e *Shard) ingestCandidate(namespaceID uint, service string, asOf time.Time) shard.Shard {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	if e.State != StateIngesting || e.Live == nil || e.isStale() {
+	if e.State != StateIngesting || e.Live == nil || e.isStale(asOf) {
 		return nil
 	}
 	if e.serves(namespaceID, service) {

@@ -1,6 +1,7 @@
 package logdb
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -209,5 +210,63 @@ func TestProcessHeartbeat_RefreshesLastHeartbeatAt(t *testing.T) {
 	}
 	if time.Since(got.LastHeartbeatAt) > 5*time.Second {
 		t.Fatalf("LastHeartbeatAt should be ~now, got %v ago", time.Since(got.LastHeartbeatAt))
+	}
+}
+
+// A coordinator that doesn't hold a shard's heartbeat stream learns of its
+// beats only from the store sweep, so between sweeps its copy of the last
+// beat ages. Judging that copy against the wall clock made the coordinator's
+// own lateness count against the shard: a sweep that ran late (a slow FSM
+// tick, a GC pause) dropped a healthy shard from query and write routing, and
+// a one-minute sweep against a one-minute threshold did so before every tick.
+// Liveness must be judged as of the last read that could have seen a beat.
+func TestAdoptFromHeartbeats_LateSweepKeepsShardLive(t *testing.T) {
+	ds, err := shard.NewDuckDBShard("shard-elsewhere", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ds.Close() })
+
+	// The sweep ran 70s ago and saw a beat 9s old: a healthy shard whose
+	// next sweep is late.
+	sweptAt := time.Now().Add(-70 * time.Second)
+	now := sweptAt
+	reg := NewShardRegistry()
+	reg.Add(&Shard{
+		ID: "shard-elsewhere", Services: []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
+		WindowStart: t0, WindowEnd: t2, State: StateIngesting,
+		Addr: "10.0.0.2:9000", Live: ds,
+	})
+	hbs := &mockHeartbeatStore{heartbeats: []store.ShardHeartbeat{{
+		ShardID: "shard-elsewhere", Addr: "10.0.0.2:9000", State: "INGESTING", Age: 9 * time.Second,
+	}}}
+	prov := &Provisioner{
+		registry:   reg,
+		config:     ProvisionerConfig{Store: hbs, PollInterval: time.Minute, WindowDuration: 7 * 24 * time.Hour},
+		configurer: &stubConfigurer{},
+		clock:      func() time.Time { return now },
+	}
+	prov.shardDeps().BootedAt = sweptAt.Add(-time.Hour)
+	prov.adoptFromHeartbeats()
+	now = sweptAt.Add(70 * time.Second)
+
+	if got := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt"); len(got) != 1 {
+		t.Fatalf("a late sweep dropped a shard whose last-read beat was 9s old: %d shards routed, want 1", len(got))
+	}
+	if reg.IngestingShard(1, "vimgym") == nil {
+		t.Fatal("a late sweep dropped a healthy shard from write routing")
+	}
+	if reg.Get("shard-elsewhere").actuallyStale(context.Background()) {
+		t.Fatal("a late sweep would SUSPEND a shard whose last-read beat was 9s old")
+	}
+
+	// The next sweep no longer sees a beat: now the shard is dead.
+	hbs.heartbeats = nil
+	prov.adoptFromHeartbeats()
+	if got := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt"); len(got) != 0 {
+		t.Fatalf("a sweep that saw no beat for 79s still routes the shard: %d shards", len(got))
+	}
+	if !reg.Get("shard-elsewhere").actuallyStale(context.Background()) {
+		t.Fatal("a sweep that saw no beat for 79s should mark the shard stale")
 	}
 }

@@ -406,8 +406,11 @@ func (sh *Shard) postRecoveryTarget() (stateless.State, error) {
 
 // actuallyStale guards the HeartbeatStale trigger so a tick that fires
 // while a fresh heartbeat is already in flight doesn't move us to
-// SUSPENDED prematurely. Returns true only if LastHeartbeatAt is older
-// than the staleness threshold.
+// SUSPENDED prematurely. Returns true only if LastHeartbeatAt was older
+// than the staleness threshold as of the registry's last heartbeat sweep
+// (ShardRegistry.LivenessAsOf), so a sweep that runs late can't suspend a
+// shard that was beating when last read; the clock stands in only when no
+// sweep has run.
 func (sh *Shard) actuallyStale(context.Context, ...any) bool {
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
@@ -424,7 +427,11 @@ func (sh *Shard) actuallyStale(context.Context, ...any) bool {
 	if ref.Before(sh.deps.BootedAt) {
 		ref = sh.deps.BootedAt
 	}
-	return sh.deps.Clock().Sub(ref) > sh.deps.StaleThreshold
+	asOf := sh.deps.Clock()
+	if sh.deps.Registry != nil && sh.deps.Registry.livenessReadAt.Load() != 0 {
+		asOf = sh.deps.Registry.LivenessAsOf()
+	}
+	return asOf.Sub(ref) > sh.deps.StaleThreshold
 }
 
 // staleTargetFromActive picks SUSPENDED when the shard has an EBS volume

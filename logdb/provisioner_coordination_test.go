@@ -377,7 +377,7 @@ func TestProvisioner_Coordination_FollowerRoutesToShardMintedAfterBoot(t *testin
 		e.mu.RLock()
 		defer e.mu.RUnlock()
 		t.Fatalf("follower has %s but won't route to it: state=%s live=%v stale=%v (last beat %v) services=%v",
-			shardID, e.State, e.Live != nil, e.isStale(), e.LastHeartbeatAt, e.Services)
+			shardID, e.State, e.Live != nil, e.isStale(follower.registry.LivenessAsOf()), e.LastHeartbeatAt, e.Services)
 	}
 }
 

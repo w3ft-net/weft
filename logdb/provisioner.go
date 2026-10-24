@@ -487,6 +487,7 @@ func (p *Provisioner) adoptFromHeartbeats() {
 		return
 	}
 
+	readAt := p.clock()
 	heartbeats, err := p.config.Store.LiveShardHeartbeats("1 minute")
 	if err != nil {
 		weftsdk.Errorf(context.Background(), "provisioner: heartbeat query failed: %v", err)
@@ -502,6 +503,10 @@ func (p *Provisioner) adoptFromHeartbeats() {
 	for _, hb := range heartbeats {
 		p.ProcessHeartbeat(hb)
 	}
+	// After the beats are applied, so no reader pairs the new read time with
+	// a not-yet-refreshed beat. A failed read leaves it where it was: not
+	// knowing is not evidence a shard died.
+	p.registry.MarkLivenessRead(readAt)
 }
 
 // AuthenticateShard validates the bearer presented for shardID
