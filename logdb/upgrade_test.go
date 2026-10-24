@@ -71,10 +71,11 @@ func (v *swapVolumes) where() string {
 
 // fakePauser records the leader's Pause/Resume calls by instance address.
 type fakePauser struct {
-	mu       sync.Mutex
-	pauses   []string // "addr→successor"
-	resumes  []string
-	pauseErr map[string]error
+	mu        sync.Mutex
+	pauses    []string // "addr→successor"
+	resumes   []string
+	pauseErr  map[string]error
+	resumeErr map[string]error
 }
 
 func (p *fakePauser) Pause(_ context.Context, addr, successor string) error {
@@ -88,7 +89,7 @@ func (p *fakePauser) Resume(_ context.Context, addr string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.resumes = append(p.resumes, addr)
-	return nil
+	return p.resumeErr[addr]
 }
 
 func (p *fakePauser) resumed(addr string) bool {
@@ -212,6 +213,15 @@ func (f *upgradeFixture) evaluate(t *testing.T) {
 
 func (f *upgradeFixture) advance(d time.Duration) { *f.now = f.now.Add(d) }
 
+// advanceAlive is advance with the serving instance heartbeating all the
+// while, as a healthy one does every few seconds.
+func (f *upgradeFixture) advanceAlive(d time.Duration) {
+	f.advance(d)
+	f.sh.mu.Lock()
+	f.sh.LastHeartbeatAt = *f.now
+	f.sh.mu.Unlock()
+}
+
 func (f *upgradeFixture) state(t *testing.T) ShardState {
 	t.Helper()
 	st, err := f.sh.smState(context.Background())
@@ -295,7 +305,7 @@ func TestUpgrade_MovesTheVolumeToASpareWithoutLeavingRouting(t *testing.T) {
 	if f.terminated(oldInstance) {
 		t.Fatal("demoted instance terminated before every coordinator could route to the new address")
 	}
-	f.advance(3 * time.Minute)
+	f.advanceAlive(3 * time.Minute)
 	f.evaluate(t)
 	if f.terminated(oldInstance) {
 		t.Fatal("demoted instance terminated before its replacement spare heartbeat")
@@ -325,7 +335,7 @@ func TestUpgrade_ReadOnlyOriginIsNeverWritable(t *testing.T) {
 	f.evaluate(t)
 	f.assertServing(t, false)
 	f.sh.deps.UpgradeRouteGrace = 0
-	f.advance(upgradeReplacementBudget + time.Second) // past waiting for a replacement spare
+	f.advanceAlive(upgradeReplacementBudget + time.Second) // past waiting for a replacement spare
 	f.evaluate(t)
 	if st := f.state(t); st != StateReadOnly {
 		t.Fatalf("after the upgrade: %s, want READ_ONLY", st)
@@ -466,7 +476,7 @@ func TestUpgrade_RotationDuringAnUpgradeLandsInReadOnly(t *testing.T) {
 	f.cfg.setReady(spareAddr)
 	f.evaluate(t)
 	f.sh.deps.UpgradeRouteGrace = 0
-	f.advance(upgradeReplacementBudget + time.Second)
+	f.advanceAlive(upgradeReplacementBudget + time.Second)
 	f.evaluate(t)
 	if st := f.state(t); st != StateReadOnly {
 		t.Fatalf("after the upgrade: %s, want READ_ONLY", st)
@@ -514,7 +524,7 @@ func TestUpgrade_AReplacementLaunchedDuringTheSwapCounts(t *testing.T) {
 
 	f.cfg.setReady(spareAddr)
 	f.evaluate(t) // resumed
-	f.advance(f.sh.deps.UpgradeRouteGrace + time.Second)
+	f.advanceAlive(f.sh.deps.UpgradeRouteGrace + time.Second)
 	f.evaluate(t)
 	if st := f.state(t); st != StateIngesting {
 		t.Fatalf("after the route grace with a heartbeating replacement: %s/%q, want INGESTING", st, f.phase())

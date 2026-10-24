@@ -43,6 +43,10 @@ const (
 	// upgradeSwapBudget covers detach, attach, mount and DuckDB open on the
 	// spare (expected 10–30s).
 	upgradeSwapBudget = 5 * time.Minute
+	// upgradeRollBackBudget covers putting the volume back and resuming the
+	// old instance. Past it the old instance is taken for dead and the
+	// shard goes to recovery.
+	upgradeRollBackBudget = 5 * time.Minute
 	// upgradeReplacementBudget caps how long the demoted instance waits for
 	// the pool's replacement spare to heartbeat before the upgrade finishes
 	// anyway: a pool that can't launch must not wedge the roll.
@@ -222,6 +226,17 @@ func (sh *Shard) rotateDuringUpgrade(ctx context.Context, _ ...any) error {
 // evaluateUpgrading drives one step of the upgrade (see the file comment).
 func (sh *Shard) evaluateUpgrading(ctx context.Context) error {
 	f := sh.upgradeFacts()
+	// While an instance should be heartbeating as the shard — the old one
+	// while a spare is claimed, the new one after the swap — its silence
+	// means it died, and the upgrade can't continue past a dead instance.
+	// Not while pausing: a paused instance goes quiet by design, and a pause
+	// that never completes rolls back on its own budget.
+	switch f.Phase {
+	case PhaseClaiming, PhaseResumed:
+		if sh.actuallyStale(ctx) {
+			return sh.abortForDeadInstance(ctx, f, "it stopped heartbeating")
+		}
+	}
 	switch f.Phase {
 	case "":
 		// An UPGRADING row with no phase predates the pool (a roll in flight
@@ -464,6 +479,9 @@ func (sh *Shard) upgradeRollBack(ctx context.Context, f UpgradeFacts) error {
 		err := sh.deps.Pauser.Resume(rctx, f.DemotedAddr)
 		rcancel()
 		if err != nil {
+			if sh.phaseAge(f) > upgradeRollBackBudget {
+				return sh.abortForDeadInstance(ctx, f, fmt.Sprintf("it would not resume within %s: %v", upgradeRollBackBudget, err))
+			}
 			weftsdk.Infof(ctx, "shardsm %s: resume %s, retrying: %v", sh.ID, f.DemotedAddr, err)
 			return nil
 		}
@@ -483,6 +501,36 @@ func (sh *Shard) upgradeRollBack(ctx context.Context, f UpgradeFacts) error {
 		m.Repoint(f.DemotedAddr)
 	}
 	return sh.endUpgrade(ctx, "rolled back; still on "+f.DemotedInstanceID)
+}
+
+// abortForDeadInstance ends an upgrade whose serving instance died. The
+// instance that isn't the shard's — the claimed spare before the swap, the
+// demoted instance after it — is terminated now, since nothing tracks it
+// once the upgrade's facts are cleared; then the shard returns to its
+// origin state, whose stale check sends it down the recovery path (which
+// reaps the dead instance and reattaches the volume to a spare). Going
+// through the origin state keeps the transition log naming it, so recovery
+// returns the shard to it.
+func (sh *Shard) abortForDeadInstance(ctx context.Context, f UpgradeFacts, why string) error {
+	sh.mu.RLock()
+	serving := sh.InstanceID
+	sh.mu.RUnlock()
+	weftsdk.Errorf(ctx, "shardsm %s: abandoning its upgrade: instance %s is dead (%s)", sh.ID, serving, why)
+	if f.SuccessorInstanceID != "" && f.SuccessorInstanceID != serving {
+		if err := sh.abandonSuccessor(ctx, f); err != nil {
+			weftsdk.Infof(ctx, "shardsm %s: terminate spare %s (the pool reconciler will retry): %v", sh.ID, f.SuccessorInstanceID, err)
+		}
+	}
+	if f.DemotedInstanceID != "" && f.DemotedInstanceID != serving && sh.deps.Launcher != nil {
+		tctx, cancel := context.WithTimeout(ctx, archiveTimeout)
+		err := sh.deps.Launcher.Terminate(tctx, f.DemotedInstanceID)
+		cancel()
+		if err != nil {
+			weftsdk.Infof(ctx, "shardsm %s: terminate demoted %s, retrying next tick: %v", sh.ID, f.DemotedInstanceID, err)
+			return nil
+		}
+	}
+	return sh.endUpgrade(ctx, "abandoned: instance "+serving+" died; recovery takes over")
 }
 
 // abandonSuccessor terminates the claimed spare and drops its claim.
