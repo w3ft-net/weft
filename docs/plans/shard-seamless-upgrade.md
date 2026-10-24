@@ -51,9 +51,10 @@ its data.
 An upgrade:
 
 1. **Claim a spare** on the current AMI in the shard's AZ. The old instance
-   keeps serving throughout. No spare available (the pool is still
-   refilling, or another path took it): launch one on demand, the same as
-   a spare but a few minutes slower.
+   keeps serving throughout. No current-AMI spare available (the pool is
+   still refilling, or another path took it): launch one on demand, the
+   same as a spare but a few minutes slower. A spare on an older AMI is
+   never claimed.
 2. **Pause.** The FSM leader tells the old shard: pause, your successor is
    at `addr`. Its server interceptor refuses every new call with a
    `paused` status carrying the successor address, and lets in-flight calls
@@ -63,10 +64,16 @@ An upgrade:
    it to the spare, which mounts it, opens DuckDB from `shard.json`, and
    starts admitting calls. The shard's `Addr` / `InstanceID` move to the new
    instance.
-4. **Resume.** Held calls (below) land on the new instance. The old
-   instance keeps refusing with the redirect until the new one has
-   heartbeat and every coordinator's registry carries the new address, then
-   it is terminated. The pool backfills.
+4. **Resume.** Held calls (below) land on the new instance. The demoted
+   instance keeps refusing with the redirect, and stays the rollback
+   target, until the new one has heartbeat and every coordinator's registry
+   carries the new address.
+5. **Upgrade the demoted instance.** An AMI can't change in place, so the
+   demoted instance is upgraded by replacing it: the pool launches a spare
+   on the current AMI for the (tier, AZ), and the demoted instance is
+   terminated once that spare heartbeats. The new spare is the next
+   shard's successor in that AZ, so a roll walks each (tier, AZ) as a
+   chain: upgrade the spare, promote it, upgrade the demoted.
 
 Expected gap: unmount, detach, attach, mount, DuckDB open, roughly 10–30s.
 
@@ -119,12 +126,15 @@ last bucket of a tier retires its spares.
 A claim is one store write (`UPDATE shard_spares SET claimed_by = $shard,
 claimed_at = now() WHERE instance_id = (SELECT … unclaimed, matching tier
 and AZ, current image … LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING …`), so
-two paths can't take the same spare. Three paths claim:
+two paths can't take the same spare. Only a spare on the current image is
+claimable, on every path: a recovery during a deploy that finds only an
+old-AMI spare launches on demand rather than land a shard on an AMI the
+roll would then have to upgrade again. Three paths claim:
 
 | path | today | with the pool |
 |---|---|---|
 | **upgrade** (UPGRADING) | reap, then launch, then reattach: minutes, reads and writes lost | claim, pause, swap the volume: seconds of held calls |
-| **recovery** (SUSPENDED: the instance died) | reap, launch, boot, reattach: minutes | claim, force-detach the dead instance's volume, attach: the boot time is gone. Still an outage, which still fails queries, but shorter |
+| **recovery** (SUSPENDED: the instance died) | reap, launch, boot, reattach: minutes | claim, force-detach the volume from the dead or impaired instance (terminating it in parallel; ext4's journal and DuckDB's WAL replay recover the crash-consistent volume), attach: the boot time is gone. Still an outage, which still fails queries, but shorter |
 | **minting** (WARMING, fills, scale-up) | launch a fresh instance and volume, wait for boot | claim, create and attach a fresh volume, Configure |
 
 Every path falls back to an on-demand launch when no spare is free, so the
@@ -173,7 +183,8 @@ itself during the pause.
 
 ## Rollback
 
-The old instance is not terminated until the new one serves. If the claimed
+The demoted instance is not terminated until the new one serves and its
+replacement spare is up. If the claimed
 spare never becomes ready (attach stuck, mount fails, DuckDB won't open,
 timeout), the leader detaches the volume from it, reattaches it to the old
 instance, which remounts, reopens and unpauses. Calls held against the
@@ -190,7 +201,7 @@ persisted phases (mirrored onto the entry, like the export columns):
 | `claiming` | serving (old instance) | a spare is claimed and heartbeating (on-demand launch if none) |
 | `pausing` | serving; calls held by interceptors | old shard reports in-flight 0 and closed |
 | `swapping` | serving; calls held | the spare reports DuckDB open |
-| `resumed` | serving (new instance) | every coordinator routes to the new address; old terminated → INGESTING / READ_ONLY / DEGRADED (the state it came from) |
+| `resumed` | serving (new instance) | every coordinator routes to the new address, and the demoted instance's replacement spare heartbeats; demoted terminated → INGESTING / READ_ONLY / DEGRADED (the state it came from) |
 | `rolling_back` | serving; calls held | old instance reopened and unpaused |
 
 `queryable` treats UPGRADING as queryable again (69be93fa's
@@ -234,8 +245,10 @@ rolls back.
    paused shard holds only its own rows.
 7. **weft-admin**: `roll-*` waits for UPGRADING → back in the origin state
    with the target `binary_sha`, as today; only the meaning of the wait
-   changes. With one spare per (tier, AZ), consecutive rolls in one AZ wait
-   on the pool's backfill or fall back to on-demand launches; both work.
+   changes. With one spare per (tier, AZ), consecutive rolls in one AZ walk
+   the chain (upgrade spare, promote, upgrade demoted), each waiting on the
+   previous demoted instance's replacement, or fall back to on-demand
+   launches; both work.
 
 ## Related hazards found along the way
 
@@ -249,6 +262,9 @@ rolls back.
 
 ## Tests (each phase starts with a failing one)
 
+- Pool: an old-AMI spare is never claimed, on any path; the demoted
+  instance outlives its replacement spare's first heartbeat, and a rollback
+  started before then reattaches to it.
 - Pool: the desired set follows buckets (a new bucket's tier and stripes get
   spares; deleting the last bucket of a tier retires them); a stale-AMI
   spare is replaced new-first, never leaving its pair uncovered; two
@@ -275,11 +291,5 @@ rolls back.
 
 - `pauseHoldTimeout`: it must sit inside query and cron run budgets and
   inside what the ring buffer absorbs. 60s?
-- Recovery force-detaches the dead instance's volume. If the instance is
-  impaired rather than gone, force-detach risks the filesystem; terminate
-  first, then detach?
 - Detach of a volume the old instance hasn't cleanly unmounted during an
   upgrade (it hung): rolling back is safer than force-detaching.
-- Should a spare be claimable across the image change during a deploy (an
-  old-AMI spare for a recovery while the new ones boot)? Faster recovery,
-  but it lands a shard on the old AMI that the roll then has to upgrade.
