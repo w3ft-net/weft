@@ -1,22 +1,32 @@
 package coordinator
 
 import (
+	"context"
 	"sync"
+	"sync/atomic"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // RingBuffer is a fixed-size circular buffer for log rows. Writes never block;
-// if the buffer is full, the oldest rows are silently overwritten. Readers
-// drain batches for shard ingestion.
+// if the buffer is full, the oldest rows are overwritten, and every
+// overwritten row is counted (Dropped) and logged so the loss is never
+// silent. Readers drain batches for shard ingestion.
 type RingBuffer struct {
-	mu     sync.Mutex
-	buf    []*pb.LogRow
-	size   int
-	head   int           // next write position
-	count  int           // number of unread rows (for drain)
-	notify chan struct{} // signaled on write
+	mu      sync.Mutex
+	buf     []*pb.LogRow
+	size    int
+	head    int           // next write position
+	count   int           // number of unread rows (for drain)
+	notify  chan struct{} // signaled on write
+	dropped atomic.Int64  // rows overwritten before they were drained
 }
+
+// Dropped returns how many rows have been overwritten unread since the
+// buffer was created.
+func (r *RingBuffer) Dropped() int64 { return r.dropped.Load() }
 
 // UsagePct returns the buffer fill percentage (0-100).
 func (r *RingBuffer) UsagePct() int {
@@ -40,14 +50,21 @@ func NewRingBuffer(capacity int) *RingBuffer {
 // Write appends rows to the buffer. Never blocks.
 func (r *RingBuffer) Write(rows []*pb.LogRow) {
 	r.mu.Lock()
+	overwritten := 0
 	for _, row := range rows {
 		r.buf[r.head] = row
 		r.head = (r.head + 1) % r.size
 		if r.count < r.size {
 			r.count++
+		} else {
+			overwritten++
 		}
 	}
 	r.mu.Unlock()
+	if overwritten > 0 {
+		total := r.dropped.Add(int64(overwritten))
+		weftsdk.Errorf(context.Background(), "ingest ring buffer full: overwrote %d undrained rows (%d since start)", overwritten, total)
+	}
 
 	// Non-blocking signal to drain goroutine.
 	select {

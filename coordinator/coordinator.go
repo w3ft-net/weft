@@ -188,6 +188,11 @@ type Coordinator struct {
 	// ingest drain's hot path, so resolving a row's routing namespace_id
 	// doesn't hit the DB per batch. Keyed by "customer\x00namespace".
 	nsIDCache sync.Map // map[string]uint
+
+	// senders is the drain's per-shard send path (drain.go), keyed by shard
+	// id; sendersMu guards the map.
+	sendersMu sync.Mutex
+	senders   map[string]*shardSender
 }
 
 // loweredCacheEntry pairs a decoded LoweredPlan with the
@@ -366,95 +371,6 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		c.TailFanout = NewTailFanout(cfg.Tail, cfg.RedisAddr, cfg.RedisTLS)
 	}
 	return c
-}
-
-// StartDrain runs a background goroutine that drains the ring buffer
-// into shards. Routes rows by app to the correct INGESTING shard.
-func (c *Coordinator) StartDrain(ctx context.Context) {
-	if c.Ingest == nil {
-		return
-	}
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-c.Ingest.Notify():
-			}
-
-			for {
-				batch := c.Ingest.Drain(500)
-				if batch == nil {
-					break
-				}
-
-				// Group by (customer, namespace, service) for targeted
-				// routing; count bytes per customer. The customer must be
-				// part of the key — two customers can use the same
-				// (namespace, service), but they resolve to different
-				// namespace_ids and so route to different shards.
-				byKey := make(map[drainKey][]*pb.LogRow)
-				for _, row := range batch {
-					k := drainKey{row.CustomerId, row.Namespace, row.Service}
-					byKey[k] = append(byKey[k], row)
-					if c.Usage != nil && row.CustomerId != 0 {
-						c.Usage.Record(row.CustomerId, int64(len(row.Raw)))
-					}
-				}
-
-				for k, rows := range byKey {
-					// Route by (namespace_id, service). namespace_id is
-					// resolved through a (customer, namespace) cache so the
-					// per-batch grouping keeps the DB off the hot path.
-					service := k.service
-					nsID := c.ingestNamespaceID(k.customerID, k.namespace)
-					// Strict service-scoped routing only — no whole-registry
-					// fallback, which would commingle a different tenant's
-					// rows onto the wrong shard. A service onboarded after
-					// the INGESTING shards christened is stamped onto them by
-					// the reconciler (OnboardService triggers it on first-seen);
-					// rows that arrive before that lands go to DLQ and the
-					// scanner re-ingests once a shard serves them.
-					sh := c.Provisioner.IngestingShard(nsID, service)
-					if sh == nil {
-						dlqPath := c.DLQ.Write(rows)
-						c.Errors.Record("none", "no shard serves "+k.namespace+"/"+k.service, rows, dlqPath)
-						weftsdk.Infof(ctx, "drain: DLQ'd %d rows for %s (no shard serves this service)", len(rows), k.namespace+"/"+k.service)
-						continue
-					}
-					// sh.Ingest reports its own outcome to the provisioner —
-					// incrementing the consecutive-failure counter on error,
-					// resetting it on success. The returned error names the
-					// shard and the running failure count (N/M) for the log
-					// line. (Routing exclusion is the FSM's job now, not a
-					// per-failure ingest latch.)
-					if err := sh.Ingest(ctx, rows, c.Provisioner); err != nil {
-						weftsdk.Infof(ctx, "drain: %v", err)
-
-						// Retry once. IngestingShard round-robins, so a
-						// second call lands on a different candidate if any
-						// exist for this service; a recently-suspended
-						// primary is excluded automatically. With small
-						// per-service candidate sets the two attempts are
-						// typically exhaustive.
-						if fallback := c.Provisioner.IngestingShard(nsID, service); fallback != nil {
-							if retryErr := fallback.Ingest(ctx, rows, c.Provisioner); retryErr == nil {
-								c.Provisioner.Stats().Record(k.namespace+"/"+k.service, int64(len(rows)))
-								continue // retry succeeded
-							}
-						}
-
-						// All retries exhausted — DLQ.
-						dlqPath := c.DLQ.Write(rows)
-						c.Errors.Record(sh.ID(), err.Error(), rows, dlqPath)
-						weftsdk.Errorf(ctx, "drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(rows), k.namespace+"/"+k.service, sh.ID())
-						continue
-					}
-					c.Provisioner.Stats().Record(k.namespace+"/"+k.service, int64(len(rows)))
-				}
-			}
-		}
-	}()
 }
 
 // StartUsageFlush runs a background goroutine that periodically appends
