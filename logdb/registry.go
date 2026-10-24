@@ -680,7 +680,7 @@ func (r *ShardRegistry) AddServiceToShard(id string, namespaceID uint, service s
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	if entry.State != StateIngesting {
+	if !entry.writable() {
 		return true, false
 	}
 	if entry.serves(namespaceID, service) {
@@ -896,15 +896,25 @@ func (e *Shard) queryable(tr TimeRange, serving map[string]struct{}, asOf time.T
 		}
 	}
 
-	// SUSPENDED (instance dead, awaiting rebind) and UPGRADING (operator-
-	// driven roll, instance about to be terminated by evaluateRecovery)
-	// keep a stale non-nil Shard pointer, so they are caught by state;
-	// routing them only yields "no grpc_addr or lambda_url".
+	// SUSPENDED (instance dead, awaiting rebind) keeps a stale non-nil
+	// Shard pointer, so it is caught by state; routing it only yields "no
+	// grpc_addr or lambda_url". UPGRADING is a serving state when it moves
+	// the volume through the warm pool, and the reap-and-relaunch outage
+	// otherwise.
 	switch e.State {
 	case StateSuspended:
 		return true, "SUSPENDED: its instance died"
 	case StateUpgrading:
-		return true, "UPGRADING: its instance is being replaced"
+		if e.UpgradePhase == "" {
+			// Reap-and-relaunch (no warm pool): there is no instance to ask.
+			return true, "UPGRADING: its instance is being replaced"
+		}
+		if e.UpgradePhase.volumeMoving() {
+			// The old instance stopped heartbeating when it paused; calls
+			// routed here are held by its gate and the client until the
+			// successor opens (or the hold times out and the query fails).
+			return true, ""
+		}
 	case StateLaunching:
 		return true, "LAUNCHING: its replacement instance is starting"
 	}
@@ -953,13 +963,32 @@ func (r *ShardRegistry) IngestingShard(namespaceID uint, service string) shard.S
 func (e *Shard) ingestCandidate(namespaceID uint, service string, asOf time.Time) shard.Shard {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	if e.State != StateIngesting || e.Live == nil || e.isStale(asOf) {
+	if !e.writable() || e.Live == nil || e.isStaleForWrites(asOf) {
 		return nil
 	}
 	if e.serves(namespaceID, service) {
 		return e.Live
 	}
 	return nil
+}
+
+// writable reports whether writes route to this shard: an INGESTING shard,
+// or one UPGRADING from INGESTING (its writes are held across the volume
+// move, never sent elsewhere — a bucket with one INGESTING shard has
+// nowhere else to send them). Caller holds e.mu.
+func (e *Shard) writable() bool {
+	return e.State == StateIngesting ||
+		(e.State == StateUpgrading && e.UpgradePhase != "" && e.UpgradeOrigin == StateIngesting)
+}
+
+// isStaleForWrites is isStale, except while an upgrade moves the volume:
+// no instance heartbeats as the shard then, and the held write completes
+// on the successor. Caller holds e.mu.
+func (e *Shard) isStaleForWrites(asOf time.Time) bool {
+	if e.State == StateUpgrading && e.UpgradePhase.volumeMoving() {
+		return false
+	}
+	return e.isStale(asOf)
 }
 
 // TotalIngesting returns the count of all INGESTING shards regardless of app.
@@ -969,7 +998,7 @@ func (r *ShardRegistry) TotalIngesting() int {
 	n := 0
 	for _, e := range r.entries {
 		e.mu.RLock()
-		ingesting := e.State == StateIngesting && e.Live != nil
+		ingesting := e.writable() && e.Live != nil
 		e.mu.RUnlock()
 		if ingesting {
 			n++
@@ -986,7 +1015,7 @@ func (r *ShardRegistry) IngestingCount(namespaceID uint, service string) int {
 	n := 0
 	for _, e := range r.entries {
 		e.mu.RLock()
-		ok := e.State == StateIngesting && e.Live != nil && e.serves(namespaceID, service)
+		ok := e.writable() && e.Live != nil && e.serves(namespaceID, service)
 		e.mu.RUnlock()
 		if ok {
 			n++

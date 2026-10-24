@@ -30,6 +30,10 @@ type VolumeInfo struct {
 	State    string // available / in-use / creating / deleting / ...
 	ShardID  string // from the shard_id tag; empty for volumes created pre-christening
 	Tier     string // from the shard_tier tag
+	// InstanceID is the instance the volume is attached (or attaching) to,
+	// "" when it is available. An upgrade's swap and rollback re-derive
+	// their progress from it.
+	InstanceID string
 }
 
 // CreateVolumeOpts parameterises a CreateForShard call.
@@ -150,6 +154,15 @@ func (m *EC2VolumeManager) FindByShard(ctx context.Context, shardID string) (*Vo
 		info.AZ = *v.AvailabilityZone
 	}
 	info.State = string(v.State)
+	for _, a := range v.Attachments {
+		if a.InstanceId == nil {
+			continue
+		}
+		switch a.State {
+		case ec2types.VolumeAttachmentStateAttached, ec2types.VolumeAttachmentStateAttaching, ec2types.VolumeAttachmentStateBusy:
+			info.InstanceID = *a.InstanceId
+		}
+	}
 	return info, nil
 }
 

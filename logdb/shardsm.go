@@ -103,6 +103,18 @@ type ShardDeps struct {
 	// export instances in flight across all shards (0 → the default).
 	ExportSizing         []ExportSize
 	MaxConcurrentExports int
+
+	// Spares and Pauser enable the seamless upgrade
+	// (docs/plans/shard-seamless-upgrade.md): UPGRADING moves the shard's
+	// volume to a claimed warm-pool spare behind a shard-enforced pause.
+	// Both nil — dev, docker — keeps UPGRADING's reap-and-relaunch path.
+	// They are set together or not at all.
+	Spares *SparePool
+	Pauser ShardPauser
+	// UpgradeRouteGrace is how long a demoted instance keeps redirecting
+	// after the swap before it may be terminated; zero defaults to
+	// defaultUpgradeRouteGrace.
+	UpgradeRouteGrace time.Duration
 }
 
 // volumeSizeGB returns the fresh-launch data-volume size for tier, falling
@@ -136,6 +148,9 @@ func newShardDeps(d ShardDeps) *ShardDeps {
 	}
 	if d.LaunchRetryBudget == 0 {
 		d.LaunchRetryBudget = 5
+	}
+	if d.UpgradeRouteGrace == 0 {
+		d.UpgradeRouteGrace = defaultUpgradeRouteGrace
 	}
 	return &d
 }
@@ -306,10 +321,17 @@ func (sh *Shard) configureSM() {
 	// SUSPENDED's blip-rescue permit would race the reap and silently
 	// no-op the roll. Without the heartbeat permit, the only exits are
 	// TriggerRelaunch (post-reap) → LAUNCHING or TriggerStranded → GONE.
+	//
+	// With the warm pool wired (upgrade.go) UPGRADING is instead a serving
+	// state: evaluateUpgrading moves the volume to a spare and fires
+	// UpgradeComplete back to the origin state, and a bucket rotation that
+	// lands mid-upgrade amends the origin to READ_ONLY in place.
 	sh.sm.Configure(StateUpgrading).
 		OnEntry(sh.onEnterUpgrading).
 		Permit(TriggerRelaunch, StateLaunching).
-		Permit(TriggerStranded, StateGone)
+		Permit(TriggerStranded, StateGone).
+		PermitDynamic(TriggerUpgradeComplete, sh.upgradeOriginTarget).
+		InternalTransition(TriggerRotateRequested, sh.rotateDuringUpgrade)
 
 	sh.sm.Configure(StateArchived).
 		OnEntry(sh.onEnterArchived).
@@ -476,7 +498,12 @@ func (sh *Shard) Evaluate(ctx context.Context) error {
 		return sh.evaluateActive(ctx)
 	case StateDegraded:
 		return sh.evaluateDegraded(ctx)
-	case StateSuspended, StateUpgrading:
+	case StateSuspended:
+		return sh.evaluateRecovery(ctx)
+	case StateUpgrading:
+		if sh.upgradesInPlace() {
+			return sh.evaluateUpgrading(ctx)
+		}
 		return sh.evaluateRecovery(ctx)
 	case StateArchiving:
 		return sh.evaluateArchiving(ctx)
@@ -1087,6 +1114,12 @@ func (sh *Shard) onEnterSuspended(ctx context.Context, args ...any) error {
 // state differs from SUSPENDED only in lacking a heartbeat-promotion
 // edge, so the still-alive shard process can't race the reap.
 func (sh *Shard) onEnterUpgrading(ctx context.Context, args ...any) error {
+	if sh.upgradesInPlace() {
+		// Seamless: the shard keeps serving from its instance until the
+		// swap moves it; nothing to tear down.
+		weftsdk.Infof(ctx, "shardsm %s: enter UPGRADING — serving on %s while its volume moves to a spare", sh.ID, sh.InstanceID)
+		return nil
+	}
 	weftsdk.Infof(ctx, "shardsm %s: enter UPGRADING — connection torn down; Evaluate will reap %s and relaunch for binary upgrade",
 		sh.ID, sh.InstanceID)
 	sh.mu.Lock()

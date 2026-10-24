@@ -318,7 +318,9 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 	// The warm pool of volume-less spares that upgrades, recoveries and
 	// mints claim instead of waiting on EC2 (docs/plans/
 	// shard-seamless-upgrade.md). Spares run the coordinator's own AMI.
-	prov.SetSparePool(NewSparePool(ShardStore{cfg.DB}, ep, nil))
+	pool := NewSparePool(ShardStore{cfg.DB}, ep, nil)
+	ep.SetSparePool(pool)
+	prov.SetSparePool(pool)
 
 	// Build the FSM control plane (one SM per persisted bucket + shard).
 	// The tick drives these — they own all lifecycle convergence.

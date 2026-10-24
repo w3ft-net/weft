@@ -94,6 +94,12 @@ const (
 	// the volume is genuinely gone the SUSPENDED evaluator catches that
 	// case via its existing stranded check.
 	TriggerRelaunchRequested Trigger = "relaunch-requested"
+
+	// UpgradeComplete is fired by an UPGRADING shard's own Evaluate once a
+	// seamless upgrade ends — the shard serving from the spare it moved to,
+	// or rolled back onto its old instance. It returns the shard to the
+	// state the upgrade started from (UpgradeOrigin).
+	TriggerUpgradeComplete Trigger = "upgrade-complete"
 )
 
 // Bucket FSM triggers. Each names a cascade-advancing edge in the

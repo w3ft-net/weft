@@ -83,6 +83,12 @@ const (
 	PhaseRollingBack UpgradePhase = "rolling_back"
 )
 
+// volumeMoving reports whether the shard's volume is between instances in
+// this phase: no instance is heartbeating as the shard, and calls are held.
+func (p UpgradePhase) volumeMoving() bool {
+	return p == PhasePausing || p == PhaseSwapping || p == PhaseRollingBack
+}
+
 // BucketState is the persisted state of a bucket, mirroring
 // ShardState in shape (string constants, written via the FSM's
 // ExternalStorage). Buckets are coarser-grained than shards: their

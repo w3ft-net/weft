@@ -609,12 +609,23 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 	case StateLaunching, StateSuspended:
 		p.promoteOnHeartbeat(ctx, e, hb)
 	case StateUpgrading:
-		// Operator-driven roll: the FSM has decided to reap this instance.
-		// Heartbeats from the still-running process must NOT promote
-		// (UPGRADING has no Heartbeat permit by design — see configureSM)
-		// and must NOT ObserveHeartbeat (its reconnect path would undo
-		// onEnterUpgrading's teardown and race the planned reap). Drop
-		// silently; evaluateRecovery will reap on the next tick.
+		// Seamless upgrade: only the instance serving the shard counts —
+		// the old one before the swap, the spare after. The spare beating
+		// with the shard id before the swap completes is the swap's own
+		// business (it probes the spare), and must not move the handle.
+		//
+		// Reap-and-relaunch (no pool): the FSM has decided to reap this
+		// instance. Heartbeats from the still-running process must NOT
+		// promote (UPGRADING has no Heartbeat permit by design — see
+		// configureSM) and must NOT ObserveHeartbeat (its reconnect path
+		// would undo onEnterUpgrading's teardown and race the planned
+		// reap). Drop silently; evaluateRecovery will reap on the next tick.
+		e.mu.RLock()
+		serving := e.UpgradePhase != "" && hb.InstanceID != "" && hb.InstanceID == e.InstanceID
+		e.mu.RUnlock()
+		if serving {
+			e.ObserveHeartbeat(ctx, hb)
+		}
 	default:
 		e.ObserveHeartbeat(ctx, hb)
 	}
@@ -978,7 +989,7 @@ func (p *Provisioner) syncServicesForBucket(bucket *Bucket) {
 	}
 	for _, e := range p.registry.Entries() {
 		e.mu.RLock()
-		skip := e.BucketID != bucket.ID || e.State != StateIngesting
+		skip := e.BucketID != bucket.ID || !e.writable()
 		e.mu.RUnlock()
 		if skip {
 			continue
@@ -1098,13 +1109,16 @@ func (p *Provisioner) ForceRemove(shardID string, force bool) error {
 
 // RelaunchShard is the admin-facing entry point for an in-place binary
 // upgrade. Drives the shard FSM through TriggerRelaunchRequested →
-// UPGRADING, where the shared reap-and-relaunch recovery branch takes
-// over (evaluateRecovery): the still-running instance is terminated, a
-// fresh instance is launched from the ASG's current launch template (=
-// current AMI), and the surviving EBS volume is reattached in the same
-// AZ. The shard reconstructs its identity from shard.json on the
-// reattached volume, heartbeats, and the promote path lifts it back to
-// INGESTING — same shard id, same window, same data, new binary.
+// UPGRADING — same shard id, same window, same data, new binary:
+//
+//   - with the warm pool wired (prod), the shard keeps serving while its
+//     volume moves to a spare on the current AMI behind a shard-enforced
+//     pause (upgrade.go, docs/plans/shard-seamless-upgrade.md); callers see
+//     seconds of held calls, not errors.
+//   - without it (dev), the reap-and-relaunch recovery branch takes over
+//     (evaluateRecovery): the still-running instance is terminated, a
+//     fresh one launched, and the surviving EBS volume reattached; the
+//     shard is down until the promote path lifts it back.
 //
 // UPGRADING is a distinct state from SUSPENDED (which HeartbeatStale
 // uses) because the operator-roll target is a HEALTHY shard whose
@@ -1127,10 +1141,14 @@ func (p *Provisioner) RelaunchShard(shardID string) error {
 	if st != StateIngesting && st != StateReadOnly && st != StateDegraded {
 		return fmt.Errorf("shard %s is %s, cannot relaunch (only INGESTING/READ_ONLY/DEGRADED): %w", shardID, st, ErrShardWrongState)
 	}
-	if err := entry.Fire(context.Background(), TriggerRelaunchRequested); err != nil {
+	if err := entry.startUpgrade(context.Background()); err != nil {
 		return fmt.Errorf("relaunch %s: %w", shardID, err)
 	}
-	weftsdk.Infof(context.Background(), "provisioner: relaunch requested for %s (was %s); driving via UPGRADING → LAUNCHING", shardID, st)
+	if entry.upgradesInPlace() {
+		weftsdk.Infof(context.Background(), "provisioner: upgrade requested for %s (was %s); moving its volume to a warm-pool spare", shardID, st)
+	} else {
+		weftsdk.Infof(context.Background(), "provisioner: relaunch requested for %s (was %s); driving via UPGRADING → LAUNCHING", shardID, st)
+	}
 	return nil
 }
 

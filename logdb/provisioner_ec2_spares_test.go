@@ -1,8 +1,11 @@
+//go:build test
+
 package logdb
 
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func spareProvisioner(f *fakeEC2) *EC2Provisioner {
@@ -88,6 +91,89 @@ func TestEC2Provisioner_ClaimReleaseAndListSpares(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].InstanceID != a.InstanceID || got[0].ClaimedBy != "shard-a" {
 		t.Fatalf("ListSpareInstances: %+v, want only the claimed %s", got, a.InstanceID)
+	}
+}
+
+// pooledProvisioner is an EC2Provisioner whose launches claim from a pool
+// holding one heartbeating current-image spare in us-east-2a.
+func pooledProvisioner(t *testing.T, vols VolumeManager) (*EC2Provisioner, *fakeEC2, string) {
+	t.Helper()
+	f := newFakeEC2()
+	p := newTestEC2Provisioner(f, vols)
+	p.imageID = "ami-current"
+	db := openSMTestStore(t)
+	pool := NewSparePool(ShardStore{db}, p, time.Now)
+	p.SetSparePool(pool)
+	if err := pool.Reconcile(context.Background(), map[SparePair]bool{{"small", "us-east-2a"}: true}, func(Spare) SpareUse { return SpareInUse }); err != nil {
+		t.Fatal(err)
+	}
+	spares, _ := p.ListSpareInstances(context.Background())
+	if len(spares) != 1 {
+		t.Fatalf("pool seeded %d spares", len(spares))
+	}
+	if err := (ShardStore{db}).ObserveSpareHeartbeat(spares[0].InstanceID, "10.0.0.9:9000", "sha", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	return p, f, spares[0].InstanceID
+}
+
+// A recovery claims the spare instead of booting a fresh instance, and
+// force-detaches the volume from the dead instance rather than waiting
+// for EC2 to release it.
+func TestEC2Provisioner_RecoveryClaimsASpare(t *testing.T) {
+	vols := &swapVolumes{volume: "vol-1", shardID: "s-rec", attachedTo: "i-dead"}
+	p, f, spare := pooledProvisioner(t, vols)
+	before := len(f.insts)
+	res, err := p.Launch(context.Background(), LaunchSpec{ShardID: "s-rec", Tier: "small", AZ: "us-east-2a", ExistingVolumeID: "vol-1"})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if res.InstanceID != spare {
+		t.Fatalf("recovery landed on %s, want the claimed spare %s", res.InstanceID, spare)
+	}
+	if len(f.insts) != before {
+		t.Fatal("a recovery with a spare available ran a fresh instance")
+	}
+	if len(vols.detaches) != 1 || !vols.detaches[0] {
+		t.Fatalf("detaches %v: want one forced detach from the dead instance", vols.detaches)
+	}
+	if vols.where() != spare {
+		t.Fatalf("volume attached to %q, want the spare", vols.where())
+	}
+	if f.find(spare).tags["shard_id"] != "s-rec" {
+		t.Fatal("claimed spare not stamped with its shard, so a replayed launch couldn't adopt it")
+	}
+}
+
+// A fresh mint claims the spare and gives it a new volume.
+func TestEC2Provisioner_MintClaimsASpare(t *testing.T) {
+	vols := &swapVolumes{shardID: "s-other"}
+	p, f, spare := pooledProvisioner(t, vols)
+	before := len(f.insts)
+	res, err := p.Launch(context.Background(), LaunchSpec{ShardID: "s-new", Tier: "small", AZ: "us-east-2a", SizeGB: 20})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if res.InstanceID != spare || len(f.insts) != before {
+		t.Fatalf("mint landed on %s with %d new instances, want the spare %s and none", res.InstanceID, len(f.insts)-before, spare)
+	}
+	if vols.where() != spare {
+		t.Fatalf("fresh volume attached to %q, want the spare", vols.where())
+	}
+}
+
+// With no spare in the AZ, a launch falls back to running a fresh
+// instance: the pool only ever shortens a path.
+func TestEC2Provisioner_LaunchFallsBackWithoutASpare(t *testing.T) {
+	vols := &swapVolumes{shardID: "s-other"}
+	p, f, spare := pooledProvisioner(t, vols)
+	before := len(f.insts)
+	res, err := p.Launch(context.Background(), LaunchSpec{ShardID: "s-b", Tier: "small", AZ: "us-east-2b", SizeGB: 20})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if res.InstanceID == spare || len(f.insts) != before+1 {
+		t.Fatalf("launch in an AZ without a spare: instance %s, %d new", res.InstanceID, len(f.insts)-before)
 	}
 }
 

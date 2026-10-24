@@ -34,6 +34,9 @@ type shardRowStore interface {
 	SetExportInstance(id, instanceID string) error
 	ClearExportFacts(id string) error
 	LatestShardDiskBytes(id string) (int64, error)
+
+	// Seamless upgrade facts (migration 104).
+	SetShardUpgrade(id string, f UpgradeFacts) error
 }
 
 // ShardArchiveStat is one (shard, customer) row of archive metadata: the
@@ -333,6 +336,32 @@ func (s ShardStore) ClearExportFacts(id string) error {
 			"export_instance_id":   nil,
 			"export_instance_type": nil,
 			"export_started_at":    nil,
+		}).Error
+}
+
+// SetShardUpgrade writes an upgrade's persisted facts in one narrow
+// update; the zero UpgradeFacts clears them (NULLs, like an un-upgraded
+// row).
+func (s ShardStore) SetShardUpgrade(id string, f UpgradeFacts) error {
+	null := func(v string) any {
+		if v == "" {
+			return nil
+		}
+		return v
+	}
+	var phaseAt any
+	if f.PhaseAt != nil {
+		phaseAt = *f.PhaseAt
+	}
+	return s.db().Model(&Shard{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"upgrade_phase":                 null(string(f.Phase)),
+			"upgrade_origin":                null(string(f.Origin)),
+			"upgrade_phase_at":              phaseAt,
+			"upgrade_successor_instance_id": null(f.SuccessorInstanceID),
+			"upgrade_successor_addr":        null(f.SuccessorAddr),
+			"upgrade_demoted_instance_id":   null(f.DemotedInstanceID),
+			"upgrade_demoted_addr":          null(f.DemotedAddr),
 		}).Error
 }
 

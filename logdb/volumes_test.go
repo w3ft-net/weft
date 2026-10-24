@@ -472,3 +472,27 @@ func collectTags(specs []ec2types.TagSpecification) map[string]string {
 	}
 	return out
 }
+
+// An upgrade's swap and rollback read where the volume is attached to
+// decide their next step, so FindByShard must report it.
+func TestVolumeManager_FindByShard_ReportsTheAttachedInstance(t *testing.T) {
+	mock := &mockEC2Volumes{
+		volumesByShard: map[string]ec2types.Volume{
+			"shard-x": {
+				VolumeId: strPtr("vol-123"),
+				State:    ec2types.VolumeStateInUse,
+				Attachments: []ec2types.VolumeAttachment{
+					{InstanceId: strPtr("i-gone"), State: ec2types.VolumeAttachmentStateDetached},
+					{InstanceId: strPtr("i-now"), State: ec2types.VolumeAttachmentStateAttached},
+				},
+			},
+		},
+	}
+	got, err := NewEC2VolumeManagerWithClient(mock).FindByShard(context.Background(), "shard-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.InstanceID != "i-now" {
+		t.Fatalf("InstanceID = %q, want the attached instance i-now", got.InstanceID)
+	}
+}

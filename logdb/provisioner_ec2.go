@@ -108,7 +108,14 @@ type EC2Provisioner struct {
 
 	pollInterval time.Duration
 	pollAttempts int
+
+	// spares, when set, is the warm pool Launch claims from before running a
+	// fresh instance (docs/plans/shard-seamless-upgrade.md).
+	spares *SparePool
 }
+
+// SetSparePool lets Launch claim warm-pool spares for recoveries and mints.
+func (p *EC2Provisioner) SetSparePool(pool *SparePool) { p.spares = pool }
 
 var (
 	_ ShardLaunchAPI = (*EC2Provisioner)(nil)
@@ -227,8 +234,19 @@ func (p *EC2Provisioner) Launch(ctx context.Context, spec LaunchSpec) (LaunchRes
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("launch %s: %w", spec.ShardID, err)
 	}
+	if instanceID == "" && p.spares != nil {
+		// A warm-pool spare is already booted: claiming one skips the
+		// instance boot. The claim stamps shard_id on it, so a replay of
+		// this launch adopts it through findLiveByShard above.
+		sp, err := p.spares.Claim(ctx, spec.ShardID, spec.Tier, spec.AZ)
+		if err != nil {
+			weftsdk.Infof(ctx, "ec2-provisioner: claim a spare for %s, launching fresh instead: %v", spec.ShardID, err)
+		} else if sp != nil {
+			instanceID = sp.InstanceID
+		}
+	}
 	if instanceID != "" {
-		weftsdk.Infof(ctx, "ec2-provisioner: adopting in-flight instance %s already tagged for %s (idempotent relaunch)", instanceID, spec.ShardID)
+		weftsdk.Infof(ctx, "ec2-provisioner: launching %s on existing instance %s (in-flight relaunch or claimed spare)", spec.ShardID, instanceID)
 	} else {
 		instanceID, err = p.runInstance(ctx, spec, subnet, templateID)
 		if err != nil {
@@ -244,6 +262,22 @@ func (p *EC2Provisioner) Launch(ctx context.Context, spec LaunchSpec) (LaunchRes
 	}
 
 	volumeID := spec.ExistingVolumeID
+	if volumeID != "" {
+		// A recovery launch runs after the dead instance was reaped, but EC2
+		// can take minutes to release its volume. The instance is gone or
+		// going, and ext4's journal and DuckDB's WAL recover the
+		// crash-consistent volume, so force the detach rather than wait.
+		info, err := p.volumes.FindByShard(ctx, spec.ShardID)
+		if err != nil {
+			return LaunchResult{}, fmt.Errorf("launch %s: find volume: %w", spec.ShardID, err)
+		}
+		if info != nil && info.InstanceID != "" && info.InstanceID != instanceID {
+			weftsdk.Infof(ctx, "ec2-provisioner: force-detaching %s from reaped instance %s", volumeID, info.InstanceID)
+			if err := p.volumes.DetachFromInstance(ctx, volumeID, true); err != nil {
+				return LaunchResult{}, fmt.Errorf("launch %s: force-detach %s from %s: %w", spec.ShardID, volumeID, info.InstanceID, err)
+			}
+		}
+	}
 	if volumeID == "" {
 		// Idempotency for the volume too: a crash-replay of a fresh launch
 		// (instance adopted above) must reattach the volume it already

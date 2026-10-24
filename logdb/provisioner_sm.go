@@ -77,6 +77,10 @@ func (p *Provisioner) shardDeps() *ShardDeps {
 		if api, ok := p.launcher.(ShardLaunchAPI); ok {
 			d.Launcher = api
 		}
+		if p.spares != nil {
+			d.Spares = p.spares
+			d.Pauser = grpcPauser{shardSecret: p.config.ShardSecret}
+		}
 		p.sharedDeps = newShardDeps(d)
 	})
 	return p.sharedDeps

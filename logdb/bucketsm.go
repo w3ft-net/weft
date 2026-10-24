@@ -284,7 +284,7 @@ func (b *BucketSM) onEnterRotating(ctx context.Context, args ...any) error {
 		weftsdk.Infof(ctx, "bucketsm %d (%s): enter ROTATING — no controller, nothing to rotate", b.ID, b.Label)
 		return nil
 	}
-	ing, err := b.shardsInStates(servingCohort...)
+	ing, err := b.rotationCohort()
 	if err != nil {
 		return fmt.Errorf("bucketsm %d: rotating cohort query: %w", b.ID, err)
 	}
@@ -505,7 +505,7 @@ func (b *BucketSM) evaluateWarming(ctx context.Context) error {
 // in a window older than the newest. onEnterRotating fired
 // RotateRequested at entry; this waits for each to land in READ_ONLY.
 func (b *BucketSM) evaluateRotating(ctx context.Context) error {
-	ing, err := b.shardsInStates(servingCohort...)
+	ing, err := b.rotationCohort()
 	if err != nil {
 		return fmt.Errorf("bucketsm %d: rotating gate query: %w", b.ID, err)
 	}
@@ -575,6 +575,24 @@ func (b *BucketSM) shardsInStates(states ...ShardState) ([]*Shard, error) {
 		return nil, err
 	}
 	return shards, nil
+}
+
+// rotationCohort is what a rotation rotates and then waits on: the serving
+// cohort plus any shard mid-upgrade that will return to it (its writes are
+// held across the volume move, never rerouted). An UPGRADING shard takes
+// RotateRequested in place, amending the state it returns to.
+func (b *BucketSM) rotationCohort() ([]*Shard, error) {
+	rows, err := b.shardsInStates(append(servingCohort, StateUpgrading)...)
+	if err != nil {
+		return nil, err
+	}
+	out := rows[:0]
+	for _, r := range rows {
+		if r.State != StateUpgrading || (r.UpgradePhase != "" && ingestingLike(r.UpgradeOrigin)) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 // liveCohort / servingCohort name the state sets the bucket gates query
