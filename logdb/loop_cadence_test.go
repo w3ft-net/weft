@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/store"
 )
 
 // ARCHIVED and GONE shards have no instance and nothing to converge: the
@@ -24,16 +26,20 @@ func TestConvergingShards_SkipsTerminalShards(t *testing.T) {
 }
 
 // The deadman's switch measures time, not ticks: a 5s tick must not make
-// a leader give up its lease after 10s of one slow AWS call.
+// a leader give up its lease after 10s of one slow AWS call, and a stuck
+// leader must give way before its lease would have expired.
 func TestProgressStale_HasAFloorUnderFastTicks(t *testing.T) {
 	p := &Provisioner{config: ProvisionerConfig{PollInterval: 5 * time.Second}}
-	p.lastProgress.Store(time.Now().Add(-30 * time.Second).UnixNano())
+	p.lastProgress.Store(time.Now().Add(-15 * time.Second).UnixNano())
 	if p.progressStale() {
-		t.Fatal("stale after 30s at a 5s tick")
+		t.Fatal("stale after 15s at a 5s tick")
 	}
 	p.lastProgress.Store(time.Now().Add(-progressStaleFloor - time.Second).UnixNano())
 	if !p.progressStale() {
 		t.Fatal("not stale past the floor")
+	}
+	if progressStaleFloor >= store.LeaseTTL {
+		t.Fatalf("deadman floor %s is no faster than the lease TTL %s", progressStaleFloor, store.LeaseTTL)
 	}
 }
 

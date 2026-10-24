@@ -9,8 +9,11 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
-// reconcileSparesTimeout bounds one pool pass inside the leader's tick.
-const reconcileSparesTimeout = time.Minute
+// reconcileSparesTimeout bounds one pool pass inside the leader's tick: a
+// few EC2 calls, each normally well under a second. It is the longest
+// thing the tick itself waits on, so it sets progressStaleFloor. A pass
+// cut short finishes on a later tick.
+const reconcileSparesTimeout = 10 * time.Second
 
 // SetSparePool wires the warm pool (docs/plans/shard-seamless-upgrade.md).
 // Nil — dev, docker, tests that don't exercise it — leaves the upgrade,

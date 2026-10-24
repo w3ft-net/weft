@@ -27,10 +27,12 @@ const shardFSMLeaseName = "shard-fsm-leader"
 const progressStaleFactor = 2
 
 // progressStaleFloor is the least time without progress the deadman's
-// switch tolerates, however fast the tick: one tick may legitimately wait
-// on AWS (the warm pool's reconcile, a launch) for longer than a few
-// short ticks.
-const progressStaleFloor = 2 * time.Minute
+// switch tolerates, however fast the tick: the tick itself waits on AWS
+// only in the warm pool's reconcile (reconcileSparesTimeout), so that plus
+// two ticks. Shard Evaluates that wait longer (a swap, an attach) run on
+// workers and don't hold the tick up. Kept under store.LeaseTTL, so a
+// stuck leader gives way about as fast as a dead one.
+const progressStaleFloor = reconcileSparesTimeout + 10*time.Second
 
 // startLeaderElection starts the shard-fsm-leader election loop in a
 // background goroutine, unless Holder or the store is unset — the
