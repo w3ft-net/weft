@@ -6,6 +6,36 @@ a fix. Not a bug tracker; keep entries here only once root-caused, with
 enough detail that fixing them later doesn't require re-discovery. Move an
 entry to `docs/completed/` (or delete it) once fixed.
 
+## `weft-admin roll-shard` without `--target-sha` reports a rolled-back upgrade as done
+
+**Where:** `cmd/weft-admin/wait.go` `pollShardReady`, against the seamless
+upgrade's rollback (`logdb/upgrade.go` `upgradeRollBack`).
+
+**What:** a roll waits for the shard to return to a live serving state with
+a heartbeat after the request. An upgrade that rolls back (the spare never
+opened the shard) returns the shard to its origin state on the old
+instance, which then heartbeats, so without `--target-sha` the wait sees
+success. With it (what `roll-all` passes whenever the coordinator AMI
+carries a `ShardGitSHA` tag) the old SHA keeps the wait going until it
+times out and reports the failure.
+
+**Fix, if it matters:** have `GetShard` surface the last upgrade's outcome
+and fail the wait on a rollback.
+
+## A shard's drain backlog past 200k rows goes to the no-op DLQ
+
+**Where:** `coordinator/drain.go` `enqueue` (`maxQueuedRowsPerShard`).
+
+**What:** each shard has its own send queue so a held ingest (a shard
+paused mid-upgrade) stalls only its rows. A queue that grows past 200k rows
+— a shard whose ingest hangs far longer than a pause's 60s hold — hands
+further batches to the DLQ, which is a no-op, so they are lost (logged
+with the shard and backlog size). The ring buffer upstream overwrites when
+full, also logged and counted (`RingBuffer.Dropped`).
+
+**Fix, if it matters:** a working DLQ, or backpressure from the queue to
+the ingest stream.
+
 ## cut and awk projections run once per row, not once per line, on JSON rows
 
 **Where:** projection pushdown (`planner/passes.go` `pushProjection`) for

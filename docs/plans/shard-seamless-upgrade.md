@@ -1,5 +1,57 @@
 # Seamless shard upgrade: warm spares + pause/redirect
 
+## Status (2026-10-24)
+
+Built on branch `seamless-shard-upgrade`, every piece below, each with the
+tests the plan lists. Where the code lives:
+
+| piece | code |
+|---|---|
+| spare boot, gate, Pause/Resume | `shard/service/gate.go`, `cmd/shard/volume.go`, `deploy/shard-volume.sh` (installed as `/usr/local/sbin/weft-shard-volume`), `deploy/sudoers-weft-shard`, `deploy/startup.sh` |
+| refusal statuses | `shard/refusal.go` |
+| client hold + redirect | `shard/grpc_client.go` (`pauseHoldTimeout` = 60s) |
+| pool | `logdb/sparepool.go`, `logdb/spares_store.go`, `logdb/provisioner_spares.go`, `logdb/provisioner_ec2_spares.go`, migration 104 |
+| UPGRADING phases | `logdb/upgrade.go` |
+| recovery + mint through a claim | `EC2Provisioner.Launch` |
+| drain isolation | `coordinator/drain.go` |
+| end to end | `logdb/upgrade_e2e_test.go` |
+
+Settled while building, beyond or instead of the text below:
+
+- **"Every coordinator routes to the new address"** is a route-convergence
+  grace (2 provisioner ticks), not an observation: every coordinator
+  re-reads the row each tick and now *repoints its live handle* when the
+  row's addr moves (`RefreshFromStore`). That repoint is also the fix for
+  the incident's 634 lost batches: a follower's handle used to stay on the
+  old address because its `Addr` field was refreshed while the connection
+  wasn't, so the heartbeat reconnect never fired.
+- **The demoted instance waits for its pair to be covered** — an unclaimed,
+  heartbeating, current-image spare in its (tier, AZ) — not for a spare
+  launched after the swap: the reconciler replaces the claimed spare as
+  soon as the claim leaves the pair bare, usually mid-swap.
+- **An instance dying mid-upgrade** (the old one while claiming, the new
+  one after the swap, or an old one that won't resume during a rollback)
+  abandons the upgrade: the instance the shard isn't on is terminated, the
+  shard returns to its origin state, and that state's stale check sends it
+  to SUSPENDED, whose recovery now claims a spare too.
+- **A rotation landing mid-upgrade** amends the origin to READ_ONLY in
+  place (UPGRADING takes RotateRequested as an internal transition), and
+  the bucket rotates and waits on a shard mid-upgrade from INGESTING.
+- **Spare tags:** `shard_spare` from birth until the instance is a shard's
+  (released by the reconciler once the shard records it), `shard_id`
+  stamped at claim. A spare boots in spare mode from the tag; one that
+  boots with its volume already attached just activates at once.
+- **The volume helper lives outside `/opt/app`**, which `app` owns: the
+  sudoers rule trusts the helper's contents.
+- **Pause is not judged stale.** A paused instance stops heartbeating by
+  design; a pause that never completes rolls back on its own budget.
+
+Before it can run in prod: the coordinator's instance role needs
+`ec2:DeleteTags` (infrastructure-catalog `shard_ec2_launch`; `CreateTags`
+is already there), and the AMI that ships this must be the one spares and
+coordinators run (it installs the helper and the sudoers rule). Dev
+(Docker launcher, no pool) keeps the old reap-and-relaunch UPGRADING.
+
 ## Why
 
 A shard roll (`weft-admin roll-*`, run by every deploy whose shard binary

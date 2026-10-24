@@ -23,7 +23,14 @@ package logdb
 // layer instead — MatchingEntries treats ARCHIVING exactly like
 // READ_ONLY.
 //
-// UPGRADING is the operator-driven sibling of SUSPENDED: same
+// UPGRADING is an operator-driven roll. With the warm pool wired (prod) it
+// is a serving state: the shard's volume moves to a claimed spare behind a
+// shard-enforced pause, through the persisted UpgradePhase below, and
+// UpgradeComplete returns it to the state it came from (upgrade.go,
+// docs/plans/shard-seamless-upgrade.md). Without the pool (dev) it is the
+// sibling of SUSPENDED described next.
+//
+// Reap-and-relaunch UPGRADING is the operator-driven sibling of SUSPENDED: same
 // reap-then-relaunch recovery logic, but no heartbeat-promotion edge.
 // RelaunchShard fires TriggerRelaunchRequested against a HEALTHY shard
 // whose process keeps heartbeating — landing in SUSPENDED would race
