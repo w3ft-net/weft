@@ -147,6 +147,9 @@ func TestCronBenchedAfterRepeatedTimeouts(t *testing.T) {
 		t.Errorf("page should name the cron and say how to re-enable it:\n%s", pages[0])
 	}
 
+	// A budget the fast run is sure to meet: 100ms is only there to make the
+	// slow one time out, and a loaded CI runner can spend that starting bash.
+	ce.RunTimeout = 10 * time.Second
 	if w := run("fast"); w.LastStatus != "ok" || !w.Enabled || w.ConsecutiveStrikes != 0 {
 		t.Fatalf("fast cron: status=%q enabled=%v strikes=%d", w.LastStatus, w.Enabled, w.ConsecutiveStrikes)
 	}
