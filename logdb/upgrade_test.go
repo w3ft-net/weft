@@ -493,3 +493,33 @@ func TestUpgrade_OnlyTheServingInstancesHeartbeatCounts(t *testing.T) {
 		t.Fatal("the serving instance's heartbeat during an upgrade was dropped")
 	}
 }
+
+// The reconciler replaces the claimed spare as soon as the claim leaves
+// the pair bare, which is usually while the swap is still running. That
+// replacement is the one the demoted instance waits for: the upgrade
+// finishes at the end of the route grace, not after a fallback timeout.
+func TestUpgrade_AReplacementLaunchedDuringTheSwapCounts(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	ctx := context.Background()
+	if err := f.sh.startUpgrade(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate(t) // claimed, paused, swapping (spare not open yet)
+
+	pair := map[SparePair]bool{{"small", "us-east-2a"}: true}
+	if err := f.pool.Reconcile(ctx, pair, func(Spare) SpareUse { return SpareInUse }); err != nil {
+		t.Fatal(err)
+	}
+	heartbeatAll(t, ShardStore{f.db})
+
+	f.cfg.setReady(spareAddr)
+	f.evaluate(t) // resumed
+	f.advance(f.sh.deps.UpgradeRouteGrace + time.Second)
+	f.evaluate(t)
+	if st := f.state(t); st != StateIngesting {
+		t.Fatalf("after the route grace with a heartbeating replacement: %s/%q, want INGESTING", st, f.phase())
+	}
+	if !f.terminated(oldInstance) {
+		t.Fatal("demoted instance not terminated")
+	}
+}

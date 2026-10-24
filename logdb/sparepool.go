@@ -313,15 +313,19 @@ func (p *SparePool) Abandon(ctx context.Context, instanceID string) error {
 	return p.store.DeleteSpare(instanceID)
 }
 
-// ReplacementReady reports whether a spare for (tier, az) launched after
-// since has heartbeat: the demoted instance of an upgrade waits on it.
-func (p *SparePool) ReplacementReady(tier, az string, since time.Time) (bool, error) {
+// Covered reports whether (tier, az) has an unclaimed, heartbeating spare
+// on the current image: an upgrade's demoted instance waits for this before
+// it is terminated. The spare the upgrade claimed no longer counts, so this
+// is its replacement, which the reconciler launches as soon as the claim
+// leaves the pair bare (usually while the swap is still running).
+func (p *SparePool) Covered(tier, az string) (bool, error) {
 	rows, err := p.store.ListSpares()
 	if err != nil {
 		return false, err
 	}
+	current := p.ec2.CurrentImageID()
 	for _, sp := range rows {
-		if sp.Tier == tier && sp.AZ == az && sp.LaunchedAt.After(since) && sp.LastHeartbeatAt != nil {
+		if !sp.claimed() && sp.Tier == tier && sp.AZ == az && sp.ImageID == current && sp.LastHeartbeatAt != nil {
 			return true, nil
 		}
 	}

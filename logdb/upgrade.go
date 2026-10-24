@@ -395,11 +395,11 @@ func (sh *Shard) upgradeFinish(ctx context.Context, f UpgradeFacts) error {
 	if sh.phaseAge(f) < grace {
 		return nil
 	}
-	if sh.deps.Spares != nil && f.PhaseAt != nil {
+	if sh.deps.Spares != nil {
 		sh.mu.RLock()
 		tier, az := sh.Tier, sh.AZ
 		sh.mu.RUnlock()
-		ready, err := sh.deps.Spares.ReplacementReady(tier, az, *f.PhaseAt)
+		ready, err := sh.deps.Spares.Covered(tier, az)
 		if err != nil {
 			return fmt.Errorf("shardsm %s: replacement spare check: %w", sh.ID, err)
 		}
