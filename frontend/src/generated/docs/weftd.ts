@@ -33,8 +33,8 @@ you can.</p>
 source</a>.</p>
 <h3 id="1-install">1. Install</h3>
 <p>Download weftd from the <strong>Downloads</strong> page. Or just use curl:</p>
-<pre><code>curl -LO https://releases.w3ft.net/weftd/v0.31.0/weftd_0.31.0_amd64.deb
-sudo dpkg -i weftd_0.31.0_amd64.deb
+<pre><code>curl -LO https://releases.w3ft.net/weftd/v0.32.0/weftd_0.32.0_amd64.deb
+sudo dpkg -i weftd_0.32.0_amd64.deb
 </code></pre>
 <p>arm64 packages are also available -- just swap the suffix in the paths above.</p>
 <p>The package installs the systemd unit and enables it on boot, but does not
