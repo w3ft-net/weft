@@ -56,6 +56,10 @@ type ShardHeartbeat struct {
 	// an age rather than a timestamp so replaying it needs no agreement
 	// between the coordinator's clock and the database's.
 	Age time.Duration
+	// Spare marks a warm-pool instance's beat (it has no volume and no shard
+	// id). Spare beats refresh the pool's shard_spares row and are never
+	// recorded here or dispatched as a shard's.
+	Spare bool
 }
 
 // RecordHeartbeat upserts the latest beat for this source. The table is a

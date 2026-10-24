@@ -1041,10 +1041,13 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 		RowCount:   req.RowCount,
 		DiskBytes:  req.DiskBytes,
 		BinarySHA:  req.BinarySha,
+		Spare:      req.Spare,
 	}
 	// Persistence is opt-in: a Store-less Server still validates and
-	// dispatches, it just doesn't keep a row.
-	if s.Store != nil {
+	// dispatches, it just doesn't keep a row. A warm-pool spare's beat is
+	// kept on its shard_spares row instead (ProcessHeartbeat), never here:
+	// the catch-up sweep replays this table as shard heartbeats.
+	if s.Store != nil && !hb.Spare {
 		if err := s.Store.RecordHeartbeat(&hb); err != nil {
 			weftsdk.Errorf(ctx, "heartbeat: failed to persist for %s: %v", req.ShardId, err)
 		}

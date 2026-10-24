@@ -251,6 +251,7 @@ type Provisioner struct {
 	Buckets     *BucketManager
 	configurer  ShardConfigurer
 	volumes     VolumeManager // optional; the shard SM creates/attaches/retires EBS volumes through it
+	spares      *SparePool    // optional warm pool; nil = every path launches fresh instances
 	heartbeatMu sync.Mutex    // serialises ProcessHeartbeat with the ticker's adoptFromHeartbeats
 
 	// bucketSMs is the bucket half of the FSM control plane
@@ -570,6 +571,14 @@ func (p *Provisioner) AuthenticateShard(shardID, presented string) error {
 //   - known id, steady state → ObserveHeartbeat: refresh liveness and
 //     reattach the gRPC handle if it's missing (post-restart) or moved.
 func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
+	// A warm-pool spare is not a shard: its beat only refreshes the pool's
+	// record, and must never reach the instance correlation below, which
+	// would take it for a LAUNCHING shard's first heartbeat.
+	if hb.Spare {
+		p.observeSpareHeartbeat(hb)
+		return
+	}
+
 	p.heartbeatMu.Lock()
 	defer p.heartbeatMu.Unlock()
 	ctx := context.Background()
@@ -839,6 +848,10 @@ func (p *Provisioner) evaluateStateMachines(ctx context.Context) {
 		}
 		p.markProgress()
 	})
+
+	// The warm pool converges after the bucket pass so a bucket created or
+	// resized this tick is covered now.
+	p.reconcileSpares(ctx)
 
 	shards := p.registry.Entries()
 	p.enqueueShardEvaluations(ctx, shards)

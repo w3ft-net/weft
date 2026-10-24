@@ -78,6 +78,21 @@ type Shard struct {
 	ExportStartedAt    *time.Time `gorm:"column:export_started_at"`
 	ExportAttempt      int        `gorm:"not null;default:0;column:export_attempt"`
 
+	// ── seamless upgrade (migration 104) ──
+	// The persisted facts an UPGRADING shard's phase re-derives from after a
+	// restart or leader change (docs/plans/shard-seamless-upgrade.md). Like
+	// the export facts: written through ShardStore's narrow methods,
+	// mirrored onto the entry, refreshed by RefreshFromStore. UpgradeOrigin
+	// is the state the upgrade returns to, and what write routing treats the
+	// shard as meanwhile.
+	UpgradePhase               UpgradePhase `gorm:"column:upgrade_phase"`
+	UpgradeOrigin              ShardState   `gorm:"column:upgrade_origin"`
+	UpgradePhaseAt             *time.Time   `gorm:"column:upgrade_phase_at"`
+	UpgradeSuccessorInstanceID string       `gorm:"column:upgrade_successor_instance_id"`
+	UpgradeSuccessorAddr       string       `gorm:"column:upgrade_successor_addr"`
+	UpgradeDemotedInstanceID   string       `gorm:"column:upgrade_demoted_instance_id"`
+	UpgradeDemotedAddr         string       `gorm:"column:upgrade_demoted_addr"`
+
 	// ── retention janitor (migration 066) ──
 	// LastPurgedAt is when the janitor last rewrote (or revisited) this
 	// archived shard. The prior parquet from a rewrite is tombstoned in the
@@ -349,6 +364,15 @@ func (e *Shard) persistedCopy() *Shard {
 		ExportInstanceType: e.ExportInstanceType,
 		ExportStartedAt:    copyTimePtr(e.ExportStartedAt),
 		ExportAttempt:      e.ExportAttempt,
+
+		// Upgrade facts ride along for the same reason.
+		UpgradePhase:               e.UpgradePhase,
+		UpgradeOrigin:              e.UpgradeOrigin,
+		UpgradePhaseAt:             copyTimePtr(e.UpgradePhaseAt),
+		UpgradeSuccessorInstanceID: e.UpgradeSuccessorInstanceID,
+		UpgradeSuccessorAddr:       e.UpgradeSuccessorAddr,
+		UpgradeDemotedInstanceID:   e.UpgradeDemotedInstanceID,
+		UpgradeDemotedAddr:         e.UpgradeDemotedAddr,
 	}
 }
 
@@ -497,6 +521,15 @@ func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 		entry.ExportInstanceType = f.ExportInstanceType
 		entry.ExportStartedAt = f.ExportStartedAt
 		entry.ExportAttempt = f.ExportAttempt
+		// Upgrade facts: same — and a follower needs UpgradeOrigin to keep
+		// write-routing an INGESTING shard through its upgrade.
+		entry.UpgradePhase = f.UpgradePhase
+		entry.UpgradeOrigin = f.UpgradeOrigin
+		entry.UpgradePhaseAt = f.UpgradePhaseAt
+		entry.UpgradeSuccessorInstanceID = f.UpgradeSuccessorInstanceID
+		entry.UpgradeSuccessorAddr = f.UpgradeSuccessorAddr
+		entry.UpgradeDemotedInstanceID = f.UpgradeDemotedInstanceID
+		entry.UpgradeDemotedAddr = f.UpgradeDemotedAddr
 		// Only refresh services when the shard_services read succeeded;
 		// on a transient error leave the existing membership rather than
 		// wiping live routing to nil.

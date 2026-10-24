@@ -117,9 +117,13 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstances
 		}
 	} else {
 		wantShard := ec2FilterValue(in.Filters, "tag:shard_id")
+		wantKey := ec2FilterValue(in.Filters, "tag-key")
 		wantStates := ec2FilterValues(in.Filters, "instance-state-name")
 		for _, inst := range f.insts {
 			if wantShard != "" && inst.tags["shard_id"] != wantShard {
+				continue
+			}
+			if _, has := inst.tags[wantKey]; wantKey != "" && !has {
 				continue
 			}
 			if len(wantStates) > 0 && !ec2Contains(wantStates, inst.state) {
@@ -130,14 +134,62 @@ func (f *fakeEC2) DescribeInstances(_ context.Context, in *ec2.DescribeInstances
 	}
 	var out []ec2types.Instance
 	for _, m := range match {
-		out = append(out, ec2types.Instance{
+		inst := ec2types.Instance{
 			InstanceId: aws.String(m.id),
 			State:      &ec2types.InstanceState{Name: ec2types.InstanceStateName(m.state)},
-		})
+			ImageId:    aws.String(m.imageID),
+		}
+		if !m.launched.IsZero() {
+			inst.LaunchTime = aws.Time(m.launched)
+		}
+		for k, v := range m.tags {
+			inst.Tags = append(inst.Tags, ec2types.Tag{Key: aws.String(k), Value: aws.String(v)})
+		}
+		out = append(out, inst)
 	}
 	return &ec2.DescribeInstancesOutput{
 		Reservations: []ec2types.Reservation{{Instances: out}},
 	}, nil
+}
+
+func (f *fakeEC2) CreateTags(_ context.Context, in *ec2.CreateTagsInput, _ ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, id := range in.Resources {
+		inst := f.find(id)
+		if inst == nil {
+			return nil, fmt.Errorf("InvalidInstanceID.NotFound: %q", id)
+		}
+		for _, t := range in.Tags {
+			inst.tags[aws.ToString(t.Key)] = aws.ToString(t.Value)
+		}
+	}
+	return &ec2.CreateTagsOutput{}, nil
+}
+
+func (f *fakeEC2) DeleteTags(_ context.Context, in *ec2.DeleteTagsInput, _ ...func(*ec2.Options)) (*ec2.DeleteTagsOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, id := range in.Resources {
+		inst := f.find(id)
+		if inst == nil {
+			return nil, fmt.Errorf("InvalidInstanceID.NotFound: %q", id)
+		}
+		for _, t := range in.Tags {
+			delete(inst.tags, aws.ToString(t.Key))
+		}
+	}
+	return &ec2.DeleteTagsOutput{}, nil
+}
+
+// find returns the instance with id, or nil. Caller holds f.mu.
+func (f *fakeEC2) find(id string) *fakeEC2Instance {
+	for _, inst := range f.insts {
+		if inst.id == id {
+			return inst
+		}
+	}
+	return nil
 }
 
 func ec2FilterValue(fs []ec2types.Filter, name string) string {

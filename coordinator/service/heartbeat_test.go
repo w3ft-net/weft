@@ -193,3 +193,29 @@ func TestHeartbeat_UnknownInRegistry_LoadFromStore(t *testing.T) {
 		t.Errorf("expected Unauthenticated, got %s", s.Code())
 	}
 }
+
+// A warm-pool spare's heartbeat never lands in shard_heartbeats: the
+// catch-up sweep replays that table as shard heartbeats, and an empty-id
+// beat from an instance a LAUNCHING shard names would be taken for that
+// shard's first heartbeat. The spare's row in shard_spares records it.
+func TestHeartbeat_SpareIsNotRecordedAsAShardHeartbeat(t *testing.T) {
+	tx, cleanup := testStore(t)
+	defer cleanup()
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: tx})
+	srv := &Server{Coord: coord, Store: tx}
+
+	if _, err := srv.Heartbeat(context.Background(), &pb.ShardHeartbeatRequest{
+		Addr: "10.0.0.7:9000", InstanceId: "i-spare-hb", State: "SPARE", Spare: true,
+	}); err != nil {
+		t.Fatalf("spare heartbeat rejected: %v", err)
+	}
+	beats, err := tx.LiveShardHeartbeats("1 minute")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hb := range beats {
+		if hb.InstanceID == "i-spare-hb" {
+			t.Fatal("a spare's heartbeat was recorded as a shard heartbeat")
+		}
+	}
+}

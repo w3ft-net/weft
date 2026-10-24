@@ -58,6 +58,31 @@ const (
 	StateDegraded ShardState = "DEGRADED"
 )
 
+// UpgradePhase is where an UPGRADING shard is in the move of its volume to
+// a warm-pool spare (docs/plans/shard-seamless-upgrade.md). UPGRADING is a
+// serving state: routing never leaves the shard, and calls that arrive
+// while its volume is moving are held by the shard's gate and the client.
+type UpgradePhase string
+
+const (
+	// PhaseClaiming: a spare is being claimed (or launched on demand) and
+	// awaited; the old instance serves normally.
+	PhaseClaiming UpgradePhase = "claiming"
+	// PhasePausing: the old instance refuses new calls with a redirect to
+	// the spare and drains, then closes DuckDB and unmounts.
+	PhasePausing UpgradePhase = "pausing"
+	// PhaseSwapping: the volume moves to the spare, which mounts it and
+	// opens DuckDB.
+	PhaseSwapping UpgradePhase = "swapping"
+	// PhaseResumed: the spare serves the shard. The demoted instance keeps
+	// redirecting until every coordinator routes to the new address and the
+	// pool's replacement spare heartbeats, then it is terminated.
+	PhaseResumed UpgradePhase = "resumed"
+	// PhaseRollingBack: the spare never readied; the volume goes back to
+	// the demoted instance, which remounts and resumes.
+	PhaseRollingBack UpgradePhase = "rolling_back"
+)
+
 // BucketState is the persisted state of a bucket, mirroring
 // ShardState in shape (string constants, written via the FSM's
 // ExternalStorage). Buckets are coarser-grained than shards: their
