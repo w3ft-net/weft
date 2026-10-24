@@ -1,0 +1,6 @@
+# The shard runs as app and moves its own data volume during a seamless
+# upgrade (docs/plans/shard-seamless-upgrade.md): it unmounts after a Pause
+# drains, and mounts on a spare's activation or a Resume. Exactly these two
+# invocations of the root helper, nothing else. Installed to
+# /etc/sudoers.d/weft-shard (0440) by the AMI build.
+app ALL=(root) NOPASSWD: /usr/local/sbin/weft-shard-volume mount, /usr/local/sbin/weft-shard-volume unmount

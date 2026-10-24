@@ -78,54 +78,37 @@ fi
 # restart reads it back. See docs/plans/ebs-shard-volumes.md.
 if [ "$ROLE" = "shard" ]; then
   echo "shard role: coordinator=${COORDINATOR_NLB:-localhost:9020}"
-
-  # Mount the data volume. The coordinator attaches an EBS volume at
-  # /dev/sdf before completing the instance's ASG lifecycle hook; on
-  # nitro instances the kernel renames it to /dev/nvme1n1 or similar.
-  # Resolve it via ec2-utils (available in all our shard AMIs). If no
-  # data volume is attached within ~60s, fall through — the shard can
-  # still come up on the root volume for dev or container mode.
   MOUNT_POINT=/opt/app/data
-  DEVICE=""
-  for i in $(seq 1 30); do
-    # ebsnvme-id is shipped with ec2-utils on Amazon Linux and Debian
-    # AMIs we build from. It maps /dev/nvme*n* → the requested device
-    # name we asked for at attach time.
-    for nvme in /dev/nvme[1-9]n[0-9]*; do
-      [ -e "$nvme" ] || continue
-      requested=$(ebsnvme-id "$nvme" 2>/dev/null | awk '/Disk/{print $NF}')
-      if [ "$requested" = "/dev/sdf" ] || [ "$requested" = "sdf" ]; then
-        DEVICE=$nvme
-        break 2
-      fi
-    done
-    # On non-nitro / older kernels, /dev/sdf may be the literal path.
-    if [ -e "/dev/sdf" ]; then
-      DEVICE=/dev/sdf
-      break
-    fi
-    sleep 2
-  done
 
-  if [ -n "$DEVICE" ]; then
-    echo "shard data volume detected at $DEVICE"
-    if ! blkid "$DEVICE" >/dev/null 2>&1; then
-      echo "formatting $DEVICE (fresh volume)"
-      mkfs.ext4 -L weft-data "$DEVICE"
-    fi
+  # A warm-pool spare (shard_spare tag, set by the coordinator) has no
+  # volume yet and must not fall back to the root volume below: it boots
+  # empty, and the shard binary mounts the volume through
+  # shard-volume.sh once the coordinator claims the spare and attaches one.
+  # See docs/plans/shard-seamless-upgrade.md.
+  # Fresh token: the one from the top of the script has a 60s TTL and
+  # fetch-config may have outlived it.
+  TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+  SPARE=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" \
+    http://169.254.169.254/latest/meta-data/tags/instance/shard_spare || true)
+  if [ -n "$SPARE" ]; then
+    echo "warm-pool spare: leaving $MOUNT_POINT unmounted for the shard to claim"
     mkdir -p "$MOUNT_POINT"
-    # Use LABEL= so a kernel-induced device rename across reboots
-    # doesn't break the mount.
-    if ! mountpoint -q "$MOUNT_POINT"; then
-      mount -o defaults,noatime LABEL=weft-data "$MOUNT_POINT" \
-        || mount -o defaults,noatime "$DEVICE" "$MOUNT_POINT"
-    fi
-    chown -R app:app "$MOUNT_POINT"
-    echo "shard data volume mounted at $MOUNT_POINT"
+    chown app:app "$MOUNT_POINT"
   else
-    echo "no shard data volume attached; running on root volume (dev/container mode)"
-    mkdir -p "$MOUNT_POINT"
-    chown -R app:app "$MOUNT_POINT"
+    # The coordinator attaches the data volume at /dev/sdf at launch. If
+    # none is attached within ~60s the shard still comes up on the root
+    # volume, for dev or container mode.
+    status=0
+    /usr/local/sbin/weft-shard-volume mount --within 60 || status=$?
+    case "$status" in
+    0) ;;
+    3)
+      echo "no shard data volume attached; running on root volume (dev/container mode)"
+      mkdir -p "$MOUNT_POINT"
+      chown -R app:app "$MOUNT_POINT"
+      ;;
+    *) exit "$status" ;;
+    esac
   fi
 fi
 

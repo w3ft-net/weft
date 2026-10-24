@@ -278,6 +278,19 @@ build {
     destination = "/tmp/export-role.sh"
   }
 
+  # The shard's data-volume helper and the sudoers rule that lets the shard
+  # (running as app) mount and unmount its volume during a seamless upgrade.
+  # See docs/plans/shard-seamless-upgrade.md.
+  provisioner "file" {
+    source      = "deploy/shard-volume.sh"
+    destination = "/tmp/shard-volume.sh"
+  }
+
+  provisioner "file" {
+    source      = "deploy/sudoers-weft-shard"
+    destination = "/tmp/sudoers-weft-shard"
+  }
+
   # load-app-env-extra is weft's per-app hook for the universal
   # /usr/local/bin/load-app-env loader. Composes DB_DSN from the
   # DATABASE_* component env vars (DATABASE_HOST/NAME from the SSM
@@ -306,6 +319,12 @@ build {
       "sudo mv /tmp/startup.sh /tmp/fetch-config.sh /tmp/start-role.sh /tmp/export-role.sh /opt/app/scripts/",
       "sudo mv /tmp/load-app-env-extra /opt/app/scripts/load-app-env-extra",
       "sudo chmod +x /opt/app/scripts/startup.sh /opt/app/scripts/fetch-config.sh /opt/app/scripts/start-role.sh /opt/app/scripts/export-role.sh /opt/app/scripts/load-app-env-extra",
+      # Outside /opt/app (which app owns) and root-owned: the sudoers rule
+      # trusts its content, so app must not be able to replace it.
+      "sudo install -o root -g root -m 0755 /tmp/shard-volume.sh /usr/local/sbin/weft-shard-volume",
+      "sudo visudo -cf /tmp/sudoers-weft-shard",
+      "sudo install -o root -g root -m 0440 /tmp/sudoers-weft-shard /etc/sudoers.d/weft-shard",
+      "rm -f /tmp/shard-volume.sh /tmp/sudoers-weft-shard",
       "sudo mv /tmp/weft-admin-run /opt/app/bin/weft-admin-run",
       "sudo chmod +x /opt/app/bin/weft-admin-run",
       "sudo chown app:app /opt/app/bin/weft-admin-run",

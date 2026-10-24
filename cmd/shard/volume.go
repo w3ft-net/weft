@@ -18,7 +18,7 @@ import (
 // defaultVolumeHelper mounts and unmounts the shard data volume. The shard
 // runs as app, so it calls the helper through a sudoers rule that allows
 // exactly this path (deploy/shard-volume.sh, installed by the AMI build).
-const defaultVolumeHelper = "/opt/app/scripts/shard-volume.sh"
+const defaultVolumeHelper = "/usr/local/sbin/weft-shard-volume"
 
 // hostVolume is the production shardsvc.Volume: the root helper does the
 // device lookup, mkfs of a blank volume, mount, and unmount.

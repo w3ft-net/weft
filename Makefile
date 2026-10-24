@@ -37,6 +37,7 @@ test:
 test-deploy:
 	./deploy/load-app-env-extra_test.sh
 	./deploy/export-role_test.sh
+	./deploy/shard-volume_test.sh
 
 # One-shot integration suite: bring the docker stack up (with the
 # localstack overlay), run the integration tag set, tear down. Wraps
