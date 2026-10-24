@@ -15,6 +15,8 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ── fakes for the volume move ──────────────────────────────────────
@@ -259,6 +261,19 @@ func (f *upgradeFixture) terminated(id string) bool {
 	return contains(f.launch.terminated, id) || contains(f.ec2.terminatedIDs(), id)
 }
 
+// terminations counts the launcher's terminate calls for id.
+func (f *upgradeFixture) terminations(id string) int {
+	f.launch.mu.Lock()
+	defer f.launch.mu.Unlock()
+	n := 0
+	for _, t := range f.launch.terminated {
+		if t == id {
+			n++
+		}
+	}
+	return n
+}
+
 // ── tests ──────────────────────────────────────────────────────────
 
 // The whole upgrade: the shard is never routed away from, its volume moves
@@ -461,6 +476,70 @@ func TestUpgrade_ADifferentLeaderFinishesIt(t *testing.T) {
 	f.evaluate(t)
 	if f.phase() != PhaseResumed {
 		t.Fatalf("new leader's phase: %q, want resumed", f.phase())
+	}
+}
+
+// The first deploy of the seamless upgrade rolls shards whose binary has no
+// Pause. Such an old instance is terminated, as the roll did before, and its
+// volume (force-detached: the instance never unmounted) moves to the spare;
+// the upgrade then finishes as usual, without terminating it a second time.
+func TestUpgrade_APreUpgradeBinaryIsCutOverCold(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	f.pauser.pauseErr = map[string]error{oldAddr: status.Error(codes.Unimplemented, "unknown method Pause")}
+	f.vols.detachErr = errors.New("IncorrectState: the instance never unmounted")
+	if err := f.sh.startUpgrade(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate(t)
+	if f.phase() != PhaseSwapping {
+		t.Fatalf("phase: %q, want swapping", f.phase())
+	}
+	if !f.terminated(oldInstance) {
+		t.Fatal("old instance without Pause was not terminated")
+	}
+	if f.vols.where() != "i-spare" {
+		t.Fatalf("volume attached to %q, want the spare", f.vols.where())
+	}
+
+	f.cfg.setReady(spareAddr)
+	f.evaluate(t)
+	if f.phase() != PhaseResumed {
+		t.Fatalf("phase: %q, want resumed", f.phase())
+	}
+	f.advanceAlive(3 * time.Minute)
+	if err := f.pool.Reconcile(context.Background(), map[SparePair]bool{{"small", "us-east-2a"}: true}, func(Spare) SpareUse { return SpareAdopted }); err != nil {
+		t.Fatal(err)
+	}
+	heartbeatAll(t, ShardStore{f.db})
+	f.evaluate(t)
+	if st := f.state(t); st != StateIngesting || f.phase() != "" {
+		t.Fatalf("after the cut-over: %s/%q, want INGESTING with no phase", st, f.phase())
+	}
+	if n := f.terminations(oldInstance); n != 1 {
+		t.Fatalf("old instance terminated %d times, want once", n)
+	}
+}
+
+// If the spare can't take a cold cut-over's volume, there is no old
+// instance to roll back to: the upgrade is abandoned to recovery.
+func TestUpgrade_AFailedColdCutOverGoesToRecovery(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	f.pauser.pauseErr = map[string]error{oldAddr: status.Error(codes.Unimplemented, "unknown method Pause")}
+	if err := f.sh.startUpgrade(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate(t) // old instance terminated; → swapping, spare never readies
+	f.advance(upgradeSwapBudget + time.Second)
+	f.evaluate(t) // → rolling back
+	f.evaluate(t)
+	if st := f.state(t); st != StateIngesting || f.phase() != "" {
+		t.Fatalf("after a failed cut-over: %s/%q, want the origin state for its stale check to recover", st, f.phase())
+	}
+	if f.pauser.resumed(oldAddr) {
+		t.Fatal("resumed a terminated instance")
+	}
+	if !f.terminated("i-spare") {
+		t.Fatal("the spare that never readied was kept")
 	}
 }
 

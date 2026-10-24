@@ -114,5 +114,8 @@ post_deploy:
     run_remote: sudo /opt/app/bin/weft-admin-run bump-shard-templates
     on_error: fail
   - name: Roll the shard fleet onto the new AMI
-    run_remote: sudo /opt/app/bin/weft-admin-run roll-all
+    # A seamless upgrade leaves UPGRADING only once its old instance is
+    # terminated, after the route grace and a replacement spare: ~5 min
+    # typical, ~32 min at the edge of every phase budget.
+    run_remote: sudo /opt/app/bin/weft-admin-run roll-all --per-shard-timeout 35m
     on_error: fail

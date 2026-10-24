@@ -8,7 +8,9 @@ import (
 	"github.com/qmuntal/stateless"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"github.com/graybeardcorp/weft/auth"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -115,7 +117,10 @@ type UpgradeFacts struct {
 	SuccessorInstanceID string
 	SuccessorAddr       string
 	DemotedInstanceID   string
-	DemotedAddr         string
+	// DemotedAddr is cleared when the demoted instance was terminated
+	// rather than paused (a pre-upgrade binary; cutOverCold): there is no
+	// instance to resume, redirect from, or terminate at the end.
+	DemotedAddr string
 }
 
 func (sh *Shard) upgradeFacts() UpgradeFacts {
@@ -309,6 +314,9 @@ func (sh *Shard) upgradeClaim(ctx context.Context, f UpgradeFacts) error {
 // to the spare, drain, close DuckDB and release the volume. Pause is
 // idempotent, so a lost reply is simply retried.
 func (sh *Shard) upgradePause(ctx context.Context, f UpgradeFacts) error {
+	if f.DemotedAddr == "" {
+		return sh.cutOverCold(ctx, f)
+	}
 	if f.PausedAt == nil {
 		now := sh.deps.Clock()
 		f.PausedAt = &now
@@ -320,11 +328,39 @@ func (sh *Shard) upgradePause(ctx context.Context, f UpgradeFacts) error {
 	pctx, cancel := context.WithTimeout(ctx, pauseRPCTimeout)
 	err := sh.deps.Pauser.Pause(pctx, f.DemotedAddr, f.SuccessorAddr)
 	cancel()
+	if status.Code(err) == codes.Unimplemented {
+		weftsdk.Errorf(ctx, "shardsm %s: old instance %s has no Pause (a pre-upgrade binary); cutting over cold", sh.ID, f.DemotedInstanceID)
+		f.DemotedAddr = ""
+		if err := sh.setUpgradeFacts(f); err != nil {
+			return err
+		}
+		return sh.cutOverCold(ctx, f)
+	}
 	if err != nil {
 		weftsdk.Infof(ctx, "shardsm %s: pause %s toward %s, retrying: %v", sh.ID, f.DemotedAddr, f.SuccessorAddr, err)
 		return sh.giveUpIfOver(ctx, f, upgradePauseBudget)
 	}
 	weftsdk.Infof(ctx, "shardsm %s: upgrade timing: old instance %s drained and released its volume in %s", sh.ID, f.DemotedInstanceID, sh.deps.Clock().Sub(start))
+	f, err = sh.enterPhase(f, PhaseSwapping)
+	if err != nil {
+		return err
+	}
+	return sh.upgradeSwap(ctx, f)
+}
+
+// cutOverCold moves the shard off an old instance whose binary predates
+// Pause, which only the first deploy of the seamless upgrade meets: the
+// instance is terminated, as a roll did before, and the swap force-detaches
+// its volume (it never unmounted) and attaches it to the spare. Callers see
+// the old roll's outage, that once.
+func (sh *Shard) cutOverCold(ctx context.Context, f UpgradeFacts) error {
+	tctx, cancel := context.WithTimeout(ctx, archiveTimeout)
+	err := sh.deps.Launcher.Terminate(tctx, f.DemotedInstanceID)
+	cancel()
+	if err != nil {
+		weftsdk.Infof(ctx, "shardsm %s: terminate pre-upgrade instance %s, retrying: %v", sh.ID, f.DemotedInstanceID, err)
+		return sh.giveUpIfOver(ctx, f, upgradePauseBudget)
+	}
 	f, err = sh.enterPhase(f, PhaseSwapping)
 	if err != nil {
 		return err
@@ -351,7 +387,8 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 	switch info.InstanceID {
 	case f.DemotedInstanceID:
 		start := sh.deps.Clock()
-		if err := sh.deps.Volumes.DetachFromInstance(vctx, info.VolumeID, false); err != nil {
+		cold := f.DemotedAddr == ""
+		if err := sh.deps.Volumes.DetachFromInstance(vctx, info.VolumeID, cold); err != nil {
 			weftsdk.Infof(ctx, "shardsm %s: detach %s from %s: %v", sh.ID, info.VolumeID, f.DemotedInstanceID, err)
 			return sh.giveUpIfOver(ctx, f, upgradeSwapBudget)
 		}
@@ -460,7 +497,7 @@ func (sh *Shard) upgradeFinish(ctx context.Context, f UpgradeFacts) error {
 			weftsdk.Errorf(ctx, "shardsm %s: no replacement spare in %s/%s after %s; finishing the upgrade without one", sh.ID, tier, az, upgradeReplacementBudget)
 		}
 	}
-	if f.DemotedInstanceID != "" && sh.deps.Launcher != nil {
+	if f.DemotedInstanceID != "" && f.DemotedAddr != "" && sh.deps.Launcher != nil {
 		tctx, cancel := context.WithTimeout(ctx, archiveTimeout)
 		err := sh.deps.Launcher.Terminate(tctx, f.DemotedInstanceID)
 		cancel()
@@ -476,6 +513,9 @@ func (sh *Shard) upgradeFinish(ctx context.Context, f UpgradeFacts) error {
 // it. The spare is paused (so callers it admitted go back), terminated,
 // and never returns to the pool.
 func (sh *Shard) upgradeRollBack(ctx context.Context, f UpgradeFacts) error {
+	if f.DemotedAddr == "" {
+		return sh.abortForDeadInstance(ctx, f, "it was terminated for a cold cut-over the spare couldn't take")
+	}
 	info, err := sh.deps.Volumes.FindByShard(ctx, sh.ID)
 	if err != nil {
 		return fmt.Errorf("shardsm %s: find volume: %w", sh.ID, err)
