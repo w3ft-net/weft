@@ -159,7 +159,9 @@ func (s *GRPCShard) redirect(addr string) {
 	s.res.UpdateState(resolver.State{Addresses: []resolver.Address{{Addr: addr}}})
 }
 
-func (s *GRPCShard) homeAddr() string {
+// Home returns the address the shard is recorded to live at, which a pause
+// redirect does not move.
+func (s *GRPCShard) Home() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.home
@@ -216,7 +218,7 @@ func (s *GRPCShard) call(ctx context.Context, op string, retryTransport bool, at
 				s.redirect(successor)
 			}
 		case holding && status.Code(err) == codes.Unavailable:
-			s.redirect(s.homeAddr())
+			s.redirect(s.Home())
 		case retryTransport && isRetriable(err):
 			transportFailures++
 			if transportFailures >= maxRetryAttempts {

@@ -148,6 +148,12 @@ type Shard struct {
 	// same breaker IngestFailures uses. Reset on a successful reconnect and
 	// on DEGRADED re-admit. In-memory (guarded by mu).
 	reconnectFailures int `gorm:"-" json:"-"`
+
+	// locEpoch counts in-process moves of the shard's location (Addr,
+	// InstanceID, Live). RefreshFromStore snapshots it before reading rows and
+	// skips the location fields of any entry whose epoch moved since: its row
+	// read predates the move. Guarded by mu.
+	locEpoch uint64 `gorm:"-" json:"-"`
 }
 
 // ingestRecoveryCooldown is how long a shard stays DEGRADED before
@@ -239,6 +245,7 @@ func (e *Shard) serves(namespaceID uint, service string) bool {
 // (shard.GRPCShard).
 type repointable interface {
 	Addr() string
+	Home() string
 	Repoint(addr string)
 }
 
@@ -436,6 +443,7 @@ func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 	if r.store == nil {
 		return
 	}
+	epochs := r.locationEpochs()
 	fresh, err := r.store.ListShards()
 	if err != nil {
 		weftsdk.Infof(context.Background(), "registry: RefreshFromStore: %v", err)
@@ -480,16 +488,21 @@ func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 		entry.WindowStart = f.WindowStart
 		entry.WindowEnd = f.WindowEnd
 		entry.CreatedAt = f.CreatedAt
-		entry.Addr = f.Addr
-		// The row's addr is the only way a coordinator that doesn't hold the
-		// shard's heartbeat stream learns the shard moved to another instance
-		// (an upgrade's volume swap). Move the live handle with it, or this
-		// coordinator keeps writing to the old instance.
-		if m, ok := entry.Live.(repointable); ok && f.Addr != "" && m.Addr() != f.Addr {
-			m.Repoint(f.Addr)
-			weftsdk.Infof(context.Background(), "registry: shard %s moved to %s; repointed its handle", f.ID, f.Addr)
+		// The location fields move together, and only if nothing in this process
+		// moved the shard since the rows were read: a swap that completed
+		// meanwhile left f holding the old instance.
+		if entry.locEpoch == epochs[f.ID] {
+			entry.Addr = f.Addr
+			// The row's addr is the only way a coordinator that doesn't hold the
+			// shard's heartbeat stream learns the shard moved to another instance
+			// (an upgrade's volume swap). Move the live handle with it, or this
+			// coordinator keeps writing to the old instance.
+			if m, ok := entry.Live.(repointable); ok && f.Addr != "" && m.Home() != f.Addr {
+				m.Repoint(f.Addr)
+				weftsdk.Infof(context.Background(), "registry: shard %s moved to %s; repointed its handle", f.ID, f.Addr)
+			}
+			entry.InstanceID = f.InstanceID
 		}
-		entry.InstanceID = f.InstanceID
 		entry.ParquetPath = f.ParquetPath
 		entry.Tier = f.Tier
 		entry.RowCount = f.RowCount
@@ -1044,4 +1057,18 @@ func (r *ShardRegistry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.entries)
+}
+
+// locationEpochs snapshots every entry's locEpoch, taken before
+// RefreshFromStore reads the rows.
+func (r *ShardRegistry) locationEpochs() map[string]uint64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]uint64, len(r.entries))
+	for id, e := range r.entries {
+		e.mu.RLock()
+		out[id] = e.locEpoch
+		e.mu.RUnlock()
+	}
+	return out
 }

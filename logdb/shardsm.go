@@ -636,6 +636,7 @@ func (sh *Shard) runLaunch() {
 	}
 	sh.mu.Lock()
 	sh.InstanceID = res.InstanceID
+	sh.locEpoch++
 	sh.AZ = res.AZ
 	sh.EBSVolumeID = res.VolumeID
 	sh.mu.Unlock()
@@ -757,6 +758,7 @@ func (sh *Shard) evaluateRecovery(ctx context.Context) error {
 	}
 	sh.mu.Lock()
 	sh.InstanceID = ""
+	sh.locEpoch++
 	sh.mu.Unlock()
 
 	return sh.Fire(ctx, TriggerRelaunch) // → LAUNCHING (recovery relaunch)
@@ -867,6 +869,7 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 		}
 		sh.mu.Lock()
 		sh.InstanceID = ""
+	sh.locEpoch++
 		sh.mu.Unlock()
 	}
 
@@ -986,6 +989,7 @@ func (sh *Shard) configureOnHeartbeat(_ context.Context, args ...any) error {
 	sh.mu.Lock()
 	sh.Addr = hb.Addr
 	sh.InstanceID = hb.InstanceID
+	sh.locEpoch++
 	sh.LastHeartbeatAt = sh.deps.Clock()
 	if hb.RowCount > 0 {
 		sh.RowCount = hb.RowCount
@@ -1132,6 +1136,7 @@ func (sh *Shard) reconnect(ctx context.Context, hb store.ShardHeartbeat) error {
 	old := sh.Live
 	sh.Live = s
 	sh.Addr = hb.Addr
+	sh.locEpoch++
 	if hb.InstanceID != "" {
 		sh.InstanceID = hb.InstanceID
 	}

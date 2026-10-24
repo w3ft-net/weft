@@ -453,6 +453,7 @@ func (sh *Shard) completeSwap(ctx context.Context, f UpgradeFacts, dialed shard.
 	sh.mu.Lock()
 	old := sh.Live
 	sh.InstanceID = f.SuccessorInstanceID
+	sh.locEpoch++
 	sh.Addr = f.SuccessorAddr
 	if dialed != nil {
 		sh.Live = dialed
