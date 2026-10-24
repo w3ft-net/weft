@@ -414,6 +414,33 @@ service WeftAdmin {
   // ListBuckets returns every bucket (id/label/tier/target/state) for
   // `weft-admin roll-all` iteration.
   rpc ListBuckets(ListBucketsRequest) returns (ListBucketsResponse);
+
+  // AuditFleet returns the database half of `weft-admin audit`: every
+  // shard's instance/volume/upgrade-phase facts, the shard_spares rows, and
+  // the running count of ingestion_errors (every DLQ'd batch has a row).
+  // The audit joins it with EC2's view.
+  rpc AuditFleet(AuditFleetRequest) returns (AuditFleetResponse);
+}
+
+message AuditFleetRequest {}
+
+message AuditShardState {
+  string id = 1;
+  string state = 2;
+  string instance_id = 3;
+  string volume_id = 4;
+  string upgrade_phase = 5;
+}
+
+message AuditSpareState {
+  string instance_id = 1;
+  bool claimed = 2;
+}
+
+message AuditFleetResponse {
+  repeated AuditShardState shards = 1;
+  repeated AuditSpareState spares = 2;
+  int64 ingestion_errors = 3;
 }
 
 message ShardHeartbeatRequest {

@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v5.29.3
-// source: proto/weftpb/weft.proto
+// source: weft.proto
 
 package weftpb
 
@@ -374,7 +374,7 @@ var ShardQuery_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "proto/weftpb/weft.proto",
+	Metadata: "weft.proto",
 }
 
 const (
@@ -485,7 +485,7 @@ var WeftCompute_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "proto/weftpb/weft.proto",
+	Metadata: "weft.proto",
 }
 
 const (
@@ -1590,7 +1590,7 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "proto/weftpb/weft.proto",
+	Metadata: "weft.proto",
 }
 
 const (
@@ -1599,6 +1599,7 @@ const (
 	WeftAdmin_GetShard_FullMethodName         = "/weft.WeftAdmin/GetShard"
 	WeftAdmin_ListShards_FullMethodName       = "/weft.WeftAdmin/ListShards"
 	WeftAdmin_ListBuckets_FullMethodName      = "/weft.WeftAdmin/ListBuckets"
+	WeftAdmin_AuditFleet_FullMethodName       = "/weft.WeftAdmin/AuditFleet"
 )
 
 // WeftAdminClient is the client API for WeftAdmin service.
@@ -1642,6 +1643,11 @@ type WeftAdminClient interface {
 	// ListBuckets returns every bucket (id/label/tier/target/state) for
 	// `weft-admin roll-all` iteration.
 	ListBuckets(ctx context.Context, in *ListBucketsRequest, opts ...grpc.CallOption) (*ListBucketsResponse, error)
+	// AuditFleet returns the database half of `weft-admin audit`: every
+	// shard's instance/volume/upgrade-phase facts, the shard_spares rows, and
+	// the running count of ingestion_errors (every DLQ'd batch has a row).
+	// The audit joins it with EC2's view.
+	AuditFleet(ctx context.Context, in *AuditFleetRequest, opts ...grpc.CallOption) (*AuditFleetResponse, error)
 }
 
 type weftAdminClient struct {
@@ -1702,6 +1708,16 @@ func (c *weftAdminClient) ListBuckets(ctx context.Context, in *ListBucketsReques
 	return out, nil
 }
 
+func (c *weftAdminClient) AuditFleet(ctx context.Context, in *AuditFleetRequest, opts ...grpc.CallOption) (*AuditFleetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuditFleetResponse)
+	err := c.cc.Invoke(ctx, WeftAdmin_AuditFleet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WeftAdminServer is the server API for WeftAdmin service.
 // All implementations must embed UnimplementedWeftAdminServer
 // for forward compatibility.
@@ -1743,6 +1759,11 @@ type WeftAdminServer interface {
 	// ListBuckets returns every bucket (id/label/tier/target/state) for
 	// `weft-admin roll-all` iteration.
 	ListBuckets(context.Context, *ListBucketsRequest) (*ListBucketsResponse, error)
+	// AuditFleet returns the database half of `weft-admin audit`: every
+	// shard's instance/volume/upgrade-phase facts, the shard_spares rows, and
+	// the running count of ingestion_errors (every DLQ'd batch has a row).
+	// The audit joins it with EC2's view.
+	AuditFleet(context.Context, *AuditFleetRequest) (*AuditFleetResponse, error)
 	mustEmbedUnimplementedWeftAdminServer()
 }
 
@@ -1767,6 +1788,9 @@ func (UnimplementedWeftAdminServer) ListShards(context.Context, *ListShardsReque
 }
 func (UnimplementedWeftAdminServer) ListBuckets(context.Context, *ListBucketsRequest) (*ListBucketsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListBuckets not implemented")
+}
+func (UnimplementedWeftAdminServer) AuditFleet(context.Context, *AuditFleetRequest) (*AuditFleetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AuditFleet not implemented")
 }
 func (UnimplementedWeftAdminServer) mustEmbedUnimplementedWeftAdminServer() {}
 func (UnimplementedWeftAdminServer) testEmbeddedByValue()                   {}
@@ -1879,6 +1903,24 @@ func _WeftAdmin_ListBuckets_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WeftAdmin_AuditFleet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AuditFleetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftAdminServer).AuditFleet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftAdmin_AuditFleet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftAdminServer).AuditFleet(ctx, req.(*AuditFleetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WeftAdmin_ServiceDesc is the grpc.ServiceDesc for WeftAdmin service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1906,7 +1948,11 @@ var WeftAdmin_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ListBuckets",
 			Handler:    _WeftAdmin_ListBuckets_Handler,
 		},
+		{
+			MethodName: "AuditFleet",
+			Handler:    _WeftAdmin_AuditFleet_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "proto/weftpb/weft.proto",
+	Metadata: "weft.proto",
 }

@@ -71,6 +71,8 @@ func main() {
 		bumpShardTemplatesCmd(os.Args[2:])
 	case "force-remove":
 		forceRemoveCmd(os.Args[2:])
+	case "audit":
+		auditCmd(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -88,6 +90,7 @@ Subcommands:
   roll-all                 roll every live shard across every bucket
   bump-shard-templates     point shard launch templates at /<app>/ami/latest
   force-remove <shard-id>  discard a shard stuck in ARCHIVING (dry run unless --yes)
+  audit                    check the DB and EC2 agree and nothing is mid-upgrade (-save/-baseline track ingestion_errors); exits 1 on a violation
 
 Common flags:
   -coord                coordinator gRPC address (default "localhost:9020")

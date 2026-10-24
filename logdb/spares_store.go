@@ -109,3 +109,12 @@ func (s ShardStore) ObserveSpareHeartbeat(instanceID, addr, binarySHA string, at
 	return s.db().Model(&Spare{}).Where("instance_id = ?", instanceID).
 		Updates(map[string]any{"addr": addr, "binary_sha": binarySHA, "last_heartbeat_at": at}).Error
 }
+
+// IngestionErrorCount is how many batches ingest has failed since the table
+// began: a monotonic counter, so a test's before/after difference is what
+// the test cost. Every DLQ'd batch has a row.
+func (s ShardStore) IngestionErrorCount() (int64, error) {
+	var n int64
+	err := s.db().Raw("SELECT count(*) FROM ingestion_errors").Scan(&n).Error
+	return n, err
+}
