@@ -7,26 +7,16 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
-// TestMatchingEntries_SkipsSuspended pins Issue 2: a SUSPENDED shard
-// must never be returned for query routing.
+// TestMatchingEntries_SuspendedFailsTheQuery pins Issue 2 and its
+// successor. A SUSPENDED shard must never be dialed: its instance is dead
+// or awaiting rebind, so routing it only produced compute's "no grpc_addr
+// or lambda_url" (e.g. shard-20260511T0000-822eab40). But it still holds
+// rows for its window, so skipping it answered with the other shards'
+// rows alone. The query fails instead, naming it.
 //
-// When a shard's instance goes stale, the provisioner sets
-// State=SUSPENDED, Addr="", InstanceID="" — but does NOT clear the
-// (now stale) e.Live pointer. So MatchingEntries' "Addr=="" &&
-// Shard==nil" guard doesn't skip it, and SUSPENDED wasn't in the
-// state-exclusion list (only EXPIRING was). The entry was therefore
-// routed, the descriptor builder took the non-archived branch
-// (GrpcAddr = e.Addr = ""), and compute logged
-// "no grpc_addr or lambda_url" (e.g. shard-20260511T0000-822eab40).
-// ReconstructShard documents SUSPENDED as "instance dead, awaiting
-// replacement. No shard to dial" — it is unqueryable by definition
-// until it rebinds (→ INGESTING/READ_ONLY with a fresh addr) or is
-// archived (→ ARCHIVED, queryable via Lambda).
-//
-// The SUSPENDED entry below is given a NON-empty Addr and a non-nil
-// Shard on purpose: that proves it is excluded by *state*, not
-// incidentally caught by the addr/shard guard.
-func TestMatchingEntries_SkipsSuspended(t *testing.T) {
+// The SUSPENDED entry below is given a NON-empty Addr on purpose: that
+// proves it is caught by *state*, not incidentally by the addr guard.
+func TestMatchingEntries_SuspendedFailsTheQuery(t *testing.T) {
 	now := time.Now()
 	reg := NewShardRegistry()
 
@@ -36,7 +26,7 @@ func TestMatchingEntries_SkipsSuspended(t *testing.T) {
 		WindowStart: now.Add(-30 * time.Minute),
 		WindowEnd:   now.Add(-20 * time.Minute),
 		State:       StateSuspended,
-		Addr:        "10.0.0.9:9000", // non-empty: must still be excluded
+		Addr:        "10.0.0.9:9000", // non-empty: must still be refused
 		RowCount:    500,
 	})
 	reg.Add(&Shard{
@@ -50,16 +40,40 @@ func TestMatchingEntries_SkipsSuspended(t *testing.T) {
 	})
 
 	tr := TimeRange{Start: now.Add(-time.Hour), End: now}
-	got := map[string]bool{}
-	for _, e := range reg.MatchingEntries(tr, servingFor(reg, "vimgym"), store.Tier("")) {
-		got[e.ID] = true
-	}
+	got, err := reg.MatchingEntries(tr, servingFor(reg, "vimgym"), store.Tier(""))
+	requireUnavailable(t, got, err, "shard-suspended")
 
-	if got["shard-suspended"] {
-		t.Error("SUSPENDED shard was returned for query routing — its instance is dead/awaiting rebind, " +
-			"so this only produces the 'no grpc_addr or lambda_url' dial error")
+	// Outside its window, or for a service it doesn't serve, the
+	// SUSPENDED shard has nothing the query needs and doesn't fail it.
+	before := TimeRange{Start: now.Add(-15 * time.Minute), End: now}
+	if got := mustMatch(t, reg, before, servingFor(reg, "vimgym"), store.Tier("")); len(got) != 0 {
+		t.Fatalf("a range after both windows matched %d shards", len(got))
 	}
-	if !got["shard-live"] {
-		t.Error("healthy INGESTING shard in the same window was excluded — regression")
+	if got := mustMatch(t, reg, tr, servingFor(reg, "callbox"), store.Tier("")); len(got) != 0 {
+		t.Fatalf("a service neither shard serves matched %d shards", len(got))
 	}
+}
+
+// A shard relaunching after SUSPENDED or UPGRADING reattaches its old
+// volume: its rows exist but nothing can serve them yet. A fresh LAUNCHING
+// shard has never ingested and holds nothing.
+func TestMatchingEntries_RelaunchingShardFailsTheQuery(t *testing.T) {
+	now := time.Now()
+	reg := NewShardRegistry()
+	mk := func(id string, rows int64) *Shard {
+		return &Shard{
+			ID:          id,
+			Services:    []store.ShardService{{NamespaceID: 1, Service: "vimgym"}},
+			WindowStart: now.Add(-30 * time.Minute),
+			WindowEnd:   now.Add(10 * time.Minute),
+			State:       StateLaunching,
+			RowCount:    rows,
+		}
+	}
+	reg.Add(mk("shard-fresh", 0))
+	reg.Add(mk("shard-relaunching", 500))
+
+	tr := TimeRange{Start: now.Add(-time.Hour), End: now}
+	got, err := reg.MatchingEntries(tr, servingFor(reg, "vimgym"), store.Tier(""))
+	requireUnavailable(t, got, err, "shard-relaunching")
 }

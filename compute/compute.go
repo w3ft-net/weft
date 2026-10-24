@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"sync"
 
@@ -16,6 +17,20 @@ type ComputeMessage struct {
 	ShardID  string
 	Sentinel bool
 }
+
+// MissingRowsError fails a query one of whose shards didn't return all its
+// rows (unreachable, failed, or cut off mid-stream). The answer from the
+// remaining shards would be wrong while looking right, so there is none.
+type MissingRowsError struct {
+	ShardID string
+	Err     error
+}
+
+func (e *MissingRowsError) Error() string {
+	return fmt.Sprintf("can't answer without shard %s: %v", e.ShardID, e.Err)
+}
+
+func (e *MissingRowsError) Unwrap() error { return e.Err }
 
 // Executor is what the coordinator dispatches every query through.
 // Production uses Client (gRPC to the remote compute worker, which
@@ -53,6 +68,7 @@ func FanOutToShards(ctx context.Context, req *pb.ExecuteQueryRequest, job shard.
 			sh, err := resolve(ctx, d)
 			if err != nil {
 				weftsdk.Infof(ctx, "execute-query: resolve shard %s: %v", d.ShardId, err)
+				job.Fail(d.ShardId, err)
 				job.SendSentinel(d.ShardId)
 				return
 			}

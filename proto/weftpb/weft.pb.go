@@ -1128,9 +1128,12 @@ func (x *ExecuteQueryRequest) GetAggregate() string {
 }
 
 type ExecuteQueryStreamResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Lines         []string               `protobuf:"bytes,1,rep,name=lines,proto3" json:"lines,omitempty"`
-	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Lines []string               `protobuf:"bytes,1,rep,name=lines,proto3" json:"lines,omitempty"`
+	Error string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	// missing_shard names the shard whose rows the answer is missing when
+	// error is that shard's failure; the query then has no answer.
+	MissingShard  string `protobuf:"bytes,3,opt,name=missing_shard,json=missingShard,proto3" json:"missing_shard,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1175,6 +1178,13 @@ func (x *ExecuteQueryStreamResponse) GetLines() []string {
 func (x *ExecuteQueryStreamResponse) GetError() string {
 	if x != nil {
 		return x.Error
+	}
+	return ""
+}
+
+func (x *ExecuteQueryStreamResponse) GetMissingShard() string {
+	if x != nil {
+		return x.MissingShard
 	}
 	return ""
 }
@@ -4845,10 +4855,11 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"row_stages\x18\n" +
 	" \x03(\tR\trowStages\x12.\n" +
 	"\x13stages_read_payload\x18\v \x01(\bR\x11stagesReadPayload\x12\x1c\n" +
-	"\taggregate\x18\f \x01(\tR\taggregateJ\x04\b\x06\x10\aR\fshard_secret\"H\n" +
+	"\taggregate\x18\f \x01(\tR\taggregateJ\x04\b\x06\x10\aR\fshard_secret\"m\n" +
 	"\x1aExecuteQueryStreamResponse\x12\x14\n" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\xd8\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12#\n" +
+	"\rmissing_shard\x18\x03 \x01(\tR\fmissingShard\"\xd8\x01\n" +
 	"\x15ShardHeartbeatRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1f\n" +

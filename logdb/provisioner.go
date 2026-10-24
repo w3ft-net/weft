@@ -420,9 +420,11 @@ func (p *Provisioner) ResetIngestFailures(id string) {
 // back to no filter rather than silently returning zero shards.
 //
 // Returns an empty slice if nothing matches — callers can range over
-// it without nil-checking. This is the only path coordinator-side
-// code uses to read shard state for queries.
-func (p *Provisioner) ShardDescriptorsFor(ctx context.Context, tr TimeRange, namespaceID uint, service string, tier store.Tier) []*pb.ShardDescriptor {
+// it without nil-checking — and an *UnavailableShardsError when a shard
+// holding rows for the query can't be queried (see MatchingEntries). This
+// is the only path coordinator-side code uses to read shard state for
+// queries.
+func (p *Provisioner) ShardDescriptorsFor(ctx context.Context, tr TimeRange, namespaceID uint, service string, tier store.Tier) ([]*pb.ShardDescriptor, error) {
 	var serving map[string]struct{}
 	if namespaceID != 0 && p.config.ShardOps != nil {
 		s, err := p.config.ShardOps.ShardIDsServingService(namespaceID, service)
@@ -432,7 +434,10 @@ func (p *Provisioner) ShardDescriptorsFor(ctx context.Context, tr TimeRange, nam
 			serving = s
 		}
 	}
-	entries := p.registry.MatchingEntries(tr, serving, tier)
+	entries, err := p.registry.MatchingEntries(tr, serving, tier)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]*pb.ShardDescriptor, len(entries))
 	for i, e := range entries {
 		e.mu.RLock()
@@ -446,7 +451,7 @@ func (p *Provisioner) ShardDescriptorsFor(ctx context.Context, tr TimeRange, nam
 		e.mu.RUnlock()
 		out[i] = d
 	}
-	return out
+	return out, nil
 }
 
 // Start runs the provisioner loop until the context is cancelled.

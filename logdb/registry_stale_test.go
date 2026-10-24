@@ -2,6 +2,8 @@ package logdb
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,10 +11,11 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
-// TestRegistry_MatchingEntries_SkipsStaleHeartbeat confirms that shards
-// whose LastHeartbeatAt is older than heartbeatStaleThreshold are
-// excluded from query routing.
-func TestRegistry_MatchingEntries_SkipsStaleHeartbeat(t *testing.T) {
+// TestRegistry_MatchingEntries_StaleHeartbeatFailsTheQuery: a shard whose
+// LastHeartbeatAt is older than heartbeatStaleThreshold can't be queried,
+// and since it holds rows in the range the query has no answer without
+// it. Dropping it silently answered with the fresh shard's rows alone.
+func TestRegistry_MatchingEntries_StaleHeartbeatFailsTheQuery(t *testing.T) {
 	freshShard, err := shard.NewDuckDBShard("fresh", "")
 	if err != nil {
 		t.Fatal(err)
@@ -38,12 +41,24 @@ func TestRegistry_MatchingEntries_SkipsStaleHeartbeat(t *testing.T) {
 		LastHeartbeatAt: time.Now().Add(-5 * time.Minute),
 	})
 
-	matching := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt")
-	if len(matching) != 1 {
-		t.Fatalf("expected 1 matching shard (stale skipped), got %d", len(matching))
+	matching, err := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt")
+	requireUnavailable(t, matching, err, "stale")
+}
+
+// requireUnavailable fails the test unless MatchingEntries refused with an
+// *UnavailableShardsError naming exactly ids.
+func requireUnavailable(t *testing.T, matching []*Shard, err error, ids ...string) {
+	t.Helper()
+	var ue *UnavailableShardsError
+	if !errors.As(err, &ue) {
+		t.Fatalf("MatchingEntries = %d shards, err %v; want an UnavailableShardsError naming %v", len(matching), err, ids)
 	}
-	if matching[0].ID != "fresh" {
-		t.Fatalf("expected fresh shard, got %s", matching[0].ID)
+	var got []string
+	for _, d := range ue.Shards {
+		got = append(got, d.ID)
+	}
+	if strings.Join(got, ",") != strings.Join(ids, ",") {
+		t.Fatalf("unavailable shards = %v, want %v (%v)", got, ids, err)
 	}
 }
 
@@ -107,7 +122,7 @@ func TestRegistry_ZeroLastHeartbeatAtCountsAsFresh(t *testing.T) {
 		// LastHeartbeatAt left zero.
 	})
 
-	matching := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt")
+	matching := mustMatch(t, reg, fullRange, servingFor(reg, "vimgym"), "bolt")
 	if len(matching) != 1 {
 		t.Fatalf("zero LastHeartbeatAt should count as fresh; got %d matching", len(matching))
 	}
@@ -152,7 +167,7 @@ func TestRegistry_MatchingEntries_ArchivedShardsIgnoreStaleHeartbeat(t *testing.
 	})
 
 	tr := TimeRange{Start: now.Add(-46 * 24 * time.Hour), End: now.Add(-43 * 24 * time.Hour)}
-	matching := reg.MatchingEntries(tr, servingFor(reg, "vimgym"), "bolt")
+	matching := mustMatch(t, reg, tr, servingFor(reg, "vimgym"), "bolt")
 	if len(matching) != 1 {
 		t.Fatalf("archived shard with real, in-window data was excluded by a stale pre-archival heartbeat; got %d matching", len(matching))
 	}
@@ -250,7 +265,7 @@ func TestAdoptFromHeartbeats_LateSweepKeepsShardLive(t *testing.T) {
 	prov.adoptFromHeartbeats()
 	now = sweptAt.Add(70 * time.Second)
 
-	if got := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt"); len(got) != 1 {
+	if got := mustMatch(t, reg, fullRange, servingFor(reg, "vimgym"), "bolt"); len(got) != 1 {
 		t.Fatalf("a late sweep dropped a shard whose last-read beat was 9s old: %d shards routed, want 1", len(got))
 	}
 	if reg.IngestingShard(1, "vimgym") == nil {
@@ -260,12 +275,12 @@ func TestAdoptFromHeartbeats_LateSweepKeepsShardLive(t *testing.T) {
 		t.Fatal("a late sweep would SUSPEND a shard whose last-read beat was 9s old")
 	}
 
-	// The next sweep no longer sees a beat: now the shard is dead.
+	// The next sweep no longer sees a beat: now the shard is dead, and a
+	// query over its window has no answer.
 	hbs.heartbeats = nil
 	prov.adoptFromHeartbeats()
-	if got := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt"); len(got) != 0 {
-		t.Fatalf("a sweep that saw no beat for 79s still routes the shard: %d shards", len(got))
-	}
+	got, err := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt")
+	requireUnavailable(t, got, err, "shard-elsewhere")
 	if !reg.Get("shard-elsewhere").actuallyStale(context.Background()) {
 		t.Fatal("a sweep that saw no beat for 79s should mark the shard stale")
 	}

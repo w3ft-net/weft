@@ -2,11 +2,14 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/logdb"
 	"github.com/graybeardcorp/weft/planner"
 	"github.com/graybeardcorp/weft/shellfs"
 	"github.com/graybeardcorp/weft/store"
@@ -30,7 +33,11 @@ import (
 // conditionals, functions — anywhere warp.Walk reaches — so query
 // pipelines anywhere in the tree are substituted regardless of
 // nesting depth.
-func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordinator, tr TimeRange, customer string, custID store.OrgID, userID string, alertCtx *AlertContext) {
+//
+// fail, when non-nil, is called with a query's error when its answer is
+// missing rows (missingRows); the run then has no result. Nil (tests)
+// reports those like any other query error.
+func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordinator, tr TimeRange, customer string, custID store.OrgID, userID string, alertCtx *AlertContext, fail func(error)) {
 	if script == nil {
 		return
 	}
@@ -139,8 +146,7 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 					// directory. The dirstack was seeded from the courier.
 					result, err := c.runQuery(ctx, src, interp.DirStack().Cwd(), tr, customer, custID, userID, alertCtx)
 					if err != nil {
-						fmt.Fprintf(stderr, "query: %v\n", err)
-						return 1
+						return queryFailed(stderr, err, fail)
 					}
 					// Draining an already-produced stream: the values (trace
 					// ID) of the propagated ctx above are kept, but its
@@ -150,8 +156,7 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 					for {
 						line, ok, err := result.Stream.Next(drainCtx)
 						if err != nil {
-							fmt.Fprintf(stderr, "query: %v\n", err)
-							return 1
+							return queryFailed(stderr, err, fail)
 						}
 						if !ok {
 							break
@@ -172,6 +177,27 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 		// held alive only through the snapshot captured above.
 		return false
 	})
+}
+
+// queryFailed reports a log query's error and returns its exit status. A
+// query whose answer is missing rows fails the whole run through fail: a
+// script carrying on with a short answer (counting it, alerting on it,
+// writing it to a file) would produce a wrong result that looks right.
+func queryFailed(stderr io.Writer, err error, fail func(error)) int {
+	if fail != nil && missingRows(err) {
+		fail(fmt.Errorf("query: %w", err))
+		return 1
+	}
+	fmt.Fprintf(stderr, "query: %v\n", err)
+	return 1
+}
+
+// missingRows reports whether err means some shard holding rows for the
+// query didn't return them: it couldn't be routed to, or failed.
+func missingRows(err error) bool {
+	var down *logdb.UnavailableShardsError
+	var failed *compute.MissingRowsError
+	return errors.As(err, &down) || errors.As(err, &failed)
 }
 
 // firstBinStage returns the index of the first stage after the source

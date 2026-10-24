@@ -174,10 +174,12 @@ func (s *GRPCShard) QueryToSink(ctx context.Context, sql string, args []any, sin
 		if rowsSent > 0 {
 			// Sink saw partial output; retrying would double-send.
 			weftsdk.Errorf(ctx, "shard %s: QueryToSink mid-stream error after %d rows: %v", s.id, rowsSent, err)
+			sink.Fail(s.id, fmt.Errorf("failed after %d rows: %w", rowsSent, err))
 			return
 		}
 		if !isRetriable(err) {
 			weftsdk.Errorf(ctx, "shard %s: QueryToSink failed: %v (sql=%s)", s.id, err, sql)
+			sink.Fail(s.id, err)
 			return
 		}
 		lastErr = err
@@ -187,6 +189,7 @@ func (s *GRPCShard) QueryToSink(ctx context.Context, sql string, args []any, sin
 		}
 	}
 	weftsdk.Infof(ctx, "shard %s: QueryToSink gave up after %d attempts: %v (sql=%s)", s.id, maxRetryAttempts, lastErr, sql)
+	sink.Fail(s.id, fmt.Errorf("gave up after %d attempts: %w", maxRetryAttempts, lastErr))
 }
 
 // queryToSinkOnce attempts a single QueryToSink streaming pass.

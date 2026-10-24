@@ -162,11 +162,15 @@ func TestColdShard_EmptyResult(t *testing.T) {
 // testSink implements RowSink for testing QueryToSink.
 type testSink struct {
 	rows             []*pb.ResultRow
+	err              error
 	sentinelReceived bool
 }
 
 func (s *testSink) SendRow(row *pb.ResultRow, shardID string) {
 	s.rows = append(s.rows, row)
+}
+func (s *testSink) Fail(shardID string, err error) {
+	s.err = err
 }
 func (s *testSink) SendSentinel(shardID string) {
 	s.sentinelReceived = true

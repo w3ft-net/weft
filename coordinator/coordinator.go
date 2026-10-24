@@ -816,7 +816,10 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 // is baked into LoweredPlan at save time).
 func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
 	nsID := c.resolveNamespaceID(store.OrgID(lp.CustomerID), lp.SourceNamespace)
-	descs := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, lp.SourceService, tier)
+	descs, err := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, lp.SourceService, tier)
+	if err != nil {
+		return nil, err
+	}
 	if len(descs) == 0 {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
@@ -1168,7 +1171,11 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 		tier = c.Store.TierForOrg(custID)
 	}
 	nsID := c.resolveNamespaceID(custID, plan.SourceNamespace)
-	descs := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, plan.SourceService, tier)
+	descs, err := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, plan.SourceService, tier)
+	if err != nil {
+		logQuery(ctx, "query: namespace=%s service=%s: %v", plan.SourceNamespace, plan.SourceService, err)
+		return nil, err
+	}
 	if len(descs) == 0 {
 		logQuery(ctx, "query: no matching shards (namespace=%s, service=%s, customer=%s)", plan.SourceNamespace, plan.SourceService, customer)
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
@@ -1267,7 +1274,11 @@ func (c *Coordinator) executeTraceList(ctx context.Context, plan *planner.QueryP
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
 
-	all := c.Provisioner.ShardDescriptorsFor(ctx, tr, 0, "", tier)
+	all, err := c.Provisioner.ShardDescriptorsFor(ctx, tr, 0, "", tier)
+	if err != nil {
+		logQuery(ctx, "query: trace list stats: %v", err)
+		return nil, err
+	}
 	logQuery(ctx, "query: trace list stats: traces=%d shards=%d sql=%s", len(ids), len(all), plan.TraceStats.SQL)
 	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:       plan.TraceStats.SQL,
@@ -1374,6 +1385,13 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 	stderrR, stderrW := io.Pipe()
 	interp.SetStdout(stdoutW)
 	interp.SetStderr(stderrW)
+	stream := newLiveScriptStream(stdoutR, stderrR)
+	// A log query whose answer is missing rows ends the run as a failure
+	// and stops the script at its next statement.
+	failRun := func(err error) {
+		stream.setRunErr(err)
+		interp.Cancel()
+	}
 
 	bash.RegisterToolCommands(interp)
 
@@ -1444,13 +1462,11 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 
 		RegisterClipboardCommand(interp, c.Store, custID, userID, c.ShareURLBase, tr.Start, tr.End)
 
-		rewriteQueryPipelines(ctx, ast, c, tr, customer, custID, userID, alertCtx)
+		rewriteQueryPipelines(ctx, ast, c, tr, customer, custID, userID, alertCtx, failRun)
 		interp.BinScriptTransform = func(_ string, script *bash.Script) {
-			rewriteQueryPipelines(ctx, script, c, tr, customer, custID, userID, alertCtx)
+			rewriteQueryPipelines(ctx, script, c, tr, customer, custID, userID, alertCtx, failRun)
 		}
 	}
-
-	stream := newLiveScriptStream(stdoutR, stderrR)
 	res := &ExecuteResult{Stream: stream}
 
 	// Run warp asynchronously. The goroutine sets res.Notices and any

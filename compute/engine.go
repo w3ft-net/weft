@@ -202,6 +202,11 @@ type Job struct {
 	streamCh  chan Line           // consume() pushes output here
 	streamErr error               // set by consume before closing streamCh
 
+	// shardErr is the first shard failure (Fail). The answer is missing
+	// that shard's rows, so it fails the query whatever else was emitted.
+	shardErrMu sync.Mutex
+	shardErr   error
+
 	consumeOnce sync.Once
 
 	// drain cache — populated on first Result/MergedRows call.
@@ -227,6 +232,24 @@ func (j *Job) SendRow(row *pb.ResultRow, shardID string) {
 // SendSentinel implements shard.RowSink.
 func (j *Job) SendSentinel(shardID string) {
 	j.Send(ComputeMessage{ShardID: shardID, Sentinel: true})
+}
+
+// Fail implements shard.RowSink. It is recorded before the shard's
+// sentinel is sent, so once the merge has seen every sentinel it has seen
+// every failure.
+func (j *Job) Fail(shardID string, err error) {
+	j.shardErrMu.Lock()
+	defer j.shardErrMu.Unlock()
+	if j.shardErr == nil {
+		j.shardErr = &MissingRowsError{ShardID: shardID, Err: err}
+	}
+}
+
+// shardFailure is the first shard failure Fail recorded, if any.
+func (j *Job) shardFailure() error {
+	j.shardErrMu.Lock()
+	defer j.shardErrMu.Unlock()
+	return j.shardErr
 }
 
 // Stream returns a forward-only line stream of the job's output. Lines
@@ -460,6 +483,13 @@ func (j *Job) feed(sink func(*pb.ResultRow) bool) {
 // error after the channel signals exhaustion.
 func (j *Job) consume() {
 	defer close(j.streamCh)
+	// Runs before the close: every path below returns only after the merge
+	// has seen every shard's sentinel.
+	defer func() {
+		if err := j.shardFailure(); err != nil {
+			j.streamErr = err
+		}
+	}()
 
 	if len(j.stages) == 0 {
 		if j.traceTag {
@@ -511,7 +541,9 @@ func (j *Job) consume() {
 	// comes only after all shards drain — which is intrinsic to "last
 	// N" semantics (the merge can't know what the last N are until it
 	// has seen everything).
+	writerDone := make(chan struct{})
 	go func() {
+		defer close(writerDone)
 		defer stdinW.Close()
 		if awkVarsCh != nil {
 			defer close(awkVarsCh)
@@ -558,6 +590,10 @@ func (j *Job) consume() {
 			}
 		}
 		exitCode, err = bash.RunStreamingWithOptions(pipeline, stdinR, stdoutW, &stderrBuf, opts)
+		// A pipeline that stopped reading early (head) must not strand the
+		// writer: its writes now fail, and it drains the remaining shards to
+		// their sentinels without emitting.
+		stdinR.Close()
 		if err != nil {
 			runErrCh <- fmt.Errorf("compute: %w", err)
 			return
@@ -579,15 +615,15 @@ func (j *Job) consume() {
 	}
 	if err := scanner.Err(); err != nil {
 		j.streamErr = fmt.Errorf("compute: read stdout: %w", err)
-		// Drain runner before returning so we don't leak the goroutine.
+		// Drain runner and writer before returning so we don't leak them.
 		<-runErrCh
+		<-writerDone
 		return
 	}
 	if err := <-runErrCh; err != nil {
 		j.streamErr = err
 	}
-	// The writer set feedErr before closing the pipeline's stdin, which
-	// the pipeline read to EOF before finishing.
+	<-writerDone
 	if j.feedErr != nil {
 		j.streamErr = j.feedErr
 	}

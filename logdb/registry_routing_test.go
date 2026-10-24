@@ -9,6 +9,17 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
+// mustMatch is MatchingEntries for a registry whose every shard can be
+// queried: an *UnavailableShardsError fails the test.
+func mustMatch(t *testing.T, reg *ShardRegistry, tr TimeRange, serving map[string]struct{}, tier store.Tier) []*Shard {
+	t.Helper()
+	out, err := reg.MatchingEntries(tr, serving, tier)
+	if err != nil {
+		t.Fatalf("MatchingEntries: %v", err)
+	}
+	return out
+}
+
 // servingFor builds the serving set a query for app would resolve to,
 // mirroring the per-entry hasApp match that MatchingEntries used to do
 // internally. Tests whose real subject is staleness / suspension /
@@ -76,7 +87,7 @@ func TestRegistry_ServingSetQueryRouting(t *testing.T) {
 		return s
 	}
 
-	matching := reg.MatchingEntries(fullRange, serving("shard-vimgym"), store.Tier("bolt"))
+	matching := mustMatch(t, reg, fullRange, serving("shard-vimgym"), store.Tier("bolt"))
 	if len(matching) != 1 {
 		t.Fatalf("expected 1 shard for the vimgym serving set, got %d", len(matching))
 	}
@@ -84,19 +95,19 @@ func TestRegistry_ServingSetQueryRouting(t *testing.T) {
 		t.Fatalf("expected shard-vimgym, got %s", matching[0].ID)
 	}
 
-	matching = reg.MatchingEntries(fullRange, serving("shard-callbox"), store.Tier("bolt"))
+	matching = mustMatch(t, reg, fullRange, serving("shard-callbox"), store.Tier("bolt"))
 	if len(matching) != 1 || matching[0].ID != "shard-callbox" {
 		t.Fatalf("expected only shard-callbox, got %v", matching)
 	}
 
 	// Nil serving set = no service filter = all shards in the window.
-	matching = reg.MatchingEntries(fullRange, nil, store.Tier("bolt"))
+	matching = mustMatch(t, reg, fullRange, nil, store.Tier("bolt"))
 	if len(matching) != 2 {
 		t.Fatalf("expected 2 shards for the nil (all-services) set, got %d", len(matching))
 	}
 
 	// Empty (non-nil) serving set = a service no shard serves = nothing.
-	matching = reg.MatchingEntries(fullRange, serving(), store.Tier("bolt"))
+	matching = mustMatch(t, reg, fullRange, serving(), store.Tier("bolt"))
 	if len(matching) != 0 {
 		t.Fatalf("expected 0 shards for the empty serving set, got %d", len(matching))
 	}
@@ -129,7 +140,7 @@ func TestRegistry_DegradedExcludedFromWritesButQueryable(t *testing.T) {
 	}
 
 	// Read routing still includes it.
-	matching := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), store.Tier("bolt"))
+	matching := mustMatch(t, reg, fullRange, servingFor(reg, "vimgym"), store.Tier("bolt"))
 	if len(matching) != 1 || matching[0].ID != "shard-degraded" {
 		t.Fatalf("DEGRADED shard not read-queryable: got %v", matching)
 	}

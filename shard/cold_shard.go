@@ -196,12 +196,15 @@ func (s *ColdShard) QueryToSink(ctx context.Context, query string, args []any, s
 	defer sink.SendSentinel(s.id)
 
 	if s.functionURL != "" {
-		s.queryToSinkRemote(ctx, query, args, sink)
+		if err := s.queryToSinkRemote(ctx, query, args, sink); err != nil {
+			sink.Fail(s.id, err)
+		}
 		return
 	}
 
 	rows, err := s.queryLocal(ctx, query, args)
 	if err != nil {
+		sink.Fail(s.id, err)
 		return
 	}
 	for _, r := range rows {
@@ -209,7 +212,9 @@ func (s *ColdShard) QueryToSink(ctx context.Context, query string, args []any, s
 	}
 }
 
-func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []any, sink RowSink) {
+// queryToSinkRemote streams the Lambda's rows to sink; a non-nil error
+// means the rows it sent (if any) are not all of them.
+func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []any, sink RowSink) error {
 	start := time.Now()
 	traceID, _ := weftsdk.TraceIDFromContext(ctx)
 
@@ -221,31 +226,31 @@ func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []
 	})
 	if err != nil {
 		weftsdk.Infof(ctx, "cold shard %s: marshal request: %v", s.id, err)
-		return
+		return fmt.Errorf("marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.functionURL, bytes.NewReader(body))
 	if err != nil {
 		weftsdk.Infof(ctx, "cold shard %s: build request: %v", s.id, err)
-		return
+		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if err := s.signRequest(req, body); err != nil {
 		weftsdk.Infof(ctx, "cold shard %s: sign request: %v", s.id, err)
-		return
+		return fmt.Errorf("sign request: %w", err)
 	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {
 		weftsdk.Errorf(ctx, "cold shard %s: lambda call failed: %v", s.id, err)
-		return
+		return fmt.Errorf("lambda call failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		weftsdk.Infof(ctx, "cold shard %s: lambda returned %d: %s", s.id, resp.StatusCode, body)
-		return
+		return fmt.Errorf("lambda returned %d: %s", resp.StatusCode, body)
 	}
 
 	rowsSeen := 0
@@ -260,11 +265,11 @@ func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []
 			// logging here doesn't reintroduce the log-spam problem a
 			// hot live-shard path would have.
 			weftsdk.Infof(ctx, "cold shard %s: query completed in %s (%d rows)", s.id, time.Since(start), rowsSeen)
-			return
+			return nil
 		}
 		if err != nil {
 			weftsdk.Errorf(ctx, "cold shard %s: stream read error after %d rows: %v", s.id, rowsSeen, err)
-			return
+			return fmt.Errorf("stream read error after %d rows: %w", rowsSeen, err)
 		}
 		rowsSeen++
 		sink.SendRow(row, s.id)

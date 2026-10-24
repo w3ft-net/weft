@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/graybeardcorp/weft/compute"
@@ -33,7 +34,12 @@ func (s *Server) ExecuteQueryStream(req *pb.ExecuteQueryRequest, out pb.WeftComp
 		line, ok, err := stream.Next(ctx)
 		if err != nil {
 			span.RecordError(err)
-			return out.Send(&pb.ExecuteQueryStreamResponse{Error: err.Error()})
+			resp := &pb.ExecuteQueryStreamResponse{Error: err.Error()}
+			var missing *compute.MissingRowsError
+			if errors.As(err, &missing) {
+				resp.MissingShard, resp.Error = missing.ShardID, missing.Err.Error()
+			}
+			return out.Send(resp)
 		}
 		if !ok {
 			break

@@ -88,7 +88,7 @@ func TestMatchingEntries_AfterRestart(t *testing.T) {
 	// coordinator builds ShardDescriptors from Addr, not from
 	// Shard — a nil Shard with a valid Addr is queryable.
 	tr := TimeRange{Start: now.Add(-30 * time.Minute), End: now}
-	entries := reg2.MatchingEntries(tr, nil, store.TierBolt)
+	entries := mustMatch(t, reg2, tr, nil, store.TierBolt)
 	if len(entries) == 0 {
 		t.Fatal("MatchingEntries returned 0 entries after restart — this is the d477ea2 production bug")
 	}

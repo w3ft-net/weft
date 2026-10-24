@@ -24,6 +24,10 @@ import (
 // RowSink receives result rows streamed from a shard query. compute.Job satisfies this.
 type RowSink interface {
 	SendRow(row *pb.ResultRow, shardID string)
+	// Fail reports that the shard's rows for this query are missing or
+	// incomplete; the query then has no answer. Called before the shard's
+	// SendSentinel.
+	Fail(shardID string, err error)
 	SendSentinel(shardID string)
 }
 
@@ -325,6 +329,7 @@ func (s *DuckDBShard) QueryToSink(ctx context.Context, query string, args []any,
 	rows, err := s.QueryContext(ctx, query, args...)
 	if err != nil {
 		weftsdk.Errorf(ctx, "shard %s: QueryToSink error: %v (sql=%s args=%v)", s.id, err, query, args)
+		sink.Fail(s.id, err)
 		return // sentinel still sent via defer
 	}
 	for _, r := range rows {

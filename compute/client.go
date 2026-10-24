@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
@@ -64,6 +65,9 @@ func (s *grpcLineStream) Next(_ context.Context) (Line, bool, error) {
 				return Line{}, false, nil
 			}
 			return Line{}, false, fmt.Errorf("compute stream: %w", err)
+		}
+		if resp.MissingShard != "" {
+			return Line{}, false, &MissingRowsError{ShardID: resp.MissingShard, Err: errors.New(resp.Error)}
 		}
 		if resp.Error != "" {
 			return Line{}, false, fmt.Errorf("compute error: %s", resp.Error)

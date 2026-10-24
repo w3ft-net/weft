@@ -191,13 +191,46 @@ func TestGRPCShard_QueryToSink_RetriesInitialSetup(t *testing.T) {
 	if len(sink.rows) != 1 {
 		t.Errorf("sink got %d rows, want 1", len(sink.rows))
 	}
+	if sink.err != nil {
+		t.Errorf("a query that succeeded on retry reported a failure: %v", sink.err)
+	}
+}
+
+// A shard query that never succeeds must say so to the sink: its rows are
+// missing from the answer, which is then no answer.
+func TestGRPCShard_QueryToSink_ExhaustedRetriesFail(t *testing.T) {
+	srv := &retryServer{
+		failBeforeOK: 100,
+		failCode:     codes.Unavailable,
+		failMsg:      "connection refused",
+	}
+	addr, stop := startRetryServer(t, srv)
+	defer stop()
+
+	gs, err := NewGRPCShard("test-shard", addr, "")
+	if err != nil {
+		t.Fatalf("NewGRPCShard: %v", err)
+	}
+	defer gs.Close()
+
+	sink := &captureSink{}
+	gs.QueryToSink(context.Background(), "SELECT 1", nil, sink)
+
+	if sink.err == nil {
+		t.Fatal("a query that never reached the shard reported no failure")
+	}
+	if !sink.sawSentinel {
+		t.Error("sink never saw sentinel")
+	}
 }
 
 // captureSink is a minimal RowSink for assertions.
 type captureSink struct {
 	rows        []*pb.ResultRow
+	err         error
 	sawSentinel bool
 }
 
 func (s *captureSink) SendRow(r *pb.ResultRow, _ string) { s.rows = append(s.rows, r) }
+func (s *captureSink) Fail(_ string, err error)          { s.err = err }
 func (s *captureSink) SendSentinel(_ string)             { s.sawSentinel = true }

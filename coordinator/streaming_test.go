@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -110,35 +111,71 @@ func TestExecute_StagedPipelinePopulatesText(t *testing.T) {
 	}
 }
 
-// TestExecute_ShardErrorReturnsPartialResults verifies that a shard
-// which produces no rows (simulating a failure) doesn't crash the
-// query — the coordinator returns partial results from the working
-// shard.
-func TestExecute_ShardErrorReturnsPartialResults(t *testing.T) {
-	c := setupTestCoordinator(t)
-	e := &logdb.Shard{
-		ID:          "shard-1",
-		WindowStart: t1, WindowEnd: t2,
-		State:     logdb.StateIngesting,
-		Live:      &errShard{id: "shard-1"},
-		CreatedAt: time.Now(),
-	}
-	logdb.SeedShard(c.Provisioner, e)
-	stampShardServicesFromApps(t, c, e, []string{"vimgym", "callbox"})
+// A query whose answer is missing a shard's rows has no answer: it fails,
+// naming the shard, rather than returning what the other shards had. Here
+// shard-1 holds rows for the range but every query on it errors.
+func TestExecute_ShardErrorFailsTheQuery(t *testing.T) {
+	for _, pipeline := range []string{`cat vimgym.log`, `cat vimgym.log | sort`, `cat vimgym.log | head -n 1`} {
+		t.Run(pipeline, func(t *testing.T) {
+			c := setupTestCoordinator(t)
+			broken, err := shard.NewDuckDBShard("shard-1", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			broken.Close()
+			addInProcessShard(t, c, &logdb.Shard{
+				ID:          "shard-1",
+				WindowStart: t1, WindowEnd: t2,
+				State:     logdb.StateIngesting,
+				Live:      broken,
+				CreatedAt: time.Now(),
+			}, "vimgym", "callbox")
 
-	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, "kevlar", "")
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
+			requireQueryFails(t, c, pipeline, "shard-1")
+		})
 	}
-	drained, drainErr := res.Drain(context.Background())
-	if drainErr != nil {
-		t.Fatalf("Drain: %v", drainErr)
+}
+
+// A shard that holds rows for the range but can't be queried (SUSPENDED:
+// its instance died) is not left out of the answer; the query fails.
+func TestExecute_UnavailableShardFailsTheQuery(t *testing.T) {
+	for _, st := range []logdb.ShardState{logdb.StateSuspended, logdb.StateUpgrading} {
+		t.Run(string(st), func(t *testing.T) {
+			c := setupTestCoordinator(t)
+			e := &logdb.Shard{
+				ID:          "shard-1",
+				WindowStart: t1, WindowEnd: t2,
+				State:     st,
+				Addr:      "10.0.0.9:9000",
+				RowCount:  25,
+				CreatedAt: time.Now(),
+			}
+			logdb.SeedShard(c.Provisioner, e)
+			stampShardServicesFromApps(t, c, e, []string{"vimgym", "callbox"})
+
+			requireQueryFails(t, c, `cat vimgym.log`, "shard-1")
+		})
 	}
-	if drained == nil {
-		t.Fatal("expected partial results from working shard")
+}
+
+// requireQueryFails runs pipeline over fullRange and fails the test unless
+// the query errors with a message naming shardID.
+func requireQueryFails(t *testing.T, c *Coordinator, pipeline, shardID string) {
+	t.Helper()
+	res, err := c.Execute(context.Background(), pipeline, fullRange, "kevlar", "")
+	if err == nil {
+		d, drainErr := res.Drain(context.Background())
+		if drainErr == nil {
+			n := 0
+			if d != nil {
+				n = len(d.Rows) + len(nonEmptyLines(d.Text))
+			}
+			t.Fatalf("%s succeeded with %d lines although %s's rows are missing (stderr %q)", pipeline, n, shardID, d.Stderr)
+		}
+		err = drainErr
 	}
-	if len(drained.Rows) == 0 && drained.Text == "" {
-		t.Fatal("expected rows from shard-0; got empty result")
+	if !strings.Contains(err.Error(), shardID) {
+		t.Fatalf("%s failed with %q, which doesn't name %s", pipeline, err, shardID)
 	}
 }
 

@@ -127,7 +127,7 @@ func TestRegistry_MatchingEntries_IncludesArchived(t *testing.T) {
 		State: StateArchived, Live: ds, RowCount: 1,
 	})
 
-	matching := reg.MatchingEntries(TimeRange{Start: t0, End: t1}, servingFor(reg, "vimgym"), "bolt")
+	matching := mustMatch(t, reg, TimeRange{Start: t0, End: t1}, servingFor(reg, "vimgym"), "bolt")
 	if len(matching) != 1 {
 		t.Fatalf("expected 1 archived shard in results, got %d", len(matching))
 	}

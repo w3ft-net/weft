@@ -270,6 +270,9 @@ message ExecuteQueryRequest {
 message ExecuteQueryStreamResponse {
   repeated string lines = 1;
   string error = 2;
+  // missing_shard names the shard whose rows the answer is missing when
+  // error is that shard's failure; the query then has no answer.
+  string missing_shard = 3;
 }
 
 // ---------------------------------------------------------------------------

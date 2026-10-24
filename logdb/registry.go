@@ -2,7 +2,10 @@ package logdb
 
 import (
 	"context"
+	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -748,7 +751,12 @@ func (r *ShardRegistry) HasAddr(addr string) bool {
 // within that shard. The clamp here is defense in depth; passing the
 // already-clamped value keeps it idempotent. tier="" yields the
 // trial-tier retention (24h, conservative).
-func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{}, tier store.Tier) []*Shard {
+//
+// A shard that holds rows for the query but can't be queried (its instance
+// is dead or being replaced, or it has stopped heartbeating) is not left
+// out: the query has no answer without its rows, so MatchingEntries returns
+// an *UnavailableShardsError naming every such shard instead.
+func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{}, tier store.Tier) ([]*Shard, error) {
 	if cap := time.Now().Add(-store.LogRetention(tier)); tr.Start.Before(cap) {
 		tr.Start = cap
 	}
@@ -758,43 +766,60 @@ func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{
 
 	asOf := r.LivenessAsOf()
 	var out []*Shard
+	var down []UnavailableShard
 	for _, e := range r.entries {
-		if e.queryable(tr, serving, asOf) {
+		holds, why := e.queryable(tr, serving, asOf)
+		switch {
+		case !holds:
+		case why != "":
+			down = append(down, UnavailableShard{ID: e.ID, Why: why})
+		default:
 			out = append(out, e)
 		}
 	}
-	return out
+	if len(down) > 0 {
+		sort.Slice(down, func(i, j int) bool { return down[i].ID < down[j].ID })
+		return nil, &UnavailableShardsError{Shards: down}
+	}
+	return out, nil
+}
+
+// UnavailableShard is a shard a query needs that can't be queried, and why.
+type UnavailableShard struct {
+	ID  string
+	Why string
+}
+
+// UnavailableShardsError fails a query some of whose rows sit on shards
+// that can't be queried. An answer from the remaining shards would be a
+// wrong answer that looks right, so there is none.
+type UnavailableShardsError struct {
+	Shards []UnavailableShard
+}
+
+func (e *UnavailableShardsError) Error() string {
+	parts := make([]string, len(e.Shards))
+	for i, d := range e.Shards {
+		parts[i] = d.ID + " (" + d.Why + ")"
+	}
+	return "can't answer without " + strings.Join(parts, ", ") + ": they hold rows in this query's time range"
 }
 
 // queryable applies MatchingEntries' per-entry filter under the entry's
 // read lock. Note: the entry pointer it qualifies is still returned to
 // the caller, which must take e.mu before reading its fields (e.g.
 // ShardDescriptorsFor does).
-func (e *Shard) queryable(tr TimeRange, serving map[string]struct{}, asOf time.Time) bool {
+//
+// It reports whether the entry holds rows this query needs (holds) and,
+// when it does, why it can't be queried (why; "" = queryable).
+func (e *Shard) queryable(tr TimeRange, serving map[string]struct{}, asOf time.Time) (holds bool, why string) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	if e.Addr == "" && e.Live == nil {
-		return false
-	}
-	// SUSPENDED (instance dead, awaiting rebind) and UPGRADING (operator-
-	// driven roll, instance about to be terminated by evaluateRecovery)
-	// are both unqueryable: they keep a stale non-nil Shard pointer so the
-	// Addr==""/Shard==nil guard doesn't catch them, and routing them only
-	// yields "no grpc_addr or lambda_url".
-	if e.State == StateSuspended || e.State == StateUpgrading {
-		return false
-	}
-	// Staleness (missed heartbeats) is a live-instance liveness signal —
-	// meaningless once a shard is ARCHIVED, since it has no instance left
-	// to go stale. evaluateArchiving clears LastHeartbeatAt in memory when
-	// the archive completes, but that clear is never persisted (Store.
-	// SetShardParquetPath only updates parquet_path), so LoadFromStore
-	// rehydrates the shard's stale pre-archival heartbeat from Postgres on
-	// every coordinator restart. Applying isStale() here excluded every
-	// archived shard from queries the moment the coordinator next
-	// restarted — silently, with no error or log trace.
-	if e.State != StateArchived && e.isStale(asOf) {
-		return false
+	// GONE's data is destroyed: it has no rows anything could return. A
+	// fresh LAUNCHING shard has never ingested; a relaunch after SUSPENDED
+	// or UPGRADING reattaches the old volume and keeps its row count.
+	if e.State == StateGone || (e.State == StateLaunching && e.RowCount == 0) {
+		return false, ""
 	}
 	// An ARCHIVED / ARCHIVING / READ_ONLY shard with zero rows has nothing
 	// to return; dialing it is pure waste. ARCHIVING is grouped with
@@ -802,18 +827,45 @@ func (e *Shard) queryable(tr TimeRange, serving map[string]struct{}, asOf time.T
 	// queryable until the export swaps in the ColdShard. Live INGESTING
 	// shards are exempt: a transient 0 count just means it hasn't filled.
 	if e.RowCount == 0 && (e.State == StateArchived || e.State == StateArchiving || e.State == StateReadOnly) {
-		return false
+		return false, ""
 	}
 	hasWindow := !e.WindowStart.IsZero() && !e.WindowEnd.IsZero()
 	if hasWindow && (!e.WindowStart.Before(tr.End) || !e.WindowEnd.After(tr.Start)) {
-		return false
+		return false, ""
 	}
 	if serving != nil {
 		if _, ok := serving[e.ID]; !ok {
-			return false
+			return false, ""
 		}
 	}
-	return true
+
+	// SUSPENDED (instance dead, awaiting rebind) and UPGRADING (operator-
+	// driven roll, instance about to be terminated by evaluateRecovery)
+	// keep a stale non-nil Shard pointer, so they are caught by state;
+	// routing them only yields "no grpc_addr or lambda_url".
+	switch e.State {
+	case StateSuspended:
+		return true, "SUSPENDED: its instance died"
+	case StateUpgrading:
+		return true, "UPGRADING: its instance is being replaced"
+	case StateLaunching:
+		return true, "LAUNCHING: its replacement instance is starting"
+	}
+	// Staleness (missed heartbeats) is a live-instance liveness signal —
+	// meaningless once a shard is ARCHIVED, since it has no instance left
+	// to go stale. evaluateArchiving clears LastHeartbeatAt in memory when
+	// the archive completes, but that clear is never persisted (Store.
+	// SetShardParquetPath only updates parquet_path), so LoadFromStore
+	// rehydrates the shard's stale pre-archival heartbeat from Postgres on
+	// every coordinator restart, and judging it here would fail every
+	// query over archived data the moment the coordinator next restarted.
+	if e.State != StateArchived && e.isStale(asOf) {
+		return true, fmt.Sprintf("no heartbeat for %s", asOf.Sub(e.LastHeartbeatAt).Round(time.Second))
+	}
+	if e.Addr == "" && e.Live == nil {
+		return true, string(e.State) + " with no address to query"
+	}
+	return true, ""
 }
 
 // IngestingShard returns an INGESTING shard serving (namespaceID,

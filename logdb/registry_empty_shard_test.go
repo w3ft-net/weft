@@ -36,7 +36,7 @@ func TestMatchingEntries_SkipsEmptyColdShards(t *testing.T) {
 
 	tr := TimeRange{Start: now.Add(-time.Hour), End: now}
 	got := map[string]bool{}
-	for _, e := range reg.MatchingEntries(tr, nil, store.Tier("")) {
+	for _, e := range mustMatch(t, reg, tr, nil, store.Tier("")) {
 		got[e.ID] = true
 	}
 
