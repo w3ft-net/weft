@@ -43,15 +43,16 @@ type Server struct {
 	// or a spare's Activate. Nil (dev, container mode) skips both.
 	Volume Volume
 
-	// The gate (gate.go): gateMu guards mode, successor, inflight, spare and
-	// released. It is separate from mu so admitting a call never waits on a
-	// database open.
+	// The gate (gate.go): gateMu guards mode, successor, inflight, queries,
+	// spare and released. It is separate from mu so admitting a call never
+	// waits on a database open.
 	gateMu    sync.Mutex
 	mode      serveMode
 	successor string // the address paused refusals redirect to
 	inflight  int
-	spare     bool // a warm-pool instance not yet given a volume
-	released  bool // the volume is not mounted (a spare, or after Pause)
+	queries   map[*gatedQuery]struct{} // admitted queries, which Pause may cut
+	spare     bool                     // a warm-pool instance not yet given a volume
+	released  bool                     // the volume is not mounted (a spare, or after Pause)
 
 	// CfgPtr holds the live runtime config. Consulted by Query to pick
 	// up the current SHARD_QUERY_TIMEOUT_SECONDS on every request. Nil

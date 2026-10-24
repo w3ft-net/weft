@@ -110,7 +110,10 @@ An upgrade:
 2. **Pause.** The FSM leader tells the old shard: pause, your successor is
    at `addr`. Its server interceptor refuses every new call with a
    `paused` status carrying the successor address, and lets in-flight calls
-   finish.
+   finish. Writes always finish; a query still running after 2s is cut (a
+   cron run has 2s anyway, an ad hoc query up to 30s). A cut query that
+   hadn't sent a row is refused as paused and re-runs on the successor; one
+   already streaming fails.
 3. **Swap.** In-flight at zero: the old shard checkpoints, closes DuckDB,
    and the volume is unmounted. The leader detaches the volume and attaches
    it to the spare, which mounts it, opens DuckDB from `shard.json`, and

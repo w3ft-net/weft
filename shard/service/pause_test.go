@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -171,6 +173,8 @@ func TestPause_RefusesNewCallsBeforeTheHandler(t *testing.T) {
 // Pause waits for the calls already admitted: an in-flight call runs to
 // completion before Pause reports the shard drained.
 func TestPause_WaitsForInFlightCalls(t *testing.T) {
+	// Writes are never cut, however long they outlive the query grace.
+	shrinkQueryGrace(t, 10*time.Millisecond)
 	srv, _ := seededServer(t, newFakeVolume(true))
 	unary := srv.UnaryInterceptor()
 
@@ -325,6 +329,84 @@ func TestSpare_ActivatesBlankForAFreshVolume(t *testing.T) {
 	}
 	if err := ingestOne(ctx, c); err != nil {
 		t.Fatalf("ingest after Configure: %v", err)
+	}
+}
+
+func shrinkQueryGrace(t *testing.T, d time.Duration) {
+	prev := pauseQueryGrace
+	pauseQueryGrace = d
+	t.Cleanup(func() { pauseQueryGrace = prev })
+}
+
+// queryStream is the server side of a Query stream, for driving the
+// stream interceptor directly.
+type queryStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (q *queryStream) Context() context.Context { return q.ctx }
+func (q *queryStream) SendMsg(any) error        { return nil }
+
+// startLongQuery admits a Query that runs until its context is cancelled,
+// sending one row first when sendRow is set, and returns what the
+// interceptor answers it with.
+func startLongQuery(t *testing.T, srv *Server, sendRow bool) <-chan error {
+	t.Helper()
+	entered := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.StreamInterceptor()(nil, &queryStream{ctx: context.Background()},
+			&grpc.StreamServerInfo{FullMethod: pb.ShardQuery_Query_FullMethodName},
+			func(_ any, ss grpc.ServerStream) error {
+				if sendRow {
+					if err := ss.SendMsg(&pb.ResultRow{}); err != nil {
+						return err
+					}
+				}
+				close(entered)
+				<-ss.Context().Done()
+				return ss.Context().Err()
+			})
+	}()
+	<-entered
+	return done
+}
+
+// A query still running when the grace runs out is cut so the pause can
+// finish. Having sent nothing, it is refused as paused, naming the
+// successor: the caller re-runs it there.
+func TestPause_CutsAQueryThatOutlivesTheGrace(t *testing.T) {
+	shrinkQueryGrace(t, 50*time.Millisecond)
+	srv, _ := seededServer(t, newFakeVolume(true))
+	answered := startLongQuery(t, srv, false)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := srv.Pause(ctx, &pb.PauseRequest{SuccessorAddr: "succ:9000"}); err != nil {
+		t.Fatalf("Pause with a long query in flight: %v", err)
+	}
+	err := <-answered
+	if kind, succ := shard.ParseRefusal(err); kind != shard.RefusedPaused || succ != "succ:9000" {
+		t.Fatalf("cut query: got %v, want a paused refusal naming succ:9000", err)
+	}
+}
+
+// A query cut after it has streamed rows can't be re-run without sending
+// them twice, so it fails rather than being refused.
+func TestPause_CutsAStreamingQueryAsAFailure(t *testing.T) {
+	shrinkQueryGrace(t, 50*time.Millisecond)
+	srv, _ := seededServer(t, newFakeVolume(true))
+	answered := startLongQuery(t, srv, true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := srv.Pause(ctx, &pb.PauseRequest{SuccessorAddr: "succ:9000"}); err != nil {
+		t.Fatalf("Pause with a streaming query in flight: %v", err)
+	}
+	err := <-answered
+	if kind, _ := shard.ParseRefusal(err); kind != shard.NotRefused || status.Code(err) != codes.Unavailable {
+		t.Fatalf("cut streaming query: got %v, want a plain Unavailable failure", err)
 	}
 }
 

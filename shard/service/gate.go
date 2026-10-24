@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	weftsdk "github.com/w3ft-net/weft-go"
@@ -40,6 +42,35 @@ const (
 // pauseDrainPoll is how often Pause rechecks the in-flight count.
 const pauseDrainPoll = 5 * time.Millisecond
 
+// pauseQueryGrace is how long Pause lets admitted queries run before it
+// cuts them, so one long query can't hold every caller past their hold
+// timeout. Crons get 2s a run, so this never cuts one short; ad hoc
+// queries may run up to ShardQueryTimeoutSeconds (30s). A query cut
+// before its first row is refused as paused and re-runs on the successor;
+// one already streaming fails, since its rows so far are incomplete.
+// Writes are never cut: a cancelled write may already be applied, and its
+// retry would duplicate it. A var for tests.
+var pauseQueryGrace = 2 * time.Second
+
+// errPauseCut is the cancel cause of a query Pause cut.
+var errPauseCut = errors.New("shard paused")
+
+// gatedQuery is an admitted Query stream: its context is the one Pause
+// cancels, and it notes whether a row has gone out.
+type gatedQuery struct {
+	grpc.ServerStream
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	sent   atomic.Bool
+}
+
+func (q *gatedQuery) Context() context.Context { return q.ctx }
+
+func (q *gatedQuery) SendMsg(m any) error {
+	q.sent.Store(true)
+	return q.ServerStream.SendMsg(m)
+}
+
 // gateExempt are the calls the gate never refuses: the leader drives the
 // pause through them.
 var gateExempt = map[string]bool{
@@ -47,11 +78,11 @@ var gateExempt = map[string]bool{
 	pb.ShardQuery_Resume_FullMethodName: true,
 }
 
-// admit lets a call in (counting it in flight) or returns the refusal.
-// The mode check and the count happen under one lock, so a call admitted
-// before Pause flips the mode is one Pause waits for, and none is admitted
-// after.
-func (s *Server) admit(method string) (release func(), err error) {
+// admit lets a call in (counting it in flight, and registering q, a
+// query, as one Pause may cut) or returns the refusal. The mode check and
+// the count happen under one lock, so a call admitted before Pause flips
+// the mode is one Pause waits for, and none is admitted after.
+func (s *Server) admit(method string, q *gatedQuery) (release func(), err error) {
 	if gateExempt[method] {
 		return func() {}, nil
 	}
@@ -64,9 +95,16 @@ func (s *Server) admit(method string) (release func(), err error) {
 		return nil, shard.NotReadyError()
 	}
 	s.inflight++
+	if q != nil {
+		if s.queries == nil {
+			s.queries = map[*gatedQuery]struct{}{}
+		}
+		s.queries[q] = struct{}{}
+	}
 	return func() {
 		s.gateMu.Lock()
 		s.inflight--
+		delete(s.queries, q)
 		s.gateMu.Unlock()
 	}, nil
 }
@@ -75,7 +113,7 @@ func (s *Server) admit(method string) (release func(), err error) {
 // after auth in the chain so an unauthenticated caller learns nothing.
 func (s *Server) UnaryInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		release, err := s.admit(info.FullMethod)
+		release, err := s.admit(info.FullMethod, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -85,16 +123,49 @@ func (s *Server) UnaryInterceptor() grpc.UnaryServerInterceptor {
 }
 
 // StreamInterceptor is UnaryInterceptor for streams. A refused Query fails
-// before it sends a row, so a retry can't double-send.
+// before it sends a row, so a retry can't double-send. A Query that Pause
+// cuts (see pauseQueryGrace) is refused as paused if it hadn't sent a row,
+// so the caller re-runs it on the successor, and fails otherwise.
 func (s *Server) StreamInterceptor() grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		release, err := s.admit(info.FullMethod)
+		if info.FullMethod != pb.ShardQuery_Query_FullMethodName {
+			release, err := s.admit(info.FullMethod, nil)
+			if err != nil {
+				return err
+			}
+			defer release()
+			return handler(srv, ss)
+		}
+		ctx, cancel := context.WithCancelCause(ss.Context())
+		defer cancel(nil)
+		q := &gatedQuery{ServerStream: ss, ctx: ctx, cancel: cancel}
+		release, err := s.admit(info.FullMethod, q)
 		if err != nil {
 			return err
 		}
 		defer release()
-		return handler(srv, ss)
+		err = handler(srv, q)
+		if err == nil || !errors.Is(context.Cause(ctx), errPauseCut) {
+			return err
+		}
+		if q.sent.Load() {
+			return status.Error(codes.Unavailable, "shard paused mid-query; the rows it sent are incomplete")
+		}
+		s.gateMu.Lock()
+		successor := s.successor
+		s.gateMu.Unlock()
+		return shard.PausedError(successor)
 	}
+}
+
+// cutQueries cancels every admitted query and returns how many.
+func (s *Server) cutQueries() int {
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	for q := range s.queries {
+		q.cancel(errPauseCut)
+	}
+	return len(s.queries)
 }
 
 // Spare reports whether this instance is a warm-pool spare that has no
@@ -166,7 +237,8 @@ func (s *Server) openFromDisk() error {
 }
 
 // Pause refuses every new call with a redirect to req.SuccessorAddr, waits
-// for the calls already admitted, then checkpoints and closes DuckDB and
+// for the calls already admitted (cutting queries that outlive
+// pauseQueryGrace), then checkpoints and closes DuckDB and
 // unmounts the volume, so the leader can move it. Idempotent: a repeat
 // only updates the successor. If the drain outlives ctx the shard stays
 // paused with its database open; the leader's Resume brings it back.
@@ -181,8 +253,19 @@ func (s *Server) Pause(ctx context.Context, req *pb.PauseRequest) (*pb.PauseResp
 	s.gateMu.Unlock()
 
 	start := time.Now()
-	if err := s.waitDrained(ctx); err != nil {
-		return nil, err
+	graceCtx, cancelGrace := context.WithTimeout(ctx, pauseQueryGrace)
+	err := s.waitDrained(graceCtx)
+	cancelGrace()
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		if n := s.cutQueries(); n > 0 {
+			weftsdk.Infof(ctx, "shard %s: pause cut %d queries still running after %s", s.Identity(), n, pauseQueryGrace)
+		}
+		if err := s.waitDrained(ctx); err != nil {
+			return nil, err
+		}
 	}
 	drained := time.Now()
 
