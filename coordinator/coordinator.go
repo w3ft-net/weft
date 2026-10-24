@@ -26,6 +26,7 @@ import (
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/theme"
 	"github.com/graybeardcorp/weft/witrepo"
+	"gorm.io/gorm"
 )
 
 // TimeRange aliases logdb.TimeRange so callers inside the coordinator
@@ -1386,13 +1387,25 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 			shellfs.WithContext(context.WithoutCancel(ctx)),
 		}
 		if userID != "" {
-			// The coordinator runLocal path is reached by query
-			// execution and script runs — never by interactive vim
-			// writes (those land on /api/fs/write). Defaulting to
-			// zero perms means a pipeline redirect like `... > /bin/x`
-			// is denied for non-owners; owners route through the FS
-			// endpoint with their session, where it'll succeed.
-			opts = append(opts, shellfs.WithUser(userID, mounts.OrgPerms{}))
+			// A redirect like `... > /cron.d/x` writes with the member's
+			// org_permissions row, the same authority vi's /api/fs/write
+			// save has; no row is default-deny. The system identity crons
+			// run as (empty userID) gets no WithUser and never writes
+			// /bin, /cron.d or /etc.
+			var perms mounts.OrgPerms
+			perm, err := c.Store.GetOrgPermission(custID, userID)
+			switch {
+			case err == nil:
+				perms = mounts.OrgPerms{
+					CanManageFunctions:  perm.CanManageFunctions,
+					CanManageWatches:    perm.CanManageWatches,
+					CanManageEtc:        perm.CanManageEtc,
+					CanCreateNamespaces: perm.CanCreateNamespaces,
+				}
+			case !errors.Is(err, gorm.ErrRecordNotFound):
+				weftsdk.Warnf(ctx, "runLocal: load org perms for %s: %v (writes denied)", userID, err)
+			}
+			opts = append(opts, shellfs.WithUser(userID, perms))
 		}
 		// LogServices feeds LogMount's directory listing. Source it from
 		// the same per-customer ingest discovery the /api/fs path uses

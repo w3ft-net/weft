@@ -7,6 +7,7 @@ import (
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/notices"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // TestCoordinatorQuery_RecordsCreatorOnTmpWrite is the end-to-end
@@ -152,5 +153,51 @@ func TestCoordinatorExecuteForWatch_StoresNullCreator(t *testing.T) {
 	}
 	if row.CreatedByUserID != nil {
 		t.Errorf("watch write should be unattributed; got creator %q", *row.CreatedByUserID)
+	}
+}
+
+// TestCoordinatorExecute_RedirectUsesMemberGroups: a redirect into /bin
+// runs with the caller's org_permissions row, the same authority vi's
+// /api/fs/write save uses. A binmgr member's write lands; a member without
+// the group, and the system identity crons run as, are denied.
+func TestCoordinatorExecute_RedirectUsesMemberGroups(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	alice, err := db.CreateUser("alice-redirect@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := db.CreateUser("bob-redirect@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB().WithContext(store.WithOrg(t.Context(), custID)).Create(&store.OrgPermission{
+		OrgID: custID, UserID: alice.ID, CanManageFunctions: true,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
+	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
+	cust, _ := db.GetOrgByID(custID)
+	write := func(userID, name string) string {
+		res, err := c.Execute(context.Background(), "echo 'echo hi' > /bin/"+name, tr, cust.Name, userID)
+		if err != nil {
+			t.Fatalf("Execute as %q: %v", userID, err)
+		}
+		return drainExec(t, res).Stderr
+	}
+
+	if stderr := write(alice.ID, "from-alice"); stderr != "" {
+		t.Errorf("binmgr member's redirect: stderr %q", stderr)
+	}
+	if fn, err := db.GetShellFunction(custID, "from-alice"); err != nil || fn == nil {
+		t.Errorf("binmgr member's redirect didn't save /bin/from-alice: %v", err)
+	}
+
+	for who, userID := range map[string]string{"member without binmgr": bob.ID, "system": ""} {
+		write(userID, "denied")
+		if fn, err := db.GetShellFunction(custID, "denied"); err == nil && fn != nil {
+			t.Errorf("%s's redirect saved /bin/denied", who)
+		}
 	}
 }
