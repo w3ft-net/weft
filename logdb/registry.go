@@ -219,6 +219,22 @@ func (e *Shard) serves(namespaceID uint, service string) bool {
 	return false
 }
 
+// repointable is a live handle whose address can move under it
+// (shard.GRPCShard).
+type repointable interface {
+	Addr() string
+	Repoint(addr string)
+}
+
+// liveAddr is the address e's live handle actually talks to, or "" when it
+// has none (or can't say). Caller holds e.mu.
+func (e *Shard) liveAddr() string {
+	if m, ok := e.Live.(repointable); ok {
+		return m.Addr()
+	}
+	return ""
+}
+
 // RegistryStore is the persistence surface ShardRegistry needs. The
 // shard-row methods take/return the unified *Shard (no Record↔Entry
 // mapping); production satisfies it with ShardStore (gorm over
@@ -439,6 +455,14 @@ func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 		entry.WindowEnd = f.WindowEnd
 		entry.CreatedAt = f.CreatedAt
 		entry.Addr = f.Addr
+		// The row's addr is the only way a coordinator that doesn't hold the
+		// shard's heartbeat stream learns the shard moved to another instance
+		// (an upgrade's volume swap). Move the live handle with it, or this
+		// coordinator keeps writing to the old instance.
+		if m, ok := entry.Live.(repointable); ok && f.Addr != "" && m.Addr() != f.Addr {
+			m.Repoint(f.Addr)
+			weftsdk.Infof(context.Background(), "registry: shard %s moved to %s; repointed its handle", f.ID, f.Addr)
+		}
 		entry.InstanceID = f.InstanceID
 		entry.ParquetPath = f.ParquetPath
 		entry.Tier = f.Tier

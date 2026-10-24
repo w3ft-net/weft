@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/resolver"
+	"google.golang.org/grpc/resolver/manual"
 	"google.golang.org/grpc/status"
 
 	weftsdk "github.com/w3ft-net/weft-go"
@@ -28,6 +31,14 @@ const (
 	retryBackoff     = 100 * time.Millisecond
 )
 
+// pauseHoldTimeout bounds how long a call waits out a shard's pause (the
+// volume moving to a successor during an upgrade, ~10–30s; see
+// docs/plans/shard-seamless-upgrade.md). It sits inside the query and cron
+// run budgets and well inside what the coordinator's ingest ring buffer
+// absorbs at peak. Past it the call fails: a query reports its rows
+// missing rather than answering without them.
+var pauseHoldTimeout = 60 * time.Second
+
 // isRetriable narrows the retry class to gRPC connection-lifecycle
 // errors. Canceled appears when the underlying *grpc.ClientConn is
 // closed mid-RPC; Unavailable when the new conn after a rebind isn't
@@ -46,11 +57,24 @@ func isRetriable(err error) bool {
 
 // GRPCShard implements the Shard interface by connecting to a remote shard
 // over gRPC. Drop-in replacement for DuckDBShard in the coordinator.
+//
+// The connection resolves through a per-handle manual resolver, so the
+// address can change under a live handle: Repoint follows the shard to a
+// new instance (its shard_records addr moved), and a paused shard's
+// refusal redirects calls to the successor it names. In-flight calls on
+// the old address finish there.
 type GRPCShard struct {
 	id     string
-	addr   string
 	conn   *grpc.ClientConn
 	client pb.ShardQueryClient
+	res    *manual.Resolver
+
+	mu sync.Mutex
+	// home is the address the shard is known to live at (dialed, or set by
+	// Repoint); cur is where calls go now, which a pause redirect can move
+	// ahead of home. A held call goes back home when the successor it was
+	// sent to stops answering (an upgrade rolled back).
+	home, cur string
 }
 
 // NewGRPCShard connects to a remote shard gRPC server. token is the
@@ -59,7 +83,10 @@ type GRPCShard struct {
 // SharedTokenServerInterceptor accepts the connection. Empty token is
 // only valid in tests where the shard also runs without interceptors.
 func NewGRPCShard(id, addr, token string) (*GRPCShard, error) {
-	conn, err := grpc.NewClient(addr,
+	res := manual.NewBuilderWithScheme("weft-shard")
+	res.InitialState(resolver.State{Addresses: []resolver.Address{{Addr: addr}}})
+	conn, err := grpc.NewClient(res.Scheme()+":///"+id,
+		grpc.WithResolvers(res),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor(), auth.ClientTokenUnaryInterceptor(token)),
 		grpc.WithChainStreamInterceptor(weftsdk.GRPC.StreamClientInterceptor(), auth.ClientTokenStreamInterceptor(token)),
@@ -69,22 +96,31 @@ func NewGRPCShard(id, addr, token string) (*GRPCShard, error) {
 	}
 	return &GRPCShard{
 		id:     id,
-		addr:   addr,
 		conn:   conn,
 		client: pb.NewShardQueryClient(conn),
+		res:    res,
+		home:   addr,
+		cur:    addr,
 	}, nil
 }
 
 // Configure calls the Configure RPC to assign identity and time window.
 func (s *GRPCShard) Configure(ctx context.Context, cfg *pb.ConfigureRequest) error {
-	_, err := s.client.Configure(ctx, cfg)
-	return err
+	return s.call(ctx, "Configure", false, func() (bool, error) {
+		_, err := s.client.Configure(ctx, cfg)
+		return false, err
+	})
 }
 
 func (s *GRPCShard) ID() string { return s.id }
 
 func (s *GRPCShard) Archive(ctx context.Context, s3Prefix string) (string, []CustomerStat, error) {
-	resp, err := s.client.Archive(ctx, &pb.ArchiveRequest{S3Prefix: s3Prefix})
+	var resp *pb.ArchiveResponse
+	err := s.call(ctx, "Archive", false, func() (bool, error) {
+		var err error
+		resp, err = s.client.Archive(ctx, &pb.ArchiveRequest{S3Prefix: s3Prefix})
+		return false, err
+	})
 	if err != nil {
 		return "", nil, fmt.Errorf("archive shard %s: %w", s.id, err)
 	}
@@ -95,15 +131,107 @@ func (s *GRPCShard) Close() error {
 	return s.conn.Close()
 }
 
-// Addr returns the gRPC address of this shard.
-func (s *GRPCShard) Addr() string { return s.addr }
+// Addr returns the address calls currently go to.
+func (s *GRPCShard) Addr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cur
+}
+
+// Repoint moves the handle to the shard's new address: the coordinator
+// calls it when the shard's recorded addr changes (an upgrade swapped its
+// volume to another instance), so the handle follows without a redial.
+func (s *GRPCShard) Repoint(addr string) {
+	s.mu.Lock()
+	s.home = addr
+	s.mu.Unlock()
+	s.redirect(addr)
+}
+
+// redirect sends subsequent calls to addr, leaving home where it is.
+func (s *GRPCShard) redirect(addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cur == addr {
+		return
+	}
+	s.cur = addr
+	s.res.UpdateState(resolver.State{Addresses: []resolver.Address{{Addr: addr}}})
+}
+
+func (s *GRPCShard) homeAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.home
+}
+
+// call runs attempt until it succeeds or fails for good. It is where a
+// shard's pause becomes latency instead of an error:
+//
+//   - a paused refusal redirects the handle to the successor it names and
+//     retries; a not-ready refusal (the successor still opening) retries in
+//     place. A refused call was never applied, so every call kind may
+//     retry it. The hold is bounded by pauseHoldTimeout.
+//   - while holding, an Unavailable from the address we were sent to means
+//     the successor went away (a rollback): go back home and retry.
+//   - otherwise a connection-lifecycle error (isRetriable) is retried up to
+//     maxRetryAttempts, but only when retryTransport is set: such a call
+//     may have been applied before the connection dropped, which a read can
+//     repeat and a write can't.
+//
+// attempt reports progressed once it has delivered anything (a row to a
+// sink); after that nothing is retried, since a retry would deliver it
+// twice.
+func (s *GRPCShard) call(ctx context.Context, op string, retryTransport bool, attempt func() (progressed bool, err error)) error {
+	var holdUntil time.Time
+	transportFailures := 0
+	for {
+		progressed, err := attempt()
+		if err == nil || progressed {
+			return err
+		}
+		kind, successor := ParseRefusal(err)
+		holding := !holdUntil.IsZero()
+		switch {
+		case kind != NotRefused:
+			if !holding {
+				holdUntil = time.Now().Add(pauseHoldTimeout)
+				weftsdk.Infof(ctx, "shard %s: %s refused (%v); holding up to %s", s.id, op, err, pauseHoldTimeout)
+			}
+			if kind == RefusedPaused && successor != "" {
+				s.redirect(successor)
+			}
+		case holding && status.Code(err) == codes.Unavailable:
+			s.redirect(s.homeAddr())
+		case retryTransport && isRetriable(err):
+			transportFailures++
+			if transportFailures >= maxRetryAttempts {
+				return fmt.Errorf("shard %s: gave up after %d attempts: %w", s.id, maxRetryAttempts, err)
+			}
+			weftsdk.Errorf(ctx, "shard %s: %s attempt %d failed (%v); retrying", s.id, op, transportFailures, err)
+		default:
+			return err
+		}
+		if holding && time.Now().After(holdUntil) {
+			return fmt.Errorf("shard %s: %s still refused after holding %s: %w", s.id, op, pauseHoldTimeout, err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("shard %s: %s: %w (last error: %v)", s.id, op, ctx.Err(), err)
+		case <-time.After(retryBackoff):
+		}
+	}
+}
 
 // Ingest forwards rows to the remote shard for insertion. On error,
 // reports the failure to rec (if non-nil) and returns an error that
 // carries the resulting consecutive-failure count, so callers only
 // need a single log line.
 func (s *GRPCShard) Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestRecorder) error {
-	_, err := s.client.Ingest(ctx, &pb.IngestRequest{Rows: rows})
+	err := s.call(ctx, "Ingest", false, func() (bool, error) {
+		_, err := s.client.Ingest(ctx, &pb.IngestRequest{Rows: rows})
+		return false, err
+	})
 	if err != nil {
 		// wrapIngestError already names the shard; pass the raw RPC
 		// error so the formatted message reads as one phrase, not two.
@@ -116,26 +244,19 @@ func (s *GRPCShard) Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestRec
 }
 
 // Query executes SQL on the remote shard and collects all result
-// rows. Retries the entire attempt on Canceled/Unavailable up to
-// maxRetryAttempts times — the buffered slice is local, so a failed
-// mid-stream attempt is safely discarded and re-driven from scratch.
+// rows. A failed attempt's buffered rows are discarded, so the whole
+// query is safely re-driven from scratch.
 func (s *GRPCShard) Query(ctx context.Context, sql string, args ...any) ([]*pb.ResultRow, error) {
-	var lastErr error
-	for attempt := 0; attempt < maxRetryAttempts; attempt++ {
-		rows, err := s.queryOnce(ctx, sql, args)
-		if err == nil {
-			return rows, nil
-		}
-		if !isRetriable(err) {
-			return nil, err
-		}
-		lastErr = err
-		if attempt < maxRetryAttempts-1 {
-			weftsdk.Errorf(ctx, "shard %s: Query attempt %d failed (%v); retrying", s.id, attempt+1, err)
-			time.Sleep(retryBackoff)
-		}
+	var rows []*pb.ResultRow
+	err := s.call(ctx, "Query", true, func() (bool, error) {
+		var err error
+		rows, err = s.queryOnce(ctx, sql, args)
+		return false, err
+	})
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("shard %s: gave up after %d attempts: %w", s.id, maxRetryAttempts, lastErr)
+	return rows, nil
 }
 
 func (s *GRPCShard) queryOnce(ctx context.Context, sql string, args []any) ([]*pb.ResultRow, error) {
@@ -158,38 +279,27 @@ func (s *GRPCShard) queryOnce(ctx context.Context, sql string, args []any) ([]*p
 }
 
 // QueryToSink executes SQL on the remote shard and streams rows to
-// the sink. Retries the *pre-first-row* failure window: setup errors
-// and a first-Recv-with-no-rows-yet are safe to retry because the
-// sink hasn't been written to. Once any row reaches the sink, a
-// retry would double-send, so a mid-stream failure logs and bails.
+// the sink. Only the pre-first-row window is retried: once any row
+// reaches the sink, a retry would double-send, so a mid-stream failure
+// fails the shard's part of the query.
 func (s *GRPCShard) QueryToSink(ctx context.Context, sql string, args []any, sink RowSink) {
 	defer sink.SendSentinel(s.id)
 
-	var lastErr error
-	for attempt := 0; attempt < maxRetryAttempts; attempt++ {
-		rowsSent, err := s.queryToSinkOnce(ctx, sql, args, sink)
-		if err == nil {
-			return
-		}
-		if rowsSent > 0 {
-			// Sink saw partial output; retrying would double-send.
-			weftsdk.Errorf(ctx, "shard %s: QueryToSink mid-stream error after %d rows: %v", s.id, rowsSent, err)
-			sink.Fail(s.id, fmt.Errorf("failed after %d rows: %w", rowsSent, err))
-			return
-		}
-		if !isRetriable(err) {
-			weftsdk.Errorf(ctx, "shard %s: QueryToSink failed: %v (sql=%s)", s.id, err, sql)
-			sink.Fail(s.id, err)
-			return
-		}
-		lastErr = err
-		if attempt < maxRetryAttempts-1 {
-			weftsdk.Errorf(ctx, "shard %s: QueryToSink attempt %d failed pre-row (%v); retrying", s.id, attempt+1, err)
-			time.Sleep(retryBackoff)
-		}
+	rowsSent := 0
+	err := s.call(ctx, "QueryToSink", true, func() (bool, error) {
+		n, err := s.queryToSinkOnce(ctx, sql, args, sink)
+		rowsSent += n
+		return n > 0, err
+	})
+	switch {
+	case err == nil:
+	case rowsSent > 0:
+		weftsdk.Errorf(ctx, "shard %s: QueryToSink mid-stream error after %d rows: %v", s.id, rowsSent, err)
+		sink.Fail(s.id, fmt.Errorf("failed after %d rows: %w", rowsSent, err))
+	default:
+		weftsdk.Errorf(ctx, "shard %s: QueryToSink failed: %v (sql=%s)", s.id, err, sql)
+		sink.Fail(s.id, err)
 	}
-	weftsdk.Infof(ctx, "shard %s: QueryToSink gave up after %d attempts: %v (sql=%s)", s.id, maxRetryAttempts, lastErr, sql)
-	sink.Fail(s.id, fmt.Errorf("gave up after %d attempts: %w", maxRetryAttempts, lastErr))
 }
 
 // queryToSinkOnce attempts a single QueryToSink streaming pass.

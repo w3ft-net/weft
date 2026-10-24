@@ -968,9 +968,13 @@ func (sh *Shard) dialConfigure(ctx context.Context, hb store.ShardHeartbeat) (sh
 // — LoadFromStore rehydrates the row but can't redial a live shard — so
 // the first post-restart heartbeat is what reattaches it.
 func (sh *Shard) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat) {
+	// The handle's own address is the truth: RefreshFromStore copies the
+	// row's addr onto sh.Addr every tick, so sh.Addr can already show the
+	// move while the handle still talks to the old instance.
 	sh.mu.Lock()
+	liveAddr := sh.liveAddr()
 	needDial := sh.deps.Configurer != nil && hb.Addr != "" &&
-		(sh.Live == nil || sh.Addr != hb.Addr)
+		(sh.Live == nil || sh.Addr != hb.Addr || (liveAddr != "" && liveAddr != hb.Addr))
 	sh.mu.Unlock()
 	if needDial {
 		if err := sh.reconnect(ctx, hb); err != nil {
