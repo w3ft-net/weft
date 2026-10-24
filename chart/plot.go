@@ -1,6 +1,9 @@
 package chart
 
-import "math"
+import (
+	"encoding/json"
+	"math"
+)
 
 // Plot is a pipe-form chart reduced to plain data: the grouped, bucketed and
 // aggregated points a renderer draws. The terminal renderer (RenderFromStream)
@@ -15,6 +18,15 @@ type Plot struct {
 	// means the data's own span.
 	XMin float64 `json:"xMin,omitempty"`
 	XMax float64 `json:"xMax,omitempty"`
+}
+
+// MarshalJSON sends no series as [], not null: the browser maps over it.
+func (p Plot) MarshalJSON() ([]byte, error) {
+	type plot Plot
+	if p.Series == nil {
+		p.Series = []PlotSeries{}
+	}
+	return json.Marshal(plot(p))
 }
 
 // fixTimeSpan sets XMin/XMax from the range in args and the data's extent.
@@ -36,6 +48,15 @@ func (p *Plot) fixTimeSpan(args PipeArgs) {
 type PlotSeries struct {
 	Tag    string      `json:"tag"`
 	Points []PlotPoint `json:"points"`
+}
+
+// MarshalJSON sends no points as [], not null: the browser maps over it.
+func (s PlotSeries) MarshalJSON() ([]byte, error) {
+	type series PlotSeries
+	if s.Points == nil {
+		s.Points = []PlotPoint{}
+	}
+	return json.Marshal(series(s))
 }
 
 // PlotPoint is one reduced group: X is the numeric position (unix seconds for

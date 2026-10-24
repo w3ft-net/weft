@@ -1,6 +1,8 @@
 package chart
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,5 +73,30 @@ func TestPlotFromStream_NoData(t *testing.T) {
 	args, _ := parsePipeArgs(nil)
 	if _, errMsg := PlotFromStream(nil, args); errMsg != "no data points to chart" {
 		t.Errorf("errMsg = %q", errMsg)
+	}
+}
+
+// TestPlotJSON_EmptyIsArrays: the browser maps over series and points, so a
+// cron with nothing stored in the window must send [] rather than null — a
+// null there crashed the whole Dashboards page.
+func TestPlotJSON_EmptyIsArrays(t *testing.T) {
+	for name, p := range map[string]Plot{
+		"no series":         {Kind: "line", TimeX: true},
+		"series, no points": {Kind: "line", TimeX: true, Series: []PlotSeries{{Tag: "a"}}},
+	} {
+		b, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "null") {
+			t.Errorf("%s: %s", name, b)
+		}
+	}
+	empty, msg := CronPlot(CronSeries{}, WatchArgs{Kind: "line", Aggregate: "avg"})
+	if msg != "" {
+		t.Fatal(msg)
+	}
+	if b, _ := json.Marshal(empty); !strings.Contains(string(b), `"series":[]`) {
+		t.Errorf("CronPlot of an empty series: %s", b)
 	}
 }
