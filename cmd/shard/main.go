@@ -37,6 +37,7 @@ func main() {
 	dataDir := flag.String("data-dir", "/opt/app/data", "directory holding shard.json and shard.duckdb")
 	coordAddr := flag.String("coordinator-addr", "", "coordinator gRPC address for heartbeats")
 	hbInterval := flag.Duration("heartbeat-interval", 10*time.Second, "heartbeat interval")
+	volumeHelper := flag.String("volume-helper", defaultVolumeHelper, "root helper (run via sudo) that mounts and unmounts the data volume; absent = no volume management (dev/container)")
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {
@@ -44,11 +45,29 @@ func main() {
 	}
 	dbPath := filepath.Join(*dataDir, "shard.duckdb")
 
+	// The data volume this process can release (Pause) and take back
+	// (Resume, a spare's activation). Off-EC2 there is no helper and no
+	// volume to move.
+	var vol shardsvc.Volume
+	if _, err := os.Stat(*volumeHelper); err == nil {
+		vol = hostVolume{helper: *volumeHelper}
+	}
+
 	// Try to start from an existing identity on disk. If shard.json is
 	// missing we start in blank mode and wait for the coordinator to
 	// christen us via Configure.
 	var srv *shardsvc.Server
-	if id, err := shardIdentityHint(*dataDir); err != nil {
+	if isSpare() {
+		// A warm-pool spare (docs/plans/shard-seamless-upgrade.md): no volume
+		// and no shard until the leader claims it and attaches one. startup.sh
+		// skipped the mount; Activate waits for the attach and mounts it.
+		if vol == nil {
+			log.Fatalf("spare mode needs the volume helper at %s", *volumeHelper)
+		}
+		weftsdk.Infof(context.Background(), "starting as a warm-pool spare; waiting for a volume")
+		srv = shardsvc.NewSpareServer(*dataDir, dbPath, vol)
+		go activateWhenAttached(srv)
+	} else if id, err := shardIdentityHint(*dataDir); err != nil {
 		log.Fatalf("inspect shard.json: %v", err)
 	} else if id != "" {
 		weftsdk.Infof(context.Background(), "found existing identity %s — opening db at %s", id, dbPath)
@@ -59,6 +78,9 @@ func main() {
 	} else {
 		weftsdk.Infof(context.Background(), "no shard.json in %s — starting blank, awaiting Configure", *dataDir)
 		srv = shardsvc.NewBlankServer(*dataDir, dbPath)
+	}
+	if srv.Volume == nil {
+		srv.Volume = vol
 	}
 
 	// gRPC server with shared-token auth. Coord↔shard is an internal
@@ -99,8 +121,8 @@ func main() {
 	}
 	gs := grpc.NewServer(
 		grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
-		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor(), auth.SharedTokenUnaryServerInterceptor(shardSecret)),
-		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor(), auth.SharedTokenStreamServerInterceptor(shardSecret)),
+		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor(), auth.SharedTokenUnaryServerInterceptor(shardSecret), srv.UnaryInterceptor()),
+		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor(), auth.SharedTokenStreamServerInterceptor(shardSecret), srv.StreamInterceptor()),
 	)
 	pb.RegisterShardQueryServer(gs, srv)
 
@@ -307,20 +329,36 @@ func buildHeartbeatRequest(shardID, addr, instanceID, state string, rowCount, di
 	}
 }
 
-func sendHeartbeat(client pb.WeftCoordinatorClient, addr, instanceID string, srv *shardsvc.Server) bool {
+// heartbeatFor builds this tick's heartbeat, or reports there is none to
+// send: a paused shard has handed its volume to a successor, and a beat
+// from its old address would pull callers back to it.
+func heartbeatFor(srv *shardsvc.Server, addr, instanceID string) (*pb.ShardHeartbeatRequest, bool) {
+	if srv.Paused() {
+		return nil, false
+	}
 	shardID := srv.Identity()
 	state := "INGESTING"
 	if shardID == "" {
 		state = "ADOPTED"
 	}
-
 	var rowCount, diskBytes int64
 	if ds := srv.Shard(); ds != nil {
 		rowCount = ds.RowCount()
 		diskBytes = ds.DiskUsage().TotalBytes()
 	}
-
 	req := buildHeartbeatRequest(shardID, addr, instanceID, state, rowCount, diskBytes)
+	if srv.Spare() {
+		req.State = "SPARE"
+		req.Spare = true
+	}
+	return req, true
+}
+
+func sendHeartbeat(client pb.WeftCoordinatorClient, addr, instanceID string, srv *shardsvc.Server) bool {
+	req, send := heartbeatFor(srv, addr, instanceID)
+	if !send {
+		return true
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

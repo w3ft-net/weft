@@ -24,6 +24,8 @@ const (
 	ShardQuery_IngestStream_FullMethodName = "/weft.ShardQuery/IngestStream"
 	ShardQuery_Configure_FullMethodName    = "/weft.ShardQuery/Configure"
 	ShardQuery_Archive_FullMethodName      = "/weft.ShardQuery/Archive"
+	ShardQuery_Pause_FullMethodName        = "/weft.ShardQuery/Pause"
+	ShardQuery_Resume_FullMethodName       = "/weft.ShardQuery/Resume"
 )
 
 // ShardQueryClient is the client API for ShardQuery service.
@@ -44,6 +46,15 @@ type ShardQueryClient interface {
 	// path written. Called by the coordinator when a READ_ONLY shard
 	// exceeds its retention window.
 	Archive(ctx context.Context, in *ArchiveRequest, opts ...grpc.CallOption) (*ArchiveResponse, error)
+	// Pause stops the shard admitting calls so its volume can move to a
+	// successor instance (docs/plans/shard-seamless-upgrade.md). Every new
+	// call is refused with a SHARD_PAUSED status naming successor_addr;
+	// in-flight calls finish. Returns once they have, DuckDB is checkpointed
+	// and closed, and the volume is unmounted. Idempotent.
+	Pause(ctx context.Context, in *PauseRequest, opts ...grpc.CallOption) (*PauseResponse, error)
+	// Resume undoes Pause (an upgrade's rollback): remount the volume, reopen
+	// DuckDB, and admit calls again. A no-op on a shard that is serving.
+	Resume(ctx context.Context, in *ResumeRequest, opts ...grpc.CallOption) (*ResumeResponse, error)
 }
 
 type shardQueryClient struct {
@@ -116,6 +127,26 @@ func (c *shardQueryClient) Archive(ctx context.Context, in *ArchiveRequest, opts
 	return out, nil
 }
 
+func (c *shardQueryClient) Pause(ctx context.Context, in *PauseRequest, opts ...grpc.CallOption) (*PauseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PauseResponse)
+	err := c.cc.Invoke(ctx, ShardQuery_Pause_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *shardQueryClient) Resume(ctx context.Context, in *ResumeRequest, opts ...grpc.CallOption) (*ResumeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResumeResponse)
+	err := c.cc.Invoke(ctx, ShardQuery_Resume_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ShardQueryServer is the server API for ShardQuery service.
 // All implementations must embed UnimplementedShardQueryServer
 // for forward compatibility.
@@ -134,6 +165,15 @@ type ShardQueryServer interface {
 	// path written. Called by the coordinator when a READ_ONLY shard
 	// exceeds its retention window.
 	Archive(context.Context, *ArchiveRequest) (*ArchiveResponse, error)
+	// Pause stops the shard admitting calls so its volume can move to a
+	// successor instance (docs/plans/shard-seamless-upgrade.md). Every new
+	// call is refused with a SHARD_PAUSED status naming successor_addr;
+	// in-flight calls finish. Returns once they have, DuckDB is checkpointed
+	// and closed, and the volume is unmounted. Idempotent.
+	Pause(context.Context, *PauseRequest) (*PauseResponse, error)
+	// Resume undoes Pause (an upgrade's rollback): remount the volume, reopen
+	// DuckDB, and admit calls again. A no-op on a shard that is serving.
+	Resume(context.Context, *ResumeRequest) (*ResumeResponse, error)
 	mustEmbedUnimplementedShardQueryServer()
 }
 
@@ -158,6 +198,12 @@ func (UnimplementedShardQueryServer) Configure(context.Context, *ConfigureReques
 }
 func (UnimplementedShardQueryServer) Archive(context.Context, *ArchiveRequest) (*ArchiveResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Archive not implemented")
+}
+func (UnimplementedShardQueryServer) Pause(context.Context, *PauseRequest) (*PauseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Pause not implemented")
+}
+func (UnimplementedShardQueryServer) Resume(context.Context, *ResumeRequest) (*ResumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Resume not implemented")
 }
 func (UnimplementedShardQueryServer) mustEmbedUnimplementedShardQueryServer() {}
 func (UnimplementedShardQueryServer) testEmbeddedByValue()                    {}
@@ -252,6 +298,42 @@ func _ShardQuery_Archive_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ShardQuery_Pause_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PauseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ShardQueryServer).Pause(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ShardQuery_Pause_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ShardQueryServer).Pause(ctx, req.(*PauseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ShardQuery_Resume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResumeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ShardQueryServer).Resume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ShardQuery_Resume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ShardQueryServer).Resume(ctx, req.(*ResumeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ShardQuery_ServiceDesc is the grpc.ServiceDesc for ShardQuery service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -270,6 +352,14 @@ var ShardQuery_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Archive",
 			Handler:    _ShardQuery_Archive_Handler,
+		},
+		{
+			MethodName: "Pause",
+			Handler:    _ShardQuery_Pause_Handler,
+		},
+		{
+			MethodName: "Resume",
+			Handler:    _ShardQuery_Resume_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

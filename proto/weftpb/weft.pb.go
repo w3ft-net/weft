@@ -21,6 +21,158 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type PauseRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SuccessorAddr string                 `protobuf:"bytes,1,opt,name=successor_addr,json=successorAddr,proto3" json:"successor_addr,omitempty"` // host:port the refusals redirect callers to
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PauseRequest) Reset() {
+	*x = PauseRequest{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PauseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PauseRequest) ProtoMessage() {}
+
+func (x *PauseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PauseRequest.ProtoReflect.Descriptor instead.
+func (*PauseRequest) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *PauseRequest) GetSuccessorAddr() string {
+	if x != nil {
+		return x.SuccessorAddr
+	}
+	return ""
+}
+
+type PauseResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PauseResponse) Reset() {
+	*x = PauseResponse{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PauseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PauseResponse) ProtoMessage() {}
+
+func (x *PauseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PauseResponse.ProtoReflect.Descriptor instead.
+func (*PauseResponse) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{1}
+}
+
+type ResumeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResumeRequest) Reset() {
+	*x = ResumeRequest{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResumeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResumeRequest) ProtoMessage() {}
+
+func (x *ResumeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResumeRequest.ProtoReflect.Descriptor instead.
+func (*ResumeRequest) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{2}
+}
+
+type ResumeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResumeResponse) Reset() {
+	*x = ResumeResponse{}
+	mi := &file_proto_weftpb_weft_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResumeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResumeResponse) ProtoMessage() {}
+
+func (x *ResumeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_weftpb_weft_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResumeResponse.ProtoReflect.Descriptor instead.
+func (*ResumeResponse) Descriptor() ([]byte, []int) {
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{3}
+}
+
 type ConfigureRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	ShardId     string                 `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
@@ -39,7 +191,7 @@ type ConfigureRequest struct {
 
 func (x *ConfigureRequest) Reset() {
 	*x = ConfigureRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[0]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -51,7 +203,7 @@ func (x *ConfigureRequest) String() string {
 func (*ConfigureRequest) ProtoMessage() {}
 
 func (x *ConfigureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[0]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -64,7 +216,7 @@ func (x *ConfigureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureRequest.ProtoReflect.Descriptor instead.
 func (*ConfigureRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{0}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ConfigureRequest) GetShardId() string {
@@ -110,7 +262,7 @@ type ConfigureResponse struct {
 
 func (x *ConfigureResponse) Reset() {
 	*x = ConfigureResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[1]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -122,7 +274,7 @@ func (x *ConfigureResponse) String() string {
 func (*ConfigureResponse) ProtoMessage() {}
 
 func (x *ConfigureResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[1]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -135,7 +287,7 @@ func (x *ConfigureResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureResponse.ProtoReflect.Descriptor instead.
 func (*ConfigureResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{1}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{5}
 }
 
 type ArchiveRequest struct {
@@ -147,7 +299,7 @@ type ArchiveRequest struct {
 
 func (x *ArchiveRequest) Reset() {
 	*x = ArchiveRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[2]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -159,7 +311,7 @@ func (x *ArchiveRequest) String() string {
 func (*ArchiveRequest) ProtoMessage() {}
 
 func (x *ArchiveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[2]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -172,7 +324,7 @@ func (x *ArchiveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveRequest.ProtoReflect.Descriptor instead.
 func (*ArchiveRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{2}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ArchiveRequest) GetS3Prefix() string {
@@ -198,7 +350,7 @@ type ArchiveResponse struct {
 
 func (x *ArchiveResponse) Reset() {
 	*x = ArchiveResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[3]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -210,7 +362,7 @@ func (x *ArchiveResponse) String() string {
 func (*ArchiveResponse) ProtoMessage() {}
 
 func (x *ArchiveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[3]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -223,7 +375,7 @@ func (x *ArchiveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveResponse.ProtoReflect.Descriptor instead.
 func (*ArchiveResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{3}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ArchiveResponse) GetParquetPath() string {
@@ -252,7 +404,7 @@ type CustomerArchiveStat struct {
 
 func (x *CustomerArchiveStat) Reset() {
 	*x = CustomerArchiveStat{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[4]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -264,7 +416,7 @@ func (x *CustomerArchiveStat) String() string {
 func (*CustomerArchiveStat) ProtoMessage() {}
 
 func (x *CustomerArchiveStat) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[4]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -277,7 +429,7 @@ func (x *CustomerArchiveStat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CustomerArchiveStat.ProtoReflect.Descriptor instead.
 func (*CustomerArchiveStat) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{4}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CustomerArchiveStat) GetCustomerId() int64 {
@@ -317,7 +469,7 @@ type IngestStreamResponse struct {
 
 func (x *IngestStreamResponse) Reset() {
 	*x = IngestStreamResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[5]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -329,7 +481,7 @@ func (x *IngestStreamResponse) String() string {
 func (*IngestStreamResponse) ProtoMessage() {}
 
 func (x *IngestStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[5]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -342,7 +494,7 @@ func (x *IngestStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestStreamResponse.ProtoReflect.Descriptor instead.
 func (*IngestStreamResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{5}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *IngestStreamResponse) GetRowsReceived() int64 {
@@ -364,7 +516,7 @@ type QueryRequest struct {
 
 func (x *QueryRequest) Reset() {
 	*x = QueryRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[6]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -376,7 +528,7 @@ func (x *QueryRequest) String() string {
 func (*QueryRequest) ProtoMessage() {}
 
 func (x *QueryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[6]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -389,7 +541,7 @@ func (x *QueryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryRequest.ProtoReflect.Descriptor instead.
 func (*QueryRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{6}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *QueryRequest) GetSql() string {
@@ -438,7 +590,7 @@ type ResultRow struct {
 
 func (x *ResultRow) Reset() {
 	*x = ResultRow{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[7]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -450,7 +602,7 @@ func (x *ResultRow) String() string {
 func (*ResultRow) ProtoMessage() {}
 
 func (x *ResultRow) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[7]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -463,7 +615,7 @@ func (x *ResultRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResultRow.ProtoReflect.Descriptor instead.
 func (*ResultRow) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{7}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{11}
 }
 
 // Deprecated: Marked as deprecated in proto/weftpb/weft.proto.
@@ -571,7 +723,7 @@ type LogRow struct {
 
 func (x *LogRow) Reset() {
 	*x = LogRow{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[8]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -583,7 +735,7 @@ func (x *LogRow) String() string {
 func (*LogRow) ProtoMessage() {}
 
 func (x *LogRow) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[8]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -596,7 +748,7 @@ func (x *LogRow) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogRow.ProtoReflect.Descriptor instead.
 func (*LogRow) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{8}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{12}
 }
 
 // Deprecated: Marked as deprecated in proto/weftpb/weft.proto.
@@ -791,7 +943,7 @@ type IngestRequest struct {
 
 func (x *IngestRequest) Reset() {
 	*x = IngestRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[9]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -803,7 +955,7 @@ func (x *IngestRequest) String() string {
 func (*IngestRequest) ProtoMessage() {}
 
 func (x *IngestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[9]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -816,7 +968,7 @@ func (x *IngestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestRequest.ProtoReflect.Descriptor instead.
 func (*IngestRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{9}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *IngestRequest) GetRows() []*LogRow {
@@ -835,7 +987,7 @@ type IngestResponse struct {
 
 func (x *IngestResponse) Reset() {
 	*x = IngestResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[10]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -847,7 +999,7 @@ func (x *IngestResponse) String() string {
 func (*IngestResponse) ProtoMessage() {}
 
 func (x *IngestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[10]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -860,7 +1012,7 @@ func (x *IngestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestResponse.ProtoReflect.Descriptor instead.
 func (*IngestResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{10}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *IngestResponse) GetRowsIngested() int64 {
@@ -889,7 +1041,7 @@ type ShardDescriptor struct {
 
 func (x *ShardDescriptor) Reset() {
 	*x = ShardDescriptor{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[11]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -901,7 +1053,7 @@ func (x *ShardDescriptor) String() string {
 func (*ShardDescriptor) ProtoMessage() {}
 
 func (x *ShardDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[11]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -914,7 +1066,7 @@ func (x *ShardDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardDescriptor.ProtoReflect.Descriptor instead.
 func (*ShardDescriptor) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{11}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ShardDescriptor) GetShardId() string {
@@ -1022,7 +1174,7 @@ type ExecuteQueryRequest struct {
 
 func (x *ExecuteQueryRequest) Reset() {
 	*x = ExecuteQueryRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[12]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1034,7 +1186,7 @@ func (x *ExecuteQueryRequest) String() string {
 func (*ExecuteQueryRequest) ProtoMessage() {}
 
 func (x *ExecuteQueryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[12]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1047,7 +1199,7 @@ func (x *ExecuteQueryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteQueryRequest.ProtoReflect.Descriptor instead.
 func (*ExecuteQueryRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{12}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ExecuteQueryRequest) GetSql() string {
@@ -1140,7 +1292,7 @@ type ExecuteQueryStreamResponse struct {
 
 func (x *ExecuteQueryStreamResponse) Reset() {
 	*x = ExecuteQueryStreamResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[13]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1152,7 +1304,7 @@ func (x *ExecuteQueryStreamResponse) String() string {
 func (*ExecuteQueryStreamResponse) ProtoMessage() {}
 
 func (x *ExecuteQueryStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[13]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1165,7 +1317,7 @@ func (x *ExecuteQueryStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteQueryStreamResponse.ProtoReflect.Descriptor instead.
 func (*ExecuteQueryStreamResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{13}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ExecuteQueryStreamResponse) GetLines() []string {
@@ -1202,14 +1354,18 @@ type ShardHeartbeatRequest struct {
 	// weft-admin can skip rolling a shard that's already on the target SHA.
 	// Empty when an older shard binary is in service — weft-admin treats
 	// empty as "unknown" and rolls it.
-	BinarySha     string `protobuf:"bytes,10,opt,name=binary_sha,json=binarySha,proto3" json:"binary_sha,omitempty"`
+	BinarySha string `protobuf:"bytes,10,opt,name=binary_sha,json=binarySha,proto3" json:"binary_sha,omitempty"`
+	// spare is set by a warm-pool instance that holds no volume yet: its
+	// heartbeat only keeps the pool's record of it fresh and never promotes
+	// a shard. shard_id is empty on a spare.
+	Spare         bool `protobuf:"varint,11,opt,name=spare,proto3" json:"spare,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ShardHeartbeatRequest) Reset() {
 	*x = ShardHeartbeatRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[14]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1221,7 +1377,7 @@ func (x *ShardHeartbeatRequest) String() string {
 func (*ShardHeartbeatRequest) ProtoMessage() {}
 
 func (x *ShardHeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[14]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1234,7 +1390,7 @@ func (x *ShardHeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardHeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*ShardHeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{14}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ShardHeartbeatRequest) GetShardId() string {
@@ -1286,6 +1442,13 @@ func (x *ShardHeartbeatRequest) GetBinarySha() string {
 	return ""
 }
 
+func (x *ShardHeartbeatRequest) GetSpare() bool {
+	if x != nil {
+		return x.Spare
+	}
+	return false
+}
+
 type HeartbeatResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1294,7 +1457,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[15]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1306,7 +1469,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[15]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1319,7 +1482,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{15}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{19}
 }
 
 type GetUsageRequest struct {
@@ -1331,7 +1494,7 @@ type GetUsageRequest struct {
 
 func (x *GetUsageRequest) Reset() {
 	*x = GetUsageRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[16]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1343,7 +1506,7 @@ func (x *GetUsageRequest) String() string {
 func (*GetUsageRequest) ProtoMessage() {}
 
 func (x *GetUsageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[16]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1356,7 +1519,7 @@ func (x *GetUsageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUsageRequest.ProtoReflect.Descriptor instead.
 func (*GetUsageRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{16}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetUsageRequest) GetPeriod() string {
@@ -1377,7 +1540,7 @@ type GetUsageResponse struct {
 
 func (x *GetUsageResponse) Reset() {
 	*x = GetUsageResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[17]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1389,7 +1552,7 @@ func (x *GetUsageResponse) String() string {
 func (*GetUsageResponse) ProtoMessage() {}
 
 func (x *GetUsageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[17]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1402,7 +1565,7 @@ func (x *GetUsageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetUsageResponse.ProtoReflect.Descriptor instead.
 func (*GetUsageResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{17}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetUsageResponse) GetBytesIngested() int64 {
@@ -1437,7 +1600,7 @@ type CreateTokenRequest struct {
 
 func (x *CreateTokenRequest) Reset() {
 	*x = CreateTokenRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[18]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1449,7 +1612,7 @@ func (x *CreateTokenRequest) String() string {
 func (*CreateTokenRequest) ProtoMessage() {}
 
 func (x *CreateTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[18]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1462,7 +1625,7 @@ func (x *CreateTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTokenRequest.ProtoReflect.Descriptor instead.
 func (*CreateTokenRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{18}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *CreateTokenRequest) GetLabel() string {
@@ -1495,7 +1658,7 @@ type CreateTokenResponse struct {
 
 func (x *CreateTokenResponse) Reset() {
 	*x = CreateTokenResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[19]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1507,7 +1670,7 @@ func (x *CreateTokenResponse) String() string {
 func (*CreateTokenResponse) ProtoMessage() {}
 
 func (x *CreateTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[19]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1520,7 +1683,7 @@ func (x *CreateTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTokenResponse.ProtoReflect.Descriptor instead.
 func (*CreateTokenResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{19}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *CreateTokenResponse) GetToken() string {
@@ -1538,7 +1701,7 @@ type ListTokensRequest struct {
 
 func (x *ListTokensRequest) Reset() {
 	*x = ListTokensRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[20]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1550,7 +1713,7 @@ func (x *ListTokensRequest) String() string {
 func (*ListTokensRequest) ProtoMessage() {}
 
 func (x *ListTokensRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[20]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1563,7 +1726,7 @@ func (x *ListTokensRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTokensRequest.ProtoReflect.Descriptor instead.
 func (*ListTokensRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{20}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{24}
 }
 
 type ListTokensResponse struct {
@@ -1575,7 +1738,7 @@ type ListTokensResponse struct {
 
 func (x *ListTokensResponse) Reset() {
 	*x = ListTokensResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[21]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1587,7 +1750,7 @@ func (x *ListTokensResponse) String() string {
 func (*ListTokensResponse) ProtoMessage() {}
 
 func (x *ListTokensResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[21]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1600,7 +1763,7 @@ func (x *ListTokensResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTokensResponse.ProtoReflect.Descriptor instead.
 func (*ListTokensResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{21}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ListTokensResponse) GetTokens() []*TokenInfo {
@@ -1623,7 +1786,7 @@ type TokenInfo struct {
 
 func (x *TokenInfo) Reset() {
 	*x = TokenInfo{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[22]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1635,7 +1798,7 @@ func (x *TokenInfo) String() string {
 func (*TokenInfo) ProtoMessage() {}
 
 func (x *TokenInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[22]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1648,7 +1811,7 @@ func (x *TokenInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TokenInfo.ProtoReflect.Descriptor instead.
 func (*TokenInfo) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{22}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *TokenInfo) GetToken() string {
@@ -1695,7 +1858,7 @@ type RevokeTokenRequest struct {
 
 func (x *RevokeTokenRequest) Reset() {
 	*x = RevokeTokenRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[23]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1707,7 +1870,7 @@ func (x *RevokeTokenRequest) String() string {
 func (*RevokeTokenRequest) ProtoMessage() {}
 
 func (x *RevokeTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[23]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1720,7 +1883,7 @@ func (x *RevokeTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeTokenRequest.ProtoReflect.Descriptor instead.
 func (*RevokeTokenRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{23}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *RevokeTokenRequest) GetToken() string {
@@ -1738,7 +1901,7 @@ type RevokeTokenResponse struct {
 
 func (x *RevokeTokenResponse) Reset() {
 	*x = RevokeTokenResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[24]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1750,7 +1913,7 @@ func (x *RevokeTokenResponse) String() string {
 func (*RevokeTokenResponse) ProtoMessage() {}
 
 func (x *RevokeTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[24]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1763,7 +1926,7 @@ func (x *RevokeTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeTokenResponse.ProtoReflect.Descriptor instead.
 func (*RevokeTokenResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{24}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{28}
 }
 
 type AuthenticateRequest struct {
@@ -1776,7 +1939,7 @@ type AuthenticateRequest struct {
 
 func (x *AuthenticateRequest) Reset() {
 	*x = AuthenticateRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[25]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1788,7 +1951,7 @@ func (x *AuthenticateRequest) String() string {
 func (*AuthenticateRequest) ProtoMessage() {}
 
 func (x *AuthenticateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[25]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1801,7 +1964,7 @@ func (x *AuthenticateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthenticateRequest.ProtoReflect.Descriptor instead.
 func (*AuthenticateRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{25}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *AuthenticateRequest) GetToken() string {
@@ -1829,7 +1992,7 @@ type MetricsConfig struct {
 
 func (x *MetricsConfig) Reset() {
 	*x = MetricsConfig{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[26]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1841,7 +2004,7 @@ func (x *MetricsConfig) String() string {
 func (*MetricsConfig) ProtoMessage() {}
 
 func (x *MetricsConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[26]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1854,7 +2017,7 @@ func (x *MetricsConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetricsConfig.ProtoReflect.Descriptor instead.
 func (*MetricsConfig) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{26}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *MetricsConfig) GetEnabled() bool {
@@ -1888,7 +2051,7 @@ type AuthenticateResponse struct {
 
 func (x *AuthenticateResponse) Reset() {
 	*x = AuthenticateResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[27]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1900,7 +2063,7 @@ func (x *AuthenticateResponse) String() string {
 func (*AuthenticateResponse) ProtoMessage() {}
 
 func (x *AuthenticateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[27]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1913,7 +2076,7 @@ func (x *AuthenticateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthenticateResponse.ProtoReflect.Descriptor instead.
 func (*AuthenticateResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{27}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *AuthenticateResponse) GetCustomer() string {
@@ -1943,7 +2106,7 @@ type CoordinatorExecuteRequest struct {
 
 func (x *CoordinatorExecuteRequest) Reset() {
 	*x = CoordinatorExecuteRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[28]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1955,7 +2118,7 @@ func (x *CoordinatorExecuteRequest) String() string {
 func (*CoordinatorExecuteRequest) ProtoMessage() {}
 
 func (x *CoordinatorExecuteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[28]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1968,7 +2131,7 @@ func (x *CoordinatorExecuteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CoordinatorExecuteRequest.ProtoReflect.Descriptor instead.
 func (*CoordinatorExecuteRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{28}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *CoordinatorExecuteRequest) GetPipeline() string {
@@ -2028,7 +2191,7 @@ type CoordinatorExecuteResponse struct {
 
 func (x *CoordinatorExecuteResponse) Reset() {
 	*x = CoordinatorExecuteResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[29]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2040,7 +2203,7 @@ func (x *CoordinatorExecuteResponse) String() string {
 func (*CoordinatorExecuteResponse) ProtoMessage() {}
 
 func (x *CoordinatorExecuteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[29]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2053,7 +2216,7 @@ func (x *CoordinatorExecuteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CoordinatorExecuteResponse.ProtoReflect.Descriptor instead.
 func (*CoordinatorExecuteResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{29}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *CoordinatorExecuteResponse) GetLines() []*Line {
@@ -2089,7 +2252,7 @@ type Line struct {
 
 func (x *Line) Reset() {
 	*x = Line{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[30]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2101,7 +2264,7 @@ func (x *Line) String() string {
 func (*Line) ProtoMessage() {}
 
 func (x *Line) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[30]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2114,7 +2277,7 @@ func (x *Line) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Line.ProtoReflect.Descriptor instead.
 func (*Line) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{30}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *Line) GetRaw() string {
@@ -2149,7 +2312,7 @@ type Notice struct {
 
 func (x *Notice) Reset() {
 	*x = Notice{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[31]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2161,7 +2324,7 @@ func (x *Notice) String() string {
 func (*Notice) ProtoMessage() {}
 
 func (x *Notice) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[31]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2174,7 +2337,7 @@ func (x *Notice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Notice.ProtoReflect.Descriptor instead.
 func (*Notice) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{31}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *Notice) GetKey() string {
@@ -2213,7 +2376,7 @@ type ListServicesRequest struct {
 
 func (x *ListServicesRequest) Reset() {
 	*x = ListServicesRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[32]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2225,7 +2388,7 @@ func (x *ListServicesRequest) String() string {
 func (*ListServicesRequest) ProtoMessage() {}
 
 func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[32]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2238,7 +2401,7 @@ func (x *ListServicesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesRequest.ProtoReflect.Descriptor instead.
 func (*ListServicesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{32}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{36}
 }
 
 type ListServicesResponse struct {
@@ -2250,7 +2413,7 @@ type ListServicesResponse struct {
 
 func (x *ListServicesResponse) Reset() {
 	*x = ListServicesResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[33]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2262,7 +2425,7 @@ func (x *ListServicesResponse) String() string {
 func (*ListServicesResponse) ProtoMessage() {}
 
 func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[33]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2275,7 +2438,7 @@ func (x *ListServicesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListServicesResponse.ProtoReflect.Descriptor instead.
 func (*ListServicesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{33}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ListServicesResponse) GetServices() []string {
@@ -2298,7 +2461,7 @@ type AddSourceRequest struct {
 
 func (x *AddSourceRequest) Reset() {
 	*x = AddSourceRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[34]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2310,7 +2473,7 @@ func (x *AddSourceRequest) String() string {
 func (*AddSourceRequest) ProtoMessage() {}
 
 func (x *AddSourceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[34]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2323,7 +2486,7 @@ func (x *AddSourceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddSourceRequest.ProtoReflect.Descriptor instead.
 func (*AddSourceRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{34}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *AddSourceRequest) GetService() string {
@@ -2362,7 +2525,7 @@ type AddSourceResponse struct {
 
 func (x *AddSourceResponse) Reset() {
 	*x = AddSourceResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[35]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2374,7 +2537,7 @@ func (x *AddSourceResponse) String() string {
 func (*AddSourceResponse) ProtoMessage() {}
 
 func (x *AddSourceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[35]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2387,7 +2550,7 @@ func (x *AddSourceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddSourceResponse.ProtoReflect.Descriptor instead.
 func (*AddSourceResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{35}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{39}
 }
 
 type ListSourcesRequest struct {
@@ -2398,7 +2561,7 @@ type ListSourcesRequest struct {
 
 func (x *ListSourcesRequest) Reset() {
 	*x = ListSourcesRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[36]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2410,7 +2573,7 @@ func (x *ListSourcesRequest) String() string {
 func (*ListSourcesRequest) ProtoMessage() {}
 
 func (x *ListSourcesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[36]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2423,7 +2586,7 @@ func (x *ListSourcesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSourcesRequest.ProtoReflect.Descriptor instead.
 func (*ListSourcesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{36}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{40}
 }
 
 type ListSourcesResponse struct {
@@ -2435,7 +2598,7 @@ type ListSourcesResponse struct {
 
 func (x *ListSourcesResponse) Reset() {
 	*x = ListSourcesResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[37]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2447,7 +2610,7 @@ func (x *ListSourcesResponse) String() string {
 func (*ListSourcesResponse) ProtoMessage() {}
 
 func (x *ListSourcesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[37]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2460,7 +2623,7 @@ func (x *ListSourcesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSourcesResponse.ProtoReflect.Descriptor instead.
 func (*ListSourcesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{37}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ListSourcesResponse) GetSources() []*SourceInfo {
@@ -2484,7 +2647,7 @@ type SourceInfo struct {
 
 func (x *SourceInfo) Reset() {
 	*x = SourceInfo{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[38]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2496,7 +2659,7 @@ func (x *SourceInfo) String() string {
 func (*SourceInfo) ProtoMessage() {}
 
 func (x *SourceInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[38]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2509,7 +2672,7 @@ func (x *SourceInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SourceInfo.ProtoReflect.Descriptor instead.
 func (*SourceInfo) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{38}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *SourceInfo) GetService() string {
@@ -2564,7 +2727,7 @@ type RemoveSourceRequest struct {
 
 func (x *RemoveSourceRequest) Reset() {
 	*x = RemoveSourceRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[39]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2576,7 +2739,7 @@ func (x *RemoveSourceRequest) String() string {
 func (*RemoveSourceRequest) ProtoMessage() {}
 
 func (x *RemoveSourceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[39]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2589,7 +2752,7 @@ func (x *RemoveSourceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveSourceRequest.ProtoReflect.Descriptor instead.
 func (*RemoveSourceRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{39}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *RemoveSourceRequest) GetService() string {
@@ -2614,7 +2777,7 @@ type RemoveSourceResponse struct {
 
 func (x *RemoveSourceResponse) Reset() {
 	*x = RemoveSourceResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[40]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2626,7 +2789,7 @@ func (x *RemoveSourceResponse) String() string {
 func (*RemoveSourceResponse) ProtoMessage() {}
 
 func (x *RemoveSourceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[40]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2639,7 +2802,7 @@ func (x *RemoveSourceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveSourceResponse.ProtoReflect.Descriptor instead.
 func (*RemoveSourceResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{40}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{44}
 }
 
 // Shell functions (/bin/).
@@ -2653,7 +2816,7 @@ type SaveFunctionRequest struct {
 
 func (x *SaveFunctionRequest) Reset() {
 	*x = SaveFunctionRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[41]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2665,7 +2828,7 @@ func (x *SaveFunctionRequest) String() string {
 func (*SaveFunctionRequest) ProtoMessage() {}
 
 func (x *SaveFunctionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[41]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2678,7 +2841,7 @@ func (x *SaveFunctionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveFunctionRequest.ProtoReflect.Descriptor instead.
 func (*SaveFunctionRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{41}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *SaveFunctionRequest) GetName() string {
@@ -2703,7 +2866,7 @@ type SaveFunctionResponse struct {
 
 func (x *SaveFunctionResponse) Reset() {
 	*x = SaveFunctionResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[42]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2715,7 +2878,7 @@ func (x *SaveFunctionResponse) String() string {
 func (*SaveFunctionResponse) ProtoMessage() {}
 
 func (x *SaveFunctionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[42]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2728,7 +2891,7 @@ func (x *SaveFunctionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveFunctionResponse.ProtoReflect.Descriptor instead.
 func (*SaveFunctionResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{42}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{46}
 }
 
 type GetFunctionRequest struct {
@@ -2740,7 +2903,7 @@ type GetFunctionRequest struct {
 
 func (x *GetFunctionRequest) Reset() {
 	*x = GetFunctionRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[43]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2752,7 +2915,7 @@ func (x *GetFunctionRequest) String() string {
 func (*GetFunctionRequest) ProtoMessage() {}
 
 func (x *GetFunctionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[43]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2765,7 +2928,7 @@ func (x *GetFunctionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFunctionRequest.ProtoReflect.Descriptor instead.
 func (*GetFunctionRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{43}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *GetFunctionRequest) GetName() string {
@@ -2785,7 +2948,7 @@ type GetFunctionResponse struct {
 
 func (x *GetFunctionResponse) Reset() {
 	*x = GetFunctionResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[44]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2797,7 +2960,7 @@ func (x *GetFunctionResponse) String() string {
 func (*GetFunctionResponse) ProtoMessage() {}
 
 func (x *GetFunctionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[44]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2810,7 +2973,7 @@ func (x *GetFunctionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFunctionResponse.ProtoReflect.Descriptor instead.
 func (*GetFunctionResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{44}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *GetFunctionResponse) GetName() string {
@@ -2835,7 +2998,7 @@ type ListFunctionsRequest struct {
 
 func (x *ListFunctionsRequest) Reset() {
 	*x = ListFunctionsRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[45]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2847,7 +3010,7 @@ func (x *ListFunctionsRequest) String() string {
 func (*ListFunctionsRequest) ProtoMessage() {}
 
 func (x *ListFunctionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[45]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2860,7 +3023,7 @@ func (x *ListFunctionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListFunctionsRequest.ProtoReflect.Descriptor instead.
 func (*ListFunctionsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{45}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{49}
 }
 
 type ListFunctionsResponse struct {
@@ -2872,7 +3035,7 @@ type ListFunctionsResponse struct {
 
 func (x *ListFunctionsResponse) Reset() {
 	*x = ListFunctionsResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[46]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2884,7 +3047,7 @@ func (x *ListFunctionsResponse) String() string {
 func (*ListFunctionsResponse) ProtoMessage() {}
 
 func (x *ListFunctionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[46]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2897,7 +3060,7 @@ func (x *ListFunctionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListFunctionsResponse.ProtoReflect.Descriptor instead.
 func (*ListFunctionsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{46}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *ListFunctionsResponse) GetNames() []string {
@@ -2916,7 +3079,7 @@ type DeleteFunctionRequest struct {
 
 func (x *DeleteFunctionRequest) Reset() {
 	*x = DeleteFunctionRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[47]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2928,7 +3091,7 @@ func (x *DeleteFunctionRequest) String() string {
 func (*DeleteFunctionRequest) ProtoMessage() {}
 
 func (x *DeleteFunctionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[47]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2941,7 +3104,7 @@ func (x *DeleteFunctionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteFunctionRequest.ProtoReflect.Descriptor instead.
 func (*DeleteFunctionRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{47}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *DeleteFunctionRequest) GetName() string {
@@ -2959,7 +3122,7 @@ type DeleteFunctionResponse struct {
 
 func (x *DeleteFunctionResponse) Reset() {
 	*x = DeleteFunctionResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[48]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2971,7 +3134,7 @@ func (x *DeleteFunctionResponse) String() string {
 func (*DeleteFunctionResponse) ProtoMessage() {}
 
 func (x *DeleteFunctionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[48]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2984,7 +3147,7 @@ func (x *DeleteFunctionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteFunctionResponse.ProtoReflect.Descriptor instead.
 func (*DeleteFunctionResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{48}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{52}
 }
 
 // Cron watches (/cron.d/).
@@ -3001,7 +3164,7 @@ type SaveWatchRequest struct {
 
 func (x *SaveWatchRequest) Reset() {
 	*x = SaveWatchRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[49]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3013,7 +3176,7 @@ func (x *SaveWatchRequest) String() string {
 func (*SaveWatchRequest) ProtoMessage() {}
 
 func (x *SaveWatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[49]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3026,7 +3189,7 @@ func (x *SaveWatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveWatchRequest.ProtoReflect.Descriptor instead.
 func (*SaveWatchRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{49}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *SaveWatchRequest) GetName() string {
@@ -3058,7 +3221,7 @@ type SaveWatchResponse struct {
 
 func (x *SaveWatchResponse) Reset() {
 	*x = SaveWatchResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[50]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3070,7 +3233,7 @@ func (x *SaveWatchResponse) String() string {
 func (*SaveWatchResponse) ProtoMessage() {}
 
 func (x *SaveWatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[50]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3083,7 +3246,7 @@ func (x *SaveWatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveWatchResponse.ProtoReflect.Descriptor instead.
 func (*SaveWatchResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{50}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{54}
 }
 
 type GetWatchRequest struct {
@@ -3095,7 +3258,7 @@ type GetWatchRequest struct {
 
 func (x *GetWatchRequest) Reset() {
 	*x = GetWatchRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[51]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3107,7 +3270,7 @@ func (x *GetWatchRequest) String() string {
 func (*GetWatchRequest) ProtoMessage() {}
 
 func (x *GetWatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[51]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3120,7 +3283,7 @@ func (x *GetWatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWatchRequest.ProtoReflect.Descriptor instead.
 func (*GetWatchRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{51}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *GetWatchRequest) GetName() string {
@@ -3142,7 +3305,7 @@ type GetWatchResponse struct {
 
 func (x *GetWatchResponse) Reset() {
 	*x = GetWatchResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[52]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3154,7 +3317,7 @@ func (x *GetWatchResponse) String() string {
 func (*GetWatchResponse) ProtoMessage() {}
 
 func (x *GetWatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[52]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3167,7 +3330,7 @@ func (x *GetWatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWatchResponse.ProtoReflect.Descriptor instead.
 func (*GetWatchResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{52}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *GetWatchResponse) GetName() string {
@@ -3206,7 +3369,7 @@ type ListWatchesRequest struct {
 
 func (x *ListWatchesRequest) Reset() {
 	*x = ListWatchesRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[53]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3218,7 +3381,7 @@ func (x *ListWatchesRequest) String() string {
 func (*ListWatchesRequest) ProtoMessage() {}
 
 func (x *ListWatchesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[53]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3231,7 +3394,7 @@ func (x *ListWatchesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWatchesRequest.ProtoReflect.Descriptor instead.
 func (*ListWatchesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{53}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{57}
 }
 
 type ListWatchesResponse struct {
@@ -3243,7 +3406,7 @@ type ListWatchesResponse struct {
 
 func (x *ListWatchesResponse) Reset() {
 	*x = ListWatchesResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[54]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3255,7 +3418,7 @@ func (x *ListWatchesResponse) String() string {
 func (*ListWatchesResponse) ProtoMessage() {}
 
 func (x *ListWatchesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[54]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3268,7 +3431,7 @@ func (x *ListWatchesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWatchesResponse.ProtoReflect.Descriptor instead.
 func (*ListWatchesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{54}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ListWatchesResponse) GetNames() []string {
@@ -3287,7 +3450,7 @@ type DeleteWatchRequest struct {
 
 func (x *DeleteWatchRequest) Reset() {
 	*x = DeleteWatchRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[55]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3299,7 +3462,7 @@ func (x *DeleteWatchRequest) String() string {
 func (*DeleteWatchRequest) ProtoMessage() {}
 
 func (x *DeleteWatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[55]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3312,7 +3475,7 @@ func (x *DeleteWatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteWatchRequest.ProtoReflect.Descriptor instead.
 func (*DeleteWatchRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{55}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *DeleteWatchRequest) GetName() string {
@@ -3330,7 +3493,7 @@ type DeleteWatchResponse struct {
 
 func (x *DeleteWatchResponse) Reset() {
 	*x = DeleteWatchResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[56]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3342,7 +3505,7 @@ func (x *DeleteWatchResponse) String() string {
 func (*DeleteWatchResponse) ProtoMessage() {}
 
 func (x *DeleteWatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[56]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3355,7 +3518,7 @@ func (x *DeleteWatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteWatchResponse.ProtoReflect.Descriptor instead.
 func (*DeleteWatchResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{56}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{60}
 }
 
 type GetWatchResultsRequest struct {
@@ -3368,7 +3531,7 @@ type GetWatchResultsRequest struct {
 
 func (x *GetWatchResultsRequest) Reset() {
 	*x = GetWatchResultsRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[57]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3380,7 +3543,7 @@ func (x *GetWatchResultsRequest) String() string {
 func (*GetWatchResultsRequest) ProtoMessage() {}
 
 func (x *GetWatchResultsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[57]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3393,7 +3556,7 @@ func (x *GetWatchResultsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWatchResultsRequest.ProtoReflect.Descriptor instead.
 func (*GetWatchResultsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{57}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *GetWatchResultsRequest) GetName() string {
@@ -3419,7 +3582,7 @@ type GetWatchResultsResponse struct {
 
 func (x *GetWatchResultsResponse) Reset() {
 	*x = GetWatchResultsResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[58]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3431,7 +3594,7 @@ func (x *GetWatchResultsResponse) String() string {
 func (*GetWatchResultsResponse) ProtoMessage() {}
 
 func (x *GetWatchResultsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[58]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3444,7 +3607,7 @@ func (x *GetWatchResultsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetWatchResultsResponse.ProtoReflect.Descriptor instead.
 func (*GetWatchResultsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{58}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *GetWatchResultsResponse) GetResults() []*WatchResult {
@@ -3467,7 +3630,7 @@ type WatchResult struct {
 
 func (x *WatchResult) Reset() {
 	*x = WatchResult{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[59]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3479,7 +3642,7 @@ func (x *WatchResult) String() string {
 func (*WatchResult) ProtoMessage() {}
 
 func (x *WatchResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[59]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3492,7 +3655,7 @@ func (x *WatchResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchResult.ProtoReflect.Descriptor instead.
 func (*WatchResult) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{59}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *WatchResult) GetStdout() string {
@@ -3544,7 +3707,7 @@ type ShardHealth struct {
 
 func (x *ShardHealth) Reset() {
 	*x = ShardHealth{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[60]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3556,7 +3719,7 @@ func (x *ShardHealth) String() string {
 func (*ShardHealth) ProtoMessage() {}
 
 func (x *ShardHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[60]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3569,7 +3732,7 @@ func (x *ShardHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardHealth.ProtoReflect.Descriptor instead.
 func (*ShardHealth) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{60}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *ShardHealth) GetState() string {
@@ -3641,7 +3804,7 @@ type SubmitSampleRequest struct {
 
 func (x *SubmitSampleRequest) Reset() {
 	*x = SubmitSampleRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[61]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3653,7 +3816,7 @@ func (x *SubmitSampleRequest) String() string {
 func (*SubmitSampleRequest) ProtoMessage() {}
 
 func (x *SubmitSampleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[61]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3666,7 +3829,7 @@ func (x *SubmitSampleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitSampleRequest.ProtoReflect.Descriptor instead.
 func (*SubmitSampleRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{61}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *SubmitSampleRequest) GetToken() string {
@@ -3734,7 +3897,7 @@ type SubmitSampleResponse struct {
 
 func (x *SubmitSampleResponse) Reset() {
 	*x = SubmitSampleResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[62]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3746,7 +3909,7 @@ func (x *SubmitSampleResponse) String() string {
 func (*SubmitSampleResponse) ProtoMessage() {}
 
 func (x *SubmitSampleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[62]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3759,7 +3922,7 @@ func (x *SubmitSampleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitSampleResponse.ProtoReflect.Descriptor instead.
 func (*SubmitSampleResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{62}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *SubmitSampleResponse) GetStatus() string {
@@ -3785,7 +3948,7 @@ type GetSourceStatusRequest struct {
 
 func (x *GetSourceStatusRequest) Reset() {
 	*x = GetSourceStatusRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[63]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3797,7 +3960,7 @@ func (x *GetSourceStatusRequest) String() string {
 func (*GetSourceStatusRequest) ProtoMessage() {}
 
 func (x *GetSourceStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[63]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3810,7 +3973,7 @@ func (x *GetSourceStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSourceStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetSourceStatusRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{63}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *GetSourceStatusRequest) GetToken() string {
@@ -3867,7 +4030,7 @@ type GetSourceStatusResponse struct {
 
 func (x *GetSourceStatusResponse) Reset() {
 	*x = GetSourceStatusResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[64]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3879,7 +4042,7 @@ func (x *GetSourceStatusResponse) String() string {
 func (*GetSourceStatusResponse) ProtoMessage() {}
 
 func (x *GetSourceStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[64]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3892,7 +4055,7 @@ func (x *GetSourceStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSourceStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetSourceStatusResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{64}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *GetSourceStatusResponse) GetStatus() string {
@@ -3946,7 +4109,7 @@ type ListShardsRequest struct {
 
 func (x *ListShardsRequest) Reset() {
 	*x = ListShardsRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[65]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3958,7 +4121,7 @@ func (x *ListShardsRequest) String() string {
 func (*ListShardsRequest) ProtoMessage() {}
 
 func (x *ListShardsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[65]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3971,7 +4134,7 @@ func (x *ListShardsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListShardsRequest.ProtoReflect.Descriptor instead.
 func (*ListShardsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{65}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *ListShardsRequest) GetBucketId() int64 {
@@ -4014,7 +4177,7 @@ type ShardInfo struct {
 
 func (x *ShardInfo) Reset() {
 	*x = ShardInfo{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[66]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4026,7 +4189,7 @@ func (x *ShardInfo) String() string {
 func (*ShardInfo) ProtoMessage() {}
 
 func (x *ShardInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[66]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4039,7 +4202,7 @@ func (x *ShardInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardInfo.ProtoReflect.Descriptor instead.
 func (*ShardInfo) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{66}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *ShardInfo) GetId() string {
@@ -4142,7 +4305,7 @@ type ListShardsResponse struct {
 
 func (x *ListShardsResponse) Reset() {
 	*x = ListShardsResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[67]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4154,7 +4317,7 @@ func (x *ListShardsResponse) String() string {
 func (*ListShardsResponse) ProtoMessage() {}
 
 func (x *ListShardsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[67]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4167,7 +4330,7 @@ func (x *ListShardsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListShardsResponse.ProtoReflect.Descriptor instead.
 func (*ListShardsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{67}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ListShardsResponse) GetShards() []*ShardInfo {
@@ -4186,7 +4349,7 @@ type ForceArchiveShardRequest struct {
 
 func (x *ForceArchiveShardRequest) Reset() {
 	*x = ForceArchiveShardRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[68]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4198,7 +4361,7 @@ func (x *ForceArchiveShardRequest) String() string {
 func (*ForceArchiveShardRequest) ProtoMessage() {}
 
 func (x *ForceArchiveShardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[68]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4211,7 +4374,7 @@ func (x *ForceArchiveShardRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForceArchiveShardRequest.ProtoReflect.Descriptor instead.
 func (*ForceArchiveShardRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{68}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *ForceArchiveShardRequest) GetShardId() string {
@@ -4229,7 +4392,7 @@ type ForceArchiveShardResponse struct {
 
 func (x *ForceArchiveShardResponse) Reset() {
 	*x = ForceArchiveShardResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[69]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4241,7 +4404,7 @@ func (x *ForceArchiveShardResponse) String() string {
 func (*ForceArchiveShardResponse) ProtoMessage() {}
 
 func (x *ForceArchiveShardResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[69]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4254,7 +4417,7 @@ func (x *ForceArchiveShardResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForceArchiveShardResponse.ProtoReflect.Descriptor instead.
 func (*ForceArchiveShardResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{69}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{73}
 }
 
 type DeleteArchivedShardRequest struct {
@@ -4267,7 +4430,7 @@ type DeleteArchivedShardRequest struct {
 
 func (x *DeleteArchivedShardRequest) Reset() {
 	*x = DeleteArchivedShardRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[70]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4279,7 +4442,7 @@ func (x *DeleteArchivedShardRequest) String() string {
 func (*DeleteArchivedShardRequest) ProtoMessage() {}
 
 func (x *DeleteArchivedShardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[70]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4292,7 +4455,7 @@ func (x *DeleteArchivedShardRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteArchivedShardRequest.ProtoReflect.Descriptor instead.
 func (*DeleteArchivedShardRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{70}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *DeleteArchivedShardRequest) GetShardId() string {
@@ -4317,7 +4480,7 @@ type DeleteArchivedShardResponse struct {
 
 func (x *DeleteArchivedShardResponse) Reset() {
 	*x = DeleteArchivedShardResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[71]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4329,7 +4492,7 @@ func (x *DeleteArchivedShardResponse) String() string {
 func (*DeleteArchivedShardResponse) ProtoMessage() {}
 
 func (x *DeleteArchivedShardResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[71]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4342,7 +4505,7 @@ func (x *DeleteArchivedShardResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteArchivedShardResponse.ProtoReflect.Descriptor instead.
 func (*DeleteArchivedShardResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{71}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{75}
 }
 
 type RelaunchShardRequest struct {
@@ -4354,7 +4517,7 @@ type RelaunchShardRequest struct {
 
 func (x *RelaunchShardRequest) Reset() {
 	*x = RelaunchShardRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[72]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4366,7 +4529,7 @@ func (x *RelaunchShardRequest) String() string {
 func (*RelaunchShardRequest) ProtoMessage() {}
 
 func (x *RelaunchShardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[72]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4379,7 +4542,7 @@ func (x *RelaunchShardRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelaunchShardRequest.ProtoReflect.Descriptor instead.
 func (*RelaunchShardRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{72}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *RelaunchShardRequest) GetShardId() string {
@@ -4397,7 +4560,7 @@ type RelaunchShardResponse struct {
 
 func (x *RelaunchShardResponse) Reset() {
 	*x = RelaunchShardResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[73]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4409,7 +4572,7 @@ func (x *RelaunchShardResponse) String() string {
 func (*RelaunchShardResponse) ProtoMessage() {}
 
 func (x *RelaunchShardResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[73]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4422,7 +4585,7 @@ func (x *RelaunchShardResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelaunchShardResponse.ProtoReflect.Descriptor instead.
 func (*RelaunchShardResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{73}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{77}
 }
 
 type ForceRemoveShardRequest struct {
@@ -4435,7 +4598,7 @@ type ForceRemoveShardRequest struct {
 
 func (x *ForceRemoveShardRequest) Reset() {
 	*x = ForceRemoveShardRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[74]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4447,7 +4610,7 @@ func (x *ForceRemoveShardRequest) String() string {
 func (*ForceRemoveShardRequest) ProtoMessage() {}
 
 func (x *ForceRemoveShardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[74]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4460,7 +4623,7 @@ func (x *ForceRemoveShardRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForceRemoveShardRequest.ProtoReflect.Descriptor instead.
 func (*ForceRemoveShardRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{74}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *ForceRemoveShardRequest) GetShardId() string {
@@ -4485,7 +4648,7 @@ type ForceRemoveShardResponse struct {
 
 func (x *ForceRemoveShardResponse) Reset() {
 	*x = ForceRemoveShardResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[75]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4497,7 +4660,7 @@ func (x *ForceRemoveShardResponse) String() string {
 func (*ForceRemoveShardResponse) ProtoMessage() {}
 
 func (x *ForceRemoveShardResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[75]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4510,7 +4673,7 @@ func (x *ForceRemoveShardResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForceRemoveShardResponse.ProtoReflect.Descriptor instead.
 func (*ForceRemoveShardResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{75}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{79}
 }
 
 type GetShardRequest struct {
@@ -4522,7 +4685,7 @@ type GetShardRequest struct {
 
 func (x *GetShardRequest) Reset() {
 	*x = GetShardRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[76]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4534,7 +4697,7 @@ func (x *GetShardRequest) String() string {
 func (*GetShardRequest) ProtoMessage() {}
 
 func (x *GetShardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[76]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4547,7 +4710,7 @@ func (x *GetShardRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetShardRequest.ProtoReflect.Descriptor instead.
 func (*GetShardRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{76}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *GetShardRequest) GetShardId() string {
@@ -4566,7 +4729,7 @@ type GetShardResponse struct {
 
 func (x *GetShardResponse) Reset() {
 	*x = GetShardResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[77]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4578,7 +4741,7 @@ func (x *GetShardResponse) String() string {
 func (*GetShardResponse) ProtoMessage() {}
 
 func (x *GetShardResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[77]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4591,7 +4754,7 @@ func (x *GetShardResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetShardResponse.ProtoReflect.Descriptor instead.
 func (*GetShardResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{77}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *GetShardResponse) GetShard() *ShardInfo {
@@ -4609,7 +4772,7 @@ type ListBucketsRequest struct {
 
 func (x *ListBucketsRequest) Reset() {
 	*x = ListBucketsRequest{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[78]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4621,7 +4784,7 @@ func (x *ListBucketsRequest) String() string {
 func (*ListBucketsRequest) ProtoMessage() {}
 
 func (x *ListBucketsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[78]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4634,7 +4797,7 @@ func (x *ListBucketsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBucketsRequest.ProtoReflect.Descriptor instead.
 func (*ListBucketsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{78}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{82}
 }
 
 type BucketInfo struct {
@@ -4650,7 +4813,7 @@ type BucketInfo struct {
 
 func (x *BucketInfo) Reset() {
 	*x = BucketInfo{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[79]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4662,7 +4825,7 @@ func (x *BucketInfo) String() string {
 func (*BucketInfo) ProtoMessage() {}
 
 func (x *BucketInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[79]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4675,7 +4838,7 @@ func (x *BucketInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BucketInfo.ProtoReflect.Descriptor instead.
 func (*BucketInfo) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{79}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *BucketInfo) GetId() int64 {
@@ -4722,7 +4885,7 @@ type ListBucketsResponse struct {
 
 func (x *ListBucketsResponse) Reset() {
 	*x = ListBucketsResponse{}
-	mi := &file_proto_weftpb_weft_proto_msgTypes[80]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4734,7 +4897,7 @@ func (x *ListBucketsResponse) String() string {
 func (*ListBucketsResponse) ProtoMessage() {}
 
 func (x *ListBucketsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_weftpb_weft_proto_msgTypes[80]
+	mi := &file_proto_weftpb_weft_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4747,7 +4910,7 @@ func (x *ListBucketsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBucketsResponse.ProtoReflect.Descriptor instead.
 func (*ListBucketsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{80}
+	return file_proto_weftpb_weft_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *ListBucketsResponse) GetBuckets() []*BucketInfo {
@@ -4761,7 +4924,12 @@ var File_proto_weftpb_weft_proto protoreflect.FileDescriptor
 
 const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\n" +
-	"\x17proto/weftpb/weft.proto\x12\x04weft\"\xb4\x01\n" +
+	"\x17proto/weftpb/weft.proto\x12\x04weft\"5\n" +
+	"\fPauseRequest\x12%\n" +
+	"\x0esuccessor_addr\x18\x01 \x01(\tR\rsuccessorAddr\"\x0f\n" +
+	"\rPauseResponse\"\x0f\n" +
+	"\rResumeRequest\"\x10\n" +
+	"\x0eResumeResponse\"\xb4\x01\n" +
 	"\x10ConfigureRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x1a\n" +
 	"\bservices\x18\x02 \x03(\tR\bservices\x12!\n" +
@@ -4859,7 +5027,7 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x1aExecuteQueryStreamResponse\x12\x14\n" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12#\n" +
-	"\rmissing_shard\x18\x03 \x01(\tR\fmissingShard\"\xd8\x01\n" +
+	"\rmissing_shard\x18\x03 \x01(\tR\fmissingShard\"\xee\x01\n" +
 	"\x15ShardHeartbeatRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1f\n" +
@@ -4871,7 +5039,8 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"disk_bytes\x18\t \x01(\x03R\tdiskBytes\x12\x1d\n" +
 	"\n" +
 	"binary_sha\x18\n" +
-	" \x01(\tR\tbinarySha\"\x13\n" +
+	" \x01(\tR\tbinarySha\x12\x14\n" +
+	"\x05spare\x18\v \x01(\bR\x05spare\"\x13\n" +
 	"\x11HeartbeatResponse\"9\n" +
 	"\x0fGetUsageRequest\x12\x16\n" +
 	"\x06period\x18\x02 \x01(\tR\x06periodJ\x04\b\x01\x10\x02R\bcustomer\"{\n" +
@@ -5090,14 +5259,16 @@ const file_proto_weftpb_weft_proto_rawDesc = "" +
 	"\x04tier\x18\x04 \x01(\tR\x04tier\x12\x14\n" +
 	"\x05state\x18\x05 \x01(\tR\x05state\"A\n" +
 	"\x13ListBucketsResponse\x12*\n" +
-	"\abuckets\x18\x01 \x03(\v2\x10.weft.BucketInfoR\abuckets2\xa3\x02\n" +
+	"\abuckets\x18\x01 \x03(\v2\x10.weft.BucketInfoR\abuckets2\x8a\x03\n" +
 	"\n" +
 	"ShardQuery\x12.\n" +
 	"\x05Query\x12\x12.weft.QueryRequest\x1a\x0f.weft.ResultRow0\x01\x123\n" +
 	"\x06Ingest\x12\x13.weft.IngestRequest\x1a\x14.weft.IngestResponse\x12:\n" +
 	"\fIngestStream\x12\f.weft.LogRow\x1a\x1a.weft.IngestStreamResponse(\x01\x12<\n" +
 	"\tConfigure\x12\x16.weft.ConfigureRequest\x1a\x17.weft.ConfigureResponse\x126\n" +
-	"\aArchive\x12\x14.weft.ArchiveRequest\x1a\x15.weft.ArchiveResponse2b\n" +
+	"\aArchive\x12\x14.weft.ArchiveRequest\x1a\x15.weft.ArchiveResponse\x120\n" +
+	"\x05Pause\x12\x12.weft.PauseRequest\x1a\x13.weft.PauseResponse\x123\n" +
+	"\x06Resume\x12\x13.weft.ResumeRequest\x1a\x14.weft.ResumeResponse2b\n" +
 	"\vWeftCompute\x12S\n" +
 	"\x12ExecuteQueryStream\x12\x19.weft.ExecuteQueryRequest\x1a .weft.ExecuteQueryStreamResponse0\x012\xb8\x0e\n" +
 	"\x0fWeftCoordinator\x12N\n" +
@@ -5149,181 +5320,189 @@ func file_proto_weftpb_weft_proto_rawDescGZIP() []byte {
 	return file_proto_weftpb_weft_proto_rawDescData
 }
 
-var file_proto_weftpb_weft_proto_msgTypes = make([]protoimpl.MessageInfo, 82)
+var file_proto_weftpb_weft_proto_msgTypes = make([]protoimpl.MessageInfo, 86)
 var file_proto_weftpb_weft_proto_goTypes = []any{
-	(*ConfigureRequest)(nil),            // 0: weft.ConfigureRequest
-	(*ConfigureResponse)(nil),           // 1: weft.ConfigureResponse
-	(*ArchiveRequest)(nil),              // 2: weft.ArchiveRequest
-	(*ArchiveResponse)(nil),             // 3: weft.ArchiveResponse
-	(*CustomerArchiveStat)(nil),         // 4: weft.CustomerArchiveStat
-	(*IngestStreamResponse)(nil),        // 5: weft.IngestStreamResponse
-	(*QueryRequest)(nil),                // 6: weft.QueryRequest
-	(*ResultRow)(nil),                   // 7: weft.ResultRow
-	(*LogRow)(nil),                      // 8: weft.LogRow
-	(*IngestRequest)(nil),               // 9: weft.IngestRequest
-	(*IngestResponse)(nil),              // 10: weft.IngestResponse
-	(*ShardDescriptor)(nil),             // 11: weft.ShardDescriptor
-	(*ExecuteQueryRequest)(nil),         // 12: weft.ExecuteQueryRequest
-	(*ExecuteQueryStreamResponse)(nil),  // 13: weft.ExecuteQueryStreamResponse
-	(*ShardHeartbeatRequest)(nil),       // 14: weft.ShardHeartbeatRequest
-	(*HeartbeatResponse)(nil),           // 15: weft.HeartbeatResponse
-	(*GetUsageRequest)(nil),             // 16: weft.GetUsageRequest
-	(*GetUsageResponse)(nil),            // 17: weft.GetUsageResponse
-	(*CreateTokenRequest)(nil),          // 18: weft.CreateTokenRequest
-	(*CreateTokenResponse)(nil),         // 19: weft.CreateTokenResponse
-	(*ListTokensRequest)(nil),           // 20: weft.ListTokensRequest
-	(*ListTokensResponse)(nil),          // 21: weft.ListTokensResponse
-	(*TokenInfo)(nil),                   // 22: weft.TokenInfo
-	(*RevokeTokenRequest)(nil),          // 23: weft.RevokeTokenRequest
-	(*RevokeTokenResponse)(nil),         // 24: weft.RevokeTokenResponse
-	(*AuthenticateRequest)(nil),         // 25: weft.AuthenticateRequest
-	(*MetricsConfig)(nil),               // 26: weft.MetricsConfig
-	(*AuthenticateResponse)(nil),        // 27: weft.AuthenticateResponse
-	(*CoordinatorExecuteRequest)(nil),   // 28: weft.CoordinatorExecuteRequest
-	(*CoordinatorExecuteResponse)(nil),  // 29: weft.CoordinatorExecuteResponse
-	(*Line)(nil),                        // 30: weft.Line
-	(*Notice)(nil),                      // 31: weft.Notice
-	(*ListServicesRequest)(nil),         // 32: weft.ListServicesRequest
-	(*ListServicesResponse)(nil),        // 33: weft.ListServicesResponse
-	(*AddSourceRequest)(nil),            // 34: weft.AddSourceRequest
-	(*AddSourceResponse)(nil),           // 35: weft.AddSourceResponse
-	(*ListSourcesRequest)(nil),          // 36: weft.ListSourcesRequest
-	(*ListSourcesResponse)(nil),         // 37: weft.ListSourcesResponse
-	(*SourceInfo)(nil),                  // 38: weft.SourceInfo
-	(*RemoveSourceRequest)(nil),         // 39: weft.RemoveSourceRequest
-	(*RemoveSourceResponse)(nil),        // 40: weft.RemoveSourceResponse
-	(*SaveFunctionRequest)(nil),         // 41: weft.SaveFunctionRequest
-	(*SaveFunctionResponse)(nil),        // 42: weft.SaveFunctionResponse
-	(*GetFunctionRequest)(nil),          // 43: weft.GetFunctionRequest
-	(*GetFunctionResponse)(nil),         // 44: weft.GetFunctionResponse
-	(*ListFunctionsRequest)(nil),        // 45: weft.ListFunctionsRequest
-	(*ListFunctionsResponse)(nil),       // 46: weft.ListFunctionsResponse
-	(*DeleteFunctionRequest)(nil),       // 47: weft.DeleteFunctionRequest
-	(*DeleteFunctionResponse)(nil),      // 48: weft.DeleteFunctionResponse
-	(*SaveWatchRequest)(nil),            // 49: weft.SaveWatchRequest
-	(*SaveWatchResponse)(nil),           // 50: weft.SaveWatchResponse
-	(*GetWatchRequest)(nil),             // 51: weft.GetWatchRequest
-	(*GetWatchResponse)(nil),            // 52: weft.GetWatchResponse
-	(*ListWatchesRequest)(nil),          // 53: weft.ListWatchesRequest
-	(*ListWatchesResponse)(nil),         // 54: weft.ListWatchesResponse
-	(*DeleteWatchRequest)(nil),          // 55: weft.DeleteWatchRequest
-	(*DeleteWatchResponse)(nil),         // 56: weft.DeleteWatchResponse
-	(*GetWatchResultsRequest)(nil),      // 57: weft.GetWatchResultsRequest
-	(*GetWatchResultsResponse)(nil),     // 58: weft.GetWatchResultsResponse
-	(*WatchResult)(nil),                 // 59: weft.WatchResult
-	(*ShardHealth)(nil),                 // 60: weft.ShardHealth
-	(*SubmitSampleRequest)(nil),         // 61: weft.SubmitSampleRequest
-	(*SubmitSampleResponse)(nil),        // 62: weft.SubmitSampleResponse
-	(*GetSourceStatusRequest)(nil),      // 63: weft.GetSourceStatusRequest
-	(*GetSourceStatusResponse)(nil),     // 64: weft.GetSourceStatusResponse
-	(*ListShardsRequest)(nil),           // 65: weft.ListShardsRequest
-	(*ShardInfo)(nil),                   // 66: weft.ShardInfo
-	(*ListShardsResponse)(nil),          // 67: weft.ListShardsResponse
-	(*ForceArchiveShardRequest)(nil),    // 68: weft.ForceArchiveShardRequest
-	(*ForceArchiveShardResponse)(nil),   // 69: weft.ForceArchiveShardResponse
-	(*DeleteArchivedShardRequest)(nil),  // 70: weft.DeleteArchivedShardRequest
-	(*DeleteArchivedShardResponse)(nil), // 71: weft.DeleteArchivedShardResponse
-	(*RelaunchShardRequest)(nil),        // 72: weft.RelaunchShardRequest
-	(*RelaunchShardResponse)(nil),       // 73: weft.RelaunchShardResponse
-	(*ForceRemoveShardRequest)(nil),     // 74: weft.ForceRemoveShardRequest
-	(*ForceRemoveShardResponse)(nil),    // 75: weft.ForceRemoveShardResponse
-	(*GetShardRequest)(nil),             // 76: weft.GetShardRequest
-	(*GetShardResponse)(nil),            // 77: weft.GetShardResponse
-	(*ListBucketsRequest)(nil),          // 78: weft.ListBucketsRequest
-	(*BucketInfo)(nil),                  // 79: weft.BucketInfo
-	(*ListBucketsResponse)(nil),         // 80: weft.ListBucketsResponse
-	nil,                                 // 81: weft.ResultRow.MetaVarsEntry
+	(*PauseRequest)(nil),                // 0: weft.PauseRequest
+	(*PauseResponse)(nil),               // 1: weft.PauseResponse
+	(*ResumeRequest)(nil),               // 2: weft.ResumeRequest
+	(*ResumeResponse)(nil),              // 3: weft.ResumeResponse
+	(*ConfigureRequest)(nil),            // 4: weft.ConfigureRequest
+	(*ConfigureResponse)(nil),           // 5: weft.ConfigureResponse
+	(*ArchiveRequest)(nil),              // 6: weft.ArchiveRequest
+	(*ArchiveResponse)(nil),             // 7: weft.ArchiveResponse
+	(*CustomerArchiveStat)(nil),         // 8: weft.CustomerArchiveStat
+	(*IngestStreamResponse)(nil),        // 9: weft.IngestStreamResponse
+	(*QueryRequest)(nil),                // 10: weft.QueryRequest
+	(*ResultRow)(nil),                   // 11: weft.ResultRow
+	(*LogRow)(nil),                      // 12: weft.LogRow
+	(*IngestRequest)(nil),               // 13: weft.IngestRequest
+	(*IngestResponse)(nil),              // 14: weft.IngestResponse
+	(*ShardDescriptor)(nil),             // 15: weft.ShardDescriptor
+	(*ExecuteQueryRequest)(nil),         // 16: weft.ExecuteQueryRequest
+	(*ExecuteQueryStreamResponse)(nil),  // 17: weft.ExecuteQueryStreamResponse
+	(*ShardHeartbeatRequest)(nil),       // 18: weft.ShardHeartbeatRequest
+	(*HeartbeatResponse)(nil),           // 19: weft.HeartbeatResponse
+	(*GetUsageRequest)(nil),             // 20: weft.GetUsageRequest
+	(*GetUsageResponse)(nil),            // 21: weft.GetUsageResponse
+	(*CreateTokenRequest)(nil),          // 22: weft.CreateTokenRequest
+	(*CreateTokenResponse)(nil),         // 23: weft.CreateTokenResponse
+	(*ListTokensRequest)(nil),           // 24: weft.ListTokensRequest
+	(*ListTokensResponse)(nil),          // 25: weft.ListTokensResponse
+	(*TokenInfo)(nil),                   // 26: weft.TokenInfo
+	(*RevokeTokenRequest)(nil),          // 27: weft.RevokeTokenRequest
+	(*RevokeTokenResponse)(nil),         // 28: weft.RevokeTokenResponse
+	(*AuthenticateRequest)(nil),         // 29: weft.AuthenticateRequest
+	(*MetricsConfig)(nil),               // 30: weft.MetricsConfig
+	(*AuthenticateResponse)(nil),        // 31: weft.AuthenticateResponse
+	(*CoordinatorExecuteRequest)(nil),   // 32: weft.CoordinatorExecuteRequest
+	(*CoordinatorExecuteResponse)(nil),  // 33: weft.CoordinatorExecuteResponse
+	(*Line)(nil),                        // 34: weft.Line
+	(*Notice)(nil),                      // 35: weft.Notice
+	(*ListServicesRequest)(nil),         // 36: weft.ListServicesRequest
+	(*ListServicesResponse)(nil),        // 37: weft.ListServicesResponse
+	(*AddSourceRequest)(nil),            // 38: weft.AddSourceRequest
+	(*AddSourceResponse)(nil),           // 39: weft.AddSourceResponse
+	(*ListSourcesRequest)(nil),          // 40: weft.ListSourcesRequest
+	(*ListSourcesResponse)(nil),         // 41: weft.ListSourcesResponse
+	(*SourceInfo)(nil),                  // 42: weft.SourceInfo
+	(*RemoveSourceRequest)(nil),         // 43: weft.RemoveSourceRequest
+	(*RemoveSourceResponse)(nil),        // 44: weft.RemoveSourceResponse
+	(*SaveFunctionRequest)(nil),         // 45: weft.SaveFunctionRequest
+	(*SaveFunctionResponse)(nil),        // 46: weft.SaveFunctionResponse
+	(*GetFunctionRequest)(nil),          // 47: weft.GetFunctionRequest
+	(*GetFunctionResponse)(nil),         // 48: weft.GetFunctionResponse
+	(*ListFunctionsRequest)(nil),        // 49: weft.ListFunctionsRequest
+	(*ListFunctionsResponse)(nil),       // 50: weft.ListFunctionsResponse
+	(*DeleteFunctionRequest)(nil),       // 51: weft.DeleteFunctionRequest
+	(*DeleteFunctionResponse)(nil),      // 52: weft.DeleteFunctionResponse
+	(*SaveWatchRequest)(nil),            // 53: weft.SaveWatchRequest
+	(*SaveWatchResponse)(nil),           // 54: weft.SaveWatchResponse
+	(*GetWatchRequest)(nil),             // 55: weft.GetWatchRequest
+	(*GetWatchResponse)(nil),            // 56: weft.GetWatchResponse
+	(*ListWatchesRequest)(nil),          // 57: weft.ListWatchesRequest
+	(*ListWatchesResponse)(nil),         // 58: weft.ListWatchesResponse
+	(*DeleteWatchRequest)(nil),          // 59: weft.DeleteWatchRequest
+	(*DeleteWatchResponse)(nil),         // 60: weft.DeleteWatchResponse
+	(*GetWatchResultsRequest)(nil),      // 61: weft.GetWatchResultsRequest
+	(*GetWatchResultsResponse)(nil),     // 62: weft.GetWatchResultsResponse
+	(*WatchResult)(nil),                 // 63: weft.WatchResult
+	(*ShardHealth)(nil),                 // 64: weft.ShardHealth
+	(*SubmitSampleRequest)(nil),         // 65: weft.SubmitSampleRequest
+	(*SubmitSampleResponse)(nil),        // 66: weft.SubmitSampleResponse
+	(*GetSourceStatusRequest)(nil),      // 67: weft.GetSourceStatusRequest
+	(*GetSourceStatusResponse)(nil),     // 68: weft.GetSourceStatusResponse
+	(*ListShardsRequest)(nil),           // 69: weft.ListShardsRequest
+	(*ShardInfo)(nil),                   // 70: weft.ShardInfo
+	(*ListShardsResponse)(nil),          // 71: weft.ListShardsResponse
+	(*ForceArchiveShardRequest)(nil),    // 72: weft.ForceArchiveShardRequest
+	(*ForceArchiveShardResponse)(nil),   // 73: weft.ForceArchiveShardResponse
+	(*DeleteArchivedShardRequest)(nil),  // 74: weft.DeleteArchivedShardRequest
+	(*DeleteArchivedShardResponse)(nil), // 75: weft.DeleteArchivedShardResponse
+	(*RelaunchShardRequest)(nil),        // 76: weft.RelaunchShardRequest
+	(*RelaunchShardResponse)(nil),       // 77: weft.RelaunchShardResponse
+	(*ForceRemoveShardRequest)(nil),     // 78: weft.ForceRemoveShardRequest
+	(*ForceRemoveShardResponse)(nil),    // 79: weft.ForceRemoveShardResponse
+	(*GetShardRequest)(nil),             // 80: weft.GetShardRequest
+	(*GetShardResponse)(nil),            // 81: weft.GetShardResponse
+	(*ListBucketsRequest)(nil),          // 82: weft.ListBucketsRequest
+	(*BucketInfo)(nil),                  // 83: weft.BucketInfo
+	(*ListBucketsResponse)(nil),         // 84: weft.ListBucketsResponse
+	nil,                                 // 85: weft.ResultRow.MetaVarsEntry
 }
 var file_proto_weftpb_weft_proto_depIdxs = []int32{
-	4,  // 0: weft.ArchiveResponse.customer_stats:type_name -> weft.CustomerArchiveStat
-	81, // 1: weft.ResultRow.meta_vars:type_name -> weft.ResultRow.MetaVarsEntry
-	8,  // 2: weft.IngestRequest.rows:type_name -> weft.LogRow
-	11, // 3: weft.ExecuteQueryRequest.shards:type_name -> weft.ShardDescriptor
-	22, // 4: weft.ListTokensResponse.tokens:type_name -> weft.TokenInfo
-	26, // 5: weft.AuthenticateRequest.metrics_config:type_name -> weft.MetricsConfig
-	30, // 6: weft.CoordinatorExecuteResponse.lines:type_name -> weft.Line
-	31, // 7: weft.CoordinatorExecuteResponse.notices:type_name -> weft.Notice
-	38, // 8: weft.ListSourcesResponse.sources:type_name -> weft.SourceInfo
-	59, // 9: weft.GetWatchResultsResponse.results:type_name -> weft.WatchResult
-	66, // 10: weft.ListShardsResponse.shards:type_name -> weft.ShardInfo
-	66, // 11: weft.GetShardResponse.shard:type_name -> weft.ShardInfo
-	79, // 12: weft.ListBucketsResponse.buckets:type_name -> weft.BucketInfo
-	6,  // 13: weft.ShardQuery.Query:input_type -> weft.QueryRequest
-	9,  // 14: weft.ShardQuery.Ingest:input_type -> weft.IngestRequest
-	8,  // 15: weft.ShardQuery.IngestStream:input_type -> weft.LogRow
-	0,  // 16: weft.ShardQuery.Configure:input_type -> weft.ConfigureRequest
-	2,  // 17: weft.ShardQuery.Archive:input_type -> weft.ArchiveRequest
-	12, // 18: weft.WeftCompute.ExecuteQueryStream:input_type -> weft.ExecuteQueryRequest
-	28, // 19: weft.WeftCoordinator.Execute:input_type -> weft.CoordinatorExecuteRequest
-	32, // 20: weft.WeftCoordinator.ListServices:input_type -> weft.ListServicesRequest
-	34, // 21: weft.WeftCoordinator.AddSource:input_type -> weft.AddSourceRequest
-	36, // 22: weft.WeftCoordinator.ListSources:input_type -> weft.ListSourcesRequest
-	39, // 23: weft.WeftCoordinator.RemoveSource:input_type -> weft.RemoveSourceRequest
-	25, // 24: weft.WeftCoordinator.Authenticate:input_type -> weft.AuthenticateRequest
-	8,  // 25: weft.WeftCoordinator.IngestStream:input_type -> weft.LogRow
-	18, // 26: weft.WeftCoordinator.CreateToken:input_type -> weft.CreateTokenRequest
-	20, // 27: weft.WeftCoordinator.ListTokens:input_type -> weft.ListTokensRequest
-	23, // 28: weft.WeftCoordinator.RevokeToken:input_type -> weft.RevokeTokenRequest
-	16, // 29: weft.WeftCoordinator.GetUsage:input_type -> weft.GetUsageRequest
-	41, // 30: weft.WeftCoordinator.SaveFunction:input_type -> weft.SaveFunctionRequest
-	43, // 31: weft.WeftCoordinator.GetFunction:input_type -> weft.GetFunctionRequest
-	45, // 32: weft.WeftCoordinator.ListFunctions:input_type -> weft.ListFunctionsRequest
-	47, // 33: weft.WeftCoordinator.DeleteFunction:input_type -> weft.DeleteFunctionRequest
-	49, // 34: weft.WeftCoordinator.SaveWatch:input_type -> weft.SaveWatchRequest
-	51, // 35: weft.WeftCoordinator.GetWatch:input_type -> weft.GetWatchRequest
-	53, // 36: weft.WeftCoordinator.ListWatches:input_type -> weft.ListWatchesRequest
-	55, // 37: weft.WeftCoordinator.DeleteWatch:input_type -> weft.DeleteWatchRequest
-	57, // 38: weft.WeftCoordinator.GetWatchResults:input_type -> weft.GetWatchResultsRequest
-	61, // 39: weft.WeftCoordinator.SubmitSample:input_type -> weft.SubmitSampleRequest
-	63, // 40: weft.WeftCoordinator.GetSourceStatus:input_type -> weft.GetSourceStatusRequest
-	14, // 41: weft.WeftCoordinator.Heartbeat:input_type -> weft.ShardHeartbeatRequest
-	65, // 42: weft.WeftCoordinator.ListShards:input_type -> weft.ListShardsRequest
-	68, // 43: weft.WeftCoordinator.ForceArchiveShard:input_type -> weft.ForceArchiveShardRequest
-	70, // 44: weft.WeftCoordinator.DeleteArchivedShard:input_type -> weft.DeleteArchivedShardRequest
-	72, // 45: weft.WeftAdmin.RelaunchShard:input_type -> weft.RelaunchShardRequest
-	74, // 46: weft.WeftAdmin.ForceRemoveShard:input_type -> weft.ForceRemoveShardRequest
-	76, // 47: weft.WeftAdmin.GetShard:input_type -> weft.GetShardRequest
-	65, // 48: weft.WeftAdmin.ListShards:input_type -> weft.ListShardsRequest
-	78, // 49: weft.WeftAdmin.ListBuckets:input_type -> weft.ListBucketsRequest
-	7,  // 50: weft.ShardQuery.Query:output_type -> weft.ResultRow
-	10, // 51: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
-	5,  // 52: weft.ShardQuery.IngestStream:output_type -> weft.IngestStreamResponse
-	1,  // 53: weft.ShardQuery.Configure:output_type -> weft.ConfigureResponse
-	3,  // 54: weft.ShardQuery.Archive:output_type -> weft.ArchiveResponse
-	13, // 55: weft.WeftCompute.ExecuteQueryStream:output_type -> weft.ExecuteQueryStreamResponse
-	29, // 56: weft.WeftCoordinator.Execute:output_type -> weft.CoordinatorExecuteResponse
-	33, // 57: weft.WeftCoordinator.ListServices:output_type -> weft.ListServicesResponse
-	35, // 58: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
-	37, // 59: weft.WeftCoordinator.ListSources:output_type -> weft.ListSourcesResponse
-	40, // 60: weft.WeftCoordinator.RemoveSource:output_type -> weft.RemoveSourceResponse
-	27, // 61: weft.WeftCoordinator.Authenticate:output_type -> weft.AuthenticateResponse
-	5,  // 62: weft.WeftCoordinator.IngestStream:output_type -> weft.IngestStreamResponse
-	19, // 63: weft.WeftCoordinator.CreateToken:output_type -> weft.CreateTokenResponse
-	21, // 64: weft.WeftCoordinator.ListTokens:output_type -> weft.ListTokensResponse
-	24, // 65: weft.WeftCoordinator.RevokeToken:output_type -> weft.RevokeTokenResponse
-	17, // 66: weft.WeftCoordinator.GetUsage:output_type -> weft.GetUsageResponse
-	42, // 67: weft.WeftCoordinator.SaveFunction:output_type -> weft.SaveFunctionResponse
-	44, // 68: weft.WeftCoordinator.GetFunction:output_type -> weft.GetFunctionResponse
-	46, // 69: weft.WeftCoordinator.ListFunctions:output_type -> weft.ListFunctionsResponse
-	48, // 70: weft.WeftCoordinator.DeleteFunction:output_type -> weft.DeleteFunctionResponse
-	50, // 71: weft.WeftCoordinator.SaveWatch:output_type -> weft.SaveWatchResponse
-	52, // 72: weft.WeftCoordinator.GetWatch:output_type -> weft.GetWatchResponse
-	54, // 73: weft.WeftCoordinator.ListWatches:output_type -> weft.ListWatchesResponse
-	56, // 74: weft.WeftCoordinator.DeleteWatch:output_type -> weft.DeleteWatchResponse
-	58, // 75: weft.WeftCoordinator.GetWatchResults:output_type -> weft.GetWatchResultsResponse
-	62, // 76: weft.WeftCoordinator.SubmitSample:output_type -> weft.SubmitSampleResponse
-	64, // 77: weft.WeftCoordinator.GetSourceStatus:output_type -> weft.GetSourceStatusResponse
-	15, // 78: weft.WeftCoordinator.Heartbeat:output_type -> weft.HeartbeatResponse
-	67, // 79: weft.WeftCoordinator.ListShards:output_type -> weft.ListShardsResponse
-	69, // 80: weft.WeftCoordinator.ForceArchiveShard:output_type -> weft.ForceArchiveShardResponse
-	71, // 81: weft.WeftCoordinator.DeleteArchivedShard:output_type -> weft.DeleteArchivedShardResponse
-	73, // 82: weft.WeftAdmin.RelaunchShard:output_type -> weft.RelaunchShardResponse
-	75, // 83: weft.WeftAdmin.ForceRemoveShard:output_type -> weft.ForceRemoveShardResponse
-	77, // 84: weft.WeftAdmin.GetShard:output_type -> weft.GetShardResponse
-	67, // 85: weft.WeftAdmin.ListShards:output_type -> weft.ListShardsResponse
-	80, // 86: weft.WeftAdmin.ListBuckets:output_type -> weft.ListBucketsResponse
-	50, // [50:87] is the sub-list for method output_type
-	13, // [13:50] is the sub-list for method input_type
+	8,  // 0: weft.ArchiveResponse.customer_stats:type_name -> weft.CustomerArchiveStat
+	85, // 1: weft.ResultRow.meta_vars:type_name -> weft.ResultRow.MetaVarsEntry
+	12, // 2: weft.IngestRequest.rows:type_name -> weft.LogRow
+	15, // 3: weft.ExecuteQueryRequest.shards:type_name -> weft.ShardDescriptor
+	26, // 4: weft.ListTokensResponse.tokens:type_name -> weft.TokenInfo
+	30, // 5: weft.AuthenticateRequest.metrics_config:type_name -> weft.MetricsConfig
+	34, // 6: weft.CoordinatorExecuteResponse.lines:type_name -> weft.Line
+	35, // 7: weft.CoordinatorExecuteResponse.notices:type_name -> weft.Notice
+	42, // 8: weft.ListSourcesResponse.sources:type_name -> weft.SourceInfo
+	63, // 9: weft.GetWatchResultsResponse.results:type_name -> weft.WatchResult
+	70, // 10: weft.ListShardsResponse.shards:type_name -> weft.ShardInfo
+	70, // 11: weft.GetShardResponse.shard:type_name -> weft.ShardInfo
+	83, // 12: weft.ListBucketsResponse.buckets:type_name -> weft.BucketInfo
+	10, // 13: weft.ShardQuery.Query:input_type -> weft.QueryRequest
+	13, // 14: weft.ShardQuery.Ingest:input_type -> weft.IngestRequest
+	12, // 15: weft.ShardQuery.IngestStream:input_type -> weft.LogRow
+	4,  // 16: weft.ShardQuery.Configure:input_type -> weft.ConfigureRequest
+	6,  // 17: weft.ShardQuery.Archive:input_type -> weft.ArchiveRequest
+	0,  // 18: weft.ShardQuery.Pause:input_type -> weft.PauseRequest
+	2,  // 19: weft.ShardQuery.Resume:input_type -> weft.ResumeRequest
+	16, // 20: weft.WeftCompute.ExecuteQueryStream:input_type -> weft.ExecuteQueryRequest
+	32, // 21: weft.WeftCoordinator.Execute:input_type -> weft.CoordinatorExecuteRequest
+	36, // 22: weft.WeftCoordinator.ListServices:input_type -> weft.ListServicesRequest
+	38, // 23: weft.WeftCoordinator.AddSource:input_type -> weft.AddSourceRequest
+	40, // 24: weft.WeftCoordinator.ListSources:input_type -> weft.ListSourcesRequest
+	43, // 25: weft.WeftCoordinator.RemoveSource:input_type -> weft.RemoveSourceRequest
+	29, // 26: weft.WeftCoordinator.Authenticate:input_type -> weft.AuthenticateRequest
+	12, // 27: weft.WeftCoordinator.IngestStream:input_type -> weft.LogRow
+	22, // 28: weft.WeftCoordinator.CreateToken:input_type -> weft.CreateTokenRequest
+	24, // 29: weft.WeftCoordinator.ListTokens:input_type -> weft.ListTokensRequest
+	27, // 30: weft.WeftCoordinator.RevokeToken:input_type -> weft.RevokeTokenRequest
+	20, // 31: weft.WeftCoordinator.GetUsage:input_type -> weft.GetUsageRequest
+	45, // 32: weft.WeftCoordinator.SaveFunction:input_type -> weft.SaveFunctionRequest
+	47, // 33: weft.WeftCoordinator.GetFunction:input_type -> weft.GetFunctionRequest
+	49, // 34: weft.WeftCoordinator.ListFunctions:input_type -> weft.ListFunctionsRequest
+	51, // 35: weft.WeftCoordinator.DeleteFunction:input_type -> weft.DeleteFunctionRequest
+	53, // 36: weft.WeftCoordinator.SaveWatch:input_type -> weft.SaveWatchRequest
+	55, // 37: weft.WeftCoordinator.GetWatch:input_type -> weft.GetWatchRequest
+	57, // 38: weft.WeftCoordinator.ListWatches:input_type -> weft.ListWatchesRequest
+	59, // 39: weft.WeftCoordinator.DeleteWatch:input_type -> weft.DeleteWatchRequest
+	61, // 40: weft.WeftCoordinator.GetWatchResults:input_type -> weft.GetWatchResultsRequest
+	65, // 41: weft.WeftCoordinator.SubmitSample:input_type -> weft.SubmitSampleRequest
+	67, // 42: weft.WeftCoordinator.GetSourceStatus:input_type -> weft.GetSourceStatusRequest
+	18, // 43: weft.WeftCoordinator.Heartbeat:input_type -> weft.ShardHeartbeatRequest
+	69, // 44: weft.WeftCoordinator.ListShards:input_type -> weft.ListShardsRequest
+	72, // 45: weft.WeftCoordinator.ForceArchiveShard:input_type -> weft.ForceArchiveShardRequest
+	74, // 46: weft.WeftCoordinator.DeleteArchivedShard:input_type -> weft.DeleteArchivedShardRequest
+	76, // 47: weft.WeftAdmin.RelaunchShard:input_type -> weft.RelaunchShardRequest
+	78, // 48: weft.WeftAdmin.ForceRemoveShard:input_type -> weft.ForceRemoveShardRequest
+	80, // 49: weft.WeftAdmin.GetShard:input_type -> weft.GetShardRequest
+	69, // 50: weft.WeftAdmin.ListShards:input_type -> weft.ListShardsRequest
+	82, // 51: weft.WeftAdmin.ListBuckets:input_type -> weft.ListBucketsRequest
+	11, // 52: weft.ShardQuery.Query:output_type -> weft.ResultRow
+	14, // 53: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
+	9,  // 54: weft.ShardQuery.IngestStream:output_type -> weft.IngestStreamResponse
+	5,  // 55: weft.ShardQuery.Configure:output_type -> weft.ConfigureResponse
+	7,  // 56: weft.ShardQuery.Archive:output_type -> weft.ArchiveResponse
+	1,  // 57: weft.ShardQuery.Pause:output_type -> weft.PauseResponse
+	3,  // 58: weft.ShardQuery.Resume:output_type -> weft.ResumeResponse
+	17, // 59: weft.WeftCompute.ExecuteQueryStream:output_type -> weft.ExecuteQueryStreamResponse
+	33, // 60: weft.WeftCoordinator.Execute:output_type -> weft.CoordinatorExecuteResponse
+	37, // 61: weft.WeftCoordinator.ListServices:output_type -> weft.ListServicesResponse
+	39, // 62: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
+	41, // 63: weft.WeftCoordinator.ListSources:output_type -> weft.ListSourcesResponse
+	44, // 64: weft.WeftCoordinator.RemoveSource:output_type -> weft.RemoveSourceResponse
+	31, // 65: weft.WeftCoordinator.Authenticate:output_type -> weft.AuthenticateResponse
+	9,  // 66: weft.WeftCoordinator.IngestStream:output_type -> weft.IngestStreamResponse
+	23, // 67: weft.WeftCoordinator.CreateToken:output_type -> weft.CreateTokenResponse
+	25, // 68: weft.WeftCoordinator.ListTokens:output_type -> weft.ListTokensResponse
+	28, // 69: weft.WeftCoordinator.RevokeToken:output_type -> weft.RevokeTokenResponse
+	21, // 70: weft.WeftCoordinator.GetUsage:output_type -> weft.GetUsageResponse
+	46, // 71: weft.WeftCoordinator.SaveFunction:output_type -> weft.SaveFunctionResponse
+	48, // 72: weft.WeftCoordinator.GetFunction:output_type -> weft.GetFunctionResponse
+	50, // 73: weft.WeftCoordinator.ListFunctions:output_type -> weft.ListFunctionsResponse
+	52, // 74: weft.WeftCoordinator.DeleteFunction:output_type -> weft.DeleteFunctionResponse
+	54, // 75: weft.WeftCoordinator.SaveWatch:output_type -> weft.SaveWatchResponse
+	56, // 76: weft.WeftCoordinator.GetWatch:output_type -> weft.GetWatchResponse
+	58, // 77: weft.WeftCoordinator.ListWatches:output_type -> weft.ListWatchesResponse
+	60, // 78: weft.WeftCoordinator.DeleteWatch:output_type -> weft.DeleteWatchResponse
+	62, // 79: weft.WeftCoordinator.GetWatchResults:output_type -> weft.GetWatchResultsResponse
+	66, // 80: weft.WeftCoordinator.SubmitSample:output_type -> weft.SubmitSampleResponse
+	68, // 81: weft.WeftCoordinator.GetSourceStatus:output_type -> weft.GetSourceStatusResponse
+	19, // 82: weft.WeftCoordinator.Heartbeat:output_type -> weft.HeartbeatResponse
+	71, // 83: weft.WeftCoordinator.ListShards:output_type -> weft.ListShardsResponse
+	73, // 84: weft.WeftCoordinator.ForceArchiveShard:output_type -> weft.ForceArchiveShardResponse
+	75, // 85: weft.WeftCoordinator.DeleteArchivedShard:output_type -> weft.DeleteArchivedShardResponse
+	77, // 86: weft.WeftAdmin.RelaunchShard:output_type -> weft.RelaunchShardResponse
+	79, // 87: weft.WeftAdmin.ForceRemoveShard:output_type -> weft.ForceRemoveShardResponse
+	81, // 88: weft.WeftAdmin.GetShard:output_type -> weft.GetShardResponse
+	71, // 89: weft.WeftAdmin.ListShards:output_type -> weft.ListShardsResponse
+	84, // 90: weft.WeftAdmin.ListBuckets:output_type -> weft.ListBucketsResponse
+	52, // [52:91] is the sub-list for method output_type
+	13, // [13:52] is the sub-list for method input_type
 	13, // [13:13] is the sub-list for extension type_name
 	13, // [13:13] is the sub-list for extension extendee
 	0,  // [0:13] is the sub-list for field type_name
@@ -5340,7 +5519,7 @@ func file_proto_weftpb_weft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_weftpb_weft_proto_rawDesc), len(file_proto_weftpb_weft_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   82,
+			NumMessages:   86,
 			NumExtensions: 0,
 			NumServices:   4,
 		},

@@ -320,6 +320,13 @@ func (s *DuckDBShard) Close() error {
 	return s.db.Close()
 }
 
+// Checkpoint folds the WAL into the database file, so a volume unmounted
+// after Close carries a database the next instance opens without replay.
+func (s *DuckDBShard) Checkpoint(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "CHECKPOINT")
+	return err
+}
+
 // QueryToSink executes SQL and streams matching rows to the sink, then
 // sends a sentinel. If the query fails, the sentinel is still sent so the
 // compute job doesn't hang.

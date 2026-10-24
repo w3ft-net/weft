@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	shardsvc "github.com/graybeardcorp/weft/shard/service"
 )
 
 // Off-EC2 (dev/docker) the shard has no IMDS, so the DockerLauncher
@@ -61,5 +62,37 @@ func TestHeartbeat_UnclaimedStillCarriesInstanceID(t *testing.T) {
 	}
 	if req.ShardId != "" {
 		t.Errorf("ShardId: got %q want empty", req.ShardId)
+	}
+}
+
+// noVolume is a Volume that is always attached: activation mounts nothing.
+type noVolume struct{}
+
+func (noVolume) Mount(context.Context) error   { return nil }
+func (noVolume) Unmount(context.Context) error { return nil }
+
+// A warm-pool spare heartbeats as one, with no shard id, so the
+// coordinator refreshes the pool's record of it and never correlates it to
+// a LAUNCHING shard.
+func TestHeartbeat_SpareAnnouncesItself(t *testing.T) {
+	srv := shardsvc.NewSpareServer(t.TempDir(), "", noVolume{})
+	req, send := heartbeatFor(srv, "10.0.0.2:9000", "i-spare")
+	if !send {
+		t.Fatal("a spare must heartbeat")
+	}
+	if !req.Spare || req.ShardId != "" || req.InstanceId != "i-spare" {
+		t.Fatalf("spare heartbeat: spare=%v shard=%q instance=%q", req.Spare, req.ShardId, req.InstanceId)
+	}
+}
+
+// A paused shard has handed its volume to a successor; a beat from the old
+// address would pull callers back to it, so it stays silent.
+func TestHeartbeat_PausedShardIsSilent(t *testing.T) {
+	srv := shardsvc.NewBlankServer(t.TempDir(), "")
+	if _, err := srv.Pause(context.Background(), &pb.PauseRequest{SuccessorAddr: "10.0.0.3:9000"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, send := heartbeatFor(srv, "10.0.0.2:9000", "i-old"); send {
+		t.Fatal("a paused shard must not heartbeat")
 	}
 }

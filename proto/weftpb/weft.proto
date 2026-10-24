@@ -27,7 +27,28 @@ service ShardQuery {
   // path written. Called by the coordinator when a READ_ONLY shard
   // exceeds its retention window.
   rpc Archive(ArchiveRequest) returns (ArchiveResponse);
+
+  // Pause stops the shard admitting calls so its volume can move to a
+  // successor instance (docs/plans/shard-seamless-upgrade.md). Every new
+  // call is refused with a SHARD_PAUSED status naming successor_addr;
+  // in-flight calls finish. Returns once they have, DuckDB is checkpointed
+  // and closed, and the volume is unmounted. Idempotent.
+  rpc Pause(PauseRequest) returns (PauseResponse);
+
+  // Resume undoes Pause (an upgrade's rollback): remount the volume, reopen
+  // DuckDB, and admit calls again. A no-op on a shard that is serving.
+  rpc Resume(ResumeRequest) returns (ResumeResponse);
 }
+
+message PauseRequest {
+  string successor_addr = 1; // host:port the refusals redirect callers to
+}
+
+message PauseResponse {}
+
+message ResumeRequest {}
+
+message ResumeResponse {}
 
 message ConfigureRequest {
   string shard_id = 1;
@@ -408,6 +429,10 @@ message ShardHeartbeatRequest {
   // Empty when an older shard binary is in service — weft-admin treats
   // empty as "unknown" and rolls it.
   string binary_sha = 10;
+  // spare is set by a warm-pool instance that holds no volume yet: its
+  // heartbeat only keeps the pool's record of it fresh and never promotes
+  // a shard. shard_id is empty on a spare.
+  bool spare = 11;
 }
 
 message HeartbeatResponse {}
