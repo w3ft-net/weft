@@ -4,13 +4,17 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/graybeardcorp/weft/auth"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
-	"github.com/graybeardcorp/weft/shard"
 )
 
 type secondCount struct {
@@ -20,6 +24,33 @@ type secondCount struct {
 
 type shardQuerier interface {
 	Query(ctx context.Context, sql string, args ...any) ([]*pb.ResultRow, error)
+}
+
+// shardStream collects a shard's streamed query result. weft-admin can't use
+// shard.GRPCShard: the shard package links DuckDB, which this binary is built
+// without (CGO_ENABLED=0).
+type shardStream struct{ c pb.ShardQueryClient }
+
+func (s shardStream) Query(ctx context.Context, sql string, args ...any) ([]*pb.ResultRow, error) {
+	strs := make([]string, len(args))
+	for i, a := range args {
+		strs[i] = fmt.Sprint(a)
+	}
+	stream, err := s.c.Query(ctx, &pb.QueryRequest{Sql: sql, Args: strs})
+	if err != nil {
+		return nil, err
+	}
+	var rows []*pb.ResultRow
+	for {
+		row, err := stream.Recv()
+		if err == io.EOF {
+			return rows, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, row)
+	}
 }
 
 // countRunByTime counts the rows of one roll-canary run stored on a single
@@ -64,11 +95,16 @@ func shardCountCmd(args []string) {
 	if err != nil {
 		log.Fatalf("get shard %s: %v", id, err)
 	}
-	sh, err := shard.NewGRPCShard(id, resp.Shard.Addr, os.Getenv("SHARD_SECRET"))
+	token := os.Getenv("SHARD_SECRET")
+	conn, err := grpc.NewClient(resp.Shard.Addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainStreamInterceptor(auth.ClientTokenStreamInterceptor(token)),
+	)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("dial shard %s at %s: %v", id, resp.Shard.Addr, err)
 	}
-	defer sh.Close()
+	defer conn.Close()
+	sh := shardStream{pb.NewShardQueryClient(conn)}
 
 	counts, err := countRunByTime(ctx, sh, service, run)
 	if err != nil {
