@@ -869,7 +869,7 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 		}
 		sh.mu.Lock()
 		sh.InstanceID = ""
-	sh.locEpoch++
+		sh.locEpoch++
 		sh.mu.Unlock()
 	}
 
@@ -1009,7 +1009,7 @@ func (sh *Shard) configureOnHeartbeat(_ context.Context, args ...any) error {
 	// eager-dial this shard via ReconstructShard and RefreshFromStore
 	// stops clobbering it with the stale empty row. The heartbeat path is
 	// the sole owner of shard_records.addr.
-	if err := sh.deps.Store.SetShardAddr(sh.ID, hb.Addr); err != nil {
+	if err := sh.deps.Store.SetShardAddr(sh.ID, hb.InstanceID, hb.Addr); err != nil {
 		return fmt.Errorf("shardsm %s: persist addr %s: %w", sh.ID, hb.Addr, err)
 	}
 	return nil
@@ -1068,7 +1068,10 @@ func (sh *Shard) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat) 
 		(sh.Live == nil || sh.Addr != hb.Addr || (liveAddr != "" && liveAddr != hb.Addr))
 	sh.mu.Unlock()
 	if needDial {
-		if err := sh.reconnect(ctx, hb); err != nil {
+		if err := sh.reconnect(ctx, hb); errors.Is(err, errStaleBeat) {
+			// Not this shard's instance any more: nothing in the beat counts.
+			return
+		} else if err != nil {
 			weftsdk.Infof(ctx, "shardsm %s: reconnect on heartbeat at %s: %v", sh.ID, hb.Addr, err)
 			sh.mu.Lock()
 			sh.reconnectFailures++
@@ -1109,6 +1112,10 @@ func (sh *Shard) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat) 
 	}
 }
 
+// errStaleBeat is reconnect's refusal of a beat from an instance the shard's
+// row no longer names.
+var errStaleBeat = errors.New("heartbeat from an instance the shard has left")
+
 // reconnect dials hb.Addr, sends Configure, and swaps the fresh handle
 // into the shard, deferring the old handle's close so in-flight queries
 // drain rather than getting cut mid-stream. Shares the ConfigureRequest
@@ -1132,6 +1139,18 @@ func (sh *Shard) reconnect(ctx context.Context, hb store.ShardHeartbeat) error {
 		return err
 	}
 
+	// Persist the (possibly moved) addr first, so it survives RefreshFromStore
+	// and a later restart's eager-dial (same rationale as
+	// configureOnHeartbeat), and so a beat from an instance the row no longer
+	// names is refused before it can move this coordinator's handle.
+	if err := sh.deps.Store.SetShardAddr(sh.ID, hb.InstanceID, hb.Addr); err != nil {
+		if errors.Is(err, ErrShardMoved) {
+			closeShard(s)
+			return errStaleBeat
+		}
+		weftsdk.Infof(ctx, "shardsm %s: persist reconnect addr %s: %v", sh.ID, hb.Addr, err)
+	}
+
 	sh.mu.Lock()
 	old := sh.Live
 	sh.Live = s
@@ -1141,12 +1160,6 @@ func (sh *Shard) reconnect(ctx context.Context, hb store.ShardHeartbeat) error {
 		sh.InstanceID = hb.InstanceID
 	}
 	sh.mu.Unlock()
-
-	// Persist the (possibly moved) addr so it survives RefreshFromStore and
-	// a later restart's eager-dial — same rationale as configureOnHeartbeat.
-	if err := sh.deps.Store.SetShardAddr(sh.ID, hb.Addr); err != nil {
-		weftsdk.Infof(ctx, "shardsm %s: persist reconnect addr %s: %v", sh.ID, hb.Addr, err)
-	}
 
 	if old != nil {
 		go func() {

@@ -58,7 +58,7 @@ func (f *fakeConcurrentShardStore) SetShardState(id string, state ShardState) er
 	return nil
 }
 
-func (f *fakeConcurrentShardStore) SetShardAddr(id, addr string) error {
+func (f *fakeConcurrentShardStore) SetShardAddr(id, instanceID, addr string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if r, ok := f.rows[id]; ok {

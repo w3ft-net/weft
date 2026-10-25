@@ -446,7 +446,7 @@ func (sh *Shard) completeSwap(ctx context.Context, f UpgradeFacts, dialed shard.
 		closeShard(dialed)
 		return fmt.Errorf("shardsm %s: persist the spare as the shard's instance: %w", sh.ID, err)
 	}
-	if err := sh.deps.Store.SetShardAddr(sh.ID, f.SuccessorAddr); err != nil {
+	if err := sh.deps.Store.SetShardAddr(sh.ID, f.SuccessorInstanceID, f.SuccessorAddr); err != nil {
 		closeShard(dialed)
 		return fmt.Errorf("shardsm %s: persist the spare's address: %w", sh.ID, err)
 	}

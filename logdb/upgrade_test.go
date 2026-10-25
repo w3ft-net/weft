@@ -180,7 +180,7 @@ func newUpgradeFixture(t *testing.T, origin ShardState, withSpare bool) *upgrade
 	if err := ss.SetShardLaunchResult(sh.ID, oldInstance, "us-east-2a", "vol-1", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := ss.SetShardAddr(sh.ID, oldAddr); err != nil {
+	if err := ss.SetShardAddr(sh.ID, oldInstance, oldAddr); err != nil {
 		t.Fatal(err)
 	}
 	sh.mu.Lock()
@@ -668,5 +668,54 @@ func TestUpgrade_AReplacementLaunchedDuringTheSwapCounts(t *testing.T) {
 	}
 	if !f.terminated(oldInstance) {
 		t.Fatal("demoted instance not terminated")
+	}
+}
+
+// Every coordinator runs the heartbeat sweep and persists the address a beat
+// carries. A follower whose entry predates the swap still believes the
+// demoted instance is the serving one, so it takes the demoted instance's
+// last beat for the shard's own and writes that instance's address over the
+// row the leader just moved. 2026-10-24: "moved to <the demoted instance>"
+// right after the shard was on its successor, then the closing-connection
+// failures.
+func TestUpgrade_AStaleFollowerCannotWriteTheDemotedAddrOverTheRow(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	ctx := context.Background()
+	if err := f.sh.startUpgrade(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate(t)
+	if f.phase() != PhaseSwapping {
+		t.Fatalf("phase: %q, want swapping", f.phase())
+	}
+	// The follower's view, as of its last refresh: the swap not yet finished.
+	followerView := f.sh.persistedCopy()
+
+	f.cfg.setReady(spareAddr)
+	f.evaluate(t)
+	if f.phase() != PhaseResumed {
+		t.Fatalf("phase: %q, want resumed", f.phase())
+	}
+
+	// The follower: same store, its own registry, entry not yet refreshed.
+	freg := NewShardRegistry()
+	freg.mu.Lock()
+	freg.entries[followerView.ID] = followerView
+	freg.mu.Unlock()
+	fdeps := *f.sh.deps
+	fdeps.Registry = freg
+	p := NewProvisioner(freg, nil, ProvisionerConfig{})
+	p.sharedDeps = &fdeps
+	p.depsOnce.Do(func() {})
+	f.cfg.setReady(oldAddr) // the demoted instance is still up and answers a dial
+
+	p.ProcessHeartbeat(store.ShardHeartbeat{ShardID: f.sh.ID, InstanceID: oldInstance, Addr: oldAddr})
+
+	rec, _, err := ShardStore{f.db}.GetShard(f.sh.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Addr != spareAddr || rec.InstanceID != "i-spare" {
+		t.Fatalf("a stale follower rewrote the row to %s / %s; want it left on %s / i-spare", rec.Addr, rec.InstanceID, spareAddr)
 	}
 }

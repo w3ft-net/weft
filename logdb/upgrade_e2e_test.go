@@ -185,7 +185,7 @@ func TestUpgradeEndToEnd_ARollUnderLoadLosesNoRowAndFailsNoQuery(t *testing.T) {
 	if err := ss.SetShardLaunchResult(shardID, "i-old", "us-east-2a", "vol-e2e", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := ss.SetShardAddr(shardID, oldAddr); err != nil {
+	if err := ss.SetShardAddr(shardID, oldInstance, oldAddr); err != nil {
 		t.Fatal(err)
 	}
 	live, err := grpcConfigurer{}.Dial(ctx, oldAddr, &pb.ConfigureRequest{ShardId: shardID})
