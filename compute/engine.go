@@ -46,8 +46,8 @@ type Engine struct {
 	// cache holds the dialed shard.Shard for each ShardID alongside
 	// the addr it was dialed at. A subsequent query reuses the cached
 	// handle when the descriptor's addr matches; addr mismatch (which
-	// only happens on rebind) invalidates the entry, closes the stale
-	// connection, and re-dials. Override-derived entries cache too —
+	// only happens on rebind) repoints a live handle to the new addr, or
+	// closes any other kind and re-dials. Override-derived entries cache too —
 	// their addr is empty and never changes, so the cache hit is
 	// permanent until the engine is dropped.
 	cache sync.Map // map[string]*cachedShard
@@ -55,7 +55,7 @@ type Engine struct {
 
 // cachedShard pairs a dialed handle with the addr it was dialed at so
 // a rebind (descriptor's GrpcAddr changes) is detected on the next
-// query and the stale connection is closed before re-dialing.
+// query and the handle follows it.
 type cachedShard struct {
 	addr string
 	sh   shard.Shard
@@ -73,8 +73,8 @@ func (p *Engine) RegisterResolver(r Resolver) {
 // resolveShard turns a descriptor into a live shard.Shard handle.
 // Precedence: registered override → cache → descriptor-derived
 // resolver. A cache hit with matching addr returns immediately. A
-// cache hit with mismatching addr (rebind) closes the stale handle
-// and re-dials. The freshly-dialed handle is stored in the cache so
+// cache hit with mismatching addr (rebind) repoints a live handle, or
+// closes any other and re-dials. The freshly-dialed handle is stored in the cache so
 // the next query for this id is a hit.
 func (p *Engine) resolveShard(ctx context.Context, d *pb.ShardDescriptor) (shard.Shard, error) {
 	if v, ok := p.overrides.Load(d.ShardId); ok {
@@ -100,9 +100,17 @@ func (p *Engine) resolveShard(ctx context.Context, d *pb.ShardDescriptor) (shard
 		if c.addr == d.GrpcAddr {
 			return c.sh, nil
 		}
-		// Rebind: addr changed, drop the stale conn. Close errors
-		// are logged but not propagated — the new dial below is the
-		// path that matters.
+		// Rebind of a live shard: follow it to the new address on the
+		// same handle. Closing it instead would fail every query that
+		// resolved it a moment ago, or is still running on it.
+		if g, ok := c.sh.(*shard.GRPCShard); ok && d.GrpcAddr != "" {
+			g.Repoint(d.GrpcAddr)
+			p.cache.Store(d.ShardId, &cachedShard{addr: d.GrpcAddr, sh: g})
+			return g, nil
+		}
+		// Any other handle (a shard that went cold): drop it and re-dial.
+		// Close errors are logged but not propagated — the new dial
+		// below is the path that matters.
 		if err := c.sh.Close(); err != nil {
 			weftsdk.Infof(ctx, "compute: close stale handle for %s (addr %s → %s): %v", d.ShardId, c.addr, d.GrpcAddr, err)
 		}
