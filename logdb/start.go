@@ -340,7 +340,7 @@ func startArchiveSweeper(ctx context.Context, prov *Provisioner) {
 	sw := &ArchiveSweeper{
 		Store:    ShardStore{prov.store},
 		Clock:    time.Now,
-		IsLeader: prov.isLeader,
+		IsLeader: prov.IsLeader,
 	}
 	if lister, ok := prov.config.Exports.(ExportLister); ok {
 		sw.Resources = lister

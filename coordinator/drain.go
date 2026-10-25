@@ -234,3 +234,34 @@ func (c *Coordinator) ingestBatch(ctx context.Context, b drainBatch) {
 	c.Errors.Record(b.sh.ID(), err.Error(), b.rows, dlqPath)
 	weftsdk.Errorf(ctx, "drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(b.rows), app, b.sh.ID())
 }
+
+// StartDLQReplay feeds the DLQ back into the ingest path every interval
+// while IsLeader reports true. Rows that still can't be delivered are
+// DLQ'd again under a new key, so a replay that finds every shard down
+// costs one S3 round trip, not data.
+func (c *Coordinator) StartDLQReplay(ctx context.Context, interval time.Duration, IsLeader func() bool) {
+	if c.DLQ == nil {
+		return
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			if !IsLeader() {
+				continue
+			}
+			n, err := c.DLQ.Replay(ctx, c.Ingest.Write)
+			if n > 0 {
+				weftsdk.Infof(ctx, "dlq: replayed %d rows into the ingest path", n)
+			}
+			if err != nil {
+				weftsdk.Errorf(ctx, "dlq: replay: %v", err)
+			}
+		}
+	}()
+}

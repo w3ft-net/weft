@@ -5,8 +5,10 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
+	"io"
 	"strings"
 	"time"
 
@@ -14,22 +16,26 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
+	"google.golang.org/protobuf/encoding/protojson"
+
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
-	"github.com/graybeardcorp/weft/shard"
 )
 
-// s3PutObjectAPI is the slice of *s3.Client that DLQ actually uses.
+// s3API is the slice of *s3.Client that DLQ actually uses.
 // Lowercased so it's not part of the package's public surface — its
 // only consumer outside dlq.go is the in-package test that
-// substitutes a recording fake. *s3.Client satisfies it natively.
-type s3PutObjectAPI interface {
+// substitutes a fake bucket. *s3.Client satisfies it natively.
+type s3API interface {
 	PutObject(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, opts ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+	GetObject(ctx context.Context, in *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, opts ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 }
 
 // DLQ writes failed ingest batches to S3 as gzipped JSON-lines.
-// A background scanner re-ingests them when healthy shards are available.
+// Replay feeds them back through the ingest path.
 type DLQ struct {
-	client s3PutObjectAPI
+	client s3API
 	bucket string
 	prefix string // e.g. "dlq/"
 }
@@ -59,7 +65,8 @@ func NewDLQ(region, bucket string) *DLQ {
 	}
 }
 
-// Write uploads a failed batch to S3 as gzipped JSON-lines.
+// Write uploads a failed batch to S3 as gzipped JSON-lines, one protojson
+// LogRow per line, so a replay restores every field.
 // Returns the S3 key path, or "" on failure.
 func (d *DLQ) Write(rows []*pb.LogRow) string {
 	if d == nil || len(rows) == 0 {
@@ -71,21 +78,15 @@ func (d *DLQ) Write(rows []*pb.LogRow) string {
 
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
-	enc := json.NewEncoder(gz)
 
 	for _, r := range rows {
-		enc.Encode(map[string]any{
-			"app":         shard.JoinApp(r.Namespace, r.Service, r.Kind),
-			"customer_id": r.CustomerId,
-			"raw":         r.Raw,
-			"level":       r.Level,
-			"instance":    r.Instance,
-			"ts_ns":       r.TsUnixNs,
-			"payload":     string(r.PayloadJson),
-			"deployment":  r.Deployment,
-			"event_id":    r.EventId,
-			"line_no":     r.LineNo,
-		})
+		line, err := protojson.Marshal(r)
+		if err != nil {
+			weftsdk.Errorf(context.Background(), "dlq: marshal row: %v", err)
+			return ""
+		}
+		gz.Write(line)
+		gz.Write([]byte{'\n'})
 	}
 	gz.Close()
 
@@ -101,4 +102,67 @@ func (d *DLQ) Write(rows []*pb.LogRow) string {
 
 	weftsdk.Infof(context.Background(), "dlq: wrote %d rows to s3://%s/%s", len(rows), d.bucket, key)
 	return key
+}
+
+// Replay feeds every row in the DLQ to sink, one object at a time, and
+// deletes an object only after sink has taken its rows: a crash in between
+// delivers the object twice rather than never. Returns the rows delivered.
+// An object that can't be read or decoded stays in the bucket and is
+// reported in the error; the others still replay.
+func (d *DLQ) Replay(ctx context.Context, sink func([]*pb.LogRow)) (int, error) {
+	if d == nil {
+		return 0, nil
+	}
+	var (
+		total int
+		errs  []error
+	)
+	pages := s3.NewListObjectsV2Paginator(d.client, &s3.ListObjectsV2Input{Bucket: aws.String(d.bucket), Prefix: aws.String(d.prefix)})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return total, errors.Join(append(errs, fmt.Errorf("list dlq: %w", err))...)
+		}
+		for _, obj := range page.Contents {
+			rows, err := d.readObject(ctx, *obj.Key)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			sink(rows)
+			total += len(rows)
+			if _, err := d.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(d.bucket), Key: obj.Key}); err != nil {
+				errs = append(errs, fmt.Errorf("delete %s: %w", *obj.Key, err))
+			}
+		}
+	}
+	return total, errors.Join(errs...)
+}
+
+func (d *DLQ) readObject(ctx context.Context, key string) ([]*pb.LogRow, error) {
+	out, err := d.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(d.bucket), Key: aws.String(key)})
+	if err != nil {
+		return nil, fmt.Errorf("get %s: %w", key, err)
+	}
+	defer out.Body.Close()
+	gz, err := gzip.NewReader(out.Body)
+	if err != nil {
+		return nil, fmt.Errorf("gunzip %s: %w", key, err)
+	}
+	defer gz.Close()
+	var rows []*pb.LogRow
+	dec := json.NewDecoder(gz)
+	for {
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err == io.EOF {
+			return rows, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("decode %s: %w", key, err)
+		}
+		row := &pb.LogRow{}
+		if err := protojson.Unmarshal(raw, row); err != nil {
+			return nil, fmt.Errorf("decode %s: %w", key, err)
+		}
+		rows = append(rows, row)
+	}
 }

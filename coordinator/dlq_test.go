@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
@@ -25,8 +27,9 @@ import (
 // accepts this interface (defined in dlq.go), so same-package tests
 // can substitute it without touching the public surface.
 type recordingPutter struct {
-	mu    sync.Mutex
-	calls []recordedPut
+	mu      sync.Mutex
+	calls   []recordedPut
+	objects map[string][]byte // live objects: put, minus deleted
 }
 
 type recordedPut struct {
@@ -43,8 +46,48 @@ func (r *recordingPutter) PutObject(ctx context.Context, in *s3.PutObjectInput, 
 	}
 	r.mu.Lock()
 	r.calls = append(r.calls, recordedPut{Key: *in.Key, Body: body})
+	if r.objects == nil {
+		r.objects = map[string][]byte{}
+	}
+	r.objects[*in.Key] = body
 	r.mu.Unlock()
 	return &s3.PutObjectOutput{}, nil
+}
+
+func (r *recordingPutter) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, opts ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := &s3.ListObjectsV2Output{}
+	for k := range r.objects {
+		if strings.HasPrefix(k, *in.Prefix) {
+			out.Contents = append(out.Contents, s3types.Object{Key: aws.String(k)})
+		}
+	}
+	return out, nil
+}
+
+func (r *recordingPutter) GetObject(ctx context.Context, in *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	body, ok := r.objects[*in.Key]
+	if !ok {
+		return nil, fmt.Errorf("NoSuchKey: %s", *in.Key)
+	}
+	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(body))}, nil
+}
+
+func (r *recordingPutter) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, opts ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.objects, *in.Key)
+	return &s3.DeleteObjectOutput{}, nil
+}
+
+// Live returns how many objects are still in the fake bucket.
+func (r *recordingPutter) Live() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.objects)
 }
 
 func (r *recordingPutter) Calls() []recordedPut {
@@ -142,7 +185,7 @@ func TestDLQ_Write_PayloadShape(t *testing.T) {
 	if len(decoded) != len(rows) {
 		t.Fatalf("expected %d records, got %d", len(rows), len(decoded))
 	}
-	if decoded[0]["app"] != "weft/coordinator" || decoded[0]["customer_id"] != float64(1) { // JSON numbers decode as float64
+	if decoded[0]["namespace"] != "weft" || decoded[0]["service"] != "coordinator" || decoded[0]["customerId"] != "1" { // protojson encodes int64 as a string
 		t.Errorf("record fields wrong: %v", decoded[0])
 	}
 }
@@ -224,7 +267,7 @@ func TestDrain_PrimaryAndFallbackFail_RoutesToDLQ(t *testing.T) {
 	if len(rows) != 5 {
 		t.Errorf("expected 5 rows in DLQ, got %d", len(rows))
 	}
-	if rows[0]["app"] != "weft/coordinator" {
+	if rows[0]["service"] != "coordinator" {
 		t.Errorf("wrong app in DLQ record: %v", rows[0])
 	}
 }

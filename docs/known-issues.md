@@ -22,19 +22,21 @@ times out and reports the failure.
 **Fix, if it matters:** have `GetShard` surface the last upgrade's outcome
 and fail the wait on a rollback.
 
-## A shard's drain backlog past 200k rows goes to the no-op DLQ
+## A shard's drain backlog past 200k rows goes to the DLQ
 
 **Where:** `coordinator/drain.go` `enqueue` (`maxQueuedRowsPerShard`).
 
 **What:** each shard has its own send queue so a held ingest (a shard
 paused mid-upgrade) stalls only its rows. A queue that grows past 200k rows
 — a shard whose ingest hangs far longer than a pause's 60s hold — hands
-further batches to the DLQ, which is a no-op, so they are lost (logged
-with the shard and backlog size). The ring buffer upstream overwrites when
-full, also logged and counted (`RingBuffer.Dropped`).
+further batches to the DLQ (`weft-dlq-<account>`), and the leader coordinator
+replays them into the ingest path every minute (`StartDLQReplay`). Replay is
+at-least-once: a crash between handing a batch to the ingest path and
+deleting its DLQ object delivers it twice. The ring buffer upstream
+overwrites when full, logged and counted (`RingBuffer.Dropped`) but not
+recovered.
 
-**Fix, if it matters:** a working DLQ, or backpressure from the queue to
-the ingest stream.
+**Fix, if it matters:** backpressure from the queue to the ingest stream.
 
 ## cut and awk projections run once per row, not once per line, on JSON rows
 

@@ -38,7 +38,7 @@ const progressStaleFloor = reconcileSparesTimeout + 10*time.Second
 // background goroutine, unless Holder or the store is unset — the
 // expected shape for every test that builds a Provisioner directly via
 // NewProvisioner without going through Start, and for any deploy that
-// never wires a holder id. In that case isLeader() keeps returning
+// never wires a holder id. In that case IsLeader() keeps returning
 // NewProvisioner's default of true: this process behaves as the sole,
 // permanent leader, matching every pre-#5 caller's expectations.
 func (p *Provisioner) startLeaderElection(ctx context.Context) {
@@ -66,7 +66,7 @@ func (p *Provisioner) runLeaderElection(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			if p.isLeader() {
+			if p.IsLeader() {
 				// Best-effort — an unreleased lease just expires on its own
 				// (LeaseTTL later), so skipping this on a crash is never a
 				// correctness problem, only a slower handoff.
@@ -90,7 +90,7 @@ func (p *Provisioner) runLeaderElection(ctx context.Context) {
 // winning the DB-reachability check forever while doing no actual work.
 // See progressStaleFactor and "Real gap #3" in the plan doc.
 func (p *Provisioner) leaderTick() {
-	if p.isLeader() && p.progressStale() {
+	if p.IsLeader() && p.progressStale() {
 		weftsdk.Infof(context.Background(), "provisioner: shard-fsm-leader progress stale (no convergence in %s) — releasing lease rather than renewing", time.Since(p.lastProgressTime()))
 		if err := p.store.ReleaseLease(shardFSMLeaseName, p.config.Holder); err != nil {
 			weftsdk.Infof(context.Background(), "provisioner: release stale shard-fsm-leader lease: %v", err)
@@ -107,7 +107,7 @@ func (p *Provisioner) leaderTick() {
 		return
 	}
 	switch {
-	case ok && !p.isLeader():
+	case ok && !p.IsLeader():
 		weftsdk.Infof(context.Background(), "provisioner: acquired shard-fsm-leader lease")
 		store.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "acquired")
 		// Reset the progress window on a fresh acquire so a just-elected
@@ -115,7 +115,7 @@ func (p *Provisioner) leaderTick() {
 		// had a chance to run.
 		p.lastProgress.Store(time.Now().UnixNano())
 		p.leading.Store(true)
-	case !ok && p.isLeader():
+	case !ok && p.IsLeader():
 		weftsdk.Infof(context.Background(), "provisioner: lost shard-fsm-leader lease")
 		store.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "lost")
 		p.leading.Store(false)

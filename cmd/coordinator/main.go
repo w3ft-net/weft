@@ -202,6 +202,7 @@ func main() {
 		Notifier:          notifier,
 		Tail:              coordinator.NewTailBroker(),
 		Ingest:            coordinator.NewRingBuffer(1_000_000),
+		DLQ:               coordinator.NewDLQ(*awsRegion, os.Getenv("DLQ_BUCKET")),
 		Usage:             coordinator.NewCustomerUsageStats(),
 		LambdaFunctionURL: os.Getenv("LAMBDA_FUNCTION_URL"),
 		RedisAddr:         *redisAddr,
@@ -248,6 +249,7 @@ func main() {
 		log.Fatalf("logdb.Start: %v", err)
 	}
 	coord.Provisioner = prov
+	coord.StartDLQReplay(drainCtx, time.Minute, prov.IsLeader)
 
 	// Runtime config watcher — powers IngestStream's per-stream byte
 	// budget via an atomic pointer the service reads on every accepted

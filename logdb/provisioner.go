@@ -115,7 +115,7 @@ type ProvisionerConfig struct {
 	// docs/plans/coordinator-horizontal-scaling.md #5) — the same holder
 	// id main.go's coordinatorHolder() mints for the NAT/poller/cron
 	// leases. Start no-ops the election when Holder is empty (or Store is
-	// nil): NewProvisioner defaults isLeader() to true, so this process
+	// nil): NewProvisioner defaults IsLeader() to true, so this process
 	// just stays leader unconditionally — the pre-#5 behavior, and the
 	// expected shape for every test that constructs a Provisioner directly
 	// without going through Start.
@@ -280,7 +280,7 @@ type Provisioner struct {
 
 	// leading is whether this process currently holds the
 	// "shard-fsm-leader" lease — the gate around evaluateStateMachines and
-	// promoteOnHeartbeat (see isLeader, docs/plans/
+	// promoteOnHeartbeat (see IsLeader, docs/plans/
 	// coordinator-horizontal-scaling.md #5). Defaults to true: a
 	// Provisioner nobody ever calls startLeaderElection on (every test
 	// that builds one directly, plus any Start call with no Holder/Store
@@ -644,7 +644,7 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 // relaunch churn (a LAUNCHING shard counts as in-flight, so the bucket SM
 // holds rather than minting a replacement into the same wall).
 //
-// Gated behind isLeader(): firing an FSM transition is exclusive, same as
+// Gated behind IsLeader(): firing an FSM transition is exclusive, same as
 // evaluateStateMachines. A non-leader coordinator that happens to receive
 // this heartbeat's RPC (heartbeats aren't sticky-routed to the leader)
 // silently drops it here — the persisted row from Server.Heartbeat's
@@ -652,7 +652,7 @@ func (p *Provisioner) ProcessHeartbeat(hb store.ShardHeartbeat) {
 // catch-up sweep (unconditional, every tick) picks it up within one
 // PollInterval. See docs/plans/coordinator-horizontal-scaling.md #5.
 func (p *Provisioner) promoteOnHeartbeat(ctx context.Context, e *Shard, hb store.ShardHeartbeat) {
-	if !p.isLeader() {
+	if !p.IsLeader() {
 		return
 	}
 	dialed, err := e.dialConfigure(ctx, hb)
@@ -750,7 +750,7 @@ func (p *Provisioner) OnboardService(namespaceID uint, service string) error {
 // into its own bucket) is disabled pending the redesign in
 // docs/plans/bucket-split-policy.md.
 func (p *Provisioner) check(ctx context.Context) {
-	p.registry.RefreshFromStore(!p.isLeader())
+	p.registry.RefreshFromStore(!p.IsLeader())
 
 	// Service-drift: a service onboarded after a shard christened isn't on
 	// its stamp yet. The FSM cascade is deliberately lifecycle-only, so
@@ -767,15 +767,15 @@ func (p *Provisioner) check(ctx context.Context) {
 	// be driven by one coordinator at a time, so this is gated behind the
 	// shard-fsm-leader lease. See docs/plans/coordinator-horizontal-scaling.md
 	// #5.
-	if p.isLeader() {
+	if p.IsLeader() {
 		p.evaluateStateMachines(ctx)
 	}
 }
 
-// isLeader reports whether this process currently holds the
+// IsLeader reports whether this process currently holds the
 // "shard-fsm-leader" lease. See the leading field comment and
 // docs/plans/coordinator-horizontal-scaling.md #5.
-func (p *Provisioner) isLeader() bool { return p.leading.Load() }
+func (p *Provisioner) IsLeader() bool { return p.leading.Load() }
 
 // markProgress stamps lastProgress with the current time — called once per
 // evaluateStateMachines tick (via defer, so an idle tick with nothing to
@@ -932,7 +932,7 @@ func (p *Provisioner) runShardEvaluate(ctx context.Context, e *Shard) {
 	defer p.evalWG.Done()
 	// A shard queued under a lease this process has since lost must not be
 	// driven: the new leader owns convergence.
-	if p.isLeader() {
+	if p.IsLeader() {
 		e.ensureSM(p.shardDeps())
 		before := e.stateNow()
 		start := time.Now()

@@ -21,7 +21,7 @@ func resetShardFSMLease(t *testing.T, db *store.Store) {
 }
 
 // electorTestProvisioner builds a minimal Provisioner wired to db with the
-// given holder id — enough to exercise leaderTick/isLeader/markProgress
+// given holder id — enough to exercise leaderTick/IsLeader/markProgress
 // without any real launcher or FSM control plane.
 func electorTestProvisioner(db *store.Store, holder string, pollInterval time.Duration) *Provisioner {
 	p := NewProvisioner(NewShardRegistry(), nil, ProvisionerConfig{
@@ -29,7 +29,7 @@ func electorTestProvisioner(db *store.Store, holder string, pollInterval time.Du
 		PollInterval: pollInterval,
 	})
 	p.SetStore(db)
-	// NewProvisioner defaults isLeader() to true (the no-election-running
+	// NewProvisioner defaults IsLeader() to true (the no-election-running
 	// shape); these tests want to observe leaderTick actually deciding
 	// leadership, so start from the not-yet-decided state.
 	p.leading.Store(false)
@@ -37,7 +37,7 @@ func electorTestProvisioner(db *store.Store, holder string, pollInterval time.Du
 }
 
 // TestLeaderTick_AcquiresLeaseAndBecomesLeader confirms the core contract:
-// a lone process wins the initially-unheld lease and isLeader() flips true.
+// a lone process wins the initially-unheld lease and IsLeader() flips true.
 func TestLeaderTick_AcquiresLeaseAndBecomesLeader(t *testing.T) {
 	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
@@ -47,7 +47,7 @@ func TestLeaderTick_AcquiresLeaseAndBecomesLeader(t *testing.T) {
 
 	p := electorTestProvisioner(db, "coord-a", time.Minute)
 	p.leaderTick()
-	if !p.isLeader() {
+	if !p.IsLeader() {
 		t.Fatal("expected to hold the shard-fsm-leader lease after the first tick")
 	}
 }
@@ -65,13 +65,13 @@ func TestLeaderTick_DoesNotChallengeHealthyIncumbent(t *testing.T) {
 
 	a := electorTestProvisioner(db, "coord-a", time.Minute)
 	a.leaderTick()
-	if !a.isLeader() {
+	if !a.IsLeader() {
 		t.Fatal("incumbent should win the initially-unheld lease")
 	}
 
 	b := electorTestProvisioner(db, "coord-b", time.Minute)
 	b.leaderTick()
-	if b.isLeader() {
+	if b.IsLeader() {
 		t.Fatal("challenger must not win the lease while the incumbent is still renewing")
 	}
 
@@ -79,8 +79,8 @@ func TestLeaderTick_DoesNotChallengeHealthyIncumbent(t *testing.T) {
 	a.markProgress()
 	a.leaderTick()
 	b.leaderTick()
-	if !a.isLeader() || b.isLeader() {
-		t.Fatalf("incumbent should keep the lease across ticks: a=%v b=%v", a.isLeader(), b.isLeader())
+	if !a.IsLeader() || b.IsLeader() {
+		t.Fatalf("incumbent should keep the lease across ticks: a=%v b=%v", a.IsLeader(), b.IsLeader())
 	}
 }
 
@@ -102,7 +102,7 @@ func TestLeaderTick_ChallengerTakesOverAfterIncumbentExpiry(t *testing.T) {
 
 	b := electorTestProvisioner(db, "coord-b", time.Minute)
 	b.leaderTick()
-	if !b.isLeader() {
+	if !b.IsLeader() {
 		t.Fatal("challenger should take over an expired lease")
 	}
 }
@@ -124,7 +124,7 @@ func TestLeaderTick_ProgressStaleReleasesLease(t *testing.T) {
 	// simulate crossing without a real sleep.
 	p := electorTestProvisioner(db, "coord-stuck", 10*time.Millisecond)
 	p.leaderTick()
-	if !p.isLeader() {
+	if !p.IsLeader() {
 		t.Fatal("expected to acquire the lease on the first tick")
 	}
 
@@ -133,7 +133,7 @@ func TestLeaderTick_ProgressStaleReleasesLease(t *testing.T) {
 	p.lastProgress.Store(time.Now().Add(-time.Hour).UnixNano())
 
 	p.leaderTick()
-	if p.isLeader() {
+	if p.IsLeader() {
 		t.Fatal("expected the deadman's switch to release the lease once progress went stale")
 	}
 
@@ -142,7 +142,7 @@ func TestLeaderTick_ProgressStaleReleasesLease(t *testing.T) {
 	// LeaseTTL for an unreleased-but-abandoned row.
 	challenger := electorTestProvisioner(db, "coord-b", time.Minute)
 	challenger.leaderTick()
-	if !challenger.isLeader() {
+	if !challenger.IsLeader() {
 		t.Fatal("challenger should win immediately after the stuck leader released the lease")
 	}
 }
