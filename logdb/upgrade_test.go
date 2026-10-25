@@ -253,7 +253,8 @@ func (f *upgradeFixture) assertServing(t *testing.T, writable bool) {
 	if !holds || why != "" {
 		t.Fatalf("phase %q: queries routed away from the shard (holds=%v why=%q)", f.phase(), holds, why)
 	}
-	got := f.sh.ingestCandidate(1, "svc", *f.now) != nil
+	cand, _ := f.sh.ingestCandidate(1, "svc", *f.now)
+	got := cand != nil
 	if got != writable {
 		t.Fatalf("phase %q: writable=%v, want %v", f.phase(), got, writable)
 	}

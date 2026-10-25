@@ -966,13 +966,25 @@ func (r *ShardRegistry) IngestingShard(namespaceID uint, service string) shard.S
 	defer r.mu.RUnlock()
 
 	asOf := r.LivenessAsOf()
-	var candidates []shard.Shard
+	var serving, upgrading []shard.Shard
 	for _, e := range r.entries {
-		if sh := e.ingestCandidate(namespaceID, service, asOf); sh != nil {
-			candidates = append(candidates, sh)
+		sh, isUpgrading := e.ingestCandidate(namespaceID, service, asOf)
+		switch {
+		case sh == nil:
+		case isUpgrading:
+			upgrading = append(upgrading, sh)
+		default:
+			serving = append(serving, sh)
 		}
 	}
 
+	// A shard mid-upgrade takes writes only when nothing else can: with a
+	// sibling ingesting, the sibling absorbs them and the paused shard's
+	// senders never stall waiting for its successor to open.
+	candidates := serving
+	if len(candidates) == 0 {
+		candidates = upgrading
+	}
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -980,24 +992,26 @@ func (r *ShardRegistry) IngestingShard(namespaceID uint, service string) shard.S
 	return candidates[idx]
 }
 
-// ingestCandidate returns the live shard handle if this entry is an
-// INGESTING, fresh, serving shard, else nil. Takes the entry read lock.
-func (e *Shard) ingestCandidate(namespaceID uint, service string, asOf time.Time) shard.Shard {
+// ingestCandidate returns the live shard handle if this entry is a fresh,
+// serving shard that accepts writes, and whether it is mid-upgrade. Takes
+// the entry read lock.
+func (e *Shard) ingestCandidate(namespaceID uint, service string, asOf time.Time) (sh shard.Shard, upgrading bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if !e.writable() || e.Live == nil || e.isStaleForWrites(asOf) {
-		return nil
+		return nil, false
 	}
 	if e.serves(namespaceID, service) {
-		return e.Live
+		return e.Live, e.State == StateUpgrading
 	}
-	return nil
+	return nil, false
 }
 
-// writable reports whether writes route to this shard: an INGESTING shard,
-// or one UPGRADING from INGESTING (its writes are held across the volume
-// move, never sent elsewhere — a bucket with one INGESTING shard has
-// nowhere else to send them). Caller holds e.mu.
+// writable reports whether this shard may take writes: an INGESTING shard,
+// or one UPGRADING from INGESTING. IngestingShard routes to an upgrading
+// shard only when no sibling is ingesting; its write is then held across
+// the volume move, since a bucket with one INGESTING shard has nowhere else
+// to send it. Caller holds e.mu.
 func (e *Shard) writable() bool {
 	return e.State == StateIngesting ||
 		(e.State == StateUpgrading && e.UpgradePhase != "" && e.UpgradeOrigin == StateIngesting)
