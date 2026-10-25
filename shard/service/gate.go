@@ -253,28 +253,33 @@ func (s *Server) Pause(ctx context.Context, req *pb.PauseRequest) (*pb.PauseResp
 	s.gateMu.Unlock()
 
 	start := time.Now()
-	graceCtx, cancelGrace := context.WithTimeout(ctx, pauseQueryGrace)
-	err := s.waitDrained(graceCtx)
-	cancelGrace()
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, err
+	if err := inSpan(ctx, "pause.drain", func(ctx context.Context) error {
+		graceCtx, cancelGrace := context.WithTimeout(ctx, pauseQueryGrace)
+		err := s.waitDrained(graceCtx)
+		cancelGrace()
+		if err == nil || ctx.Err() != nil {
+			return err
 		}
 		if n := s.cutQueries(); n > 0 {
 			weftsdk.Infof(ctx, "shard %s: pause cut %d queries still running after %s", s.Identity(), n, pauseQueryGrace)
 		}
-		if err := s.waitDrained(ctx); err != nil {
-			return nil, err
-		}
+		return s.waitDrained(ctx)
+	}); err != nil {
+		return nil, err
 	}
 	drained := time.Now()
 
 	if ds := s.Shard(); ds != nil {
-		if err := ds.Checkpoint(ctx); err != nil {
-			return nil, fmt.Errorf("checkpoint: %w", err)
-		}
-		if err := ds.Close(); err != nil {
-			return nil, fmt.Errorf("close duckdb: %w", err)
+		if err := inSpan(ctx, "pause.checkpoint", func(ctx context.Context) error {
+			if err := ds.Checkpoint(ctx); err != nil {
+				return fmt.Errorf("checkpoint: %w", err)
+			}
+			if err := ds.Close(); err != nil {
+				return fmt.Errorf("close duckdb: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return nil, err
 		}
 		s.mu.Lock()
 		s.shard = nil
@@ -286,7 +291,7 @@ func (s *Server) Pause(ctx context.Context, req *pb.PauseRequest) (*pb.PauseResp
 	released := s.released
 	s.gateMu.Unlock()
 	if !released && s.Volume != nil {
-		if err := s.Volume.Unmount(ctx); err != nil {
+		if err := inSpan(ctx, "pause.unmount", s.Volume.Unmount); err != nil {
 			return nil, fmt.Errorf("unmount: %w", err)
 		}
 		s.gateMu.Lock()
@@ -296,6 +301,15 @@ func (s *Server) Pause(ctx context.Context, req *pb.PauseRequest) (*pb.PauseResp
 	weftsdk.Infof(ctx, "shard %s: paused and released its volume in %s (drain %s, checkpoint and close %s, unmount %s); redirecting to %s",
 		s.Identity(), time.Since(start), drained.Sub(start), closed.Sub(drained), time.Since(closed), req.SuccessorAddr)
 	return &pb.PauseResponse{}, nil
+}
+
+// inSpan runs fn as the span name in ctx's trace, recording its error.
+func inSpan(ctx context.Context, name string, fn func(context.Context) error) error {
+	sctx, span := weftsdk.StartSpan(ctx, name)
+	err := fn(sctx)
+	span.RecordError(err)
+	span.End()
+	return err
 }
 
 func (s *Server) waitDrained(ctx context.Context) error {

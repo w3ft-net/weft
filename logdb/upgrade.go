@@ -100,7 +100,7 @@ func (p grpcPauser) Resume(ctx context.Context, addr string) error {
 func (p grpcPauser) with(addr string, call func(pb.ShardQueryClient) error) error {
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(auth.ClientTokenUnaryInterceptor(p.shardSecret)),
+		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor(), auth.ClientTokenUnaryInterceptor(p.shardSecret)),
 	)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)

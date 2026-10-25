@@ -2,19 +2,23 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	weftsdk "github.com/w3ft-net/weft-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/graybeardcorp/weft/internal/logtest"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 )
@@ -440,5 +444,36 @@ func TestPause_FailsWhenDrainOutlivesItsDeadline(t *testing.T) {
 	}
 	if srv.Paused() {
 		t.Fatal("still paused after Resume")
+	}
+}
+
+// Pause's slow steps are spans in the trace of the roll that asked for it, so
+// a hold window breaks down by step in `trace --spans`.
+func TestPause_RecordsItsStepsAsSpans(t *testing.T) {
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	srv, _ := seededServer(t, newFakeVolume(true))
+	ctx := weftsdk.ContextWithTraceID(context.Background(), traceID)
+
+	out := logtest.Capture(func() {
+		if _, err := srv.Pause(ctx, &pb.PauseRequest{SuccessorAddr: "10.0.0.9:9000"}); err != nil {
+			t.Fatalf("Pause: %v", err)
+		}
+	})
+	done := map[string]bool{}
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		var rec map[string]any
+		if json.Unmarshal([]byte(l), &rec) != nil || rec["msg"] != "span done" {
+			continue
+		}
+		if rec["trace_id"] != traceID {
+			t.Errorf("span outside the roll's trace: %s", l)
+		}
+		name, _ := rec["span_name"].(string)
+		done[name] = true
+	}
+	for _, name := range []string{"pause.drain", "pause.checkpoint", "pause.unmount"} {
+		if !done[name] {
+			t.Errorf("no %q span in Pause's log:\n%s", name, out)
+		}
 	}
 }
