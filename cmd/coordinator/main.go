@@ -344,18 +344,16 @@ func main() {
 		"/weft.WeftCoordinator/Heartbeat":       true,
 	}
 
-	// HTTP liveness endpoint. Deliberately minimal — just 200 OK on
-	// /health so docker compose's healthcheck, the integration harness
-	// (integration/harness.go:217), and any external watchdog can tell
-	// the process is up and accepting requests. No subsystem metrics
+	// HTTP readiness endpoint: 503 until the gRPC server is about to serve
+	// (see coordinator.Readiness), then 200 for good. The ASG's load balancer
+	// health check, docker compose's healthcheck and the integration harness
+	// (integration/harness.go:217) all wait on it. No subsystem metrics
 	// here; if we ever need that, expose it on the gRPC API behind
 	// auth, not on an open HTTP port.
+	ready := &coordinator.Readiness{}
 	go func() {
 		mux := http.NewServeMux()
-		mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintln(w, "ok")
-		})
+		mux.Handle("/health", ready.Handler())
 		addr := fmt.Sprintf(":%d", *healthPort)
 		weftsdk.Infof(context.Background(), "coordinator health on %s", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
@@ -472,6 +470,7 @@ func main() {
 		}
 	}()
 
+	ready.MarkReady()
 	if err := srv.Serve(lis); err != nil {
 		weftsdk.Errorf(context.Background(), "serve error: %v", err)
 		os.Exit(1)
