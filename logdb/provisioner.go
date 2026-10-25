@@ -1152,7 +1152,7 @@ func (p *Provisioner) ForceRemove(shardID string, force bool) error {
 // DEGRADED). LAUNCHING is already coming up; ARCHIVING/ARCHIVED/GONE/
 // SUSPENDED/UPGRADING have nothing to upgrade and are rejected with
 // ErrShardWrongState so the caller can map it to FailedPrecondition.
-func (p *Provisioner) RelaunchShard(shardID string) error {
+func (p *Provisioner) RelaunchShard(ctx context.Context, shardID string) error {
 	entry := p.registry.Get(shardID)
 	if entry == nil {
 		return fmt.Errorf("shard %s: %w", shardID, ErrShardNotInRegistry)
@@ -1164,13 +1164,13 @@ func (p *Provisioner) RelaunchShard(shardID string) error {
 	if st != StateIngesting && st != StateReadOnly && st != StateDegraded {
 		return fmt.Errorf("shard %s is %s, cannot relaunch (only INGESTING/READ_ONLY/DEGRADED): %w", shardID, st, ErrShardWrongState)
 	}
-	if err := entry.startUpgrade(context.Background()); err != nil {
+	if err := entry.startUpgrade(ctx); err != nil {
 		return fmt.Errorf("relaunch %s: %w", shardID, err)
 	}
 	if entry.upgradesInPlace() {
-		weftsdk.Infof(context.Background(), "provisioner: upgrade requested for %s (was %s); moving its volume to a warm-pool spare", shardID, st)
+		weftsdk.Infof(ctx, "provisioner: upgrade requested for %s (was %s); moving its volume to a warm-pool spare", shardID, st)
 	} else {
-		weftsdk.Infof(context.Background(), "provisioner: relaunch requested for %s (was %s); driving via UPGRADING → LAUNCHING", shardID, st)
+		weftsdk.Infof(ctx, "provisioner: relaunch requested for %s (was %s); driving via UPGRADING → LAUNCHING", shardID, st)
 	}
 	return nil
 }

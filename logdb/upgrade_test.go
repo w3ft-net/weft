@@ -4,6 +4,7 @@ package logdb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
+	weftsdk "github.com/w3ft-net/weft-go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -717,5 +719,75 @@ func TestUpgrade_AStaleFollowerCannotWriteTheDemotedAddrOverTheRow(t *testing.T)
 	}
 	if rec.Addr != spareAddr || rec.InstanceID != "i-spare" {
 		t.Fatalf("a stale follower rewrote the row to %s / %s; want it left on %s / i-spare", rec.Addr, rec.InstanceID, spareAddr)
+	}
+}
+
+// A tick has no request of its own, so the upgrade's lines carry the trace
+// of the RelaunchShard call that started it: persisted with the phase (a
+// new leader continues the same trace) and gone when the upgrade ends.
+func TestUpgrade_PhaseLogsCarryTheTraceOfTheRequestThatStartedIt(t *testing.T) {
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	const parentSpan = "00f067aa0ba902b7"
+	f := newUpgradeFixture(t, StateIngesting, true)
+	ctx := context.Background()
+
+	var lines []string
+	out := logtest.Capture(func() {
+		rolled := weftsdk.ContextWithSpanID(weftsdk.ContextWithTraceID(ctx, traceID), parentSpan)
+		if err := f.sh.startUpgrade(rolled); err != nil {
+			t.Fatalf("startUpgrade: %v", err)
+		}
+		f.evaluate(t) // claim, pause → swapping
+		row, ok, err := ShardStore{f.db}.GetShard(f.sh.ID)
+		if err != nil || !ok {
+			t.Fatalf("reload: %v %v", ok, err)
+		}
+		if row.UpgradeTraceID != traceID {
+			t.Fatalf("stored trace id %q, want %q", row.UpgradeTraceID, traceID)
+		}
+		f.cfg.setReady(spareAddr)
+		f.evaluate(t) // → resumed
+		f.advanceAlive(3 * time.Minute)
+		if err := f.pool.Reconcile(ctx, map[SparePair]bool{{"small", "us-east-2a"}: true}, func(Spare) SpareUse { return SpareAdopted }); err != nil {
+			t.Fatal(err)
+		}
+		heartbeatAll(t, ShardStore{f.db})
+		f.evaluate(t) // → done
+	})
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.Contains(l, "upgrade") || strings.Contains(l, `"span_name"`) {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) == 0 || f.phase() != "" {
+		t.Fatalf("upgrade did not run to the end (phase %q):\n%s", f.phase(), out)
+	}
+	for _, l := range lines {
+		if !strings.Contains(l, `"trace_id":"`+traceID+`"`) {
+			t.Errorf("upgrade line without the request's trace id: %s", l)
+		}
+	}
+	row, _, _ := ShardStore{f.db}.GetShard(f.sh.ID)
+	if row.UpgradeTraceID != "" || row.UpgradeParentSpanID != "" {
+		t.Errorf("trace %q / span %q left on the row after the upgrade ended", row.UpgradeTraceID, row.UpgradeParentSpanID)
+	}
+
+	// Each slow step is a span under the span that requested the roll.
+	done := map[string]bool{}
+	for _, l := range lines {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(l), &rec); err != nil || rec["msg"] != "span done" {
+			continue
+		}
+		name, _ := rec["span_name"].(string)
+		if rec["parent_span_id"] != parentSpan {
+			t.Errorf("span %q has parent %v, want the roll's span %s", name, rec["parent_span_id"], parentSpan)
+		}
+		done[name] = true
+	}
+	for _, name := range []string{"upgrade.claim", "upgrade.pause", "upgrade.detach", "upgrade.attach", "upgrade.open"} {
+		if !done[name] {
+			t.Errorf("no %q span in the upgrade's log:\n%s", name, out)
+		}
 	}
 }

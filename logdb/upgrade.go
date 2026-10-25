@@ -123,6 +123,13 @@ type UpgradeFacts struct {
 	// rather than paused (a pre-upgrade binary; cutOverCold): there is no
 	// instance to resume, redirect from, or terminate at the end.
 	DemotedAddr string
+	// TraceID is the trace of the RelaunchShard call that started the
+	// upgrade. A tick has no request of its own, so the phase code logs
+	// under this id (see upgradeCtx).
+	TraceID string
+	// ParentSpanID is the span of that call, the parent of the spans the
+	// phase code records.
+	ParentSpanID string
 }
 
 func (sh *Shard) upgradeFacts() UpgradeFacts {
@@ -137,6 +144,8 @@ func (sh *Shard) upgradeFacts() UpgradeFacts {
 		SuccessorAddr:       sh.UpgradeSuccessorAddr,
 		DemotedInstanceID:   sh.UpgradeDemotedInstanceID,
 		DemotedAddr:         sh.UpgradeDemotedAddr,
+		TraceID:             sh.UpgradeTraceID,
+		ParentSpanID:        sh.UpgradeParentSpanID,
 	}
 }
 
@@ -155,18 +164,20 @@ func (sh *Shard) setUpgradeFacts(f UpgradeFacts) error {
 	sh.UpgradeSuccessorAddr = f.SuccessorAddr
 	sh.UpgradeDemotedInstanceID = f.DemotedInstanceID
 	sh.UpgradeDemotedAddr = f.DemotedAddr
+	sh.UpgradeTraceID = f.TraceID
+	sh.UpgradeParentSpanID = f.ParentSpanID
 	sh.mu.Unlock()
 	return nil
 }
 
 // enterPhase persists f moved to phase, stamped now.
-func (sh *Shard) enterPhase(f UpgradeFacts, phase UpgradePhase) (UpgradeFacts, error) {
+func (sh *Shard) enterPhase(ctx context.Context, f UpgradeFacts, phase UpgradePhase) (UpgradeFacts, error) {
 	now := sh.deps.Clock()
 	f.Phase, f.PhaseAt = phase, &now
 	if err := sh.setUpgradeFacts(f); err != nil {
 		return f, err
 	}
-	weftsdk.Infof(context.Background(), "shardsm %s: upgrade → %s", sh.ID, phase)
+	weftsdk.Infof(ctx, "shardsm %s: upgrade → %s", sh.ID, phase)
 	return f, nil
 }
 
@@ -183,6 +194,37 @@ func (sh *Shard) phaseAge(f UpgradeFacts) time.Duration {
 // relaunch recovery path.
 func (sh *Shard) upgradesInPlace() bool { return sh.deps.Spares != nil && sh.deps.Pauser != nil }
 
+// traceIDOf is the trace ctx carries, or a fresh one for a caller that
+// started none (an operator calling the RPC by hand), so every upgrade has
+// a trace to log under.
+func traceIDOf(ctx context.Context) string {
+	if id, ok := weftsdk.TraceIDFromContext(ctx); ok {
+		return id
+	}
+	return weftsdk.NewTraceID()
+}
+
+// spanIDOf is the span ctx is in, or "" when it is in none.
+func spanIDOf(ctx context.Context) string {
+	id, _ := weftsdk.CurrentSpanID(ctx)
+	return id
+}
+
+// upgradeCtx is ctx under the trace and span the upgrade was started in. It is the
+// only place a stored trace id is read, and startUpgrade the only place one
+// is written, so a tick never adopts an id from an upgrade other than its
+// own shard's.
+func upgradeCtx(ctx context.Context, f UpgradeFacts) context.Context {
+	if f.TraceID == "" {
+		return ctx
+	}
+	ctx = weftsdk.ContextWithTraceID(ctx, f.TraceID)
+	if f.ParentSpanID != "" {
+		ctx = weftsdk.ContextWithSpanID(ctx, f.ParentSpanID)
+	}
+	return ctx
+}
+
 // startUpgrade records the upgrade's facts — where it returns to, the
 // instance it leaves — and only then fires RelaunchRequested, so routing
 // (which reads UpgradeOrigin) never sees an UPGRADING shard without them.
@@ -195,6 +237,7 @@ func (sh *Shard) startUpgrade(ctx context.Context) error {
 		if err := sh.setUpgradeFacts(UpgradeFacts{
 			Phase: PhaseClaiming, Origin: origin, PhaseAt: &now,
 			DemotedInstanceID: instanceID, DemotedAddr: addr,
+			TraceID: traceIDOf(ctx), ParentSpanID: spanIDOf(ctx),
 		}); err != nil {
 			return err
 		}
@@ -242,6 +285,7 @@ func (sh *Shard) rotateDuringUpgrade(ctx context.Context, _ ...any) error {
 // evaluateUpgrading drives one step of the upgrade (see the file comment).
 func (sh *Shard) evaluateUpgrading(ctx context.Context) error {
 	f := sh.upgradeFacts()
+	ctx = upgradeCtx(ctx, f)
 	// While an instance should be heartbeating as the shard — the old one
 	// while a spare is claimed, the new one after the swap — its silence
 	// means it died, and the upgrade can't continue past a dead instance.
@@ -265,7 +309,7 @@ func (sh *Shard) evaluateUpgrading(ctx context.Context) error {
 		sh.mu.RLock()
 		f = UpgradeFacts{Origin: origin, DemotedInstanceID: sh.InstanceID, DemotedAddr: sh.Addr}
 		sh.mu.RUnlock()
-		if f, err = sh.enterPhase(f, PhaseClaiming); err != nil {
+		if f, err = sh.enterPhase(ctx, f, PhaseClaiming); err != nil {
 			return err
 		}
 		return sh.upgradeClaim(ctx, f)
@@ -289,7 +333,10 @@ func (sh *Shard) upgradeClaim(ctx context.Context, f UpgradeFacts) error {
 	sh.mu.RLock()
 	tier, az := sh.Tier, sh.AZ
 	sh.mu.RUnlock()
-	sp, err := sh.deps.Spares.ClaimOrLaunch(ctx, sh.ID, tier, az)
+	cctx, span := weftsdk.StartSpan(ctx, "upgrade.claim")
+	sp, err := sh.deps.Spares.ClaimOrLaunch(cctx, sh.ID, tier, az)
+	span.RecordError(err)
+	span.End()
 	if err != nil {
 		weftsdk.Infof(ctx, "shardsm %s: claim a spare in %s/%s, retrying next tick: %v", sh.ID, tier, az, err)
 		return sh.giveUpIfOver(ctx, f, upgradeClaimBudget)
@@ -305,7 +352,7 @@ func (sh *Shard) upgradeClaim(ctx context.Context, f UpgradeFacts) error {
 		return sh.giveUpIfOver(ctx, f, upgradeClaimBudget)
 	}
 	f.SuccessorAddr = sp.Addr
-	f, err = sh.enterPhase(f, PhasePausing)
+	f, err = sh.enterPhase(ctx, f, PhasePausing)
 	if err != nil {
 		return err
 	}
@@ -328,7 +375,10 @@ func (sh *Shard) upgradePause(ctx context.Context, f UpgradeFacts) error {
 	}
 	start := sh.deps.Clock()
 	pctx, cancel := context.WithTimeout(ctx, pauseRPCTimeout)
+	pctx, span := weftsdk.StartSpan(pctx, "upgrade.pause")
 	err := sh.deps.Pauser.Pause(pctx, f.DemotedAddr, f.SuccessorAddr)
+	span.RecordError(err)
+	span.End()
 	cancel()
 	if status.Code(err) == codes.Unimplemented {
 		weftsdk.Errorf(ctx, "shardsm %s: old instance %s has no Pause (a pre-upgrade binary); cutting over cold", sh.ID, f.DemotedInstanceID)
@@ -343,7 +393,7 @@ func (sh *Shard) upgradePause(ctx context.Context, f UpgradeFacts) error {
 		return sh.giveUpIfOver(ctx, f, upgradePauseBudget)
 	}
 	weftsdk.Infof(ctx, "shardsm %s: upgrade timing: old instance %s drained and released its volume in %s", sh.ID, f.DemotedInstanceID, sh.deps.Clock().Sub(start))
-	f, err = sh.enterPhase(f, PhaseSwapping)
+	f, err = sh.enterPhase(ctx, f, PhaseSwapping)
 	if err != nil {
 		return err
 	}
@@ -363,7 +413,7 @@ func (sh *Shard) cutOverCold(ctx context.Context, f UpgradeFacts) error {
 		weftsdk.Infof(ctx, "shardsm %s: terminate pre-upgrade instance %s, retrying: %v", sh.ID, f.DemotedInstanceID, err)
 		return sh.giveUpIfOver(ctx, f, upgradePauseBudget)
 	}
-	f, err = sh.enterPhase(f, PhaseSwapping)
+	f, err = sh.enterPhase(ctx, f, PhaseSwapping)
 	if err != nil {
 		return err
 	}
@@ -390,7 +440,11 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 	case f.DemotedInstanceID:
 		start := sh.deps.Clock()
 		cold := f.DemotedAddr == ""
-		if err := sh.deps.Volumes.DetachFromInstance(vctx, info.VolumeID, cold); err != nil {
+		dctx, span := weftsdk.StartSpan(vctx, "upgrade.detach")
+		err := sh.deps.Volumes.DetachFromInstance(dctx, info.VolumeID, cold)
+		span.RecordError(err)
+		span.End()
+		if err != nil {
 			weftsdk.Infof(ctx, "shardsm %s: detach %s from %s: %v", sh.ID, info.VolumeID, f.DemotedInstanceID, err)
 			return sh.giveUpIfOver(ctx, f, upgradeSwapBudget)
 		}
@@ -398,7 +452,11 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 		fallthrough
 	case "":
 		start := sh.deps.Clock()
-		if err := sh.deps.Volumes.AttachToInstance(vctx, info.VolumeID, f.SuccessorInstanceID, shardVolumeDevice); err != nil {
+		actx, span := weftsdk.StartSpan(vctx, "upgrade.attach")
+		err := sh.deps.Volumes.AttachToInstance(actx, info.VolumeID, f.SuccessorInstanceID, shardVolumeDevice)
+		span.RecordError(err)
+		span.End()
+		if err != nil {
 			weftsdk.Infof(ctx, "shardsm %s: attach %s to %s: %v", sh.ID, info.VolumeID, f.SuccessorInstanceID, err)
 			return sh.giveUpIfOver(ctx, f, upgradeSwapBudget)
 		}
@@ -407,7 +465,7 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 	default:
 		weftsdk.Errorf(ctx, "shardsm %s: volume %s is attached to %s, neither the old instance %s nor the spare %s; rolling back",
 			sh.ID, info.VolumeID, info.InstanceID, f.DemotedInstanceID, f.SuccessorInstanceID)
-		_, err := sh.enterPhase(f, PhaseRollingBack)
+		_, err := sh.enterPhase(ctx, f, PhaseRollingBack)
 		return err
 	}
 
@@ -417,6 +475,8 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 	start := sh.deps.Clock()
 	pctx, pcancel := context.WithTimeout(ctx, swapProbeTimeout)
 	defer pcancel()
+	pctx, span := weftsdk.StartSpan(pctx, "upgrade.open")
+	defer span.End()
 	for {
 		dialed, err := sh.dialConfigure(pctx, store.ShardHeartbeat{Addr: f.SuccessorAddr})
 		if err == nil {
@@ -424,6 +484,7 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 			return sh.completeSwap(ctx, f, dialed)
 		}
 		if pctx.Err() != nil {
+			span.RecordError(err)
 			weftsdk.Infof(ctx, "shardsm %s: spare %s not open yet: %v", sh.ID, f.SuccessorAddr, err)
 			return sh.giveUpIfOver(ctx, f, upgradeSwapBudget)
 		}
@@ -467,7 +528,7 @@ func (sh *Shard) completeSwap(ctx context.Context, f UpgradeFacts, dialed shard.
 		}()
 	}
 	swapAge := sh.phaseAge(f)
-	resumed, err := sh.enterPhase(f, PhaseResumed)
+	resumed, err := sh.enterPhase(ctx, f, PhaseResumed)
 	if err != nil {
 		return err
 	}
@@ -639,7 +700,7 @@ func (sh *Shard) giveUpIfOver(ctx context.Context, f UpgradeFacts, budget time.D
 		return nil
 	}
 	weftsdk.Errorf(ctx, "shardsm %s: upgrade phase %s exceeded %s; rolling back", sh.ID, f.Phase, budget)
-	_, err := sh.enterPhase(f, PhaseRollingBack)
+	_, err := sh.enterPhase(ctx, f, PhaseRollingBack)
 	return err
 }
 

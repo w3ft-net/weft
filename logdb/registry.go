@@ -93,6 +93,8 @@ type Shard struct {
 	UpgradeSuccessorAddr       string       `gorm:"column:upgrade_successor_addr"`
 	UpgradeDemotedInstanceID   string       `gorm:"column:upgrade_demoted_instance_id"`
 	UpgradeDemotedAddr         string       `gorm:"column:upgrade_demoted_addr"`
+	UpgradeTraceID             string       `gorm:"column:upgrade_trace_id"`
+	UpgradeParentSpanID        string       `gorm:"column:upgrade_parent_span_id"`
 
 	// ── retention janitor (migration 066) ──
 	// LastPurgedAt is when the janitor last rewrote (or revisited) this
@@ -382,6 +384,8 @@ func (e *Shard) persistedCopy() *Shard {
 		UpgradeSuccessorAddr:       e.UpgradeSuccessorAddr,
 		UpgradeDemotedInstanceID:   e.UpgradeDemotedInstanceID,
 		UpgradeDemotedAddr:         e.UpgradeDemotedAddr,
+		UpgradeTraceID:             e.UpgradeTraceID,
+		UpgradeParentSpanID:        e.UpgradeParentSpanID,
 	}
 }
 
@@ -546,6 +550,8 @@ func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 		entry.UpgradeSuccessorAddr = f.UpgradeSuccessorAddr
 		entry.UpgradeDemotedInstanceID = f.UpgradeDemotedInstanceID
 		entry.UpgradeDemotedAddr = f.UpgradeDemotedAddr
+		entry.UpgradeTraceID = f.UpgradeTraceID
+		entry.UpgradeParentSpanID = f.UpgradeParentSpanID
 		// Only refresh services when the shard_services read succeeded;
 		// on a transient error leave the existing membership rather than
 		// wiping live routing to nil.

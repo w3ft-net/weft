@@ -1360,11 +1360,11 @@ func (s *Server) ForceRemoveShard(_ context.Context, req *pb.ForceRemoveShardReq
 	return &pb.ForceRemoveShardResponse{}, nil
 }
 
-func (s *Server) RelaunchShard(_ context.Context, req *pb.RelaunchShardRequest) (*pb.RelaunchShardResponse, error) {
+func (s *Server) RelaunchShard(ctx context.Context, req *pb.RelaunchShardRequest) (*pb.RelaunchShardResponse, error) {
 	if s.Coord.Provisioner == nil {
 		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
 	}
-	if err := s.Coord.Provisioner.RelaunchShard(req.ShardId); err != nil {
+	if err := s.Coord.Provisioner.RelaunchShard(ctx, req.ShardId); err != nil {
 		return nil, shardOpStatus(err)
 	}
 	return &pb.RelaunchShardResponse{}, nil

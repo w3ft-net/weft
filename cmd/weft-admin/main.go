@@ -29,6 +29,7 @@ import (
 	"sort"
 	"time"
 
+	weftsdk "github.com/w3ft-net/weft-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -129,7 +130,10 @@ func registerCommon(fs *flag.FlagSet, includeContinue bool) *commonFlags {
 }
 
 func newAdminClient(coord string) (pb.WeftAdminClient, func(), error) {
-	conn, err := grpc.NewClient(coord, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(coord,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor()),
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("dial coordinator at %s: %w", coord, err)
 	}
@@ -145,9 +149,12 @@ func newAdminClient(coord string) (pb.WeftAdminClient, func(), error) {
 func rollOne(ctx context.Context, client pb.WeftAdminClient, shardID string, perShardTimeout, pollInterval time.Duration, wantSHA string) error {
 	rollCtx, cancel := context.WithTimeout(adminCtx(ctx), perShardTimeout)
 	defer cancel()
+	rollCtx, span := weftsdk.StartSpan(rollCtx, "roll "+shardID)
+	defer span.End()
 
 	cutoff := time.Now()
 	if _, err := client.RelaunchShard(rollCtx, &pb.RelaunchShardRequest{ShardId: shardID}); err != nil {
+		span.RecordError(err)
 		return fmt.Errorf("relaunch %s: %w", shardID, err)
 	}
 	fmt.Printf("  relaunch fired for %s; waiting for return to a live serving state...\n", shardID)
@@ -166,6 +173,7 @@ func rollOne(ctx context.Context, client pb.WeftAdminClient, shardID string, per
 		return resp.Shard.State, hb, resp.Shard.BinarySha, nil
 	}
 	if err := pollShardReady(rollCtx, get, shardID, cutoff, wantSHA, pollInterval); err != nil {
+		span.RecordError(err)
 		return err
 	}
 	fmt.Printf("  %s is back serving\n", shardID)
@@ -351,7 +359,13 @@ func rollAllCmd(args []string) {
 	}
 	defer closeConn()
 
-	ctx := context.Background()
+	// The whole roll is one trace: every shard's upgrade on the coordinator
+	// logs under it, so `trace --id` shows the roll end to end.
+	traceID := weftsdk.NewTraceID()
+	ctx := weftsdk.ContextWithTraceID(context.Background(), traceID)
+	fmt.Printf("trace id: %s\n", traceID)
+	ctx, span := weftsdk.StartSpan(ctx, "roll-all")
+	defer span.End()
 
 	// Default the skip-if-current target to the SHA the coordinator's own AMI
 	// advertises (its ShardGitSHA tag): only shards whose binary_sha differs get

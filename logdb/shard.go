@@ -384,6 +384,8 @@ func (s ShardStore) SetShardUpgrade(id string, f UpgradeFacts) error {
 			"upgrade_successor_addr":        null(f.SuccessorAddr),
 			"upgrade_demoted_instance_id":   null(f.DemotedInstanceID),
 			"upgrade_demoted_addr":          null(f.DemotedAddr),
+			"upgrade_trace_id":              null(f.TraceID),
+			"upgrade_parent_span_id":        null(f.ParentSpanID),
 		}).Error
 }
 
