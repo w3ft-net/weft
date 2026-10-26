@@ -773,8 +773,18 @@ func (sh *Shard) evaluateRecovery(ctx context.Context) error {
 	if err := sh.deps.Store.SetShardLaunchResult(sh.ID, "", az, volumeID, stripeIndex); err != nil {
 		return fmt.Errorf("shardsm %s: clear instance before relaunch: %w", sh.ID, err)
 	}
+	// The failures that sent the shard here were the reaped instance's, and
+	// the replacement starts with none: carried over, they have it trip the
+	// breaker the moment it heartbeats in and sit out a full cooldown healthy.
+	// Persisted first, since RefreshFromStore copies the row's count back
+	// every tick.
+	if err := sh.deps.Store.SetShardIngestFailures(sh.ID, 0); err != nil {
+		return fmt.Errorf("shardsm %s: clear ingest failures before relaunch: %w", sh.ID, err)
+	}
 	sh.mu.Lock()
 	sh.InstanceID = ""
+	sh.IngestFailures = 0
+	sh.reconnectFailures = 0
 	sh.locEpoch++
 	sh.mu.Unlock()
 

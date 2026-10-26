@@ -494,6 +494,53 @@ func TestShardSM_EvaluateSuspendedReapsThenRelaunches(t *testing.T) {
 	}
 }
 
+// The ingest failures that tripped the breaker were the dead instance's. The
+// replacement starts clean: a count that survives the relaunch has the shard
+// re-degrade the moment the new instance heartbeats in, and sit out a full
+// cooldown with a healthy instance.
+func TestShardSM_AReplacementInstanceDoesNotInheritTheDeadOnesFailures(t *testing.T) {
+	fl := &fakeLauncher{}
+	vm := &fakeVolumeManager{findResult: map[string]*VolumeInfo{"s-test": {VolumeID: "vol-1", AZ: "us-east-2a"}}}
+	sm, db, entry := makeFixtureShardSM(t, StateSuspended, func(d *ShardDeps) {
+		d.Launcher = fl
+		d.Volumes = vm
+	})
+	entry.InstanceID = "i-dead"
+	entry.EBSVolumeID = "vol-1"
+	entry.AZ = "us-east-2a"
+	entry.IngestFailures = SuspendFailureThreshold + 2
+	entry.reconnectFailures = SuspendFailureThreshold
+	if err := (ShardStore{db}).SetShardIngestFailures("s-test", entry.IngestFailures); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	if err := sm.Evaluate(ctx); err != nil { // reap
+		t.Fatalf("Evaluate (reap): %v", err)
+	}
+	if err := sm.Evaluate(ctx); err != nil { // relaunch
+		t.Fatalf("Evaluate (relaunch): %v", err)
+	}
+	waitForLaunch(t, sm)
+	if entry.IngestFailures != 0 || entry.reconnectFailures != 0 {
+		t.Errorf("replacement starts with %d ingest and %d reconnect failures, want 0 and 0", entry.IngestFailures, entry.reconnectFailures)
+	}
+	if rec, _, _ := (ShardStore{db}).GetShard("s-test"); rec.IngestFailures != 0 {
+		t.Errorf("row still carries %d ingest failures (RefreshFromStore would bring them back)", rec.IngestFailures)
+	}
+
+	hb := store.ShardHeartbeat{ShardID: "s-test", Addr: "10.0.0.9:9000", InstanceID: entry.InstanceID}
+	if err := sm.Fire(ctx, TriggerHeartbeat, hb); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	if err := sm.Evaluate(ctx); err != nil {
+		t.Fatalf("Evaluate (serving): %v", err)
+	}
+	if st, _ := sm.smState(ctx); st != StateIngesting {
+		t.Fatalf("replacement is %s, want INGESTING: it degraded on the dead instance's failures", st)
+	}
+}
+
 func TestShardSM_EvaluateSuspendedStrandedWhenVolumeGone(t *testing.T) {
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{} // FindByShard returns nil → volume gone
