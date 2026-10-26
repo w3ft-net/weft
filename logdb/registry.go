@@ -962,12 +962,23 @@ func (e *Shard) queryable(tr TimeRange, serving map[string]struct{}, asOf time.T
 // shards. This distributes writes across N concurrent writable shards
 // for the same service.
 func (r *ShardRegistry) IngestingShard(namespaceID uint, service string) shard.Shard {
+	return r.IngestingShardExcept(namespaceID, service, "")
+}
+
+// IngestingShardExcept is IngestingShard without the shard exceptID: the one
+// a write just failed on, which can still be a candidate (it takes a few
+// consecutive failures to drop out), so a retry that simply asks again can
+// land on it. Nil when nothing else takes the service.
+func (r *ShardRegistry) IngestingShardExcept(namespaceID uint, service, exceptID string) shard.Shard {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	asOf := r.LivenessAsOf()
 	var serving, upgrading []shard.Shard
-	for _, e := range r.entries {
+	for id, e := range r.entries {
+		if id == exceptID {
+			continue
+		}
 		sh, isUpgrading := e.ingestCandidate(namespaceID, service, asOf)
 		switch {
 		case sh == nil:

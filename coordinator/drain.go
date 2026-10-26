@@ -218,11 +218,10 @@ func (c *Coordinator) ingestBatch(ctx context.Context, b drainBatch) {
 	}
 	weftsdk.Infof(ctx, "drain: %v", err)
 
-	// Retry once. IngestingShard round-robins, so a second call lands on a
-	// different candidate if any exist for this service; a recently-
-	// degraded primary is excluded automatically. With small per-service
-	// candidate sets the two attempts are typically exhaustive.
-	if fallback := c.Provisioner.IngestingShard(b.nsID, b.key.service); fallback != nil {
+	// Retry once, on a shard other than the one that just failed: it stays a
+	// candidate until it has failed several times in a row, and the round-robin
+	// counter every sender advances would send the retry straight back to it.
+	if fallback := c.Provisioner.IngestingShardExcept(b.nsID, b.key.service, b.sh.ID()); fallback != nil {
 		if retryErr := fallback.Ingest(ctx, b.rows, c.Provisioner); retryErr == nil {
 			c.Provisioner.Stats().Record(app, int64(len(b.rows)))
 			return

@@ -390,6 +390,12 @@ func (p *Provisioner) IngestingShard(namespaceID uint, service string) shard.Sha
 	return p.registry.IngestingShard(namespaceID, service)
 }
 
+// IngestingShardExcept is IngestingShard without the shard exceptID (see
+// ShardRegistry.IngestingShardExcept): where a write that failed is retried.
+func (p *Provisioner) IngestingShardExcept(namespaceID uint, service, exceptID string) shard.Shard {
+	return p.registry.IngestingShardExcept(namespaceID, service, exceptID)
+}
+
 // TotalIngesting returns the count of INGESTING shards regardless
 // of app. Used by the disk-pressure check.
 func (p *Provisioner) TotalIngesting() int { return p.registry.TotalIngesting() }
