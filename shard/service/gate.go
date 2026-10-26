@@ -209,7 +209,13 @@ func (s *Server) Activate(ctx context.Context) error {
 	s.spare = false
 	s.mode = modeServing
 	s.gateMu.Unlock()
-	weftsdk.Infof(ctx, "spare activated as %q; opening its database took %s", s.Identity(), time.Since(opening))
+	timing := ""
+	s.mu.RLock()
+	if s.shard != nil { // a blank volume carries no shard to open
+		timing = " (" + s.shard.OpenTiming() + ")"
+	}
+	s.mu.RUnlock()
+	weftsdk.Infof(ctx, "spare activated as %q; opening its database took %s%s", s.Identity(), time.Since(opening), timing)
 	return nil
 }
 

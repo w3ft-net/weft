@@ -135,6 +135,9 @@ type DuckDBShard struct {
 	archiveRunning bool
 	archiveAttempt int64
 	archiveStarted time.Time
+
+	// openTiming is where NewDuckDBShard spent its time, for OpenTiming.
+	openTiming string
 }
 
 // queryStats accumulates per-query execution timings between telemetry samples;
@@ -289,16 +292,26 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb %q: %w", path, err)
 	}
+	t0 := time.Now()
+	// sql.Open is lazy: the Ping is the first real connection, where the file
+	// is opened and any WAL replayed.
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open duckdb %q: %w", path, err)
+	}
+	connected := time.Now()
 	if _, err := db.Exec(createTableSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create table: %w", err)
 	}
+	created := time.Now()
 	// Run migrations. Errors are non-fatal — the rename fails on fresh
 	// shards that never had host_group, the ADDs fail on fully-migrated
 	// shards. Either way the schema converges to the CREATE TABLE shape.
 	for _, step := range migrationSteps {
 		_, _ = db.Exec(step)
 	}
+	migrated := time.Now()
 	ds := &DuckDBShard{id: id, dbPath: path, db: db}
 	// Seed rowCount from the on-disk table so a shard recovering off a
 	// reattached volume reports its real size in heartbeats. Without this
@@ -311,8 +324,16 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 		return nil, fmt.Errorf("seed rowCount from logs: %w", err)
 	}
 	ds.rowCount.Store(existing)
+	ds.openTiming = fmt.Sprintf("connect=%s create=%s migrate=%s count=%s",
+		connected.Sub(t0).Round(time.Millisecond), created.Sub(connected).Round(time.Millisecond),
+		migrated.Sub(created).Round(time.Millisecond), time.Since(migrated).Round(time.Millisecond))
 	return ds, nil
 }
+
+// OpenTiming reports how long each step of NewDuckDBShard took. A spare opens
+// its database inside an upgrade's hold window, so this says what a slow open
+// spent it on.
+func (s *DuckDBShard) OpenTiming() string { return s.openTiming }
 
 func (s *DuckDBShard) ID() string { return s.id }
 
