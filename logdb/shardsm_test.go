@@ -729,6 +729,41 @@ func TestShardSM_LaunchingFromUpgradingFromIngestingGoesIngesting(t *testing.T) 
 	}
 }
 
+// DEGRADED is the breaker for the instance that was failing. A replacement
+// launched for a shard that died DEGRADED is a new instance, and starts
+// INGESTING: coming up DEGRADED sat it out of write routing for a full cooldown
+// while healthy.
+func TestShardSM_ALaunchedReplacementForADegradedShardGoesIngesting(t *testing.T) {
+	sm, db, entry := makeFixtureShardSM(t, StateLaunching)
+	entry.InstanceID = "i-new"
+	seedShardOperation(t, db, "s-test", StateDegraded, StateSuspended)
+	seedShardOperation(t, db, "s-test", StateSuspended, StateLaunching)
+
+	hb := store.ShardHeartbeat{ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-new"}
+	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	if got, _ := sm.smState(context.Background()); got != StateIngesting {
+		t.Fatalf("state: got %q want INGESTING: the replacement inherited the dead instance's breaker", got)
+	}
+}
+
+// The same instance coming back from SUSPENDED is not a replacement: a
+// DEGRADED shard that blipped silent returns to DEGRADED and works its own
+// cooldown.
+func TestShardSM_ABlipRescueFromDegradedReturnsToDegraded(t *testing.T) {
+	sm, db, _ := makeFixtureShardSM(t, StateSuspended)
+	seedShardOperation(t, db, "s-test", StateDegraded, StateSuspended)
+
+	hb := store.ShardHeartbeat{ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-same"}
+	if err := sm.Fire(context.Background(), TriggerHeartbeat, hb); err != nil {
+		t.Fatalf("Fire heartbeat: %v", err)
+	}
+	if got, _ := sm.smState(context.Background()); got != StateDegraded {
+		t.Fatalf("state: got %q want DEGRADED (same instance, breaker still its own)", got)
+	}
+}
+
 // TestShardSM_SuspendedRescueFromReadOnlyReturnsToReadOnly tests
 // SUSPENDED's blip-rescue path: a READ_ONLY shard whose heartbeats
 // stalled briefly (network blip → HeartbeatStale → SUSPENDED) should

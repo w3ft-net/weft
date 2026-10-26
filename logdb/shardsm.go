@@ -414,7 +414,7 @@ func (sh *Shard) heartbeatMatchesLaunching(_ context.Context, args ...any) bool 
 // heartbeatTargetFromLaunching returns the state the shard should land
 // in once its first post-launch heartbeat lands. For a fresh shard this
 // is INGESTING. For a shard that was rolled (UPGRADING) or recovered
-// (SUSPENDED) from READ_ONLY or DEGRADED, the post-launch destination
+// (SUSPENDED) from READ_ONLY, the post-launch destination
 // must mirror the pre-recovery state — otherwise a READ_ONLY shard's
 // roll briefly becomes write-routable (no data damage in practice but
 // it triggers a redundant SCALING_DOWN cascade as the bucket scrambles
@@ -425,7 +425,16 @@ func (sh *Shard) heartbeatMatchesLaunching(_ context.Context, args ...any) bool 
 // lookup error, or when there's no recovery history, default to
 // INGESTING — the fresh-launch path.
 func (sh *Shard) heartbeatTargetFromLaunching(_ context.Context, _ ...any) (stateless.State, error) {
-	return sh.postRecoveryTarget()
+	target, err := sh.postRecoveryTarget()
+	if target == StateDegraded {
+		// DEGRADED is the breaker for the instance that was failing. A shard
+		// reaches LAUNCHING when that instance was reaped, so the one that
+		// heartbeats now is a replacement, and starts clean: mirrored, it sat
+		// out a full cooldown out of write routing while healthy. (READ_ONLY
+		// is mirrored: it says what the data is, not how an instance fared.)
+		return StateIngesting, err
+	}
+	return target, err
 }
 
 // heartbeatMatchesSuspended gates SUSPENDED → INGESTING. The heartbeat
