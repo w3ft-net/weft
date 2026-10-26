@@ -12,7 +12,6 @@ import (
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
-	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -83,14 +82,19 @@ func streamRows(w io.Writer, rows *sql.Rows) (int, error) {
 		flush = f.Flush
 	}
 
+	cols, err := rows.Columns()
+	if err != nil {
+		return 0, fmt.Errorf("columns: %w", err)
+	}
+	extraCols := cols[2:]
+
 	count := 0
 	for rows.Next() {
-		var raw string
-		var ts time.Time
-		if err := rows.Scan(&raw, &ts); err != nil {
-			return count, fmt.Errorf("scan row: %w", err)
+		row, err := shard.ScanResultRow(rows, extraCols)
+		if err != nil {
+			return count, err
 		}
-		if err := shard.WriteResultRow(w, &pb.ResultRow{Raw: raw, TsUnixNs: ts.UnixNano()}); err != nil {
+		if err := shard.WriteResultRow(w, row); err != nil {
 			return count, fmt.Errorf("write row: %w", err)
 		}
 		count++

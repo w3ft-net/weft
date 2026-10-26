@@ -73,10 +73,10 @@ func TestProtoStream_SingleRow(t *testing.T) {
 }
 
 func TestProtoStream_ReadResultRow_EOF(t *testing.T) {
-	// Empty reader returns io.EOF.
+	// An empty reader never sent the end sentinel: not a clean end.
 	_, err := ReadResultRow(&bytes.Buffer{})
-	if err != io.EOF {
-		t.Fatalf("expected io.EOF, got %v", err)
+	if err != io.ErrUnexpectedEOF {
+		t.Fatalf("expected io.ErrUnexpectedEOF, got %v", err)
 	}
 }
 

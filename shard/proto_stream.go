@@ -46,11 +46,17 @@ func WriteStreamEnd(w io.Writer) error {
 }
 
 // ReadResultRow reads a length-prefixed protobuf ResultRow from the reader.
-// Returns io.EOF when the zero-length sentinel is encountered.
+// Returns io.EOF only when the zero-length sentinel is encountered; a stream
+// that ends without one returns io.ErrUnexpectedEOF.
 func ReadResultRow(r io.Reader) (*pb.ResultRow, error) {
 	var length uint32
 	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
-		return nil, err // io.EOF or read error
+		if err == io.EOF {
+			// The stream stopped where a frame or the end sentinel belonged:
+			// the writer failed after it had sent its headers.
+			return nil, io.ErrUnexpectedEOF
+		}
+		return nil, err
 	}
 	if length == 0 {
 		return nil, io.EOF // sentinel

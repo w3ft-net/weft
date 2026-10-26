@@ -210,3 +210,41 @@ func TestLambdaHandler_EmptyResult(t *testing.T) {
 		t.Fatalf("expected 0 rows, got %d", len(rows))
 	}
 }
+
+// The coordinator pushes queries down whose rows carry more than raw and ts:
+// a count aggregate for `wc -l`, event_id and line_no for dedup, meta-vars for
+// jq. The hot shard scans all of them; the cold path has to as well, or every
+// such query against archived data comes back empty.
+func TestLambdaHandler_ScansExtraColumnsLikeAHotShard(t *testing.T) {
+	path := testParquet(t)
+
+	var counted bytes.Buffer
+	if err := HandleQuery(&counted, QueryRequest{
+		SQL:         "SELECT '' AS raw, min(ts) AS ts, count(*) AS count FROM logs WHERE customer_id = 1 HAVING count(*) > 0",
+		ParquetPath: path,
+	}, nil); err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	rows, err := shard.ReadAllResultRows(&counted)
+	if err != nil {
+		t.Fatalf("read count rows: %v", err)
+	}
+	if len(rows) != 1 || rows[0].MetaVars["count"] != "3" {
+		t.Fatalf("count query rows = %v, want one row with count=3", rows)
+	}
+
+	var withIDs bytes.Buffer
+	if err := HandleQuery(&withIDs, QueryRequest{
+		SQL:         "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE customer_id = 1",
+		ParquetPath: path,
+	}, nil); err != nil {
+		t.Fatalf("event_id query: %v", err)
+	}
+	rows, err = shard.ReadAllResultRows(&withIDs)
+	if err != nil {
+		t.Fatalf("read event_id rows: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("event_id query rows = %v, want 3 rows", rows)
+	}
+}
