@@ -140,6 +140,14 @@ type ShardDeps struct {
 	// after the swap before it may be terminated; zero defaults to
 	// defaultUpgradeRouteGrace.
 	UpgradeRouteGrace time.Duration
+
+	// Leading reports whether this process still holds the shard-fsm-leader
+	// lease. Every call a shard's FSM makes that changes the world (EC2, the
+	// shard rows, a shard's pause) is refused once it returns false, however
+	// far into an Evaluate the process has got: Evaluate checks leadership only
+	// when it starts, and an upgrade runs for tens of seconds. Nil, as in
+	// tests and dev, never refuses.
+	Leading func() bool
 }
 
 // volumeSizeGB returns the fresh-launch data-volume size for tier, falling
@@ -176,6 +184,9 @@ func newShardDeps(d ShardDeps) *ShardDeps {
 	}
 	if d.UpgradeRouteGrace == 0 {
 		d.UpgradeRouteGrace = defaultUpgradeRouteGrace
+	}
+	if d.Leading != nil {
+		fenceDeps(&d)
 	}
 	return &d
 }
@@ -251,6 +262,9 @@ func (sh *Shard) readState(ctx context.Context) (stateless.State, error) {
 // non-FSM readers (the registry's MatchingEntries walk, dashboards) see
 // the same value without another round-trip.
 func (sh *Shard) writeState(ctx context.Context, st stateless.State) error {
+	if err := leaseGone(ctx); err != nil {
+		return err
+	}
 	newState := st.(ShardState)
 	// Narrow write: only the state column (SetShardState). Lifecycle-owned
 	// fields (window bounds, services, addr) move through SaveShard, so
@@ -542,6 +556,9 @@ func (sh *Shard) staleTargetFromActive(context.Context, ...any) (stateless.State
 // launch does: a crash mid-cleanup re-drives it on the next tick.
 // ARCHIVED is terminal — nothing to converge.
 func (sh *Shard) Evaluate(ctx context.Context) error {
+	if sh.deps.Leading != nil {
+		ctx = withLeaderFence(ctx, sh.deps.Leading)
+	}
 	st, err := sh.smState(ctx)
 	if err != nil {
 		return err

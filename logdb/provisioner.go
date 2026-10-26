@@ -288,6 +288,12 @@ type Provisioner struct {
 	// process, always convergence-driving. Only startLeaderElection ever
 	// flips it based on real lease ownership.
 	leading atomic.Bool
+	// electing is whether the election loop runs at all; without it (dev,
+	// tests) this process is the permanent leader and its lease never
+	// expires. leaseUntil is the earliest moment the lease this process last
+	// won could expire (see leaderTick), in unix nanos.
+	electing   atomic.Bool
+	leaseUntil atomic.Int64
 	// lastProgress is the unix-nanos timestamp of the last observed
 	// convergence progress — stamped inside evaluateStateMachines, once
 	// per tick and again after each individual bucket/shard Evaluate call

@@ -145,7 +145,9 @@ func (f *fakeConcurrentShardStore) LatestShardDiskBytes(string) (int64, error) {
 }
 
 // Nor is any shard here UPGRADING through the pool.
-func (f *fakeConcurrentShardStore) SetShardUpgrade(string, UpgradeFacts) error { return nil }
+func (f *fakeConcurrentShardStore) SetShardUpgrade(string, UpgradePhase, UpgradeFacts) error {
+	return nil
+}
 
 // sleepyLauncher is a ShardLaunchAPI whose Terminate blocks for `delay`
 // before succeeding — standing in for a slow AWS call (e.g. a stuck

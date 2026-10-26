@@ -150,9 +150,18 @@ func (sh *Shard) upgradeFacts() UpgradeFacts {
 }
 
 // setUpgradeFacts persists f, then mirrors it onto the entry (the DB is
-// never behind memory, so RefreshFromStore can't undo it).
-func (sh *Shard) setUpgradeFacts(f UpgradeFacts) error {
-	if err := sh.deps.Store.SetShardUpgrade(sh.ID, f); err != nil {
+// never behind memory, so RefreshFromStore can't undo it). The write only
+// lands if the row is still in the phase this entry last saw, so a writer
+// that missed another coordinator's progress cannot regress it. A leader's
+// Evaluate that has lost the lease writes nothing (see fence.go).
+func (sh *Shard) setUpgradeFacts(ctx context.Context, f UpgradeFacts) error {
+	if err := leaseGone(ctx); err != nil {
+		return err
+	}
+	sh.mu.RLock()
+	from := sh.UpgradePhase
+	sh.mu.RUnlock()
+	if err := sh.deps.Store.SetShardUpgrade(sh.ID, from, f); err != nil {
 		return fmt.Errorf("shardsm %s: persist upgrade phase %q: %w", sh.ID, f.Phase, err)
 	}
 	sh.mu.Lock()
@@ -174,7 +183,7 @@ func (sh *Shard) setUpgradeFacts(f UpgradeFacts) error {
 func (sh *Shard) enterPhase(ctx context.Context, f UpgradeFacts, phase UpgradePhase) (UpgradeFacts, error) {
 	now := sh.deps.Clock()
 	f.Phase, f.PhaseAt = phase, &now
-	if err := sh.setUpgradeFacts(f); err != nil {
+	if err := sh.setUpgradeFacts(ctx, f); err != nil {
 		return f, err
 	}
 	weftsdk.Infof(ctx, "shardsm %s: upgrade → %s", sh.ID, phase)
@@ -234,7 +243,7 @@ func (sh *Shard) startUpgrade(ctx context.Context) error {
 	sh.mu.RUnlock()
 	if sh.upgradesInPlace() {
 		now := sh.deps.Clock()
-		if err := sh.setUpgradeFacts(UpgradeFacts{
+		if err := sh.setUpgradeFacts(ctx, UpgradeFacts{
 			Phase: PhaseClaiming, Origin: origin, PhaseAt: &now,
 			DemotedInstanceID: instanceID, DemotedAddr: addr,
 			TraceID: traceIDOf(ctx), ParentSpanID: spanIDOf(ctx),
@@ -244,7 +253,7 @@ func (sh *Shard) startUpgrade(ctx context.Context) error {
 	}
 	if err := sh.Fire(ctx, TriggerRelaunchRequested); err != nil {
 		if sh.upgradesInPlace() {
-			if cerr := sh.setUpgradeFacts(UpgradeFacts{}); cerr != nil {
+			if cerr := sh.setUpgradeFacts(ctx, UpgradeFacts{}); cerr != nil {
 				weftsdk.Errorf(ctx, "shardsm %s: clear upgrade facts after a refused start: %v", sh.ID, cerr)
 			}
 		}
@@ -275,7 +284,7 @@ func (sh *Shard) rotateDuringUpgrade(ctx context.Context, _ ...any) error {
 		return nil
 	}
 	f.Origin = StateReadOnly
-	if err := sh.setUpgradeFacts(f); err != nil {
+	if err := sh.setUpgradeFacts(ctx, f); err != nil {
 		return err
 	}
 	weftsdk.Infof(ctx, "shardsm %s: rotated during its upgrade; will return to READ_ONLY", sh.ID)
@@ -343,7 +352,7 @@ func (sh *Shard) upgradeClaim(ctx context.Context, f UpgradeFacts) error {
 	}
 	if f.SuccessorInstanceID != sp.InstanceID {
 		f.SuccessorInstanceID = sp.InstanceID
-		if err := sh.setUpgradeFacts(f); err != nil {
+		if err := sh.setUpgradeFacts(ctx, f); err != nil {
 			return err
 		}
 	}
@@ -369,7 +378,7 @@ func (sh *Shard) upgradePause(ctx context.Context, f UpgradeFacts) error {
 	if f.PausedAt == nil {
 		now := sh.deps.Clock()
 		f.PausedAt = &now
-		if err := sh.setUpgradeFacts(f); err != nil {
+		if err := sh.setUpgradeFacts(ctx, f); err != nil {
 			return err
 		}
 	}
@@ -383,7 +392,7 @@ func (sh *Shard) upgradePause(ctx context.Context, f UpgradeFacts) error {
 	if status.Code(err) == codes.Unimplemented {
 		weftsdk.Errorf(ctx, "shardsm %s: old instance %s has no Pause (a pre-upgrade binary); cutting over cold", sh.ID, f.DemotedInstanceID)
 		f.DemotedAddr = ""
-		if err := sh.setUpgradeFacts(f); err != nil {
+		if err := sh.setUpgradeFacts(ctx, f); err != nil {
 			return err
 		}
 		return sh.cutOverCold(ctx, f)
@@ -712,7 +721,7 @@ func (sh *Shard) endUpgrade(ctx context.Context, outcome string) error {
 	if err := sh.Fire(ctx, TriggerUpgradeComplete); err != nil {
 		return fmt.Errorf("shardsm %s: complete upgrade: %w", sh.ID, err)
 	}
-	if err := sh.setUpgradeFacts(UpgradeFacts{}); err != nil {
+	if err := sh.setUpgradeFacts(ctx, UpgradeFacts{}); err != nil {
 		weftsdk.Infof(ctx, "shardsm %s: clear upgrade facts: %v", sh.ID, err)
 	}
 	weftsdk.Infof(ctx, "shardsm %s: upgrade done: %s", sh.ID, outcome)

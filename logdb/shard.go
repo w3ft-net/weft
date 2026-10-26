@@ -2,6 +2,7 @@ package logdb
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -36,7 +37,7 @@ type shardRowStore interface {
 	LatestShardDiskBytes(id string) (int64, error)
 
 	// Seamless upgrade facts (migration 104).
-	SetShardUpgrade(id string, f UpgradeFacts) error
+	SetShardUpgrade(id string, from UpgradePhase, f UpgradeFacts) error
 }
 
 // ShardArchiveStat is one (shard, customer) row of archive metadata: the
@@ -356,10 +357,15 @@ func (s ShardStore) ClearExportFacts(id string) error {
 		}).Error
 }
 
+// ErrUpgradeMoved is returned by SetShardUpgrade when the row is no longer in
+// the phase the writer last saw: another coordinator advanced the upgrade, and
+// a writer working from a stale view must not overwrite it.
+var ErrUpgradeMoved = errors.New("upgrade moved on")
+
 // SetShardUpgrade writes an upgrade's persisted facts in one narrow
 // update; the zero UpgradeFacts clears them (NULLs, like an un-upgraded
 // row).
-func (s ShardStore) SetShardUpgrade(id string, f UpgradeFacts) error {
+func (s ShardStore) SetShardUpgrade(id string, from UpgradePhase, f UpgradeFacts) error {
 	null := func(v string) any {
 		if v == "" {
 			return nil
@@ -374,7 +380,7 @@ func (s ShardStore) SetShardUpgrade(id string, f UpgradeFacts) error {
 	if f.PausedAt != nil {
 		pausedAt = *f.PausedAt
 	}
-	return s.db().Model(&Shard{}).Where("id = ?", id).
+	res := s.db().Model(&Shard{}).Where("id = ? AND COALESCE(upgrade_phase, '') = ?", id, string(from)).
 		Updates(map[string]any{
 			"upgrade_phase":                 null(string(f.Phase)),
 			"upgrade_origin":                null(string(f.Origin)),
@@ -386,7 +392,14 @@ func (s ShardStore) SetShardUpgrade(id string, f UpgradeFacts) error {
 			"upgrade_demoted_addr":          null(f.DemotedAddr),
 			"upgrade_trace_id":              null(f.TraceID),
 			"upgrade_parent_span_id":        null(f.ParentSpanID),
-		}).Error
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("%w: %s is no longer in phase %q", ErrUpgradeMoved, id, from)
+	}
+	return nil
 }
 
 // StuckShard is a shard that has been ARCHIVING since Since.

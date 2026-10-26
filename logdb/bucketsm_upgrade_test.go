@@ -17,7 +17,7 @@ func seedUpgradingRow(t *testing.T, db *store.Store, bucketID int64, id string, 
 	t.Helper()
 	seedShardRow(t, db, bucketID, id, StateUpgrading, windowStart, stripe)
 	at := windowStart
-	if err := (ShardStore{db}).SetShardUpgrade(id, UpgradeFacts{Phase: PhaseSwapping, Origin: origin, PhaseAt: &at}); err != nil {
+	if err := (ShardStore{db}).SetShardUpgrade(id, "", UpgradeFacts{Phase: PhaseSwapping, Origin: origin, PhaseAt: &at}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -56,7 +56,7 @@ func TestBucketSM_RotatingWaitsForAShardMidUpgrade(t *testing.T) {
 		t.Fatalf("state: %q, want ROTATING (the upgrading shard would return to INGESTING)", got)
 	}
 	at := curWin
-	if err := (ShardStore{db}).SetShardUpgrade("s-cur-0", UpgradeFacts{Phase: PhaseSwapping, Origin: StateReadOnly, PhaseAt: &at}); err != nil {
+	if err := (ShardStore{db}).SetShardUpgrade("s-cur-0", PhaseSwapping, UpgradeFacts{Phase: PhaseSwapping, Origin: StateReadOnly, PhaseAt: &at}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sm.Evaluate(context.Background()); err != nil {

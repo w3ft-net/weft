@@ -51,6 +51,7 @@ func (p *Provisioner) startLeaderElection(ctx context.Context) {
 	// can fire, rather than judging it against a zero timestamp (which
 	// time.Since would read as "ancient" and trip the switch immediately).
 	p.lastProgress.Store(time.Now().UnixNano())
+	p.electing.Store(true)
 	go p.runLeaderElection(ctx)
 }
 
@@ -101,7 +102,13 @@ func (p *Provisioner) leaderTick() {
 		return
 	}
 
+	// Taken before the call, so the expiry it implies is never later than the
+	// lease row's own.
+	asked := time.Now()
 	ok, err := p.store.AcquireLease(shardFSMLeaseName, p.config.Holder, store.LeaseTTL)
+	if ok && err == nil {
+		p.leaseUntil.Store(asked.Add(store.LeaseTTL).UnixNano())
+	}
 	if err != nil {
 		weftsdk.Errorf(context.Background(), "provisioner: shard-fsm-leader lease acquire error: %v", err)
 		return
@@ -120,6 +127,27 @@ func (p *Provisioner) leaderTick() {
 		store.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "lost")
 		p.leading.Store(false)
 	}
+}
+
+// leaseSafetyMargin is how far before its computed expiry a lease stops
+// counting: the lease row expires by the database's clock, this process reads
+// its own.
+const leaseSafetyMargin = 5 * time.Second
+
+// leaseValid reports whether this process may still act as the shard-fsm
+// leader: it holds the lease, and the lease has not run out. The flag alone
+// isn't enough. A process that was stopped for longer than the lease lasts
+// (a long pause, a frozen VM) wakes with the flag still set, because the
+// ticker that clears it hasn't run yet; the wall clock has already passed the
+// expiry, so this refuses it at once.
+func (p *Provisioner) leaseValid() bool {
+	if !p.IsLeader() {
+		return false
+	}
+	if !p.electing.Load() {
+		return true
+	}
+	return time.Now().Add(leaseSafetyMargin).UnixNano() < p.leaseUntil.Load()
 }
 
 // progressStale reports whether this process has gone more than

@@ -69,6 +69,8 @@ func (p *Provisioner) shardDeps() *ShardDeps {
 			Clock:             p.clock,
 			VolumeSizesGB:     p.config.VolumeSizesGB,
 
+			Leading: p.leaseValid,
+
 			Exports:              p.config.Exports,
 			ExportManifests:      p.config.ExportManifests,
 			ExportOutputs:        p.config.ExportOutputs,

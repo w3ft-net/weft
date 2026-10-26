@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,12 +28,13 @@ import (
 // volume is attached to, the one fact the swap phases re-derive from.
 type swapVolumes struct {
 	fakeVolumeManager
-	mu         sync.Mutex
-	volume     string // the shard's volume id
-	shardID    string
-	attachedTo string
-	detachErr  error
-	detaches   []bool // force flag of each detach
+	mu          sync.Mutex
+	volume      string // the shard's volume id
+	shardID     string
+	attachedTo  string
+	detachErr   error
+	detaches    []bool // force flag of each detach
+	afterDetach func() // runs once a detach has gone through (a test's lease loss)
 }
 
 func (v *swapVolumes) FindByShard(_ context.Context, shardID string) (*VolumeInfo, error) {
@@ -66,6 +68,9 @@ func (v *swapVolumes) DetachFromInstance(_ context.Context, _ string, force bool
 		return v.detachErr
 	}
 	v.attachedTo = ""
+	if v.afterDetach != nil {
+		v.afterDetach()
+	}
 	return nil
 }
 
@@ -142,6 +147,8 @@ type upgradeFixture struct {
 	pool   *SparePool
 	launch *fakeLauncher
 	deps   func(*ShardDeps)
+	// leading is the lease: the shard's deps refuse to act once it is false.
+	leading atomic.Bool
 }
 
 const (
@@ -159,6 +166,7 @@ func newUpgradeFixture(t *testing.T, origin ShardState, withSpare bool) *upgrade
 	t.Cleanup(func() { swapProbeTimeout = prevProbe })
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	f := &upgradeFixture{now: &now, pauser: &fakePauser{}, cfg: &readyConfigurer{}, ec2: newFakeSpareEC2("ami-1"), launch: &fakeLauncher{}}
+	f.leading.Store(true)
 	clock := func() time.Time { return *f.now }
 	f.vols = &swapVolumes{volume: "vol-1", shardID: "s-test", attachedTo: oldInstance}
 	reg := NewShardRegistry()
@@ -170,6 +178,7 @@ func newUpgradeFixture(t *testing.T, origin ShardState, withSpare bool) *upgrade
 		d.Pauser = f.pauser
 		d.Launcher = f.launch
 		d.UpgradeRouteGrace = 2 * time.Minute
+		d.Leading = f.leading.Load
 		f.pool = NewSparePool(ShardStore{d.Store.(ShardStore).Store}, f.ec2, clock)
 		d.Spares = f.pool
 	})
@@ -790,5 +799,104 @@ func TestUpgrade_PhaseLogsCarryTheTraceOfTheRequestThatStartedIt(t *testing.T) {
 		if !done[name] {
 			t.Errorf("no %q span in the upgrade's log:\n%s", name, out)
 		}
+	}
+}
+
+// A leader's Evaluate checks the lease only when it starts, and an upgrade
+// keeps driving EC2 and the shard rows for tens of seconds. A process that
+// loses the lease mid-swap (it was stopped, or its lease renewal stalled) must
+// not take another step: the new leader owns the shard, and two writers moving
+// one volume is how a shard ends up attached nowhere, or twice.
+func TestUpgrade_ALeaderThatLosesTheLeaseMidSwapTakesNoFurtherStep(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	ctx := context.Background()
+	if err := f.sh.startUpgrade(ctx); err != nil {
+		t.Fatalf("startUpgrade: %v", err)
+	}
+	// The lease is gone once the volume is off the old instance: the next step
+	// would attach it to the spare.
+	f.vols.afterDetach = func() { f.leading.Store(false) }
+
+	for i := 0; i < 2; i++ { // the second tick is the leader's own retry
+		f.evaluate(t)
+		if where := f.vols.where(); where != "" {
+			t.Fatalf("evaluate %d: volume attached to %q after the lease was lost; the old leader must not attach it", i+1, where)
+		}
+	}
+	if f.terminations(oldInstance) != 0 || f.terminated("i-spare") {
+		t.Error("an instance was terminated after the lease was lost")
+	}
+	if f.pauser.resumed(oldAddr) {
+		t.Error("the old instance was resumed after the lease was lost")
+	}
+	if ph := f.phase(); ph == PhaseResumed || ph == PhaseRollingBack {
+		t.Errorf("phase moved to %q after the lease was lost", ph)
+	}
+}
+
+// An Evaluate that was queued under a lease the process has since lost, and
+// starts without it, changes nothing: no phase write, no pause, no volume move.
+func TestUpgrade_AnEvaluateWithoutTheLeaseWritesNothing(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	ctx := context.Background()
+	if err := f.sh.startUpgrade(ctx); err != nil {
+		t.Fatalf("startUpgrade: %v", err)
+	}
+	f.leading.Store(false)
+
+	f.evaluate(t)
+	if ph := f.phase(); ph != PhaseClaiming {
+		t.Errorf("phase %q, want it left at claiming", ph)
+	}
+	if len(f.pauser.pauses) != 0 {
+		t.Errorf("pauses %v issued without the lease", f.pauser.pauses)
+	}
+	if where := f.vols.where(); where != oldInstance {
+		t.Errorf("volume attached to %q, want it left on the old instance", where)
+	}
+}
+
+// A request that starts an upgrade is not leader work: roll-shard's
+// startUpgrade runs on whichever coordinator received the RPC, follower
+// included. Only Evaluate, the leader's own loop, is fenced.
+func TestUpgrade_AFollowerCanStillStartOne(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	f.leading.Store(false)
+	if err := f.sh.startUpgrade(context.Background()); err != nil {
+		t.Fatalf("startUpgrade on a coordinator without the lease: %v", err)
+	}
+	if st := f.state(t); st != StateUpgrading || f.phase() != PhaseClaiming {
+		t.Fatalf("after start: %s/%s", st, f.phase())
+	}
+}
+
+// Two entries for one shard: the old leader's, which still thinks the upgrade
+// is pausing, and the new leader's, which has moved it on. The old leader's
+// write must lose, whatever its lease says, so it cannot regress the phase.
+func TestUpgrade_AStaleWriterCannotRegressThePhase(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	ctx := context.Background()
+	if err := f.sh.startUpgrade(ctx); err != nil {
+		t.Fatal(err)
+	}
+	old := f.sh
+	row, ok, err := ShardStore{f.db}.GetShard(old.ID)
+	if err != nil || !ok {
+		t.Fatalf("reload: %v %v", ok, err)
+	}
+	row.ensureSM(old.deps)
+	newLeader := row
+	facts := newLeader.upgradeFacts()
+	if _, err := newLeader.enterPhase(ctx, facts, PhaseSwapping); err != nil {
+		t.Fatalf("new leader's write: %v", err)
+	}
+
+	// The old leader never saw that: its entry still says claiming.
+	if _, err := old.enterPhase(ctx, old.upgradeFacts(), PhasePausing); err == nil {
+		t.Fatal("a writer that missed the phase change overwrote it")
+	}
+	rec, _, _ := ShardStore{f.db}.GetShard(old.ID)
+	if rec.UpgradePhase != PhaseSwapping {
+		t.Fatalf("row phase %q, want the new leader's swapping", rec.UpgradePhase)
 	}
 }
