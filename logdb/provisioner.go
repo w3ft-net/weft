@@ -667,6 +667,13 @@ func (p *Provisioner) promoteOnHeartbeat(ctx context.Context, e *Shard, hb store
 	if !p.IsLeader() {
 		return
 	}
+	// A SUSPENDED shard's current instance is the dead one, so its replayed
+	// last beat passes the instance check. Dialing it holds heartbeatMu and
+	// the ticker goroutine for the dial's whole timeout, and the shard's own
+	// reap-and-relaunch waits behind that tick.
+	if e.beatAlreadyCounted(hb) {
+		return
+	}
 	dialed, err := e.dialConfigure(ctx, hb)
 	if err != nil {
 		weftsdk.Infof(ctx, "provisioner: heartbeat %s (instance %s): not promoting — coordinator can't reach %s: %v", e.ID, hb.InstanceID, hb.Addr, err)

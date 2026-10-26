@@ -1085,6 +1085,24 @@ func (sh *Shard) dialConfigure(ctx context.Context, hb store.ShardHeartbeat) (sh
 	return s, nil
 }
 
+// replayJitter is how far past LastHeartbeatAt a replayed beat can land: the
+// coordinator stamps a beat when the RPC arrives and the database stamps it
+// when the row is written, so a replay of the same beat computes a time a few
+// milliseconds later. Well under the 10s the shards beat at, so a real new
+// beat is never taken for a replay.
+const replayJitter = 2 * time.Second
+
+// beatAlreadyCounted reports whether hb is a beat the shard's liveness already
+// reflects: the catch-up sweep re-delivers an instance's last beat for a
+// minute. A shard that never counted a beat (LAUNCHING, first promotion) has
+// none to repeat.
+func (sh *Shard) beatAlreadyCounted(hb store.ShardHeartbeat) bool {
+	at := sh.deps.Clock().Add(-hb.Age)
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	return !sh.LastHeartbeatAt.IsZero() && !at.After(sh.LastHeartbeatAt.Add(replayJitter))
+}
+
 // ObserveHeartbeat handles a heartbeat for a shard already past the
 // LAUNCHING/SUSPENDED promotion (INGESTING or READ_ONLY) — the
 // steady-state path ProcessHeartbeat routes here instead of firing a
