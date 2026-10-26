@@ -14,11 +14,11 @@ const (
 	// The planner's timestamp argument format (planner.formatTS).
 	tsArgLayout = "2006-01-02 15:04:05.999999"
 
-	// A hive-partitioned archive is split at day, hour, 10-minute or minute
-	// granularity (partitionGranularity), and a row's _part is the start of its
-	// bucket. The coarsest bucket is a day, so a row at or after t is in a
-	// partition that starts after t minus a day.
-	coarsestPartition = 24 * time.Hour
+	// An archive that doesn't record its bucket width (PartitionMinutes) was
+	// split at day, hour, 10-minute or minute granularity, and a row's _part is
+	// the start of its bucket. The coarsest bucket is a day, so a row at or
+	// after t is in a partition that starts after t minus a day.
+	coarsestLegacyPartition = 24 * time.Hour
 )
 
 // PruneColdPartitions restates a pushed-down query's time bounds on _part, the
@@ -27,10 +27,13 @@ const (
 // filter itself, and a fresh DuckDB (the cold-shard Lambda starts one per
 // query) otherwise opens every file's footer to find that out.
 //
-// Each bound F becomes (F AND _part ...) where F implies the added condition for
-// every row, so the rewrite never changes which rows match. A bound it can't
-// read is left as it was.
-func PruneColdPartitions(sql string, args []string) string {
+// With the archive's bucket width in its path the low side is the bucket
+// holding the bound; without one it is a day earlier. Each bound F becomes
+// (F AND _part ...) where F implies the added condition for every row, so the
+// rewrite never changes which rows match. A bound it can't read is left as it
+// was.
+func PruneColdPartitions(sql string, args []string, parquetPath string) string {
+	minutes, _ := PartitionMinutes(parquetPath)
 	var out strings.Builder
 	rest := sql
 	consumed := 0 // bytes of sql already copied to out
@@ -47,7 +50,7 @@ func PruneColdPartitions(sql string, args []string) string {
 		out.WriteString(sql[consumed:at])
 		frag := sql[at : at+n]
 		if t, ok := timeArgAt(sql, at, args); ok && !precededByIdentifier(sql, at) {
-			frag = "(" + frag + " AND " + partBound(bound, t) + ")"
+			frag = "(" + frag + " AND " + partBound(bound, t, minutes) + ")"
 		}
 		out.WriteString(frag)
 		consumed = at + n
@@ -70,11 +73,17 @@ func nextTimeBound(s string) (int, string) {
 	}
 }
 
-func partBound(bound string, t time.Time) string {
-	if bound == tsLowerBound {
-		return "_part > '" + t.Add(-coarsestPartition).Format(tsArgLayout) + "'"
+// partBound is the _part condition implied by a time bound; minutes is the
+// archive's bucket width, 0 when it doesn't record one.
+func partBound(bound string, t time.Time, minutes int) string {
+	switch {
+	case bound == tsUpperBound:
+		return "_part <= '" + t.Format(tsArgLayout) + "'"
+	case minutes > 0:
+		return "_part >= '" + BucketStart(t, minutes).Format(tsArgLayout) + "'"
+	default:
+		return "_part > '" + t.Add(-coarsestLegacyPartition).Format(tsArgLayout) + "'"
 	}
-	return "_part <= '" + t.Format(tsArgLayout) + "'"
 }
 
 // timeArgAt parses the argument bound to the placeholder in the fragment at

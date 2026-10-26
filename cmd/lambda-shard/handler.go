@@ -53,7 +53,7 @@ func runQuery(req QueryRequest, s3cfg *shard.S3Config) (*sql.DB, *sql.Rows, erro
 	sqlText := req.SQL
 	if strings.Contains(req.ParquetPath, "*") {
 		readExpr = fmt.Sprintf("read_parquet('%s', hive_partitioning=true)", req.ParquetPath)
-		sqlText = shard.PruneColdPartitions(sqlText, req.Args)
+		sqlText = shard.PruneColdPartitions(sqlText, req.Args, req.ParquetPath)
 	} else {
 		readExpr = fmt.Sprintf("read_parquet('%s')", req.ParquetPath)
 	}

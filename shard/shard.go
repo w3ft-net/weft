@@ -678,8 +678,8 @@ func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix
 	if err != nil {
 		return "", 0, fmt.Errorf("partition sizing: %w", err)
 	}
-	weftsdk.Infof(ctx, "archive attempt=%d sizing db_bytes=%d est_parquet_bytes=%d target_files=%d granularity=%q",
-		attempt, plan.dbBytes, plan.estParquetBytes, plan.targetFiles, string(plan.gran))
+	weftsdk.Infof(ctx, "archive attempt=%d sizing db_bytes=%d est_parquet_bytes=%d target_files=%d bucket_minutes=%d",
+		attempt, plan.dbBytes, plan.estParquetBytes, plan.targetFiles, plan.minutes)
 
 	copyStart := time.Now()
 	weftsdk.Infof(ctx, "archive attempt=%d copy start %s", attempt, s.nativeMemoryDiag(ctx))
@@ -693,11 +693,11 @@ func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix
 		if err := s3cfg.ConfigureDuckDB(s.db); err != nil {
 			return "", 0, err
 		}
-		return s.exportParquet(ctx, fmt.Sprintf("%s/%s%s", s3Prefix, s.id, outputSuffix), plan.gran)
+		return s.exportParquet(ctx, fmt.Sprintf("%s/%s%s", s3Prefix, s.id, outputSuffix), plan.minutes)
 	}
 
 	dir := fmt.Sprintf("%s/%s%s", s3Prefix, s.id, outputSuffix)
-	if plan.gran == "" {
+	if plan.minutes == 0 {
 		// Small shard — single file, no partition.
 		path := dir + ".parquet"
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -713,25 +713,15 @@ func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", 0, fmt.Errorf("mkdir for %s: %w", dir, err)
 	}
-	return s.exportParquet(ctx, dir, plan.gran)
+	return s.exportParquet(ctx, dir, plan.minutes)
 }
-
-const targetFileBytes = 150 * 1024 * 1024 // 150 MB
-
-type partitionGranularity string
-
-const (
-	granDay   partitionGranularity = "date_trunc('day', ts)"
-	granHour  partitionGranularity = "date_trunc('hour', ts)"
-	gran10Min partitionGranularity = "time_bucket(INTERVAL '10 minutes', ts)"
-	gran1Min  partitionGranularity = "time_bucket(INTERVAL '1 minute', ts)"
-)
 
 // partitionPlan is the archive export's sizing decision: the inputs
 // (dbBytes, the estimated Parquet size and target file count derived from it)
-// and the resulting granularity. gran is "" when the data fits a single file.
+// and the resulting bucket width. minutes is 0 when the data fits a single
+// file.
 type partitionPlan struct {
-	gran            partitionGranularity
+	minutes         int
 	dbBytes         int64
 	estParquetBytes int64
 	targetFiles     int64
@@ -755,46 +745,27 @@ func (s *DuckDBShard) planPartitions(ctx context.Context) (partitionPlan, error)
 		p.dbBytes = count * 500 // rough DuckDB row size to approximate
 	}
 
-	p.estParquetBytes = int64(float64(p.dbBytes) * 0.4)
-	if p.estParquetBytes < 100*1024*1024 {
-		return p, nil
-	}
-
+	p.estParquetBytes = int64(float64(p.dbBytes) * parquetToDBRatio)
 	p.targetFiles = p.estParquetBytes / targetFileBytes
-	if p.targetFiles < 2 {
-		return p, nil
+	if p.estParquetBytes < 100*1024*1024 || p.targetFiles < 2 {
+		return p, nil // fits a single file
 	}
 
 	var tsMin, tsMax time.Time
-	err := s.db.QueryRowContext(ctx, "SELECT MIN(ts), MAX(ts) FROM logs").Scan(&tsMin, &tsMax)
-	if err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT MIN(ts), MAX(ts) FROM logs").Scan(&tsMin, &tsMax); err != nil {
 		return p, err
 	}
-	span := tsMax.Sub(tsMin)
-	if span <= 0 {
-		return p, nil
-	}
-
-	interval := span / time.Duration(p.targetFiles)
-	switch {
-	case interval >= 24*time.Hour:
-		p.gran = granDay
-	case interval >= time.Hour:
-		p.gran = granHour
-	case interval >= 10*time.Minute:
-		p.gran = gran10Min
-	default:
-		p.gran = gran1Min
-	}
+	p.minutes = choosePartitionMinutes(p.estParquetBytes, tsMax.Sub(tsMin))
 	return p, nil
 }
 
 // exportParquet writes partitioned (or single-file) Parquet to the given path
 // and returns it with the number of rows written.
-// If gran is empty, writes a single file at path+".parquet".
-// If gran is set, writes hive-partitioned files under path/.
-func (s *DuckDBShard) exportParquet(ctx context.Context, path string, gran partitionGranularity) (string, int64, error) {
-	if gran == "" {
+// If minutes is 0, writes a single file at path+".parquet".
+// Otherwise writes hive-partitioned files, one directory per minutes-wide time
+// bucket, under path/m<minutes>/ (see PartitionMinutes).
+func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes int) (string, int64, error) {
+	if minutes == 0 {
 		outPath := path + ".parquet"
 		res, err := s.db.ExecContext(ctx, fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", outPath))
 		if err != nil {
@@ -803,17 +774,17 @@ func (s *DuckDBShard) exportParquet(ctx context.Context, path string, gran parti
 		n, _ := res.RowsAffected()
 		return outPath, n, nil
 	}
-	// Partitioned export: DuckDB writes hive-style directories.
+	dir := fmt.Sprintf("%s/m%d", path, minutes)
 	sql := fmt.Sprintf(
 		"COPY (SELECT *, %s AS _part FROM logs) TO '%s' (FORMAT PARQUET, PARTITION_BY (_part), OVERWRITE_OR_IGNORE)",
-		string(gran), path,
+		partitionExpr(minutes, "ts"), dir,
 	)
 	res, err := s.db.ExecContext(ctx, sql)
 	if err != nil {
 		return "", 0, err
 	}
 	n, _ := res.RowsAffected()
-	return path + "/**/*.parquet", n, nil
+	return dir + "/**/*.parquet", n, nil
 }
 
 // ExportToParquet exports the logs table to a single Parquet file (local path).

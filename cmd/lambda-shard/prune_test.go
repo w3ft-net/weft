@@ -20,11 +20,15 @@ import (
 // per query, and opening every file's footer in a week of hourly partitions
 // is where an archived read's seconds go.
 func TestHandleQuery_PrunesPartitionsAtEveryGranularity(t *testing.T) {
-	grans := map[string]string{
-		"day":   "date_trunc('day', ts)",
-		"hour":  "date_trunc('hour', ts)",
-		"10min": "time_bucket(INTERVAL '10 minutes', ts)",
-		"1min":  "time_bucket(INTERVAL '1 minute', ts)",
+	// segment is the m<minutes> directory a width-carrying archive nests its
+	// partitions under (shard.PartitionMinutes); legacy archives have none.
+	grans := map[string]struct{ expr, segment string }{
+		"legacy day":   {"date_trunc('day', ts)", ""},
+		"legacy hour":  {"date_trunc('hour', ts)", ""},
+		"legacy 10min": {"time_bucket(INTERVAL '10 minutes', ts)", ""},
+		"legacy 1min":  {"time_bucket(INTERVAL '1 minute', ts)", ""},
+		"width 594":    {"time_bucket(INTERVAL '594 minutes', ts, TIMESTAMP '1970-01-01')", "m594"},
+		"width 7":      {"time_bucket(INTERVAL '7 minutes', ts, TIMESTAMP '1970-01-01')", "m7"},
 	}
 	t0 := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
 	// Rows every 7 minutes for 3 days, so they straddle every bucket edge.
@@ -44,16 +48,16 @@ func TestHandleQuery_PrunesPartitionsAtEveryGranularity(t *testing.T) {
 		t.Fatal("test window holds no rows")
 	}
 
-	for name, expr := range grans {
+	for name, g := range grans {
 		t.Run(name, func(t *testing.T) {
-			dir := exportPartitioned(t, stamps, expr)
+			dir := exportPartitioned(t, stamps, g.expr, g.segment)
 			corruptPartitionsFrom(t, dir, t0.Add(48*time.Hour))
 
 			var buf bytes.Buffer
 			err := HandleQuery(&buf, QueryRequest{
 				SQL:         "SELECT raw, ts FROM logs WHERE customer_id = CAST(? AS BIGINT) AND ts >= CAST(? AS TIMESTAMP) AND ts <= CAST(? AS TIMESTAMP)",
 				Args:        []string{"1", start.Format("2006-01-02 15:04:05"), end.Format("2006-01-02 15:04:05")},
-				ParquetPath: dir + "/**/*.parquet",
+				ParquetPath: filepath.Join(dir, g.segment) + "/**/*.parquet",
 			}, nil)
 			if err != nil {
 				t.Fatalf("query: %v", err)
@@ -71,7 +75,7 @@ func TestHandleQuery_PrunesPartitionsAtEveryGranularity(t *testing.T) {
 
 // exportPartitioned writes rows (raw=timestamp, customer 1) the way the
 // shard's archive does: COPY ... PARTITION_BY (_part).
-func exportPartitioned(t *testing.T, stamps []time.Time, partExpr string) string {
+func exportPartitioned(t *testing.T, stamps []time.Time, partExpr, segment string) string {
 	t.Helper()
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
@@ -87,7 +91,7 @@ func exportPartitioned(t *testing.T, stamps []time.Time, partExpr string) string
 		}
 	}
 	dir := t.TempDir()
-	if _, err := db.Exec(fmt.Sprintf("COPY (SELECT *, %s AS _part FROM logs) TO '%s' (FORMAT PARQUET, PARTITION_BY (_part), OVERWRITE_OR_IGNORE)", partExpr, dir)); err != nil {
+	if _, err := db.Exec(fmt.Sprintf("COPY (SELECT *, %s AS _part FROM logs) TO '%s' (FORMAT PARQUET, PARTITION_BY (_part), OVERWRITE_OR_IGNORE)", partExpr, filepath.Join(dir, segment))); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -98,7 +102,10 @@ func exportPartitioned(t *testing.T, stamps []time.Time, partExpr string) string
 // skips those files survives.
 func corruptPartitionsFrom(t *testing.T, root string, notBefore time.Time) {
 	t.Helper()
-	files, err := filepath.Glob(root + "/*/*.parquet")
+	files, err := filepath.Glob(root + "/*/*/*.parquet")
+	if len(files) == 0 {
+		files, err = filepath.Glob(root + "/*/*.parquet")
+	}
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no partitions under %s: %v", root, err)
 	}

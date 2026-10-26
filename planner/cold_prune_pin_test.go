@@ -24,7 +24,7 @@ func TestPlanTimeBounds_ColdPartitionsArePruned(t *testing.T) {
 	for i, a := range plan.Args {
 		args[i] = a.(string)
 	}
-	pruned := shard.PruneColdPartitions(plan.DirectShardSQL, args)
+	pruned := shard.PruneColdPartitions(plan.DirectShardSQL, args, "s3://b/x/shard.attempt-1/**/*.parquet")
 	for _, want := range []string{"_part > '2026-10-13 12:00:00'", "_part <= '2026-10-14 12:05:00'"} {
 		if !strings.Contains(pruned, want) {
 			t.Errorf("planned SQL lost %q after pruning:\n%s", want, pruned)
