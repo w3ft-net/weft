@@ -1086,6 +1086,19 @@ func (sh *Shard) dialConfigure(ctx context.Context, hb store.ShardHeartbeat) (sh
 // — LoadFromStore rehydrates the row but can't redial a live shard — so
 // the first post-restart heartbeat is what reattaches it.
 func (sh *Shard) ObserveHeartbeat(ctx context.Context, hb store.ShardHeartbeat) {
+	// A beat from an instance other than the shard's current one is not the
+	// shard's: the catch-up sweep re-delivers the last beat of an instance that
+	// has died or been replaced for up to a minute, and dialing its address
+	// failed, which counted toward the breaker and tripped it on the healthy
+	// replacement. Beats that name no instance, or a shard with none recorded
+	// yet, still count.
+	sh.mu.RLock()
+	current := sh.InstanceID
+	sh.mu.RUnlock()
+	if current != "" && hb.InstanceID != "" && hb.InstanceID != current {
+		return
+	}
+
 	// The handle's own address is the truth: RefreshFromStore copies the
 	// row's addr onto sh.Addr every tick, so sh.Addr can already show the
 	// move while the handle still talks to the old instance.

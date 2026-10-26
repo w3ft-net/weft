@@ -368,6 +368,39 @@ func TestShardSM_EvaluateIngestingDegradesOnReconnectFailures(t *testing.T) {
 	}
 }
 
+// The catch-up sweep re-delivers heartbeats up to a minute old, so for a
+// minute after an instance dies its last beat keeps arriving. Once a
+// replacement has taken the shard, those beats are not the shard's: dialing the
+// dead address for each one failed, and four such failures tripped the breaker
+// on a healthy replacement, which then sat out the cooldown.
+func TestShardSM_ADeadInstancesReplayedBeatsDoNotDegradeItsReplacement(t *testing.T) {
+	fc := &fakeConfigurer{err: fmt.Errorf("dial tcp 10.0.0.1:9000: connect: connection refused")}
+	sm, _, entry := makeFixtureShardSM(t, StateIngesting, func(d *ShardDeps) { d.Configurer = fc })
+	entry.mu.Lock()
+	entry.InstanceID = "i-new"
+	entry.Addr = "10.0.0.2:9000"
+	entry.Live = &movableShard{failingShard: failingShard{id: "s-test"}, addr: "10.0.0.2:9000"}
+	entry.mu.Unlock()
+
+	dead := store.ShardHeartbeat{ShardID: "s-test", Addr: "10.0.0.1:9000", InstanceID: "i-dead", Age: 40 * time.Second}
+	for i := 0; i < SuspendFailureThreshold+2; i++ {
+		entry.ObserveHeartbeat(context.Background(), dead)
+	}
+
+	fc.mu.Lock()
+	dialed := fc.dialAddr
+	fc.mu.Unlock()
+	if dialed != "" {
+		t.Errorf("dialed %s for a beat from an instance that is not the shard's", dialed)
+	}
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if st, _ := sm.smState(context.Background()); st != StateIngesting {
+		t.Fatalf("replacement is %s, want INGESTING: the dead instance's beats counted against it", st)
+	}
+}
+
 // TestShardSM_EvaluateDegradedRecoversAfterCooldown: once the cooldown
 // elapses, a DEGRADED shard half-opens back to INGESTING with its failure
 // count reset.
