@@ -53,6 +53,9 @@ func (v *swapVolumes) FindByShard(_ context.Context, shardID string) (*VolumeInf
 func (v *swapVolumes) AttachToInstance(_ context.Context, volumeID, instanceID, _ string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if v.attachErr != nil {
+		return v.attachErr
+	}
 	if v.attachedTo != "" && v.attachedTo != instanceID {
 		return fmt.Errorf("VolumeInUse: %s is attached to %s", volumeID, v.attachedTo)
 	}
@@ -149,6 +152,8 @@ type upgradeFixture struct {
 	deps   func(*ShardDeps)
 	// leading is the lease: the shard's deps refuse to act once it is false.
 	leading atomic.Bool
+	// inst answers EC2's view of an instance: whether it is gone.
+	inst *fakeInstances
 }
 
 const (
@@ -167,6 +172,7 @@ func newUpgradeFixture(t *testing.T, origin ShardState, withSpare bool) *upgrade
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	f := &upgradeFixture{now: &now, pauser: &fakePauser{}, cfg: &readyConfigurer{}, ec2: newFakeSpareEC2("ami-1"), launch: &fakeLauncher{}}
 	f.leading.Store(true)
+	f.inst = &fakeInstances{}
 	clock := func() time.Time { return *f.now }
 	f.vols = &swapVolumes{volume: "vol-1", shardID: "s-test", attachedTo: oldInstance}
 	reg := NewShardRegistry()
@@ -179,6 +185,7 @@ func newUpgradeFixture(t *testing.T, origin ShardState, withSpare bool) *upgrade
 		d.Launcher = f.launch
 		d.UpgradeRouteGrace = 2 * time.Minute
 		d.Leading = f.leading.Load
+		d.Instances = f.inst
 		f.pool = NewSparePool(ShardStore{d.Store.(ShardStore).Store}, f.ec2, clock)
 		d.Spares = f.pool
 	})
@@ -898,5 +905,64 @@ func TestUpgrade_AStaleWriterCannotRegressThePhase(t *testing.T) {
 	rec, _, _ := ShardStore{f.db}.GetShard(old.ID)
 	if rec.UpgradePhase != PhaseSwapping {
 		t.Fatalf("row phase %q, want the new leader's swapping", rec.UpgradePhase)
+	}
+}
+
+// The spare the volume is moving to can die mid-swap (a spot reclaim, a crash).
+// EC2 detaches the volume as it goes, and every attach to the dead instance then
+// fails. The swap must see that the spare is gone and roll back at once, not
+// retry for its whole five-minute budget with the shard held the entire time.
+func TestUpgrade_ASpareThatDiesMidSwapRollsBackAtOnce(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	ctx := context.Background()
+	if err := f.sh.startUpgrade(ctx); err != nil {
+		t.Fatalf("startUpgrade: %v", err)
+	}
+	f.evaluate(t) // claim, pause, move the volume onto the spare; it isn't open yet
+	if f.phase() != PhaseSwapping || f.vols.where() != "i-spare" {
+		t.Fatalf("setup: phase %q, volume on %q; want swapping on the spare", f.phase(), f.vols.where())
+	}
+
+	// The spare dies; EC2 detaches the volume with it, and nothing can attach to it.
+	f.inst.mu.Lock()
+	f.inst.gone = true
+	f.inst.mu.Unlock()
+	f.vols.mu.Lock()
+	f.vols.attachedTo = ""
+	f.vols.attachErr = fmt.Errorf("InvalidInstanceID: i-spare is not running")
+	f.vols.mu.Unlock()
+
+	f.advance(5 * time.Second)
+	f.evaluate(t)
+	if f.phase() != PhaseRollingBack {
+		t.Fatalf("phase %q five seconds after the spare died, want rolling_back: the swap kept retrying a dead instance", f.phase())
+	}
+}
+
+// A paused instance goes quiet by design, so after a rollback that took minutes
+// its last heartbeat is old. The instance has just answered Resume: judging it
+// stale on the next tick sent a cleanly rolled-back shard through a full
+// recovery (reap and relaunch), and a held minute became several.
+func TestUpgrade_ARolledBackInstanceIsNotJudgedStaleForItsPauseSilence(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	ctx := context.Background()
+	if err := f.sh.startUpgrade(ctx); err != nil {
+		t.Fatalf("startUpgrade: %v", err)
+	}
+	f.evaluate(t) // swapping; the spare never opens
+
+	// Long enough for the swap to give up and roll back, with the paused
+	// instance silent the whole time.
+	f.advance(upgradeSwapBudget + time.Second)
+	for i := 0; i < 8 && f.phase() != ""; i++ {
+		f.evaluate(t)
+	}
+	if st := f.state(t); st != StateIngesting || f.phase() != "" {
+		t.Fatalf("after the rollback: %s/%q, want INGESTING with no phase", st, f.phase())
+	}
+
+	f.evaluate(t) // the next ordinary tick
+	if st := f.state(t); st != StateIngesting {
+		t.Fatalf("a rolled-back instance that had just resumed was marked %s for the silence of its pause", st)
 	}
 }

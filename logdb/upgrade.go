@@ -435,6 +435,14 @@ func (sh *Shard) cutOverCold(ctx context.Context, f UpgradeFacts) error {
 // complete is never forced: the old instance may not have unmounted, and
 // rolling back is safer than corrupting the filesystem.
 func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
+	// A spare that died mid-swap takes the volume's attachment with it, and
+	// every later attach to it fails. Retried, that holds the shard for the
+	// whole swap budget; the old instance is intact, so go back to it now.
+	if sh.successorGone(ctx, f) {
+		weftsdk.Errorf(ctx, "shardsm %s: spare %s died mid-swap; rolling back", sh.ID, f.SuccessorInstanceID)
+		_, err := sh.enterPhase(ctx, f, PhaseRollingBack)
+		return err
+	}
 	info, err := sh.deps.Volumes.FindByShard(ctx, sh.ID)
 	if err != nil {
 		return fmt.Errorf("shardsm %s: find volume: %w", sh.ID, err)
@@ -640,6 +648,14 @@ func (sh *Shard) upgradeRollBack(ctx context.Context, f UpgradeFacts) error {
 	}
 	sh.logHoldWindow(ctx, f, "rolled back", sh.phaseAge(f))
 
+	// A paused instance heartbeats nothing, so its last beat can be minutes old.
+	// It has just answered Resume, which is as good as a beat: without this the
+	// next tick reads the pause's silence as death and recovers a shard that is
+	// fine (completeSwap stamps the spare's liveness the same way).
+	sh.mu.Lock()
+	sh.LastHeartbeatAt = sh.deps.Clock()
+	sh.mu.Unlock()
+
 	if err := sh.abandonSuccessor(ctx, f); err != nil {
 		weftsdk.Infof(ctx, "shardsm %s: terminate spare %s after rollback (the pool reconciler will retry): %v", sh.ID, f.SuccessorInstanceID, err)
 	}
@@ -700,6 +716,17 @@ func (sh *Shard) abandonSuccessor(ctx context.Context, f UpgradeFacts) error {
 		return nil
 	}
 	return sh.deps.Spares.Abandon(ctx, f.SuccessorInstanceID)
+}
+
+// successorGone reports whether the spare an upgrade is moving the volume to is
+// dead or dying, by EC2's account. Without a checker, or when EC2 can't say, it
+// is not: the swap's own budget is the backstop.
+func (sh *Shard) successorGone(ctx context.Context, f UpgradeFacts) bool {
+	if sh.deps.Instances == nil || f.SuccessorInstanceID == "" {
+		return false
+	}
+	gone, err := sh.deps.Instances.InstanceGone(ctx, f.SuccessorInstanceID)
+	return err == nil && gone
 }
 
 // giveUpIfOver rolls the upgrade back once the current phase has outlived
