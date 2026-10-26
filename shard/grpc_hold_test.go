@@ -242,6 +242,51 @@ func TestGRPCShard_HeldCallReturnsHomeOnRollback(t *testing.T) {
 	}
 }
 
+// A held call that ends before the upgrade does (its caller's deadline passed)
+// leaves the handle redirected at the successor. If the upgrade then rolls back
+// and the successor is torn down, calls made later start at that dead address:
+// they must find their way home, not fail on it for as long as the handle lives
+// (a compute worker keeps its handles for the life of the process, and the
+// coordinator's descriptor still names the old address, so nothing repoints it).
+func TestGRPCShard_ACallAfterARollbackGoesHomeEvenIfTheHoldEndedEarlier(t *testing.T) {
+	oldSrv, _, oldAddr, spareAddr, _, stopSpare := upgradePair(t)
+	gs, err := shard.NewGRPCShard("shard-hold", oldAddr, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+	ctx := context.Background()
+	if _, err := oldSrv.Pause(ctx, &pb.PauseRequest{SuccessorAddr: spareAddr}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first call holds against the spare and gives up when its own deadline
+	// passes, with the handle still pointing there.
+	held, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+	if _, err := gs.Query(held, "SELECT raw, ts FROM logs"); err == nil {
+		t.Fatal("a call into a paused shard returned without holding")
+	}
+	cancel()
+	if got := gs.Addr(); got != spareAddr {
+		t.Fatalf("handle is at %s after the held call, want the successor %s", got, spareAddr)
+	}
+
+	// Rollback: the spare is torn down, the old shard resumes.
+	stopSpare()
+	if _, err := oldSrv.Resume(ctx, &pb.ResumeRequest{}); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	fresh, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := gs.Query(fresh, "SELECT raw, ts FROM logs"); err != nil {
+		t.Fatalf("a call after the rollback failed on the dead successor: %v", err)
+	}
+	if got := gs.Addr(); got != oldAddr {
+		t.Errorf("handle still at %s after the rollback, want home %s", got, oldAddr)
+	}
+}
+
 // Repoint moves a handle to a shard's new address in place, the way a
 // coordinator follows a shard_records addr change without redialing.
 func TestGRPCShard_RepointMovesTheHandle(t *testing.T) {

@@ -174,8 +174,9 @@ func (s *GRPCShard) Home() string {
 //     retries; a not-ready refusal (the successor still opening) retries in
 //     place. A refused call was never applied, so every call kind may
 //     retry it. The hold is bounded by pauseHoldTimeout.
-//   - while holding, an Unavailable from the address we were sent to means
-//     the successor went away (a rollback): go back home and retry.
+//   - an Unavailable from an address we were redirected to (while holding,
+//     or on a handle an earlier call left redirected) means the successor
+//     went away (a rollback): go back home and retry.
 //   - otherwise a connection-lifecycle error (isRetriable) is retried up to
 //     maxRetryAttempts, but only when retryTransport is set: such a call
 //     may have been applied before the connection dropped, which a read can
@@ -217,7 +218,12 @@ func (s *GRPCShard) call(ctx context.Context, op string, retryTransport bool, at
 			if kind == RefusedPaused && successor != "" {
 				s.redirect(successor)
 			}
-		case holding && status.Code(err) == codes.Unavailable:
+		case status.Code(err) == codes.Unavailable && (holding || s.Addr() != s.Home()):
+			// The address we were sent to has gone away: a rollback tore the
+			// successor down. Redirected earlier by another call that has since
+			// ended, the handle can be there without this call holding, and a
+			// handle that lives as long as its process (compute's) would fail
+			// every call on the dead successor.
 			s.redirect(s.Home())
 		case retryTransport && isRetriable(err):
 			transportFailures++
