@@ -288,13 +288,13 @@ var migrationSteps = []string{
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
 // logs table. Use "" or ":memory:" for an in-memory database.
 func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
+	t0 := time.Now()
 	db, err := sql.Open("duckdb", path)
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb %q: %w", path, err)
 	}
-	t0 := time.Now()
-	// sql.Open is lazy: the Ping is the first real connection, where the file
-	// is opened and any WAL replayed.
+	// The duckdb driver opens the database file inside sql.Open, so t0 is taken
+	// before it; the Ping confirms the connection.
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("open duckdb %q: %w", path, err)
@@ -324,9 +324,9 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 		return nil, fmt.Errorf("seed rowCount from logs: %w", err)
 	}
 	ds.rowCount.Store(existing)
-	ds.openTiming = fmt.Sprintf("connect=%s create=%s migrate=%s count=%s",
-		connected.Sub(t0).Round(time.Millisecond), created.Sub(connected).Round(time.Millisecond),
-		migrated.Sub(created).Round(time.Millisecond), time.Since(migrated).Round(time.Millisecond))
+	ds.openTiming = fmt.Sprintf("open=%s create=%s migrate=%s count=%s",
+		connected.Sub(t0).Round(time.Microsecond), created.Sub(connected).Round(time.Microsecond),
+		migrated.Sub(created).Round(time.Microsecond), time.Since(migrated).Round(time.Microsecond))
 	return ds, nil
 }
 
