@@ -43,8 +43,9 @@ const (
 	// pauseRPCTimeout; the leader retries until the budget is spent).
 	upgradePauseBudget = 2 * time.Minute
 	// upgradeSwapBudget covers detach, attach, mount and DuckDB open on the
-	// spare (expected 10–30s).
-	upgradeSwapBudget = 5 * time.Minute
+	// spare. Callers are held for all of it, so it is a few times the slowest
+	// healthy swap seen (detach 5.6s plus a 7s database open) and no more.
+	upgradeSwapBudget = 30 * time.Second
 	// upgradeRollBackBudget covers putting the volume back and resuming the
 	// old instance. Past it the old instance is taken for dead and the
 	// shard goes to recovery.
@@ -66,9 +67,10 @@ const (
 )
 
 // swapProbeTimeout is how long one tick keeps asking the spare whether it
-// has opened the shard. It matches the provisioner tick, so the spare is
-// asked every swapProbeRetry from the attach until it answers, rather than
-// once a tick: callers are holding meanwhile. A var for tests.
+// has opened the shard, bounded by what is left of the swap budget. It matches
+// the provisioner tick, so the spare is asked every swapProbeRetry from the
+// attach until it answers, rather than once a tick: callers are holding
+// meanwhile. A var for tests.
 var swapProbeTimeout = time.Minute
 
 // ShardPauser drives one shard instance's gate at addr. It dials the
@@ -490,7 +492,7 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 	// is open, so a successful dial is the "DuckDB open" signal, and it
 	// yields the coordinator's new handle.
 	start := sh.deps.Clock()
-	pctx, pcancel := context.WithTimeout(ctx, swapProbeTimeout)
+	pctx, pcancel := context.WithTimeout(ctx, sh.swapProbeWindow(f, swapProbeTimeout))
 	defer pcancel()
 	pctx, span := weftsdk.StartSpan(pctx, "upgrade.open")
 	defer span.End()
@@ -769,4 +771,10 @@ func closeShard(s shard.Shard) {
 	if s != nil {
 		_ = s.Close()
 	}
+}
+
+// swapProbeWindow is how long one tick asks the spare whether it has opened
+// the shard: the probe timeout, cut to what is left of the swap budget.
+func (sh *Shard) swapProbeWindow(f UpgradeFacts, probeTimeout time.Duration) time.Duration {
+	return min(probeTimeout, max(upgradeSwapBudget-sh.phaseAge(f), swapProbeRetry))
 }

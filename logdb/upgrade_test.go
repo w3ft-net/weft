@@ -381,6 +381,44 @@ func TestUpgrade_ReadOnlyOriginIsNeverWritable(t *testing.T) {
 	}
 }
 
+// A hung spare holds every caller of the shard until the swap gives up, so
+// the give-up is the hold window. 30 seconds is several times the slowest
+// healthy swap seen in prod (detach 5.6s plus a 7s database open).
+func TestUpgrade_ASpareThatNeverReadiesRollsBackWithin30Seconds(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	if err := f.sh.startUpgrade(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate(t)
+	if f.phase() != PhaseSwapping {
+		t.Fatalf("phase: %q", f.phase())
+	}
+	f.advance(31 * time.Second)
+	f.evaluate(t)
+	if f.phase() != PhaseRollingBack {
+		t.Fatalf("phase 31s into the swap: %q, want rolling_back", f.phase())
+	}
+}
+
+// One tick keeps asking the spare for swapProbeTimeout (a minute in prod), and
+// the budget is only checked after the probe gives up, so the probe must not
+// be allowed to run past the budget.
+func TestUpgrade_TheSpareProbeStopsAtTheSwapBudget(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	if err := f.sh.startUpgrade(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate(t)
+	f.advance(20 * time.Second)
+	facts := f.sh.upgradeFacts()
+	if got := f.sh.swapProbeWindow(facts, time.Minute); got != upgradeSwapBudget-20*time.Second {
+		t.Fatalf("probe window 20s into the swap: %s, want the %s left of the budget", got, upgradeSwapBudget-20*time.Second)
+	}
+	if got := f.sh.swapProbeWindow(facts, 5*time.Second); got != 5*time.Second {
+		t.Fatalf("probe window with a 5s probe timeout: %s, want 5s", got)
+	}
+}
+
 // A spare that never opens the shard rolls the upgrade back: the volume
 // returns to the demoted instance, which resumes, and the spare is
 // terminated.
