@@ -5,6 +5,7 @@ package logdb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -87,6 +88,44 @@ func TestUpgrade_ARollbackThatCannotResumeEndsInRecovery(t *testing.T) {
 	if st := f.state(t); st != StateIngesting || f.phase() != "" {
 		t.Fatalf("past the rollback budget: %s/%q, want INGESTING with the upgrade cleared", st, f.phase())
 	}
+	f.evaluate(t)
+	if st := f.state(t); st != StateSuspended {
+		t.Fatalf("next tick: %s, want SUSPENDED (recovery)", st)
+	}
+}
+
+// The old instance dies while the volume is off it (the pause hung on a
+// frozen instance, then the instance was terminated): the rollback has
+// nothing to reattach the volume to. It retried AttachVolume against the dead
+// instance every tick for ever, the shard held in UPGRADING with its reads
+// failing and the claimed spare never released (live test S5, 2026-10-27,
+// 8 minutes and counting). It must end the upgrade for recovery instead.
+func TestUpgrade_ARollbackWhoseOldInstanceIsGoneEndsInRecovery(t *testing.T) {
+	f := newUpgradeFixture(t, StateIngesting, true)
+	if err := f.sh.startUpgrade(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.evaluate(t) // swapping; the volume is on the spare
+
+	// Every instance is gone, the volume with them.
+	f.inst.mu.Lock()
+	f.inst.gone = true
+	f.inst.mu.Unlock()
+	f.vols.mu.Lock()
+	f.vols.attachedTo = ""
+	f.vols.attachErr = fmt.Errorf("InvalidInstanceID: %s is not running", oldInstance)
+	f.vols.mu.Unlock()
+
+	f.advance(5 * time.Second)
+	f.evaluate(t) // → rolling_back
+	for i := 0; i < 3; i++ {
+		f.advance(5 * time.Second)
+		f.evaluate(t)
+	}
+	if st := f.state(t); st != StateIngesting || f.phase() != "" {
+		t.Fatalf("20s into a rollback to a dead instance: %s/%q, want INGESTING with the upgrade cleared (recovery next)", st, f.phase())
+	}
+	f.advance(f.sh.deps.StaleThreshold + time.Minute) // the dead instance stays silent
 	f.evaluate(t)
 	if st := f.state(t); st != StateSuspended {
 		t.Fatalf("next tick: %s, want SUSPENDED (recovery)", st)

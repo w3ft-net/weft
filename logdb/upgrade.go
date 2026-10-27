@@ -626,6 +626,9 @@ func (sh *Shard) upgradeRollBack(ctx context.Context, f UpgradeFacts) error {
 		return nil // the volume detaches as the spare shuts down
 	case info.InstanceID == "":
 		if err := sh.deps.Volumes.AttachToInstance(vctx, info.VolumeID, f.DemotedInstanceID, shardVolumeDevice); err != nil {
+			if sh.instanceGone(ctx, f.DemotedInstanceID) || sh.phaseAge(f) > upgradeRollBackBudget {
+				return sh.abortForDeadInstance(ctx, f, fmt.Sprintf("the volume cannot go back to it: %v", err))
+			}
 			weftsdk.Infof(ctx, "shardsm %s: reattach %s to %s, retrying: %v", sh.ID, info.VolumeID, f.DemotedInstanceID, err)
 			return nil
 		}
@@ -722,10 +725,16 @@ func (sh *Shard) abandonSuccessor(ctx context.Context, f UpgradeFacts) error {
 // dead or dying, by EC2's account. Without a checker, or when EC2 can't say, it
 // is not: the swap's own budget is the backstop.
 func (sh *Shard) successorGone(ctx context.Context, f UpgradeFacts) bool {
-	if sh.deps.Instances == nil || f.SuccessorInstanceID == "" {
+	return sh.instanceGone(ctx, f.SuccessorInstanceID)
+}
+
+// instanceGone reports whether EC2 says the instance is dead or dying.
+// Without a checker, an id, or an answer it is not.
+func (sh *Shard) instanceGone(ctx context.Context, id string) bool {
+	if sh.deps.Instances == nil || id == "" {
 		return false
 	}
-	gone, err := sh.deps.Instances.InstanceGone(ctx, f.SuccessorInstanceID)
+	gone, err := sh.deps.Instances.InstanceGone(ctx, id)
 	return err == nil && gone
 }
 
