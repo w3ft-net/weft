@@ -335,8 +335,9 @@ key), so a slot runs at most once across coordinators; a failed claim write is
 a skipped slot, never a duplicate. This is now the only execution path: the
 per-cron lease, the sliding `[now-interval, now]` window and the immediate run
 on acquire are removed. Holes are visible in `cron_claims` (a gap in the slot
-index sequence for a cron), and the overdue guard (`cron_overdue.go`) reports a
-cron that has stopped. See `docs/plans/cron-claims-rollout.md`.
+index sequence for a cron). A cron that has stopped is
+caught by an operator-side weft monitor on the coordinator's per-run log
+lines, not by the platform. See `docs/plans/cron-claims-rollout.md`.
 
 A new cron's first run is its next slot (a slot whose window closed before the
 cron was created is skipped), not an immediate run as before.

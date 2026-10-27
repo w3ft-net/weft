@@ -75,7 +75,7 @@ type CronExecutor struct {
 	// RunTimeout is the budget for one run. Zero means cronRunTimeout;
 	// tests shrink it.
 	RunTimeout time.Duration
-	// SendSystem delivers an overdue page. Nil means Notifier.Send;
+	// SendSystem delivers a system-alias page. Nil means Notifier.Send;
 	// tests substitute it.
 	SendSystem func(ctx context.Context, orgID store.OrgID, alias, watchName, body string) error
 
@@ -90,7 +90,6 @@ func (ce *CronExecutor) Start(ctx context.Context) {
 
 	// Initial load.
 	ce.reconcile(ctx)
-	go ce.runOverdueGuard(ctx)
 	weftsdk.Infof(ctx, "cron: started (%d watches)", len(ce.cancels))
 
 	// Reconcile loop: pick up new/changed/deleted watches.
@@ -320,8 +319,8 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 			weftsdk.Errorf(ctx, "cron[%s]: failed to disable: %v", watch.Name, err)
 		case disabled:
 			weftsdk.Warnf(ctx, "cron[%s]: disabled: %s", watch.Name, disableWhy)
-			ce.pageSystem(ctx, watch.OrgID, "cron-disabled", fmt.Sprintf(
-				"cron %q was disabled after one run: %s.\n%s Fix it, then re-enable it: edit /cron.d/%s, remove the '# enabled: false' line, and save.",
+			ce.pageSystem(ctx, watch.OrgID, "cron disabled", fmt.Sprintf(
+				"cron %q was disabled. Cause: %s.\n%s After fixing, re-enable by editing /cron.d/%s to remove the '# enabled: false' line.",
 				watch.Name, disableWhy, disableHint, watch.Name))
 		}
 	}
@@ -333,14 +332,33 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 		case benched:
 			weftsdk.Warnf(ctx, "cron[%s]: disabled after %d strikes in a row (last: %s); re-enable it by saving /cron.d/%s without '# enabled: false'",
 				watch.Name, cronBenchStrikes, why, watch.Name)
-			ce.pageSystem(ctx, watch.OrgID, "cron-benched", fmt.Sprintf(
-				"cron %q was disabled after %d failed runs in a row. The last one failed because %s.\nIt will not run again until you re-enable it: edit /cron.d/%s, remove the '# enabled: false' line, and save.",
+			ce.pageSystem(ctx, watch.OrgID, "cron disabled", fmt.Sprintf(
+				"cron %q disabled after %d consecutive failed runs. Most recent failure: %s.\nAfter fixing, reenable by editing /cron.d/%s to remove the '# enabled: false' line.",
 				watch.Name, cronBenchStrikes, why, watch.Name))
 		}
 	}
 
 	weftsdk.Infof(ctx, "cron[%s]: %s (%dms, stdout=%d bytes, stderr=%d bytes)",
 		watch.Name, status, duration.Milliseconds(), len(stdout), len(stderr))
+}
+
+// pageSystem sends body to an org's reserved `system` alias, for the alerts
+// weft raises on the tenant's behalf. An org that has not defined the alias
+// gets nothing; that is expected, so a failure is only logged.
+func (ce *CronExecutor) pageSystem(ctx context.Context, org store.OrgID, watchName, body string) {
+	send := ce.SendSystem
+	if send == nil && ce.Notifier != nil {
+		send = func(ctx context.Context, org store.OrgID, alias, watchName, body string) error {
+			_, err := ce.Notifier.Send(ctx, org, alias, watchName, body, nil)
+			return err
+		}
+	}
+	if send == nil {
+		return
+	}
+	if err := send(ctx, org, store.SystemAlias, watchName, body); err != nil {
+		weftsdk.Infof(ctx, "%s not delivered for org %d: %v", strings.ReplaceAll(watchName, "-", "_"), org, err)
+	}
 }
 
 // checkOutput splits a run's stdout into points and applies the runtime

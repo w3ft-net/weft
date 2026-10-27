@@ -14,7 +14,6 @@ weft's Postgres is `weft-postgres`, a 1 GB t4g.micro shared with vimgym, reached
 | Cron reconcile | 30s per coordinator | `coordinator/cron.go:53` |
 | AgentSeen flush | 30s per coordinator | — |
 | Provisioner tick | 60s per coordinator | `logdb/provisioner.go:147` |
-| Overdue-cron guard | 60s per coordinator | `coordinator/cron_overdue.go` |
 | `rollup_cron_hourly` (pg_cron) | 5 min | `store/schema.sql:3435+` |
 | `rollup_cron_4h`, `rollup_cron_daily`, `rollup_usage_daily` | hourly | same |
 | partman maintenance | 30 min | same |
@@ -256,7 +255,7 @@ Separately, `cron_results.stdout` is stored uncapped (`coordinator/cron.go:245-2
 
 ### 10. `SELECT *` of wide rows
 
-- Cron reconcile (30s, `coordinator/cron.go:75`) and the overdue guard (60s, `coordinator/cron_overdue.go:113`) load `pipeline` plus the `lowered_plan` jsonb just to diff IDs. Select `id, updated_at` and fetch full rows only for changes.
+- Cron reconcile (30s, `coordinator/cron.go:75`) loads `pipeline` plus the `lowered_plan` jsonb just to diff IDs. Select `id, updated_at` and fetch full rows only for changes.
 - `handleListSources` (`api/sources.go:372`) loads every org's `log_groups.*` (`schema_yaml`, `sample`, `detection`) and filters by customer in Go. Push the org filter into SQL. This also tightens the tenancy boundary.
 
 ### 11. Missing indexes (small tables today; cheap insurance)

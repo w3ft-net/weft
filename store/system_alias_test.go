@@ -6,7 +6,7 @@ import (
 )
 
 // Every org with an owner has a `system` alias in notify.yaml: it is where
-// platform alerts (a cron gone overdue, a cron failing) go, so it can be
+// platform alerts (a cron disabled or benched) go, so it can be
 // changed but never removed. These tests pin the two halves of that promise:
 // the alias exists from the moment the org has an owner, and no save can take
 // it away.

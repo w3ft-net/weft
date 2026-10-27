@@ -13,8 +13,8 @@ import (
 // `alert` stage raises. It is an ordinary alias with ordinary targets, except
 // that it always exists: it starts as the org owner's email
 // (ensureSystemAliases) and ValidateNotifyAliases refuses a save without it.
-// Today the only such alert is a cron going overdue
-// (coordinator/cron_overdue.go).
+// Today the only such alerts are a cron being disabled or benched
+// (coordinator/cron.go).
 const SystemAlias = "system"
 
 // AliasMap is the parsed form of /etc/notify.yaml. Keys are alias names

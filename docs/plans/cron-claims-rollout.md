@@ -263,38 +263,14 @@ SSM config blob (new code ignores it).
 - **Fail closed.** A failed claim write means no run and a retry on the next
   tick; never a run without a claim. Worst case is a skipped slot and a logged
   gap, never a duplicate.
-- **Overdue-cron guard** (`coordinator/cron_overdue.go`). A cron is overdue
-  when `now - last_run_at > 2 x interval` (`created_at` if it never ran), in
-  either mode. It keys on `cron_watches.last_run_at`, not `cron_results`: a
-  quiet cron writes no result rows, so a results-based check would page on
-  healthy crons. It runs inside the coordinator, under the
-  `cron-overdue-guard` lease so exactly one instance checks, once a minute. It
-  must not be a weft cron: crons stop together when the database blips (see
-  the latent bug below), and a cron that watched for stopped crons would
-  stop with them. It logs `cron_overdue name=... id=... age=...` on entering
-  overdue and `cron_overdue_cleared id=...` on recovery. Crons below their
-  tier's minimum interval are skipped (they never run). A new guard holder
-  re-reports anything still overdue. Blind spot: if every coordinator is
-  down, nothing pages.
-
-  **Who gets paged.** Aliases live in each org's `notify.yaml`, so there is
-  no platform-wide alias or setting. A tenant opts in by defining the reserved
-  alias `system` (`store.SystemAlias`), an ordinary alias with ordinary
-  targets:
-
-  ```yaml
-  system:
-    pagerduty: [platform-oncall]
-    slack: ["#ops"]
-  ```
-
-  It is for alerts the platform raises on the tenant's behalf, as opposed to a
-  cron's own `alert` stage; today the only one is a cron going overdue. Crons
-  that newly went overdue in a check are sent as one grouped message per org
-  (so an outage that stops every cron at once is one page per tenant, not one
-  per cron), once per episode. Every overdue cron is included, whether or not
-  it has an alert stage of its own. A tenant without the `system` alias is not
-  paged; the failure is only logged.
+- **Overdue-cron guard (removed 2026-10-27).** The coordinator used to page a
+  tenant's `system` alias when a cron went 2 x interval without a run. Every
+  way a cron goes overdue (scheduler wedged, coordinators down, a process
+  killed mid-run, a failed `last_run_at` write) is a platform fault, not
+  something the tenant can act on, so it now belongs to operators: a weft
+  monitor over the coordinator's per-run `cron[<name>]: <status>` log lines.
+  A cron that fails or times out still writes `last_run_at` and is handled by
+  the strike/bench path, which still pages `system`.
 
 ## Rollback runbook
 
@@ -364,14 +340,6 @@ to 30s later, small against the 5m minimum interval for trial tier.
 - Shadow flag: enabled via `kevcons config set --no-apply` for the rollout
   (temporary). Remove it, and the shadow code, in Phase 3.
 - Per-source settle for CloudWatch-sourced crons (not scheduled).
-- Tenants without a `system` alias are not told when a cron goes overdue.
-  Decided: that should be visible in the product (the cron list), not only in
-  a log. Not built yet: which surface (the web list API, the `/cron.d` mount,
-  the CLI) and how it is shown is open.
-- A platform-wide outage pages every tenant that defined `system`, once each
-  per episode, with all of their stopped crons in one message.
-- Operators have no page of their own for a tenant's crons going overdue, only
-  the `cron_overdue` log line.
 - Unrelated to this rollout, cause already found elsewhere: **coordinators
   fail their ELB health check every few hours and are replaced by the ASG**
   (10-04 10:42, 12:14, 16:04 and 10-05 06:56, 09:00, 11:50, 16:02 UTC, the
