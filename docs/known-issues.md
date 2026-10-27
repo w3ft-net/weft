@@ -420,3 +420,108 @@ row-count check of its archive against `row_count`.
 
 **Status:** open for the in-process path; fixed for the export.
 
+## weftd's ack means "in the coordinator's ring buffer", not "on a shard"
+
+**Where:** `coordinator/service/server.go` `IngestStream` (the ack),
+`coordinator/drain.go` (the drain), `cmd/weftd/filetail.go` (the checkpoint).
+
+**What:** the stream ack comes once the coordinator has written the rows to
+its in-memory ring buffer, and weftd advances its file checkpoint on that ack.
+The drain moves rows to a shard later. A coordinator that dies after the ack
+and before the drain (or before a shard's send queue empties) loses those rows,
+and weftd will not resend them. Every shard-side failure is covered (the
+sender queues, the retry on a sibling, the DLQ), so this is the one window
+left in the ingest path. Not exercised by the 2026-10-27 live tests, which
+killed shards and a coordinator but kept the canary's rows out of that window.
+A stronger durability step on the shard (a CHECKPOINT per commit) costs about
+6 ms more per 500-row commit and does not help here, because the loss is
+upstream of the shard.
+
+**Fix, if it matters:** ack after the rows are on a shard or in the DLQ, or
+persist the ring buffer. Backpressure from the queue to the stream (see the
+entry above) is the same change.
+
+## `IngestionErrorRecorder` is never constructed, so `ingestion_errors` is never written
+
+**Where:** `coordinator/ingestion_errors.go` `NewIngestionErrorRecorder` (no
+caller anywhere in the repo), `cmd/coordinator/main.go` (leaves
+`CoordinatorConfig.Errors` unset).
+
+**What:** `c.Errors` is nil, so every `c.Errors.Record(...)` in the drain
+(each DLQ'd batch) is a silent no-op. The `ingestion_errors` table stays empty,
+`weft-admin audit`'s "ingestion_errors grew" check can never fire, and
+`api/handlers.go` `handleIngestionStatus` (`affected_services`) always reports
+nothing. Seen on 2026-10-27: about 1,400 DLQ'd batches, `ingestion_errors=0`.
+The same failure shape as the DLQ itself, which sat unconstructed until
+`DLQ_BUCKET` was set.
+
+**Fix:** construct the recorder in `main.go` with the store. Failing test
+first: a drained batch that goes to the DLQ must leave a row in
+`ingestion_errors`. Note the recorder drops records when its 100-slot channel
+is full (logged), so a burst like the one above would still under-count.
+
+## An `Ingest` RPC has no deadline, so a hung shard holds its sender for ever
+
+**Where:** `shard/grpc_client.go` `GRPCShard.Ingest` and `call` (the attempt
+runs on the caller's context), `coordinator/drain.go` `runSender` (a context
+with no timeout).
+
+**What:** a shard that stops answering without closing its connection (a
+frozen process, a wedged disk) blocks the one in-flight `Ingest`, and the
+shard's sender behind it. Rows queue up to 200k per shard, then go to the DLQ.
+Nothing cancels the call when the shard goes stale or is replaced. On
+2026-10-27 two shards frozen for 40 s delayed their rows by 40 s and lost none;
+a longer hang was not tested, and whether gRPC keepalive eventually breaks the
+connection was not checked. A shard that fails fast (a stopped process) does
+not behave this way: it trips the DEGRADED breaker after three failures and the
+DLQ takes over.
+
+**Fix, if it matters:** a per-call deadline on `Ingest`, or cancel in-flight
+calls when the shard leaves INGESTING.
+
+## `startup.sh` falls back to the root volume when no data volume attaches
+
+**Where:** `deploy/startup.sh` (`weft-shard-volume mount --within 60`, exit 3
+falls through).
+
+**What:** after 60 s without an attached volume, a non-spare shard continues in
+"dev/container mode" on the root disk. The shard binary now waits for a volume
+when its data directory is not a mount point and it manages a volume
+(`cmd/shard/volume.go` `startsAsSpare`), which closes the booting-spare race
+that hid 6 hours of data on 2026-10-27. The script's fallback is still there,
+and any other path that reaches the binary with a blank root-disk data
+directory still serves a blank shard.
+
+**Fix:** in prod, treat a missing volume as fatal in the script and keep the
+fallback for dev only.
+
+## `weft-admin audit` reports healthy for shards that are unmounted, unreachable or stuck
+
+**Where:** `cmd/weft-admin/audit.go`.
+
+**What:** it checks counts and states. It does not check that a shard's data
+directory is a mount point (a shard ran on the root disk for 6 hours while the
+audit said healthy), that a live shard answers a trivial query (during S4 it
+passed for 20 minutes while reads failed), or how long a shard has been
+SUSPENDED or DEGRADED (it flagged a DEGRADED shard only while the state lasted).
+Its ingest-error check is dead for the reason in the entry above.
+
+**Fix:** add those three checks.
+
+## ARCHIVED shard rows past retention are never retired
+
+**Where:** the retention janitor (`ShardArchiveStats` capture and the retire
+path), `logdb` `DeleteArchived` and the GONE trigger.
+
+**What:** as of 2026-10-27, 40 ARCHIVED rows span 23 weeks against a 90-day
+retention. 17 are fully past retention and their S3 objects are gone, but the
+rows remain. The janitor treats them as "unknown", fails capturing their stats
+(the compactor Lambda returns 500), and never retires them. It also runs once
+per 24 h of process uptime, and frequent deploys restart that clock.
+
+**Fix:** retire through the FSM (`DeleteArchived`, the GONE trigger), classify
+"object missing and past retention" as retirable, have the Lambda return a
+distinct not-found, and schedule off a stored last-run time or the lease, with
+every retirement logged. Undecided: mark rows GONE and exclude them from reads
+instead of deleting (about 27 query sites would need the filter). Failing test
+first.
