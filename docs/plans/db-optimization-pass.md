@@ -1,6 +1,6 @@
 # Plan: Postgres optimization pass
 
-**Status (2026-10-08):** Items 0, 2, 3 and 4 are implemented in the working tree, uncommitted and undeployed (migrations 081 and 082). Item 0 (shard_heartbeats) is the largest finding from the prod baseline. Everything else is analysis only. The code-side audit of `store/` and its callers came first; items 1 and 2 were re-verified against source. A partial prod baseline (database stats, table sizes, partman and pg_cron state) was captured later the same day; see Step 0 and item 0. The full `pg_stat_user_indexes` pull is still outstanding, so confirm item 7's unused-index claims before dropping anything.
+**Status (2026-10-27):** Items 0, 2, 3 and 4 are done and deployed, with measured results below. Items 1 (retention in `rollup_usage_daily`, migration 084) and the HOT follow-up (migration 083) were described as awaiting deploy, and I have not re-verified either. Items 5-12 are analysis only and should be re-ranked before anyone starts them.
 
 weft's Postgres is `weft-postgres`, a 1 GB t4g.micro shared with vimgym, reached through PgBouncer (transaction mode, `pool_size=10`) since 2026-10-07. Memory and write volume are the binding constraints, so this pass favors cutting writes, dead tuples, and index footprint over read latency.
 
@@ -28,46 +28,14 @@ Prod runs `coordinator_desired=2`, so every per-coordinator loop happens twice.
 - One query accounts for essentially all the disk reads: `SELECT DISTINCT ON (shard_id) … FROM shard_heartbeats WHERE beat_at > NOW() - $1::interval`. 16,150 calls, mean **19.6 s**, 937M blocks read.
 - `partman.run_maintenance_proc()` (pg_cron job 1, every 30 min) has failed on every run since its last success at 2026-10-06 21:00. Two alternating errors: `ATTACH PARTITION … updated partition constraint for default partition would be violated by some row`, and `deadlock detected` on `DROP TABLE shard_heartbeats_p20260525_020000`.
 
-## Item 0: shard_heartbeats redesign (implemented, not deployed)
+## Item 0: shard_heartbeats redesign (done, deployed 2026-10-08)
 
-**Root cause.** Heartbeats were an hourly-partitioned log with 5-minute partman retention. Once maintenance failed, rows landed in the default partition, which partman never trims. The adopt query then seq-scanned it for ~20 s every minute on both coordinators, holding locks long enough to deadlock the next maintenance `DROP`, which guaranteed the next run would fail too. The ATTACH failure is the same loop from the other side: rows for the new hour were already in the default partition.
-
-**Who reads the table** (grepped across weft, kevcons, infrastructure, vimgym, gravitty):
-- `adoptFromHeartbeats`, every 60 s on every coordinator, looking back 1 minute.
-- `LatestShardDiskBytes`, once per export attempt, with no time bound.
-- Tests, and `docs/runbooks/export-drill.md`.
-
-Nothing reads history. The durable liveness copy is `shard_records.last_heartbeat_at`, written by `TouchHeartbeat`.
-
-**Durability.** UNLOGGED was considered and rejected: the table is small enough that the WAL savings are negligible, UNLOGGED tables are emptied on crash or failover, and it would have taken away the one reader that needs data to outlive a restart (export sizing). Keeping the table LOGGED but tiny makes the question moot.
-
-**Change (migration 081):**
-- `shard_heartbeats` is now a plain table with one row per `(shard_id, instance_id)`, upserted by `Store.RecordHeartbeat` (renamed from `InsertHeartbeat`). Unclaimed instances beat with an empty `shard_id` and are told apart by `instance_id`.
-- It is removed from partman (`part_config` row and template table dropped). `TestPartmanBackfill` no longer expects it.
-- `shard_records.disk_bytes` is new, written by `TouchHeartbeat` only when positive, so a beat that reports 0 never erases the last known footprint. `LatestShardDiskBytes` now reads it, so export sizing no longer depends on transient rows. The migration backfills it from the old table before dropping that table.
-- `Store.PruneShardHeartbeats` deletes rows older than `heartbeatRetention` (1 hour). `adoptFromHeartbeats` calls it each tick on every coordinator. It is idempotent, so no leader gating is needed.
-- `LiveShardHeartbeats` returns the newest beat per claimed shard (so a replaced instance's old row can't resurface its dead address) plus every unclaimed instance's own beat. The old `DISTINCT ON (shard_id)` collapsed all unclaimed instances into one, so a multi-shard launch could starve all but the newest.
-
-**Tests** (`store/shard_heartbeat_test.go`, plus edits in `logdb`):
-- Five beats leave one row.
-- A replaced instance returns only its newest beat.
-- Two unclaimed instances are both returned.
-- Beats outside the window are excluded.
-- Prune drops only expired rows.
-- The table is a plain relation and not registered with partman.
-- `TouchHeartbeat` persists `disk_bytes`, and `LatestShardDiskBytes` reads it and keeps the last non-zero value.
-
-`go test -tags test ./store ./logdb ./coordinator/...` passes. I did not capture a recorded red run against a real database before implementing: the local test pool DBs were stale (see below), so the pre-fix state was only confirmed as compile failures.
-
-**Rollout (not done yet):**
-1. Migration 082 (trigger split) is trivial and runs right after 081. Migration 081 runs `DROP TABLE` on the partitioned parent. It takes an ACCESS EXCLUSIVE lock and can deadlock if `run_maintenance_proc` or an adopt scan is mid-flight, and the backfill `UPDATE` seq-scans the 1 GB default partition once (expect on the order of 20 s). Deploy away from :00 and :30, when pg_cron fires.
-2. Run `make collapse` after the deploy. Do not hand-edit `store/schema.sql`: the partman reconstruction block is regenerated from `part_config`, which the migration cleans.
-3. The `DROP` of the old table is what returns the ~1 GB to the OS; no `VACUUM FULL` is needed.
-4. Local pool DBs `weft_test_0`..`4` recorded version 81 from an earlier branch, so they skipped this migration. I dropped them (the documented remedy) and they rebuilt. Other worktrees will need the same.
-
-**Stopgap if the deploy is delayed:** a single-transaction cleanup (`LOCK` the parent, `TRUNCATE` the default partition, drop the stale partition, `SELECT partman.run_maintenance('public.shard_heartbeats')`) would unwedge maintenance, but it only buys time and the same trap can recur.
-
-**Adjacent finding, not fixed here:** the adopt tick is 60 s and `heartbeatStaleThreshold` (`logdb/registry.go:155`) is also 60 s. A follower coordinator learns about a shard's liveness only by polling this table, so its view sits on a knife-edge. That plausibly contributes to the follower staleness symptom behind the flaky `weft sh` reads. Item 4 below covers the related replay-stamp bug.
+Heartbeats were an hourly-partitioned log with 5-minute partman retention; once
+maintenance failed, rows piled up in the default partition and the adopt query
+scanned all of it. `shard_heartbeats` is now a plain table with one row per
+`(shard_id, instance_id)`, upserted by `Store.RecordHeartbeat` (migration 081),
+pruned after an hour, with disk footprint kept on `shard_records.disk_bytes`.
+The results are under "Deploy results" below.
 
 ## Deploy results (2026-10-09)
 
@@ -141,59 +109,29 @@ Re-run the same queries after each tier to get before/after numbers. `scripts/au
 
 **Implemented (migration 084, not deployed).** Chose retention inside `rollup_usage_daily()` over converting to partman: the table is 17 MB, and converting a populated default-partition table is exactly the trap that wedged `shard_heartbeats`. The procedure now also deletes `usage_hourly` rows older than 14 days (the rollup re-rolls only the last 3), which reuses the existing hourly pg_cron job and works in environments without pg_cron. Migration 084 also drops the orphaned `partman.template_public_usage_{hourly,daily}` tables. `QueryUsage`'s comment is corrected. `TestRollupUsageDaily_PrunesOldHourly` failed before the migration (20-day-old row survived) and passes now; `go test -tags test ./store` is green. Also adds a BRIN index on `hour` (`idx_usage_hourly_hour_brin`): the rollup and the prune filter on `hour` alone, which `(org_id, hour)` cannot serve. The rows are insert-only and time-ordered, so BRIN is tiny. The gain is modest (the rollup is already 166 ms); the prune benefits most. First deploy deletes ~50k old rows in one statement; harmless at this size. Run `make collapse` after the deploy so `schema.sql` picks up the new procedure body.
 
-### 2. Unconditional `UPDATE users` on every authenticated request
+### 2. Unconditional `UPDATE users` on every authenticated request (done)
 
-- `persistLastActive` (`api/middleware.go:64`, `77-87`) calls `UpdateUserLastActiveOrg` on every request. The comment says it runs in a goroutine and only when the value differs; it does neither.
-- `UpdateUserLastActiveOrg` (`store/user.go:289-293`) claims to be a no-op when nothing changed. It always sets `updated_at = now()`, so every request is a real row write: a dead tuple plus WAL.
+`persistLastActive` no longer writes when the user's last active org already
+matches, and `UpdateUserLastActiveOrg` is a real no-op when nothing changed.
+The sidebar badge uses `GET /api/sources/pending/count`. Not done: the
+per-request `BuildSession` cache (5 SELECTs per request) stays a later option.
 
-**Change:** skip the write when `session`'s user already has `LastActiveOrgID == ActiveOrgID` (already loaded by `BuildSession`). Correct both comments. A test should assert that two requests in the same org produce zero `users` updates.
+### 3. Turn off GORM's default transaction wrap (done)
 
-Related, same middleware:
-- `BuildSession` (`auth/session.go:86-143`) runs 5 SELECTs per request (user, `ListUserOrgs`, `TierForOrg`, `IsOwner`, `GetOrgPermission`). A short-TTL session cache is a later option.
-- The 30s sidebar poll hits `handlePendingSources` (`api/sources.go:155-168`). That handler loads `log_groups.*`, including the `sample`/`detection` blobs, just to count rows, and re-resolves the org by name although the session carries `ActiveOrgID`. Replace it with a `COUNT(*)` keyed on the session org.
-
-**Implemented.**
-- `Session` now carries `LastActiveOrgID` (what `users.last_active_org_id` held when the session was built), and `persistLastActive` skips the write when it already equals the active org.
-- `UpdateUserLastActiveOrg` now has `AND last_active_org_id IS DISTINCT FROM ?` in its WHERE clause, so the six other callers (login, invites, admin) are real no-ops too, as its comment always claimed. Both comments are corrected.
-- New `GET /api/sources/pending/count` backed by `Store.CountPendingLogGroups`. The sidebar badge uses it instead of fetching every pending source with its sample and detection blobs just to take the length. The list handler also uses `session.ActiveOrgID` instead of re-resolving the org by name.
-- Tests: `api/last_active_write_test.go` (repeat requests leave the `users` row's `ctid` unchanged; same-org `UpdateUserLastActiveOrg` is a no-op), `api/sources_pending_count_test.go`. Both failed before the fix. The frontend build passes.
-- Not done: the per-request `BuildSession` cache (5 SELECTs per request) stays a later option.
-
-### 3. Turn off GORM's default transaction wrap
-
-`gorm.Config` sets only `Logger` (`store/store.go:120-122`), so every single-statement `Create`/`Updates`/`Delete` runs as BEGIN, statement, COMMIT: three round trips through PgBouncer. That includes the heartbeat touch, cron status updates, incident updates, and the `users` write above.
-
-**Change:** `SkipDefaultTransaction: true`. Before flipping it, audit the callers that rely on hooks or associations writing atomically. Explicit `Transaction(...)` blocks are unaffected.
-
-**Implemented** in `store.Connect` (the only `gorm.Open` site). Audit result:
-- No model hooks (`BeforeCreate`/`AfterSave` etc.).
-- No association writes: `Organization`/`Namespace` fields on `AgentToken` and `LogGroup` are only populated by `Preload` on reads.
-- The two `CreateInBatches` sites (`store/tmp.go`, `mounts/tmp.go`) already run inside explicit `Transaction` blocks. Outside one, GORM would stop wrapping batches after this change.
-- `Save` (`SaveShard`, `SaveBucket`) can issue UPDATE then INSERT … ON CONFLICT as two statements; both are idempotent.
-- Tests run inside a transaction, where GORM never opened its own, so the suite cannot detect an atomicity regression either way; the audit above is the evidence. `store/connect_config_test.go` pins the setting.
+`SkipDefaultTransaction: true` in `store.Connect`, pinned by
+`store/connect_config_test.go`. The two `CreateInBatches` sites already run
+inside explicit transactions.
 
 ## Tier 2: write amplification
 
-### 4. Heartbeat path
+### 4. Heartbeat path (done)
 
-- Each 10s beat does `INSERT shard_heartbeats` (`coordinator/service/server.go:1061`) plus `TouchHeartbeat`, an UPDATE of `shard_records` (`logdb/shardsm.go:980`, `logdb/shard.go:124-131`). The beat lands on whichever coordinator receives it; it isn't leader-gated.
-- `adoptFromHeartbeats` replays every live heartbeat on both coordinators every minute (`logdb/provisioner.go:483-490`). That's another UPDATE per shard per coordinator.
-- The `shard_records_audit` trigger (`schema.sql:3105`) fires on every UPDATE, including heartbeat stamps.
-
-**Correctness bug, fix test-first:** the replay stamps `LastHeartbeatAt = Clock()` (`logdb/shardsm.go:971`) instead of the beat's own timestamp. A beat up to 59s old therefore makes a shard look fresh. This lines up with the follower heartbeat-staleness symptom behind the flaky `weft sh` reads. Write a failing test (replay an old beat, then assert `LastHeartbeatAt` equals the beat time) before changing it.
-
-**Changes:**
-- Restrict the audit trigger to `AFTER UPDATE OF state` or add a `WHEN (OLD.state IS DISTINCT FROM NEW.state)` clause.
-- Skip the replay UPDATE when the stored stamp is already at least as new as the beat.
-
-**Implemented.**
-- `ShardHeartbeat.BeatAt` (an unused RFC3339 string) is replaced by `Age`, how long ago the database recorded the beat, computed in SQL as `NOW() - beat_at`. A beat just received over RPC has `Age` 0. Using an age rather than a timestamp keeps the coordinator's clock and the database's clock out of each other's way.
-- `ObserveHeartbeat` stamps `Clock() - Age` and never moves `LastHeartbeatAt` backwards. It calls `TouchHeartbeat` only when the stamp advanced or `row_count`, `disk_bytes` or `binary_sha` changed. On the coordinator that received the RPC, the 60 s replay of the same beat is now a no-op; followers still write once per shard per minute.
-- Migration 082 splits the audit trigger: INSERT/DELETE as before, UPDATE only `WHEN (OLD.state IS DISTINCT FROM NEW.state)`.
-- Tests: `logdb/observe_heartbeat_test.go` (stamps the beat's time, never goes backwards, skips redundant persists, persists `disk_bytes` on the steady-state path), an `Age` test in `store/shard_heartbeat_test.go`, and a trigger-shape pin in `store/shard_operations_test.go`.
-- Found while writing these: my first item 0 patch put the `DiskBytes` assignment in `configureOnHeartbeat` (the promotion path) instead of `ObserveHeartbeat`, so steady-state beats were not updating `disk_bytes`. Fixed here and covered by a test.
-- `configureOnHeartbeat` (promotion) still stamps `Clock()`. A promotion requires a successful dial, which proves liveness, so a replayed stale beat cannot promote a dead shard.
-- Not done: the 60 s adopt tick versus the 60 s `heartbeatStaleThreshold` knife-edge noted under item 0. A follower's view of a shard is at most one tick old, which is already as long as the threshold. Fixing it means either a faster adopt tick or a larger threshold; both change failure-detection timing, so it deserves its own decision.
+`ObserveHeartbeat` stamps the beat's own time (it used to stamp `Clock()`),
+never moves `LastHeartbeatAt` backwards, and skips redundant persists. The
+`shard_records_audit` trigger fires only on state changes (migration 082).
+Not done: the 60 s adopt tick equals the 60 s `heartbeatStaleThreshold`
+(`logdb/registry.go:155`), so a follower's view of a shard can be a full
+threshold old.
 
 ### 5. Alert evaluation N+1
 

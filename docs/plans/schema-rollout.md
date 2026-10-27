@@ -1,7 +1,7 @@
 # Schema rollout: ship it, put every producer on a schema, delete the fallback
 
 Status: plan, 2026-10-15. Phase 1's missing pieces are built (below); nothing here has been run against production.
-Companion to `schema-extraction-wizard.md` (what was built); this is how it gets out.
+Follows the wizard work (landed in `1c93825b`, weft 0.10.0); this is how it gets out.
 
 ## Goal and end state
 

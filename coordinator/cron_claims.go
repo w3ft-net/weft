@@ -15,8 +15,7 @@ const (
 	// the coordinator's 2s shard batching need only a few seconds;
 	// CloudWatch-sourced rows can lag 5-60s (docs/ingestion-weftd.md), and
 	// a window queried early is undercounted for good. 30s covers most of
-	// that; the 60s tail needs a per-source settle (see
-	// docs/plans/cron-claims-rollout.md).
+	// that; the 60s tail would need a per-source settle, which is not built.
 	cronSettle = 30 * time.Second
 	// cronClaimPoll is how often a claim-mode cron checks whether a new
 	// slot is due. Checking is a clock comparison; the database is only

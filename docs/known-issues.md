@@ -337,7 +337,7 @@ per-cron lease, the sliding `[now-interval, now]` window and the immediate run
 on acquire are removed. Holes are visible in `cron_claims` (a gap in the slot
 index sequence for a cron). A cron that has stopped is
 caught by an operator-side weft monitor on the coordinator's per-run log
-lines, not by the platform. See `docs/plans/cron-claims-rollout.md`.
+lines, not by the platform.
 
 A new cron's first run is its next slot (a slot whose window closed before the
 cron was created is skipped), not an immediate run as before.
@@ -526,3 +526,45 @@ distinct not-found, and schedule off a stored last-run time or the lease, with
 every retirement logged. Undecided: mark rows GONE and exclude them from reads
 instead of deleting (about 27 query sites would need the filter). Failing test
 first.
+
+## Shard host heartbeats went sparse after a coordinator replacement
+
+**Where:** shard host telemetry (`/log/weft/shard/*`), the `shard-host-count`
+and `shard-host-loss` crons.
+
+**What:** observed 2026-10-05, not re-checked since. One shard host
+heartbeated every minute until 16:03 UTC, then about every ten minutes, after
+a coordinator was replaced. `shard-host-count` then flipped between 4 and 5
+depending on which five-minute windows held its heartbeat, and
+`shard-host-loss` paged at 17:00:36 on a -1 delta. The sparsity is in the
+data, not an artifact of cron windows: the raw heartbeats show it, and
+another host was sparse for hours before that. Whether the host was unhealthy
+or its weftd reconnected badly after the replacement is not established.
+
+**Fix:** find out which, starting from the host's weftd log around the
+replacement. Until then `shard-host-loss` can false-page on a quiet host.
+
+## `drain` DLQs rows for `loom/api`, `loom/worker` and `loom/edge` continuously
+
+**Where:** the coordinator log, `drain: DLQ'd ~50 rows ... (no shard serves
+this service)`.
+
+**What:** observed 2026-10-05, uninvestigated. The loom services keep
+shipping rows that no shard serves, so they are dead-lettered on every drain.
+Per the follower-registry finding, the DLQ is a no-op, so the rows are lost.
+
+**Fix:** establish whether the loom services should have a shard (a bucket
+without a routing entry) or should stop shipping.
+
+## `weft::latest` and the other `weft::*` readers ignore a cron's tags
+
+**Where:** `coordinator/weftfuncs.go` (`ListCronResults(watch.ID, n, "")`).
+
+**What:** a tagged cron stores one row per tag per run, but the `weft::*`
+predicates and aggregates read with an empty tag. `weft::latest` returns the
+newest row's stdout, which for a tagged cron is an arbitrary tag's, and the
+others compare across tags as if they were one series.
+
+**Fix:** give them a tag argument, or document and enforce a single reduction
+(for example, refuse a tagged cron without one). Failing test first.
+
