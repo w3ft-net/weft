@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	weftsdk "github.com/w3ft-net/weft-go"
@@ -51,6 +53,25 @@ func isSpare() bool {
 		return v == "1" || v == "true"
 	}
 	return imdsTag("shard_spare") == "true"
+}
+
+// startsAsSpare reports whether the process should boot waiting for a volume.
+// The tag alone is racy: the leader can claim a booting spare, and retag it,
+// after startup.sh saw the spare tag and left the data directory unmounted but
+// before this process reads the tag. Where the host manages a volume, a data
+// directory that is not a mount point means the volume has not arrived, so
+// wait for it rather than run a shard on the root disk.
+func startsAsSpare(tagged bool, dataDir string, managesVolume bool) bool {
+	return tagged || (managesVolume && !isMountPoint(dataDir))
+}
+
+// isMountPoint reports whether dir is on a different device than its parent.
+func isMountPoint(dir string) bool {
+	var st, parent syscall.Stat_t
+	if syscall.Stat(dir, &st) != nil || syscall.Stat(filepath.Dir(filepath.Clean(dir)), &parent) != nil {
+		return false
+	}
+	return st.Dev != parent.Dev
 }
 
 // activateWhenAttached turns a spare into a shard once the leader attaches

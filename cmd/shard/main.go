@@ -57,7 +57,7 @@ func main() {
 	// missing we start in blank mode and wait for the coordinator to
 	// christen us via Configure.
 	var srv *shardsvc.Server
-	if isSpare() {
+	if startsAsSpare(isSpare(), *dataDir, vol != nil) {
 		// A warm-pool spare (docs/plans/shard-seamless-upgrade.md): no volume
 		// and no shard until the leader claims it and attaches one. startup.sh
 		// skipped the mount; Activate waits for the attach and mounts it.
