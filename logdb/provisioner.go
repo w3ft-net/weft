@@ -766,8 +766,7 @@ func (p *Provisioner) OnboardService(namespaceID uint, service string) error {
 // syncs ASG desired_capacity (the EC2Provisioner runs/terminates one
 // instance at a time inside Launch/Terminate). Bucket-split (carving a hot
 // service
-// into its own bucket) is disabled pending the redesign in
-// docs/plans/bucket-split-policy.md.
+// into its own bucket) is not implemented.
 func (p *Provisioner) check(ctx context.Context) {
 	p.registry.RefreshFromStore(!p.IsLeader())
 

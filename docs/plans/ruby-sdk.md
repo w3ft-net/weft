@@ -3,8 +3,8 @@
 ## Status
 
 🟡 Designed, not started. Targets the parity bar set by `weft-go` and
-`weft-py` after the SDK-fed logging work ([sdk-line-header](sdk-line-header.md))
-and the span/trace work ([request-tracing](request-tracing.md)). Shape
+`weft-py` after the SDK-fed logging work (the SDK line header, `weftd/header.go`)
+and the span/trace work (request tracing, `docs/manual/trace.md`). Shape
 follows the Python SDK ([completed/python-sdk](../completed/python-sdk.md)):
 a small library, same wire protocol, idiomatic API.
 

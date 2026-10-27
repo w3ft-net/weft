@@ -197,5 +197,4 @@ func TestRegistry_RoundRobinIngestion(t *testing.T) {
 }
 
 // End-to-end split test removed along with the disabled EvaluateSplit
-// path. See docs/plans/bucket-split-policy.md for the regression
-// contract the re-enabled policy will need to honour.
+// path.

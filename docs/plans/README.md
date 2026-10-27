@@ -15,7 +15,7 @@ ties them together.
 
 | Plan | State |
 |---|---|
-| Shipped plans live in `docs/completed/`. Recent additions: `weftd-authored-config`, `loom-producer-host`, `python-sdk`, `anomaly-conditions` (shipped as the `weft::is_outlier`/`weft::is_seasonal` predicates), `query-sharing`, `dashboard-builder`, `onboarding`, `oidc`, `cross-shard-post-limit-filter`, `executeresult-buffered-cleanup`, `shard-grpc-resilience` (Phase 3 deferred), `notify-destinations`, `migration-collapse`. |
+| Shipped plans live in `docs/completed/`. Recent additions: `weftd-authored-config`, `loom-producer-host`, `python-sdk`, `anomaly-conditions` (shipped as the `weft::is_outlier`/`weft::is_seasonal` predicates), `query-sharing`, `dashboard-builder`, `onboarding`, `oidc`, `cross-shard-post-limit-filter`, `executeresult-buffered-cleanup`, `shard-grpc-resilience` (Phase 3 deferred), `notify-destinations`, `migration-collapse`. Shipped and deleted outright: `line-storage`, `planner-ir`, `request-tracing`, `sdk-line-header`, `shard-seamless-upgrade`. |
 | `weftd-client-side-parsing` — **default-on**; `WEFTD_PARSE_CLIENT_SIDE=0` is now the rollback lever. Stays in this dir until the flag is removed. |
 | Everything in this directory | 🟡 Designed, not started (or partially shipped — read the plan's own Status section) |
 
@@ -37,13 +37,10 @@ build order; this table is for picking opportunistic wins.
 | [http-ingest](http-ingest.md) | ~1d left | 4 | 5 | Heroku + CloudWatch adapters shipped; JSONAdapter remains |
 | [shard-archive-test](shard-archive-test.md) | ~2–3d | 4 | 3 | Operational validation only |
 | [weftd-multiline](weftd-multiline.md) | 3d | 4 | 4 | Easiest high-ROI win |
-| [line-storage](line-storage.md) | ~3d | 3 | 4 | One row per line, grouped by `event_id`; fixes shard/compute disagreement on multi-line events, enables sentry-like grouping |
-| [planner-ir](planner-ir.md) | ~10d (phase 1 ~2d) | 3 | 5 | Phase 1 fixes 3 live pushdown bugs (awk `?`, dropped rules, quoting) |
 | [cloudwatch-kinesis-subscription](cloudwatch-kinesis-subscription.md) | ~0.5d left | 5 | 4 | Push path, CLI/frontend onboarding, and the poll-mode ripout all shipped; live pilot + rate-limit plumbing remain |
 | [alert-silencing](alert-silencing.md) | 3.5d | 4 | 5 | |
 | [weftd-disk-spool](weftd-disk-spool.md) | 3.5d | 3 | 4 | |
 | [cross-tenant-coordinator-log](compliance/cross-tenant-coordinator-log.md) | ~1–2d* | 3 | 5 | *Triage-gated; live security defect |
-| [bucket-split-policy](bucket-split-policy.md) | 3–4d | 3 | 4 | Fixes a broken/disabled feature |
 | [alert-multirow-tier-limits](alert-multirow-tier-limits.md) | 3–4d | 3 | 4 | Blocked on real customer data |
 | [streaming-parallel-warp](streaming-parallel-warp.md) | 4d | 3 | 4 | |
 | [ingest-governance](compliance/ingest-governance.md) | 4.5d | 3 | 5 | |
@@ -157,10 +154,9 @@ than product strategy.
 | Plan | What |
 |---|---|
 | [az-resilience](az-resilience.md) | Multi-AZ shard placement |
-| [bucket-split-policy](bucket-split-policy.md) | When to split a multi-tenant shard bucket |
 | [retention-enforcement](retention-enforcement.md) | Real deletion behind the per-plan cap (today the cap is filter-only) |
 | [materialized-views](materialized-views.md) | Save a pipeline as a continuously-updated view table |
-| [direct-to-compute](direct-to-compute.md) | Shard streams rows directly to compute (skip coordinator) |
+| [direct-to-compute](../completed/direct-to-compute.md) | Shard streams rows directly to compute (skip coordinator) |
 | [nested-query-compute-pool](nested-query-compute-pool.md) | Compute calling back into the coordinator for sub-queries |
 | [compute-scaling](compute-scaling.md) | When the compute pool needs to scale beyond 1 |
 | [cloudwatch-kinesis-subscription](cloudwatch-kinesis-subscription.md) | Push-based CloudWatch ingestion — subscription filter → customer-owned Firehose stream → our HTTP endpoint; poll-mode fully retired |
@@ -170,8 +166,6 @@ than product strategy.
 | [streaming-backpressure](streaming-backpressure.md) | Bounded per-shard queues + configurable streamCh; defer until production hits memory pressure |
 | [streaming-parallel-warp](streaming-parallel-warp.md) | Combine streaming + chunked intra-stage parallelism in warp |
 | [coverage-improvement](coverage-improvement.md) | Per-PR coverage delta, per-package floors, eliminating the `-p 1` test-isolation workaround |
-| [request-tracing](request-tracing.md) | `trace_id` log correlation (no span model, no OTLP) across weftd/CloudWatch (push)/offline ingest + SDK-based propagation; weft dogfoods it internally |
-| [sdk-line-header](sdk-line-header.md) | SDK writes a versioned `\x1e` header (ts, level, trace, spans, body format) on each file line; weftd fills `LogRow` fields from it and SDK-fed sources skip the wizard |
 
 ## Conventions for new plans
 

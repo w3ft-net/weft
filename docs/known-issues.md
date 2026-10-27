@@ -45,7 +45,7 @@ recovered.
 stages themselves in compute.
 
 **What:** text events are stored one row per line
-([line-storage](plans/line-storage.md)), so these projections are exact
+(`ingest/lines.go`), so these projections are exact
 for them. A row with a JSON payload isn't split, and its `raw` can still
 hold several lines (a pretty-printed document): compute feeds them to a
 stage as several lines, while the shard's projection reads the whole raw
@@ -61,7 +61,7 @@ problem.
 ## Shard aggregates keep a trailing `\r` that warp's line readers drop, on JSON rows
 
 **Where:** `planner.Query.Aggregate` (the shard half of `wc -l`, `sort -u`,
-`sort | uniq [-c]`; docs/plans/planner-ir.md, Phase 3) versus warp's
+`sort | uniq [-c]`; planner IR, Phase 3) versus warp's
 `sort`, `uniq`, `cut` and the compute engine's stdout reader, which all read
 lines with Go's `bufio.ScanLines`.
 
@@ -75,7 +75,7 @@ same pipeline run in compute. Verified with the differential harness: rows
 `cr\r` under `sort -u` and `sort | uniq -c` (plan `cr\r`, reference `cr`).
 
 Text rows no longer have this: ingest drops a trailing `\r` from every line
-([line-storage](plans/line-storage.md)). It remains for rows with a JSON
+(`ingest/lines.go`). It remains for rows with a JSON
 payload, which ingest leaves as they are.
 
 Row filters agree either way (a leading grep keeps or drops the whole row on
@@ -568,3 +568,16 @@ others compare across tags as if they were one series.
 **Fix:** give them a tag argument, or document and enforce a single reduction
 (for example, refuse a tagged cron without one). Failing test first.
 
+## Row stages start an interpreter per row, and warp's jq and grep lack `.end` and `-w`
+
+**Where:** `planner/rowstage.go` (row stages), warp's jq and grep.
+
+**What:** a row stage (a filter followed by a stage that reads the payload or
+meta-variables) starts an interpreter per row, so `grep -E x | jq ...` over a
+full scan is slow. Separately, warp's jq rejects `.end` (a keyword, but valid as
+a field in real jq) and its grep has no `-w`. The differential harness treats
+both sides failing alike as agreement, so neither is caught there.
+
+**Fix:** measure the dogfood account's heaviest crons first. If row stages bite,
+lower more filters (`grep -E` is RE2-compatible for most patterns) or reuse one
+interpreter per stage. The jq and grep gaps belong in warp.

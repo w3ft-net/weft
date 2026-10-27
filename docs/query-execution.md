@@ -26,7 +26,7 @@ filter and projection acts on lines, not on a whole event. The lines
 share the event's other columns and carry an `event_id` and a `line_no`.
 Line endings are normalized on the way in (`\r\n` becomes `\n`, no
 trailing `\r`). Rows with a JSON payload are never split, since jq reads
-the payload once per event. See [line-storage](plans/line-storage.md).
+the payload once per event. See `ingest/lines.go`.
 
 Every row query returns `event_id` and `line_no` after `raw, ts`, and a
 time order is `(ts, event_id, line_no)`, rows with no event first. The
