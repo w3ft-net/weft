@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -285,6 +286,45 @@ var migrationSteps = []string{
 	`ALTER TABLE logs ADD COLUMN IF NOT EXISTS line_no INTEGER`,
 }
 
+// legacyColumns are columns an older build's schema carried that the
+// migrations remove or rename; any of them means the shard needs migrating.
+var legacyColumns = []string{"host_group", "app", "line_num"}
+
+// schemaIsCurrent reports whether the logs table already has every column the
+// code writes and none of the legacy ones, so the migrations would change
+// nothing. It only reads the catalog, where running the migrations takes a
+// write for every statement even when each is a no-op. Any doubt (a failed
+// read) says it is not current, and the migrations run.
+func schemaIsCurrent(db *sql.DB) bool {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('logs')`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	have := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) != nil {
+			return false
+		}
+		have[name] = true
+	}
+	if rows.Err() != nil {
+		return false
+	}
+	for _, c := range logColumns {
+		if !have[c] {
+			return false
+		}
+	}
+	for _, c := range legacyColumns {
+		if have[c] {
+			return false
+		}
+	}
+	return true
+}
+
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
 // logs table. Use "" or ":memory:" for an in-memory database.
 func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
@@ -308,8 +348,12 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 	// Run migrations. Errors are non-fatal — the rename fails on fresh
 	// shards that never had host_group, the ADDs fail on fully-migrated
 	// shards. Either way the schema converges to the CREATE TABLE shape.
-	for _, step := range migrationSteps {
-		_, _ = db.Exec(step)
+	migrate := "skipped"
+	if !schemaIsCurrent(db) {
+		for _, step := range migrationSteps {
+			_, _ = db.Exec(step)
+		}
+		migrate = ""
 	}
 	migrated := time.Now()
 	ds := &DuckDBShard{id: id, dbPath: path, db: db}
@@ -326,7 +370,7 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 	ds.rowCount.Store(existing)
 	ds.openTiming = fmt.Sprintf("open=%s create=%s migrate=%s count=%s",
 		connected.Sub(t0).Round(time.Microsecond), created.Sub(connected).Round(time.Microsecond),
-		migrated.Sub(created).Round(time.Microsecond), time.Since(migrated).Round(time.Microsecond))
+		cmp.Or(migrate, migrated.Sub(created).Round(time.Microsecond).String()), time.Since(migrated).Round(time.Microsecond))
 	return ds, nil
 }
 
