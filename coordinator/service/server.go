@@ -25,9 +25,7 @@ import (
 	"github.com/graybeardcorp/weft/coordinator"
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/logdb"
-	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/notices"
-	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -371,25 +369,6 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 	}
 
 	return &pb.AddSourceResponse{}, nil
-}
-
-func (s *Server) ListSources(_ context.Context, _ *pb.ListSourcesRequest) (*pb.ListSourcesResponse, error) {
-	logGroups, err := s.Store.AllLogGroups()
-	if err != nil {
-		return nil, err
-	}
-	var infos []*pb.SourceInfo
-	for _, lg := range logGroups {
-		infos = append(infos, &pb.SourceInfo{
-			Service:   lg.Service,
-			Customer:  lg.CustomerName,
-			Namespace: lg.NamespaceName,
-			LogGroup:  lg.LogGroupName,
-			Region:    lg.Region,
-			Enabled:   lg.Enabled,
-		})
-	}
-	return &pb.ListSourcesResponse{Sources: infos}, nil
 }
 
 func (s *Server) RemoveSource(ctx context.Context, req *pb.RemoveSourceRequest) (*pb.RemoveSourceResponse, error) {
@@ -843,177 +822,7 @@ func (s *Server) resolveCallerOrgID(ctx context.Context) (store.OrgID, error) {
 	return c.ID, nil
 }
 
-func (s *Server) SaveFunction(ctx context.Context, req *pb.SaveFunctionRequest) (*pb.SaveFunctionResponse, error) {
-	custID, err := s.resolveCallerOrgID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	lang, cleanSource := mounts.ClassifyBinScript(req.Name, req.Source)
-	if err := s.Store.SaveShellFunction(custID, callerUserID(ctx), req.Name, cleanSource, lang); err != nil {
-		return nil, err
-	}
-	return &pb.SaveFunctionResponse{}, nil
-}
-
-func (s *Server) GetFunction(ctx context.Context, req *pb.GetFunctionRequest) (*pb.GetFunctionResponse, error) {
-	custID, err := s.resolveCallerOrgID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	fn, err := s.Store.GetShellFunction(custID, req.Name)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "%s: not found", req.Name)
-	}
-	return &pb.GetFunctionResponse{Name: fn.Name, Source: fn.Source}, nil
-}
-
-func (s *Server) ListFunctions(ctx context.Context, req *pb.ListFunctionsRequest) (*pb.ListFunctionsResponse, error) {
-	custID, err := s.resolveCallerOrgID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	fns, err := s.Store.ListShellFunctions(custID)
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, len(fns))
-	for i, f := range fns {
-		names[i] = f.Name
-	}
-	return &pb.ListFunctionsResponse{Names: names}, nil
-}
-
-func (s *Server) DeleteFunction(ctx context.Context, req *pb.DeleteFunctionRequest) (*pb.DeleteFunctionResponse, error) {
-	custID, err := s.resolveCallerOrgID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.Store.DeleteShellFunction(custID, req.Name); err != nil {
-		return nil, err
-	}
-	return &pb.DeleteFunctionResponse{}, nil
-}
-
 // ── Cron watches (/cron.d/) ─────────────────────────────────
-
-func (s *Server) SaveWatch(ctx context.Context, req *pb.SaveWatchRequest) (*pb.SaveWatchResponse, error) {
-	custID, err := s.resolveCallerOrgID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// Look up customer name for the LoweredPlan's ArgCustomer source.
-	// On a save-time race where the customer was deleted between auth
-	// and here, skip lowering rather than fail the save.
-	var loweredJSON []byte
-	if cust, err := s.Store.GetOrgByID(custID); err == nil && cust != nil {
-		resolver := storeBinResolver{store: s.Store, orgID: custID}
-		tier := string(s.Store.TierForOrg(custID))
-		loweredJSON = planner.LowerForStorage(ctx, req.Pipeline, int64(custID), tier, resolver)
-	}
-	// SaveCronWatch's error may be a non-blocking store.Warning (the
-	// save already happened) — see store.Split's doc. SaveWatchResponse
-	// has no field to carry warning text today, so this surface drops
-	// it rather than misreporting a successful save as an RPC failure;
-	// the CLI/HTTP/MCP surfaces are where warnings actually reach a
-	// user today.
-	blocking, _ := store.Split(s.Store.SaveCronWatch(custID, callerUserID(ctx), req.Name, req.Schedule, req.Pipeline, true, loweredJSON))
-	if len(blocking) > 0 {
-		return nil, errors.Join(blocking...)
-	}
-	return &pb.SaveWatchResponse{}, nil
-}
-
-// storeBinResolver adapts the gRPC service's store + customer scope to
-// planner.BinResolver for save-time pipeline inlining. Mirrors the
-// adapter in api/handlers.go — kept duplicated rather than shared
-// because the two save paths sit in different packages and the type
-// is genuinely tiny.
-type storeBinResolver struct {
-	store *store.Store
-	orgID store.OrgID
-}
-
-func (r storeBinResolver) Source(name string) (string, string, bool) {
-	fn, err := r.store.GetShellFunction(r.orgID, name)
-	if err != nil || fn == nil {
-		return "", "", false
-	}
-	return fn.Source, planner.HashBinSource(fn.Source), true
-}
-
-func (s *Server) GetWatch(ctx context.Context, req *pb.GetWatchRequest) (*pb.GetWatchResponse, error) {
-	custID, err := s.resolveCallerOrgID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	w, err := s.Store.GetCronWatch(custID, req.Name)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "%s: not found", req.Name)
-	}
-	return &pb.GetWatchResponse{
-		Name:     w.Name,
-		Schedule: w.Schedule,
-		Pipeline: w.Pipeline,
-		Enabled:  w.Enabled,
-	}, nil
-}
-
-func (s *Server) ListWatches(ctx context.Context, req *pb.ListWatchesRequest) (*pb.ListWatchesResponse, error) {
-	custID, err := s.resolveCallerOrgID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	watches, err := s.Store.ListCronWatches(custID)
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, len(watches))
-	for i, w := range watches {
-		names[i] = w.Name
-	}
-	return &pb.ListWatchesResponse{Names: names}, nil
-}
-
-func (s *Server) GetWatchResults(ctx context.Context, req *pb.GetWatchResultsRequest) (*pb.GetWatchResultsResponse, error) {
-	custID, err := s.resolveCallerOrgID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	w, err := s.Store.GetCronWatch(custID, req.Name)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "%s: not found", req.Name)
-	}
-	limit := int(req.Limit)
-	if limit <= 0 {
-		limit = 20
-	}
-	results, err := s.Store.ListCronResults(w.ID, limit, "")
-	if err != nil {
-		return nil, err
-	}
-	var out []*pb.WatchResult
-	for _, r := range results {
-		out = append(out, &pb.WatchResult{
-			Stdout:     r.Stdout,
-			Stderr:     r.Stderr,
-			ExitCode:   int32(r.ExitCode),
-			DurationMs: r.DurationMs,
-			RanAt:      r.RanAt.Format(time.RFC3339),
-		})
-	}
-	return &pb.GetWatchResultsResponse{Results: out}, nil
-}
-
-func (s *Server) DeleteWatch(ctx context.Context, req *pb.DeleteWatchRequest) (*pb.DeleteWatchResponse, error) {
-	custID, err := s.resolveCallerOrgID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.Store.DeleteCronWatch(custID, req.Name); err != nil {
-		return nil, err
-	}
-	return &pb.DeleteWatchResponse{}, nil
-}
 
 // Heartbeat receives a shard's periodic status report. Persists the
 // heartbeat for the provisioner's tick-based reconciliation pass,

@@ -320,9 +320,6 @@ service WeftCoordinator {
   // from real traffic.
   rpc AddSource(AddSourceRequest) returns (AddSourceResponse);
 
-  // ListSources returns all configured log sources.
-  rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
-
   // RemoveSource deletes a log source.
   rpc RemoveSource(RemoveSourceRequest) returns (RemoveSourceResponse);
 
@@ -334,26 +331,12 @@ service WeftCoordinator {
   // coordinator forwards batches to the active shard.
   rpc IngestStream(stream LogRow) returns (IngestStreamResponse);
 
-  // Token management for weftd agents.
+  // CreateToken mints an agent token (the load-test and integration tools
+  // use it; the CLI and web go through REST).
   rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
-  rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
-  rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
 
   // Usage metering.
   rpc GetUsage(GetUsageRequest) returns (GetUsageResponse);
-
-  // Shell functions (/bin/).
-  rpc SaveFunction(SaveFunctionRequest) returns (SaveFunctionResponse);
-  rpc GetFunction(GetFunctionRequest) returns (GetFunctionResponse);
-  rpc ListFunctions(ListFunctionsRequest) returns (ListFunctionsResponse);
-  rpc DeleteFunction(DeleteFunctionRequest) returns (DeleteFunctionResponse);
-
-  // Cron watches (/cron.d/).
-  rpc SaveWatch(SaveWatchRequest) returns (SaveWatchResponse);
-  rpc GetWatch(GetWatchRequest) returns (GetWatchResponse);
-  rpc ListWatches(ListWatchesRequest) returns (ListWatchesResponse);
-  rpc DeleteWatch(DeleteWatchRequest) returns (DeleteWatchResponse);
-  rpc GetWatchResults(GetWatchResultsRequest) returns (GetWatchResultsResponse);
 
   // Source onboarding — weftd submits samples and polls for schema config.
   rpc SubmitSample(SubmitSampleRequest) returns (SubmitSampleResponse);
@@ -488,29 +471,6 @@ message CreateTokenResponse {
   string token = 1;  // the generated wft_xxx token
 }
 
-message ListTokensRequest {
-  reserved 1;
-  reserved "customer";
-}
-
-message ListTokensResponse {
-  repeated TokenInfo tokens = 1;
-}
-
-message TokenInfo {
-  string token = 1;
-  string label = 2;
-  bool revoked = 3;
-  string created_at = 4;
-  string service = 5;
-}
-
-message RevokeTokenRequest {
-  string token = 1;
-}
-
-message RevokeTokenResponse {}
-
 message AuthenticateRequest {
   string token = 1;
   MetricsConfig metrics_config = 5;  // agent reports its metrics config on connect
@@ -598,22 +558,6 @@ message AddSourceRequest {
 
 message AddSourceResponse {}
 
-message ListSourcesRequest {}
-
-message ListSourcesResponse {
-  repeated SourceInfo sources = 1;
-}
-
-message SourceInfo {
-  reserved 6; // last_poll_at — poll-mode-only, retired with coordinator/poller
-  string service = 1;
-  string customer = 2;
-  string log_group = 3;
-  string region = 4;
-  bool enabled = 5;
-  string namespace = 7;
-}
-
 message RemoveSourceRequest {
   string service = 1;
   reserved 2;
@@ -622,102 +566,6 @@ message RemoveSourceRequest {
 }
 
 message RemoveSourceResponse {}
-
-// Shell functions (/bin/).
-message SaveFunctionRequest {
-  reserved 1;
-  reserved "customer";
-  string name = 2;
-  string source = 3;
-}
-message SaveFunctionResponse {}
-
-message GetFunctionRequest {
-  reserved 1;
-  reserved "customer";
-  string name = 2;
-}
-message GetFunctionResponse {
-  string name = 1;
-  string source = 2;
-}
-
-message ListFunctionsRequest {
-  reserved 1;
-  reserved "customer";
-}
-message ListFunctionsResponse {
-  repeated string names = 1;
-}
-
-message DeleteFunctionRequest {
-  reserved 1;
-  reserved "customer";
-  string name = 2;
-}
-message DeleteFunctionResponse {}
-
-// Cron watches (/cron.d/).
-// Alert destinations are encoded inline in the pipeline as
-// `alert --notify=<alias>`; there is no separate wire field.
-message SaveWatchRequest {
-  reserved 1;
-  reserved "customer";
-  string name = 2;
-  string schedule = 3;
-  string pipeline = 4;
-  reserved 5;
-  reserved "notify_dest";
-}
-message SaveWatchResponse {}
-
-message GetWatchRequest {
-  reserved 1;
-  reserved "customer";
-  string name = 2;
-}
-message GetWatchResponse {
-  string name = 1;
-  string schedule = 2;
-  string pipeline = 3;
-  reserved 4;
-  reserved "notify_dest";
-  bool enabled = 5;
-}
-
-message ListWatchesRequest {
-  reserved 1;
-  reserved "customer";
-}
-message ListWatchesResponse {
-  repeated string names = 1;
-}
-
-message DeleteWatchRequest {
-  reserved 1;
-  reserved "customer";
-  string name = 2;
-}
-message DeleteWatchResponse {}
-
-message GetWatchResultsRequest {
-  reserved 1;
-  reserved "customer";
-  string name = 2;
-  int32 limit = 3;  // 0 = default (20)
-}
-
-message GetWatchResultsResponse {
-  repeated WatchResult results = 1;
-}
-
-message WatchResult {
-  string stdout = 1;
-  string stderr = 2;
-  int32 exit_code = 3;
-  int64 duration_ms = 4;
-  string ran_at = 5;  // RFC3339
-}
 
 // ---------------------------------------------------------------------------
 // Shard health — HTTP, not gRPC, but defining the message for consistency
