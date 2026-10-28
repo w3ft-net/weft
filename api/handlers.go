@@ -951,6 +951,8 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 	// Attach the Stripe subscription ID to our local trial row so refresh
 	// reuses the same subscription and the webhook can promote it on confirm.
 	if trial, _ := s.store.ActiveSubscription(session.ActiveOrgID); trial != nil {
+		// Unscoped, but trial came from the org-scoped ActiveSubscription read above,
+		// so this id is already known to belong to the caller's org.
 		_ = s.store.DB().WithContext(store.WithoutTenantScope(r.Context())).Model(&store.Subscription{}).
 			Where("id = ?", trial.ID).
 			Updates(map[string]any{
@@ -1152,6 +1154,8 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		// Only promote once the subscription is actually paying (not trialing
 		// without a PM, and not past_due).
 		if tier != "" && (sub.Status == stripe.SubscriptionStatusActive || sub.Status == stripe.SubscriptionStatusTrialing) {
+			// Unscoped: no session on a webhook. The signature authenticates the call
+			// and the Stripe subscription id selects the row.
 			if err := s.store.DB().WithContext(store.WithoutTenantScope(context.WithoutCancel(r.Context()))).Model(&store.Subscription{}).
 				Where("stripe_subscription_id = ? AND comp_reason = ''", sub.ID).
 				Updates(map[string]any{
@@ -1182,6 +1186,8 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if inv.Parent.SubscriptionDetails.Subscription != nil {
 			subID := inv.Parent.SubscriptionDetails.Subscription.ID
+			// Unscoped: no session on a webhook. The signature authenticates the call
+			// and the Stripe subscription id selects the row.
 			_ = s.store.DB().WithContext(store.WithoutTenantScope(context.WithoutCancel(r.Context()))).Model(&store.Subscription{}).
 				Where("stripe_subscription_id = ? AND comp_reason = ''", subID).
 				Updates(map[string]any{
@@ -1201,6 +1207,8 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		if !s.subscriptionHasOurPrice(&sub) {
 			break
 		}
+		// Unscoped: no session on a webhook. The signature authenticates the call
+		// and the Stripe subscription id selects the row.
 		if err := s.store.DB().WithContext(store.WithoutTenantScope(context.WithoutCancel(r.Context()))).Model(&store.Subscription{}).
 			Where("stripe_subscription_id = ? AND comp_reason = ''", sub.ID).
 			Updates(map[string]any{
