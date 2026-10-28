@@ -137,7 +137,7 @@ func seedFixtures() error {
 	_, err = conn.Exec(`
 		INSERT INTO users (id, email, name, email_verified_at, last_active_org_id, created_at, updated_at)
 		VALUES ('dev-user', 'dev@test.local', 'Dev User', now(), $1, now(), now())
-		ON CONFLICT (email) DO UPDATE SET email_verified_at = now(), last_active_org_id = $1`,
+		ON CONFLICT (lower(email)) DO UPDATE SET email_verified_at = now(), last_active_org_id = $1`,
 		kevID,
 	)
 	if err != nil {
@@ -159,7 +159,7 @@ func seedFixtures() error {
 	_, err = conn.Exec(`
 		INSERT INTO users (id, email, name, email_verified_at, last_active_org_id, created_at, updated_at)
 		VALUES ('integration-user', 'it@example.com', 'Integration User', now(), $1, now(), now())
-		ON CONFLICT (email) DO UPDATE SET email_verified_at = now(), last_active_org_id = $1`,
+		ON CONFLICT (lower(email)) DO UPDATE SET email_verified_at = now(), last_active_org_id = $1`,
 		kevID,
 	)
 	if err != nil {
