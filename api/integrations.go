@@ -16,6 +16,8 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -72,9 +74,24 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// requireConfigWrite refuses (403) unless the caller may change /etc, the
+// group (configmgr) that owns notify.yaml. Integrations are the credentials
+// its aliases deliver through, so they take the same group, and the check is
+// the /etc mount's own rather than a second copy of it.
+func (s *Server) requireConfigWrite(w http.ResponseWriter, r *http.Request, session *auth.Session) bool {
+	if err := s.shellFS(r, session, nil).MountFS().Access("/etc/notify.yaml", shellcore.PermWrite); err != nil {
+		writeFSError(w, err)
+		return false
+	}
+	return true
+}
+
 // handleSlackConnect starts the Slack OAuth flow.
 func (s *Server) handleSlackConnect(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
+	if !s.requireConfigWrite(w, r, session) {
+		return
+	}
 
 	if s.SlackClientID == "" {
 		http.Error(w, "Slack integration not configured", http.StatusServiceUnavailable)
@@ -154,6 +171,9 @@ func (s *Server) handleSlackCallback(w http.ResponseWriter, r *http.Request) {
 // handleSlackDisconnect removes the Slack integration.
 func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
+	if !s.requireConfigWrite(w, r, session) {
+		return
+	}
 	custID, ok := activeOrg(w, session)
 	if !ok {
 		return
@@ -169,6 +189,9 @@ func (s *Server) handleSlackDisconnect(w http.ResponseWriter, r *http.Request) {
 // Body: {"name": "ops", "key": "<routing-key>", "description": "optional"}.
 func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
+	if !s.requireConfigWrite(w, r, session) {
+		return
+	}
 	custID, ok := activeOrg(w, session)
 	if !ok {
 		return
@@ -205,6 +228,9 @@ func (s *Server) handlePagerDutySave(w http.ResponseWriter, r *http.Request) {
 // Path: DELETE /api/integrations/pagerduty/{name}
 func (s *Server) handlePagerDutyDelete(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
+	if !s.requireConfigWrite(w, r, session) {
+		return
+	}
 	custID, ok := activeOrg(w, session)
 	if !ok {
 		return
@@ -267,6 +293,9 @@ func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) 
 // Body: {"name": "token", "value": "<secret>"}.
 func (s *Server) handleWebhookSecretSave(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
+	if !s.requireConfigWrite(w, r, session) {
+		return
+	}
 	custID, ok := activeOrg(w, session)
 	if !ok {
 		return
@@ -290,6 +319,9 @@ func (s *Server) handleWebhookSecretSave(w http.ResponseWriter, r *http.Request)
 // Path: DELETE /api/integrations/webhook-secrets/{name}
 func (s *Server) handleWebhookSecretDelete(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
+	if !s.requireConfigWrite(w, r, session) {
+		return
+	}
 	custID, ok := activeOrg(w, session)
 	if !ok {
 		return
@@ -304,6 +336,9 @@ func (s *Server) handleWebhookSecretDelete(w http.ResponseWriter, r *http.Reques
 // handlePagerDutyDisconnect removes all PagerDuty integrations for the customer.
 func (s *Server) handlePagerDutyDisconnect(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
+	if !s.requireConfigWrite(w, r, session) {
+		return
+	}
 	custID, ok := activeOrg(w, session)
 	if !ok {
 		return
