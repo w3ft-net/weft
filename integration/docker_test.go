@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	coordinatorAddr = "localhost:9020"
+	coordinatorAddr = "localhost:9025"
 	apiAddr         = "http://localhost:8080"
 	healthAddr      = "http://localhost:9021/health"
 )

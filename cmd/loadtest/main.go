@@ -4,8 +4,8 @@
 //
 // Usage:
 //
-//	go run ./cmd/loadtest --coordinator=localhost:9020 --duration=2m
-//	go run ./cmd/loadtest --scenario=burst --coordinator=localhost:9020
+//	go run ./cmd/loadtest --coordinator=localhost:9025 --duration=2m
+//	go run ./cmd/loadtest --scenario=burst --coordinator=localhost:9025
 package main
 
 import (
@@ -29,7 +29,7 @@ import (
 )
 
 func main() {
-	coordAddr := flag.String("coordinator", "localhost:9020", "coordinator gRPC address")
+	coordAddr := flag.String("coordinator", "localhost:9025", "coordinator --local-addr (loadtest calls Execute, which the public port refuses)")
 	healthURL := flag.String("health", "http://localhost:9021/health", "coordinator health endpoint")
 	customers := flag.Int("customers", 5, "number of simulated customers")
 	ingestRate := flag.Int("ingest-rate", 500, "total rows/second across all customers")

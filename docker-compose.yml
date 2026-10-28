@@ -74,12 +74,16 @@ services:
       WEFT_HOST_DATA_ROOT: ${WEFT_HOST_DATA_ROOT:-${PWD}/dev/shard-data}
       WEFT_LOCAL_DATA_ROOT: /opt/app/shard-data
       WEFT_COORDINATOR_ADDR: coordinator:9020
+      # The full service for the api and the integration tests; 9020 serves
+      # only the ingest/infra RPCs.
+      COORDINATOR_LOCAL_ADDR: 0.0.0.0:9025
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${WEFT_HOST_DATA_ROOT:-${PWD}/dev/shard-data}:/opt/app/shard-data
     ports:
       - "9020:9020"
       - "9021:9021"
+      - "9025:9025"
     depends_on:
       postgres:
         condition: service_healthy
@@ -130,12 +134,14 @@ services:
       # shard-fsm-leader lease) still report to `coordinator`, not
       # itself — this dev topology's fixed shard-heartbeat address.
       WEFT_COORDINATOR_ADDR: coordinator:9020
+      COORDINATOR_LOCAL_ADDR: 0.0.0.0:9025
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${WEFT_HOST_DATA_ROOT:-${PWD}/dev/shard-data}:/opt/app/shard-data
     ports:
       - "9023:9020"
       - "9024:9021"
+      - "9026:9025"
     depends_on:
       postgres:
         condition: service_healthy
@@ -155,7 +161,7 @@ services:
     environment:
       ROLE: api
       DB_DSN: host=postgres dbname=weft user=weft password=weft sslmode=disable
-      COORDINATOR_ADDR: coordinator:9020
+      COORDINATOR_ADDR: coordinator:9025
       BASE_URL: http://localhost:5173
       JWT_SECRET: dev-secret-change-in-production
       # Shared ingest-schema cache (docs/plans/cloudwatch-kinesis-subscription.md)

@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	onboardCoordAddr = "localhost:9020"
+	onboardCoordAddr = "localhost:9025"
 	onboardAPIAddr   = "http://localhost:8080"
 	// Must match docker-compose.yml's JWT_SECRET for the coordinator
 	// + api services, which in turn matches the compiled-in default

@@ -37,7 +37,7 @@ const (
 	S3AccessKey = "test"
 	S3SecretKey = "test"
 	ColdBucket  = "weft-cold"
-	CoordAddr   = "localhost:9020"
+	CoordAddr   = "localhost:9025"
 
 	coordHealth    = "http://localhost:9021/health"
 	postgresURL    = "postgres://weft:weft@localhost:5433/weft?sslmode=disable"

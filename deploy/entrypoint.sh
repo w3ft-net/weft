@@ -15,6 +15,7 @@ case "$ROLE" in
   coordinator)
     ARGS=(--port="${COORDINATOR_PORT:-9020}" --health-port="${COORDINATOR_HEALTH_PORT:-9021}")
 
+    [ -n "${COORDINATOR_LOCAL_ADDR:-}" ]  && ARGS+=(--local-addr="$COORDINATOR_LOCAL_ADDR")
     [ -n "${DB_DSN:-}" ]                  && ARGS+=(--db-dsn="$DB_DSN")
     [ -n "${WEFT_REGION:-}" ]             && ARGS+=(--region="$WEFT_REGION")
     [ -n "${COMPUTE_ADDR:-}" ]            && ARGS+=(--compute="$COMPUTE_ADDR")

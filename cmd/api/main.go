@@ -21,7 +21,7 @@ func main() {
 	weftsdk.InitLogging("", os.Stderr).CaptureStdio()
 	port := flag.String("port", "8080", "HTTP listen port")
 	dbDSN := flag.String("db-dsn", "", "PostgreSQL DSN")
-	coordAddr := flag.String("coordinator", "localhost:9020", "coordinator gRPC address")
+	coordAddr := flag.String("coordinator", "localhost:9025", "coordinator gRPC address (its --local-addr; the public port serves only ingest RPCs)")
 	baseURL := flag.String("base-url", "https://w3ft.net", "base URL for magic links")
 	renderSyslogPort := flag.Int("render-syslog-port", 9023, "TCP port for the Render TLS syslog listener (see docs/ingestion-syslog.md); the NLB terminates TLS and forwards plaintext here")
 	redisAddr := flag.String("redis-addr", "", "Redis/Valkey address for the shared ingest-schema cache (host:port); empty disables it, every schema lookup falls through to Postgres directly")

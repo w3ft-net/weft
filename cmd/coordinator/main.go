@@ -110,6 +110,7 @@ func main() {
 	logFile.CaptureStdio()
 	port := flag.Int("port", 9020, "gRPC listen port")
 	healthPort := flag.Int("health-port", 9021, "HTTP liveness listen port")
+	localAddr := flag.String("local-addr", "127.0.0.1:9025", "listen address for the full WeftCoordinator service, which the co-located api connects to (the public --port serves only the ingest/infra RPCs)")
 	adminPort := flag.Int("admin-port", 9022, "gRPC listen port for the localhost-only WeftAdmin surface (weft-admin CLI)")
 	debugPort := flag.Int("debug-port", 6060, "localhost-only HTTP port for net/http/pprof (goroutine/heap profiling); 0 disables")
 	computeAddr := flag.String("compute", "", "compute worker address (host:port)")
@@ -338,13 +339,7 @@ func main() {
 		jwtSecret = "dev-secret-change-in-production"
 		weftsdk.Warnf(context.Background(), "using default JWT secret — set JWT_SECRET in production")
 	}
-	skip := auth.SkipMethods{
-		"/weft.WeftCoordinator/IngestStream":    true,
-		"/weft.WeftCoordinator/SubmitSample":    true,
-		"/weft.WeftCoordinator/GetSourceStatus": true,
-		"/weft.WeftCoordinator/Authenticate":    true,
-		"/weft.WeftCoordinator/Heartbeat":       true,
-	}
+	skip := coordsvc.PublicMethods
 
 	// HTTP readiness endpoint: 503 until the gRPC server is about to serve
 	// (see coordinator.Readiness), then 200 for good. The ASG's load balancer
@@ -383,15 +378,28 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
-	srv := grpc.NewServer(
-		grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
-		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor(), auth.UnaryServerInterceptor(
-			func(uid, org string) (*auth.Session, error) { return auth.BuildSession(db, uid, org) },
-			jwtSecret, skip)),
-		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor(), auth.StreamServerInterceptor(
-			func(uid, org string) (*auth.Session, error) { return auth.BuildSession(db, uid, org) },
-			jwtSecret, skip)),
-	)
+	// The public port serves only service.PublicMethods; the api reaches the
+	// rest (including the superadmin shard RPCs) on the loopback listener below.
+	newGRPC := func(public bool) *grpc.Server {
+		build := func(uid, org string) (*auth.Session, error) { return auth.BuildSession(db, uid, org) }
+		unary := []grpc.UnaryServerInterceptor{weftsdk.GRPC.UnaryServerInterceptor()}
+		stream := []grpc.StreamServerInterceptor{weftsdk.GRPC.StreamServerInterceptor()}
+		if public {
+			unary = append(unary, coordsvc.PublicOnlyUnaryInterceptor())
+			stream = append(stream, coordsvc.PublicOnlyStreamInterceptor())
+		}
+		return grpc.NewServer(
+			grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
+			grpc.ChainUnaryInterceptor(append(unary, auth.UnaryServerInterceptor(build, jwtSecret, skip))...),
+			grpc.ChainStreamInterceptor(append(stream, auth.StreamServerInterceptor(build, jwtSecret, skip))...),
+		)
+	}
+	srv := newGRPC(true)
+	localSrv := newGRPC(false)
+	localLis, err := net.Listen("tcp", *localAddr)
+	if err != nil {
+		log.Fatalf("local listen on %s: %v", *localAddr, err)
+	}
 	// LLM-based schema-field classification for pending sources — see
 	// ingest/llmdetect.go. Disabled (nil) unless
 	// BEDROCK_CLASSIFIER_MODEL_ID/BEDROCK_REGION are set; deliberately
@@ -411,6 +419,13 @@ func main() {
 		AgentSeen:  agentSeen,
 	}
 	pb.RegisterWeftCoordinatorServer(srv, coordSvc)
+	pb.RegisterWeftCoordinatorServer(localSrv, coordSvc)
+	go func() {
+		if err := localSrv.Serve(localLis); err != nil {
+			weftsdk.Errorf(context.Background(), "local serve error: %v", err)
+		}
+	}()
+	defer localSrv.GracefulStop()
 
 	// WeftAdmin lives on a separate 127.0.0.1:<admin-port> listener gated
 	// by SharedToken auth (WEFT_ADMIN_TOKEN). It exists so the coordinator-
@@ -467,6 +482,7 @@ func main() {
 				continue
 			}
 			weftsdk.Infof(context.Background(), "coordinator: received %s, gracefully stopping", s)
+			localSrv.GracefulStop()
 			srv.GracefulStop()
 			return
 		}
