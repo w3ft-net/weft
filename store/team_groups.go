@@ -210,6 +210,9 @@ func (s *Store) IsOwner(orgID OrgID, userID string) (bool, error) {
 // trigger does it, on the same status update, inside the same
 // transaction. Two writers for one row is how the tombstone bug in
 // setOrgBit stayed hidden; the trigger is now the only one.
+// ErrOwnerImmutable: an owner can't be removed from their org.
+var ErrOwnerImmutable = errors.New("owner cannot be removed")
+
 func (s *Store) RemoveMember(orgID OrgID, email string) error {
 	m, err := s.GetTeamMemberByEmail(orgID, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -219,7 +222,7 @@ func (s *Store) RemoveMember(orgID OrgID, email string) error {
 		return err
 	}
 	if m.Role == RoleOwner {
-		return fmt.Errorf("%s is an owner and cannot be removed", email)
+		return fmt.Errorf("%s is an owner and cannot be removed: %w", email, ErrOwnerImmutable)
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		txStore := &Store{db: tx}

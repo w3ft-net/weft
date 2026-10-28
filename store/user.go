@@ -488,6 +488,21 @@ func (s *Store) ListTeamMembers(orgID OrgID) ([]TeamMember, error) {
 	return s.Orgs.Members(context.Background(), orgID.String())
 }
 
+// GetTeamMemberByID finds a non-removed membership by id within orgID. An id
+// belonging to another org is indistinguishable from a missing one.
+func (s *Store) GetTeamMemberByID(orgID OrgID, id string) (*TeamMember, error) {
+	members, err := s.ListTeamMembers(orgID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range members {
+		if members[i].ID == id {
+			return &members[i], nil
+		}
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
 // InviteTeamMember records a pending membership for an address that may not
 // have an account yet. invitedBy is the inviting user's id.
 func (s *Store) InviteTeamMember(orgID OrgID, email string, role orgs.Role, invitedBy string) (*TeamMember, error) {

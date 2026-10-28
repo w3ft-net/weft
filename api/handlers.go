@@ -1979,10 +1979,13 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Can't remove self.
-	var target store.TeamMember
-	if err := s.store.DB().WithContext(store.WithoutTenantScope(r.Context())).First(&target, "id = ?", id).Error; err != nil {
+	target, err := s.store.GetTeamMemberByID(session.ActiveOrgID, id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		http.Error(w, "member not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if target.Email == session.Email {
@@ -1990,11 +1993,14 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Remove.
-	s.store.DB().WithContext(store.WithoutTenantScope(r.Context())).Model(&store.TeamMember{}).Where("id = ?", id).Updates(map[string]any{
-		"status":     "removed",
-		"updated_at": time.Now(),
-	})
+	if err := s.store.RemoveMember(session.ActiveOrgID, target.Email); err != nil {
+		if errors.Is(err, store.ErrOwnerImmutable) {
+			http.Error(w, "owners cannot be removed", http.StatusForbidden)
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	// Membership is removed; user record itself is unchanged (the user
 	// may belong to other orgs).
