@@ -85,7 +85,7 @@ func (f *readFixture) run(t *testing.T, user, pipeline string) error {
 }
 
 func refused(err error) bool {
-	return err != nil && (strings.Contains(err.Error(), "unknown source") || strings.Contains(err.Error(), "every namespace"))
+	return err != nil && (strings.Contains(err.Error(), "unknown source") || strings.Contains(err.Error(), "you can read only"))
 }
 
 func TestQuery_ReadsOnlyNamespacesTheUserMayRead(t *testing.T) {
@@ -104,6 +104,12 @@ func TestQuery_ReadsOnlyNamespacesTheUserMayRead(t *testing.T) {
 		// first; naming one the user can't read taints the whole query.
 		{"reader mixing a readable and an unreadable namespace", f.reader, "cat /log/alpha/api/main.log /log/beta/api/main.log", true},
 		{"owner mixing namespaces", f.owner, "cat /log/alpha/api/main.log /log/beta/api/main.log", false},
+		// These plan a query that names no namespace, which reads all of them.
+		{"reader naming no namespace", f.reader, "cat /log", true},
+		{"reader naming no namespace, trailing slash", f.reader, "head -n 5 /log/", true},
+		{"reader with an empty namespace segment", f.reader, "cat /log//api/main.log", true},
+		{"owner naming no namespace", f.owner, "cat /log", false},
+		{"system identity naming no namespace", "", "cat /log", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -141,16 +141,16 @@ func TestExecuteQuery_TraceListEmptyRunsOneStep(t *testing.T) {
 	}
 }
 
-// The old form `trace <id>` now reads as a namespace; say what to type.
-func TestExecuteQuery_OldTraceFormHintsAtID(t *testing.T) {
+// The old form `trace <id>` reads as a namespace, and no namespace has that name.
+func TestExecuteQuery_OldTraceFormIsAnUnknownNamespace(t *testing.T) {
 	c := setupTestCoordinator(t)
 	res, err := c.Execute(context.Background(), "trace 4bf92f3577b34da6a3ce929d0e0e4736", fullRange, "kevlar", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	stderr := drainExec(t, res).Stderr
-	if !strings.Contains(stderr, "unknown source: 4bf92f") || !strings.Contains(stderr, "--id") {
-		t.Fatalf("want an unknown-source message that mentions --id, got %q", stderr)
+	if !strings.Contains(stderr, "unknown source: 4bf92f") {
+		t.Fatalf("want an unknown-source message naming the id, got %q", stderr)
 	}
 }
 

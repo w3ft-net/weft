@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"slices"
 	"sort"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 	luapkg "github.com/graybeardcorp/warp/pkg/lua"
@@ -1098,16 +1099,13 @@ func (c *Coordinator) authorizeSources(custID store.OrgID, userID string, plan *
 			return fmt.Errorf("validate source: %w", err)
 		}
 		if len(readable) < len(all) {
-			return fmt.Errorf("this query reads every namespace, and you can read only %s — name one", strings.Join(readable, ", "))
+			return fmt.Errorf("this script reads from all namespaces, and you can read only %s", strings.Join(readable, ", "))
 		}
 		return nil
 	}
 	for _, ns := range plan.SourceNamespaces {
 		if !slices.Contains(readable, ns) {
 			msg := "unknown source: " + ns
-			if strings.HasPrefix(plan.SourceCmd, "trace") {
-				msg += " (to show one trace, pass its id with --id)"
-			}
 			return errors.New(msg)
 		}
 	}
