@@ -47,6 +47,16 @@ func (s *Store) NamespaceNames(orgID OrgID, userID string, all bool) ([]string, 
 	return names, err
 }
 
+// ReadableNamespaces is the one rule for which namespaces a user may read: all
+// of them for an owner and for the empty user (the system identity crons and
+// internal callers run as), otherwise those they hold read permission on.
+// Everything that decides read access — the /log listing, log queries — asks
+// this. The caller says whether the user is an owner, since it already knows
+// (the session, or Store.IsOwner).
+func (s *Store) ReadableNamespaces(orgID OrgID, userID string, owner bool) ([]string, error) {
+	return s.NamespaceNames(orgID, userID, owner || userID == "")
+}
+
 // UpsertNamespacePermission creates or updates a namespace permission.
 func (s *Store) UpsertNamespacePermission(p *NamespacePermission) error {
 	var existing NamespacePermission

@@ -80,7 +80,6 @@ func TestExecuteRPC_FollowFlushesSingleLineImmediately(t *testing.T) {
 
 	req := &pb.CoordinatorExecuteRequest{
 		Pipeline: "tail follow-flush/svc/main.log",
-		UserId:   user.ID,
 		Follow:   true,
 	}
 

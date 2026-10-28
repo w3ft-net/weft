@@ -74,7 +74,6 @@ func TestQueryRPC_EmitsNoticesOnFirstTmpWrite(t *testing.T) {
 
 	req := &pb.CoordinatorExecuteRequest{
 		Pipeline:    `echo first > /tmp/wire`,
-		UserId:      user.ID,
 		TimeStartNs: time.Now().Add(-time.Hour).UnixNano(),
 		TimeEndNs:   time.Now().Add(time.Hour).UnixNano(),
 	}

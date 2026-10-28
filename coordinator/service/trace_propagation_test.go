@@ -75,7 +75,6 @@ func TestExecuteRPC_TraceIDSurvivesGRPCMetadataBoundary(t *testing.T) {
 
 	req := &pb.CoordinatorExecuteRequest{
 		Pipeline: "(", // deliberately unparseable — fails fast, no shard/compute needed
-		UserId:   user.ID,
 	}
 
 	stream := &traceCaptureStream{ctx: ctx}

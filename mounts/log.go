@@ -29,7 +29,7 @@ func (m *LogMount) Authorize(rel string, _ shellcore.Perm) error {
 	if rel == "" {
 		return nil
 	}
-	nss, err := m.cfg.Store.NamespaceNames(m.cfg.OrgID, m.cfg.UserID, m.cfg.IsOwner || m.cfg.UserID == "")
+	nss, err := m.cfg.Store.ReadableNamespaces(m.cfg.OrgID, m.cfg.UserID, m.cfg.IsOwner)
 	if err != nil {
 		return err
 	}
@@ -41,7 +41,7 @@ func (m *LogMount) Authorize(rel string, _ shellcore.Perm) error {
 
 func (m *LogMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	if rel == "" {
-		nss, err := m.cfg.Store.NamespaceNames(m.cfg.OrgID, m.cfg.UserID, m.cfg.IsOwner || m.cfg.UserID == "")
+		nss, err := m.cfg.Store.ReadableNamespaces(m.cfg.OrgID, m.cfg.UserID, m.cfg.IsOwner)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +135,7 @@ func (m *LogMount) Remove(string) error            { return shellcore.ErrReadOnl
 // Readable namespaces come from one query, not a permission lookup per
 // namespace.
 func (m *LogMount) Walk(rel string) ([]string, error) {
-	nss, err := m.cfg.Store.NamespaceNames(m.cfg.OrgID, m.cfg.UserID, m.cfg.IsOwner || m.cfg.UserID == "")
+	nss, err := m.cfg.Store.ReadableNamespaces(m.cfg.OrgID, m.cfg.UserID, m.cfg.IsOwner)
 	if err != nil {
 		return nil, err
 	}

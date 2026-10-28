@@ -864,7 +864,6 @@ func (s *Server) recentLines(r *http.Request, userID string, namespace, app stri
 	end := time.Now()
 	stream, err := s.coordClient.Execute(ctx, &pb.CoordinatorExecuteRequest{
 		Pipeline:    fmt.Sprintf("tail -n %d /log/%s/%s/main.log", n, namespace, app),
-		UserId:      userID,
 		TimeStartNs: end.Add(-time.Hour).UnixNano(),
 		TimeEndNs:   end.UnixNano(),
 	})

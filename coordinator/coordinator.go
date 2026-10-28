@@ -7,6 +7,7 @@ import (
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1042,31 +1043,64 @@ func (c *Coordinator) preflight(pipeline, customer string) (store.OrgID, string,
 // scopes tenant-backed features (ShellFS, weft.*). alertCtx is forwarded
 // to runLocal so interior queries dispatched by the interceptor inherit
 // the caller's alert identity; may be nil.
+// userIsOwner reports whether userID owns the org. The empty user (the system
+// identity) is not a member of anything, but reads as an owner.
+func (c *Coordinator) userIsOwner(custID store.OrgID, userID string) (bool, error) {
+	if userID == "" {
+		return true, nil
+	}
+	return c.Store.IsOwner(custID, userID)
+}
+
+// authorizeSources refuses a log query that reads a namespace userID may not.
+// The empty user is the system identity and may read everything.
+func (c *Coordinator) authorizeSources(custID store.OrgID, userID string, plan *planner.QueryPlan) error {
+	// The system identity reading "every namespace" has nothing to check.
+	if len(plan.SourceNamespaces) == 0 && userID == "" {
+		return nil
+	}
+	owner, err := c.userIsOwner(custID, userID)
+	if err != nil {
+		return fmt.Errorf("validate source: %w", err)
+	}
+	readable, err := c.Store.ReadableNamespaces(custID, userID, owner)
+	if err != nil {
+		return fmt.Errorf("validate source: %w", err)
+	}
+	if len(plan.SourceNamespaces) == 0 {
+		all, err := c.Store.NamespaceNames(custID, "", true)
+		if err != nil {
+			return fmt.Errorf("validate source: %w", err)
+		}
+		if len(readable) < len(all) {
+			return fmt.Errorf("this query reads every namespace, and you can read only %s — name one", strings.Join(readable, ", "))
+		}
+		return nil
+	}
+	for _, ns := range plan.SourceNamespaces {
+		if !slices.Contains(readable, ns) {
+			msg := "unknown source: " + ns
+			if strings.HasPrefix(plan.SourceCmd, "trace") {
+				msg += " (to show one trace, pass its id with --id)"
+			}
+			return errors.New(msg)
+		}
+	}
+	return nil
+}
+
 func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan, tr TimeRange, customer string, custID store.OrgID, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	if plan.ShardSQL == "" {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
 
-	// Allowlist: the pipeline's source namespace must resolve to a
-	// namespace this customer owns. Gate here, before the name ever
-	// reaches SQL interpolation — the planner escapes string literals,
-	// but an allowlist is the correct posture for a user-controlled
-	// identifier. The planner already split the namespace out of the
-	// pseudofile path, so this checks it directly.
-	if plan.SourceNamespace != "" {
-		var count int64
-		if err := c.Store.DB().WithContext(store.WithOrg(ctx, custID)).Model(&store.Namespace{}).
-			Where("name = ?", plan.SourceNamespace).
-			Count(&count).Error; err != nil {
-			return nil, fmt.Errorf("validate source: %w", err)
-		}
-		if count == 0 {
-			msg := "unknown source: " + plan.SourceNamespace
-			if strings.HasPrefix(plan.SourceCmd, "trace") {
-				msg += " (to show one trace, pass its id with --id)"
-			}
-			return nil, errors.New(msg)
-		}
+	// Authorization: every namespace the query reads must be one the user may
+	// read (the same rule the /log listing applies), and a query that names no
+	// namespace reads all of them. This also serves as the allowlist before a
+	// name reaches SQL interpolation: only namespaces that exist can pass. A
+	// namespace that is missing and one that is unreadable read the same.
+	if err := c.authorizeSources(custID, userID, plan); err != nil {
+		return nil, err
 	}
 
 	// Every shard query goes through plan.DirectShardSQL so each shard
@@ -1327,10 +1361,16 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 			// run as (empty userID) gets no WithUser and never writes
 			// /bin, /cron.d or /etc.
 			var perms mounts.OrgPerms
+			owner, oerr := c.userIsOwner(custID, userID)
+			if oerr != nil {
+				weftsdk.Warnf(ctx, "runLocal: load role for %s: %v (reads limited to granted namespaces)", userID, oerr)
+			}
+			perms.IsOwner = owner
 			perm, err := c.Store.GetOrgPermission(custID, userID)
 			switch {
 			case err == nil:
 				perms = mounts.OrgPerms{
+					IsOwner:             owner,
 					CanManageFunctions:  perm.CanManageFunctions,
 					CanManageWatches:    perm.CanManageWatches,
 					CanManageEtc:        perm.CanManageEtc,

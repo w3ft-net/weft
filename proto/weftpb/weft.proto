@@ -494,9 +494,11 @@ message CoordinatorExecuteRequest {
   int64 time_start_ns = 2;  // 0 = use default
   int64 time_end_ns = 3;    // 0 = use default
   bool follow = 4;          // if true, stream stays open for live tail
-  reserved 5;
-  reserved "customer";
-  string user_id = 6;       // invoking user; empty = system. Used for write attribution.
+  // The invoking user is the authenticated caller, never a field of the
+  // request: a caller that could name its own user could name "" (the system
+  // identity, which reads every namespace) or someone else.
+  reserved 5, 6;
+  reserved "customer", "user_id";
 }
 
 message CoordinatorExecuteResponse {

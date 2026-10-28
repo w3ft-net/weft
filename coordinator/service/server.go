@@ -149,6 +149,8 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	if err != nil {
 		return err
 	}
+	// Who is asking comes from the authenticated session, not the request.
+	userID := callerUserID(stream.Context())
 
 	tr := coordinator.TimeRange{
 		Start: time.Unix(0, req.TimeStartNs),
@@ -192,9 +194,9 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	var lineCount int
 	var result *coordinator.ExecuteResult
 	if req.Follow && s.Coord.Tail != nil {
-		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, customer, req.UserId, dirStack)
+		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, customer, userID, dirStack)
 	} else {
-		result, err = s.Coord.ExecuteWithDir(ctx, req.Pipeline, tr, customer, req.UserId, dirStack)
+		result, err = s.Coord.ExecuteWithDir(ctx, req.Pipeline, tr, customer, userID, dirStack)
 	}
 	if err != nil {
 		span.RecordError(err)

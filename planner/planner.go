@@ -60,9 +60,13 @@ type QueryPlan struct {
 	// reads the row's payload instead of its raw line.
 	LiveRowStages    []string
 	LiveReadsPayload bool
-	SourceCmd        string   // source command: "cat", "head", "tail", or "trace"
-	SourceCustomerID int64    // the customer_id the query is scoped to (0 only in tests)
-	SourceNamespace  string   // namespace column value — routing + allowlist ("" = all namespaces)
+	SourceCmd        string // source command: "cat", "head", "tail", or "trace"
+	SourceCustomerID int64  // the customer_id the query is scoped to (0 only in tests)
+	SourceNamespace  string // namespace column value — routing ("" = all namespaces)
+	// SourceNamespaces is every namespace the source reads, sorted; empty means
+	// all of them. SourceNamespace is only the first. Authorization must use
+	// this, not SourceNamespace.
+	SourceNamespaces []string
 	SourceService    string   // service column value — routing ("" = all services in the namespace)
 	SourceKind       string   // kind column value — live-tail matching ("" = all kinds)
 	AlertArgs        []string // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
@@ -333,6 +337,7 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 		SourceCmd:         info.source.cmd,
 		SourceCustomerID:  customerID,
 		SourceNamespace:   firstOrEmpty(info.source.namespaces),
+		SourceNamespaces:  info.source.namespaces,
 		SourceService:     firstOrEmpty(info.source.services),
 		SourceKind:        firstOrEmpty(info.source.kinds),
 		AlertArgs:         alertArgs,

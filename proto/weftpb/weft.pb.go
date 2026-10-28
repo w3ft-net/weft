@@ -2087,7 +2087,6 @@ type CoordinatorExecuteRequest struct {
 	TimeStartNs   int64                  `protobuf:"varint,2,opt,name=time_start_ns,json=timeStartNs,proto3" json:"time_start_ns,omitempty"` // 0 = use default
 	TimeEndNs     int64                  `protobuf:"varint,3,opt,name=time_end_ns,json=timeEndNs,proto3" json:"time_end_ns,omitempty"`       // 0 = use default
 	Follow        bool                   `protobuf:"varint,4,opt,name=follow,proto3" json:"follow,omitempty"`                                // if true, stream stays open for live tail
-	UserId        string                 `protobuf:"bytes,6,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                   // invoking user; empty = system. Used for write attribution.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2148,13 +2147,6 @@ func (x *CoordinatorExecuteRequest) GetFollow() bool {
 		return x.Follow
 	}
 	return false
-}
-
-func (x *CoordinatorExecuteRequest) GetUserId() string {
-	if x != nil {
-		return x.UserId
-	}
-	return ""
 }
 
 type CoordinatorExecuteResponse struct {
@@ -4020,13 +4012,12 @@ const file_weft_proto_rawDesc = "" +
 	"\x14AuthenticateResponse\x12\x1a\n" +
 	"\bcustomer\x18\x01 \x01(\tR\bcustomer\x12\x1c\n" +
 	"\tnamespace\x18\x05 \x01(\tR\tnamespaceJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\n" +
-	"shard_addrR\vshard_tokenR\rexpires_at_ns\"\xbc\x01\n" +
+	"shard_addrR\vshard_tokenR\rexpires_at_ns\"\xb2\x01\n" +
 	"\x19CoordinatorExecuteRequest\x12\x1a\n" +
 	"\bpipeline\x18\x01 \x01(\tR\bpipeline\x12\"\n" +
 	"\rtime_start_ns\x18\x02 \x01(\x03R\vtimeStartNs\x12\x1e\n" +
 	"\vtime_end_ns\x18\x03 \x01(\x03R\ttimeEndNs\x12\x16\n" +
-	"\x06follow\x18\x04 \x01(\bR\x06follow\x12\x17\n" +
-	"\auser_id\x18\x06 \x01(\tR\x06userIdJ\x04\b\x05\x10\x06R\bcustomer\"~\n" +
+	"\x06follow\x18\x04 \x01(\bR\x06followJ\x04\b\x05\x10\x06J\x04\b\x06\x10\aR\bcustomerR\auser_id\"~\n" +
 	"\x1aCoordinatorExecuteResponse\x12 \n" +
 	"\x05lines\x18\x01 \x03(\v2\n" +
 	".weft.LineR\x05lines\x12&\n" +
