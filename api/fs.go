@@ -5,7 +5,9 @@ import (
 	"errors"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
+	iofs "io/fs"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/graybeardcorp/weft/auth"
@@ -27,6 +29,36 @@ func sessionPerms(s *auth.Session) mounts.OrgPerms {
 	}
 }
 
+// shellFS is the filesystem the shell writes through, bound to this request's
+// session: the same mounts, the same group checks, the same plan limits. Every
+// route that changes /bin, /cron.d or /etc goes through it instead of calling
+// the store, so there is one implementation of who may write what.
+func (s *Server) shellFS(r *http.Request, session *auth.Session, logServices []string) *shellfs.ShellFS {
+	return shellfs.New(s.store, session.ActiveOrgID, logServices,
+		shellfs.WithUser(session.UserID, sessionPerms(session)),
+		shellfs.WithTier(session.Tier),
+		shellfs.WithContext(r.Context()))
+}
+
+// mountPath joins a mount directory and a name from the URL, refusing a name
+// (".." and the like) that would resolve outside the directory.
+func mountPath(dir, name string) (string, bool) {
+	p := dir + "/" + name
+	return p, path.Clean(p) == p
+}
+
+// writeFSError answers a failed write through the shell filesystem: a missing
+// group or an exhausted plan is 403, anything else (bad input, a rejected
+// save) is 400.
+func writeFSError(w http.ResponseWriter, err error) {
+	var limit *mounts.PlanLimitError
+	if errors.Is(err, iofs.ErrPermission) || errors.As(err, &limit) {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusBadRequest)
+}
+
 // FSEntry is one row in a directory listing.
 type FSEntry struct {
 	Name  string `json:"name"`
@@ -46,8 +78,7 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 		logServices = s.fetchLogServices(r)
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session)), shellfs.WithContext(r.Context())}
-	fs := shellfs.New(s.store, session.ActiveOrgID, logServices, opts...)
+	fs := s.shellFS(r, session, logServices)
 
 	if r.URL.Query().Get("walk") == "1" {
 		paths, err := fs.Walk(path)
@@ -82,8 +113,7 @@ func (s *Server) handleReadFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session)), shellfs.WithContext(r.Context())}
-	fs := shellfs.New(s.store, session.ActiveOrgID, nil, opts...)
+	fs := s.shellFS(r, session, nil)
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -114,8 +144,7 @@ func (s *Server) handleWriteFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session)), shellfs.WithContext(r.Context())}
-	fs := shellfs.New(s.store, session.ActiveOrgID, nil, opts...)
+	fs := s.shellFS(r, session, nil)
 	// WriteFile's error may be a non-blocking store.Warning (e.g. a
 	// /cron.d save tripping the truncation lint) — the write already
 	// happened. This generic multi-path editor endpoint has no field
@@ -125,7 +154,7 @@ func (s *Server) handleWriteFS(w http.ResponseWriter, r *http.Request) {
 	// warnings actually reach the user.
 	blocking, _ := store.Split(fs.WriteFile(req.Path, []byte(req.Content)))
 	if len(blocking) > 0 {
-		http.Error(w, errors.Join(blocking...).Error(), http.StatusBadRequest)
+		writeFSError(w, errors.Join(blocking...))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -139,10 +168,9 @@ func (s *Server) handleRemoveFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []shellfs.Option{shellfs.WithUser(session.UserID, sessionPerms(session)), shellfs.WithContext(r.Context())}
-	fs := shellfs.New(s.store, session.ActiveOrgID, nil, opts...)
+	fs := s.shellFS(r, session, nil)
 	if err := fs.Remove(path); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeFSError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

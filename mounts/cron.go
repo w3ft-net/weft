@@ -86,7 +86,7 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 
 	maxWatches := store.WatchLimit(m.cfg.Tier)
 	if maxWatches == 0 {
-		return fmt.Errorf("crons are not available on the trial plan")
+		return &PlanLimitError{"crons are not available on the trial plan"}
 	}
 
 	// A cron that is new, or being turned back on, takes a slot; disabled
@@ -97,7 +97,7 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 			return fmt.Errorf("failed to check cron count: %w", err)
 		}
 		if count >= maxWatches {
-			return fmt.Errorf("cron limit reached (%d crons on %s plan)", maxWatches, m.cfg.Tier)
+			return &PlanLimitError{fmt.Sprintf("cron limit reached (%d crons on %s plan)", maxWatches, m.cfg.Tier)}
 		}
 	}
 
@@ -107,7 +107,7 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 		return err
 	}
 	if interval < minInterval {
-		return fmt.Errorf("minimum schedule interval for %s plan is %s", m.cfg.Tier, minInterval)
+		return &PlanLimitError{fmt.Sprintf("minimum schedule interval for %s plan is %s", m.cfg.Tier, minInterval)}
 	}
 
 	// Lower at save time so the fire path can skip preflight + Plan.

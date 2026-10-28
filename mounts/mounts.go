@@ -23,6 +23,14 @@ func denyWrite(dir, group string) error {
 		dir, fs.ErrPermission, group, group)
 }
 
+// PlanLimitError is a write refused because the org's plan does not allow it
+// (too many crons, a schedule shorter than the plan's minimum). It is not a
+// permission problem — the caller may write here, the plan may not — so
+// callers that map errors to statuses can tell the two apart.
+type PlanLimitError struct{ Msg string }
+
+func (e *PlanLimitError) Error() string { return e.Msg }
+
 // NoticeSink is the narrow interface mounts use to signal one-time notices.
 type NoticeSink interface {
 	Maybe(ctx context.Context, noticeKey string)

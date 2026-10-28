@@ -245,8 +245,7 @@ func (s *Server) handleGetNotifyConfig(w http.ResponseWriter, r *http.Request) {
 // errors back (missing targets, bad PD severity, malformed YAML).
 func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, ok := activeOrg(w, session)
-	if !ok {
+	if _, ok := activeOrg(w, session); !ok {
 		return
 	}
 	var req struct {
@@ -256,12 +255,9 @@ func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	if err := store.ValidateNotifyAliases(req.AliasesYAML); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := s.store.SaveNotifyAliases(custID, session.UserID, req.AliasesYAML); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	// The /etc mount validates the aliases.
+	if err := s.shellFS(r, session, nil).WriteFile("/etc/notify.yaml", []byte(req.AliasesYAML)); err != nil {
+		writeFSError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)

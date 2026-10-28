@@ -30,7 +30,6 @@ import (
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/coordinator/onboarding"
 	"github.com/graybeardcorp/weft/ingest"
-	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
@@ -1501,13 +1500,16 @@ func (s *Server) handleSaveFunction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "source required", http.StatusBadRequest)
 		return
 	}
-	custID, ok := activeOrg(w, session)
-	if !ok {
+	if _, ok := activeOrg(w, session); !ok {
 		return
 	}
-	lang, cleanSource := mounts.ClassifyBinScript(name, req.Source)
-	if err := s.store.SaveShellFunction(custID, session.UserID, name, cleanSource, lang); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	p, ok := mountPath("/bin", name)
+	if !ok {
+		http.Error(w, "invalid name", http.StatusBadRequest)
+		return
+	}
+	if err := s.shellFS(r, session, nil).WriteFile(p, []byte(req.Source)); err != nil {
+		writeFSError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -1520,12 +1522,16 @@ func (s *Server) handleDeleteFunction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, ok := activeOrg(w, session)
-	if !ok {
+	if _, ok := activeOrg(w, session); !ok {
 		return
 	}
-	if err := s.store.DeleteShellFunction(custID, name); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	p, ok := mountPath("/bin", name)
+	if !ok {
+		http.Error(w, "invalid name", http.StatusBadRequest)
+		return
+	}
+	if err := s.shellFS(r, session, nil).Remove(p); err != nil {
+		writeFSError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1591,63 +1597,25 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "schedule and pipeline required", http.StatusBadRequest)
 		return
 	}
-	custID, ok := activeOrg(w, session)
+	if _, ok := activeOrg(w, session); !ok {
+		return
+	}
+	p, ok := mountPath("/cron.d", name)
 	if !ok {
+		http.Error(w, "invalid name", http.StatusBadRequest)
 		return
 	}
 
-	// Enforce tier limits on watches.
-	tier := session.Tier
-	maxWatches := store.WatchLimit(tier)
-	if maxWatches == 0 {
-		http.Error(w, "crons are not available on the trial plan", http.StatusForbidden)
-		return
-	}
-
-	// A save through the API always leaves the cron enabled, so a new
-	// watch, or one that was benched, takes a slot.
-	if existing, err := s.store.GetCronWatch(custID, name); err != nil || !existing.Enabled {
-		count, err := s.store.CountCronWatches(custID)
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if count >= maxWatches {
-			http.Error(w, fmt.Sprintf("cron limit reached (%d crons on %s plan)", maxWatches, tier), http.StatusForbidden)
-			return
-		}
-	}
-
-	// Check minimum interval.
-	minInterval := store.MinWatchInterval(tier)
-	interval, err := store.ValidateSchedule(req.Schedule)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if interval < minInterval {
-		http.Error(w, fmt.Sprintf("minimum schedule interval for %s plan is %s", tier, minInterval), http.StatusForbidden)
-		return
-	}
-
-	// Lower at save time. LowerForStorage swallows errors (returns nil)
-	// so a pipeline shape the lowerer can't handle yet (e.g. /bin/
-	// inlining stub) saves with NULL lowered_plan — the fire path falls
-	// back to inline Plan(). This is the canonical save-time entry
-	// point; the gRPC and shell save paths use the same helper.
-	resolver := storeBinResolver{store: s.store, orgID: custID}
-	loweredJSON := planner.LowerForStorage(r.Context(), req.Pipeline, int64(custID), string(tier), resolver)
-
-	// SaveCronWatch's error may be a non-blocking store.Warning (or an
-	// errors.Join of several) — the save already happened, but
-	// there's something to tell the user (e.g. the /cron.d
-	// truncation lint). store.Split separates that from an actual
-	// rejection, and — unlike before — a real rejection now carries
-	// its own message (bash syntax error, tier limit, ...) instead of
-	// a generic "internal error" that discarded it.
-	blocking, warnings := store.Split(s.store.SaveCronWatch(custID, session.UserID, name, req.Schedule, req.Pipeline, true, loweredJSON))
+	// A save through the API always leaves the cron enabled. The group
+	// check, plan limits, schedule validation and save-time lowering are the
+	// /cron.d mount's, shared with the shell. WriteFile's error may be a
+	// non-blocking store.Warning (the save already happened but there is
+	// something to tell the user, e.g. the truncation lint); store.Split
+	// separates that from a real rejection.
+	content := "# schedule: " + req.Schedule + "\n" + req.Pipeline
+	blocking, warnings := store.Split(s.shellFS(r, session, nil).WriteFile(p, []byte(content)))
 	if len(blocking) > 0 {
-		http.Error(w, errors.Join(blocking...).Error(), http.StatusBadRequest)
+		writeFSError(w, errors.Join(blocking...))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1683,12 +1651,16 @@ func (s *Server) handleDeleteWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, ok := activeOrg(w, session)
-	if !ok {
+	if _, ok := activeOrg(w, session); !ok {
 		return
 	}
-	if err := s.store.DeleteCronWatch(custID, name); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	p, ok := mountPath("/cron.d", name)
+	if !ok {
+		http.Error(w, "invalid name", http.StatusBadRequest)
+		return
+	}
+	if err := s.shellFS(r, session, nil).Remove(p); err != nil {
+		writeFSError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

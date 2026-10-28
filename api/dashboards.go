@@ -248,21 +248,17 @@ func (s *Server) handleSaveDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "yaml_body required", http.StatusBadRequest)
 		return
 	}
-	custID, ok := activeOrg(w, session)
+	if _, ok := activeOrg(w, session); !ok {
+		return
+	}
+	p, ok := mountPath("/etc/dashboards", name+".yaml")
 	if !ok {
+		http.Error(w, "invalid name", http.StatusBadRequest)
 		return
 	}
-	spec, err := store.ParseDashboardYAML(req.YAMLBody)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-		return
-	}
-	if err := s.store.ValidateDashboardWatchRefs(custID, spec); err != nil {
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-		return
-	}
-	if err := s.store.SaveDashboard(custID, session.UserID, name, req.YAMLBody); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	// The /etc mount validates the YAML and its cron references.
+	if err := s.shellFS(r, session, nil).WriteFile(p, []byte(req.YAMLBody)); err != nil {
+		writeFSError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -275,12 +271,16 @@ func (s *Server) handleDeleteDashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, ok := activeOrg(w, session)
-	if !ok {
+	if _, ok := activeOrg(w, session); !ok {
 		return
 	}
-	if err := s.store.DeleteDashboard(custID, name); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	p, ok := mountPath("/etc/dashboards", name+".yaml")
+	if !ok {
+		http.Error(w, "invalid name", http.StatusBadRequest)
+		return
+	}
+	if err := s.shellFS(r, session, nil).Remove(p); err != nil {
+		writeFSError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
