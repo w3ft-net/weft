@@ -85,19 +85,115 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 		t.Fatalf("dashboard status %d: %s", rec.Code, rec.Body)
 	}
 	var dash struct {
-		Crons map[string]struct {
-			Plot struct {
-				Series []struct {
-					Tag string `json:"tag"`
-				} `json:"series"`
-			} `json:"plot"`
-		} `json:"crons"`
+		Spec struct {
+			Sections []struct {
+				Tiles []struct {
+					Plot struct {
+						Series []struct {
+							Tag string `json:"tag"`
+						} `json:"series"`
+					} `json:"plot"`
+				} `json:"tiles"`
+			} `json:"sections"`
+		} `json:"spec"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &dash); err != nil {
 		t.Fatal(err)
 	}
-	if s := dash.Crons["hosts"].Plot.Series; len(s) != 2 || s[0].Tag != "a" || s[1].Tag != "b" {
+	if s := dash.Spec.Sections[0].Tiles[0].Plot.Series; len(s) != 2 || s[0].Tag != "a" || s[1].Tag != "b" {
 		t.Fatalf("dashboard plot series = %+v, want lines a and b", s)
+	}
+
+	// Tiles on one cron reduce it separately: a line draws its own tags, and
+	// a bar of a tagged cron says why it has no plot.
+	if err := s.SaveDashboard(cust.ID, user.ID, "fleet2", "tiles:\n  - kind: line\n    cron: hosts\n    aggregate: max\n    bucket: 1h\n  - kind: bar\n    cron: hosts\n"); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest("GET", "/api/dashboards/fleet2", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	var dash2 struct {
+		Spec struct {
+			Sections []struct {
+				Tiles []struct {
+					Plot  *struct{ Kind string } `json:"plot"`
+					Error string                 `json:"error"`
+				} `json:"tiles"`
+			} `json:"sections"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &dash2); err != nil {
+		t.Fatal(err)
+	}
+	tiles := dash2.Spec.Sections[0].Tiles
+	if tiles[0].Plot == nil || tiles[0].Plot.Kind != "line" || tiles[0].Error != "" {
+		t.Errorf("line tile = %+v, want a line plot", tiles[0])
+	}
+	if tiles[1].Plot != nil || !strings.Contains(tiles[1].Error, "a bar chart draws one series") {
+		t.Errorf("bar tile of a tagged cron = %+v, want the bar error and no plot", tiles[1])
+	}
+
+	// A tile's range: picks the window it draws, so one cron's tiles differ.
+	if err := s.SaveDashboard(cust.ID, user.ID, "fleet3", "tiles:\n  - kind: line\n    cron: hosts\n    range: 2h..30m\n  - kind: line\n    cron: hosts\n    range: 5m..\n"); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest("GET", "/api/dashboards/fleet3", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	var dash3 struct {
+		Spec struct {
+			Sections []struct {
+				Tiles []struct {
+					Plot struct {
+						Series []struct{} `json:"series"`
+					} `json:"plot"`
+				} `json:"tiles"`
+			} `json:"sections"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &dash3); err != nil {
+		t.Fatal(err)
+	}
+	if got := dash3.Spec.Sections[0].Tiles; len(got[0].Plot.Series) != 2 || len(got[1].Plot.Series) != 0 {
+		t.Errorf("series by range = %d, %d; want the 2h..30m tile to draw both tags and the 5m.. tile none", len(got[0].Plot.Series), len(got[1].Plot.Series))
+	}
+
+	// A counter and a table with a range read an aggregate over it, per tag,
+	// instead of the latest run. hosts stored a=1 and b=2 within 2h..30m.
+	if err := s.SaveDashboard(cust.ID, user.ID, "fleet4", "tiles:\n  - kind: counter\n    cron: hosts\n    aggregate: sum\n    range: 2h..30m\n  - kind: table\n    cron: hosts\n    aggregate: max\n    range: 2h..30m\n  - kind: table\n    cron: hosts\n    range: 5m..\n"); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest("GET", "/api/dashboards/fleet4", nil)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	var dash4 struct {
+		Spec struct {
+			Sections []struct {
+				Tiles []struct {
+					Display struct{ Num string } `json:"display"`
+					Points  []struct {
+						Tag   string
+						Value float64
+					} `json:"points"`
+				} `json:"tiles"`
+			} `json:"sections"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &dash4); err != nil {
+		t.Fatal(err)
+	}
+	t4 := dash4.Spec.Sections[0].Tiles
+	if t4[0].Display.Num != "2" {
+		t.Errorf("windowed counter shows %q, want the highest tag's sum, 2", t4[0].Display.Num)
+	}
+	if len(t4[1].Points) != 2 || t4[1].Points[0].Tag != "b" || t4[1].Points[0].Value != 2 || t4[1].Points[1].Tag != "a" {
+		t.Errorf("windowed table points = %+v, want b=2 then a=1", t4[1].Points)
+	}
+	if len(t4[2].Points) != 0 {
+		t.Errorf("a range with no runs in it has no rows, got %+v", t4[2].Points)
 	}
 
 	// A text cron has nothing to chart, and its latest run comes back as
@@ -126,7 +222,7 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 	if err := s.SaveDashboard(cust.ID, user.ID, "leases", "tiles:\n  - kind: table\n    cron: holders\n"); err != nil {
 		t.Fatal(err)
 	}
-	if rec := get("/api/dashboards/leases"); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"latest":[{"tag":"lease","text":"i-0abc"}]`) {
+	if rec := get("/api/dashboards/leases"); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"points":[{"tag":"lease","text":"i-0abc"}]`) {
 		t.Fatalf("dashboard latest: %d %s", rec.Code, rec.Body)
 	}
 

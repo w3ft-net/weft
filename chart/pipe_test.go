@@ -36,7 +36,7 @@ func TestParsePipeArgs_BucketImpliesLine(t *testing.T) {
 }
 
 func TestParsePipeArgs_TypeOverride(t *testing.T) {
-	got, msg := parsePipeArgs([]string{"--bucket", "1m", "-t", "bar"})
+	got, msg := parsePipeArgs([]string{"--bucket", "1m", "--kind", "bar"})
 	if msg != "" {
 		t.Fatalf("unexpected error: %s", msg)
 	}
@@ -200,14 +200,14 @@ func TestParsePipeArgs_TagDefaultsToLine(t *testing.T) {
 }
 
 func TestParsePipeArgs_TagRejectsBar(t *testing.T) {
-	_, msg := parsePipeArgs([]string{"--tag", ".host", "-t", "bar"})
+	_, msg := parsePipeArgs([]string{"--tag", ".host", "--kind", "bar"})
 	if msg == "" || !strings.Contains(msg, "only supported for line") {
 		t.Errorf("expected --tag+bar rejection, got %q", msg)
 	}
 }
 
 func TestParsePipeArgs_TagRejectsSparkline(t *testing.T) {
-	_, msg := parsePipeArgs([]string{"--tag", ".host", "-t", "sparkline"})
+	_, msg := parsePipeArgs([]string{"--tag", ".host", "--kind", "sparkline"})
 	if msg == "" || !strings.Contains(msg, "only supported for line") {
 		t.Errorf("expected --tag+sparkline rejection, got %q", msg)
 	}

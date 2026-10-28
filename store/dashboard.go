@@ -7,7 +7,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/graybeardcorp/weft/chart"
+	"github.com/graybeardcorp/weft/internal/timerange"
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 )
@@ -41,26 +44,77 @@ type DashboardSection struct {
 
 // DashboardTile is one tile entry. Watch is the cron watch name to read
 // from. Size is one of "sm", "md", "lg" (default "md"). Kind-specific
-// fields (Format, Threshold) are optional. A tile draws the tags its cron
+// fields (Format, Max) are optional. A tile draws the tags its cron
 // stores: a sparkline one line per tag, a table one row per tag of the
 // latest run.
 type DashboardTile struct {
-	Kind      string           `yaml:"kind" json:"kind"`
-	Watch     string           `yaml:"cron" json:"cron"`
-	Title     string           `yaml:"title,omitempty" json:"title,omitempty"`
-	Size      string           `yaml:"size,omitempty" json:"size,omitempty"`
-	Format    string           `yaml:"format,omitempty" json:"format,omitempty"`
-	Threshold *DashboardThresh `yaml:"threshold,omitempty" json:"threshold,omitempty"`
+	Kind      string   `yaml:"kind" json:"kind"`
+	Watch     string   `yaml:"cron" json:"cron"`
+	Title     string   `yaml:"title,omitempty" json:"title,omitempty"`
+	Aggregate string   `yaml:"aggregate,omitempty" json:"aggregate,omitempty"`
+	Bucket    string   `yaml:"bucket,omitempty" json:"bucket,omitempty"`
+	Range     string   `yaml:"range,omitempty" json:"range,omitempty"`
+	Size      string   `yaml:"size,omitempty" json:"size,omitempty"`
+	Format    string   `yaml:"format,omitempty" json:"format,omitempty"`
+	Max       *float64 `yaml:"max,omitempty" json:"max,omitempty"` // gauge full scale
 
-	// Display is filled by the API when serving a dashboard; never read from YAML.
+	// Display, Plot and Error are filled by the API when serving a dashboard; never
+	// read from YAML. Plot is the cron's last day reduced with this tile's
+	// aggregate and bucket, for line, sparkline and bar tiles.
 	Display *TileDisplay `yaml:"-" json:"display,omitempty"`
+	Plot    *chart.Plot  `yaml:"-" json:"plot,omitempty"`
+	// Critical is set by the API when the cron's alert cutoff is breached by
+	// the value the tile shows. A tile has no threshold of its own.
+	Critical bool `yaml:"-" json:"critical,omitempty"`
+	// Points are the numbers a counter, gauge or table shows, filled by the
+	// API: the cron's latest run, or with a range or aggregate its aggregate
+	// over the range. One per tag, highest first.
+	Points []chart.LatestPoint `yaml:"-" json:"points,omitempty"`
+	// Error is why a series tile has no Plot, such as a bar of a tagged cron.
+	Error string `yaml:"-" json:"error,omitempty"`
 }
 
-// DashboardThresh is the optional warn/crit cutoff for counter and gauge tiles.
-type DashboardThresh struct {
-	Warn *float64 `yaml:"warn,omitempty" json:"warn,omitempty"`
-	Crit *float64 `yaml:"crit,omitempty" json:"crit,omitempty"`
-	Max  *float64 `yaml:"max,omitempty" json:"max,omitempty"` // gauge upper bound
+// Alert is the cutoff of the cron's alert stage, nil when it has none (only
+// above, below, eq and neq carry one number).
+func (w *CronWatch) Alert() *chart.CronAlert {
+	if w == nil || w.AlertCondition == nil || w.AlertThreshold == nil {
+		return nil
+	}
+	return &chart.CronAlert{Condition: *w.AlertCondition, Threshold: *w.AlertThreshold}
+}
+
+// DefaultTileRange is the window a series tile draws unless it has a `range:`.
+const DefaultTileRange = "24h.."
+
+// TileRange is the range spec a series tile draws, in the grammar of the
+// shell's `range` command.
+func (t DashboardTile) TileRange() string {
+	if t.Range == "" {
+		return DefaultTileRange
+	}
+	return t.Range
+}
+
+// Windowed reports whether a counter, gauge or table reads an aggregate
+// over a range instead of the cron's latest run.
+func (t DashboardTile) Windowed() bool { return t.Range != "" || t.Aggregate != "" }
+
+// DrawsSeries reports whether t is one of the tile kinds that draw the cron's stored series over
+// time, the ones `chart <cron>` can draw and that take aggregate and bucket.
+func (t DashboardTile) DrawsSeries() bool {
+	return t.Kind == "line" || t.Kind == "sparkline" || t.Kind == "bar"
+}
+
+// ChartArgs is the `chart <cron>` invocation this tile stands for: its
+// aggregate (default avg) and bucket over the cron's stored series. A tile's
+// bucket is validated when the file is saved.
+func (t DashboardTile) ChartArgs() chart.WatchArgs {
+	args := chart.WatchArgs{Name: t.Watch, Kind: t.Kind, Aggregate: t.Aggregate, Title: t.Title}
+	if args.Aggregate == "" {
+		args.Aggregate = "avg"
+	}
+	args.Bucket, _ = time.ParseDuration(t.Bucket)
+	return args
 }
 
 // dashboardYAMLRaw is the on-disk shape — accepts either `sections:` or
@@ -73,6 +127,8 @@ type dashboardYAMLRaw struct {
 
 var (
 	validTileKinds = map[string]bool{
+		"line":      true,
+		"bar":       true,
 		"sparkline": true,
 		"counter":   true,
 		"gauge":     true,
@@ -155,8 +211,8 @@ func FormatTileDisplay(t DashboardTile, v *float64) *TileDisplay {
 		return &TileDisplay{Before: before.String(), Num: num, After: after.String()}
 	case "gauge":
 		max := 100.0
-		if t.Threshold != nil && t.Threshold.Max != nil {
-			max = *t.Threshold.Max
+		if t.Max != nil {
+			max = *t.Max
 		}
 		num := "—"
 		if v != nil {
@@ -172,7 +228,7 @@ func FormatTileDisplay(t DashboardTile, v *float64) *TileDisplay {
 var knownKeys = map[string][]string{
 	"dashboardYAMLRaw": {"title", "sections", "tiles"},
 	"DashboardSection": {"title", "tiles"},
-	"DashboardTile":    {"kind", "cron", "title", "size", "format", "threshold"},
+	"DashboardTile":    {"kind", "cron", "title", "aggregate", "bucket", "range", "size", "format", "max"},
 	"DashboardThresh":  {"warn", "crit", "max"},
 }
 
@@ -264,13 +320,29 @@ func validateSpec(spec *DashboardSpec) error {
 				return fmt.Errorf("%s: missing `kind:`", where)
 			}
 			if !validTileKinds[tile.Kind] {
-				return fmt.Errorf("%s: unknown kind %q (valid: sparkline, counter, gauge, table)", where, tile.Kind)
+				return fmt.Errorf("%s: unknown kind %q (valid: line, bar, sparkline, counter, gauge, table)", where, tile.Kind)
 			}
 			if tile.Watch == "" {
 				return fmt.Errorf("%s: missing `cron:`", where)
 			}
 			if tile.Size != "" && !validTileSizes[tile.Size] {
 				return fmt.Errorf("%s: unknown size %q (valid: sm, md, lg)", where, tile.Size)
+			}
+			if tile.Bucket != "" && !tile.DrawsSeries() {
+				return fmt.Errorf("%s: `bucket:` is only supported on line, bar and sparkline tiles", where)
+			}
+			if tile.Range != "" {
+				if _, _, err := timerange.ParseRange(tile.Range); err != nil {
+					return fmt.Errorf("%s: invalid range %q: %w", where, tile.Range, err)
+				}
+			}
+			if tile.Aggregate != "" && !chart.ValidCronAggregate(tile.Aggregate) {
+				return fmt.Errorf("%s: unknown aggregate %q (valid: count, sum, avg, min, max, p50, p95)", where, tile.Aggregate)
+			}
+			if tile.Bucket != "" {
+				if d, err := time.ParseDuration(tile.Bucket); err != nil || d <= 0 {
+					return fmt.Errorf("%s: invalid bucket %q (want a duration such as 5m or 1h)", where, tile.Bucket)
+				}
 			}
 			if tile.Format != "" {
 				if tile.Kind != "counter" {
@@ -280,11 +352,8 @@ func validateSpec(spec *DashboardSpec) error {
 					return fmt.Errorf("%s: %w", where, err)
 				}
 			}
-			if tile.Threshold != nil && tile.Kind == "table" {
-				return fmt.Errorf("%s: `threshold:` is only supported on counter, gauge, sparkline tiles", where)
-			}
-			if tile.Threshold != nil && tile.Threshold.Max != nil && tile.Kind != "gauge" {
-				return fmt.Errorf("%s: `threshold.max:` is only supported on gauge tiles", where)
+			if tile.Max != nil && tile.Kind != "gauge" {
+				return fmt.Errorf("%s: `max:` is only supported on gauge tiles", where)
 			}
 			tileCount++
 		}

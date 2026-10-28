@@ -3,6 +3,8 @@ package store
 import (
 	"strings"
 	"testing"
+
+	"github.com/graybeardcorp/weft/chart"
 )
 
 func TestParseDashboardYAML_Sections(t *testing.T) {
@@ -87,14 +89,21 @@ func TestParseDashboardYAML_Errors(t *testing.T) {
 		{"unknown field in tile", "tiles:\n  - kind: counter\n    cron: a\n    color: red\n", "'color' is not a valid key"},
 		{"format on gauge", "tiles:\n  - kind: gauge\n    cron: a\n    format: \"%.2f\"\n", "`format:` is only supported on counter"},
 		{"format on table", "tiles:\n  - kind: table\n    cron: a\n    format: \"%d\"\n", "`format:` is only supported on counter"},
-		{"threshold on table", "tiles:\n  - kind: table\n    cron: a\n    threshold: {warn: 1}\n", "`threshold:` is only supported on counter, gauge, sparkline"},
+		{"threshold is not a key", "tiles:\n  - kind: counter\n    cron: a\n    threshold: {crit: 1}\n", "'threshold' is not a valid key"},
 		{"format non-string", "tiles:\n  - kind: counter\n    cron: a\n    format: 5\n", "`format:` must contain exactly one %d or %.Nf"},
 		{"format no verb", "tiles:\n  - kind: counter\n    cron: a\n    format: ms\n", "`format:` must contain exactly one %d or %.Nf"},
 		{"format two verbs", "tiles:\n  - kind: counter\n    cron: a\n    format: \"%d/%d\"\n", "`format:` must contain exactly one %d or %.Nf"},
 		{"format unsupported verb", "tiles:\n  - kind: counter\n    cron: a\n    format: \"%s\"\n", "`format:` must contain exactly one %d or %.Nf"},
 		{"format bare %f", "tiles:\n  - kind: counter\n    cron: a\n    format: \"%f\"\n", "`format:` must contain exactly one %d or %.Nf"},
 		{"format stray percent", "tiles:\n  - kind: counter\n    cron: a\n    format: \"%d %\"\n", "`format:` must contain exactly one %d or %.Nf"},
-		{"max on counter", "tiles:\n  - kind: counter\n    cron: a\n    threshold: {max: 5}\n", "`threshold.max:` is only supported on gauge"},
+		{"max on counter", "tiles:\n  - kind: counter\n    cron: a\n    max: 5\n", "`max:` is only supported on gauge"},
+		{"bucket on counter", "tiles:\n  - kind: counter\n    cron: a\n    bucket: 5m\n", "`bucket:` is only supported on line, bar and sparkline"},
+		{"bad range", "tiles:\n  - kind: line\n    cron: a\n    range: sometime\n", "invalid range"},
+		{"bucket on table", "tiles:\n  - kind: table\n    cron: a\n    bucket: 5m\n", "`bucket:` is only supported on line, bar and sparkline"},
+		{"unknown aggregate", "tiles:\n  - kind: line\n    cron: a\n    aggregate: p99\n", "unknown aggregate \"p99\""},
+		{"identity is pipe-only", "tiles:\n  - kind: line\n    cron: a\n    aggregate: identity\n", "unknown aggregate"},
+		{"bad bucket", "tiles:\n  - kind: bar\n    cron: a\n    bucket: soon\n", "invalid bucket"},
+		{"zero bucket", "tiles:\n  - kind: bar\n    cron: a\n    bucket: 0s\n", "invalid bucket"},
 		{"tile tag points at the cron's schema", "tiles:\n  - kind: sparkline\n    cron: a\n    tag: .host\n", "a tile has no 'tag' key: a sparkline draws one line per tag its cron stores"},
 		{"tile y points at the cron's schema", "tiles:\n  - kind: sparkline\n    cron: a\n    y: .v\n", "'# value:' and '# tag:' headers"},
 	}
@@ -117,16 +126,35 @@ tiles:
   - kind: counter
     cron: a
     format: "$%.2f"
-    threshold: {warn: 1, crit: 2}
   - kind: counter
     cron: e
     format: "%d%%"
   - kind: gauge
     cron: b
-    threshold: {max: 50}
+    max: 50
   - kind: sparkline
     cron: c
-    threshold: {warn: 1}
+  - kind: line
+    cron: f
+    aggregate: p95
+    bucket: 1h
+    range: 7d..
+    title: Latency
+  - kind: bar
+    cron: g
+    aggregate: count
+    bucket: 90s
+  - kind: counter
+    cron: h
+    aggregate: max
+    range: 1h..
+  - kind: gauge
+    cron: i
+    range: 7d..
+  - kind: table
+    cron: d
+    aggregate: p95
+    range: 2h..
   - kind: table
     cron: d
 `
@@ -186,7 +214,7 @@ func TestFormatTileDisplay(t *testing.T) {
 		{"no format fraction", DashboardTile{Kind: "counter"}, f(3.5), &TileDisplay{Num: "3.50"}},
 		{"no data", DashboardTile{Kind: "counter", Format: "%d ms"}, nil, &TileDisplay{Num: "—"}},
 		{"gauge default max", DashboardTile{Kind: "gauge"}, f(50), &TileDisplay{Num: "50", After: "/100"}},
-		{"gauge max", DashboardTile{Kind: "gauge", Threshold: &DashboardThresh{Max: f(200)}}, f(50), &TileDisplay{Num: "50", After: "/200"}},
+		{"gauge max", DashboardTile{Kind: "gauge", Max: f(200)}, f(50), &TileDisplay{Num: "50", After: "/200"}},
 		{"gauge no data", DashboardTile{Kind: "gauge"}, nil, &TileDisplay{Num: "—", After: "/100"}},
 		{"sparkline has none", DashboardTile{Kind: "sparkline"}, f(1), nil},
 	}
@@ -197,5 +225,29 @@ func TestFormatTileDisplay(t *testing.T) {
 				t.Errorf("got %+v, want %+v", got, c.want)
 			}
 		})
+	}
+}
+
+// A tile is `chart <cron>` with the same options: its ChartArgs are what the
+// shell would parse from the equivalent command line.
+func TestDashboardTile_ChartArgsMatchTheChartCommand(t *testing.T) {
+	spec, err := ParseDashboardYAML("tiles:\n  - kind: bar\n    cron: errs\n    aggregate: max\n    bucket: 1h\n    title: Worst\n  - kind: line\n    cron: plain\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tiles := spec.Sections[0].Tiles
+	for i, cmd := range [][]string{
+		{"errs", "--kind", "bar", "-a", "max", "--bucket", "1h", "--title", "Worst"},
+		{"plain", "--kind", "line"},
+	} {
+		want, msg := chart.ParseWatchCmd(cmd)
+		if msg != "" {
+			t.Fatal(msg)
+		}
+		got := tiles[i].ChartArgs()
+		want.Interval, want.Follow = 0, false // watching is a command-line concern
+		if got != want {
+			t.Errorf("tile %d: ChartArgs() = %+v, chart %v parses to %+v", i, got, cmd, want)
+		}
 	}
 }

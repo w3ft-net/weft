@@ -62,7 +62,7 @@ Pipelines pass the same allowlist as weft.run plus the alert stage and the compo
 
 	dashboardProposeDescription = `Stage a new (or updated) dashboard for human review.
 
-The body is the dashboard YAML — top-level title plus a list of sections (each with a heading and tiles), or a flat top-level tiles: shorthand. Tiles have a kind (sparkline | counter | gauge | table), a cron: key naming the cron whose results they show, an optional size hint (sm | md | lg), and kind-specific fields like format, threshold, or columns.
+The body is the dashboard YAML — top-level title plus a list of sections (each with a heading and tiles), or a flat top-level tiles: shorthand. Tiles have a kind (line | bar | sparkline | counter | gauge | table), a cron: key naming the cron whose results they show, an optional title and size hint (sm | md | lg), and kind-specific fields: aggregate and range (as in chart -a and the shell's range command; default 24h..) on any tile but a table of a text cron — on a counter, gauge or table they make it show that aggregate over the range instead of the latest run — bucket (as in chart --bucket) on line, bar and sparkline tiles, format on counters, and max (full scale) on gauges. Tiles have no threshold of their own: a tile turns critical when the value it shows breaches its cron's alert (alert above/below/eq/neq), so put the cutoff on the cron.
 
 The body is parsed against weft's dashboard YAML grammar and every tile's cron: reference is checked against the existing crons. Returns proposal id + unified diff.`
 

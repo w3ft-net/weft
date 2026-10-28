@@ -34,6 +34,32 @@ type CronBucket struct {
 	Max   float64
 }
 
+// CronAlert is the cutoff a cron's alert stage fires on, for the conditions
+// that have a single number: above, below, eq and neq. It is the only
+// threshold a chart or dashboard tile knows, and it is drawn as critical.
+type CronAlert struct {
+	Condition string  `json:"condition"`
+	Threshold float64 `json:"threshold"`
+}
+
+// Breached reports whether v is on the alerting side of the cutoff.
+func (a *CronAlert) Breached(v float64) bool {
+	if a == nil {
+		return false
+	}
+	switch a.Condition {
+	case "above":
+		return v > a.Threshold
+	case "below":
+		return v < a.Threshold
+	case "eq":
+		return v == a.Threshold
+	case "neq":
+		return v != a.Threshold
+	}
+	return false
+}
+
 // CronSeries is a cron's stored points over a window, from one storage
 // tier. Granularity is "raw", "hourly", "4h" or "daily"; Start and End are
 // the window after the server resolved the range and clamped it to the
@@ -42,6 +68,7 @@ type CronSeries struct {
 	Granularity string
 	Start, End  time.Time
 	Buckets     []CronBucket // oldest first
+	Alert       *CronAlert   // the cron's alert cutoff, if it has one
 }
 
 // CronSource fetches a cron's stored series for a range spec ("2h..",
@@ -59,6 +86,9 @@ type LatestPoint struct {
 	Tag   string   `json:"tag"`
 	Value *float64 `json:"value,omitempty"`
 	Text  *string  `json:"text,omitempty"`
+	// Critical is set by the dashboard API when Value breaches the cron's
+	// alert cutoff.
+	Critical bool `json:"critical,omitempty"`
 }
 
 // Display is the point's value as a table cell.

@@ -94,6 +94,9 @@ func TestSaveCronWatch_TextTypeChecks(t *testing.T) {
 	if err := db.SaveDashboard(org.ID, "", "leases", "tiles:\n  - kind: table\n    cron: holders\n"); err != nil {
 		t.Fatalf("table on a text cron: %v", err)
 	}
+	if err := db.SaveDashboard(org.ID, "", "leases", "tiles:\n  - kind: table\n    cron: holders\n    range: 1h..\n"); err == nil || !strings.Contains(err.Error(), "can't aggregate") {
+		t.Fatalf("windowed table on a text cron: %v", err)
+	}
 }
 
 func TestLatestCronRun_TableOrder(t *testing.T) {

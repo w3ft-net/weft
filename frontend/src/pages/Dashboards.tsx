@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
-import { Sparkline, SparkLegend, type SparkBand } from '../components/Sparkline'
+import { Sparkline, SparkLegend } from '../components/Sparkline'
+import { PlotBars } from '../components/ShellChartModal'
 import { plotToSpark, plotXDomain } from '../lib/chartPlot'
 import {
   listDashboards, getDashboard,
@@ -195,7 +196,7 @@ function CollapsibleSection({ title, testId, children }: {
 
 // ── Tile dispatch ──────────────────────────────────────────────────────────
 
-function Tile({ tile, payload }: {
+export function Tile({ tile, payload }: {
   tile: DashboardTile
   payload: DashboardWatchPayload | null
 }) {
@@ -214,7 +215,7 @@ function Tile({ tile, payload }: {
           className="tui-pane-title dashboards-tile-header"
           data-testid={`dashboards-tile-${tile.cron}-link`}
         >
-          <span className="dashboards-tile-watch">{tile.cron}</span>
+          <span className="dashboards-tile-watch">{tile.title ?? tile.cron}</span>
         </Link>
         {payload && (
           <span className={`tui-pane-actions dashboards-tile-meta${failed ? ' dashboards-tone-crit' : ''}`}>
@@ -240,22 +241,21 @@ function TileBody({ tile, payload }: {
   payload: DashboardWatchPayload
 }) {
   switch (tile.kind) {
-    case 'counter': return <CounterTile tile={tile} payload={payload} />
-    case 'gauge':   return <GaugeTile tile={tile} payload={payload} />
-    case 'sparkline': return <SparklineTile tile={tile} payload={payload} />
-    case 'table':   return <TableTile tile={tile} payload={payload} />
+    case 'counter': return <CounterTile tile={tile} />
+    case 'gauge':   return <GaugeTile tile={tile} />
+    case 'sparkline':
+    case 'line':    return <SparklineTile tile={tile} payload={payload} />
+    case 'bar':     return <BarTile tile={tile} />
+    case 'table':   return <TableTile tile={tile} />
     default:        return <div>unknown kind: {String(tile.kind)}</div>
   }
 }
 
 // ── Counter ────────────────────────────────────────────────────────────────
 
-function CounterTile({ tile, payload }: {
-  tile: DashboardTile
-  payload: DashboardWatchPayload
-}) {
-  const latest = latestValue(payload)
-  const tone = thresholdTone(tile.threshold, latest)
+function CounterTile({ tile }: { tile: DashboardTile }) {
+  if (tile.error) return <TileError tile={tile} />
+  const tone = tile.critical ? 'crit' : 'normal'
   // The server formats the text (tile.display); a format like "%d lines/5m"
   // arrives as num "42" and after " lines/5m", shown as a dim unit.
   const { num, before = '', after = '' } = tile.display ?? { num: '—' }
@@ -270,13 +270,13 @@ function CounterTile({ tile, payload }: {
 
 // ── Gauge ──────────────────────────────────────────────────────────────────
 
-function GaugeTile({ tile, payload }: {
-  tile: DashboardTile
-  payload: DashboardWatchPayload
-}) {
-  const latest = latestValue(payload)
-  const max = tile.threshold?.max ?? 100
-  const tone = thresholdTone(tile.threshold, latest)
+function GaugeTile({ tile }: { tile: DashboardTile }) {
+  if (tile.error) return <TileError tile={tile} />
+  // The first number shown: on a tagged cron, its highest, since points come
+  // in table order.
+  const latest = tile.points?.find(p => p.value !== undefined && p.value !== null)?.value ?? null
+  const max = tile.max ?? 100
+  const tone = tile.critical ? 'crit' : 'normal'
   const pct = latest === null || max <= 0 ? 0 : Math.max(0, Math.min(1, latest / max))
   return (
     <div className="dashboards-gauge" data-testid={`gauge-${tile.cron}`}>
@@ -308,21 +308,18 @@ function SparklineTile({ tile, payload }: {
   payload: DashboardWatchPayload
 }) {
   const series = useMemo(
-    () => (payload.plot ? plotToSpark(payload.plot) : []),
-    [payload],
+    () => (tile.plot ? plotToSpark(tile.plot) : []),
+    [tile],
   )
 
+  if (tile.error) return <TileError tile={tile} />
   if (series.length === 0 || series.every(s => s.points.length < 2)) {
     return <NoData />
   }
 
-  const bands: SparkBand[] = []
-  if (typeof tile.threshold?.warn === 'number') bands.push({ y: tile.threshold.warn, tone: 'warn' })
-  if (typeof tile.threshold?.crit === 'number') bands.push({ y: tile.threshold.crit, tone: 'crit' })
-
   const tagged = series.some(s => s.tag !== '')
   const latest = !tagged && series.length === 1 ? series[0].latest : null
-  const tone = latest !== null ? thresholdTone(tile.threshold, parseFloat(latest)) : 'normal'
+  const tone = tile.critical ? 'crit' : 'normal'
 
   return (
     <div className="dashboards-sparkline-wrap" data-testid={`sparkline-${tile.cron}`}>
@@ -333,27 +330,42 @@ function SparklineTile({ tile, payload }: {
       )}
       <Sparkline
         series={series}
-        bands={bands}
         threshold={payload.cron.AlertThreshold}
         condition={payload.cron.AlertCondition}
-        height={80}
+        height={tile.kind === 'line' ? 160 : 80}
         showTimeAxis
-        xDomain={payload.plot ? plotXDomain(payload.plot) : undefined}
+        xDomain={tile.plot ? plotXDomain(tile.plot) : undefined}
       />
       {tagged && <SparkLegend series={series} />}
     </div>
   )
 }
 
+// ── Bar ────────────────────────────────────────────────────────────────────
+
+function BarTile({ tile }: { tile: DashboardTile }) {
+  if (tile.error) return <TileError tile={tile} />
+  if (!tile.plot || !tile.plot.series[0]?.points.length) return <NoData />
+  return (
+    <div className="dashboards-bar-wrap" data-testid={`bar-${tile.cron}`}>
+      <PlotBars plot={tile.plot} />
+    </div>
+  )
+}
+
+// A tile the chart refused to draw, such as a bar of a tagged cron or a
+// percentile over a range past 7 days.
+function TileError({ tile }: { tile: DashboardTile }) {
+  return <div className="dashboards-tile-nodata" data-testid={`tile-error-${tile.cron}`}>{tile.error}</div>
+}
+
 // ── Table ──────────────────────────────────────────────────────────────────
 
-export function TableTile({ tile, payload }: {
-  tile: DashboardTile
-  payload: DashboardWatchPayload
-}) {
-  // The latest run, one row per tag, already in table order (numbers
-  // highest first, text by tag).
-  const points = payload.latest
+export function TableTile({ tile }: { tile: DashboardTile }) {
+  if (tile.error) return <TileError tile={tile} />
+  // One row per tag, already in table order (numbers highest first, text by
+  // tag): the cron's latest run, or its aggregate over the tile's range.
+  const points = tile.points ?? []
   if (points.length === 0) return <NoData />
   const tagged = points.some(p => p.tag !== '')
   const numeric = points.every(p => p.value !== undefined && p.value !== null)
@@ -368,7 +380,11 @@ export function TableTile({ tile, payload }: {
       </thead>
       <tbody>
         {points.map(p => (
-          <tr key={p.tag} data-testid={`table-${tile.cron}-row-${p.tag}`}>
+          <tr
+            key={p.tag}
+            className={p.critical ? 'dashboards-tone-crit' : undefined}
+            data-testid={`table-${tile.cron}-row-${p.tag}`}
+          >
             {tagged && <td>{p.tag}</td>}
             <td className={numeric ? 'dashboards-num' : undefined}>{p.text ?? (p.value ?? '')}</td>
           </tr>
@@ -391,24 +407,5 @@ function relTime(iso: string): string {
   const h = Math.round(m / 60)
   if (h < 48) return `${h}h ago`
   return `${Math.round(h / 24)}d ago`
-}
-
-// latestValue is the first number of the latest run: on a tagged cron, its
-// highest, since the run comes in table order.
-function latestValue(payload: DashboardWatchPayload): number | null {
-  for (const p of payload.latest) {
-    if (p.value !== undefined && p.value !== null) return p.value
-  }
-  return null
-}
-
-function thresholdTone(
-  th: DashboardTile['threshold'],
-  v: number | null,
-): 'normal' | 'warn' | 'crit' {
-  if (v === null || !th) return 'normal'
-  if (typeof th.crit === 'number' && v >= th.crit) return 'crit'
-  if (typeof th.warn === 'number' && v >= th.warn) return 'warn'
-  return 'normal'
 }
 

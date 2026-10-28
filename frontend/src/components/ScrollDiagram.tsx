@@ -119,7 +119,7 @@ const SHELL_COMMANDS = [
   {
     // Output is the exact glyph sequence chart.Sparkline() emits for
     // the realistic error-rate series in chart/landing_sparkline_test.go.
-    cmd: 'chart error-rate -t sparkline',
+    cmd: 'chart error-rate --kind sparkline',
     output: [
       '\u2581\u2581\u2581\u2582\u2582\u2582\u2582\u2583\u2583\u2584\u2585\u2584\u2586\u2585\u2587\u2588\u2586\u2584\u2583\u2582\u2582\u2581\u2581\u2581',
     ],

@@ -7,40 +7,32 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/chart"
+	"github.com/graybeardcorp/weft/internal/timerange"
 	"github.com/graybeardcorp/weft/store"
 	"gorm.io/gorm"
 )
 
-// dashboardWatchPayload bundles a cron's metadata, its latest run (table,
-// counter and gauge tiles) and its plot over dashboardWindow (sparkline
-// tiles), so a dashboard render needs no follow-up requests. The latest
-// run is one point per tag in table order; the plot is reduced like
-// `chart <cron>`: one line per stored tag, the rest folded into "other".
+// dashboardWatchPayload bundles a cron's metadata so a dashboard render
+// needs no follow-up requests. What each tile shows rides on the tile, since
+// tiles on one cron can differ in range, aggregate and bucket. Latest, the
+// cron's latest run in table order, is the default for a tile that doesn't
+// aggregate over a range.
 type dashboardWatchPayload struct {
 	Watch  *store.CronWatch    `json:"cron"`
-	Latest []chart.LatestPoint `json:"latest"`
-	Plot   *chart.Plot         `json:"plot"`
+	Latest []chart.LatestPoint `json:"-"`
 }
 
-// dashboardWindow is how far back a dashboard's sparklines reach.
-const dashboardWindow = 24 * time.Hour
-
-// cronPlot reads a cron's stored series over [start, end) and reduces it
-// to the plot the chart renderers draw.
-func (s *Server) cronPlot(orgID store.OrgID, cronWatchID uint, start, end time.Time) (*chart.Plot, error) {
-	series, err := s.store.CronSeries(orgID, cronWatchID, start, end)
+// cronSeries reads a cron's stored series over [start, end).
+func (s *Server) cronSeries(orgID store.OrgID, cw *store.CronWatch, start, end time.Time) (chart.CronSeries, error) {
+	series, err := s.store.CronSeries(orgID, cw.ID, start, end)
 	if err != nil {
-		return nil, err
+		return chart.CronSeries{}, err
 	}
-	cs := chart.CronSeries{Granularity: series.Granularity, Start: series.Start, End: series.End, Buckets: make([]chart.CronBucket, len(series.Buckets))}
+	cs := chart.CronSeries{Granularity: series.Granularity, Start: series.Start, End: series.End, Buckets: make([]chart.CronBucket, len(series.Buckets)), Alert: cw.Alert()}
 	for i, b := range series.Buckets {
 		cs.Buckets[i] = chart.CronBucket{Start: b.BucketStart, Tag: b.Tag, Count: b.Count, Sum: b.Sum, Min: b.Min, Max: b.Max}
 	}
-	plot, msg := chart.CronPlot(cs, chart.WatchArgs{Kind: "line", Aggregate: "avg"})
-	if msg != "" {
-		return nil, errors.New(msg)
-	}
-	return &plot, nil
+	return cs, nil
 }
 
 // dashboardGetResponse is the wire shape for GET /api/dashboards/{name}.
@@ -123,6 +115,10 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	watches := map[string]*dashboardWatchPayload{}
+	// A series tile draws its cron over the tile's own range, so tiles on one
+	// cron share a read only when they share a range.
+	type seriesKey struct{ cron, rng string }
+	seriesByTile := map[seriesKey]chart.CronSeries{}
 	for _, sec := range spec.Sections {
 		for _, tile := range sec.Tiles {
 			if _, seen := watches[tile.Watch]; seen {
@@ -141,36 +137,87 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			now := time.Now()
-			plot, err := s.cronPlot(custID, cw.ID, now.Add(-dashboardWindow), now)
-			if err != nil {
-				http.Error(w, "internal error", http.StatusInternalServerError)
-				return
-			}
 			watches[tile.Watch] = &dashboardWatchPayload{
 				Watch:  cw,
 				Latest: latest,
-				Plot:   plot,
 			}
 		}
 	}
 
-	// Format counter/gauge text here, once; clients render tile.display.
-	// The latest run is in table order, so on a tagged cron a counter
-	// shows its highest value.
+	// Fill each tile once; clients render what the server computed. A series
+	// tile gets its plot, a counter, gauge or table its points (the cron's
+	// latest run, or its aggregate over the tile's range), a counter or
+	// gauge its formatted text. Points are in table order, so on a tagged
+	// cron a counter shows its highest value.
+	readSeries := func(tile store.DashboardTile, cw *store.CronWatch) (chart.CronSeries, error) {
+		key := seriesKey{tile.Watch, tile.TileRange()}
+		if series, ok := seriesByTile[key]; ok {
+			return series, nil
+		}
+		start, end, err := timerange.ParseRange(key.rng) // validated when the file was saved
+		if err != nil {
+			return chart.CronSeries{}, err
+		}
+		series, err := s.cronSeries(custID, cw, start, end)
+		seriesByTile[key] = series
+		return series, err
+	}
 	for si := range spec.Sections {
 		tiles := spec.Sections[si].Tiles
 		for ti := range tiles {
-			var latest *float64
-			if wp := watches[tiles[ti].Watch]; wp != nil {
-				for _, p := range wp.Latest {
-					if p.Value != nil {
-						latest = p.Value
-						break
+			tile := &tiles[ti]
+			wp := watches[tile.Watch]
+			if wp == nil {
+				tile.Display = store.FormatTileDisplay(*tile, nil)
+				continue
+			}
+			alert := wp.Watch.Alert()
+			var shown []chart.LatestPoint // what the tile's headline number comes from
+			switch {
+			case tile.DrawsSeries():
+				shown = wp.Latest
+				series, err := readSeries(*tile, wp.Watch)
+				if err != nil {
+					http.Error(w, "internal error", http.StatusInternalServerError)
+					return
+				}
+				plot, msg := chart.CronPlot(series, tile.ChartArgs())
+				if msg == "" && plot.Kind == "bar" && len(plot.Series) > 1 {
+					msg = chart.BarTaggedMsg(tile.Watch, len(plot.Series))
+				}
+				if msg != "" {
+					tile.Error = msg
+				} else {
+					tile.Plot = &plot
+				}
+			case tile.Windowed():
+				series, err := readSeries(*tile, wp.Watch)
+				if err != nil {
+					http.Error(w, "internal error", http.StatusInternalServerError)
+					return
+				}
+				var msg string
+				shown, msg = chart.CronTotals(series, tile.ChartArgs().Aggregate)
+				tile.Error = msg
+			default:
+				shown = wp.Latest
+			}
+			var headline *float64
+			for i := range shown {
+				if shown[i].Value != nil {
+					if headline == nil {
+						headline = shown[i].Value
 					}
+					shown[i].Critical = alert.Breached(*shown[i].Value)
 				}
 			}
-			tiles[ti].Display = store.FormatTileDisplay(tiles[ti], latest)
+			tile.Display = store.FormatTileDisplay(*tile, headline)
+			if tile.Kind != "table" && tile.Kind != "bar" && headline != nil {
+				tile.Critical = alert.Breached(*headline)
+			}
+			if tile.Kind == "counter" || tile.Kind == "gauge" || tile.Kind == "table" {
+				tile.Points = shown
+			}
 		}
 	}
 

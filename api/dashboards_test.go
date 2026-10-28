@@ -172,13 +172,26 @@ func TestDashboards_Get_TileDisplay(t *testing.T) {
 	seed("plain", f(3.5))
 	seed("load", f(50))
 	seed("empty", nil)
+	// A cron's alert cutoff is the only threshold: a tile on it is critical
+	// exactly when the value it shows breaches that cutoff.
+	for name, v := range map[string]float64{"hot": 95, "cool": 50} {
+		if err := s.SaveCronWatch(cust.ID, user.ID, name, "every 5m", "echo 1 | alert above 90", true, nil); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+		cw, _ := s.GetCronWatch(cust.ID, name)
+		if err := s.SaveCronResults([]store.CronResult{{CronWatchID: cw.ID, RanAt: time.Now(), Value: f(v)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	yaml := `tiles:
   - {kind: counter, cron: lat, format: "%d ms"}
   - {kind: counter, cron: plain}
-  - {kind: gauge, cron: load, threshold: {max: 200}}
+  - {kind: gauge, cron: load, max: 200}
   - {kind: counter, cron: empty}
   - {kind: sparkline, cron: plain}
+  - {kind: counter, cron: hot}
+  - {kind: gauge, cron: cool}
 `
 	if err := s.SaveDashboard(cust.ID, user.ID, "disp", yaml); err != nil {
 		t.Fatal(err)
@@ -201,6 +214,13 @@ func TestDashboards_Get_TileDisplay(t *testing.T) {
 		{Num: "50", After: "/200"},
 		{Num: "—"},
 		nil,
+		{Num: "95"},
+		{Num: "50", After: "/100"},
+	}
+	for i, crit := range []bool{false, false, false, false, false, true, false} {
+		if tiles[i].Critical != crit {
+			t.Errorf("tile %d critical = %v, want %v", i, tiles[i].Critical, crit)
+		}
 	}
 	for i, wd := range want {
 		got := tiles[i].Display

@@ -21,9 +21,9 @@ func ParseWatchCmd(args []string) (WatchArgs, string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "-t" || a == "--type":
+		case a == "--kind":
 			if i+1 >= len(args) {
-				return out, "chart: -t requires a value (line, sparkline, bar)"
+				return out, "chart: --kind requires a value (line, sparkline, bar)"
 			}
 			out.Kind = args[i+1]
 			i++
@@ -32,7 +32,7 @@ func ParseWatchCmd(args []string) (WatchArgs, string) {
 				return out, "chart: -a requires a function (count|sum|avg|min|max|p50|p95)"
 			}
 			out.Aggregate = args[i+1]
-			if !validAggregate(out.Aggregate) || out.Aggregate == "identity" {
+			if !ValidCronAggregate(out.Aggregate) {
 				return out, fmt.Sprintf("chart: unknown --aggregate %q", out.Aggregate)
 			}
 			i++
@@ -74,7 +74,7 @@ func ParseWatchCmd(args []string) (WatchArgs, string) {
 		}
 	}
 	if out.Name == "" {
-		return out, "usage: chart <cron> [-a FN] [--bucket DUR] [-t TYPE] [--title TEXT] [-f [-i DUR]]"
+		return out, "usage: chart <cron> [-a FN] [--bucket DUR] [--kind KIND] [--title TEXT] [-f [-i DUR]]"
 	}
 	// Strip /cron.d/ prefix so the user can `chart /cron.d/foo` or `chart foo`.
 	out.Name = strings.TrimPrefix(out.Name, "/cron.d/")
@@ -85,7 +85,7 @@ func ParseWatchCmd(args []string) (WatchArgs, string) {
 	switch out.Kind {
 	case "line", "sparkline", "bar":
 	default:
-		return out, fmt.Sprintf("chart: unknown type %q (want line, sparkline, bar)", out.Kind)
+		return out, fmt.Sprintf("chart: unknown kind %q (want line, sparkline, bar)", out.Kind)
 	}
 	return out, ""
 }
@@ -146,7 +146,7 @@ func (a PipeArgs) usesJSONLines() bool {
 // Validation:
 //   - -x, -y, and --tag may not mix positional and JSON-path forms.
 //   - aggregate must be a known reduction.
-//   - --tag is only supported for -t line (rejected with bar/sparkline).
+//   - --tag is only supported for --kind line (rejected with bar/sparkline).
 //
 // Signature matches shellcore.PipeStageParseFunc — this function
 // is registered directly via core.RegisterPipeStage("chart", ...).
@@ -163,7 +163,7 @@ func ParsePipeArgs(args []string) (any, string) {
 				return out, "chart: -x: " + msg
 			}
 			i++
-		case a == "-y" || a == "--tag":
+		case a == "-y" || a == "-t" || a == "--tag":
 			if i+1 >= len(args) {
 				return out, fmt.Sprintf("chart: %s requires a column index or .json.path", a)
 			}
@@ -196,9 +196,9 @@ func ParsePipeArgs(args []string) (any, string) {
 			}
 			out.Bucket = d
 			i++
-		case a == "-t" || a == "--type":
+		case a == "--kind":
 			if i+1 >= len(args) {
-				return out, "chart: -t requires line|bar|sparkline"
+				return out, "chart: --kind requires line|bar|sparkline"
 			}
 			out.Kind = args[i+1]
 			i++
@@ -242,7 +242,7 @@ func ParsePipeArgs(args []string) (any, string) {
 	switch out.Kind {
 	case "line", "bar", "sparkline":
 	default:
-		return out, fmt.Sprintf("chart: unknown type %q (want line|bar|sparkline)", out.Kind)
+		return out, fmt.Sprintf("chart: unknown kind %q (want line|bar|sparkline)", out.Kind)
 	}
 	// --tag draws one line per tag value, so it only makes sense for a
 	// line chart — bar's X-axis is already categorical (use -x for
@@ -313,6 +313,10 @@ func parseXArg(v string, out *PipeArgs) string {
 func isDigits(s string) bool {
 	return s != "" && strings.Trim(s, "0123456789") == ""
 }
+
+// ValidCronAggregate reports whether s is an aggregate `chart <cron>` takes:
+// every pipe-form reduction except identity.
+func ValidCronAggregate(s string) bool { return s != "identity" && validAggregate(s) }
 
 func validAggregate(s string) bool {
 	switch s {

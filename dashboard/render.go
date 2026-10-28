@@ -6,27 +6,40 @@ package dashboard
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
 	weftchart "github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/store"
 )
 
-// WatchSeries is the data a tile needs to render: the latest sample
-// (for counter/gauge), the chronological series (for sparkline), and
-// the most recent stdout (for table). Newest sample is index 0; the
-// renderer reverses for left-to-right time when needed.
-//
-// Tags is populated instead of Values/Times for a cron that stores
-// tags — one sub-series per tag (the smallest folded into "other").
-// See toWatchSeries.
+// WatchSeries is the data a tile needs to render: the cron's stored points
+// over the tile's range (before any tile's aggregate or bucket, which
+// each series tile applies itself) and its latest run (counter, gauge and
+// table tiles).
 type WatchSeries struct {
-	Values []float64               // numeric values, newest-first
-	Times  []float64               // epoch seconds, parallel to Values, newest-first
+	Series weftchart.CronSeries
 	Latest []weftchart.LatestPoint // the latest run, one point per tag in table order
-	Tags   map[string]WatchSeries
+}
+
+// points are the numbers a counter, gauge or table shows: the cron's latest
+// run, or with a range or aggregate its aggregate over the range. One per
+// tag, highest first. The string is why the chart can't aggregate, if so.
+func (s WatchSeries) points(t store.DashboardTile) ([]weftchart.LatestPoint, string) {
+	if !t.Windowed() {
+		return s.Latest, ""
+	}
+	return weftchart.CronTotals(s.Series, t.ChartArgs().Aggregate)
+}
+
+// headline is the number a counter or gauge shows: the first numeric point,
+// the highest on a tagged cron.
+func headline(points []weftchart.LatestPoint) (float64, bool) {
+	for _, p := range points {
+		if p.Value != nil {
+			return *p.Value, true
+		}
+	}
+	return 0, false
 }
 
 // Render lays out the spec into a single string sized to (w, h).
@@ -186,7 +199,7 @@ func writeRow(b *strings.Builder, row []packedTile, results map[string]WatchSeri
 		if innerW < 4 {
 			innerW = 4
 		}
-		series, ok := results[pt.tile.Watch]
+		series, ok := results[resultKey(pt.tile)]
 		var content []string
 		if !ok {
 			content = renderMissing(pt.tile, innerW)
@@ -290,6 +303,8 @@ func tileContentHeight(kind string) int {
 		return bigHeight + 1
 	case "sparkline":
 		return sparklineHeight
+	case "line", "bar":
+		return chartHeight
 	case "table":
 		return 7
 	case "gauge":
@@ -319,8 +334,8 @@ func renderTile(t store.DashboardTile, series WatchSeries, w int) []string {
 		return renderCounter(t, series, w)
 	case "gauge":
 		return []string{renderGauge(t, series, w)}
-	case "sparkline":
-		return renderSparkline(series, w)
+	case "sparkline", "line", "bar":
+		return renderSeries(t, series, w, tileContentHeight(t.Kind))
 	case "table":
 		return renderTable(t, series, w)
 	}
@@ -328,13 +343,17 @@ func renderTile(t store.DashboardTile, series WatchSeries, w int) []string {
 }
 
 func renderCounter(t store.DashboardTile, series WatchSeries, w int) []string {
-	if len(series.Values) == 0 {
+	points, msg := series.points(t)
+	if msg != "" {
+		return wrapMessage(msg, w)
+	}
+	v, ok := headline(points)
+	if !ok {
 		return renderMissing(t, w)
 	}
-	v := series.Values[0]
 	d := store.FormatTileDisplay(t, &v)
 	text := d.Before + d.Num + d.After
-	color := thresholdColor(t.Threshold, v)
+	color := alertColor(series, v)
 	lines := bigNumber(text)
 	var out []string
 	for _, line := range lines {
@@ -351,13 +370,20 @@ func renderCounter(t store.DashboardTile, series WatchSeries, w int) []string {
 }
 
 func renderGauge(t store.DashboardTile, series WatchSeries, w int) string {
-	if len(series.Values) == 0 {
+	points, msg := series.points(t)
+	if msg != "" {
+		if len(msg) > w-3 {
+			msg = msg[:max(w-3, 0)] + "…"
+		}
+		return padRight("  "+colorize(clrGray, msg), w)
+	}
+	v, ok := headline(points)
+	if !ok {
 		return padRight("  "+colorize(clrGray, "<no data>"), w) // gauge is 1 line; no padding needed
 	}
-	v := series.Values[0]
 	max := 100.0
-	if t.Threshold != nil && t.Threshold.Max != nil {
-		max = *t.Threshold.Max
+	if t.Max != nil {
+		max = *t.Max
 	}
 	pct := 0.0
 	if max > 0 {
@@ -376,69 +402,31 @@ func renderGauge(t store.DashboardTile, series WatchSeries, w int) string {
 		barW = 4
 	}
 	filled := int(float64(barW) * pct)
-	color := thresholdColor(t.Threshold, v)
+	color := alertColor(series, v)
 	bar := "[" + colorize(color, strings.Repeat("█", filled)) + strings.Repeat("░", barW-filled) + "]"
 	display := "  " + bar + suffix
 	return padRight(display, w)
 }
 
-const sparklineHeight = 4
+const (
+	sparklineHeight = 4
+	chartHeight     = 8
+)
 
-func renderSparkline(series WatchSeries, w int) []string {
-	if len(series.Tags) > 0 {
-		return renderSparklineTagged(series, w)
+// renderSeries draws a line, sparkline or bar tile exactly as `chart <cron>`
+// would with the tile's aggregate and bucket. A sparkline tile is a short
+// line chart, not chart's one-line glyph.
+func renderSeries(t store.DashboardTile, series WatchSeries, w, h int) []string {
+	if len(series.Series.Buckets) == 0 {
+		return renderMissing(t, w)
 	}
-	if len(series.Values) == 0 {
-		return renderMissing(store.DashboardTile{Kind: "sparkline"}, w)
+	args := t.ChartArgs()
+	if args.Kind == "sparkline" {
+		args.Kind = "line"
 	}
-	pts, hasTimes := seriesToPoints(series)
-	b := chart.Line(w, sparklineHeight).Points(pts)
-	if hasTimes {
-		b = b.XAxisTime()
-	}
-	rendered, err := b.Render()
-	if err != nil {
-		return []string{padRight("  "+colorize(clrGray, "<render error>"), w)}
-	}
-	raw := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
-	out := make([]string, len(raw))
-	for i, line := range raw {
-		out[i] = padRight(colorize(clrCyan, line), w)
-	}
-	return out
-}
-
-// renderSparklineTagged is renderSparkline for a tagged cron: one
-// warp chart.NamedSeries per distinct tag value, sharing one x/y scale
-// (warp's Builder.Series already handles per-series color + legend).
-// Unlike the single-series path, lines are NOT force-colorized here —
-// the builder already emits an explicit per-series color, and wrapping
-// the whole rendered block in one outer color would fight that.
-func renderSparklineTagged(series WatchSeries, w int) []string {
-	if len(series.Tags) == 0 {
-		return renderMissing(store.DashboardTile{Kind: "sparkline"}, w)
-	}
-	tags := make([]string, 0, len(series.Tags))
-	for tag := range series.Tags {
-		tags = append(tags, tag)
-	}
-	sort.Strings(tags)
-
-	named := make([]chart.NamedSeries, 0, len(tags))
-	hasTimes := false
-	for _, tag := range tags {
-		pts, tagHasTimes := seriesToPoints(series.Tags[tag])
-		hasTimes = hasTimes || tagHasTimes
-		named = append(named, chart.NamedSeries{Label: tag, Points: pts})
-	}
-
-	b := chart.Line(w, sparklineHeight).Series(named)
-	if hasTimes {
-		b = b.XAxisTime()
-	}
-	rendered, err := b.Render()
-	if err != nil {
-		return []string{padRight("  "+colorize(clrGray, "<render error>"), w)}
+	rendered, msg := weftchart.RenderCronTitled(t.Watch, series.Series, args, "", w, h)
+	if msg != "" {
+		return wrapMessage(msg, w)
 	}
 	raw := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
 	out := make([]string, len(raw))
@@ -448,22 +436,18 @@ func renderSparklineTagged(series WatchSeries, w int) []string {
 	return out
 }
 
-// seriesToPoints converts a WatchSeries' newest-first Values/Times into
-// oldest-first chart.Points, the shape both the single- and tagged-
-// sparkline renderers need.
-func seriesToPoints(series WatchSeries) (pts []chart.Point, hasTimes bool) {
-	n := len(series.Values)
-	hasTimes = len(series.Times) == n && n > 0
-	pts = make([]chart.Point, n)
-	for i := range series.Values {
-		ri := n - 1 - i // oldest-first
-		x := float64(i)
-		if hasTimes {
-			x = series.Times[ri]
+// wrapMessage lays a chart error out in gray, word-wrapped to w.
+func wrapMessage(msg string, w int) []string {
+	var out []string
+	line := " "
+	for _, word := range strings.Fields(msg) {
+		if len(line) > 1 && len(line)+1+len(word) > w {
+			out = append(out, padRight(colorize(clrGray, line), w))
+			line = " "
 		}
-		pts[i] = chart.Point{X: x, Y: series.Values[ri]}
+		line += " " + word
 	}
-	return pts, hasTimes
+	return append(out, padRight(colorize(clrGray, line), w))
 }
 
 // tableRows lays out a cron's latest run as a table: a tag column and a
@@ -490,14 +474,22 @@ func tableRows(latest []weftchart.LatestPoint) (headers []string, rows [][]strin
 }
 
 func renderTable(t store.DashboardTile, series WatchSeries, w int) []string {
-	if len(series.Latest) == 0 {
+	points, msg := series.points(t)
+	if msg != "" {
+		return wrapMessage(msg, w)
+	}
+	if len(points) == 0 {
 		return renderMissing(t, w)
 	}
-	headers, rows := tableRows(series.Latest)
+	headers, rows := tableRows(points)
 	colW := max((w-2)/len(headers), 4)
 	out := []string{padRight("  "+colorize(clrBlue, joinCols(headers, colW)), w)}
-	for _, row := range rows {
-		out = append(out, padRight("  "+joinCols(row, colW), w))
+	for i, row := range rows {
+		line := "  " + joinCols(row, colW)
+		if points[i].Value != nil && series.Series.Alert.Breached(*points[i].Value) {
+			line = colorize(1, line)
+		}
+		out = append(out, padRight(line, w))
 		if len(out) > 6 {
 			break
 		}
@@ -523,15 +515,11 @@ func joinCols(cols []string, colW int) string {
 	return strings.Join(parts, "")
 }
 
-func thresholdColor(th *store.DashboardThresh, v float64) int {
-	if th == nil {
-		return clrOrange
-	}
-	if th.Crit != nil && v >= *th.Crit {
+// alertColor is red when v breaches the cron's alert cutoff, the only
+// threshold a tile has, and the default color otherwise.
+func alertColor(series WatchSeries, v float64) int {
+	if series.Series.Alert.Breached(v) {
 		return 1 // red
-	}
-	if th.Warn != nil && v >= *th.Warn {
-		return 3 // yellow
 	}
 	return clrOrange
 }

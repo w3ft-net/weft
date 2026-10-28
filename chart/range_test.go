@@ -8,7 +8,7 @@ import (
 // With no -y the value is field 1, as a cron stores `<value> [<tag>]`; after
 // -x 1 it is the field after x.
 func TestPlotFromStream_DefaultYIsTheValueField(t *testing.T) {
-	args, msg := parsePipeArgs([]string{"-t", "line"})
+	args, msg := parsePipeArgs([]string{"--kind", "line"})
 	if msg != "" {
 		t.Fatal(msg)
 	}
@@ -20,7 +20,7 @@ func TestPlotFromStream_DefaultYIsTheValueField(t *testing.T) {
 		t.Fatalf("points = %+v, want y from field 1", pts)
 	}
 
-	args, _ = parsePipeArgs([]string{"-x", "1", "-t", "line"})
+	args, _ = parsePipeArgs([]string{"-x", "1", "--kind", "line"})
 	plot, msg = PlotFromStream([]string{"2026-01-01T00:00:00Z 5 x", "2026-01-01T00:01:00Z 6 x"}, args)
 	if msg != "" || plot.Series[0].Points[0].Y != 5 {
 		t.Fatalf("after -x 1: plot=%+v msg=%q, want y from field 2", plot, msg)

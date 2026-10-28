@@ -136,15 +136,8 @@ function mergeSeriesData(seriesList: SparkSeries[]): Record<string, number>[] {
 
 // ── Sparkline component ───────────────────────────────────────────────────
 
-export interface SparkBand {
-  y: number
-  tone: 'warn' | 'crit'
-}
-
 interface SparklineProps {
   series: SparkSeries[]
-  // bands are extra dashed reference lines (dashboard warn/crit levels).
-  bands?: SparkBand[]
   threshold?: number | null
   condition?: 'above' | 'below' | 'eq' | 'neq' | null
   height?: number
@@ -156,7 +149,7 @@ interface SparklineProps {
 
 const TICK_STYLE = { fontSize: 10, fill: CHART_COLORS.tick, fontFamily: "'JetBrains Mono', monospace" }
 
-export function Sparkline({ series, bands = [], threshold, condition, height = 48, showTimeAxis = false, xDomain }: SparklineProps) {
+export function Sparkline({ series, threshold, condition, height = 48, showTimeAxis = false, xDomain }: SparklineProps) {
   const drawable = series.filter(s => s.points.length >= 2)
   const data = useMemo(() => mergeSeriesData(drawable), [drawable])
   if (data.length < 2) return null
@@ -176,10 +169,6 @@ export function Sparkline({ series, bands = [], threshold, condition, height = 4
   if (hasThresh) {
     if ((threshold as number) < yMin) yMin = threshold as number
     if ((threshold as number) > yMax) yMax = threshold as number
-  }
-  for (const b of bands) {
-    if (b.y < yMin) yMin = b.y
-    if (b.y > yMax) yMax = b.y
   }
   if (yMin === yMax) { yMin -= 0.5; yMax += 0.5 }
 
@@ -219,16 +208,6 @@ export function Sparkline({ series, bands = [], threshold, condition, height = 4
             dot={false}
             isAnimationActive={false}
             connectNulls={false}
-          />
-        ))}
-
-        {bands.map(b => (
-          <ReferenceLine
-            key={`${b.tone}-${b.y}`}
-            y={b.y}
-            stroke={b.tone === 'crit' ? CHART_COLORS.crit : CHART_COLORS.warn}
-            strokeOpacity={0.7}
-            strokeDasharray="2 3"
           />
         ))}
 

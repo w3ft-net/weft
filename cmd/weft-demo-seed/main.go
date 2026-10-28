@@ -824,19 +824,13 @@ sections:
         cron: error-rate
         title: Current errors
         size: sm
-        threshold:
-          warn: 50
-          crit: 200
   - title: Memory
     tiles:
       - kind: gauge
         cron: mem-pressure
         title: Memory pressure
         size: md
-        threshold:
-          warn: 70
-          crit: 90
-          max: 100
+        max: 100
 `
 	if err := s.SaveDashboard(custID, user1.ID, "prod", prodDashboard); err != nil {
 		return fmt.Errorf("dashboard prod: %w", err)

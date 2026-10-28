@@ -244,6 +244,12 @@ func formatWindow(d time.Duration) string {
 // (output, errMsg); errMsg is empty on success. Both the one-shot builtin
 // and the --follow View call it.
 func RenderCron(name string, series CronSeries, args WatchArgs, w, h int) (string, string) {
+	return RenderCronTitled(name, series, args, cronTitle(name, series, args), w, h)
+}
+
+// RenderCronTitled is RenderCron with the title given, for a caller that
+// frames the chart itself; "" draws no title row.
+func RenderCronTitled(name string, series CronSeries, args WatchArgs, title string, w, h int) (string, string) {
 	lines, errMsg := cronLines(series, args)
 	if errMsg != "" {
 		return "", errMsg
@@ -251,7 +257,6 @@ func RenderCron(name string, series CronSeries, args WatchArgs, w, h int) (strin
 	if len(lines) == 0 {
 		return "", fmt.Sprintf("no numeric results for cron %q in this range", name)
 	}
-	title := cronTitle(name, series, args)
 
 	switch args.Kind {
 	case "sparkline":
@@ -278,7 +283,7 @@ func RenderCron(name string, series CronSeries, args WatchArgs, w, h int) (strin
 		return b.String(), ""
 	case "bar":
 		if len(lines) > 1 {
-			return "", fmt.Sprintf("a bar chart draws one series and cron %q has %d tags; use -t line", name, len(lines))
+			return "", BarTaggedMsg(name, len(lines))
 		}
 		fitted, per := fitAccs(lines[0].accs, chart.BarSlots(w))
 		labels := make([]string, len(fitted))
@@ -300,6 +305,9 @@ func RenderCron(name string, series CronSeries, args WatchArgs, w, h int) (strin
 	default: // line
 		plot, _ := CronPlot(series, args)
 		b := chart.Line(w, h).Title(title).XAxisTime().XRange(plot.XMin, plot.XMax)
+		if series.Alert != nil {
+			b = b.YThreshold(series.Alert.Threshold, chart.SeverityCrit)
+		}
 		if len(plot.Series) == 1 {
 			b = b.Points(chartPoints(plot.Series[0].Points))
 		} else {
@@ -315,6 +323,49 @@ func RenderCron(name string, series CronSeries, args WatchArgs, w, h int) (strin
 		}
 		return out, ""
 	}
+}
+
+// CronTotals reduces a cron's series to one value per tag: the aggregate of
+// every point of that tag over the window, the way a windowed counter, gauge
+// or table reads a cron. Numbers come highest first, ties by tag, like a
+// cron's latest run. Unlike a chart, tags are never folded into "other".
+func CronTotals(series CronSeries, aggregate string) ([]LatestPoint, string) {
+	if len(series.Buckets) == 0 {
+		return nil, ""
+	}
+	if _, ok := granularitySize[series.Granularity]; !ok {
+		return nil, fmt.Sprintf("unknown granularity %q", series.Granularity)
+	}
+	raw := series.Granularity == "raw"
+	if (aggregate == "p50" || aggregate == "p95") && !raw {
+		return nil, fmt.Sprintf("-a %s needs every run, and runs are kept 7 days; this range reads the %s rollups, which keep count, sum, min and max only", aggregate, series.Granularity)
+	}
+	byTag := map[string]*acc{}
+	for _, b := range series.Buckets {
+		a := byTag[b.Tag]
+		if a == nil {
+			a = &acc{}
+			byTag[b.Tag] = a
+		}
+		a.add(b, raw)
+	}
+	out := make([]LatestPoint, 0, len(byTag))
+	for tag, a := range byTag {
+		v := a.value(aggregate)
+		out = append(out, LatestPoint{Tag: tag, Value: &v})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if *out[i].Value != *out[j].Value {
+			return *out[i].Value > *out[j].Value
+		}
+		return out[i].Tag < out[j].Tag
+	})
+	return out, ""
+}
+
+// BarTaggedMsg is why a cron with several tags can't be a bar chart.
+func BarTaggedMsg(name string, tags int) string {
+	return fmt.Sprintf("a bar chart draws one series and cron %q has %d tags; use --kind line", name, tags)
 }
 
 // RenderOneShot fetches the cron's series over rangeSpec and renders one

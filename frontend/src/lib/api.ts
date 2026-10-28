@@ -837,13 +837,7 @@ export function addKinesisSource(req: AddKinesisSourceRequest): Promise<void> {
 
 // Dashboards (/etc/dashboards/)
 export type DashboardTileSize = 'sm' | 'md' | 'lg'
-export type DashboardTileKind = 'sparkline' | 'counter' | 'gauge' | 'table'
-
-export interface DashboardThreshold {
-  warn?: number
-  crit?: number
-  max?: number
-}
+export type DashboardTileKind = 'line' | 'bar' | 'sparkline' | 'counter' | 'gauge' | 'table'
 
 // Server-formatted counter/gauge text; clients show it verbatim.
 export interface DashboardTileDisplay {
@@ -855,10 +849,25 @@ export interface DashboardTileDisplay {
 export interface DashboardTile {
   kind: DashboardTileKind
   cron: string
+  title?: string
+  aggregate?: string
+  bucket?: string
+  range?: string
+  // Counter, gauge and table tiles: what they show, one point per tag, highest
+  // first: the cron's latest run, or with a range or aggregate its aggregate
+  // over the range.
+  points?: LatestPoint[]
+  // Line, sparkline and bar tiles: the cron's range reduced by this tile's
+  // aggregate and bucket like `chart <cron>`, or why there is no plot.
+  plot?: ChartPlot
+  error?: string
   size?: DashboardTileSize
   format?: string
   display?: DashboardTileDisplay
-  threshold?: DashboardThreshold
+  max?: number // gauge full scale
+  // The cron's alert cutoff is breached by the value this tile shows. A tile
+  // has no threshold of its own.
+  critical?: boolean
 }
 
 export interface DashboardSection {
@@ -877,15 +886,11 @@ export interface LatestPoint {
   tag: string
   value?: number
   text?: string
+  critical?: boolean // value breaches the cron's alert; set on dashboard tiles
 }
 
 export interface DashboardWatchPayload {
   cron: CronWatch
-  // The latest run, one point per tag in table order.
-  latest: LatestPoint[]
-  // The cron's stored series over the last day, one line per tag (the
-  // rest folded into "other"), reduced by the server like `chart <cron>`.
-  plot: ChartPlot | null
 }
 
 export interface DashboardListItem {

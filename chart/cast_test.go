@@ -61,7 +61,7 @@ func TestPlotFromStream_TimeAxisDetection(t *testing.T) {
 		{"1", []string{"2026-01-01T00:00:00Z 5", "2026-01-01T00:01:00Z 6"}, true},
 	}
 	for _, tc := range cases {
-		args, msg := parsePipeArgs([]string{"-x", tc.x, "-t", "line"})
+		args, msg := parsePipeArgs([]string{"-x", tc.x, "--kind", "line"})
 		if msg != "" {
 			t.Fatal(msg)
 		}
@@ -87,7 +87,7 @@ func TestPlotFromStream_FormatCastOverColumnRange(t *testing.T) {
 		"2026/10/13 15:04:59 GET /b",
 		"2026/10/13 15:05:10 GET /c",
 	}
-	args, msg := parsePipeArgs([]string{"-x", "1-2::time(%Y/%m/%d %H:%M:%S)", "--bucket", "1m", "-t", "bar"})
+	args, msg := parsePipeArgs([]string{"-x", "1-2::time(%Y/%m/%d %H:%M:%S)", "--bucket", "1m", "--kind", "bar"})
 	if msg != "" {
 		t.Fatal(msg)
 	}

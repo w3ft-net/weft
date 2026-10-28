@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
-	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
+	weftchart "github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -318,7 +318,7 @@ func (v *DashboardView) renderRowLines(row []packedTile, startIdx int, w int) []
 		if innerW < 4 {
 			innerW = 4
 		}
-		series, ok := v.results[pt.tile.Watch]
+		series, ok := v.results[resultKey(pt.tile)]
 		var content []string
 		if !ok {
 			content = renderMissing(pt.tile, innerW)
@@ -438,7 +438,7 @@ func (v *DashboardView) borderColor(idx int) int {
 
 func (v *DashboardView) renderZoomed(buf *strings.Builder, w, h int) {
 	t := v.tiles[v.focus]
-	series := v.results[t.Watch]
+	series := v.results[resultKey(t)]
 
 	// Use the chart library for a proper full-screen chart render,
 	// same as `chart <watch>` does.
@@ -447,16 +447,14 @@ func (v *DashboardView) renderZoomed(buf *strings.Builder, w, h int) {
 		chartH = 5
 	}
 
-	title := t.Watch
-
 	var body string
 	switch {
-	case len(series.Values) == 0 && len(series.Tags) == 0 && len(series.Latest) == 0:
+	case len(series.Series.Buckets) == 0 && len(series.Latest) == 0:
 		body = shellcore.DimText(fmt.Sprintf("(no data for %q)", t.Watch))
 	case t.Kind == "table":
 		body = v.renderZoomedTable(t, series, w, chartH)
 	default:
-		body = v.renderZoomedChart(t, series, title, w, chartH)
+		body = v.renderZoomedChart(t, series, w, chartH)
 	}
 
 	// Write the chart body with \r\n
@@ -476,53 +474,28 @@ func (v *DashboardView) renderZoomed(buf *strings.Builder, w, h int) {
 	buf.WriteString("\x1b[0m")
 }
 
-func (v *DashboardView) renderZoomedChart(t store.DashboardTile, series WatchSeries, title string, w, h int) string {
-	if len(series.Values) == 0 {
+func (v *DashboardView) renderZoomedChart(t store.DashboardTile, series WatchSeries, w, h int) string {
+	if len(series.Series.Buckets) == 0 {
 		return shellcore.DimText(fmt.Sprintf("(no numeric data for %q)", t.Watch))
 	}
-
-	// Convert to chart.Point oldest-first (series.Values is newest-first).
-	n := len(series.Values)
-	pts := make([]chart.Point, n)
-	for i := range series.Values {
-		pts[i] = chart.Point{
-			X: float64(i),
-			Y: series.Values[n-1-i],
-		}
+	// A counter or gauge zooms to its history as a line.
+	args := t.ChartArgs()
+	if !t.DrawsSeries() || args.Kind == "sparkline" {
+		args.Kind = "line"
 	}
-
-	switch t.Kind {
-	case "sparkline":
-		// Full-width sparkline rendered as a line chart for zoom.
-		rendered, err := chart.Line(w, h).Title(title).Points(pts).Render()
-		if err != nil {
-			return shellcore.ErrorText(err.Error())
-		}
-		return rendered
-	case "gauge", "counter":
-		// Bar chart of historical values.
-		labels := make([]string, len(pts))
-		vals := make([]float64, len(pts))
-		for i, p := range pts {
-			labels[i] = fmt.Sprintf("%d", i+1)
-			vals[i] = p.Y
-		}
-		rendered, err := chart.Bar(w, h).Title(title).BarValues(labels, vals).Render()
-		if err != nil {
-			return shellcore.ErrorText(err.Error())
-		}
-		return rendered
-	default:
-		rendered, err := chart.Line(w, h).Title(title).Points(pts).Render()
-		if err != nil {
-			return shellcore.ErrorText(err.Error())
-		}
-		return rendered
+	rendered, msg := weftchart.RenderCronTitled(t.Watch, series.Series, args, t.Watch, w, h)
+	if msg != "" {
+		return shellcore.ErrorText(msg)
 	}
+	return rendered
 }
 
 func (v *DashboardView) renderZoomedTable(t store.DashboardTile, series WatchSeries, w, h int) string {
-	if len(series.Latest) == 0 {
+	points, msg := series.points(t)
+	if msg != "" {
+		return shellcore.ErrorText(msg)
+	}
+	if len(points) == 0 {
 		return shellcore.DimText("(no data)")
 	}
 	var buf strings.Builder
@@ -530,7 +503,7 @@ func (v *DashboardView) renderZoomedTable(t store.DashboardTile, series WatchSer
 	buf.WriteString(t.Watch)
 	buf.WriteString("\x1b[0m\n\n")
 
-	headers, rows := tableRows(series.Latest)
+	headers, rows := tableRows(points)
 	colW := max((w-2)/len(headers), 6)
 
 	// Header row
@@ -539,8 +512,12 @@ func (v *DashboardView) renderZoomedTable(t store.DashboardTile, series WatchSer
 	buf.WriteString(strings.Repeat("─", colW*len(headers)))
 	buf.WriteString("\n")
 
-	for _, row := range rows {
-		buf.WriteString(joinCols(row, colW))
+	for i, row := range rows {
+		line := joinCols(row, colW)
+		if points[i].Value != nil && series.Series.Alert.Breached(*points[i].Value) {
+			line = colorize(1, line)
+		}
+		buf.WriteString(line)
 		buf.WriteString("\n")
 	}
 	return buf.String()

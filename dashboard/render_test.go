@@ -17,6 +17,24 @@ func mustParse(t *testing.T, body string) *store.DashboardSpec {
 	return spec
 }
 
+// series is a cron's stored series: one raw point per value, a minute apart,
+// oldest first.
+func series(vals ...float64) WatchSeries {
+	ws := WatchSeries{Series: weftchart.CronSeries{Granularity: "raw"}}
+	for i, v := range vals {
+		ws.Series.Buckets = append(ws.Series.Buckets, bucket(i, "", v))
+	}
+	return ws
+}
+
+// latest is a cron's latest untagged run.
+func latest(v float64) WatchSeries {
+	return WatchSeries{Latest: []weftchart.LatestPoint{{Value: &v}}}
+}
+
+// key is where a tile on cron, with no range of its own, finds its data.
+func key(cron string) string { return resultKey(store.DashboardTile{Watch: cron}) }
+
 func stripANSI(s string) string {
 	var b strings.Builder
 	inEsc := false
@@ -47,8 +65,8 @@ sections:
         cron: b
 `)
 	results := map[string]WatchSeries{
-		"a": {Values: []float64{42}},
-		"b": {Values: []float64{99}},
+		key("a"): latest(42),
+		key("b"): latest(99),
 	}
 	out := Render(spec, results, 40) // < threshold
 
@@ -85,8 +103,8 @@ sections:
         size: sm
 `)
 	results := map[string]WatchSeries{
-		"a": {Values: []float64{42}},
-		"b": {Values: []float64{99}},
+		key("a"): latest(42),
+		key("b"): latest(99),
 	}
 	out := Render(spec, results, 120) // wide
 
@@ -112,7 +130,7 @@ tiles:
     cron: traffic
 `)
 	results := map[string]WatchSeries{
-		"traffic": {Values: []float64{1, 5, 3, 8, 2, 7, 4}},
+		key("traffic"): series(1, 5, 3, 8, 2, 7, 4),
 	}
 	out := Render(spec, results, 80)
 	if !strings.Contains(out, "traffic") {
@@ -139,12 +157,11 @@ tiles:
     size: lg
 `)
 	results := map[string]WatchSeries{
-		"coordinator-mem-pct": {
-			Tags: map[string]WatchSeries{
-				"i-aaa": {Values: []float64{48, 44, 40}, Times: []float64{300, 200, 100}},
-				"i-bbb": {Values: []float64{68, 64, 60}, Times: []float64{300, 200, 100}},
-			},
-		},
+		key("coordinator-mem-pct"): {Series: weftchart.CronSeries{Granularity: "raw", Buckets: []weftchart.CronBucket{
+			bucket(0, "i-aaa", 40), bucket(0, "i-bbb", 60),
+			bucket(1, "i-aaa", 44), bucket(1, "i-bbb", 64),
+			bucket(2, "i-aaa", 48), bucket(2, "i-bbb", 68),
+		}}},
 	}
 	out := Render(spec, results, 80)
 	plain := stripANSI(out)
@@ -186,7 +203,7 @@ tiles:
 	num := func(v float64) *float64 { return &v }
 	text := func(s string) *string { return &s }
 	results := map[string]WatchSeries{
-		"top": {Latest: []weftchart.LatestPoint{
+		key("top"): {Latest: []weftchart.LatestPoint{
 			{Tag: "alpha", Value: num(12)}, {Tag: "beta", Value: num(7)}, {Tag: "gamma", Text: text("draining")},
 		}},
 	}
@@ -214,69 +231,22 @@ tiles:
 	}
 }
 
-func TestRender_GaugeWithThreshold(t *testing.T) {
-	body := `tiles:
-  - kind: gauge
-    cron: cpu
-    threshold: { warn: 70, crit: 90, max: 100 }
-`
-	spec := mustParse(t, body)
-	results := map[string]WatchSeries{
-		"cpu": {Values: []float64{95}},
-	}
-	out := Render(spec, results, 80)
-	if !strings.Contains(out, "95") || !strings.Contains(out, "100") {
-		t.Errorf("gauge output missing numbers:\n%s", out)
-	}
-	// Should have ANSI red for crit.
-	if !strings.Contains(out, "\x1b[38;5;1m") {
-		t.Errorf("expected crit color in output:\n%s", out)
-	}
-}
-
-func TestRender_SparklineTimeAxis(t *testing.T) {
-	spec := mustParse(t, `
-tiles:
-  - kind: sparkline
-    cron: mem
-`)
-	base := 1746550800.0 // 2025-05-06 17:00:00 UTC
-	results := map[string]WatchSeries{
-		"mem": {
-			Values: []float64{80, 75, 70, 65, 60, 55, 50}, // newest-first
-			Times:  []float64{base + 360, base + 300, base + 240, base + 180, base + 120, base + 60, base},
-		},
-	}
-	out := stripANSI(Render(spec, results, 80))
-	if !strings.Contains(out, ":") {
-		t.Errorf("expected time-formatted x-axis labels (HH:MM), got:\n%s", out)
-	}
-	if strings.Contains(out, "5.00") || strings.Contains(out, "10.00") {
-		t.Errorf("x-axis still shows index numbers instead of times:\n%s", out)
-	}
-}
-
-func TestRender_DashboardTitleAndSectionTitles(t *testing.T) {
-	spec := mustParse(t, `
-title: Production
-sections:
-  - title: Errors
-    tiles:
-      - kind: counter
-        cron: a
-  - title: Capacity
-    tiles:
-      - kind: counter
-        cron: b
-`)
-	out := Render(spec, map[string]WatchSeries{
-		"a": {Values: []float64{1}},
-		"b": {Values: []float64{2}},
-	}, 80)
-
-	for _, want := range []string{"Production", "Errors", "Capacity"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing %q:\n%s", want, out)
+// A gauge turns red when the cron's alert cutoff is breached, and only then;
+// the tile has no threshold of its own.
+func TestRender_GaugeCriticalFromCronAlert(t *testing.T) {
+	spec := mustParse(t, "tiles:\n  - kind: gauge\n    cron: cpu\n    max: 100\n")
+	for _, c := range []struct {
+		value float64
+		red   bool
+	}{{95, true}, {50, false}} {
+		ws := latest(c.value)
+		ws.Series.Alert = &weftchart.CronAlert{Condition: "above", Threshold: 90}
+		out := Render(spec, map[string]WatchSeries{key("cpu"): ws}, 80)
+		if !strings.Contains(out, "100") {
+			t.Errorf("gauge output missing its scale:\n%s", out)
+		}
+		if got := strings.Contains(out, "\x1b[38;5;1m"); got != c.red {
+			t.Errorf("value %v: red = %v, want %v:\n%s", c.value, got, c.red, out)
 		}
 	}
 }

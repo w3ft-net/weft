@@ -33,7 +33,7 @@ func DefaultReadPolicy() Policy {
 			"wc":    {},
 			"cut":   {FlagsWithValue: map[string]bool{"-d": true, "-f": true, "-c": true}},
 			"tr":    {},
-			"chart": {FlagsWithValue: map[string]bool{"-t": true, "-n": true}},
+			"chart": {FlagsWithValue: map[string]bool{"--kind": true, "-x": true, "-y": true, "-t": true, "--tag": true, "-a": true, "--aggregate": true, "--bucket": true, "--title": true}},
 
 			// Cron-result aggregators. These read history from a named
 			// watch — args are (watchName, duration) or

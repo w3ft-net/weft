@@ -87,26 +87,30 @@ export default function ShellChartModal({ spec, onClose }: Props) {
   )
 }
 
+// PlotBars draws a bar plot's single series as a row per point, shared with
+// dashboard bar tiles.
+export function PlotBars({ plot }: { plot: ChartPlot }) {
+  const points = plot.series[0]?.points ?? []
+  const max = Math.max(...points.map(p => p.y), 0)
+  return (
+    <div className="shell-chart-modal-bars" data-testid="shell-chart-modal-bars">
+      {points.map(p => (
+        <div key={p.label} className="shell-chart-modal-bar-row" data-testid={`shell-chart-modal-bar-${p.label}`}>
+          <span className="shell-chart-modal-bar-label">{p.label}</span>
+          <span className="shell-chart-modal-bar-track">
+            <span className="shell-chart-modal-bar-fill" style={{ width: `${max > 0 ? (p.y / max) * 100 : 0}%` }} />
+          </span>
+          <span className="shell-chart-modal-bar-value">{formatSparkValue(p.y)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function PlotView({ plot }: { plot: ChartPlot }) {
   const series = plotToSpark(plot)
 
-  if (plot.kind === 'bar') {
-    const points = plot.series[0]?.points ?? []
-    const max = Math.max(...points.map(p => p.y), 0)
-    return (
-      <div className="shell-chart-modal-bars" data-testid="shell-chart-modal-bars">
-        {points.map(p => (
-          <div key={p.label} className="shell-chart-modal-bar-row" data-testid={`shell-chart-modal-bar-${p.label}`}>
-            <span className="shell-chart-modal-bar-label">{p.label}</span>
-            <span className="shell-chart-modal-bar-track">
-              <span className="shell-chart-modal-bar-fill" style={{ width: `${max > 0 ? (p.y / max) * 100 : 0}%` }} />
-            </span>
-            <span className="shell-chart-modal-bar-value">{formatSparkValue(p.y)}</span>
-          </div>
-        ))}
-      </div>
-    )
-  }
+  if (plot.kind === 'bar') return <PlotBars plot={plot} />
 
   // A line needs two points. Everything landing in one bucket is a real
   // result (the window was too short for this bucket size), so say so rather

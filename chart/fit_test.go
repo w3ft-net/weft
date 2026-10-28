@@ -85,7 +85,7 @@ func TestFitGroups_ReReducesRawRows(t *testing.T) {
 }
 
 func TestRenderFromStream_SparklineFitsWidth(t *testing.T) {
-	args, _ := parsePipeArgs([]string{"-t", "sparkline"})
+	args, _ := parsePipeArgs([]string{"--kind", "sparkline"})
 	out, msg := RenderFromStream(minuteRows(), args, 80, 24)
 	if msg != "" {
 		t.Fatal(msg)

@@ -221,7 +221,6 @@
 
 .dashboards-counter-unit { color: var(--text-dim); font-weight: 400; }
 
-.dashboards-counter.dashboards-tone-warn .dashboards-counter-num { color: var(--yellow); }
 .dashboards-counter.dashboards-tone-crit .dashboards-counter-num { color: var(--red); }
 
 /* ── Gauge: [█████████░░░░░░] ──────────────────── */
@@ -256,7 +255,6 @@
 }
 
 .dashboards-gauge-normal { color: var(--green); }
-.dashboards-gauge-warn   { color: var(--yellow); }
 .dashboards-gauge-crit   { color: var(--red); }
 
 .dashboards-gauge-value {
@@ -289,7 +287,6 @@
 
 /* ── Tone modifiers (warn/crit) ────────────────── */
 .dashboards-tone-normal { color: var(--amber); }
-.dashboards-tone-warn   { color: var(--yellow); }
 .dashboards-tone-crit   { color: var(--red); }
 
 /* ── Table: uniq -c style ─────────────────────── */

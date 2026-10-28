@@ -49,7 +49,7 @@ func TestExecNonInteractiveChart(t *testing.T) {
 func TestExecNonInteractiveChartSparkline(t *testing.T) {
 	s := &Shell{FS: &chartTestFS{series: rawSeries(1, 5, 3)}}
 	var buf bytes.Buffer
-	if err := s.ExecNonInteractive("chart errors -t sparkline", &buf); err != nil {
+	if err := s.ExecNonInteractive("chart errors --kind sparkline", &buf); err != nil {
 		t.Fatalf("ExecNonInteractive: %v", err)
 	}
 	out := buf.String()
@@ -112,12 +112,12 @@ func (f *chartTestFS) GetCronSeries(_ string, rangeSpec string) (chart.CronSerie
 func TestExecNonInteractiveChartRejectsBadArgs(t *testing.T) {
 	cases := map[string]string{
 		"chart errors -x":            "chart: unknown option -x",
-		"chart errors --kind bar":    "chart: unknown option --kind",
-		"chart errors -t pie":        "unknown type",
+		"chart errors --type bar":    "chart: unknown option --type",
+		"chart errors --kind pie":    "unknown kind",
 		"chart errors -n 20":         "chart: unknown option -n",
 		"chart errors -a":            "-a requires a function",
 		"chart errors other":         "unexpected argument",
-		"chart errors --type bar -q": "chart: unknown option -q",
+		"chart errors --kind bar -q": "chart: unknown option -q",
 	}
 	for line, want := range cases {
 		s := &Shell{FS: &chartTestFS{series: rawSeries(1)}}

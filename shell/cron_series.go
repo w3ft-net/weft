@@ -22,6 +22,7 @@ func DecodeCronSeries(data []byte) (chart.CronSeries, error) {
 			Min   float64 `json:"min"`
 			Max   float64 `json:"max"`
 		} `json:"points"`
+		Alert *chart.CronAlert `json:"alert"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return chart.CronSeries{}, err
@@ -31,6 +32,7 @@ func DecodeCronSeries(data []byte) (chart.CronSeries, error) {
 		Start:       time.UnixMilli(resp.Start),
 		End:         time.UnixMilli(resp.End),
 		Buckets:     make([]chart.CronBucket, len(resp.Points)),
+		Alert:       resp.Alert,
 	}
 	for i, p := range resp.Points {
 		out.Buckets[i] = chart.CronBucket{Start: time.UnixMilli(p.Ts), Tag: p.Tag, Count: p.Count, Sum: p.Sum, Min: p.Min, Max: p.Max}

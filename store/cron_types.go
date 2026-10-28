@@ -11,7 +11,13 @@ import (
 
 // numericTileKinds are the dashboard tiles that draw numbers; a table
 // shows text as well.
-var numericTileKinds = map[string]bool{"sparkline": true, "counter": true, "gauge": true}
+var numericTileKinds = map[string]bool{"line": true, "bar": true, "sparkline": true, "counter": true, "gauge": true}
+
+// readsNumbers reports whether t draws numbers: a table does only when it
+// aggregates over a range, which text can't be.
+func readsNumbers(t DashboardTile) bool {
+	return numericTileKinds[t.Kind] || (t.Kind == "table" && t.Windowed())
+}
 
 // checkValueTypes refuses a save that would put a text cron behind a
 // numeric reader: this pipeline reading a text cron with a numeric weft::
@@ -119,7 +125,7 @@ func numericTiles(spec *DashboardSpec, name string) []string {
 	seen := map[string]bool{}
 	for _, sec := range spec.Sections {
 		for _, t := range sec.Tiles {
-			if t.Watch == name && numericTileKinds[t.Kind] {
+			if t.Watch == name && readsNumbers(t) {
 				seen[t.Kind] = true
 			}
 		}
@@ -158,7 +164,7 @@ func (s *Store) checkDashboardTypes(orgID OrgID, yamlBody string) error {
 	}
 	for _, sec := range spec.Sections {
 		for _, t := range sec.Tiles {
-			if !numericTileKinds[t.Kind] {
+			if !readsNumbers(t) {
 				continue
 			}
 			w, err := s.GetCronWatch(orgID, t.Watch)
@@ -169,6 +175,9 @@ func (s *Store) checkDashboardTypes(orgID OrgID, yamlBody string) error {
 				return err
 			}
 			if w.ValueType == ValueText {
+				if t.Kind == "table" {
+					return fmt.Errorf("cron %q stores text (# type: text), which a table can't aggregate; drop its range and aggregate to show the latest run", t.Watch)
+				}
 				return fmt.Errorf("cron %q stores text (# type: text); a %s tile draws numbers, so use a table tile", t.Watch, t.Kind)
 			}
 		}

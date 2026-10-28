@@ -2,15 +2,15 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { TableTile } from '../pages/Dashboards'
-import type { CronWatch, DashboardWatchPayload, LatestPoint } from '../lib/api'
+import type { LatestPoint } from '../lib/api'
 
-function show(latest: LatestPoint[]) {
-  const payload = { cron: { Name: 'hosts' } as CronWatch, latest, plot: null } satisfies DashboardWatchPayload
-  render(<TableTile tile={{ kind: 'table', cron: 'hosts' }} payload={payload} />)
+function show(points: LatestPoint[], error?: string) {
+  render(<TableTile tile={{ kind: 'table', cron: 'hosts', points, error }} />)
 }
 
-// A table tile is the cron's latest run, one row per tag, in the order the
-// server sent (numbers highest first, text by tag).
+// A table tile is one row per tag, in the order the server sent (numbers
+// highest first, text by tag): the cron's latest run, or its aggregate over
+// the tile's range.
 describe('TableTile', () => {
   afterEach(cleanup)
 
@@ -30,5 +30,16 @@ describe('TableTile', () => {
     show([{ tag: '', value: 7 }])
     expect(screen.queryByText('tag')).toBeNull()
     expect(screen.getByTestId('table-hosts-row-').textContent).toBe('7')
+  })
+
+  it('marks the rows that breach the cron\'s alert', () => {
+    show([{ tag: 'web-2', value: 91, critical: true }, { tag: 'web-1', value: 40 }])
+    expect(screen.getByTestId('table-hosts-row-web-2').className).toContain('dashboards-tone-crit')
+    expect(screen.getByTestId('table-hosts-row-web-1').className).not.toContain('dashboards-tone-crit')
+  })
+
+  it('shows why a table could not aggregate', () => {
+    show([], '-a p95 needs every run, and runs are kept 7 days')
+    expect(screen.getByTestId('tile-error-hosts').textContent).toContain('needs every run')
   })
 })

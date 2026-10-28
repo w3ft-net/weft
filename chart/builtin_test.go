@@ -26,7 +26,7 @@ func TestParseChartCmd(t *testing.T) {
 		},
 		{
 			name: "type bar",
-			argv: []string{"errors", "-t", "bar"},
+			argv: []string{"errors", "--kind", "bar"},
 			want: WatchArgs{Name: "errors", Kind: "bar", Aggregate: "avg", Interval: time.Second},
 		},
 		{
@@ -43,7 +43,7 @@ func TestParseChartCmd(t *testing.T) {
 		{name: "-n is gone: the window is the range", argv: []string{"errors", "-n", "20"}, err: "chart: unknown option -n"},
 		{name: "-x is pipe-only", argv: []string{"errors", "-x", "1"}, err: "chart: unknown option -x"},
 		{name: "unknown flag", argv: []string{"errors", "--no-such"}, err: "chart: unknown option --no-such"},
-		{name: "bad type", argv: []string{"errors", "-t", "candlestick"}, err: "unknown type"},
+		{name: "bad type", argv: []string{"errors", "--kind", "candlestick"}, err: "unknown kind"},
 		{name: "bad aggregate", argv: []string{"errors", "-a", "identity"}, err: "unknown --aggregate"},
 		{name: "interval too short", argv: []string{"errors", "-i", "10ms"}, err: "duration"},
 	}
@@ -152,11 +152,62 @@ func TestCheckFollow(t *testing.T) {
 
 func TestRenderCron_BarRefusesTags(t *testing.T) {
 	series := CronSeries{Granularity: "raw", Buckets: []CronBucket{raw(0, "a", 1), raw(0, "b", 2)}}
-	if _, msg := RenderCron("hosts", series, WatchArgs{Kind: "bar", Aggregate: "avg"}, 80, 20); !strings.Contains(msg, "has 2 tags; use -t line") {
+	if _, msg := RenderCron("hosts", series, WatchArgs{Kind: "bar", Aggregate: "avg"}, 80, 20); !strings.Contains(msg, "has 2 tags; use --kind line") {
 		t.Fatalf("bar over tags: %q", msg)
 	}
 	out, msg := RenderCron("hosts", series, WatchArgs{Kind: "sparkline", Aggregate: "avg"}, 80, 20)
 	if msg != "" || !strings.HasPrefix(out, "a ") || !strings.Contains(out, "\nb ") {
 		t.Fatalf("tagged sparkline should draw one labelled line per tag: %q %q", out, msg)
+	}
+}
+
+func TestCronAlertBreached(t *testing.T) {
+	for _, c := range []struct {
+		cond string
+		v    float64
+		want bool
+	}{
+		{"above", 91, true}, {"above", 90, false},
+		{"below", 89, true}, {"below", 90, false},
+		{"eq", 90, true}, {"eq", 91, false},
+		{"neq", 91, true}, {"neq", 90, false},
+	} {
+		if got := (&CronAlert{Condition: c.cond, Threshold: 90}).Breached(c.v); got != c.want {
+			t.Errorf("%s 90 breached by %v = %v, want %v", c.cond, c.v, got, c.want)
+		}
+	}
+	if (*CronAlert)(nil).Breached(1e9) {
+		t.Error("a cron with no alert is never breached")
+	}
+}
+
+func TestCronTotals(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	b := func(min int, tag string, v float64) CronBucket {
+		return CronBucket{Start: t0.Add(time.Duration(min) * time.Minute), Tag: tag, Count: 1, Sum: v, Min: v, Max: v}
+	}
+	series := CronSeries{Granularity: "raw", Buckets: []CronBucket{b(0, "a", 1), b(1, "a", 5), b(0, "b", 2), b(0, "", 4)}}
+
+	got, msg := CronTotals(series, "max")
+	if msg != "" {
+		t.Fatal(msg)
+	}
+	var order []string
+	for _, p := range got {
+		order = append(order, fmt.Sprintf("%s=%v", p.Tag, *p.Value))
+	}
+	if want := "a=5,=4,b=2"; strings.Join(order, ",") != want {
+		t.Errorf("max per tag = %v, want %s (highest first, no folding)", order, want)
+	}
+
+	if got, _ := CronTotals(series, "count"); *got[0].Value != 2 {
+		t.Errorf("count of a = %v, want 2", *got[0].Value)
+	}
+	series.Granularity = "hourly"
+	if _, msg := CronTotals(series, "p95"); !strings.Contains(msg, "needs every run") {
+		t.Errorf("p95 over rollups: %q", msg)
+	}
+	if got, msg := CronTotals(CronSeries{}, "avg"); got != nil || msg != "" {
+		t.Errorf("empty series = %v, %q", got, msg)
 	}
 }

@@ -14,7 +14,7 @@ type stubSource struct{ series CronSeries }
 func (s stubSource) GetCronSeries(string, string) (CronSeries, error) { return s.series, nil }
 
 // TestLandingSparkline reproduces the exact ANSI/Unicode output that a
-// realistic `chart error-rate -w 1h -t sparkline` would emit. The
+// realistic `chart error-rate -w 1h --kind sparkline` would emit. The
 // landing page's marketing diagram embeds this string verbatim; if this
 // test starts failing because Sparkline()'s ramp or normalisation
 // changed, the diagram needs to be regenerated.

@@ -9,7 +9,7 @@ import (
 )
 
 // TestConfigureCore_ChartBuiltin_EmitsWatchRequest verifies that
-// `chart api-errors -t bar -a max` at the browser prompt reads the cron's
+// `chart api-errors --kind bar -a max` at the browser prompt reads the cron's
 // series over the shell's range and fires Shell.Chart with the plot
 // already reduced, so the modal draws what the CLI would. The CLI's
 // ASCII renderer is not registered when Shell.Chart is set.
@@ -25,7 +25,7 @@ func TestConfigureCore_ChartBuiltin_EmitsWatchRequest(t *testing.T) {
 	}}
 	s.ConfigureCore(core)
 
-	for _, r := range "chart api-errors -t bar -a max --bucket 1h" {
+	for _, r := range "chart api-errors --kind bar -a max --bucket 1h" {
 		core.HandleEvent(shellcore.KeyEvent{Rune: r})
 	}
 	core.HandleEvent(shellcore.KeyEvent{Key: shellcore.KeyEnter})
@@ -87,7 +87,7 @@ func TestConfigureCore_ChartPipe_EmitsLinesRequest(t *testing.T) {
 		func(a shellcore.Action) {},
 	)
 	lines := []string{"200 a", "201 b", "199 c"}
-	parsed, msg := chart.ParsePipeArgs([]string{"-t", "line", "--title", "latency"})
+	parsed, msg := chart.ParsePipeArgs([]string{"--kind", "line", "--title", "latency"})
 	if msg != "" {
 		t.Fatal(msg)
 	}

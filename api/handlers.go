@@ -1898,6 +1898,7 @@ func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
 		"range":       rangeKey,
 		"start":       series.Start.UnixMilli(),
 		"end":         series.End.UnixMilli(),
+		"alert":       watch.Alert(),
 	})
 }
 
