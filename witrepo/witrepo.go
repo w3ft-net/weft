@@ -447,14 +447,10 @@ func (r *Repo) Reword(id gitcore.ObjectID, message string) error {
 	case m.authoredBy != r.cfg.UserID:
 		return fmt.Errorf("cannot reword %s/%s: someone else wrote that version", m.kind, m.name)
 	}
-	perm, err := r.cfg.Store.GetOrgPermission(r.cfg.OrgID, r.cfg.UserID)
-	switch {
-	case m.kind == "bin" && (err != nil || !perm.CanManageFunctions):
-		return fmt.Errorf("/bin: permission denied (need the binmgr group — ask an owner for `adduser <you> binmgr`)")
-	case m.kind == "cron.d" && (err != nil || !perm.CanManageWatches):
-		return fmt.Errorf("/cron.d: permission denied (need the cronmgr group — ask an owner for `adduser <you> cronmgr`)")
-	case strings.HasPrefix(m.kind, "etc") && (err != nil || !perm.CanManageEtc):
-		return fmt.Errorf("/etc: permission denied (need the configmgr group — ask an owner for `adduser <you> configmgr`)")
+	// Rewording is a write to the file, so it takes the same group as any
+	// other write: ask the mounts, rather than repeating their check here.
+	if err := r.mountFS().Access("/"+m.kind+"/"+m.name, shellcore.PermWrite); err != nil {
+		return err
 	}
 	err = r.amendMessage(m.kind, m.name, r.cfg.UserID, message)
 	r.built = nil
