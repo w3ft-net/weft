@@ -261,7 +261,11 @@ func (s *Server) inviteMember(ctx context.Context, session *auth.Session, email 
 		return nil, &inviteErr{http.StatusInternalServerError, "internal error"}
 	}
 
-	token, err := s.store.CreateMagicLink(email)
+	token, err := s.store.IssueMagicLink(&store.MagicLink{
+		Email:    email,
+		Purpose:  store.MagicLinkInvite,
+		InviteID: member.ID,
+	})
 	if err != nil {
 		return nil, &inviteErr{http.StatusInternalServerError, "internal error"}
 	}

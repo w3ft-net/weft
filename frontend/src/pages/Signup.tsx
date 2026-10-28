@@ -1,7 +1,6 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useSearchParams, useNavigate } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { signup } from '../lib/api'
-import { useAuth } from '../lib/AuthContext'
 import Pane from '../components/Pane'
 import './Login.css'
 import './Signup.css'
@@ -14,8 +13,6 @@ const TIER_LABELS: Record<string, string> = {
 
 export default function Signup() {
   const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
-  const { loginWithToken } = useAuth()
 
   const tierParam = searchParams.get('tier') || 'swatch'
   const tier = tierParam in TIER_LABELS ? tierParam : 'swatch'
@@ -24,6 +21,7 @@ export default function Signup() {
   const [orgName, setOrgName] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [sentTo, setSentTo] = useState('')
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -32,8 +30,7 @@ export default function Signup() {
     setLoading(true)
     try {
       const resp = await signup(email.trim(), orgName.trim(), tier)
-      await loginWithToken(resp.token)
-      navigate(`/signup/payment?tier=${encodeURIComponent(resp.tier)}`)
+      setSentTo(resp.email)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong.')
       setLoading(false)
@@ -46,6 +43,14 @@ export default function Signup() {
       <Pane title="create account" meta="step 1/2" className="login-card">
         <p className="login-motd">log analysis for your unix heart</p>
 
+        {sentTo ? (
+          <div className="login-sent" data-testid="signup-sent-message">
+            <div className="login-sent-ok">check your email</div>
+            <div className="login-sent-line">to: <strong>{sentTo}</strong></div>
+            <div className="login-sent-dim">open the link to create your account. it expires in 15 minutes.</div>
+            <div className="login-sent-dim tui-cursor">waiting</div>
+          </div>
+        ) : (
         <form className="login-form" onSubmit={handleSubmit} data-testid="signup-form">
           <div className="login-field">
             <label className="login-label" htmlFor="signup-email">email</label>
@@ -106,6 +111,7 @@ export default function Signup() {
             no charge until your 14-day trial ends. cancel anytime.
           </p>
         </form>
+        )}
       </Pane>
 
       <div className="login-foot">

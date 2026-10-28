@@ -375,42 +375,6 @@ func TestAuth_Unauthorized(t *testing.T) {
 
 // ── Email verification gating (security audit follow-up) ───────
 
-func TestAuth_Signup_ReturnsUnverifiedUser(t *testing.T) {
-	srv, _ := testServer(t)
-	srv.StripePrices[store.TierSwatch] = TierPrices{Flat: "price_test"}
-	handler := srv.Handler()
-	email := fmt.Sprintf("signup-%d@example.com", os.Getpid())
-
-	body, _ := json.Marshal(map[string]string{
-		"email": email, "org_name": fmt.Sprintf("squatter-%d", os.Getpid()), "tier": "swatch",
-	})
-	req := httptest.NewRequest("POST", "/api/auth/signup", bytes.NewReader(body))
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("signup: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp map[string]any
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	user, _ := resp["user"].(map[string]any)
-	if user == nil {
-		t.Fatal("no user in signup response")
-	}
-	if ver, _ := user["email_verified"].(bool); ver != false {
-		t.Errorf("signup user should be unverified, got email_verified=%v", user["email_verified"])
-	}
-
-	// JWT must validate — but verification state lives on the server
-	// now, not in the claim, so the response body's email_verified
-	// (asserted above) is the authoritative check.
-	jwt, _ := resp["token"].(string)
-	if _, err := auth.Validate(jwt, "test-secret"); err != nil {
-		t.Fatalf("validate JWT: %v", err)
-	}
-}
-
 func TestAuth_UnverifiedUser_CannotCreateToken(t *testing.T) {
 	srv, s := testServer(t)
 	handler := srv.Handler()
@@ -631,8 +595,8 @@ func TestOnboarding_StartTour_KeepsUserLoggedIn(t *testing.T) {
 		t.Fatalf("seed loom namespace: %v", err)
 	}
 
-	// Sign up the user via the public endpoint (not a hand-rolled fixture
-	// — we want every side effect handleSignup has).
+	// Sign up the user via the public endpoints (not a hand-rolled fixture
+	// — we want every side effect signup and verify have).
 	email := fmt.Sprintf("tour-%d@example.com", os.Getpid())
 	orgName := fmt.Sprintf("tour-org-%d", os.Getpid())
 	body, _ := json.Marshal(map[string]string{
@@ -644,11 +608,25 @@ func TestOnboarding_StartTour_KeepsUserLoggedIn(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("signup: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	var signupResp map[string]any
-	json.Unmarshal(w.Body.Bytes(), &signupResp)
-	jwt, _ := signupResp["token"].(string)
+
+	// The session comes from following the emailed link, which is also what
+	// creates the account.
+	linkToken, err := s.GetLastMagicLinkToken(email)
+	if err != nil {
+		t.Fatalf("signup sent no link: %v", err)
+	}
+	body, _ = json.Marshal(map[string]string{"token": linkToken})
+	req = httptest.NewRequest("POST", "/api/auth/verify", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("verify: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var verifyResp map[string]any
+	json.Unmarshal(w.Body.Bytes(), &verifyResp)
+	jwt, _ := verifyResp["token"].(string)
 	if jwt == "" {
-		t.Fatal("signup: no JWT in response")
+		t.Fatal("verify: no JWT in response")
 	}
 
 	// First /me: confirms the welcome-modal preconditions. This is what

@@ -242,6 +242,19 @@ func (s *Store) BeginTest() (*Store, func()) {
 	return &Store{db: tx, tenant: s.tenant, Orgs: orgStore}, func() { tx.Rollback() }
 }
 
+// InTx runs fn against a Store whose writes — gorm's and orgs' alike — share
+// one transaction: fn returning an error rolls all of it back. Inside a test
+// Store (already a transaction) it nests as a savepoint.
+func (s *Store) InTx(fn func(tx *Store) error) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		orgStore := s.Orgs
+		if sqlTx, ok := tx.Statement.ConnPool.(*sql.Tx); ok {
+			orgStore = orgs.New(sqlTx)
+		}
+		return fn(&Store{db: tx, tenant: s.tenant, Orgs: orgStore})
+	})
+}
+
 // TruncateTestTables removes all data from GORM-managed tables. For tests only.
 func (s *Store) TruncateTestTables() {
 	// Discarding this error once cost a debugging cycle: when the statement

@@ -73,17 +73,21 @@ export function login(email: string): Promise<{ message: string }> {
   })
 }
 
-export function signup(email: string, orgName: string, tier: string): Promise<{ token: string; tier: string; user: User }> {
+// Signup creates nothing and returns no session: the account is created, and a
+// session issued, when the emailed link is followed (see verify).
+export function signup(email: string, orgName: string, tier: string): Promise<{ status: string; email: string; tier: string }> {
   return apiFetch('/api/auth/signup', {
     method: 'POST',
     body: JSON.stringify({ email, org_name: orgName, tier }),
   })
 }
 
-export function verify(token: string, orgName?: string): Promise<{ token?: string; user?: User; needs_org?: boolean; email?: string }> {
+// signup_tier is set when the link finished a signup: the plan to carry on to
+// payment with.
+export function verify(token: string): Promise<{ token: string; user: User; signup_tier?: string }> {
   return apiFetch('/api/auth/verify', {
     method: 'POST',
-    body: JSON.stringify({ token, org_name: orgName }),
+    body: JSON.stringify({ token }),
   })
 }
 

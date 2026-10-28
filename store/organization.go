@@ -84,6 +84,23 @@ type Namespace struct {
 	Name  string `gorm:"not null;uniqueIndex:idx_ns_org_name"`
 }
 
+// ErrOrgNameTaken is CreateOrg's refusal to reuse a slug.
+var ErrOrgNameTaken = errors.New("organization name already taken")
+
+// CreateOrg makes a new org, and only a new one: a name that exists is an
+// error, never an org handed back. Use it wherever the name came from a
+// request; FindOrCreateOrg is for operator tooling that means "this one".
+func (s *Store) CreateOrg(name string) (*Organization, error) {
+	c := Organization{Name: name}
+	if err := s.db.Create(&c).Error; err != nil {
+		if IsDuplicate(err) {
+			return nil, ErrOrgNameTaken
+		}
+		return nil, err
+	}
+	return &c, nil
+}
+
 // FindOrCreateOrg returns the org with this slug, creating it if needed.
 func (s *Store) FindOrCreateOrg(name string) (*Organization, error) {
 	var c Organization

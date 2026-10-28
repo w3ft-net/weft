@@ -226,7 +226,7 @@ func TestAcceptTeamMember(t *testing.T) {
 
 	// User signs up and accepts.
 	user, _ := db.CreateUser("invitee@example.com")
-	if err := db.AcceptTeamMember(pending.ID, user.ID); err != nil {
+	if _, err := db.AcceptTeamMember(pending.ID, user.ID); err != nil {
 		t.Fatalf("AcceptTeamMember: %v", err)
 	}
 

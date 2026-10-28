@@ -434,9 +434,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Always return 200 regardless of whether the account exists.
 	// Leaking existence is an enumeration vector.
-	user, _ := s.store.GetUserByEmail(req.Email)
-	invite, _ := s.store.GetPendingTeamMemberByEmail(req.Email)
-	if user == nil && invite == nil {
+	// Only an existing account gets a login link. A pending invitee has
+	// their invite link, a prospective customer signs up; a login link is
+	// neither of those.
+	if user, _ := s.store.GetUserByEmail(req.Email); user == nil {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
 	}
@@ -466,7 +467,9 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if req.Email == "" || req.OrgName == "" || req.Tier == "" {
+	email := store.NormalizeEmail(req.Email)
+	orgName := store.NormalizeOrgName(req.OrgName)
+	if email == "" || orgName == "" || req.Tier == "" {
 		http.Error(w, "email, org_name, and tier are required", http.StatusBadRequest)
 		return
 	}
@@ -476,89 +479,41 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check for existing user.
-	if existing, _ := s.store.GetUserByEmail(req.Email); existing != nil {
+	// These checks are for the form's benefit; the verify step enforces
+	// both again, since nothing is reserved in between.
+	if existing, _ := s.store.GetUserByEmail(email); existing != nil {
 		http.Error(w, "account already exists", http.StatusConflict)
 		return
 	}
-
-	// Check for existing org name.
-	customerName := strings.ToLower(strings.TrimSpace(req.OrgName))
-	if existing, _ := s.store.GetOrgByName(customerName); existing != nil {
+	if existing, _ := s.store.GetOrgByName(orgName); existing != nil {
 		http.Error(w, "organization name already taken", http.StatusConflict)
 		return
 	}
 
-	// Create customer + user. The user starts UNVERIFIED — they'll get a
-	// JWT that lets them into the dashboard but the RequireEmailVerified
-	// middleware blocks token creation, watches, integrations, and source
-	// config until they click the magic link we send below. If they never
-	// click, the cleanup sweep deletes the account after 24h.
-	cust, _ := s.store.FindOrCreateOrg(customerName)
-	user, err := s.store.CreateUser(req.Email)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// Create trial subscription.
-	trialEnd := time.Now().Add(14 * 24 * time.Hour)
-	s.store.CreateSubscription(&store.Subscription{
-		ID:        uuid.New().String(),
-		OrgID:     cust.ID,
-		Tier:      "trial",
-		Status:    "active",
-		StartsAt:  time.Now(),
-		ExpiresAt: &trialEnd,
+	// Signup creates nothing durable and returns no session: the address is
+	// unproven. The pending org name and tier ride on the emailed link, and
+	// following it (handleVerify) is what creates the account.
+	token, err := s.store.IssueMagicLink(&store.MagicLink{
+		Email:   email,
+		Purpose: store.MagicLinkSignup,
+		OrgName: orgName,
+		Tier:    req.Tier,
 	})
-
-	// Create owner team membership — this is what binds user → customer
-	// now that User.OrgID is gone.
-	s.store.AddTeamMemberWithEmail(cust.ID, user.ID, req.Email, store.RoleOwner)
-
-	// Land the user in their fresh org by default on next request.
-	_ = s.store.UpdateUserLastActiveOrg(user.ID, cust.ID)
-
-	// Grant read-only membership in Loom Inc so the welcome modal has
-	// somewhere to point. Soft-fails when Loom isn't seeded — see
-	// grantLoomMembership.
-	if err := s.grantLoomMembership(r.Context(), user.ID, req.Email); err != nil {
-		weftsdk.Infof(r.Context(), "signup: grant Loom membership for %s: %v", req.Email, err)
-	}
-
-	// Send the verification email. We ignore the send failure on purpose:
-	// signup succeeds either way so the user still has a working session,
-	// and they can hit POST /api/auth/resend-verification from the banner
-	// if the first email never arrives. We DO fail if the magic-link
-	// record can't be created, since that's a DB problem the caller
-	// should know about.
-	token, err := s.store.CreateMagicLink(req.Email)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	verifyURL := fmt.Sprintf("%s/verify?token=%s", s.baseURL, token)
-	if err := SendMagicLinkEmail(r.Context(), s.email, req.Email, verifyURL); err != nil {
-		weftsdk.Errorf(r.Context(), "signup: failed to send verification email to %s: %v", req.Email, err)
-	}
-
-	// Generate JWT.
-	jwt, err := auth.Generate(user, s.jwtSecret)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if err := SendMagicLinkEmail(r.Context(), s.email, email, verifyURL); err != nil {
+		weftsdk.Errorf(r.Context(), "signup: failed to send verification email to %s: %v", email, err)
+		http.Error(w, "failed to send email", http.StatusBadGateway)
 		return
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{
-		"token": jwt,
-		"tier":  req.Tier,
-		"user": map[string]any{
-			"id":             user.ID,
-			"email":          user.Email,
-			"tier":           "trial",
-			"customer":       customerName,
-			"email_verified": false,
-		},
+		"status": "verification_sent",
+		"email":  email,
+		"tier":   req.Tier,
 	})
 }
 
@@ -612,140 +567,142 @@ func (s *Server) handleWelcomeDismiss(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 }
 
+// handleVerify redeems a login or signup link. Which one it is comes from
+// the link, never from what rows exist: a login link signs in an existing
+// account, a signup link creates the account it was issued for. Invite links
+// belong to handleAcceptInvite and are refused here.
+//
+// Redemption is one transaction that starts by consuming the link, so a
+// failure at any step leaves nothing behind and the link still usable.
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Token   string `json:"token"`
-		OrgName string `json:"org_name"` // required for new users
+		Token string `json:"token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Token == "" {
 		http.Error(w, "token required", http.StatusBadRequest)
 		return
 	}
 
-	// Peek first so we can branch on whether the caller needs to supply
-	// org_name. The peek only reveals the associated email — no state
-	// changes — so two racing peeks are harmless. Every state-mutating
-	// branch below goes through ConsumeMagicLink, which is a single
-	// atomic UPDATE and therefore can only be won by one concurrent
-	// request; that's what actually closes the TOCTOU.
-	email, err := s.store.PeekMagicLink(req.Token)
+	var (
+		user       *store.User
+		created    bool
+		signupTier string
+	)
+	err := s.store.InTx(func(tx *store.Store) error {
+		link, err := tx.ConsumeMagicLink(req.Token)
+		if err != nil {
+			return err
+		}
+		switch link.Purpose {
+		case store.MagicLinkLogin:
+			user, err = tx.GetUserByEmail(link.Email)
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return store.ErrMagicLinkInvalid
+			}
+			if err != nil {
+				return err
+			}
+			return tx.VerifyUserEmail(user)
+		case store.MagicLinkSignup:
+			signupTier = link.Tier
+			user, created, err = completeSignup(tx, link)
+			return err
+		default:
+			return store.ErrMagicLinkInvalid
+		}
+	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
+		s.writeLinkError(w, r, "verify", err)
 		return
 	}
 
-	// New-user + missing org_name: prompt the frontend for one and
-	// return without consuming. The user will POST back with the same
-	// token + org_name on the next round-trip.
-	if invite, _ := s.store.GetPendingTeamMemberByEmail(email); invite == nil {
-		if existing, _ := s.store.GetUserByEmail(email); existing == nil && req.OrgName == "" {
-			json.NewEncoder(w).Encode(map[string]any{
-				"needs_org": true,
-				"email":     email,
-			})
-			return
+	if created {
+		if err := s.grantLoomMembership(r.Context(), user.ID, user.Email); err != nil {
+			weftsdk.Infof(r.Context(), "verify: grant Loom membership for %s: %v", user.Email, err)
 		}
 	}
+	s.writeSession(w, r, user, map[string]any{"signup_tier": signupTier})
+}
 
-	// Every path from here creates or updates a user row. Burn the
-	// token now; if we lose the atomic race, some other request is
-	// already doing the work.
-	if _, err := s.store.ConsumeMagicLink(req.Token); err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
+// completeSignup creates what a signup link promised: a verified owner of a
+// brand-new org on a trial. If the address already has an account (say it
+// accepted an invite since signing up) the link only proves the address.
+func completeSignup(tx *store.Store, link *store.MagicLink) (user *store.User, created bool, err error) {
+	user, err = tx.GetUserByEmail(link.Email)
+	if err == nil {
+		return user, false, tx.VerifyUserEmail(user)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, err
 	}
 
-	var user *store.User
-
-	// Check for pending team invite first.
-	if invite, err := s.store.GetPendingTeamMemberByEmail(email); err == nil {
-		// Invited user — join that org. They proved email ownership by
-		// clicking the invite link, so the user row is created (or
-		// reused) as verified.
-		user, _ = s.store.GetUserByEmail(email)
-		if user == nil {
-			user, err = s.store.CreateVerifiedUser(email)
-			if err != nil {
-				http.Error(w, "internal error", http.StatusInternalServerError)
-				return
-			}
-			if err := s.grantLoomMembership(r.Context(), user.ID, email); err != nil {
-				weftsdk.Infof(r.Context(), "verify: grant Loom membership for %s: %v", email, err)
-			}
-		}
-		s.store.AcceptTeamMember(invite.ID, user.ID)
-		if orgID, err := store.ParseOrgID(invite.OrgID); err == nil {
-			_ = s.store.UpdateUserLastActiveOrg(user.ID, orgID)
-		}
-	} else {
-		// No invite — find existing user or create new user + customer.
-		user, _ = s.store.GetUserByEmail(email)
-		if user == nil {
-			customerName := strings.ToLower(strings.TrimSpace(req.OrgName))
-			cust, _ := s.store.FindOrCreateOrg(customerName)
-			user, err = s.store.CreateVerifiedUser(email)
-			if err != nil {
-				http.Error(w, "internal error", http.StatusInternalServerError)
-				return
-			}
-
-			// Create trial subscription.
-			trialEnd := time.Now().Add(14 * 24 * time.Hour)
-			s.store.CreateSubscription(&store.Subscription{
-				ID:        uuid.New().String(),
-				OrgID:     cust.ID,
-				Tier:      "trial",
-				Status:    "active",
-				StartsAt:  time.Now(),
-				ExpiresAt: &trialEnd,
-			})
-
-			// Create owner team membership — the FK that binds user→org.
-			s.store.AddTeamMemberWithEmail(cust.ID, user.ID, email, store.RoleOwner)
-			_ = s.store.UpdateUserLastActiveOrg(user.ID, cust.ID)
-
-			if err := s.grantLoomMembership(r.Context(), user.ID, email); err != nil {
-				weftsdk.Infof(r.Context(), "verify: grant Loom membership for %s: %v", email, err)
-			}
-		} else {
-			// Existing user — this is the signup-verification round-trip.
-			// Flip EmailVerifiedAt if not already set so the middleware
-			// unlocks mutating endpoints. No-op for users who were
-			// already verified (e.g. re-clicked the link later).
-			if user.EmailVerifiedAt == nil {
-				verifiedNow := time.Now()
-				if err := s.store.DB().Model(&store.User{}).
-					Where("id = ? AND email_verified_at IS NULL", user.ID).
-					Updates(map[string]any{
-						"email_verified_at": &verifiedNow,
-						"updated_at":        verifiedNow,
-					}).Error; err != nil {
-					weftsdk.Infof(r.Context(), "verify: mark verified for %s: %v", user.ID, err)
-				}
-				now := time.Now()
-				user.EmailVerifiedAt = &now
-			}
-		}
+	org, err := tx.CreateOrg(link.OrgName)
+	if err != nil {
+		return nil, false, err
 	}
+	if user, err = tx.CreateVerifiedUser(link.Email); err != nil {
+		return nil, false, err
+	}
+	trialEnd := time.Now().Add(14 * 24 * time.Hour)
+	if err := tx.CreateSubscription(&store.Subscription{
+		ID:        uuid.New().String(),
+		OrgID:     org.ID,
+		Tier:      "trial",
+		Status:    "active",
+		StartsAt:  time.Now(),
+		ExpiresAt: &trialEnd,
+	}); err != nil {
+		return nil, false, err
+	}
+	// The owner membership is what binds user to org.
+	if err := tx.AddTeamMemberWithEmail(org.ID, user.ID, link.Email, store.RoleOwner); err != nil {
+		return nil, false, err
+	}
+	if err := tx.UpdateUserLastActiveOrg(user.ID, org.ID); err != nil {
+		return nil, false, err
+	}
+	return user, true, nil
+}
 
+// writeLinkError maps a failed link redemption to a response. Every way a
+// link can be bad reads the same; only a taken org name is told apart, since
+// the caller can act on it.
+func (s *Server) writeLinkError(w http.ResponseWriter, r *http.Request, op string, err error) {
+	switch {
+	case errors.Is(err, store.ErrMagicLinkInvalid):
+		http.Error(w, store.ErrMagicLinkInvalid.Error(), http.StatusUnauthorized)
+	case errors.Is(err, store.ErrOrgNameTaken):
+		http.Error(w, "organization name already taken", http.StatusConflict)
+	default:
+		weftsdk.Errorf(r.Context(), "%s: %v", op, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+}
+
+// writeSession answers a successful redemption with a JWT and the same user
+// shape /me returns — AuthContext seeds its user straight from this payload,
+// and the welcome modal keys off onboarding_step and the orgs list it
+// carries. extra is merged into the top level.
+func (s *Server) writeSession(w http.ResponseWriter, r *http.Request, user *store.User, extra map[string]any) {
 	jwt, err := auth.Generate(user, s.jwtSecret)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-
 	// Reload so the response reflects the writes above (verified flag,
-	// membership), then return the same shape /me does — AuthContext
-	// seeds its user object straight from this payload, and the welcome
-	// modal keys off onboarding_step + the orgs list it carries.
+	// membership).
 	if fresh, err := s.store.GetUserByID(user.ID); err == nil {
 		user = fresh
 	}
 	activeID, activeName := s.resolveActiveOrg(user)
-	json.NewEncoder(w).Encode(map[string]any{
+	resp := map[string]any{
 		"token": jwt,
 		"user":  s.userResponse(r.Context(), user, activeID, activeName),
-	})
+	}
+	for k, v := range extra {
+		resp[k] = v
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -1953,6 +1910,9 @@ func (s *Server) handleInviteTeamMember(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(member)
 }
 
+// handleAcceptInvite redeems an invite link: it joins the invitee to the one
+// org the link names and nothing else. Same shape as handleVerify — one
+// transaction that begins by consuming the link.
 func (s *Server) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Token string `json:"token"`
@@ -1962,60 +1922,71 @@ func (s *Server) handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Atomic consume — invite acceptance creates/accepts a TeamMember,
-	// so two concurrent clicks on the same link must not both succeed.
-	email, err := s.store.ConsumeMagicLink(req.Token)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
+	var (
+		user    *store.User
+		created bool
+	)
+	err := s.store.InTx(func(tx *store.Store) error {
+		link, err := tx.ConsumeMagicLink(req.Token)
+		if err != nil {
+			return err
+		}
+		if link.Purpose != store.MagicLinkInvite {
+			return store.ErrMagicLinkInvalid
+		}
 
-	// Find pending invite.
-	member, err := s.store.GetPendingTeamMemberByEmail(email)
-	if err != nil {
-		http.Error(w, "no pending invite found", http.StatusNotFound)
-		return
-	}
+		// Clicking the link proves the address, so the user is verified
+		// whether they already had an account or not.
+		user, err = tx.GetUserByEmail(link.Email)
+		switch {
+		case err == nil:
+			if err := tx.VerifyUserEmail(user); err != nil {
+				return err
+			}
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			if user, err = tx.CreateVerifiedUser(link.Email); err != nil {
+				return err
+			}
+			created = true
+		default:
+			return err
+		}
 
-	// Find or create the user; the team_member row binds them to the
-	// invite's customer.
-	memberOrgID, err := store.ParseOrgID(member.OrgID)
-	if err != nil {
-		http.Error(w, "customer not found", http.StatusInternalServerError)
-		return
-	}
-	cust, err := s.store.GetOrgByID(memberOrgID)
-	if err != nil || cust == nil {
-		http.Error(w, "customer not found", http.StatusInternalServerError)
-		return
-	}
-	user, _ := s.store.GetUserByEmail(email)
-	if user == nil {
-		user, _ = s.store.CreateUser(email)
-	}
-	s.store.AcceptTeamMember(member.ID, user.ID)
-	_ = s.store.UpdateUserLastActiveOrg(user.ID, memberOrgID)
-
-	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(cust.ID); sub != nil {
-		tier = store.Tier(sub.Tier)
-	}
-
-	jwt, err := auth.Generate(user, s.jwtSecret)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	json.NewEncoder(w).Encode(map[string]any{
-		"token": jwt,
-		"user": map[string]any{
-			"id":    user.ID,
-			"email": user.Email,
-			"tier":  tier,
-		},
+		member, err := tx.AcceptTeamMember(link.InviteID, user.ID)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errInviteGone
+		}
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(member.Email, link.Email) {
+			return store.ErrMagicLinkInvalid
+		}
+		orgID, err := store.ParseOrgID(member.OrgID)
+		if err != nil {
+			return err
+		}
+		return tx.UpdateUserLastActiveOrg(user.ID, orgID)
 	})
+	if errors.Is(err, errInviteGone) {
+		http.Error(w, "this invite is no longer valid", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		s.writeLinkError(w, r, "accept invite", err)
+		return
+	}
+
+	if created {
+		if err := s.grantLoomMembership(r.Context(), user.ID, user.Email); err != nil {
+			weftsdk.Infof(r.Context(), "accept invite: grant Loom membership for %s: %v", user.Email, err)
+		}
+	}
+	s.writeSession(w, r, user, nil)
 }
+
+// errInviteGone: the invite the link names was withdrawn (or never existed).
+var errInviteGone = errors.New("invite no longer valid")
 
 func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)

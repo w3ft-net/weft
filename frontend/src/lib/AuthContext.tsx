@@ -12,7 +12,8 @@ interface AuthContextValue {
   user: User | null
   token: string | null
   login: (email: string) => Promise<void>
-  verify: (token: string, orgName?: string) => Promise<{ needs_org?: boolean; email?: string }>
+  // Resolves to the plan the link's signup chose, if it was a signup link.
+  verify: (token: string) => Promise<{ signupTier?: string }>
   loginWithToken: (jwt: string) => Promise<void>
   logout: () => void
   // switchOrg writes the new org to localStorage and reloads the page so
@@ -56,17 +57,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await apiLogin(email)
   }
 
-  async function verify(tok: string, orgName?: string): Promise<{ needs_org?: boolean; email?: string }> {
-    const resp = await apiVerify(tok, orgName)
-    if (resp.needs_org) {
-      return { needs_org: true, email: resp.email }
-    }
-    if (resp.token) {
-      localStorage.setItem(TOKEN_STORAGE_KEY, resp.token)
-      setToken(resp.token)
-      if (resp.user) setUser(resp.user)
-    }
-    return {}
+  async function verify(tok: string): Promise<{ signupTier?: string }> {
+    const resp = await apiVerify(tok)
+    localStorage.setItem(TOKEN_STORAGE_KEY, resp.token)
+    setToken(resp.token)
+    setUser(resp.user)
+    return { signupTier: resp.signup_tier || undefined }
   }
 
   async function loginWithToken(jwt: string): Promise<void> {

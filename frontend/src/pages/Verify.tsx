@@ -9,9 +9,9 @@ import './Verify.css'
 // Magic-link tokens are single-use. React.StrictMode runs the mount effect
 // twice in dev, which would send two verifies — the second 401s on the
 // already-consumed token. Share one in-flight call per token across runs.
-const inflightVerify = new Map<string, Promise<{ needs_org?: boolean; email?: string }>>()
+const inflightVerify = new Map<string, Promise<{ signupTier?: string }>>()
 
-type State = 'verifying' | 'needs-org' | 'creating' | 'success' | 'error' | 'invite-prompt'
+type State = 'verifying' | 'success' | 'error' | 'invite-prompt'
 
 export default function Verify() {
   const [searchParams] = useSearchParams()
@@ -20,8 +20,6 @@ export default function Verify() {
   const [state, setState] = useState<State>('verifying')
   const [errorMsg, setErrorMsg] = useState('')
   const [accepting, setAccepting] = useState(false)
-  const [orgName, setOrgName] = useState('')
-  const [email, setEmail] = useState('')
 
   const token = searchParams.get('token') || ''
   const isInvite = searchParams.get('invite') === '1'
@@ -38,7 +36,7 @@ export default function Verify() {
       return
     }
 
-    // Normal login flow.
+    // Login or signup link.
     let call = inflightVerify.get(token)
     if (!call) {
       call = verify(token)
@@ -46,13 +44,12 @@ export default function Verify() {
     }
     call
       .then(resp => {
-        if (resp.needs_org) {
-          setEmail(resp.email || '')
-          setState('needs-org')
-        } else {
-          setState('success')
-          setTimeout(() => navigate('/dashboards'), 1200)
-        }
+        setState('success')
+        // A finished signup carries on to the payment step it was headed for.
+        const next = resp.signupTier
+          ? `/signup/payment?tier=${encodeURIComponent(resp.signupTier)}`
+          : '/dashboards'
+        setTimeout(() => navigate(next), 1200)
       })
       .catch(err => {
         setState('error')
@@ -60,24 +57,6 @@ export default function Verify() {
       })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  async function handleCreateOrg(e: React.FormEvent) {
-    e.preventDefault()
-    if (!orgName.trim()) return
-    setState('creating')
-    try {
-      const resp = await verify(token, orgName.trim())
-      if (resp.needs_org) {
-        setState('needs-org')
-        return
-      }
-      setState('success')
-      setTimeout(() => navigate('/dashboards'), 1200)
-    } catch (err) {
-      setState('error')
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to create account.')
-    }
-  }
 
   async function handleAcceptInvite() {
     setAccepting(true)
@@ -104,46 +83,6 @@ export default function Verify() {
           <div className="verify-body" data-testid="verify-verifying-state">
             <p className="verify-status">
               <span className="verify-spinner" aria-hidden="true" />verifying magic link…
-            </p>
-          </div>
-        )}
-
-        {state === 'needs-org' && (
-          <div className="verify-body" data-testid="verify-org-state">
-            <p className="verify-status">welcome{email ? `, ${email}` : ''}.</p>
-            <p className="verify-hint">choose a name for your organization.</p>
-            <form className="login-form" onSubmit={handleCreateOrg}>
-              <div className="login-field">
-                <label className="login-label" htmlFor="verify-org">org</label>
-                <input
-                  id="verify-org"
-                  className="login-input verify-org-input"
-                  type="text"
-                  placeholder="acme"
-                  value={orgName}
-                  onChange={e => setOrgName(e.target.value)}
-                  autoFocus
-                  required
-                  data-testid="verify-org-name-input"
-                />
-              </div>
-              <div className="login-actions">
-                <button
-                  type="submit"
-                  className="tui-btn tui-btn-primary verify-accept-btn"
-                  data-testid="verify-create-org-button"
-                >
-                  create account
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {state === 'creating' && (
-          <div className="verify-body" data-testid="verify-creating-state">
-            <p className="verify-status">
-              <span className="verify-spinner" aria-hidden="true" />creating your account…
             </p>
           </div>
         )}

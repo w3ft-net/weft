@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"sync"
 	"testing"
 )
@@ -92,16 +93,71 @@ func TestMagicLink_ConsumeReturnsEmail(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	email, err := db.ConsumeMagicLink(raw)
+	link, err := db.ConsumeMagicLink(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if email != "happy@example.com" {
-		t.Errorf("expected happy@example.com, got %q", email)
+	if link.Email != "happy@example.com" || link.Purpose != MagicLinkLogin {
+		t.Errorf("expected a login link for happy@example.com, got %q / %q", link.Email, link.Purpose)
 	}
 
 	// Second consume of the same token fails.
 	if _, err := db.ConsumeMagicLink(raw); err == nil {
 		t.Error("second consume should have failed")
+	}
+}
+
+// A link keeps what it was issued for: the purpose and the pending signup or
+// invite it carries come back out of Consume, and the address is folded to
+// the one spelling the store keeps.
+func TestMagicLink_CarriesPurposeAndPayload(t *testing.T) {
+	db := testOpen(t)
+
+	raw, err := db.IssueMagicLink(&MagicLink{
+		Email: "  Carry@Example.COM ", Purpose: MagicLinkSignup, OrgName: "acme", Tier: "swatch",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := db.ConsumeMagicLink(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.Email != "carry@example.com" || link.Purpose != MagicLinkSignup || link.OrgName != "acme" || link.Tier != "swatch" {
+		t.Errorf("link did not round-trip: %+v", link)
+	}
+}
+
+// A redemption that fails after consuming the link must put it back: InTx
+// rolls the consumption back with everything else.
+func TestMagicLink_ConsumeRollsBackWithTransaction(t *testing.T) {
+	db := testOpen(t)
+	raw, err := db.CreateMagicLink("rollback@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	boom := errors.New("boom")
+	err = db.InTx(func(tx *Store) error {
+		if _, err := tx.ConsumeMagicLink(raw); err != nil {
+			return err
+		}
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("InTx = %v, want %v", err, boom)
+	}
+	if _, err := db.PeekMagicLink(raw); err != nil {
+		t.Errorf("link stayed consumed after the transaction rolled back: %v", err)
+	}
+}
+
+func TestCreateOrg_RefusesExistingName(t *testing.T) {
+	db := testOpen(t)
+	if _, err := db.CreateOrg("createorg-once"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateOrg("createorg-once"); !errors.Is(err, ErrOrgNameTaken) {
+		t.Errorf("second CreateOrg = %v, want ErrOrgNameTaken", err)
 	}
 }

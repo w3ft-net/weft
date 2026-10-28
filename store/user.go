@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -203,13 +204,33 @@ type User struct {
 	UpdatedAt           time.Time
 }
 
-// MagicLink is a one-time-use login token.
+// What a magic link was issued for. Each endpoint that redeems one accepts
+// exactly one purpose, so a link can never do more than its email said.
+const (
+	MagicLinkLogin  = "login"  // sign in to an existing account
+	MagicLinkSignup = "signup" // finish a signup: create the org and owner
+	MagicLinkInvite = "invite" // accept the membership named by InviteID
+)
+
+// ErrMagicLinkInvalid is every way a link can fail to redeem — unknown,
+// expired, used, or issued for a different purpose. Callers show one message
+// for all of them so a response never says which.
+var ErrMagicLinkInvalid = errors.New("invalid or expired link")
+
+// MagicLink is a one-time-use token emailed to prove ownership of an address.
 type MagicLink struct {
 	ID        uint   `gorm:"primaryKey"`
 	Email     string `gorm:"not null"`
 	Token     string `gorm:"uniqueIndex;not null"`
 	ExpiresAt time.Time
-	Used      bool `gorm:"not null;default:false"`
+	Used      bool   `gorm:"not null;default:false"`
+	Purpose   string `gorm:"not null;default:login"`
+
+	// OrgName and Tier are the pending signup a MagicLinkSignup link
+	// completes; InviteID is the membership a MagicLinkInvite link accepts.
+	OrgName  string `gorm:"not null;default:''"`
+	Tier     string `gorm:"not null;default:''"`
+	InviteID string `gorm:"not null;default:''"`
 }
 
 // TeamMember is an org membership — an alias for the shared
@@ -247,6 +268,18 @@ func SeatLimit(tier Tier) int {
 
 // --- Users ---
 
+// NormalizeEmail is the one spelling of an address the store keeps: trimmed
+// and lowercased. Every email entering or leaving the users and magic_links
+// tables goes through it, so a case variant can't become a second account.
+func NormalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// NormalizeOrgName is the one spelling of an org slug: trimmed and lowercased.
+func NormalizeOrgName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
 // CreateUser inserts a new user with EmailVerifiedAt == nil. Membership
 // in any specific customer is established by inserting a TeamMember row
 // after creation; the User row itself no longer carries a customer.
@@ -254,7 +287,7 @@ func (s *Store) CreateUser(email string) (*User, error) {
 	now := time.Now()
 	user := User{
 		ID:        uuid.New().String(),
-		Email:     email,
+		Email:     NormalizeEmail(email),
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -271,7 +304,7 @@ func (s *Store) CreateVerifiedUser(email string) (*User, error) {
 	now := time.Now()
 	user := User{
 		ID:              uuid.New().String(),
-		Email:           email,
+		Email:           NormalizeEmail(email),
 		EmailVerifiedAt: &now,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -284,7 +317,7 @@ func (s *Store) CreateVerifiedUser(email string) (*User, error) {
 
 func (s *Store) GetUserByEmail(email string) (*User, error) {
 	var user User
-	if err := s.db.Where("email = ?", email).First(&user).Error; err != nil {
+	if err := s.db.Where("email = ?", NormalizeEmail(email)).First(&user).Error; err != nil {
 		return nil, err
 	}
 	return &user, nil
@@ -342,76 +375,96 @@ func hashMagicLinkToken(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// CreateMagicLink issues a login link for an existing account.
 func (s *Store) CreateMagicLink(email string) (string, error) {
+	return s.IssueMagicLink(&MagicLink{Email: email, Purpose: MagicLinkLogin})
+}
+
+// IssueMagicLink stores link (hashed) and returns the raw token to email.
+// Email and expiry are filled in here; the caller sets Purpose and whichever
+// of OrgName, Tier and InviteID that purpose carries.
+func (s *Store) IssueMagicLink(link *MagicLink) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	raw := hex.EncodeToString(b)
-	link := MagicLink{
-		Email:     email,
-		Token:     hashMagicLinkToken(raw),
-		ExpiresAt: time.Now().Add(15 * time.Minute),
-	}
-	if err := s.db.Create(&link).Error; err != nil {
+	link.Email = NormalizeEmail(link.Email)
+	link.Token = hashMagicLinkToken(raw)
+	link.ExpiresAt = time.Now().Add(15 * time.Minute)
+	if err := s.db.Create(link).Error; err != nil {
 		return "", err
 	}
 	s.rawMagicLinkMu.Lock()
 	if s.rawMagicLinkTokens == nil {
 		s.rawMagicLinkTokens = make(map[string]string)
 	}
-	s.rawMagicLinkTokens[email] = raw
+	s.rawMagicLinkTokens[link.Email] = raw
 	s.rawMagicLinkMu.Unlock()
 	return raw, nil
 }
 
-// PeekMagicLink returns the email on a valid/unused/unexpired token
-// *without* consuming it. Callers that only need to branch on the
-// associated email (no state mutations) may use this. Callers that
-// mutate state — create user, flip EmailVerifiedAt, accept invite —
-// must go through ConsumeMagicLink so Postgres atomically decides
-// which concurrent request wins.
-func (s *Store) PeekMagicLink(token string) (string, error) {
-	hash := hashMagicLinkToken(token)
+// PeekMagicLink returns a valid/unused/unexpired link *without* consuming
+// it. Callers that mutate state must go through ConsumeMagicLink so Postgres
+// atomically decides which concurrent request wins.
+func (s *Store) PeekMagicLink(token string) (*MagicLink, error) {
 	var link MagicLink
-	if err := s.db.Where("token = ? AND used = ? AND expires_at > ?", hash, false, time.Now()).First(&link).Error; err != nil {
-		return "", fmt.Errorf("invalid or expired magic link")
+	if err := s.db.Where("token = ? AND used = ? AND expires_at > ?", hashMagicLinkToken(token), false, time.Now()).First(&link).Error; err != nil {
+		return nil, ErrMagicLinkInvalid
 	}
-	return link.Email, nil
+	return &link, nil
 }
 
 // ConsumeMagicLink validates and marks the token as used in a single
 // atomic UPDATE ... RETURNING — two concurrent requests can't both win
-// because Postgres serializes the row update. Returns the email on
-// success, "" and an error on invalid/expired/already-used.
-func (s *Store) ConsumeMagicLink(token string) (string, error) {
-	hash := hashMagicLinkToken(token)
-	var email string
+// because Postgres serializes the row update. Returns ErrMagicLinkInvalid
+// when the token is unknown, expired or already used.
+//
+// Call it inside InTx, first, so a redemption that goes on to fail rolls the
+// consumption back and the link stays usable.
+func (s *Store) ConsumeMagicLink(token string) (*MagicLink, error) {
+	var link MagicLink
 	res := s.db.Raw(`
 		UPDATE magic_links
 		   SET used = true
 		 WHERE token = ? AND used = false AND expires_at > now()
-		RETURNING email`, hash).Scan(&email)
+		RETURNING *`, hashMagicLinkToken(token)).Scan(&link)
 	if res.Error != nil {
-		return "", fmt.Errorf("consume magic link: %w", res.Error)
+		return nil, fmt.Errorf("consume magic link: %w", res.Error)
 	}
 	if res.RowsAffected == 0 {
-		return "", fmt.Errorf("invalid or expired magic link")
+		return nil, ErrMagicLinkInvalid
 	}
-	return email, nil
+	return &link, nil
 }
 
 // GetLastMagicLinkToken returns the most recently issued raw token for
 // an email. Test-only: reads from an in-process map populated by
-// CreateMagicLink, since the raw token is never persisted.
+// IssueMagicLink, since the raw token is never persisted.
 func (s *Store) GetLastMagicLinkToken(email string) (string, error) {
 	s.rawMagicLinkMu.Lock()
 	defer s.rawMagicLinkMu.Unlock()
-	tok, ok := s.rawMagicLinkTokens[email]
+	tok, ok := s.rawMagicLinkTokens[NormalizeEmail(email)]
 	if !ok {
 		return "", fmt.Errorf("no magic link for %s", email)
 	}
 	return tok, nil
+}
+
+// VerifyUserEmail records that user proved ownership of their address. A
+// no-op for a user who already has.
+func (s *Store) VerifyUserEmail(user *User) error {
+	if user.EmailVerifiedAt != nil {
+		return nil
+	}
+	now := time.Now()
+	if err := s.db.Model(&User{}).
+		Where("id = ? AND email_verified_at IS NULL", user.ID).
+		Updates(map[string]any{"email_verified_at": &now, "updated_at": now}).Error; err != nil {
+		return err
+	}
+	user.EmailVerifiedAt = &now
+	return nil
 }
 
 // --- Team Members ---
@@ -486,14 +539,6 @@ func (s *Store) ListUserOrgs(userID string) ([]orgs.OrgMembership, error) {
 	return s.Orgs.OrgsFor(context.Background(), userID)
 }
 
-// GetPendingTeamMemberByEmail finds a pending invite by email across all orgs.
-// The invitee isn't in any org context yet — the invite is what says which org
-// they're joining.
-func (s *Store) GetPendingTeamMemberByEmail(email string) (*TeamMember, error) {
-	m, err := s.Orgs.PendingInviteByEmail(context.Background(), email)
-	return m, asRecordNotFound(err)
-}
-
 // asRecordNotFound maps orgs' absence sentinel onto gorm's. Every caller in
 // this store — and every `errors.Is(err, gorm.ErrRecordNotFound)` written
 // against it — already means one thing by "no such row", and adopting orgs
@@ -506,10 +551,11 @@ func asRecordNotFound(err error) error {
 	return err
 }
 
-// AcceptTeamMember binds a pending membership to a user and activates it.
-func (s *Store) AcceptTeamMember(id string, userID string) error {
-	_, err := s.Orgs.AcceptByID(context.Background(), id, userID)
-	return err
+// AcceptTeamMember binds a pending membership to a user and activates it,
+// returning the membership so the caller can check it is the one it meant.
+func (s *Store) AcceptTeamMember(id string, userID string) (*TeamMember, error) {
+	m, err := s.Orgs.AcceptByID(context.Background(), id, userID)
+	return m, asRecordNotFound(err)
 }
 
 // RemoveTeamMemberByEmail revokes a membership by address, which is the only
