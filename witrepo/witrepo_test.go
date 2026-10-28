@@ -349,6 +349,10 @@ func writeCron(t *testing.T, r *Repo, name, content string) {
 // has to describe the restored pipeline, not the one it replaced.
 func TestWrites_RestoredCronIsRelowered(t *testing.T) {
 	f := newFixture(t)
+	// The cron reads logs, so its saver has to be able to read any namespace.
+	if err := f.db.AddTeamMemberWithEmail(f.org, f.alice.ID, f.alice.Email, store.RoleOwner); err != nil {
+		t.Fatal(err)
+	}
 	r := f.repo(f.alice, "/cron.d")
 	// Seed through the mounts so the first version carries a lowered plan.
 	writeCron(t, r, "errs", "# schedule: */10 * * * *\ntail /log/app/web/app.log | grep ERROR\n")

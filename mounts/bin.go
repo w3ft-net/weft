@@ -83,6 +83,9 @@ func (m *BinMount) Stat(rel string) (fs.FileInfo, error) {
 
 func (m *BinMount) WriteFile(rel string, data []byte) error {
 	lang, cleanSource := ClassifyBinScript(rel, string(data))
+	if err := m.cfg.authorizeBinEdit(rel, cleanSource, lang); err != nil {
+		return err
+	}
 	return m.cfg.Store.SaveShellFunction(m.cfg.OrgID, m.cfg.UserID, rel, cleanSource, lang)
 }
 

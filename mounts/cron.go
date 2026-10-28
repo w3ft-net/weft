@@ -110,6 +110,10 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 		return &PlanLimitError{fmt.Sprintf("minimum schedule interval for %s plan is %s", m.cfg.Tier, minInterval)}
 	}
 
+	if err := m.cfg.authorizeCronReads(pipeline); err != nil {
+		return err
+	}
+
 	// Lower at save time so the fire path can skip preflight + Plan.
 	// LowerForStorage returns nil on any failure (e.g. unsupported
 	// /bin/ pipeline) — the save still succeeds, and the fire path

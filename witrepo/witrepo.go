@@ -362,6 +362,9 @@ func (r *Repo) mountFS() *shellcore.MountFS {
 		Tier:   r.cfg.Store.TierForOrg(r.cfg.OrgID),
 		UserID: r.cfg.UserID,
 	}
+	// An owner reads every namespace, which the cron and script save checks
+	// need to know.
+	cfg.IsOwner, _ = r.cfg.Store.IsOwner(r.cfg.OrgID, r.cfg.UserID)
 	if perm, err := r.cfg.Store.GetOrgPermission(r.cfg.OrgID, r.cfg.UserID); err == nil {
 		cfg.CanManageFunctions = perm.CanManageFunctions
 		cfg.CanManageWatches = perm.CanManageWatches
