@@ -33,6 +33,7 @@ func TestAddSource_Kinesis(t *testing.T) {
 		ActiveOrgID:        cust.ID,
 		ActiveCustomerName: cust.Name,
 		EmailVerified:      true,
+		IsOwner:            true,
 	})
 
 	if _, err := srv.AddSource(ctx, &pb.AddSourceRequest{
@@ -84,6 +85,7 @@ func TestAddSource_Kinesis_RequiresLogGroup(t *testing.T) {
 		ActiveOrgID:        cust.ID,
 		ActiveCustomerName: cust.Name,
 		EmailVerified:      true,
+		IsOwner:            true,
 	})
 
 	_, err = srv.AddSource(ctx, &pb.AddSourceRequest{

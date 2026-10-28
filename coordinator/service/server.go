@@ -80,6 +80,20 @@ func callerUserID(ctx context.Context) string {
 	return c.UserID
 }
 
+// authorizeNamespace is the namespace rule the REST handlers apply
+// (auth.Session.AuthorizeNamespaceTokens), answered as a gRPC status. The
+// session is the one the interceptor built from the caller's forwarded JWT.
+func (s *Server) authorizeNamespace(ctx context.Context, namespace string) error {
+	sess := auth.SessionFromContext(ctx)
+	if sess == nil {
+		return status.Errorf(codes.Unauthenticated, "no authenticated caller")
+	}
+	if err := sess.AuthorizeNamespaceTokens(s.Store, namespace); err != nil {
+		return status.Error(codes.PermissionDenied, err.Error())
+	}
+	return nil
+}
+
 // Server implements both the WeftCoordinator (external, JWT-auth) and
 // WeftAdmin (localhost-only, shared-token-auth) gRPC services. The same Go
 // struct backs both because Go satisfies interfaces structurally; gRPC
@@ -338,6 +352,9 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 	if err != nil {
 		return nil, err
 	}
+	if err := s.authorizeNamespace(ctx, req.Namespace); err != nil {
+		return nil, err
+	}
 	customer, err := s.Store.GetOrgByName(callerCust)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
@@ -377,6 +394,9 @@ func (s *Server) RemoveSource(ctx context.Context, req *pb.RemoveSourceRequest) 
 	}
 	callerCust, err := callerCustomer(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.authorizeNamespace(ctx, req.Namespace); err != nil {
 		return nil, err
 	}
 	customer, err := s.Store.GetOrgByName(callerCust)
@@ -432,6 +452,9 @@ func (s *Server) Authenticate(ctx context.Context, req *pb.AuthenticateRequest) 
 func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
 	callerCust, err := callerCustomer(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.authorizeNamespace(ctx, req.Namespace); err != nil {
 		return nil, err
 	}
 	customer, err := s.Store.GetOrgByName(callerCust)

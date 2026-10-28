@@ -1357,13 +1357,9 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check permission: owner or can_create_tokens on namespace.
-	if !session.IsOwner {
-		perm, err := s.store.GetNamespacePermission(session.UserID, nsObj.ID)
-		if err != nil || !perm.CanCreateTokens {
-			http.Error(w, "forbidden: no token permission on this namespace", http.StatusForbidden)
-			return
-		}
+	if err := session.AuthorizeNamespaceTokens(s.store, req.Namespace); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
 	}
 
 	raw, tok, err := s.store.CreateAgentToken(custID, nsObj.ID, req.Label, req.Env)

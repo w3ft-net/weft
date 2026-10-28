@@ -556,7 +556,7 @@ func (s *Server) handleAddKinesisSource(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := s.authorizeSourceEdit(session, req.Namespace); err != nil {
+	if err := session.AuthorizeNamespaceTokens(s.store, req.Namespace); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -588,7 +588,7 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.authorizeSourceEdit(session, namespace); err != nil {
+	if err := session.AuthorizeNamespaceTokens(s.store, namespace); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -621,7 +621,7 @@ func (s *Server) handleResampleSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.authorizeSourceEdit(session, namespace); err != nil {
+	if err := session.AuthorizeNamespaceTokens(s.store, namespace); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -750,31 +750,6 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 }
-
-// authorizeSourceEdit enforces the same rule as token creation: owners pass
-// unconditionally; other users need CanCreateTokens on the namespace. If
-// we ever split source permissions from token permissions we'd add a
-// dedicated CanManageSources flag — but for now the two tend to travel
-// together (both register data ingestion) so reusing the flag is honest.
-func (s *Server) authorizeSourceEdit(session *auth.Session, namespace string) error {
-	if session.IsOwner {
-		return nil
-	}
-	ns, err := s.store.GetNamespace(session.ActiveOrgID, namespace)
-	if err != nil {
-		return errForbidden("namespace not found")
-	}
-	perm, err := s.store.GetNamespacePermission(session.UserID, ns.ID)
-	if err != nil || !perm.CanCreateTokens {
-		return errForbidden("no permission to manage sources in this namespace")
-	}
-	return nil
-}
-
-type forbiddenError string
-
-func (e forbiddenError) Error() string { return string(e) }
-func errForbidden(msg string) error    { return forbiddenError(msg) }
 
 // agentWindow is how recently an agent must have polled to count as reading a
 // source: a host retired weeks ago should not block a schema forever.
