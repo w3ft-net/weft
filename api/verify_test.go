@@ -423,7 +423,7 @@ func invite(t *testing.T, srv *Server, s *store.Store, org *store.Organization, 
 	t.Helper()
 	session := &auth.Session{
 		UserID: owner.ID, Email: owner.Email,
-		ActiveOrgID: org.ID, ActiveCustomerName: org.Name,
+		ActiveOrgID: org.ID, ActiveCustomerName: org.Name, IsOwner: true,
 	}
 	if _, err := srv.inviteMember(context.Background(), session, email); err != nil {
 		t.Fatalf("invite %s: %v", email, err)

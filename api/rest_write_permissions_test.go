@@ -24,7 +24,7 @@ type groupedOrg struct {
 	s   *store.Store
 	org *store.Organization
 
-	plain, bin, cron, etc string // JWTs: no groups / exactly one group each
+	owner, plain, bin, cron, etc string // JWTs: the org owner / no groups / exactly one group each
 }
 
 func newGroupedOrg(t *testing.T, tier store.Tier) *groupedOrg {
@@ -42,7 +42,7 @@ func newGroupedOrg(t *testing.T, tier store.Tier) *groupedOrg {
 	}
 	_, ownerJWT := permsSeed(t, s, org, store.RoleOwner, "restperm-owner")
 
-	g := &groupedOrg{srv: srv, s: s, org: org}
+	g := &groupedOrg{srv: srv, s: s, org: org, owner: ownerJWT}
 	grant := map[string]store.TeamPermsDoc{}
 	seat := func(suffix string, p store.MemberPerms) string {
 		u, jwt := permsSeed(t, s, org, orgs.RoleMember, "restperm-"+suffix)

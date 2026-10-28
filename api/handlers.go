@@ -855,6 +855,10 @@ func (s *Server) ensureStripeCustomer(ctx context.Context, u *store.User, custom
 // that client_secret and calls stripe.confirmSetup() to collect card details.
 func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
+	if !session.IsOwner {
+		http.Error(w, "only the owner can change the plan", http.StatusForbidden)
+		return
+	}
 
 	var req struct {
 		Tier string `json:"tier"`
@@ -967,6 +971,10 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 // latest invoice's PaymentIntent so the frontend can confirm inline.
 func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
+	if !session.IsOwner {
+		http.Error(w, "only the owner can change the plan", http.StatusForbidden)
+		return
+	}
 
 	var req struct {
 		Tier string `json:"tier"`

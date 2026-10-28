@@ -242,8 +242,11 @@ func (e *inviteErr) Error() string { return e.msg }
 // inviteMember creates a pending team membership for email and emails an
 // invite link. Shared by the JSON endpoint (handleInviteTeamMember) and
 // the `adduser <email>` command. Returns an *inviteErr for the known
-// rejection cases (seat limit, duplicate).
+// rejection cases (not the owner, seat limit, duplicate).
 func (s *Server) inviteMember(ctx context.Context, session *auth.Session, email string) (*store.TeamMember, error) {
+	if !session.IsOwner {
+		return nil, &inviteErr{http.StatusForbidden, "only the owner can manage the team"}
+	}
 	tier := store.TierTrial
 	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub != nil {
 		tier = store.Tier(sub.Tier)
