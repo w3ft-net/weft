@@ -43,10 +43,15 @@ func (t *TraceStatsQuery) WithIDs(ids []string) []any {
 
 // planTraceStats builds the second step. It is not scoped to the namespace
 // or service the list is: the summary describes the whole trace.
-func planTraceStats(customerID int64, start, end time.Time) *TraceStatsQuery {
+//
+// A user who may read only some namespaces (scope) is the exception: the
+// summary then describes the trace as far as they can see it, or its service
+// list and counts would reveal the namespaces they can't.
+func planTraceStats(customerID int64, start, end time.Time, scope []string) *TraceStatsQuery {
 	sql := newSQLBuilder()
 	sql.addCustomer(customerID)
 	sql.addTimeBounds(start, end)
+	addInPredicate(sql, "namespace", scope)
 	sql.addPredicate("trace_id <> ''") // the padding IDs are "", which lines without a trace ID also have
 	addInPredicate(sql, "trace_id", make([]string, TraceListLimit))
 	query := sql.spanQuery(AggregateTraceList)

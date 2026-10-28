@@ -19,7 +19,7 @@ import (
 // The shard SQL is split at keyword boundaries, and the bound args are
 // listed in render order so readers can correlate placeholders to args.
 func Explain(pipeline string) string {
-	plan, c, err := compile(pipeline, 0, "", time.Time{}, time.Time{})
+	plan, c, err := compile(pipeline, 0, "", time.Time{}, time.Time{}, nil)
 	if err != nil {
 		return fmt.Sprintf("Error: %v\n", err)
 	}

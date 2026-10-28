@@ -34,6 +34,10 @@ type sourceInfo struct {
 	// samples is `trace spans <name> --samples`: the slowest occurrences
 	// of one span name, not the aggregate.
 	samples bool
+	// scoped marks a trace restricted to the namespaces the user may read
+	// (PlanScoped): namespaces then holds that list although the user named
+	// none, so it must not narrow shard routing.
+	scoped bool
 	// spansOnly is `trace <id> --spans`: the trace's span rows, for the
 	// rollup, not every line of the trace.
 	spansOnly bool
@@ -468,4 +472,13 @@ func literalArgs(words []bash.Word) []string {
 		out[i] = w.Literal()
 	}
 	return out
+}
+
+// scopedNamespaces is the user's readable namespaces for a scoped trace, nil
+// for any other source.
+func (s sourceInfo) scopedNamespaces() []string {
+	if s.scoped {
+		return s.namespaces
+	}
+	return nil
 }

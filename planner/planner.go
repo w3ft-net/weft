@@ -3,6 +3,7 @@ package planner
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -136,13 +137,26 @@ type GrepPattern struct {
 var ErrNotPlannable = errors.New("not a plannable log query")
 
 func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (*QueryPlan, error) {
-	plan, _, err := compile(pipeline, customerID, cwd, start, end)
+	plan, _, err := compile(pipeline, customerID, cwd, start, end, nil)
+	return plan, err
+}
+
+// PlanScoped is Plan for a user who may read only the namespaces in readable.
+// A trace spans services, so rather than refuse one that names no namespace it
+// is restricted to readable: its rows, counts and per-trace service lists
+// come only from those namespaces, because the restriction is in the SQL and
+// not applied to the output afterwards. Every other command is planned as
+// Plan would, and the coordinator refuses it if it names a namespace the user
+// can't read.
+func PlanScoped(pipeline string, customerID int64, cwd string, start, end time.Time, readable []string) (*QueryPlan, error) {
+	plan, _, err := compile(pipeline, customerID, cwd, start, end, readable)
 	return plan, err
 }
 
 // compile plans a pipeline and also returns its IR, which Explain shows.
-// The IR is nil for an alert-only pipeline.
-func compile(pipeline string, customerID int64, cwd string, start, end time.Time) (*QueryPlan, *compiled, error) {
+// The IR is nil for an alert-only pipeline. readable, if non-nil, scopes trace
+// commands (see PlanScoped).
+func compile(pipeline string, customerID int64, cwd string, start, end time.Time, readable []string) (*QueryPlan, *compiled, error) {
 	queryPart, alertArgs := SplitAlertStage(pipeline)
 
 	// Alert-only pipeline (`alert ...` with nothing in front). Return
@@ -171,6 +185,16 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 			return nil, nil, ErrNotPlannable
 		}
 		return nil, nil, fmt.Errorf("plan: %w", err)
+	}
+
+	if readable != nil && strings.HasPrefix(info.source.cmd, "trace") && len(info.source.namespaces) == 0 {
+		// Nothing readable selects nothing; an empty namespace list would
+		// mean "all", so it cannot be expressed as a predicate.
+		if len(readable) == 0 {
+			return &QueryPlan{SourceCmd: info.source.cmd, AlertArgs: alertArgs}, &compiled{source: info.source}, nil
+		}
+		info.source.namespaces = slices.Sorted(slices.Values(readable))
+		info.source.scoped = true
 	}
 
 	if info.source.follow && redirTarget != "" {
@@ -336,7 +360,7 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 		LiveReadsPayload:  len(liveRest) > 0 && liveRest[0].cmd == "jq",
 		SourceCmd:         info.source.cmd,
 		SourceCustomerID:  customerID,
-		SourceNamespace:   firstOrEmpty(info.source.namespaces),
+		SourceNamespace:   routeNamespace(info.source),
 		SourceNamespaces:  info.source.namespaces,
 		SourceService:     firstOrEmpty(info.source.services),
 		SourceKind:        firstOrEmpty(info.source.kinds),
@@ -414,6 +438,16 @@ func FollowRedirectError(target string) error {
 func SourceFollows(pipeline, cwd string) bool {
 	info, err := parsePipeline(pipeline, cwd)
 	return err == nil && info.source.follow
+}
+
+// routeNamespace is the namespace a query is routed by: its first, which
+// narrows the shards searched. A scoped trace is restricted by a predicate
+// over several namespaces, so it must search every shard.
+func routeNamespace(src sourceInfo) string {
+	if src.scoped {
+		return ""
+	}
+	return firstOrEmpty(src.namespaces)
 }
 
 func firstOrEmpty(s []string) string {

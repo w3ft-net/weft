@@ -10,6 +10,7 @@ import (
 
 	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/planner"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -114,17 +115,41 @@ func TestQuery_ReadsOnlyNamespacesTheUserMayRead(t *testing.T) {
 	}
 }
 
-// A query with no namespace in its source spans every namespace, so it needs
-// to be allowed all of them.
-func TestQuery_AllNamespacesNeedsReadOnAll(t *testing.T) {
+// trace is the exception to refusing: a request crosses services, so it runs
+// for anyone, restricted to the namespaces they may read (the planner puts the
+// restriction in the SQL; see planner/trace_scope_test.go).
+func TestQuery_TraceRunsForEveryoneButOnlyOverReadableNamespaces(t *testing.T) {
 	f := newReadFixture(t)
 
-	if err := f.run(t, f.reader, "trace"); !refused(err) {
-		t.Errorf("reader of one namespace listing traces across all: err = %v, want a refusal", err)
-	}
-	for who, user := range map[string]string{"owner": f.owner, "system identity": ""} {
+	for who, user := range map[string]string{"reader of one namespace": f.reader, "member who can read none": f.none, "owner": f.owner, "system identity": ""} {
 		if err := f.run(t, user, "trace"); refused(err) {
-			t.Errorf("%s listing traces across all: refused: %v", who, err)
+			t.Errorf("%s: trace was refused: %v", who, err)
 		}
+	}
+	// Naming a namespace they can't read is still refused, as for any query.
+	if err := f.run(t, f.reader, "trace beta"); !refused(err) {
+		t.Errorf("reader tracing the unreadable namespace beta: err = %v, want a refusal", err)
+	}
+	if err := f.run(t, f.reader, "trace alpha"); refused(err) {
+		t.Errorf("reader tracing their own namespace alpha was refused: %v", err)
+	}
+}
+
+// Any other plan that names no namespace would read all of them. The planner
+// does not produce one today; if it ever does, a restricted user is refused
+// rather than shown everything.
+func TestAuthorizeSources_FailsClosedOnAPlanWithNoNamespace(t *testing.T) {
+	f := newReadFixture(t)
+	plan := &planner.QueryPlan{ShardSQL: "SELECT 1", SourceCmd: "cat"}
+
+	cust, _ := f.c.Store.GetOrgByName(f.cust)
+	if err := f.c.authorizeSources(cust.ID, f.reader, plan); !refused(err) {
+		t.Errorf("reader: err = %v, want a refusal", err)
+	}
+	if err := f.c.authorizeSources(cust.ID, f.owner, plan); err != nil {
+		t.Errorf("owner: err = %v, want it allowed", err)
+	}
+	if err := f.c.authorizeSources(cust.ID, "", plan); err != nil {
+		t.Errorf("system identity: err = %v, want it allowed", err)
 	}
 }

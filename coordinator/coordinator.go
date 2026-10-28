@@ -969,7 +969,11 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 		}
 	}
 
-	plan, err := planner.Plan(pipeline, int64(custID), cwd, tr.Start, tr.End)
+	readable, err := c.readScope(custID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("plan: %w", err)
+	}
+	plan, err := planner.PlanScoped(pipeline, int64(custID), cwd, tr.Start, tr.End, readable)
 	if err != nil {
 		// The rewriter only substitutes pipelines whose first command
 		// is on /log/..., which the planner accepts. ErrNotPlannable
@@ -1043,6 +1047,27 @@ func (c *Coordinator) preflight(pipeline, customer string) (store.OrgID, string,
 // scopes tenant-backed features (ShellFS, weft.*). alertCtx is forwarded
 // to runLocal so interior queries dispatched by the interceptor inherit
 // the caller's alert identity; may be nil.
+// readScope is the namespaces a trace is restricted to for userID: nil when
+// the user may read everything (an owner, or the system identity), otherwise
+// the namespaces they may read, which may be none.
+func (c *Coordinator) readScope(custID store.OrgID, userID string) ([]string, error) {
+	if userID == "" || c.Store == nil || custID == 0 {
+		return nil, nil
+	}
+	owner, err := c.userIsOwner(custID, userID)
+	if err != nil || owner {
+		return nil, err
+	}
+	readable, err := c.Store.ReadableNamespaces(custID, userID, false)
+	if err != nil {
+		return nil, err
+	}
+	if readable == nil {
+		readable = []string{}
+	}
+	return readable, nil
+}
+
 // userIsOwner reports whether userID owns the org. The empty user (the system
 // identity) is not a member of anything, but reads as an owner.
 func (c *Coordinator) userIsOwner(custID store.OrgID, userID string) (bool, error) {

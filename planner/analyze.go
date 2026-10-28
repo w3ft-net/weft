@@ -66,7 +66,7 @@ func Analyze(pipeline, cwd string, resolveBin BinResolver) (*Analysis, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, c, err := compile(pipeline, 0, cwd, time.Time{}, time.Time{})
+	_, c, err := compile(pipeline, 0, cwd, time.Time{}, time.Time{}, nil)
 	if err != nil {
 		return nil, err
 	}

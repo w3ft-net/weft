@@ -180,7 +180,7 @@ func TestPasses(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.pipeline, func(t *testing.T) {
-			_, c, err := compile(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			_, c, err := compile(tt.pipeline, 0, "", time.Time{}, time.Time{}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
