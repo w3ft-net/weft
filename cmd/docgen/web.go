@@ -39,22 +39,12 @@ var manualCategories = []manualCategory{
 	{
 		ID:      "weft-shell",
 		Label:   "Weft shell",
-		Summary: "A bash-like shell over your logs: the Unix builtins that carry over and where they differ, meta-variables, and /tmp scratch space with a cookbook.",
+		Summary: "A bash-like shell over your logs: the Unix builtins that carry over and where they differ, meta-variables, and the file system (scratch space, scripts, version history).",
 	},
 	{
 		ID:      "analysis-alerting",
 		Label:   "Analysis & alerting",
 		Summary: "Trace a request across services, run pipelines on a schedule with crons, understand how alerts work, choose a strategy that suits the signal, route notifications, and pin live queries to dashboards.",
-	},
-	{
-		ID:      "command-reference",
-		Label:   "Command reference",
-		Summary: "Man pages for the chart and dashboard commands: every option.",
-	},
-	{
-		ID:      "customize",
-		Label:   "Customize",
-		Summary: "Build named weft functions, save reusable scripts, share them across the team, and review their history with git.",
 	},
 }
 

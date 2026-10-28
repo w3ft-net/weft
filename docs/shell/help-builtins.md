@@ -26,7 +26,7 @@ Only the options listed here are supported. Any other option is rejected with
 an error (`grep: unknown option -o`, exit status 2). The exception is `less`,
 which accepts options and ignores them.
 
-Where a command can write depends on the directory. `/log` is read-only. `/tmp` is open to every member. `/bin` needs the `binmgr` group, `/cron.d` needs `cronmgr`, and `/etc/dashboards` and `/etc/notify.yaml` need `configmgr` (`/etc/passwd` and `/etc/usage` are read-only for everyone). Expiry, size limits and how files cross into `/bin` are in [Scratch space](../manual/tmp.md#lifetime-and-limits).
+Where a command can write depends on the directory. `/log` is read-only. `/tmp` is open to every member. `/bin` needs the `binmgr` group, `/cron.d` needs `cronmgr`, and `/etc/dashboards` and `/etc/notify.yaml` need `configmgr` (`/etc/passwd` and `/etc/usage` are read-only for everyone). Expiry, size limits and how files cross into `/bin` are in [File system](../manual/filesystem.md#limitations).
 
 | Command | Supported | Unsupported | Differences |
 |---|---|---|---|
@@ -74,14 +74,15 @@ Where a command can write depends on the directory. `/log` is read-only. `/tmp` 
 | `alert` | Fire a notification from a pipeline's final number. | [alert](../shell/man-alert.md), [notifications](../manual/alerts.md) |
 | `weft::latest`, `weft::avg`, `weft::max`, ... | Read and reason about your own cron history from inside a pipeline. | [weft::\*](../manual/crons.md) |
 | `dashboard` | Open a dashboard; the YAML grammar and tile kinds. | [dashboard](../shell/man-dashboard.md) |
-| `clipboard` | Copy a short, shareable link to a `/bin` script. | `man clipboard`, `man sharing` |
+| `clipboard` | Copy a short, shareable link to a `/bin` script. | `man clipboard` |
 
-See `man less` for paging and `man sharing` for sharing scripts.
+See `man less` for paging.
 
 ### Sharing and history
 
 | Command | What it does | Reference |
 |---|---|---|
+| `git` | Browse and restore earlier versions of `/bin` scripts, `/cron.d` crons and `/etc` config. | [git](../shell/man-git.md) |
 
 ### Team
 

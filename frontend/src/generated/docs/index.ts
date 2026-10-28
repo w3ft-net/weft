@@ -10,18 +10,13 @@ import connectRender from './connect-render';
 import connectCloudwatch from './connect-cloudwatch';
 import introduction from './introduction';
 import builtins from './builtins';
+import filesystem from './filesystem';
 import fastPipelines from './fast-pipelines';
 import metavars from './metavars';
-import tmp from './tmp';
 import trace from './trace';
 import crons from './crons';
 import alerts from './alerts';
 import dashboards from './dashboards';
-import chart from './chart';
-import dashboard from './dashboard';
-import scripts from './scripts';
-import sharing from './sharing';
-import git from './git';
 
 export type ManualHeading = {
   level: number;
@@ -48,10 +43,8 @@ export type ManualCategory = {
 export const manualCategories: readonly ManualCategory[] = [
   { id: "getting-started", label: "Getting started", summary: `Carve out namespaces for your environments and mint the tokens that agents and drains use to authenticate.` },
   { id: "connect-source", label: "Connect a source", summary: `Wire up logs from a host agent (weftd), an AWS CloudWatch log group, a Heroku app, or any custom line format.` },
-  { id: "weft-shell", label: "Weft shell", summary: `A bash-like shell over your logs: the Unix builtins that carry over and where they differ, meta-variables, and /tmp scratch space with a cookbook.` },
+  { id: "weft-shell", label: "Weft shell", summary: `A bash-like shell over your logs: the Unix builtins that carry over and where they differ, meta-variables, and the file system (scratch space, scripts, version history).` },
   { id: "analysis-alerting", label: "Analysis & alerting", summary: `Trace a request across services, run pipelines on a schedule with crons, understand how alerts work, choose a strategy that suits the signal, route notifications, and pin live queries to dashboards.` },
-  { id: "command-reference", label: "Command reference", summary: "Man pages for the chart and dashboard commands: every option." },
-  { id: "customize", label: "Customize", summary: `Build named weft functions, save reusable scripts, share them across the team, and review their history with git.` },
 ];
 
 export const manualSections: readonly ManualSection[] = [
@@ -65,16 +58,11 @@ export const manualSections: readonly ManualSection[] = [
   connectCloudwatch,
   introduction,
   builtins,
+  filesystem,
   fastPipelines,
   metavars,
-  tmp,
   trace,
   crons,
   alerts,
   dashboards,
-  chart,
-  dashboard,
-  scripts,
-  sharing,
-  git,
 ];

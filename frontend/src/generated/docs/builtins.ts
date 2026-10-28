@@ -25,7 +25,7 @@ them are below.</p>
 <p>Only the options listed here are supported. Any other option is rejected with
 an error (<code>grep: unknown option -o</code>, exit status 2). The exception is <code>less</code>,
 which accepts options and ignores them.</p>
-<p>Where a command can write depends on the directory. <code>/log</code> is read-only. <code>/tmp</code> is open to every member. <code>/bin</code> needs the <code>binmgr</code> group, <code>/cron.d</code> needs <code>cronmgr</code>, and <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code> need <code>configmgr</code> (<code>/etc/passwd</code> and <code>/etc/usage</code> are read-only for everyone). Expiry, size limits and how files cross into <code>/bin</code> are in <a href="/manual/tmp#lifetime-and-limits">Scratch space</a>.</p>
+<p>Where a command can write depends on the directory. <code>/log</code> is read-only. <code>/tmp</code> is open to every member. <code>/bin</code> needs the <code>binmgr</code> group, <code>/cron.d</code> needs <code>cronmgr</code>, and <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code> need <code>configmgr</code> (<code>/etc/passwd</code> and <code>/etc/usage</code> are read-only for everyone). Expiry, size limits and how files cross into <code>/bin</code> are in <a href="/manual/filesystem#limitations">File system</a>.</p>
 <table>
 <thead>
 <tr>
@@ -247,7 +247,7 @@ which accepts options and ignores them.</p>
 <tr>
 <td><code>chart</code></td>
 <td>Render a pipeline's output, or a cron's history, as a chart in the terminal.</td>
-<td><a href="/manual/chart">chart</a></td>
+<td>chart</td>
 </tr>
 <tr>
 <td><code>alert</code></td>
@@ -262,16 +262,16 @@ which accepts options and ignores them.</p>
 <tr>
 <td><code>dashboard</code></td>
 <td>Open a dashboard; the YAML grammar and tile kinds.</td>
-<td><a href="/manual/dashboard">dashboard</a></td>
+<td>dashboard</td>
 </tr>
 <tr>
 <td><code>clipboard</code></td>
 <td>Copy a short, shareable link to a <code>/bin</code> script.</td>
-<td><code>man clipboard</code>, <code>man sharing</code></td>
+<td><code>man clipboard</code></td>
 </tr>
 </tbody>
 </table>
-<p>See <code>man less</code> for paging and <code>man sharing</code> for sharing scripts.</p>
+<p>See <code>man less</code> for paging.</p>
 <h3 id="sharing-and-history">Sharing and history</h3>
 <table>
 <thead>
@@ -281,6 +281,13 @@ which accepts options and ignores them.</p>
 <th>Reference</th>
 </tr>
 </thead>
+<tbody>
+<tr>
+<td><code>git</code></td>
+<td>Browse and restore earlier versions of <code>/bin</code> scripts, <code>/cron.d</code> crons and <code>/etc</code> config.</td>
+<td>git</td>
+</tr>
+</tbody>
 </table>
 <h3 id="team">Team</h3>
 <table>

@@ -1,42 +1,33 @@
 ---
-id: manual-git
-title: git — version history for /bin, /cron.d and /etc
-web:
-  section: git
-  category: customize
-  order: 65
+id: man-git
+title: git
+shell:
+  const: ManGit
+  topics:
+    - "man git"
+    - "git --help"
+  banner: "GIT(1)"
 ---
 
-## Version history with `git`
+## NAME
 
-Every save to a script in `/bin`, a cron in `/cron.d`, a dashboard
-in `/etc/dashboards` or `/etc/notify.yaml` is captured in a short,
-browseable history. The `git` command shows earlier versions and
-restores them.
+git — browse and restore earlier versions of scripts, crons and config
 
-`git` is a **subset of git**. Supported commands behave and print
-the way git does: `git log`, `git show`, `git diff`, `git blame`,
-`git restore`. `git --help` lists what is supported. Unsupported
-commands are refused by name, and unsupported flags are refused with
-`fatal: unrecognized argument` (the supported flags are listed under
-`git log`):
+## SYNOPSIS
 
 ```
-weft> git rebase -i HEAD~3
-git: 'rebase' is a git command, but weft doesn't support it
+git log [--oneline] [-p] [--stat] [-n N] [<rev>] [-- <path>]
+git show <rev>[:<path>]
+git diff <a> <b> [-- <path>]
+git blame <path>
+git restore --source=<rev> <path>
+git revert <rev>
+git commit --amend -m <message>
 ```
 
-A misspelled command reads as a typo:
+## DESCRIPTION
 
-```
-weft> git rebsae
-git: 'rebsae' is not a git command. See 'git --help'.
-```
-
-There is one branch, `main`. Every save is a commit on it, in the
-order the saves happened, across your whole org. There is no
-staging area: a write is the commit. `git add`, merging, rebasing and
-remotes do not exist.
+{{include ../manual/filesystem.md#version-history}}
 
 ## What's tracked
 
@@ -70,10 +61,7 @@ git:
 - `<a>..<b>` — the commits in `<b>` that aren't in `<a>`.
 - `<rev>:<path>` — a file's content as of a revision.
 
-## The five-version cap
-
-We keep each file's **latest six** versions (the live one plus the
-five before it). Older versions are deleted.
+## The oldest version
 
 The oldest version still kept for a file is shown the way a
 shallow clone shows its edge: `git log` marks it `grafted`, its

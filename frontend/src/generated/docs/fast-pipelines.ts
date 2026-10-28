@@ -5,7 +5,7 @@ const fastPipelines = {
   section: "fast-pipelines",
   title: "How the weft shell works",
   category: "weft-shell",
-  order: 57,
+  order: 58,
   headings: [
     { level: 2, id: "explain", text: "explain" },
     { level: 3, id: "examples", text: "Examples" },

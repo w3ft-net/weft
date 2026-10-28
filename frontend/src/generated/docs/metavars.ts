@@ -5,7 +5,7 @@ const metavars = {
   section: "metavars",
   title: "Meta-variables",
   category: "weft-shell",
-  order: 57,
+  order: 59,
   headings: [
   ],
   html: `<h1 id="meta-variables">Meta-variables</h1>

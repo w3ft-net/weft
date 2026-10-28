@@ -7,10 +7,6 @@ shell:
     - "man chart"
     - "chart --help"
   banner: "CHART(1)"
-web:
-  section: chart
-  category: command-reference
-  order: 71
 ---
 
 ## NAME
@@ -23,23 +19,15 @@ chart — render a chart in the terminal, from a pipeline or a cron
 
 ## DESCRIPTION
 
-{{include ../manual/dashboards.md#how-chart-draws}}
+{{include ../manual/dashboards.md#how-chart-works}}
 
-## OPTIONS (pipe form)
+## OPTIONS
 
-{{include ../manual/dashboards.md#chart-options-for-pipelines}}
-
-## OPTIONS (cron form)
-
-{{include ../manual/dashboards.md#chart-options-for-crons}}
+{{include ../manual/dashboards.md#chart-options}}
 
 ## EXAMPLES
 
 {{include ../manual/dashboards.md#chart-examples}}
-
-## NOT SUPPORTED
-
-{{include ../manual/dashboards.md#chart-limitations}}
 
 ## SEE ALSO
 

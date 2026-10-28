@@ -4,7 +4,7 @@ title: Meta-variables
 web:
   section: metavars
   category: weft-shell
-  order: 57
+  order: 59
 ---
 
 # Meta-variables

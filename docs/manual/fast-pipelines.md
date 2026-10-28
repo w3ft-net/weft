@@ -4,7 +4,7 @@ title: How the weft shell works
 web:
   section: fast-pipelines
   category: weft-shell
-  order: 57
+  order: 58
 ---
 
 ## How the weft shell works
