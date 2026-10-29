@@ -233,7 +233,12 @@ func (s *Store) RemoveMember(orgID OrgID, email string) error {
 		if m.Pending() {
 			return nil
 		}
-		return tx.Where("user_id = ?", m.UserID).Delete(&NamespacePermission{}).Error
+		// namespace_permissions carries no org, only a namespace id: limit the
+		// delete to this org's namespaces or it wipes the user's grants in
+		// every other org they belong to.
+		orgNamespaces := txStore.scoped(orgID).Model(&Namespace{}).Select("id")
+		return tx.Where("user_id = ? AND namespace_id IN (?)", m.UserID, orgNamespaces).
+			Delete(&NamespacePermission{}).Error
 	})
 }
 

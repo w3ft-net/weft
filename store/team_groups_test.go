@@ -211,6 +211,76 @@ func TestTeamGroups_GrantAfterRemoveAndReadd(t *testing.T) {
 	}
 }
 
+// A user can belong to several orgs, and namespace_permissions rows carry no
+// org of their own — only a namespace id. Removing them from one org must
+// leave what they hold in the others.
+func TestRemoveMember_KeepsPermissionsInOtherOrgs(t *testing.T) {
+	db := teamPermsStore(t)
+	pid := os.Getpid()
+	orgA, _ := db.FindOrCreateOrg(fmt.Sprintf("rm-multi-a-%d", pid))
+	orgB, _ := db.FindOrCreateOrg(fmt.Sprintf("rm-multi-b-%d", pid))
+	email := fmt.Sprintf("alice-multi-%d@x.test", pid)
+	u := addTeamUser(t, db, orgA.ID, email, "member")
+	if err := db.AddTeamMemberWithEmail(orgB.ID, u.ID, email, orgs.RoleMember); err != nil {
+		t.Fatal(err)
+	}
+	for _, org := range []*Organization{orgA, orgB} {
+		if _, err := db.FindOrCreateNamespace(org.ID, "payments"); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AddUserToGroup(org.ID, email, "payments"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := db.RemoveMember(orgA.ID, email); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	if got := groupsFor(t, db, orgB.ID, email); !slices.Contains(got, "payments") {
+		t.Errorf("removal from org A wiped the member's grants in org B; groups = %v", got)
+	}
+	nsB, _ := db.FindOrCreateNamespace(orgB.ID, "payments")
+	perms, err := db.ListUserNamespacePermissions(u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(perms) != 1 || perms[0].NamespaceID != nsB.ID {
+		t.Errorf("want exactly org B's payments permission left, got %+v", perms)
+	}
+}
+
+// An invitee has no user id yet and holds no grants: withdrawing the invite
+// removes the pending row and touches nothing else.
+func TestRemoveMember_PendingInvitee(t *testing.T) {
+	db := teamPermsStore(t)
+	pid := os.Getpid()
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("rm-pending-%d", pid))
+	owner := addTeamUser(t, db, cust.ID, fmt.Sprintf("owner-pending-%d@x.test", pid), "owner")
+	alice := addTeamUser(t, db, cust.ID, fmt.Sprintf("alice-pending-%d@x.test", pid), "member")
+	if _, err := db.FindOrCreateNamespace(cust.ID, "payments"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AddUserToGroup(cust.ID, alice.Email, "payments"); err != nil {
+		t.Fatal(err)
+	}
+	invitee := fmt.Sprintf("invitee-%d@x.test", pid)
+	if _, err := db.InviteTeamMember(cust.ID, invitee, orgs.RoleMember, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.RemoveMember(cust.ID, invitee); err != nil {
+		t.Fatalf("withdraw invite: %v", err)
+	}
+
+	if _, err := db.GetTeamMemberByEmail(cust.ID, invitee); err == nil {
+		t.Error("withdrawn invite should not be found")
+	}
+	if got := groupsFor(t, db, cust.ID, alice.Email); !slices.Contains(got, "payments") {
+		t.Errorf("withdrawing an invite changed another member's grants; groups = %v", got)
+	}
+}
+
 func mustMember(t *testing.T, db *Store, custID OrgID, email string) *TeamMember {
 	t.Helper()
 	m, err := db.GetTeamMemberByEmail(custID, email)
