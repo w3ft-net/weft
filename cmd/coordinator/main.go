@@ -111,6 +111,7 @@ func main() {
 	port := flag.Int("port", 9020, "gRPC listen port")
 	healthPort := flag.Int("health-port", 9021, "HTTP liveness listen port")
 	localAddr := flag.String("local-addr", "127.0.0.1:9025", "listen address for the full WeftCoordinator service, which the co-located api connects to (the public --port serves only the ingest/infra RPCs)")
+	internalAddr := flag.String("internal-addr", ":9026", "listen address for the VPC-internal Heartbeat port shards report to; reachable only through the internal NLB and its security group rule")
 	adminPort := flag.Int("admin-port", 9022, "gRPC listen port for the localhost-only WeftAdmin surface (weft-admin CLI)")
 	debugPort := flag.Int("debug-port", 6060, "localhost-only HTTP port for net/http/pprof (goroutine/heap profiling); 0 disables")
 	computeAddr := flag.String("compute", "", "compute worker address (host:port)")
@@ -378,27 +379,35 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
-	// The public port serves only service.PublicMethods; the api reaches the
-	// rest (including the superadmin shard RPCs) on the loopback listener below.
-	newGRPC := func(public bool) *grpc.Server {
+	// Three listeners over one service: the public port serves only
+	// service.PublicMethods (ingest, and Heartbeat until the fleet has moved
+	// to the internal port); the internal port serves only InternalMethods to
+	// shards inside the VPC; the loopback listener serves everything to the
+	// co-located api.
+	newGRPC := func(allowed, noJWT auth.SkipMethods) *grpc.Server {
 		build := func(uid, org string) (*auth.Session, error) { return auth.BuildSession(db, uid, org) }
 		unary := []grpc.UnaryServerInterceptor{weftsdk.GRPC.UnaryServerInterceptor()}
 		stream := []grpc.StreamServerInterceptor{weftsdk.GRPC.StreamServerInterceptor()}
-		if public {
-			unary = append(unary, coordsvc.PublicOnlyUnaryInterceptor())
-			stream = append(stream, coordsvc.PublicOnlyStreamInterceptor())
+		if allowed != nil {
+			unary = append(unary, coordsvc.OnlyUnaryInterceptor(allowed))
+			stream = append(stream, coordsvc.OnlyStreamInterceptor(allowed))
 		}
 		return grpc.NewServer(
 			grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
-			grpc.ChainUnaryInterceptor(append(unary, auth.UnaryServerInterceptor(build, jwtSecret, skip))...),
-			grpc.ChainStreamInterceptor(append(stream, auth.StreamServerInterceptor(build, jwtSecret, skip))...),
+			grpc.ChainUnaryInterceptor(append(unary, auth.UnaryServerInterceptor(build, jwtSecret, noJWT))...),
+			grpc.ChainStreamInterceptor(append(stream, auth.StreamServerInterceptor(build, jwtSecret, noJWT))...),
 		)
 	}
-	srv := newGRPC(true)
-	localSrv := newGRPC(false)
+	srv := newGRPC(coordsvc.PublicMethods, skip)
+	localSrv := newGRPC(nil, skip)
+	internalSrv := newGRPC(coordsvc.InternalMethods, coordsvc.InternalMethods)
 	localLis, err := net.Listen("tcp", *localAddr)
 	if err != nil {
 		log.Fatalf("local listen on %s: %v", *localAddr, err)
+	}
+	internalLis, err := net.Listen("tcp", *internalAddr)
+	if err != nil {
+		log.Fatalf("internal listen on %s: %v", *internalAddr, err)
 	}
 	// LLM-based schema-field classification for pending sources — see
 	// ingest/llmdetect.go. Disabled (nil) unless
@@ -422,6 +431,13 @@ func main() {
 	}
 	pb.RegisterWeftCoordinatorServer(srv, coordSvc)
 	pb.RegisterWeftCoordinatorServer(localSrv, coordSvc)
+	pb.RegisterWeftCoordinatorServer(internalSrv, coordSvc)
+	go func() {
+		if err := internalSrv.Serve(internalLis); err != nil {
+			weftsdk.Errorf(context.Background(), "internal serve error: %v", err)
+		}
+	}()
+	defer internalSrv.GracefulStop()
 	go func() {
 		if err := localSrv.Serve(localLis); err != nil {
 			weftsdk.Errorf(context.Background(), "local serve error: %v", err)
@@ -484,6 +500,7 @@ func main() {
 				continue
 			}
 			weftsdk.Infof(context.Background(), "coordinator: received %s, gracefully stopping", s)
+			internalSrv.GracefulStop()
 			localSrv.GracefulStop()
 			srv.GracefulStop()
 			return

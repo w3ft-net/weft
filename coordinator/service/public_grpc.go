@@ -22,21 +22,27 @@ var PublicMethods = auth.SkipMethods{
 	"/weft.WeftCoordinator/Heartbeat":       true,
 }
 
-// PublicOnlyUnaryInterceptor refuses every unary RPC not in PublicMethods.
-// Deny by default: a method added to the service is not public until listed.
-func PublicOnlyUnaryInterceptor() grpc.UnaryServerInterceptor {
+// InternalMethods are the RPCs served on the VPC-internal port: shards
+// reporting to the coordinator. Not reachable from the internet.
+var InternalMethods = auth.SkipMethods{
+	"/weft.WeftCoordinator/Heartbeat": true,
+}
+
+// OnlyUnaryInterceptor refuses every unary RPC not in allowed. Deny by
+// default: a method added to the service is not served on a port until listed.
+func OnlyUnaryInterceptor(allowed auth.SkipMethods) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if !PublicMethods[info.FullMethod] {
+		if !allowed[info.FullMethod] {
 			return nil, status.Error(codes.Unimplemented, "method not served on this port")
 		}
 		return handler(ctx, req)
 	}
 }
 
-// PublicOnlyStreamInterceptor is the streaming counterpart.
-func PublicOnlyStreamInterceptor() grpc.StreamServerInterceptor {
+// OnlyStreamInterceptor is the streaming counterpart.
+func OnlyStreamInterceptor(allowed auth.SkipMethods) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if !PublicMethods[info.FullMethod] {
+		if !allowed[info.FullMethod] {
 			return status.Error(codes.Unimplemented, "method not served on this port")
 		}
 		return handler(srv, ss)

@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/graybeardcorp/weft/auth"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -15,8 +16,15 @@ import (
 // WeftCoordinator method (shard admin, the api's JWT-forwarded surface) is
 // reachable only on the loopback listener. Deny by default, so an RPC added to
 // the service later is not public until someone lists it.
-func TestPublicOnly_DeniesEverythingButTheAllowList(t *testing.T) {
-	unary := PublicOnlyUnaryInterceptor()
+func TestOnly_DeniesEverythingButTheAllowList(t *testing.T) {
+	for name, allowed := range map[string]auth.SkipMethods{"public": PublicMethods, "internal": InternalMethods} {
+		t.Run(name, func(t *testing.T) { checkOnlyAllowed(t, allowed) })
+	}
+}
+
+func checkOnlyAllowed(t *testing.T, allowed auth.SkipMethods) {
+	t.Helper()
+	unary := OnlyUnaryInterceptor(allowed)
 	reached := false
 	handler := func(context.Context, any) (any, error) { reached = true; return nil, nil }
 
@@ -24,36 +32,36 @@ func TestPublicOnly_DeniesEverythingButTheAllowList(t *testing.T) {
 		full := "/weft.WeftCoordinator/" + m.MethodName
 		reached = false
 		_, err := unary(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: full}, handler)
-		if PublicMethods[full] {
+		if allowed[full] {
 			if err != nil || !reached {
-				t.Errorf("%s is public: err=%v reached=%v", full, err, reached)
+				t.Errorf("%s is allowed: err=%v reached=%v", full, err, reached)
 			}
 			continue
 		}
 		if status.Code(err) != codes.Unimplemented || reached {
-			t.Errorf("%s must be denied on the public port: err=%v reached=%v", full, err, reached)
+			t.Errorf("%s must be denied on this port: err=%v reached=%v", full, err, reached)
 		}
 	}
 
-	stream := PublicOnlyStreamInterceptor()
+	stream := OnlyStreamInterceptor(allowed)
 	for _, s := range pb.WeftCoordinator_ServiceDesc.Streams {
 		full := "/weft.WeftCoordinator/" + s.StreamName
 		reached = false
 		err := stream(nil, nil, &grpc.StreamServerInfo{FullMethod: full}, func(any, grpc.ServerStream) error { reached = true; return nil })
-		if PublicMethods[full] {
+		if allowed[full] {
 			if err != nil || !reached {
-				t.Errorf("%s is public: err=%v reached=%v", full, err, reached)
+				t.Errorf("%s is allowed: err=%v reached=%v", full, err, reached)
 			}
 			continue
 		}
 		if status.Code(err) != codes.Unimplemented || reached {
-			t.Errorf("%s must be denied on the public port: err=%v reached=%v", full, err, reached)
+			t.Errorf("%s must be denied on this port: err=%v reached=%v", full, err, reached)
 		}
 	}
 }
 
-// A typo in the allow-list would silently drop a public RPC.
-func TestPublicMethods_AllExist(t *testing.T) {
+// A typo in an allow-list would silently drop an RPC.
+func TestAllowLists_AllExist(t *testing.T) {
 	have := map[string]bool{}
 	for _, m := range pb.WeftCoordinator_ServiceDesc.Methods {
 		have["/weft.WeftCoordinator/"+m.MethodName] = true
@@ -61,9 +69,11 @@ func TestPublicMethods_AllExist(t *testing.T) {
 	for _, s := range pb.WeftCoordinator_ServiceDesc.Streams {
 		have["/weft.WeftCoordinator/"+s.StreamName] = true
 	}
-	for m := range PublicMethods {
-		if !have[m] {
-			t.Errorf("PublicMethods lists %s, which WeftCoordinator does not define", m)
+	for _, allowed := range []auth.SkipMethods{PublicMethods, InternalMethods} {
+		for m := range allowed {
+			if !have[m] {
+				t.Errorf("an allow-list names %s, which WeftCoordinator does not define", m)
+			}
 		}
 	}
 }
