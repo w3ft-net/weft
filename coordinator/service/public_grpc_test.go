@@ -22,6 +22,15 @@ func TestOnly_DeniesEverythingButTheAllowList(t *testing.T) {
 	}
 }
 
+// Heartbeat moves shards off the internet-facing port: it names an instance and
+// supplies an address the coordinator then dials, so it is served only inside
+// the VPC.
+func TestPublicPort_DoesNotServeHeartbeat(t *testing.T) {
+	if PublicMethods["/weft.WeftCoordinator/Heartbeat"] {
+		t.Error("Heartbeat must not be served on the public port")
+	}
+}
+
 func checkOnlyAllowed(t *testing.T, allowed auth.SkipMethods) {
 	t.Helper()
 	unary := OnlyUnaryInterceptor(allowed)

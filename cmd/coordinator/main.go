@@ -380,8 +380,7 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 	// Three listeners over one service: the public port serves only
-	// service.PublicMethods (ingest, and Heartbeat until the fleet has moved
-	// to the internal port); the internal port serves only InternalMethods to
+	// service.PublicMethods (ingest); the internal port serves only InternalMethods to
 	// shards inside the VPC; the loopback listener serves everything to the
 	// co-located api.
 	newGRPC := func(allowed, noJWT auth.SkipMethods) *grpc.Server {

@@ -337,7 +337,7 @@ API client in `frontend/src/lib/api.ts` covers all REST endpoints. Auth state in
 
 ### WeftCoordinator (port 9020, client-facing)
 
-Served on two listeners. The public port (9020) serves only `Authenticate`, `IngestStream`, `SubmitSample`, `GetSourceStatus` and `Heartbeat` (`service.PublicMethods`) and refuses every other method as Unimplemented. The full service, JWT-gated, is on the coordinator's `--local-addr` (default `127.0.0.1:9025`), which the co-located api connects to. A third listener, `--internal-addr` (default `:9026`), serves only `Heartbeat` (`service.InternalMethods`) and is reachable only inside the VPC through the internal NLB; shards report there. A heartbeat from a shard with no identity yet must present the fleet `SHARD_SECRET` as its bearer.
+Served on two listeners. The public port (9020) serves only `Authenticate`, `IngestStream`, `SubmitSample` and `GetSourceStatus` (`service.PublicMethods`) and refuses every other method as Unimplemented. The full service, JWT-gated, is on the coordinator's `--local-addr` (default `127.0.0.1:9025`), which the co-located api connects to. A third listener, `--internal-addr` (default `:9026`), serves only `Heartbeat` (`service.InternalMethods`) and is reachable only inside the VPC through the internal NLB; shards report there. A heartbeat from a shard with no identity yet must present the fleet `SHARD_SECRET` as its bearer.
 
 - **Query**: `Query(CoordinatorQueryRequest) → stream CoordinatorQueryResponse`
 - **Sources**: AddSource, ListSources, RemoveSource

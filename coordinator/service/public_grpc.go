@@ -11,7 +11,7 @@ import (
 )
 
 // PublicMethods are the WeftCoordinator RPCs served on the public gRPC port:
-// the ones weftd, shards and producers call, which authenticate by agent
+// the ones weftd and producers call, which authenticate by agent
 // token or not at all (so they are also the JWT-exempt set). Everything else
 // on the service is served only on the loopback listener the api connects to.
 var PublicMethods = auth.SkipMethods{
@@ -19,7 +19,6 @@ var PublicMethods = auth.SkipMethods{
 	"/weft.WeftCoordinator/IngestStream":    true,
 	"/weft.WeftCoordinator/SubmitSample":    true,
 	"/weft.WeftCoordinator/GetSourceStatus": true,
-	"/weft.WeftCoordinator/Heartbeat":       true,
 }
 
 // InternalMethods are the RPCs served on the VPC-internal port: shards

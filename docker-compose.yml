@@ -73,9 +73,9 @@ services:
       WEFT_DOCKER_NETWORK: weft_default
       WEFT_HOST_DATA_ROOT: ${WEFT_HOST_DATA_ROOT:-${PWD}/dev/shard-data}
       WEFT_LOCAL_DATA_ROOT: /opt/app/shard-data
-      WEFT_COORDINATOR_ADDR: coordinator:9020
+      WEFT_COORDINATOR_ADDR: coordinator:9026
       # The full service for the api and the integration tests; 9020 serves
-      # only the ingest/infra RPCs.
+      # only the ingest/infra RPCs, and shards heartbeat to the internal 9026.
       COORDINATOR_LOCAL_ADDR: 0.0.0.0:9025
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -133,7 +133,7 @@ services:
       # Shards this coordinator ever launches (only if it wins the
       # shard-fsm-leader lease) still report to `coordinator`, not
       # itself — this dev topology's fixed shard-heartbeat address.
-      WEFT_COORDINATOR_ADDR: coordinator:9020
+      WEFT_COORDINATOR_ADDR: coordinator:9026
       COORDINATOR_LOCAL_ADDR: 0.0.0.0:9025
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
