@@ -105,6 +105,12 @@ type Server struct {
 	Coord *coordinator.Coordinator
 	Store *store.Store
 
+	// ShardSecret is the fleet secret every shard boots with. A heartbeat
+	// from a shard with no identity yet (empty ShardId) presents it as its
+	// bearer, since it has no per-shard token until it is christened. Empty
+	// refuses every such heartbeat.
+	ShardSecret string
+
 	// CfgPtr holds the live runtime config. Today only IngestStream
 	// consults it (for the per-stream byte budget); nil is fine in
 	// tests and non-production callers — handlers fall through to
@@ -865,6 +871,8 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 		if err := s.authenticateHeartbeat(ctx, req.ShardId); err != nil {
 			return nil, err
 		}
+	} else if err := s.authenticateFleetHeartbeat(ctx); err != nil {
+		return nil, err
 	}
 
 	hb := store.ShardHeartbeat{
@@ -893,6 +901,18 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 		go s.Coord.Provisioner.ProcessHeartbeat(hb)
 	}
 	return &pb.HeartbeatResponse{}, nil
+}
+
+// authenticateFleetHeartbeat admits a heartbeat from a shard that has no
+// identity yet: the christen, adopt and warm-pool-spare paths, which all name
+// a shard by instance id and addr. The bearer must be the fleet secret.
+func (s *Server) authenticateFleetHeartbeat(ctx context.Context) error {
+	md, _ := metadata.FromIncomingContext(ctx)
+	values := md.Get("authorization")
+	if len(values) == 0 || !store.ConstantTimeTokenEqual(s.ShardSecret, strings.TrimPrefix(values[0], "Bearer ")) {
+		return status.Error(codes.Unauthenticated, "heartbeat without a shard id needs the fleet secret")
+	}
+	return nil
 }
 
 // authenticateHeartbeat extracts the bearer from the incoming gRPC

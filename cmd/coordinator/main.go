@@ -417,6 +417,8 @@ func main() {
 		CfgPtr:     cfgPtr,
 		Classifier: classifier,
 		AgentSeen:  agentSeen,
+
+		ShardSecret: shardSecret,
 	}
 	pb.RegisterWeftCoordinatorServer(srv, coordSvc)
 	pb.RegisterWeftCoordinatorServer(localSrv, coordSvc)

@@ -78,16 +78,15 @@ func TestHeartbeat_BadBearer_Rejected(t *testing.T) {
 	}
 }
 
-// TestHeartbeat_EmptyShardID_Christen verifies that the christen path
-// (a fresh shard with no identity yet) bypasses auth — it has to,
-// because the shard can't present a token it hasn't been given yet.
-// The coordinator's provisioner is what mints the identity + token in
-// response.
+// TestHeartbeat_EmptyShardID_Christen verifies the christen path: a fresh
+// shard with no identity yet cannot present a per-shard token, so it presents
+// the fleet secret every shard boots with. The coordinator's provisioner is
+// what mints the identity + token in response.
 func TestHeartbeat_EmptyShardID_Christen(t *testing.T) {
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}})
-	srv := &Server{Coord: coord}
+	srv := &Server{Coord: coord, ShardSecret: "fleet-secret"}
 
-	_, err := srv.Heartbeat(context.Background(), &pb.ShardHeartbeatRequest{
+	_, err := srv.Heartbeat(heartbeatCtx("fleet-secret"), &pb.ShardHeartbeatRequest{
 		ShardId:    "",
 		Addr:       "10.0.0.99:9000",
 		InstanceId: "i-fresh",
@@ -95,6 +94,34 @@ func TestHeartbeat_EmptyShardID_Christen(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("empty-ID christen heartbeat rejected: %v", err)
+	}
+}
+
+// An empty-ID heartbeat names a LAUNCHING shard by instance id and the
+// coordinator then dials the address it supplies with the shard secret, so it
+// must be refused without the fleet secret. The public port is open to the
+// internet.
+func TestHeartbeat_EmptyShardID_WithoutFleetSecret_Rejected(t *testing.T) {
+	for name, ctx := range map[string]context.Context{
+		"no bearer":    heartbeatCtx(""),
+		"wrong bearer": heartbeatCtx("guess"),
+	} {
+		coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}})
+		srv := &Server{Coord: coord, ShardSecret: "fleet-secret"}
+		_, err := srv.Heartbeat(ctx, &pb.ShardHeartbeatRequest{InstanceId: "i-1", Addr: "6.6.6.6:9000"})
+		if s, _ := status.FromError(err); s.Code() != codes.Unauthenticated {
+			t.Errorf("%s: got %v, want Unauthenticated", name, err)
+		}
+	}
+}
+
+// A coordinator with no secret configured must refuse, never wave beats through.
+func TestHeartbeat_EmptyShardID_NoSecretConfigured_Rejected(t *testing.T) {
+	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}})
+	srv := &Server{Coord: coord}
+	_, err := srv.Heartbeat(heartbeatCtx("anything"), &pb.ShardHeartbeatRequest{InstanceId: "i-1", Addr: "6.6.6.6:9000"})
+	if s, _ := status.FromError(err); s.Code() != codes.Unauthenticated {
+		t.Errorf("got %v, want Unauthenticated", err)
 	}
 }
 
@@ -202,9 +229,9 @@ func TestHeartbeat_SpareIsNotRecordedAsAShardHeartbeat(t *testing.T) {
 	tx, cleanup := testStore(t)
 	defer cleanup()
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: tx})
-	srv := &Server{Coord: coord, Store: tx}
+	srv := &Server{Coord: coord, Store: tx, ShardSecret: "fleet-secret"}
 
-	if _, err := srv.Heartbeat(context.Background(), &pb.ShardHeartbeatRequest{
+	if _, err := srv.Heartbeat(heartbeatCtx("fleet-secret"), &pb.ShardHeartbeatRequest{
 		Addr: "10.0.0.7:9000", InstanceId: "i-spare-hb", State: "SPARE", Spare: true,
 	}); err != nil {
 		t.Fatalf("spare heartbeat rejected: %v", err)
