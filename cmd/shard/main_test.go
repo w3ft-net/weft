@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	shardsvc "github.com/graybeardcorp/weft/shard/service"
 )
@@ -128,5 +131,30 @@ func TestStartsAsSpare_TheSpareTagStillWins(t *testing.T) {
 func TestStartsAsSpare_WithoutAVolumeHelperTheDataDirIsJustADirectory(t *testing.T) {
 	if startsAsSpare(false, t.TempDir(), false) {
 		t.Fatal("no volume helper: want a normal shard on the plain directory")
+	}
+}
+
+// bearerSpy records the authorization metadata of the heartbeat it receives.
+type bearerSpy struct {
+	pb.WeftCoordinatorClient
+	got []string
+}
+
+func (b *bearerSpy) Heartbeat(ctx context.Context, _ *pb.ShardHeartbeatRequest, _ ...grpc.CallOption) (*pb.HeartbeatResponse, error) {
+	md, _ := metadata.FromOutgoingContext(ctx)
+	b.got = md.Get("authorization")
+	return &pb.HeartbeatResponse{}, nil
+}
+
+// A shard that has not been christened has no token of its own yet; it
+// proves it belongs to the fleet with the shard secret every shard boots with.
+func TestSendHeartbeat_UnchristenedShardPresentsTheFleetSecret(t *testing.T) {
+	srv := shardsvc.NewBlankServer(t.TempDir(), "")
+	spy := &bearerSpy{}
+	if !sendHeartbeat(spy, "10.0.0.2:9000", "i-fresh", srv, "fleet-secret") {
+		t.Fatal("heartbeat not sent")
+	}
+	if len(spy.got) != 1 || spy.got[0] != "Bearer fleet-secret" {
+		t.Errorf("authorization = %v, want [Bearer fleet-secret]", spy.got)
 	}
 }

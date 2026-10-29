@@ -135,7 +135,7 @@ func main() {
 
 	// Heartbeat goroutine.
 	if *coordAddr != "" {
-		go runHeartbeat(*coordAddr, *grpcPort, *hbInterval, srv)
+		go runHeartbeat(*coordAddr, *grpcPort, *hbInterval, srv, shardSecret)
 	}
 
 	wc, _ := weftsdk.New()
@@ -284,7 +284,7 @@ func volumeUsage(path string) (total, available uint64, err error) {
 // hbInterval. Pulls the shard id on each tick so post-Configure the
 // heartbeat stream starts carrying the real identity rather than the
 // empty-string unclaimed signal.
-func runHeartbeat(coordAddr string, grpcPort int, hbInterval time.Duration, srv *shardsvc.Server) {
+func runHeartbeat(coordAddr string, grpcPort int, hbInterval time.Duration, srv *shardsvc.Server, shardSecret string) {
 	myIP := getPrivateIP()
 	myAddr := fmt.Sprintf("%s:%d", myIP, grpcPort)
 	myInstanceID := getInstanceID()
@@ -299,7 +299,7 @@ func runHeartbeat(coordAddr string, grpcPort int, hbInterval time.Duration, srv 
 	// Retry initial heartbeat with backoff so we survive starting
 	// simultaneously with the coordinator.
 	for i := 0; i < 10; i++ {
-		if sendHeartbeat(client, myAddr, myInstanceID, srv) {
+		if sendHeartbeat(client, myAddr, myInstanceID, srv, shardSecret) {
 			break
 		}
 		time.Sleep(time.Duration(i+1) * time.Second)
@@ -308,7 +308,7 @@ func runHeartbeat(coordAddr string, grpcPort int, hbInterval time.Duration, srv 
 	ticker := time.NewTicker(hbInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		sendHeartbeat(client, myAddr, myInstanceID, srv)
+		sendHeartbeat(client, myAddr, myInstanceID, srv, shardSecret)
 	}
 }
 
@@ -354,7 +354,7 @@ func heartbeatFor(srv *shardsvc.Server, addr, instanceID string) (*pb.ShardHeart
 	return req, true
 }
 
-func sendHeartbeat(client pb.WeftCoordinatorClient, addr, instanceID string, srv *shardsvc.Server) bool {
+func sendHeartbeat(client pb.WeftCoordinatorClient, addr, instanceID string, srv *shardsvc.Server, shardSecret string) bool {
 	req, send := heartbeatFor(srv, addr, instanceID)
 	if !send {
 		return true
@@ -365,11 +365,13 @@ func sendHeartbeat(client pb.WeftCoordinatorClient, addr, instanceID string, srv
 
 	// Attach the per-shard bearer token so the coordinator's Heartbeat
 	// handler can prove this heartbeat came from the real owner of
-	// shardID. Empty token on christen-pending shards is expected — the
-	// coordinator skips auth for empty-ID heartbeats.
-	if tok := srv.HeartbeatToken(); tok != "" {
-		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tok)
+	// shardID. A shard not yet christened has no token of its own, so it
+	// presents the fleet secret every shard boots with instead.
+	tok := srv.HeartbeatToken()
+	if tok == "" {
+		tok = shardSecret
 	}
+	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tok)
 
 	if _, err := client.Heartbeat(ctx, req); err != nil {
 		weftsdk.Infof(ctx, "heartbeat: %v", err)
