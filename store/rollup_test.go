@@ -2,8 +2,11 @@ package store
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // TestRollupHourly_AggregatesRawCorrectly confirms rollup_cron_hourly
@@ -171,6 +174,176 @@ func TestRollup_4hCombinesHourly(t *testing.T) {
 	// Expect count=40, sum=400, sum_sq=4000, min=0 (of 0,1,2,3), max=13 (of 10,11,12,13).
 	checkAgg(t, "4h", got.Count, got.Sum, got.SumSq, got.Min, got.Max,
 		40, 400, 4000, 0, 13)
+}
+
+// TestRollup_4hKeepsBucketThatStraddlesWindowStart pins the failure where the
+// 4h rollup's source window starts mid-bucket. Every hour the window slides
+// forward; a bucket whose first hours have fallen out of the window but whose
+// last hours are still inside used to be recomputed from only those last hours
+// and overwrite the full value an earlier run had stored.
+//
+// The window start is an absolute hour, the bucket boundaries follow the
+// session time zone, so the test picks a zone in which they disagree. That
+// makes the straddle exist whatever hour the suite runs at.
+func TestRollup_4hKeepsBucketThatStraddlesWindowStart(t *testing.T) {
+	db := testOpen(t)
+
+	cust, err := db.FindOrCreateOrg("rollup-4h-straddle-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	var watchID uint
+	if err := db.db.Raw("SELECT id FROM cron_watches WHERE org_id = ? AND name = 'w'", cust.ID).Scan(&watchID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// The rollup reads hourly buckets from (current hour - 12h).
+	windowStart := time.Now().UTC().Truncate(time.Hour).Add(-12 * time.Hour)
+	zone, offset := "UTC", 0
+	if windowStart.Hour()%4 == 0 {
+		zone, offset = "Etc/GMT-1", 1 // UTC+1: the window start is no longer on a bucket edge
+	}
+	into := (windowStart.Hour() + offset) % 4 // hours of the straddling bucket before the window start
+	bucket4h := windowStart.Add(-time.Duration(into) * time.Hour)
+
+	err = db.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("SET LOCAL TIME ZONE '" + zone + "'").Error; err != nil {
+			return err
+		}
+		for h := 0; h < 4; h++ {
+			if err := tx.Exec(`
+				INSERT INTO cron_results_hourly
+					(cron_watch_id, tag, bucket_start, count, sum, sum_sq, min, max)
+				VALUES (?, '', ?, 10, 100, 1000, ?, ?)`,
+				watchID, bucket4h.Add(time.Duration(h)*time.Hour), float64(h), float64(h+10),
+			).Error; err != nil {
+				return err
+			}
+		}
+		// What the rollup stored on its earlier runs, while every hour of the
+		// bucket was still inside the window.
+		if err := tx.Exec(`
+			INSERT INTO cron_results_4h
+				(cron_watch_id, tag, bucket_start, count, sum, sum_sq, min, max)
+			VALUES (?, '', ?, 40, 400, 4000, 0, 13)`,
+			watchID, bucket4h,
+		).Error; err != nil {
+			return err
+		}
+		return tx.Exec("CALL public.rollup_cron_4h()").Error
+	})
+	if err != nil {
+		t.Fatalf("rollup_cron_4h: %v", err)
+	}
+
+	var got struct {
+		Count int64
+		Sum   float64
+		SumSq float64 `gorm:"column:sum_sq"`
+		Min   float64
+		Max   float64
+	}
+	if err := db.db.Raw(`
+		SELECT count, sum, sum_sq, min, max
+		FROM cron_results_4h
+		WHERE cron_watch_id = ? AND bucket_start = ?`,
+		watchID, bucket4h,
+	).Scan(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	checkAgg(t, "4h straddling bucket", got.Count, got.Sum, got.SumSq, got.Min, got.Max,
+		40, 400, 4000, 0, 13)
+}
+
+// TestMigration109_RebuildsDamagedRollups runs the repair statements from the
+// migration against 4h and daily rows left short by the old window, and checks
+// they are rebuilt from the hourly tier.
+func TestMigration109_RebuildsDamagedRollups(t *testing.T) {
+	db := testOpen(t)
+
+	cust, err := db.FindOrCreateOrg("rollup-109-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	var watchID uint
+	if err := db.db.Raw("SELECT id FROM cron_watches WHERE org_id = ? AND name = 'w'", cust.ID).Scan(&watchID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Two whole days, three and two days back, one hourly bucket each hour
+	// (count 10, sum 100). Each 4h bucket should hold 40/400, each day 240/2400.
+	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-3 * 24 * time.Hour)
+	for h := 0; h < 48; h++ {
+		if err := db.db.Exec(`
+			INSERT INTO cron_results_hourly
+				(cron_watch_id, tag, bucket_start, count, sum, sum_sq, min, max)
+			VALUES (?, '', ?, 10, 100, 1000, 1, 20)`,
+			watchID, day.Add(time.Duration(h)*time.Hour),
+		).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	// What the old window left: the last hour of each 4h bucket, and daily
+	// built from that.
+	for b := 0; b < 12; b++ {
+		if err := db.db.Exec(`
+			INSERT INTO cron_results_4h
+				(cron_watch_id, tag, bucket_start, count, sum, sum_sq, min, max)
+			VALUES (?, '', ?, 10, 100, 1000, 1, 20)`,
+			watchID, day.Add(time.Duration(b*4)*time.Hour),
+		).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for d := 0; d < 2; d++ {
+		if err := db.db.Exec(`
+			INSERT INTO cron_results_daily
+				(cron_watch_id, tag, bucket_start, count, sum, sum_sq, min, max)
+			VALUES (?, '', ?, 60, 600, 6000, 1, 20)`,
+			watchID, day.Add(time.Duration(d)*24*time.Hour),
+		).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	raw, err := migrationsFS.ReadFile("migrations/109_rollup_4h_aligned_window.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	up := string(raw)
+	_, up, _ = strings.Cut(up, "-- +goose StatementEnd") // after the procedure
+	up, _, _ = strings.Cut(up, "-- +goose Down")
+	if err := db.db.Exec(up).Error; err != nil {
+		t.Fatalf("repair statements: %v", err)
+	}
+
+	var h4 []int64
+	if err := db.db.Raw(`SELECT count FROM cron_results_4h WHERE cron_watch_id = ? AND bucket_start >= ? AND bucket_start < ? ORDER BY bucket_start`,
+		watchID, day, day.Add(48*time.Hour)).Scan(&h4).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(h4) != 12 {
+		t.Fatalf("4h buckets = %d, want 12", len(h4))
+	}
+	for i, c := range h4 {
+		if c != 40 {
+			t.Errorf("4h bucket %d: count = %d, want 40", i, c)
+		}
+	}
+	var daily []int64
+	if err := db.db.Raw(`SELECT count FROM cron_results_daily WHERE cron_watch_id = ? AND bucket_start >= ? AND bucket_start < ? ORDER BY bucket_start`,
+		watchID, day, day.Add(48*time.Hour)).Scan(&daily).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(daily) != 2 || daily[0] != 240 || daily[1] != 240 {
+		t.Errorf("daily counts = %v, want [240 240]", daily)
+	}
 }
 
 func checkAgg(t *testing.T, label string, count int64, sum, sumSq, min, max float64,
