@@ -171,7 +171,8 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	// /bin script, or a mix. Execute is the dispatch layer that
 	// classifies and routes; ExecuteFollow is the variant that splices
 	// a live broker subscription onto the end of the historical batch.
-	ctx := stream.Context()
+	parent := stream.Context()
+	ctx := parent
 	// Dirstack courier (in): the delegated client ferries its cached
 	// cwd/pushd stack as repeated `weft-dirstack` metadata (index 0 ==
 	// cwd) so the server resolves cd/relative paths against the client's
@@ -194,9 +195,24 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	// point below an error is actually discovered, which is what marks
 	// the eventual "span done" line's status, not whatever this
 	// function's own return value happens to be by the time it exits.
+	//
+	// The one query deadline starts here, so planning, shard fan-out, compute
+	// and the stream out to the caller all count against it. Follow lives as
+	// long as its client, so it is exempt.
+	limit := time.Duration(s.runtimeCfg().QueryDeadlineSeconds) * time.Second
+	if limit > 0 && !req.Follow {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, limit)
+		defer cancel()
+	}
 	ctx, span := weftsdk.StartSpan(ctx, "coordinator.Execute")
 	defer span.End()
 	_, traced := weftsdk.TraceIDFromContext(ctx)
+	// expired is whether the deadline ended the query, as opposed to the
+	// caller going away.
+	expired := func() bool {
+		return parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded)
+	}
 	var lineCount int
 	var result *coordinator.ExecuteResult
 	if req.Follow && s.Coord.Tail != nil {
@@ -206,6 +222,9 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	}
 	if err != nil {
 		span.RecordError(err)
+		if expired() {
+			return s.queryDeadlineError(ctx, parent, customer, req.Pipeline, dirStack, limit)
+		}
 		weftsdk.Errorf(ctx, "query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
 		return err
 	}
@@ -272,10 +291,13 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 			// mode; treat it as a clean stream end so the rpc returns
 			// nil instead of context.Canceled bubbling to the wire —
 			// not a real error, so no RecordError.
-			if ctx.Err() != nil {
+			if parent.Err() != nil {
 				return nil
 			}
 			span.RecordError(err)
+			if expired() {
+				return s.queryDeadlineError(ctx, parent, customer, req.Pipeline, dirStack, limit)
+			}
 			return err
 		}
 		if !ok {
@@ -321,6 +343,31 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 		weftsdk.Infof(ctx, "query rpc: done customer=%s pipeline=%q lines=%d duration=%s", customer, req.Pipeline, lineCount, time.Since(start))
 	}
 	return nil
+}
+
+// queryDeadlineError is what the caller gets when QueryDeadlineSeconds ends
+// their query: what happened, the explain of their pipeline where there is
+// one, and what to change. Nothing in it names our internals; the code is
+// DeadlineExceeded so the API can tell it from a failure. Lines already sent
+// stay sent, and the error says the query didn't finish.
+func (s *Server) queryDeadlineError(ctx, parent context.Context, customer, pipeline string, dirStack []string, limit time.Duration) error {
+	weftsdk.Warnf(ctx, "query rpc: deadline customer=%s pipeline=%q limit=%s", customer, pipeline, limit)
+	unit := "seconds"
+	if limit == time.Second {
+		unit = "second"
+	}
+	msg := fmt.Sprintf("This query did not finish in the time allowed (%d %s).\n", int(limit.Seconds()), unit)
+	cwd := "/"
+	if len(dirStack) > 0 {
+		cwd = dirStack[0]
+	}
+	if orgID, err := s.resolveCallerOrgID(parent); err == nil {
+		if summary := s.Coord.ExplainSummary(pipeline, cwd, orgID); summary != "" {
+			msg += "\n" + summary
+		}
+	}
+	msg += "\nNarrow the time range, or filter earlier in the pipeline."
+	return status.Error(codes.DeadlineExceeded, msg)
 }
 
 func (s *Server) ListServices(ctx context.Context, _ *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {

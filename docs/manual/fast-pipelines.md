@@ -47,6 +47,10 @@ Anything else is going to execute post-retrieval. If your 1-liners are timing
 out, you might want to run `explain` for hints of what could move into
 optimized retrieval.
 
+A 1-liner that runs past the time limit is stopped, and the error says so and
+includes the same report `explain` gives for it, so you can see what to change.
+`tail -f` is not under the limit.
+
 ## explain
 
 `explain` is a builtin function that will show you which stages of your

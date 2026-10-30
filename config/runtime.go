@@ -84,6 +84,15 @@ type Runtime struct {
 	// on the next incoming Query RPC.
 	ShardQueryTimeoutSeconds int
 
+	// QueryDeadlineSeconds is the one time every one-shot query gets, from
+	// the coordinator's Execute RPC taking it to its last line going out;
+	// past it the query is cancelled (shards and compute with it) and the
+	// caller gets a plain error with the explain of their pipeline. One
+	// value for every caller. Follow is exempt: it lives as long as its
+	// client. Read per query, so a change applies to the next one. 0
+	// disables the deadline.
+	QueryDeadlineSeconds int
+
 	// MinWeftCliVersion is the lowest weft/<version> the HTTP API
 	// accepts on X-Weft-Client; below it returns 426 Upgrade Required.
 	// Empty disables the gate.
@@ -133,6 +142,10 @@ func Defaults() *Runtime {
 		// enough to reap abandoned/half-open streams before they pile up.
 		IngestStreamIdleTimeoutSeconds: 300,
 		ShardQueryTimeoutSeconds:       30,
+		// A starting value, not a measurement: the plan wants it chosen from
+		// timings of the slow aggregations at 1 h, 6 h and 24 h. Tune it live
+		// with `kevcons config set QUERY_DEADLINE_SECONDS=<n>`.
+		QueryDeadlineSeconds: 60,
 	}
 }
 
@@ -157,6 +170,7 @@ const (
 	keyIngestTokenBurstBytes  = "GRPC_INGEST_TOKEN_BURST_BYTES"
 	keyIngestStreamIdleSec    = "GRPC_INGEST_STREAM_IDLE_TIMEOUT_SECONDS"
 	keyShardQueryTimeoutSec   = "SHARD_QUERY_TIMEOUT_SECONDS"
+	keyQueryDeadlineSec       = "QUERY_DEADLINE_SECONDS"
 	keyMinWeftCliVersion      = "MIN_WEFT_CLI_VERSION"
 	keyMinWeftdVersion        = "MIN_WEFTD_VERSION"
 	keyWeftdHardFloor         = "WEFTD_HARD_FLOOR"
@@ -191,6 +205,7 @@ func (r *Runtime) Overlay(blob map[string]string) {
 	overlayInt64(blob, keyIngestTokenBurstBytes, &r.IngestTokenBurstBytes)
 	overlayInt(blob, keyIngestStreamIdleSec, &r.IngestStreamIdleTimeoutSeconds)
 	overlayInt(blob, keyShardQueryTimeoutSec, &r.ShardQueryTimeoutSeconds)
+	overlayInt(blob, keyQueryDeadlineSec, &r.QueryDeadlineSeconds)
 	overlayString(blob, keyMinWeftCliVersion, &r.MinWeftCliVersion)
 	overlayString(blob, keyMinWeftdVersion, &r.MinWeftdVersion)
 	overlayString(blob, keyWeftdHardFloor, &r.WeftdHardFloor)

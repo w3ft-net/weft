@@ -46,6 +46,9 @@ treatment:</p>
 <p>Anything else is going to execute post-retrieval. If your 1-liners are timing
 out, you might want to run <code>explain</code> for hints of what could move into
 optimized retrieval.</p>
+<p>A 1-liner that runs past the time limit is stopped, and the error says so and
+includes the same report <code>explain</code> gives for it, so you can see what to change.
+<code>tail -f</code> is not under the limit.</p>
 <h2 id="explain">explain</h2>
 <p><code>explain</code> is a builtin function that will show you which stages of your
 pipeline run optimized, partly optimized, or post-retrieval. Sometimes it can

@@ -47,6 +47,7 @@ func TestOverlay_AppliesRecognizedValues(t *testing.T) {
 		keyShellExecBodyMax:       "4194304",
 		keyTrustedProxyCIDRs:      "172.16.0.0/12,10.0.0.0/8",
 		keyShardQueryTimeoutSec:   "45",
+		keyQueryDeadlineSec:       "90",
 		keyIngestTokenBytesPerSec: "1048576",
 		keyIngestTokenBurstBytes:  "4194304",
 	})
@@ -61,6 +62,9 @@ func TestOverlay_AppliesRecognizedValues(t *testing.T) {
 	}
 	if r.ShardQueryTimeoutSeconds != 45 {
 		t.Errorf("ShardQueryTimeoutSeconds: got %d, want 45", r.ShardQueryTimeoutSeconds)
+	}
+	if r.QueryDeadlineSeconds != 90 {
+		t.Errorf("QueryDeadlineSeconds: got %d, want 90", r.QueryDeadlineSeconds)
 	}
 	if r.IngestTokenBytesPerSec != 1048576 {
 		t.Errorf("IngestTokenBytesPerSec: got %d, want 1048576", r.IngestTokenBytesPerSec)

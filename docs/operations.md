@@ -63,6 +63,18 @@ kevcons ssh coordinator --command \
 (`SIGINT`/`SIGTERM` still trigger graceful shutdown — only `SIGUSR1` is the
 dump.)
 
+### Query deadline
+
+Every one-shot query (not `tail -f`) is cancelled after `QUERY_DEADLINE_SECONDS`
+(default 60, the same for every caller; `0` disables). The caller gets
+`This query did not finish in the time allowed` and the `explain` report of
+their pipeline, never an internal error. Cancelling stops the shard and compute
+work too. Tune it live, no deploy:
+`kevcons config set QUERY_DEADLINE_SECONDS=<n>` (read on each query, within the
+60 s config refresh). The coordinator logs each trip as `query rpc: deadline`
+with the customer and pipeline: that line is the data for choosing the value.
+Cron runs are not under it.
+
 ### Known leak class: abandoned ingest streams
 
 Symptom: linear goroutine/heap growth on the
