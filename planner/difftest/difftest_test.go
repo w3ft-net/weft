@@ -160,6 +160,102 @@ func TestDifferentialLineShapes(t *testing.T) {
 	// A comparison with a number is a prefilter: awk decides number or text
 	// per value, so the stage still runs.
 	h.check(t, `cat /log/acme/api/main.log | awk '$NF > 6'`)
+	// Stages that stay in compute are cut down to the fields they read: the
+	// same $N, $NF and NF over lines of no fields, one, and many.
+	for _, p := range []string{
+		`cat /log/acme/api/main.log | awk '{ n++ } END { print n }'`,
+		`cat /log/acme/api/main.log | awk '{ printf "[%s][%s][%d]\n", $1, $NF, NF }'`,
+		`cat /log/acme/api/main.log | awk '{ s = s "," $2 } END { print s }'`,
+		`cat /log/acme/api/main.log | awk '{ if (length($1) > m) m = length($1) } END { print m }'`,
+		`cat /log/acme/api/main.log | awk '{ printf "%s|%s|%s\n", $3, $2, NF }'`,
+		`cat /log/acme/api/main.log | awk '{ n += NF } END { print n }'`,
+		`cat /log/acme/api/main.log | awk '{ a[$NF] = a[$NF] + 1 } END { for (k in a) print k "=" a[k] }'`,
+	} {
+		t.Run("projected "+p, func(t *testing.T) {
+			plan := h.check(t, p)
+			if plan != nil && (len(plan.ComputeStages) != 1 || !strings.Contains(plan.DirectShardSQL, "regexp_extract_all") && !strings.Contains(plan.DirectShardSQL, "'' as raw")) {
+				t.Errorf("not cut down to its fields:\n%s", planner.Explain(p))
+			}
+		})
+	}
+}
+
+// TestDifferentialFieldProjectionLines: a row of several lines is cut down
+// line by line, as awk reads them: $1 is each line's first field, NF its count.
+func TestDifferentialFieldProjectionLines(t *testing.T) {
+	var rows []*pb.LogRow
+	base := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for i, raw := range []string{
+		"a 1 x", "b 2\nc 3 y z", "", "d\n", "e 5\n\nf 6 w", "  g   7  ", "h\ti\tj", "k 9\r\nl 10",
+	} {
+		rows = append(rows, &pb.LogRow{
+			Raw: raw, TsUnixNs: base.Add(time.Duration(i) * time.Second).UnixNano(),
+			Namespace: "acme", Service: "api", Kind: "main", CustomerId: 1, PayloadJson: []byte("{}"),
+		})
+	}
+	h := newHarness(t, rows, 2)
+	for _, p := range []string{
+		`cat /log/acme/api/main.log | awk '{ n++ } END { print n }'`,
+		`cat /log/acme/api/main.log | awk '{ s += $2 } END { print s }'`,
+		`cat /log/acme/api/main.log | awk '{ printf "%s;%s;%d\n", $1, $NF, NF }'`,
+		`cat /log/acme/api/main.log | awk '{ c[NF]++ } END { for (k in c) print k, c[k] }'`,
+		`cat /log/acme/api/main.log | awk '{ l = l $1 } END { print l }'`,
+		`cat /log/acme/api/main.log | awk 'NR % 2 == 0 { printf "%d:%s\n", NR, $1 }'`,
+	} {
+		t.Run(p, func(t *testing.T) {
+			plan := h.check(t, p)
+			if plan != nil && !strings.Contains(plan.DirectShardSQL, "string_split") {
+				t.Errorf("rows not split into lines before the cut:\n%s", planner.Explain(p))
+			}
+		})
+	}
+}
+
+// TestFieldProjectionShrinksTheWire: the point of the cut. Over long lines of
+// many fields, what the shards return for a stage reading two of them is a
+// fraction of what they return for the whole lines, and the same number of
+// lines.
+func TestFieldProjectionShrinksTheWire(t *testing.T) {
+	var rows []*pb.LogRow
+	base := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 200; i++ {
+		raw := fmt.Sprintf("2026-10-13T12:00:%02d INFO req-%d host-%d GET /api/v1/things/%d status=200 bytes=%d user=u%d agent=Mozilla/5.0 trace=%032d",
+			i%60, i, i%7, i, 1000+i, i%13, i)
+		rows = append(rows, &pb.LogRow{
+			Raw: raw, TsUnixNs: base.Add(time.Duration(i) * time.Second).UnixNano(),
+			Namespace: "acme", Service: "api", Kind: "main", CustomerId: 1, PayloadJson: []byte("{}"),
+		})
+	}
+	h := newHarness(t, rows, 2)
+	const whole = `cat /log/acme/api/main.log`
+	const cut = whole + ` | awk '{ s[$4] += $8 } END { for (k in s) print k, s[k] }'`
+	wire := func(p string) (lines, bytes int) {
+		plan, err := planner.Plan(p, 0, "", time.Time{}, time.Time{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, sh := range h.shards {
+			got, err := sh.Query(context.Background(), plan.DirectShardSQL, toAny(argStrings(plan.Args))...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range got {
+				lines++
+				bytes += len(r.Raw)
+			}
+		}
+		return lines, bytes
+	}
+	wholeLines, wholeBytes := wire(whole)
+	cutLines, cutBytes := wire(cut)
+	if cutLines != wholeLines || wholeLines != 200 {
+		t.Errorf("lines: whole %d, cut %d, want 200 each", wholeLines, cutLines)
+	}
+	if cutBytes*4 > wholeBytes {
+		t.Errorf("the cut sends %d bytes of %d: not under a quarter", cutBytes, wholeBytes)
+	}
+	t.Logf("whole lines %d bytes, cut %d bytes (%.1f%%)", wholeBytes, cutBytes, 100*float64(cutBytes)/float64(wholeBytes))
+	h.check(t, cut)
 }
 
 // TestDifferentialEventMetaVars checks EVENT_ID and LINE_NO, which
@@ -739,6 +835,22 @@ var extraCorpus = []string{
 	`cat /log/acme/api/main.log | awk 'length > 80 { print $3 }'`,
 	`cat /log/acme/api/main.log | grep -E 'warm|timeout' | wc -l`,
 	`cat /log/acme/api/main.log | grep -Ei 'IT.S|NA[IÏ]VE'`,
+	// Stages that stay in compute but read only some fields: the shard sends a
+	// record of just those, and the stage must see the same $N, $NF and NF.
+	`cat /log/acme/api/main.log | awk '{ s[$3] += $5 } END { for (k in s) print k, s[k] }'`,
+	`cat /log/acme/api/main.log | awk '{ if ($NF > m) m = $NF } END { print m }'`,
+	`cat /log/acme/api/main.log | awk '{ printf "%s|%d|%s\n", $2, NF, $NF }'`,
+	`cat /log/acme/api/main.log | awk '{ n++ } END { print n }'`,
+	`cat /log/acme/api/main.log | awk 'BEGIN { print "head" } { n += length($3) } END { print n }'`,
+	`cat /log/acme/api/main.log | awk '{ print toupper($2), substr($3, 2) }'`,
+	`cat /log/acme/api/main.log | grep -v warmed | awk '{ s += $5 } END { print s }'`,
+	`cat /log/acme/api/main.log | awk '$5 > 100 { c[$3]++; t += $5 } END { for (k in c) print k, c[k]; print t }'`,
+	`cat /log/acme/api/main.log | awk '{ print HOST, $3 ":" NR }'`,
+	`cat /log/acme/api/main.log | awk '{ x = $2; gsub(/a/, "A", x); print x }' | sort | uniq -c`,
+	// Not projected: they read the line.
+	`cat /log/acme/api/main.log | awk '{ print $0, NF }'`,
+	`cat /log/acme/api/main.log | awk '/warmed/ { n++ } END { print n }'`,
+	`cat /log/acme/api/main.log | awk '{ gsub(/a/, "A"); print $3 }'`,
 	// Not top-N: head -n 0, another order, tail, and a keyed sort.
 	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rn | head -n 0`,
 	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -n | head -n 3`,

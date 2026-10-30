@@ -230,7 +230,7 @@ func TestDirectShardSQL(t *testing.T) {
 			// compute stage → Mode C.
 			name:     "mode C — awk END block before sort",
 			pipeline: `cat vimgym.log | awk '{ count++ } END { print count }' | sort`,
-			want:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ?`,
+			want:     projectedSQL(fieldReads{}, `namespace = ?`, false),
 		},
 	}
 	for _, tc := range cases {

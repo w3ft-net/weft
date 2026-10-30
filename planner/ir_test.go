@@ -223,6 +223,7 @@ Plan:
 Passes:
   filter-pushdown      Filter[1: awk] into shard SQL (prefilter; its stage still runs)
   filter-pushdown      stopped at Opaque[1: awk]: it runs in compute, and so does every node above it
+  field-projection     skipped Filter[1: awk]: it reads $0 or a field position it can't name ahead of time
   sort-limit-fusion    no sort in compute, so the shard orders by ts
 `
 	if i := strings.Index(got, "\nShard SQL:"); i >= 0 {

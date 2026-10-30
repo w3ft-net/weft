@@ -307,6 +307,9 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 	if c.groupKey != "" {
 		sql.setSelect(c.groupKey)
 	}
+	if c.group == nil {
+		c.projectFields(sql.limit > 0 || sql.offset > 0)
+	}
 	if c.aggregate == "" && c.group == nil {
 		c.fuseSort(orderDesc, sql.limit)
 	}
@@ -323,8 +326,12 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 	// Hoisted filters keep lines, so the shard returns those; a pushed
 	// line count declines hoisting, so there's no ts DESC to wrap.
 	rows := sql
-	if len(linePreds) > 0 {
+	if len(linePreds) > 0 || c.fieldSelect != "" {
 		rows = sql.Lines(linePreds)
+		if c.fieldSelect != "" {
+			// The lines are split first, then each is cut down to its fields.
+			rows.rawExpr = c.fieldSelect
+		}
 	}
 	shardQuery := rows
 	if sql.orderBy == "ts DESC" {

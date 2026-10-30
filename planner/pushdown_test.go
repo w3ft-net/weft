@@ -478,7 +478,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 			// to gate count++ — that re-check needs the real per-row
 			// value the same way an output read would, or count++ would
 			// silently never fire.
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, parent_span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantSQL:     projectedSQL(fieldReads{}, `namespace = ? AND level = 'ERROR'`, true),
 			wantCompute: []string{`awk 'LEVEL == "ERROR" { count++ } END { print count }'`},
 		},
 
@@ -494,7 +494,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "grep then awk END block",
 			pipeline:    `cat vimgym.log | grep timeout | awk '{ count++ } END { print count }'`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND regexp_matches(raw, 'timeout')`,
+			wantSQL:     projectedSQL(fieldReads{}, `namespace = ? AND regexp_matches(raw, 'timeout')`, false),
 			wantCompute: []string{`awk '{ count++ } END { print count }'`},
 		},
 

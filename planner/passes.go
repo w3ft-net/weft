@@ -30,11 +30,14 @@ type compiled struct {
 	// group is the shard-side grouping that replaced the first compute
 	// stages, if any; aggregated is those stages' nodes. aggregate is a
 	// trace or span source's own aggregate (spans.go).
-	group      *GroupSpec
-	groupKey   string // the SQL a tally groups by, in place of raw
-	aggregate  string
-	aggregated []node
-	passes     []passStep
+	group    *GroupSpec
+	groupKey string // the SQL a tally groups by, in place of raw
+	// fieldSelect, when set, is the SQL for a record of just the fields the
+	// first compute stage reads (projectFields), in place of each line.
+	fieldSelect string
+	aggregate   string
+	aggregated  []node
+	passes      []passStep
 }
 
 // passStep is one line of the pass log: what a pass did or declined.
