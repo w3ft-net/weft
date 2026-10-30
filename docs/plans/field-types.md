@@ -100,21 +100,21 @@ else the base plan. `ExecuteQueryRequest` carries per-shard variants.
 
 ## Rollout
 
-1. **Dispatch plumbing.** *(Done 2026-10-30, uncommitted.)* Per-shard variants in the
+1. **Dispatch plumbing.** *(Done 2026-10-30.)* Per-shard variants in the
    request; compute accepts both forms. Compute first: an old compute ignores the new
    field, so this is safe alone. A variant is `ShardDescriptor.sql` + `args`, which
    replace the request's for that shard. Per-shard stages or group specs (the
    sum/count merge, step 3) are not on the wire yet; they land with the planner
    variant that needs them.
 2. **The classifier**, the heartbeat deltas, the registry and the Postgres
-   write-through. *(Done 2026-10-30, uncommitted.)* `Ingest` is the only writer of row
+   write-through. *(Done 2026-10-30.)* `Ingest` is the only writer of row
    values (checked 2026-10-30; the other writes to `logs` are migrations of source
    columns), so that is the only hook, and `TestIngestIsTheOnlyWriterOfRowValues`
    fails if anything else writes `fields` or `payload`. Built:
    - `shard/fieldfacts.go`: the classifier goroutine (queue of 1,024 batches; a batch
      that doesn't fit turns the classifier off for good, never a guess). Typed after
-     1,000 numeric rows, dirty on the first non-numeric or missing value, 50 locators
-     per source. A locator first seen after earlier rows is dirty from the start.
+     1,000 numeric rows, dirty on the first non-numeric or missing value. A locator
+     first seen after earlier rows is dirty from the start.
    - Reopening a shard with rows scans them in the background and reports nothing
      until the scan ends; a scan can lose a typing, never invent one. Sealed shards do
      not persist facts: the scan rebuilds them.
@@ -123,12 +123,18 @@ else the base plan. `ExecuteQueryRequest` carries per-shard variants.
    - `logdb.Shard.FieldTyped(key)`, `ShardRegistry.FoldFieldFacts`, and migration 110
      (`shard_field_facts`, cascading with the shard record), loaded at boot and on
      refresh. The ack is withheld if the store write fails.
-   - Awk fields only. A fact is just typed or not: the class set and the largest
-     absolute value (for an exact sum) wait for the sum lowering that needs them, and
-     jq locators wait on a warp export of jq's number types.
-   - `awk.LooksNumeric` is in `../warp` (uncommitted; weft sees it through the
-     gitignored `go.work`). Warp must tag, and weft's `go.mod` bump, before this is
-     committed to main.
+   - Locators are awk fields (`$N`) and top-level payload keys (`.key`). A key is
+     numeric only if its JSON value is a number: a string that reads as a number,
+     null, a bool, an array, an object, a missing key or a payload that is not an
+     object all count against it, because jq compares them differently. Awk fields
+     and keys are capped at 50 *each* per source, not 50 together: a JSON row's line
+     also splits into awk fields, which would otherwise use up the slots its keys
+     need. Classifying a stats-shaped row costs about 2.5 us on the classifier
+     goroutine (`BenchmarkClassifyJSONRow`).
+   - A fact is just typed or not: the class set and the largest absolute value (for
+     an exact sum) wait for the sum lowering that needs them. Nested jq paths are
+     still out.
+   - `awk.LooksNumeric` shipped in warp v0.2.55 (weft's `go.mod` pins it).
 3. **Planner variants**, in this order: numeric filters, then sum/count per key.
    Min/max with its all-typed-or-nothing rule last.
 

@@ -254,6 +254,119 @@ func TestReopenedShardReportsNothingWhileScanning(t *testing.T) {
 	}
 }
 
+func jsonRows(n int, payload string) []*pb.LogRow {
+	rows := numRows(n, payload)
+	for _, r := range rows {
+		r.PayloadJson = []byte(payload)
+	}
+	return rows
+}
+
+func TestFieldClassifier_JQKeyTypedWhenEveryValueIsANumber(t *testing.T) {
+	c := NewFieldClassifier()
+	defer c.Stop()
+	c.Observe(jsonRows(factTypedAfter, `{"q_max_ms":14.2,"count":-3,"shard_id":"a","nested":{"n":1}}`))
+	settle(t, c)
+	facts := c.Pending()
+	for _, loc := range []string{".q_max_ms", ".count"} {
+		if f, ok := factFor(facts, loc); !ok || f.State != FactTyped {
+			t.Errorf("%s want typed, got %+v (ok=%v)", loc, f, ok)
+		}
+	}
+	for _, loc := range []string{".shard_id", ".nested"} {
+		if _, ok := factFor(facts, loc); ok {
+			t.Errorf("%s is not a number and must never be reported", loc)
+		}
+	}
+}
+
+// jq compares a string that reads as a number as a string, so only a JSON
+// number conforms.
+func TestFieldClassifier_JQNonNumbersMakeATypedKeyDirty(t *testing.T) {
+	for name, bad := range map[string]string{
+		"string that reads as a number": `{"v":"7"}`,
+		"null":                          `{"v":null}`,
+		"bool":                          `{"v":true}`,
+		"array":                         `{"v":[1]}`,
+		"object":                        `{"v":{"a":1}}`,
+		"key missing":                   `{"w":1}`,
+		"payload not an object":         `[1,2]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := NewFieldClassifier()
+			defer c.Stop()
+			c.Observe(jsonRows(factTypedAfter, `{"v":7}`))
+			settle(t, c)
+			c.Observe(jsonRows(1, bad))
+			settle(t, c)
+			if f, ok := factFor(c.Pending(), ".v"); !ok || f.State != FactDirty {
+				t.Errorf("want .v retracted after %s, got %+v (ok=%v)", name, f, ok)
+			}
+		})
+	}
+}
+
+func TestFieldClassifier_JQKeyFirstSeenLateIsNeverTyped(t *testing.T) {
+	c := NewFieldClassifier()
+	defer c.Stop()
+	c.Observe(jsonRows(10, `{"a":1}`))
+	c.Observe(jsonRows(factTypedAfter*2, `{"a":1,"b":2}`))
+	settle(t, c)
+	if _, ok := factFor(c.Pending(), ".b"); ok {
+		t.Error(".b was absent from earlier rows and must not type")
+	}
+	if f, ok := factFor(c.Pending(), ".a"); !ok || f.State != FactTyped {
+		t.Errorf(".a want typed, got %+v", f)
+	}
+}
+
+// A JSON row's line splits into awk fields too; those junk fields must not
+// use up the slots its keys need.
+func TestFieldClassifier_JSONRowsAwkFieldsDoNotCrowdOutKeys(t *testing.T) {
+	c := NewFieldClassifier()
+	defer c.Stop()
+	var raw []string
+	for i := 0; i < factMaxLocators*2; i++ {
+		raw = append(raw, "x")
+	}
+	rows := jsonRows(factTypedAfter, `{"q":1}`)
+	for _, r := range rows {
+		r.Raw = strings.Join(raw, " ")
+	}
+	c.Observe(rows)
+	settle(t, c)
+	if f, ok := factFor(c.Pending(), ".q"); !ok || f.State != FactTyped {
+		t.Errorf(".q want typed, got %+v (ok=%v)", f, ok)
+	}
+}
+
+func TestFieldClassifier_TracksAtMostFactMaxJQKeys(t *testing.T) {
+	c := NewFieldClassifier()
+	defer c.Stop()
+	var kv []string
+	for i := 0; i < factMaxLocators+10; i++ {
+		kv = append(kv, fmt.Sprintf(`"k%d":1`, i))
+	}
+	c.Observe(jsonRows(factTypedAfter, "{"+strings.Join(kv, ",")+"}"))
+	settle(t, c)
+	if got := len(c.Pending()); got != factMaxLocators {
+		t.Errorf("tracked %d keys, want the cap %d", got, factMaxLocators)
+	}
+}
+
+func TestReopenedShardScansStoredPayloads(t *testing.T) {
+	rows := append(jsonRows(factTypedAfter, `{"q":7,"s":3}`), jsonRows(1, `{"q":7,"s":"three"}`)...)
+	ds := reopen(t, rows)
+	waitScanned(t, ds.facts)
+	facts := ds.FieldFacts()
+	if f, ok := factFor(facts, ".q"); !ok || f.State != FactTyped {
+		t.Errorf(".q want typed from the stored payloads, got %+v (ok=%v)", f, ok)
+	}
+	if f, ok := factFor(facts, ".s"); ok {
+		t.Errorf(".s held a string on disk but reported %+v", f)
+	}
+}
+
 // Ingest is the only writer of row values, so it is the only place the
 // classifier sees them. This fails if another path starts writing fields or
 // payload, which would make every fact a guess about rows it never saw.
@@ -280,5 +393,23 @@ func TestIngestIsTheOnlyWriterOfRowValues(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// BenchmarkClassifyJSONRow is the classifier's per-row cost on a stats-shaped
+// payload (the weft/shard stats source: 15 flat keys, mostly numbers). It runs
+// on the classifier goroutine, never the ingest path, but a busy shard feeds
+// it every row.
+func BenchmarkClassifyJSONRow(b *testing.B) {
+	payload := `{"duckdb_bytes":4433653760,"q_count":8,"q_errors":0,"q_max_ms":14.217,"q_mean_ms":7.442625,"q_rows":1224,"shard_id":"shard-20261026T0000-bfed2003","spill_tmp_bytes":0,"total_bytes":4433788666,"ts":"2026-10-30T18:20:50.168227539Z","type":"shard_stats","volume_free_bytes":95269953536,"volume_total_bytes":105089261568,"volume_used_bytes":9819308032,"volume_used_pct":9.343778693930807,"wal_bytes":134906}`
+	row := &pb.LogRow{Raw: payload, PayloadJson: []byte(payload), CustomerId: 1, Namespace: "ns", Service: "svc", Env: "prod"}
+	c := NewFieldClassifier()
+	defer c.Stop()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.mu.Lock()
+		c.classify(row)
+		c.mu.Unlock()
 	}
 }

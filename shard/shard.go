@@ -545,7 +545,7 @@ func (s *DuckDBShard) scanFieldFacts() {
 		<-s.facts.Done()
 		cancel()
 	}()
-	rows, err := s.db.QueryContext(ctx, `SELECT customer_id, namespace, service, kind, env, fields FROM logs`)
+	rows, err := s.db.QueryContext(ctx, `SELECT customer_id, namespace, service, kind, env, fields, CAST(payload AS VARCHAR) FROM logs`)
 	if err != nil {
 		s.facts.Disable("scan: " + err.Error())
 		return
@@ -556,13 +556,13 @@ func (s *DuckDBShard) scanFieldFacts() {
 	for rows.Next() {
 		var r ScanRow
 		var cust sql.NullInt64
-		var ns, svc, kind, env sql.NullString
+		var ns, svc, kind, env, payload sql.NullString
 		var fields duckdb.Composite[[]string]
-		if err := rows.Scan(&cust, &ns, &svc, &kind, &env, &fields); err != nil {
+		if err := rows.Scan(&cust, &ns, &svc, &kind, &env, &fields, &payload); err != nil {
 			s.facts.Disable("scan: " + err.Error())
 			return
 		}
-		r = ScanRow{CustomerID: cust.Int64, Namespace: ns.String, Service: svc.String, Kind: kind.String, Env: env.String, Fields: fields.Get()}
+		r = ScanRow{CustomerID: cust.Int64, Namespace: ns.String, Service: svc.String, Kind: kind.String, Env: env.String, Fields: fields.Get(), Payload: []byte(payload.String)}
 		if batch = append(batch, r); len(batch) == batchSize {
 			s.facts.Scan(batch)
 			batch = batch[:0]

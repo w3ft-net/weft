@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/tidwall/gjson"
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/graybeardcorp/warp/pkg/awk"
@@ -12,8 +13,9 @@ import (
 )
 
 // Field facts are what this shard has learned about the values of an awk
-// field in each source: whether every row it has seen held a number. The
-// planner lowers `$5 > 500` exactly only where that is so. See
+// field ("$N") or a top-level payload key (".key") in each source: whether
+// every row it has seen held a number there. The planner lowers `$5 > 500`
+// or `select(.q_max_ms > 10)` exactly only where that is so. See
 // docs/plans/field-types.md.
 //
 // A fact is a guess promoted by evidence. A locator is Typed once
@@ -64,16 +66,23 @@ type FieldFact struct {
 }
 
 type locatorState struct {
+	locator  string // "$N" or ".key"
 	state    FactState
 	conform  int64
 	wasTyped bool // reached Typed once, so the coordinator may hold it
 	epoch    uint64
+	seen     int64 // src.rows+1 of the last row that held this locator
 }
 
+// factSource is what is known about one source's locators. Awk fields and
+// top-level jq keys are tracked separately, up to factMaxLocators of each: a
+// JSON row also has awk fields (the text of its line), which must not crowd
+// out its keys.
 type factSource struct {
-	rows     int64
-	byField  map[int]*locatorState
-	fieldIDs []int // tracked fields in first-seen order
+	rows  int64
+	awk   map[int]*locatorState
+	jq    map[string]*locatorState
+	order []*locatorState // every tracked locator, to find the ones a row lacks
 }
 
 type sourceKey struct {
@@ -145,11 +154,13 @@ func (c *FieldClassifier) Observe(rows []*pb.LogRow) {
 	}
 }
 
-// ScanRow is one stored row handed to Scan: its source and its awk fields.
+// ScanRow is one stored row handed to Scan: its source, its awk fields and
+// its payload.
 type ScanRow struct {
 	CustomerID                    int64
 	Namespace, Service, Kind, Env string
 	Fields                        []string
+	Payload                       []byte
 }
 
 // BeginScan marks the classifier not ready: the shard holds rows it has not
@@ -174,7 +185,7 @@ func (c *FieldClassifier) Scan(rows []ScanRow) {
 		return
 	}
 	for _, r := range rows {
-		c.classifyFields(sourceKey{r.CustomerID, r.Namespace, r.Service, r.Kind, r.Env}, r.Fields)
+		c.classifyRow(sourceKey{r.CustomerID, r.Namespace, r.Service, r.Kind, r.Env}, r.Fields, r.Payload)
 	}
 }
 
@@ -185,7 +196,7 @@ func (c *FieldClassifier) EndScan() {
 	// Nothing was reported while scanning, so a locator that went typed
 	// and dirty in the scan has nothing to retract.
 	for _, src := range c.sources {
-		for _, ls := range src.byField {
+		for _, ls := range src.order {
 			if ls.state == FactDirty {
 				ls.wasTyped = false
 			}
@@ -238,44 +249,89 @@ func (c *FieldClassifier) classify(r *pb.LogRow) {
 	if kind == "" {
 		kind = "main"
 	}
-	c.classifyFields(sourceKey{r.CustomerId, r.Namespace, r.Service, kind, r.Env}, awkFields(r.Raw))
+	c.classifyRow(sourceKey{r.CustomerId, r.Namespace, r.Service, kind, r.Env}, awkFields(r.Raw), r.PayloadJson)
 }
 
-// classifyFields folds one row's awk fields in. Caller holds c.mu.
-func (c *FieldClassifier) classifyFields(sk sourceKey, fields []string) {
+// awkLocators names the first fields without building a string per row.
+var awkLocators = func() []string {
+	out := make([]string, 257)
+	for i := range out {
+		out[i] = "$" + strconv.Itoa(i)
+	}
+	return out
+}()
+
+func awkLocator(n int) string {
+	if n < len(awkLocators) {
+		return awkLocators[n]
+	}
+	return "$" + strconv.Itoa(n)
+}
+
+// classifyRow folds one row's awk fields and top-level payload keys in.
+// Caller holds c.mu.
+func (c *FieldClassifier) classifyRow(sk sourceKey, fields []string, payload []byte) {
 	src := c.sources[sk]
 	if src == nil {
-		src = &factSource{byField: map[int]*locatorState{}}
+		src = &factSource{awk: map[int]*locatorState{}, jq: map[string]*locatorState{}}
 		c.sources[sk] = src
 	}
+	mark := src.rows + 1
 	for i, f := range fields {
 		n := i + 1
-		ls := src.byField[n]
+		ls := src.awk[n]
 		if ls == nil {
-			if len(src.fieldIDs) >= factMaxLocators {
+			if ls = src.track(awkLocator(n), len(src.awk)); ls == nil {
 				continue
 			}
-			ls = &locatorState{}
-			// Rows before this one had no such field, so they would not
-			// have been numeric there.
-			if src.rows > 0 {
-				ls.state = FactDirty
-			}
-			src.byField[n] = ls
-			src.fieldIDs = append(src.fieldIDs, n)
+			src.awk[n] = ls
 		}
-		c.observe(ls, awk.LooksNumeric(f), sk, n)
+		ls.seen = mark
+		c.observe(ls, awk.LooksNumeric(f), sk)
 	}
-	for _, n := range src.fieldIDs {
-		if n > len(fields) {
-			c.observe(src.byField[n], false, sk, n)
+	if root := gjson.ParseBytes(payload); root.IsObject() {
+		root.ForEach(func(k, v gjson.Result) bool {
+			key := k.String()
+			ls := src.jq[key]
+			if ls == nil {
+				if ls = src.track("."+key, len(src.jq)); ls == nil {
+					return true
+				}
+				src.jq[key] = ls
+			}
+			ls.seen = mark
+			// jq compares a JSON number as a number and everything else
+			// (a string that reads as a number, null, a bool) otherwise.
+			c.observe(ls, v.Type == gjson.Number, sk)
+			return true
+		})
+	}
+	// A locator this row lacks is not a number there.
+	for _, ls := range src.order {
+		if ls.seen != mark {
+			c.observe(ls, false, sk)
 		}
 	}
 	src.rows++
 }
 
+// track starts following a locator the source has not shown before, or
+// returns nil if kindCount locators of its kind are already followed. Rows
+// before this one lacked it, so it starts dirty unless this is the first row.
+func (src *factSource) track(locator string, kindCount int) *locatorState {
+	if kindCount >= factMaxLocators {
+		return nil
+	}
+	ls := &locatorState{locator: locator}
+	if src.rows > 0 {
+		ls.state = FactDirty
+	}
+	src.order = append(src.order, ls)
+	return ls
+}
+
 // observe folds one value's verdict into a locator. Caller holds c.mu.
-func (c *FieldClassifier) observe(ls *locatorState, numeric bool, sk sourceKey, n int) {
+func (c *FieldClassifier) observe(ls *locatorState, numeric bool, sk sourceKey) {
 	switch ls.state {
 	case FactDirty:
 		return
@@ -283,8 +339,8 @@ func (c *FieldClassifier) observe(ls *locatorState, numeric bool, sk sourceKey, 
 		if !numeric {
 			c.epoch++
 			ls.state, ls.epoch = FactDirty, c.epoch
-			weftsdk.Infof(context.Background(), "field fact flipped dirty: customer=%d %s/%s/%s env=%s field=$%d",
-				sk.customerID, sk.namespace, sk.service, sk.kind, sk.env, n)
+			weftsdk.Infof(context.Background(), "field fact flipped dirty: customer=%d %s/%s/%s env=%s locator=%s",
+				sk.customerID, sk.namespace, sk.service, sk.kind, sk.env, ls.locator)
 		}
 	default:
 		if !numeric {
@@ -314,12 +370,12 @@ func (c *FieldClassifier) Pending() []FieldFact {
 	}
 	var out []FieldFact
 	for sk, src := range c.sources {
-		for n, ls := range src.byField {
+		for _, ls := range src.order {
 			if !ls.wasTyped || ls.epoch <= c.acked {
 				continue
 			}
 			out = append(out, FieldFact{
-				FactKey: FactKey{sk.customerID, sk.namespace, sk.service, sk.kind, sk.env, "$" + strconv.Itoa(n)},
+				FactKey: FactKey{sk.customerID, sk.namespace, sk.service, sk.kind, sk.env, ls.locator},
 				State:   ls.state,
 				Epoch:   ls.epoch,
 			})
