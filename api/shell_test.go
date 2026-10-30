@@ -31,6 +31,8 @@ type fakeCoord struct {
 	pb.UnimplementedWeftCoordinatorServer
 	authSeen chan string
 	lastReq  chan *pb.CoordinatorExecuteRequest
+	// reply, when set, answers each query: the lines to send, or an error.
+	reply func(*pb.CoordinatorExecuteRequest) ([]string, error)
 }
 
 func (f *fakeCoord) Execute(req *pb.CoordinatorExecuteRequest, stream grpc.ServerStreamingServer[pb.CoordinatorExecuteResponse]) error {
@@ -53,7 +55,18 @@ func (f *fakeCoord) Execute(req *pb.CoordinatorExecuteRequest, stream grpc.Serve
 	if seen == "" {
 		return status.Errorf(codes.Unauthenticated, "missing authorization metadata")
 	}
-	return stream.Send(&pb.CoordinatorExecuteResponse{Lines: []*pb.Line{{Raw: "ok"}}})
+	lines := []string{"ok"}
+	if f.reply != nil {
+		var err error
+		if lines, err = f.reply(req); err != nil {
+			return err
+		}
+	}
+	resp := &pb.CoordinatorExecuteResponse{}
+	for _, l := range lines {
+		resp.Lines = append(resp.Lines, &pb.Line{Raw: l})
+	}
+	return stream.Send(resp)
 }
 
 // TestShellExec_ForwardsBearerToCoordinator reproduces the prod symptom

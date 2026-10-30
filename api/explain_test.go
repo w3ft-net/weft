@@ -8,11 +8,18 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // execStream sends a body through /api/shell/exec and returns the SSE stream
-// and whether the coordinator was asked to run anything.
-func (f *shellExecFixture) execStream(body map[string]any) (stream string, ranQuery bool) {
+// and the pipelines the coordinator was asked to run.
+func (f *shellExecFixture) execStream(body map[string]any) (stream string, ran []*pb.CoordinatorExecuteRequest) {
 	f.t.Helper()
 	body["range"] = "1d.."
 	raw, _ := json.Marshal(body)
@@ -23,13 +30,18 @@ func (f *shellExecFixture) execStream(body map[string]any) (stream string, ranQu
 	if w.Code != 200 {
 		f.t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
-	return w.Body.String(), len(f.fake.lastReq) > 0
+	for len(f.fake.lastReq) > 0 {
+		ran = append(ran, <-f.fake.lastReq)
+	}
+	return w.Body.String(), ran
 }
 
-// `explain <line>` is answered by the server from the line as typed, and
-// runs nothing.
+// `explain <line>` is answered by the server from the line as typed. It
+// asks the coordinator for nothing but the count of the lines the optimized
+// stages return, never the pipeline or a stage that isn't optimized.
 func TestShellExec_Explain(t *testing.T) {
 	f := newShellExecFixture(t, "explain")
+	f.fake.reply = func(*pb.CoordinatorExecuteRequest) ([]string, error) { return []string{"1234567"}, nil }
 	cust, _ := f.srv.store.FindOrCreateOrg(fmt.Sprintf("explain-%d", os.Getpid()))
 	if err := f.srv.store.SaveShellFunction(cust.ID, "", "find-errors", `cat /log/loom/api/prod.log | grep $1`, "bash"); err != nil {
 		t.Fatal(err)
@@ -45,7 +57,7 @@ func TestShellExec_Explain(t *testing.T) {
 			[]string{"Every stage: optimized retrieval."}},
 		{"a barrier",
 			map[string]any{"pipeline": `explain cat /log/x/y/main.log | awk '{ printf "%s\n", $0 }'`},
-			[]string{"awk", "post-retrieval", "Barrier: stage 1"}},
+			[]string{"awk", "post-retrieval", "Barrier: stage 1", "1,234,567 lines retrieved"}},
 		{"relative to the client's cwd",
 			map[string]any{"pipeline": "explain cat main.log | grep ERROR", "dirstack": []string{"/log/x/y"}},
 			[]string{"Every stage: optimized retrieval."}},
@@ -68,8 +80,10 @@ func TestShellExec_Explain(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stream, ran := f.execStream(tt.body)
-			if ran {
-				t.Error("explain asked the coordinator to run something")
+			for _, req := range ran {
+				if !strings.HasSuffix(req.Pipeline, " | wc -l") || strings.Contains(req.Pipeline, "awk") {
+					t.Errorf("explain asked the coordinator to run %q", req.Pipeline)
+				}
 			}
 			for _, w := range tt.want {
 				if !strings.Contains(stream, w) {
@@ -87,5 +101,81 @@ func TestShellExec_ExplainIsAWordNotAPrefix(t *testing.T) {
 	got := f.post(map[string]any{"pipeline": "explainer foo", "range": "1d.."})
 	if got.Pipeline != "explainer foo" {
 		t.Errorf("coordinator got %q", got.Pipeline)
+	}
+}
+
+// The count is a query of the caller's own: their token, their client's
+// directory and range, the optimized stages as typed and a wc -l.
+func TestShellExec_ExplainCountsAsTheCaller(t *testing.T) {
+	f := newShellExecFixture(t, "explaincount")
+	f.fake.reply = func(*pb.CoordinatorExecuteRequest) ([]string, error) { return []string{"259662"}, nil }
+
+	stream, ran := f.execStream(map[string]any{
+		"pipeline": `explain cat main.log | grep "query rpc: done" | awk '{ printf "%s\n", $0 }'`,
+		"dirstack": []string{"/log/x/y"},
+	})
+	if len(ran) != 1 {
+		t.Fatalf("coordinator ran %d queries, want the one count", len(ran))
+	}
+	if want := `cat main.log | grep "query rpc: done" | wc -l`; ran[0].Pipeline != want {
+		t.Errorf("count ran %q, want %q", ran[0].Pipeline, want)
+	}
+	if ran[0].TimeStartNs == 0 || ran[0].TimeEndNs <= ran[0].TimeStartNs {
+		t.Errorf("count has no time range: %d..%d", ran[0].TimeStartNs, ran[0].TimeEndNs)
+	}
+	if got := <-f.fake.authSeen; got != f.bearer {
+		t.Errorf("count ran with authorization %q, want the caller's %q", got, f.bearer)
+	}
+	if !strings.Contains(stream, "259,662 lines retrieved with optimization") {
+		t.Errorf("stream lacks the count:\n%s", stream)
+	}
+}
+
+// A pipeline that is all optimized retrieval is its own result: explain
+// asks for no count of it.
+func TestShellExec_ExplainOfAFullyOptimizedPipelineRunsNothing(t *testing.T) {
+	f := newShellExecFixture(t, "explainnone")
+	_, ran := f.execStream(map[string]any{"pipeline": "explain cat /log/x/y/main.log | grep ERROR"})
+	if len(ran) != 0 {
+		t.Errorf("coordinator ran %v", ran)
+	}
+}
+
+// A count that fails is advice that couldn't be given, not an error in the
+// explain: the placement still prints, with the reason.
+func TestShellExec_ExplainSurvivesACountThatFails(t *testing.T) {
+	line := `explain cat /log/x/y/main.log | grep ERROR | awk '{ printf "%s\n", $0 }'`
+	for _, tt := range []struct {
+		name  string
+		reply func(*pb.CoordinatorExecuteRequest) ([]string, error)
+		want  string
+	}{
+		{"an error", func(*pb.CoordinatorExecuteRequest) ([]string, error) {
+			return nil, status.Error(codes.PermissionDenied, "no access to x/y")
+		}, "line count unavailable: no access to x/y"},
+		{"not a number", func(*pb.CoordinatorExecuteRequest) ([]string, error) { return []string{"many"}, nil },
+			"line count unavailable: no count came back"},
+		{"more than a line", func(*pb.CoordinatorExecuteRequest) ([]string, error) { return []string{"1", "2"}, nil },
+			"line count unavailable: no count came back"},
+		{"too slow", func(*pb.CoordinatorExecuteRequest) ([]string, error) {
+			time.Sleep(300 * time.Millisecond)
+			return []string{"1"}, nil
+		}, "line count unavailable: took longer than 50ms"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func(old time.Duration) { explainCountBudget = old }(explainCountBudget)
+			explainCountBudget = 50 * time.Millisecond
+			f := newShellExecFixture(t, "explainfail")
+			f.fake.reply = tt.reply
+			stream, _ := f.execStream(map[string]any{"pipeline": line})
+			for _, w := range []string{tt.want, "post-retrieval", "Barrier: stage 2"} {
+				if !strings.Contains(stream, w) {
+					t.Errorf("stream lacks %q:\n%s", w, stream)
+				}
+			}
+			if strings.Contains(stream, `"type":"error"`) || strings.Contains(stream, `"type":"stderr"`) {
+				t.Errorf("a failed count surfaced as an error:\n%s", stream)
+			}
+		})
 	}
 }

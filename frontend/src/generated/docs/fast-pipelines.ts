@@ -49,7 +49,7 @@ optimized retrieval.</p>
 <h2 id="explain">explain</h2>
 <p><code>explain</code> is a builtin function that will show you which stages of your
 pipeline run optimized, partly optimized, or post-retrieval. Sometimes it can
-provide you with helpful hints for rearranging things to speed it up. It doesn't actually execute the 1-liner.</p>
+provide you with helpful hints for rearranging things to speed it up. It doesn't run the 1-liner: when some stages are optimized and others aren't, it runs one count of the lines the optimized stages return, so you can see how much the first post-retrieval stage has to read.</p>
 <h3 id="examples">Examples</h3>
 <p>This one's going to be very fast, nothing to improve:</p>
 <pre><code>$ explain cat /log/acme/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' | grep timeout | head -20

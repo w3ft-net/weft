@@ -51,7 +51,7 @@ optimized retrieval.
 
 `explain` is a builtin function that will show you which stages of your
 pipeline run optimized, partly optimized, or post-retrieval. Sometimes it can
-provide you with helpful hints for rearranging things to speed it up. It doesn't actually execute the 1-liner.
+provide you with helpful hints for rearranging things to speed it up. It doesn't run the 1-liner: when some stages are optimized and others aren't, it runs one count of the lines the optimized stages return, so you can see how much the first post-retrieval stage has to read.
 
 ### Examples
 

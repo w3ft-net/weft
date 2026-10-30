@@ -23,7 +23,9 @@ explain <pipeline>
 
 explain takes a one-liner, exactly as you would run it, and says which of its
 stages are optimized and what would make more of them so. It does not run the
-pipeline, reads no logs, and is not limited by `range`.
+pipeline. When some stages are optimized and others are not, it runs one count
+of the lines the optimized stages return, for the current `range`, and shows it
+(see ROW COUNTS).
 
 A pipeline is fastest when its stages are part of the **optimized
 retrieval**: they narrow and reshape rows as the logs are fetched, so only the
@@ -47,6 +49,29 @@ to gain.
 
 Relative paths resolve against the current directory, as they do for any
 command. A script in `/bin` is explained through its body.
+
+## ROW COUNTS
+
+The lines that come back from the optimized retrieval are the lines every
+post-retrieval stage has to read, so the count is what to weigh a barrier
+against. It is printed above the first stage that is not entirely optimized:
+
+```
+  1  grep "query rpc: done"   optimized retrieval
+  2  jq -r .msg               optimized retrieval
+       259,662 lines retrieved with optimization
+  3  awk '{ c = $4 }'         post-retrieval
+```
+
+With no optimized stage in front, it is the lines of the source itself
+(`962,932 lines retrieved`).
+
+The count is exact, as of now, and covers the pipeline's range, so it moves as
+the range slides. It is a query of your own, so you must be able to read the
+source, and it is cut off after a few seconds: when it can't be had explain
+says `line count unavailable` and why, and the rest of the report is unchanged.
+No post-retrieval stage is run to get it, and there is no count when every
+stage is optimized, for a `tail -f`, or for a trace.
 
 ## EXAMPLES
 
@@ -82,8 +107,8 @@ succeeds and the same report follows it.
 
 ## NOT SUPPORTED
 
-- Running the pipeline. `explain` shows no rows, timings or row counts; use
-  the pipeline itself for those.
+- Running the pipeline. `explain` shows no rows or timings, and the only count
+  is the retrieval's (see ROW COUNTS); use the pipeline itself for the rest.
 - Options (`explain -v`, `explain --json`). They are rejected with
   `unknown option`.
 - Anything that is not a log query. `explain echo hi` is an error.

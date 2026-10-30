@@ -138,8 +138,11 @@ handled in-process before the line reaches the coordinator. So:
   (the shell is wasm-buildable).
 - The line arrives as typed. A shellcore builtin would only see
   whitespace-split arguments, so it could not hand the planner the real text.
-- It never reaches the coordinator, runs nothing, and reads no log data. It
-  names no source to check access to, so it can't be used to probe what exists.
+- It never hands the pipeline to the coordinator. Since the query-limits work
+  it makes one query, the count of the optimized retrieval (`| wc -l`), as the
+  caller through the same Execute call, so access is checked as for any run and
+  a source the caller can't read answers as it does there. Before that it ran
+  nothing and read no log data.
 - Output travels as ordinary `line` events; errors (not a log query, a parse
   error) as `stderr`. No wire change and no new route.
 - The word is `explain` followed by whitespace or end of line; `explainer foo`

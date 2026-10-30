@@ -120,13 +120,13 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// explain answers from the planner alone and runs nothing, so it never
-	// reaches the coordinator.
+	// explain answers from the planner, plus one count query (explain.go),
+	// so it never hands the pipeline itself to the coordinator.
 	cwd := "/"
 	if len(req.DirStack) > 0 {
 		cwd = req.DirStack[0]
 	}
-	if handled, out, cmdErr := s.maybeHandleExplain(session, req.Pipeline, cwd); handled {
+	if handled, out, cmdErr := s.maybeHandleExplain(r, session, req.Pipeline, cwd, req.DirStack, start, end); handled {
 		if cmdErr != nil {
 			writeSSEEvent(w, map[string]any{"type": "stderr", "text": "explain: " + cmdErr.Error() + "\n"})
 		} else {
