@@ -125,6 +125,9 @@ const (
 	// RenderCountLine is `sort | uniq -c`: each line with its count, as
 	// uniq -c prints it.
 	RenderCountLine GroupRender = "count_line"
+	// RenderDistinctTotal is one bare number, how many distinct lines there
+	// are: `sort -u | wc -l`.
+	RenderDistinctTotal GroupRender = "distinct_total"
 )
 
 // GroupSpec is the shard-side grouping a plan asks for (QueryPlan.Group).

@@ -49,7 +49,7 @@ func TestDifferential(t *testing.T) {
 			}
 		})
 	}
-	for _, r := range []planner.GroupRender{planner.RenderTotal, planner.RenderLine, planner.RenderCountLine} {
+	for _, r := range []planner.GroupRender{planner.RenderTotal, planner.RenderLine, planner.RenderCountLine, planner.RenderDistinctTotal} {
 		if renders[r] == 0 {
 			t.Errorf("no pipeline in the corpus groups as %s in the shard", r)
 		}
@@ -654,6 +654,15 @@ var extraCorpus = []string{
 	`cat /log/acme/api/main.log | awk '{ print $3 }' | sort | uniq -c | sort -rn | head -n 5`,
 	`cat /log/acme/api/main.log | awk '{ print $2 }' | sort -r | uniq -c | sort -nr | head -n 4`,
 	`cat vimgym.log | awk '{ print $2 }' | sort | uniq -c | sort -rn | head -n 2 | awk '{ print $2 }'`,
+	// Distinct count: the number of groups.
+	`cat /log/acme/api/main.log | sort -u | wc -l`,
+	`cat /log/acme/api/main.log | sort | uniq | wc -l`,
+	`cat /log/acme/api/main.log | sort -r | uniq | wc -l`,
+	`cat /log/acme/api/main.log | jq -r '.action' | sort -u | wc -l`,
+	`cat /log/acme/api/main.log | awk '{ print $3 }' | sort | uniq | wc -l`,
+	`cat /log/acme/api/main.log | grep no-such-line | sort -u | wc -l`,
+	`cat /log/acme/api/main.log | jq -r '.action' | sort -u | wc -l | awk '{ print $1 * 2 }'`,
+	`tail -n 60 /log/acme/api/main.log | sort -u | wc -l`,
 	// Not top-N: head -n 0, another order, tail, and a keyed sort.
 	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rn | head -n 0`,
 	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -n | head -n 3`,

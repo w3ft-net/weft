@@ -317,7 +317,8 @@ func (c *compiled) fuseSort(orderDesc bool, limit int) {
 }
 
 // fuseAggregate is aggregate recognition: the first compute stages, when
-// they're `wc -l`, `sort -u` or `sort | uniq [-c]` (sort plain or -r),
+// they're `wc -l`, `sort -u [| wc -l]` or `sort | uniq [-c]` (sort plain
+// or -r, and `uniq | wc -l` counts the distinct lines),
 // become the shard's GROUP BY, and the shard returns a count per line
 // instead of the rows. Compute sums the shards' counts and prints the
 // aggregate's text (QueryPlan.Aggregate), and the stages drop out.
@@ -365,6 +366,12 @@ func (c *compiled) fuseAggregate(limited bool) {
 			render, n = RenderLine, 1
 		default:
 			return
+		}
+		// A count of the distinct lines is the number of groups.
+		if render == RenderLine && len(c.compute) > n {
+			if _, ok := c.compute[n].nodes[0].(*countNode); ok {
+				render, n = RenderDistinctTotal, n+1
+			}
 		}
 	default:
 		return

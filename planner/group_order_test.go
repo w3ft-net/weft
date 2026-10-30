@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// TestGroupOrder: `sort -rn | head -n N` right after sort | uniq -c is the
+// TestGroupOrder (and the distinct count): `sort -rn | head -n N` right after sort | uniq -c is the
 // group's order and limit, and no other shape of those stages is.
 func TestGroupOrder(t *testing.T) {
 	for _, tt := range []struct {
@@ -27,6 +27,14 @@ func TestGroupOrder(t *testing.T) {
 		{`cat vimgym.log | sort | uniq -c | sort -rn -k2 | head -n 5`, GroupSpec{Render: RenderCountLine}, 2},
 		{`cat vimgym.log | sort | uniq -c | sort -run | head -n 5`, GroupSpec{Render: RenderCountLine}, 2},
 		{`cat vimgym.log | sort | uniq -c | sort -rn | tail -n 5`, GroupSpec{Render: RenderCountLine, ByCount: true}, 1},
+		// uniq's own count of lines: a count of the distinct ones.
+		{`cat vimgym.log | sort -u | wc -l`, GroupSpec{Render: RenderDistinctTotal}, 0},
+		{`cat vimgym.log | sort | uniq | wc -l`, GroupSpec{Render: RenderDistinctTotal}, 0},
+		{`cat vimgym.log | sort -r | uniq | wc -l`, GroupSpec{Render: RenderDistinctTotal}, 0},
+		{`cat vimgym.log | sort -u | wc -l | awk '{ print $1 + 1 }'`, GroupSpec{Render: RenderDistinctTotal}, 1},
+		// Not a count of distinct lines: uniq -c's lines are, but sort -n compares keys.
+		{`cat vimgym.log | sort -n | uniq | wc -l`, GroupSpec{}, 3},
+		{`cat vimgym.log | sort | wc -l`, GroupSpec{}, 2},
 		// An order has no meaning over a line or a total.
 		{`cat vimgym.log | sort -u | sort -rn | head -n 5`, GroupSpec{Render: RenderLine}, 2},
 	} {
@@ -35,7 +43,10 @@ func TestGroupOrder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if c.group == nil || *c.group != tt.want {
+			switch {
+			case tt.want == (GroupSpec{}) && c.group != nil:
+				t.Errorf("group = %+v, want none", c.group)
+			case tt.want != (GroupSpec{}) && (c.group == nil || *c.group != tt.want):
 				t.Errorf("group = %+v, want %+v", c.group, tt.want)
 			}
 			if len(c.compute) != tt.compute {
