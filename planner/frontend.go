@@ -75,8 +75,8 @@ func lowerStage(s stageInfo, index int) *loweredStage {
 			ls.nodes = []node{&opaqueNode{at: a, why: reason{code: reasonFlag, detail: s.args[0]}}}
 		}
 	case "wc":
-		if len(s.args) == 1 && s.args[0] == "-l" {
-			ls.nodes = []node{&countNode{at: a}}
+		if len(s.args) == 1 && (s.args[0] == "-l" || s.args[0] == "-c") {
+			ls.nodes = []node{&countNode{at: a, bytes: s.args[0] == "-c"}}
 		} else {
 			ls.nodes = []node{&opaqueNode{at: a, why: reason{code: reasonNoFrontend, detail: s.src}}}
 		}

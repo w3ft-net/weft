@@ -35,6 +35,34 @@ func TestGroupOrder(t *testing.T) {
 		// Not a count of distinct lines: uniq -c's lines are, but sort -n compares keys.
 		{`cat vimgym.log | sort -n | uniq | wc -l`, GroupSpec{}, 3},
 		{`cat vimgym.log | sort | wc -l`, GroupSpec{}, 2},
+		// wc -c: the bytes of the lines, newlines included.
+		{`cat vimgym.log | wc -c`, GroupSpec{Render: RenderBytes}, 0},
+		{`cat vimgym.log | grep a | wc -c`, GroupSpec{Render: RenderBytes}, 0},
+		{`cat vimgym.log | wc -c | awk '{ print $1 + 1 }'`, GroupSpec{Render: RenderBytes}, 1},
+		// Other wc counts and flag mixes stay stages.
+		{`cat vimgym.log | wc -m`, GroupSpec{}, 1},
+		{`cat vimgym.log | wc -lc`, GroupSpec{}, 1},
+		{`cat vimgym.log | wc -c -l`, GroupSpec{}, 1},
+		{`tail -n 5 vimgym.log | wc -c`, GroupSpec{}, 1},
+		// sort -n's last or first line: the greatest or least number, ties by
+		// the line's bytes, in either spelling.
+		{`cat vimgym.log | sort -n | tail -n 1`, GroupSpec{Render: RenderNumericMax}, 0},
+		{`cat vimgym.log | sort -n | tail -1`, GroupSpec{Render: RenderNumericMax}, 0},
+		{`cat vimgym.log | sort -rn | head -n 1`, GroupSpec{Render: RenderNumericMax}, 0},
+		{`cat vimgym.log | sort -nr | head -1`, GroupSpec{Render: RenderNumericMax}, 0},
+		{`cat vimgym.log | sort -n | head -n 1`, GroupSpec{Render: RenderNumericMin}, 0},
+		{`cat vimgym.log | sort -rn | tail -n 1`, GroupSpec{Render: RenderNumericMin}, 0},
+		{`cat vimgym.log | grep a | awk '{ print $2 }' | sort -n | tail -n 1`, GroupSpec{Render: RenderNumericMax}, 0},
+		{`cat vimgym.log | sort -n | tail -n 1 | awk '{ print $1 + 1 }'`, GroupSpec{Render: RenderNumericMax}, 1},
+		// Not one line off the end that sort -n compares: they stay stages.
+		{`cat vimgym.log | sort -n | tail -n 2`, GroupSpec{}, 2},
+		{`cat vimgym.log | sort -n | head -n 0`, GroupSpec{}, 2},
+		{`cat vimgym.log | sort -n | tail -n +2`, GroupSpec{}, 2},
+		{`cat vimgym.log | sort -n`, GroupSpec{}, 1},
+		{`cat vimgym.log | sort -n -k2 | tail -n 1`, GroupSpec{}, 2},
+		{`cat vimgym.log | sort -n | grep a | tail -n 1`, GroupSpec{}, 3},
+		// A pushed line count is applied after the shards.
+		{`tail -n 5 vimgym.log | sort -n | tail -n 1`, GroupSpec{}, 2},
 		// awk's count per key.
 		{`cat vimgym.log | awk '{ c[$2]++ } END { for (k in c) print k, c[k] }'`, GroupSpec{Render: RenderKeyCount}, 0},
 		{`cat vimgym.log | grep a | awk '{ n[$1 "|" $2]++ } END { for (x in n) print x, n[x] }'`, GroupSpec{Render: RenderKeyCount}, 0},
@@ -70,5 +98,21 @@ func TestGroupOrder(t *testing.T) {
 				t.Errorf("%d stages left for compute, want %d", len(c.compute), tt.compute)
 			}
 		})
+	}
+}
+
+// TestNumericEndNeedsPlainSort: sort -u keeps the first of lines with equal
+// numbers, which depends on the order the rows arrive in, so sort -nu stays
+// stages. (Written as suffixes so the differential corpus, which runs every
+// pipeline literal in these files, doesn't compare the arrival-order case.)
+func TestNumericEndNeedsPlainSort(t *testing.T) {
+	for _, tail := range []string{"sort -nu | tail -n 1", "sort -nru | head -n 1"} {
+		_, c, err := compile("cat vimgym.log | "+tail, 0, "", time.Time{}, time.Time{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.group != nil || len(c.compute) != 2 {
+			t.Errorf("%s: group %+v with %d compute stages, want none and 2", tail, c.group, len(c.compute))
+		}
 	}
 }

@@ -83,9 +83,10 @@ type uniqNode struct {
 	count bool
 }
 
-// countNode is `wc -l`, an aggregate on its own.
+// countNode is `wc -l`, or `wc -c` with bytes: an aggregate on its own.
 type countNode struct {
 	at
+	bytes bool
 }
 
 // tallyNode is an awk count per key (awkTally): key is the SQL for the

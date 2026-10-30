@@ -49,7 +49,7 @@ func TestDifferential(t *testing.T) {
 			}
 		})
 	}
-	for _, r := range []planner.GroupRender{planner.RenderTotal, planner.RenderLine, planner.RenderCountLine, planner.RenderDistinctTotal, planner.RenderKeyCount} {
+	for _, r := range []planner.GroupRender{planner.RenderTotal, planner.RenderLine, planner.RenderCountLine, planner.RenderDistinctTotal, planner.RenderKeyCount, planner.RenderBytes, planner.RenderNumericMax, planner.RenderNumericMin} {
 		if renders[r] == 0 {
 			t.Errorf("no pipeline in the corpus groups as %s in the shard", r)
 		}
@@ -925,6 +925,25 @@ var extraCorpus = []string{
 	`cat /log/acme/api/main.log | awk '{ print $3 }' | sort | uniq -c | sort -rn | head -n 5`,
 	`cat /log/acme/api/main.log | awk '{ print $2 }' | sort -r | uniq -c | sort -nr | head -n 4`,
 	`cat vimgym.log | awk '{ print $2 }' | sort | uniq -c | sort -rn | head -n 2 | awk '{ print $2 }'`,
+	// wc -c: the bytes of the lines, a newline after each. Multi-line rows,
+	// multibyte text and an empty result are the cases a character count or a
+	// missing newline would get wrong.
+	`cat /log/acme/api/main.log | wc -c`,
+	`cat /log/acme/api/main.log | grep no-such-line | wc -c`,
+	`cat /log/acme/api/main.log | grep 'café' | wc -c`,
+	`cat /log/acme/api/main.log | jq -r '.action' | wc -c`,
+	`cat /log/acme/api/main.log | awk '{ print $3 }' | wc -c`,
+	`cat /log/acme/api/main.log | wc -c | awk '{ print $1 * 2 }'`,
+	`tail -n 60 /log/acme/api/main.log | wc -c`,
+	// sort -n's end: the greatest or least number, ties by bytes.
+	`cat /log/acme/api/main.log | jq -r '.duration_ms' | sort -n | tail -n 1`,
+	`cat /log/acme/api/main.log | jq -r '.duration_ms' | sort -rn | head -n 1`,
+	`cat /log/acme/api/main.log | jq -r '.duration_ms' | sort -n | head -n 1`,
+	`cat /log/acme/api/main.log | jq -r '.status' | sort -rn | tail -n 1`,
+	`cat /log/acme/api/main.log | awk '{ print $5 }' | sort -n | tail -n 1`,
+	`cat /log/acme/api/main.log | grep no-such-line | sort -n | tail -n 1`,
+	`cat /log/acme/api/main.log | sort -n | tail -n 1`,
+	`cat /log/acme/api/main.log | sort -nr | head -1 | awk '{ print $1 }'`,
 	// Distinct count: the number of groups.
 	`cat /log/acme/api/main.log | sort -u | wc -l`,
 	`cat /log/acme/api/main.log | sort | uniq | wc -l`,
@@ -1116,4 +1135,47 @@ func generateRows(n int) []*pb.LogRow {
 		})
 	}
 	return rows
+}
+
+// TestDifferentialNumericExtreme feeds sort -n's end lines built to break a
+// number parse that isn't warp's: signs, a bare dot, a second dot, exponents
+// and hex (which sort -n ignores), spaces and tabs in front, digits that
+// aren't ASCII, a number too big for a float, and numbers that tie so the
+// line's bytes decide.
+func TestDifferentialNumericExtreme(t *testing.T) {
+	huge := strings.Repeat("9", 400)
+	base := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for _, set := range [][]string{
+		{"5", "5.0", "05", "5abc", "5 ", " 5", "+5", "5."},
+		{"-5", "-5.5", "-0", "0", "-0.0", "0.0", "00", ""},
+		{".5", "-.5", "+.5", ".", "-.", "+", "-", "1.2.3", "1..2"},
+		{"1e5", "1e+3", "0x10", "0x", "9e", "1E3", "1_000", "1,000"},
+		{"\t9", "  \t 8", "\n", "a1", "1a", "abc", "ABC", "naïve", "٣", "日本"},
+		{huge, "-" + huge, "1" + strings.Repeat("0", 308), "1" + strings.Repeat("0", 309)},
+		{"7", "7 b", "7 a", "7\tz", "007", "7.00"},
+	} {
+		var rows []*pb.LogRow
+		for i, raw := range set {
+			rows = append(rows, &pb.LogRow{
+				Raw: raw, TsUnixNs: base.Add(time.Duration(i) * time.Second).UnixNano(),
+				Namespace: "acme", Service: "api", Kind: "main", CustomerId: 1, PayloadJson: []byte("{}"),
+			})
+		}
+		for _, shards := range []int{1, 2, 3} {
+			h := newHarness(t, rows, shards)
+			for _, p := range []string{
+				`cat /log/acme/api/main.log | sort -n | tail -n 1`,
+				`cat /log/acme/api/main.log | sort -rn | head -n 1`,
+				`cat /log/acme/api/main.log | sort -n | head -n 1`,
+				`cat /log/acme/api/main.log | sort -rn | tail -n 1`,
+			} {
+				t.Run(fmt.Sprintf("%d shards/%q/%s", shards, set[0], p), func(t *testing.T) {
+					plan := h.check(t, p)
+					if plan == nil || plan.Group == nil {
+						t.Fatalf("not grouped in the shard: %+v", plan)
+					}
+				})
+			}
+		}
+	}
 }

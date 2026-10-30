@@ -53,7 +53,10 @@ import (
 // object of just those, and grep -E, awk's $NF and length lower. A lowered jq
 // program drops the rows jq would error on, and writes numbers and strings the
 // way jq does (2.0 as 2, 1e3 as 1000, <, > and & escaped in an escaped string).
-const PlannerVersion = 14
+// v15: wc -c is a Group (the shard sums each line's bytes and a newline), and
+// so is the one line `sort -n | tail -n 1` (or head, or -rn) prints: the shard
+// sends its best line and number, compute picks across shards.
+const PlannerVersion = 15
 
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to

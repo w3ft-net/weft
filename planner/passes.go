@@ -357,11 +357,19 @@ func (c *compiled) fuseAggregate(limited bool) {
 	switch first := c.compute[0].nodes[0].(type) {
 	case *countNode:
 		render, n = RenderTotal, 1
+		if first.bytes {
+			render = RenderBytes
+		}
 	case *tallyNode:
 		render, n, key = RenderKeyCount, 1, first.key
 	case *sortNode:
 		if first.keyed {
-			return
+			r, ok := numericEnd(first, c.compute[1:])
+			if !ok {
+				return
+			}
+			render, n = r, 2
+			break
 		}
 		reverse = first.reverse
 		var uniq *uniqNode
@@ -381,7 +389,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 		}
 		// A count of the distinct lines is the number of groups.
 		if render == RenderLine && len(c.compute) > n {
-			if _, ok := c.compute[n].nodes[0].(*countNode); ok {
+			if cn, ok := c.compute[n].nodes[0].(*countNode); ok && !cn.bytes {
 				render, n = RenderDistinctTotal, n+1
 			}
 		}
@@ -421,7 +429,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 	c.group = &GroupSpec{Render: render, ByCount: ordered, Limit: limit}
 	c.groupKey = key
 	switch {
-	case render == RenderTotal:
+	case render == RenderTotal || render == RenderBytes || render == RenderNumericMax || render == RenderNumericMin:
 		c.shardOrderBy = ""
 	case reverse:
 		c.shardOrderBy = "raw DESC"
@@ -429,6 +437,25 @@ func (c *compiled) fuseAggregate(limited bool) {
 		c.shardOrderBy = "raw"
 	}
 	c.logf(pass, "%s became the shard's GROUP BY (%s)", label, render)
+}
+
+// numericEnd is whether a sort -n (or -rn) with no other flag is followed by
+// a head or tail of exactly one line: the line it puts first or last is the
+// one with the greatest or least number. Ties go to the greater line in the
+// same direction, since sort's last-resort compare reverses with -r.
+func numericEnd(sort *sortNode, rest []*loweredStage) (GroupRender, bool) {
+	if !sort.numeric || sort.unique || len(rest) == 0 || len(rest[0].nodes) != 1 {
+		return "", false
+	}
+	end, ok := rest[0].nodes[0].(*limitNode)
+	if !ok || end.n != 1 || end.offset != 0 {
+		return "", false
+	}
+	last := end.order == "ts DESC"
+	if last != sort.reverse {
+		return RenderNumericMax, true
+	}
+	return RenderNumericMin, true
 }
 
 // topN is the ordering after a sort | uniq -c: `sort -rn` (highest count

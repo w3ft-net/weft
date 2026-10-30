@@ -39,12 +39,14 @@ treatment:
 * `sed -n '/PATTERN/p'`, `sed '/PATTERN/d'`, and their `!` forms (`sed -n '/PATTERN/!p'`, `sed '/PATTERN/!d'`)
 * `head [-n]` and `tail [-n]`
 * `cut -d DELIM -f LIST`, where `LIST` is discrete fields or a trailing open range (i.e. `3-`)
-* `wc -l`
+* `wc -l` and `wc -c`
 * `sort | uniq [-c]`, `sort -u`, and `sort -u | wc -l` for the number of distinct lines
 * `sort | uniq -c | sort -rn | head -N`, the N most common lines
 * an awk count per key, written exactly as
   `awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'`
 * `sort | head -N`
+* `sort -n | tail -n 1` and `sort -n | head -n 1` (and the same with `-rn`), the
+  line with the greatest or least leading number
 
 In awk, `$NF` (the last field) and `length` (in bytes) are optimized wherever
 `$1` or `$0` would be.
