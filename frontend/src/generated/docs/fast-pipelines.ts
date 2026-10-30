@@ -35,14 +35,19 @@ to optimize is to lean on jq or AWK, and wherever possible, to use
 <a href="/manual/metavars">metavariables</a>. However, the following commands also get special
 treatment:</p>
 <ul>
-<li><code>grep</code></li>
+<li><code>grep</code>, with <code>-i</code>, <code>-v</code> and <code>-E</code></li>
 <li><code>sed -n '/PATTERN/p'</code>, <code>sed '/PATTERN/d'</code>, and their <code>!</code> forms (<code>sed -n '/PATTERN/!p'</code>, <code>sed '/PATTERN/!d'</code>)</li>
 <li><code>head [-n]</code> and <code>tail [-n]</code></li>
 <li><code>cut -d DELIM -f LIST</code>, where <code>LIST</code> is discrete fields or a trailing open range (i.e. <code>3-</code>)</li>
 <li><code>wc -l</code></li>
-<li><code>sort | uniq [-c]</code></li>
+<li><code>sort | uniq [-c]</code>, <code>sort -u</code>, and <code>sort -u | wc -l</code> for the number of distinct lines</li>
+<li><code>sort | uniq -c | sort -rn | head -N</code>, the N most common lines</li>
+<li>an awk count per key, written exactly as
+<code>awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'</code></li>
 <li><code>sort | head -N</code></li>
 </ul>
+<p>In awk, <code>$NF</code> (the last field) and <code>length</code> (in bytes) are optimized wherever
+<code>$1</code> or <code>$0</code> would be.</p>
 <p>Anything else is going to execute post-retrieval. If your 1-liners are timing
 out, you might want to run <code>explain</code> for hints of what could move into
 optimized retrieval.</p>

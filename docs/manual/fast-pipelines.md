@@ -35,13 +35,19 @@ to optimize is to lean on jq or AWK, and wherever possible, to use
 [metavariables](metavars.md). However, the following commands also get special
 treatment:
 
-* `grep`
+* `grep`, with `-i`, `-v` and `-E`
 * `sed -n '/PATTERN/p'`, `sed '/PATTERN/d'`, and their `!` forms (`sed -n '/PATTERN/!p'`, `sed '/PATTERN/!d'`)
 * `head [-n]` and `tail [-n]`
 * `cut -d DELIM -f LIST`, where `LIST` is discrete fields or a trailing open range (i.e. `3-`)
 * `wc -l`
-* `sort | uniq [-c]`
+* `sort | uniq [-c]`, `sort -u`, and `sort -u | wc -l` for the number of distinct lines
+* `sort | uniq -c | sort -rn | head -N`, the N most common lines
+* an awk count per key, written exactly as
+  `awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'`
 * `sort | head -N`
+
+In awk, `$NF` (the last field) and `length` (in bytes) are optimized wherever
+`$1` or `$0` would be.
 
 Anything else is going to execute post-retrieval. If your 1-liners are timing
 out, you might want to run `explain` for hints of what could move into
