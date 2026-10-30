@@ -23,7 +23,7 @@ type aggregator struct {
 	sink func(*pb.ResultRow) bool
 	line string
 	n    int64
-	// groups counts the distinct lines emit has taken (distinctTotal).
+	// groups counts the distinct lines emit has taken (aggDistinctTotal).
 	groups int64
 	seen   bool
 	err    error
@@ -83,27 +83,31 @@ type rowAggregator interface {
 	failure() error
 }
 
-// The aggregate names a coordinator that predates GroupSpec sends in
-// ExecuteQueryRequest.Aggregate. They are also the aggregator's own names
-// for these shapes. Delete the wire use with that coordinator's last
-// release (docs/plans/internal-wire-versioning.md).
+// The aggregators a GroupSpec resolves to, named by what they print.
 const (
-	// legacyLines is `wc -l`: the total.
-	legacyLines = "lines"
-	// legacyDistinct is `sort -u` or `sort | uniq`: each line once.
-	legacyDistinct = "distinct"
-	// legacyCountDistinct is `sort | uniq -c`: each line with its count,
-	// as uniq -c prints it.
-	legacyCountDistinct = "count_distinct"
+	// aggLines is `wc -l`: the total.
+	aggLines = "lines"
+	// aggDistinct is `sort -u` or `sort | uniq`: each line once.
+	aggDistinct = "distinct"
+	// aggCountDistinct is `sort | uniq -c`: each line with its count, as
+	// uniq -c prints it.
+	aggCountDistinct = "count_distinct"
+	// aggDistinctTotal is `sort -u | wc -l`: the number of distinct lines.
+	aggDistinctTotal = "distinct_total"
+	// aggKeyCount is an awk tally, `key count` per distinct line.
+	aggKeyCount = "key_count"
 )
 
-// distinctTotal is `sort -u | wc -l`: the number of distinct lines. It has no
-// legacy aggregate string; only a GroupSpec asks for it.
-const distinctTotal = "distinct_total"
-
-// keyCount is an awk tally, `key count` per distinct line. Only a GroupSpec
-// asks for it.
-const keyCount = "key_count"
+// isGroupAggregate is whether name is one of the group aggregators, which
+// only a GroupSpec asks for: a request's aggregate string names the trace and
+// span aggregates.
+func isGroupAggregate(name string) bool {
+	switch name {
+	case aggLines, aggDistinct, aggCountDistinct, aggDistinctTotal, aggKeyCount:
+		return true
+	}
+	return false
+}
 
 // GroupToProto is the GroupSpec a coordinator sends for a plan's grouping,
 // nil for none.
@@ -132,20 +136,19 @@ func GroupToProto(g *planner.GroupSpec) *pb.GroupSpec {
 	return out
 }
 
-// groupAggregate is the aggregate a GroupSpec asks for, named as the
-// legacy aggregate string for the same shape.
+// groupAggregate is the aggregator a GroupSpec asks for.
 func groupAggregate(g *pb.GroupSpec) (string, error) {
 	switch g.Render {
 	case pb.GroupRender_GROUP_RENDER_TOTAL:
-		return legacyLines, nil
+		return aggLines, nil
 	case pb.GroupRender_GROUP_RENDER_LINE:
-		return legacyDistinct, nil
+		return aggDistinct, nil
 	case pb.GroupRender_GROUP_RENDER_COUNT_LINE:
-		return legacyCountDistinct, nil
+		return aggCountDistinct, nil
 	case pb.GroupRender_GROUP_RENDER_DISTINCT_TOTAL:
-		return distinctTotal, nil
+		return aggDistinctTotal, nil
 	case pb.GroupRender_GROUP_RENDER_KEY_COUNT:
-		return keyCount, nil
+		return aggKeyCount, nil
 	}
 	return "", fmt.Errorf("compute: unknown group render %s", g.Render)
 }
@@ -182,7 +185,7 @@ func newAggregator(fn string, sink func(*pb.ResultRow) bool) (rowAggregator, err
 		return &traceListAggregator{sink: sink, groups: map[string]*traceGroup{}}, nil
 	case planner.AggregateSpanRows, planner.AggregateSpanSamples:
 		return &spanRowAggregator{fn: fn, sink: sink}, nil
-	case legacyLines, legacyDistinct, legacyCountDistinct, distinctTotal, keyCount:
+	case aggLines, aggDistinct, aggCountDistinct, aggDistinctTotal, aggKeyCount:
 		return &aggregator{fn: fn, sink: sink}, nil
 	}
 	return nil, fmt.Errorf("compute: unknown aggregate %q", fn)
@@ -195,7 +198,7 @@ func (a *aggregator) push(row *pb.ResultRow) bool {
 		a.err = fmt.Errorf("compute: aggregate row without a %s: %w", planner.CountColumn, err)
 		return false
 	}
-	if a.fn != legacyLines && a.seen && row.Raw != a.line {
+	if a.fn != aggLines && a.seen && row.Raw != a.line {
 		if !a.emit() {
 			return false
 		}
@@ -214,10 +217,10 @@ func (a *aggregator) flush() {
 	if a.err != nil {
 		return
 	}
-	if a.seen || a.fn == legacyLines {
+	if a.seen || a.fn == aggLines {
 		a.emit()
 	}
-	if a.fn == distinctTotal {
+	if a.fn == aggDistinctTotal {
 		a.sink(&pb.ResultRow{Raw: strconv.FormatInt(a.groups, 10)})
 	}
 }
@@ -229,16 +232,16 @@ func (a *aggregator) emit() bool {
 	}
 	var text string
 	switch a.fn {
-	case distinctTotal:
+	case aggDistinctTotal:
 		a.groups++
 		return true
-	case legacyLines:
+	case aggLines:
 		text = strconv.FormatInt(a.n, 10)
-	case legacyDistinct:
+	case aggDistinct:
 		text = a.line
-	case legacyCountDistinct:
+	case aggCountDistinct:
 		text = fmt.Sprintf("%7d %s", a.n, a.line)
-	case keyCount:
+	case aggKeyCount:
 		text = fmt.Sprintf("%s %d", a.line, a.n)
 	}
 	return a.sink(&pb.ResultRow{Raw: text})

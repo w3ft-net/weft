@@ -140,6 +140,10 @@ func (p *Engine) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) 
 	}
 	job.stagesReadPayload = req.StagesReadPayload
 	aggregate := req.Aggregate
+	if isGroupAggregate(aggregate) {
+		// A coordinator from before GroupSpec; every one sends it now.
+		return nil, fmt.Errorf("compute: unknown aggregate %q: grouping is a GroupSpec", aggregate)
+	}
 	if req.Group != nil {
 		if aggregate != "" {
 			return nil, errors.New("compute: a request names both an aggregate and a group")

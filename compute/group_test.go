@@ -37,51 +37,54 @@ type groupedResolver struct{ sh *groupedShard }
 func (r groupedResolver) ShardID() string            { return r.sh.id }
 func (r groupedResolver) Dial() (shard.Shard, error) { return r.sh, nil }
 
-// TestGroup_RendersWhatTheLegacyAggregateDoes: a request carrying a
-// GroupSpec prints exactly what the same shape's legacy aggregate string
-// prints. Two shards share "b", so compute must sum their counts.
-func TestGroup_RendersWhatTheLegacyAggregateDoes(t *testing.T) {
+// TestGroup_RendersWhatTheStagesPrint: a GroupSpec prints what the stages it
+// replaced print. Two shards share "b", so compute must sum their counts.
+func TestGroup_RendersWhatTheStagesPrint(t *testing.T) {
 	a := &groupedShard{id: "a", rows: []groupedRow{{"a", 2}, {"b", 3}}}
 	b := &groupedShard{id: "b", rows: []groupedRow{{"b", 4}, {"c", 1}}}
 	for _, tc := range []struct {
 		name   string
-		legacy string
 		render pb.GroupRender
 		want   []string
 	}{
-		{"wc -l", legacyLines, pb.GroupRender_GROUP_RENDER_TOTAL, []string{"10"}},
-		{"sort -u", legacyDistinct, pb.GroupRender_GROUP_RENDER_LINE, []string{"a", "b", "c"}},
-		{"sort | uniq -c", legacyCountDistinct, pb.GroupRender_GROUP_RENDER_COUNT_LINE,
-			[]string{"      2 a", "      7 b", "      1 c"}},
+		{"wc -l", pb.GroupRender_GROUP_RENDER_TOTAL, []string{"10"}},
+		{"sort -u", pb.GroupRender_GROUP_RENDER_LINE, []string{"a", "b", "c"}},
+		{"sort | uniq -c", pb.GroupRender_GROUP_RENDER_COUNT_LINE, []string{"      2 a", "      7 b", "      1 c"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			run := func(req *pb.ExecuteQueryRequest) []string {
-				t.Helper()
-				eng := &Engine{}
-				eng.RegisterResolver(groupedResolver{a})
-				eng.RegisterResolver(groupedResolver{b})
-				req.Sql, req.MergeKey = "SELECT 1", "raw"
-				req.Shards = []*pb.ShardDescriptor{{ShardId: "a"}, {ShardId: "b"}}
-				stream, err := eng.ExecuteQuery(context.Background(), req)
-				if err != nil {
-					t.Fatal(err)
-				}
-				lines, err := DrainLineStream(context.Background(), stream)
-				if err != nil {
-					t.Fatal(err)
-				}
-				var out []string
-				for _, l := range lines {
-					out = append(out, l.Raw)
-				}
-				return out
+			eng := &Engine{}
+			eng.RegisterResolver(groupedResolver{a})
+			eng.RegisterResolver(groupedResolver{b})
+			stream, err := eng.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
+				Sql: "SELECT 1", MergeKey: "raw",
+				Shards: []*pb.ShardDescriptor{{ShardId: "a"}, {ShardId: "b"}},
+				Group:  &pb.GroupSpec{Render: tc.render},
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
-			legacy := run(&pb.ExecuteQueryRequest{Aggregate: tc.legacy})
-			if !reflect.DeepEqual(legacy, tc.want) {
-				t.Fatalf("legacy aggregate printed %q, want %q", legacy, tc.want)
+			lines, err := DrainLineStream(context.Background(), stream)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if got := run(&pb.ExecuteQueryRequest{Group: &pb.GroupSpec{Render: tc.render}}); !reflect.DeepEqual(got, legacy) {
-				t.Errorf("group printed %q, legacy printed %q", got, legacy)
+			var got []string
+			for _, l := range lines {
+				got = append(got, l.Raw)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("printed %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The aggregate strings a coordinator sent before GroupSpec fail the query
+// instead of passing the shards' per-line counts through as rows.
+func TestGroup_GroupAggregateStringsAreRejected(t *testing.T) {
+	for _, name := range []string{"lines", "distinct", "count_distinct", "distinct_total", "key_count"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := (&Engine{}).ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{Aggregate: name}); err == nil {
+				t.Errorf("aggregate %q was accepted", name)
 			}
 		})
 	}
@@ -98,7 +101,7 @@ func TestGroup_UnspecifiedRenderFailsTheQuery(t *testing.T) {
 
 func TestGroup_BothFormsFailTheQuery(t *testing.T) {
 	_, err := (&Engine{}).ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
-		Aggregate: legacyLines,
+		Aggregate: planner.AggregateSpans,
 		Group:     &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_TOTAL},
 	})
 	if err == nil {

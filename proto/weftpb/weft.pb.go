@@ -1279,16 +1279,15 @@ type ExecuteQueryRequest struct {
 	// stages_read_payload feeds the first stage, a jq, each row's payload
 	// (the `payload` column) instead of its raw line.
 	StagesReadPayload bool `protobuf:"varint,11,opt,name=stages_read_payload,json=stagesReadPayload,proto3" json:"stages_read_payload,omitempty"`
-	// aggregate, when set, says the sql groups each shard's rows: every
-	// row is a distinct line with its count (the `count` column), merged
-	// on merge_key. Compute sums the counts across shards and feeds the
-	// stages what the aggregated stages print: "lines" (wc -l), "distinct"
-	// (sort -u, sort | uniq) or "count_distinct" (sort | uniq -c). See
-	// planner.QueryPlan.Aggregate.
+	// aggregate, when set, names a trace or span source's own aggregate (see
+	// planner.QueryPlan.Aggregate). Grouping a pipeline's lines is group.
 	Aggregate string `protobuf:"bytes,12,opt,name=aggregate,proto3" json:"aggregate,omitempty"`
-	// group is the same instruction as aggregate, for a keyed aggregate:
-	// compute accepts either, and renders the same text for the same shape.
-	// Callers keep sending aggregate until every compute accepts group.
+	// group, when set, says the sql groups each shard's rows: every row is a
+	// distinct line with its count (the `count` column), merged on merge_key.
+	// Compute sums the counts across shards and prints what the render says
+	// (wc -l, sort -u, sort | uniq -c, ...). Set only one of aggregate and
+	// group. Before this existed, aggregate carried "lines", "distinct" and
+	// "count_distinct"; compute no longer accepts them.
 	Group         *GroupSpec `protobuf:"bytes,13,opt,name=group,proto3" json:"group,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1408,7 +1407,7 @@ func (x *ExecuteQueryRequest) GetGroup() *GroupSpec {
 	return nil
 }
 
-// GroupSpec says the shard sql groups each shard's rows (see aggregate).
+// GroupSpec says the shard sql groups each shard's rows (see group).
 type GroupSpec struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Render GroupRender            `protobuf:"varint,1,opt,name=render,proto3,enum=weft.GroupRender" json:"render,omitempty"`
