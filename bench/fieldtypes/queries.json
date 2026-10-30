@@ -1,53 +1,53 @@
 {
-  "doc": "Before/after queries for docs/plans/field-types.md, against weft's own shard stats (the busiest weft-owned source with per-query timings: q_count, q_mean_ms, q_max_ms, q_rows every ~10s per shard). The range is fixed and in the past so results are stable between runs. 'targets' benefit from field facts once jq locators exist; 'controls' must not change.",
+  "doc": "Before/after queries for docs/plans/field-types.md. Weft's own sources (shard stats, with per-query timings) are JSON, so every query here is a control: it must keep its output while the planner changes. The queries that benefit from typed awk fields need a text source with numeric columns (see README.md).",
   "range": "2026-10-27..2026-10-29",
   "queries": [
     {
       "id": "filter-count-qmax",
-      "kind": "target",
-      "why": "numeric filter on a top-level key: slow-query windows",
+      "kind": "control",
+      "why": "numeric filter on a top-level key: slow-query windows (jq over JSON: no numeric awk column, so facts do not change its plan; the output must not change)",
       "pipeline": "cat /log/weft/shard/stats.log | jq 'select(.q_max_ms > 10)' | wc -l"
     },
     {
       "id": "filter-count-errors",
-      "kind": "target",
-      "why": "numeric filter, selective: windows with query errors",
+      "kind": "control",
+      "why": "numeric filter, selective: windows with query errors (jq over JSON: no numeric awk column, so facts do not change its plan; the output must not change)",
       "pipeline": "cat /log/weft/shard/stats.log | jq 'select(.q_errors > 0)' | wc -l"
     },
     {
       "id": "filter-count-disk",
-      "kind": "target",
-      "why": "numeric filter on a float: volume fullness",
+      "kind": "control",
+      "why": "numeric filter on a float: volume fullness (jq over JSON: no numeric awk column, so facts do not change its plan; the output must not change)",
       "pipeline": "cat /log/weft/shard/stats.log | jq 'select(.volume_used_pct > 9.5)' | wc -l"
     },
     {
       "id": "filter-slice-slow",
-      "kind": "target",
-      "why": "numeric filter feeding head: when were the slow windows",
+      "kind": "control",
+      "why": "numeric filter feeding head: when were the slow windows (jq over JSON: no numeric awk column, so facts do not change its plan; the output must not change)",
       "pipeline": "cat /log/weft/shard/stats.log | jq -r 'select(.q_max_ms > 1000) | .ts' | head -n 20"
     },
     {
       "id": "sortn-max-qmax",
-      "kind": "target",
-      "why": "sort -n | tail -n 1: the single worst query window",
+      "kind": "control",
+      "why": "sort -n | tail -n 1: the single worst query window (jq over JSON: no numeric awk column, so facts do not change its plan; the output must not change)",
       "pipeline": "cat /log/weft/shard/stats.log | jq -r .q_max_ms | sort -n | tail -n 1"
     },
     {
       "id": "keyed-max-qmax",
       "kind": "control",
-      "why": "keyed max per shard: worst query time by shard (key first: field 2 is not provably numeric, so this stays unoptimized)",
+      "why": "keyed max per shard: worst query time by shard (jq over JSON: no numeric awk column, so facts do not change its plan; the output must not change)",
       "pipeline": "cat /log/weft/shard/stats.log | jq -r '[.shard_id, .q_max_ms] | @tsv' | awk '{ if ($2 > m[$1]) m[$1] = $2 } END { for (k in m) print k, m[k] }' | sort"
     },
     {
       "id": "keyed-sum-qcount",
       "kind": "control",
-      "why": "keyed sum per shard: queries served by shard (key first: field 2 is not provably numeric, so this stays unoptimized)",
+      "why": "keyed sum per shard: queries served by shard (jq over JSON: no numeric awk column, so facts do not change its plan; the output must not change)",
       "pipeline": "cat /log/weft/shard/stats.log | jq -r '[.shard_id, .q_count] | @tsv' | awk '{ s[$1] += $2 } END { for (k in s) print k, s[k] }' | sort"
     },
     {
       "id": "keyed-sum-qrows",
       "kind": "control",
-      "why": "keyed sum per shard: rows returned by shard (key first: field 2 is not provably numeric, so this stays unoptimized)",
+      "why": "keyed sum per shard: rows returned by shard (jq over JSON: no numeric awk column, so facts do not change its plan; the output must not change)",
       "pipeline": "cat /log/weft/shard/stats.log | jq -r '[.shard_id, .q_rows] | @tsv' | awk '{ s[$1] += $2 } END { for (k in s) print k, s[k] }' | sort"
     },
     {
@@ -61,24 +61,6 @@
       "kind": "control",
       "why": "text pushdown only",
       "pipeline": "cat /log/weft/shard/stats.log | grep shard_stats | wc -l"
-    },
-    {
-      "id": "vf-keyed-sum-qcount",
-      "kind": "target",
-      "why": "keyed sum with the value first, so field 1 is provably numeric (see field-types.md, shift hazard)",
-      "pipeline": "cat /log/weft/shard/stats.log | jq -r '[.q_count, .shard_id] | @tsv' | awk '{ s[$2] += $1 } END { for (k in s) print k, s[k] }' | sort"
-    },
-    {
-      "id": "vf-keyed-sum-qrows",
-      "kind": "target",
-      "why": "keyed sum with the value first",
-      "pipeline": "cat /log/weft/shard/stats.log | jq -r '[.q_rows, .shard_id] | @tsv' | awk '{ s[$2] += $1 } END { for (k in s) print k, s[k] }' | sort"
-    },
-    {
-      "id": "vf-keyed-max-qmax",
-      "kind": "target",
-      "why": "keyed max with the value first",
-      "pipeline": "cat /log/weft/shard/stats.log | jq -r '[.q_max_ms, .shard_id] | @tsv' | awk '{ if ($1 > m[$2]) m[$2] = $1 } END { for (k in m) print k, m[k] }' | sort"
     }
   ]
 }
