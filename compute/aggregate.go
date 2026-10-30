@@ -23,8 +23,10 @@ type aggregator struct {
 	sink func(*pb.ResultRow) bool
 	line string
 	n    int64
-	seen bool
-	err  error
+	// groups counts the distinct lines emit has taken (distinctTotal).
+	groups int64
+	seen   bool
+	err    error
 	// collect, when set, takes each merged group instead of the sink
 	// (orderedAggregator).
 	collect *[]countedLine
@@ -95,6 +97,10 @@ const (
 	legacyCountDistinct = "count_distinct"
 )
 
+// distinctTotal is `sort -u | wc -l`: the number of distinct lines. It has no
+// legacy aggregate string; only a GroupSpec asks for it.
+const distinctTotal = "distinct_total"
+
 // GroupToProto is the GroupSpec a coordinator sends for a plan's grouping,
 // nil for none.
 func GroupToProto(g *planner.GroupSpec) *pb.GroupSpec {
@@ -122,6 +128,8 @@ func groupAggregate(g *pb.GroupSpec) (string, error) {
 		return legacyDistinct, nil
 	case pb.GroupRender_GROUP_RENDER_COUNT_LINE:
 		return legacyCountDistinct, nil
+	case pb.GroupRender_GROUP_RENDER_DISTINCT_TOTAL:
+		return distinctTotal, nil
 	}
 	return "", fmt.Errorf("compute: unknown group render %s", g.Render)
 }
@@ -158,7 +166,7 @@ func newAggregator(fn string, sink func(*pb.ResultRow) bool) (rowAggregator, err
 		return &traceListAggregator{sink: sink, groups: map[string]*traceGroup{}}, nil
 	case planner.AggregateSpanRows, planner.AggregateSpanSamples:
 		return &spanRowAggregator{fn: fn, sink: sink}, nil
-	case legacyLines, legacyDistinct, legacyCountDistinct:
+	case legacyLines, legacyDistinct, legacyCountDistinct, distinctTotal:
 		return &aggregator{fn: fn, sink: sink}, nil
 	}
 	return nil, fmt.Errorf("compute: unknown aggregate %q", fn)
@@ -184,10 +192,17 @@ func (a *aggregator) push(row *pb.ResultRow) bool {
 
 func (a *aggregator) failure() error { return a.err }
 
-// flush emits the last line. wc -l prints its total even with no rows.
+// flush emits the last line. wc -l prints its total even with no rows, and
+// so does the distinct count.
 func (a *aggregator) flush() {
-	if a.err == nil && (a.seen || a.fn == legacyLines) {
+	if a.err != nil {
+		return
+	}
+	if a.seen || a.fn == legacyLines {
 		a.emit()
+	}
+	if a.fn == distinctTotal {
+		a.sink(&pb.ResultRow{Raw: strconv.FormatInt(a.groups, 10)})
 	}
 }
 
@@ -198,6 +213,9 @@ func (a *aggregator) emit() bool {
 	}
 	var text string
 	switch a.fn {
+	case distinctTotal:
+		a.groups++
+		return true
 	case legacyLines:
 		text = strconv.FormatInt(a.n, 10)
 	case legacyDistinct:

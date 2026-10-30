@@ -302,6 +302,9 @@ enum GroupRender {
   // GROUP_RENDER_COUNT_LINE: each distinct line with its count, as uniq -c
   // prints it (sort | uniq -c).
   GROUP_RENDER_COUNT_LINE = 3;
+  // GROUP_RENDER_DISTINCT_TOTAL: one bare number, how many distinct lines
+  // there are (sort -u | wc -l).
+  GROUP_RENDER_DISTINCT_TOTAL = 4;
 }
 
 // GroupOrder is how compute orders the merged groups before printing them.

@@ -186,14 +186,61 @@ func TestGroup_OrderedByCountMatchesTheStages(t *testing.T) {
 // ignored: the text would otherwise be wrong without a sign of it.
 func TestGroup_OrderAndLimitNeedACountedRender(t *testing.T) {
 	for name, g := range map[string]*pb.GroupSpec{
-		"order on a total": {Render: pb.GroupRender_GROUP_RENDER_TOTAL, Order: pb.GroupOrder_GROUP_ORDER_COUNT_DESC},
-		"order on lines":   {Render: pb.GroupRender_GROUP_RENDER_LINE, Order: pb.GroupOrder_GROUP_ORDER_COUNT_DESC},
-		"limit, no order":  {Render: pb.GroupRender_GROUP_RENDER_COUNT_LINE, Limit: 3},
-		"negative limit":   {Render: pb.GroupRender_GROUP_RENDER_COUNT_LINE, Order: pb.GroupOrder_GROUP_ORDER_COUNT_DESC, Limit: -1},
+		"order on a total":          {Render: pb.GroupRender_GROUP_RENDER_TOTAL, Order: pb.GroupOrder_GROUP_ORDER_COUNT_DESC},
+		"order on a distinct total": {Render: pb.GroupRender_GROUP_RENDER_DISTINCT_TOTAL, Order: pb.GroupOrder_GROUP_ORDER_COUNT_DESC},
+		"order on lines":            {Render: pb.GroupRender_GROUP_RENDER_LINE, Order: pb.GroupOrder_GROUP_ORDER_COUNT_DESC},
+		"limit, no order":           {Render: pb.GroupRender_GROUP_RENDER_COUNT_LINE, Limit: 3},
+		"negative limit":            {Render: pb.GroupRender_GROUP_RENDER_COUNT_LINE, Order: pb.GroupOrder_GROUP_ORDER_COUNT_DESC, Limit: -1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := (&Engine{}).ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{Group: g}); err == nil {
 				t.Error("an unusable order/limit was accepted")
+			}
+		})
+	}
+}
+
+// TestGroup_DistinctTotalMatchesTheStages: counting distinct lines in compute
+// prints what `sort -u | wc -l` printed, including 0 for no rows. Two shards
+// share "b", which must count once.
+func TestGroup_DistinctTotalMatchesTheStages(t *testing.T) {
+	for name, rows := range map[string][2][]groupedRow{
+		"overlap": {{{"a", 2}, {"b", 3}}, {{"b", 4}, {"c", 1}}},
+		"one":     {{{"a", 5}}, {{"a", 7}}},
+		"empty":   {nil, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			eng := &Engine{}
+			eng.RegisterResolver(groupedResolver{&groupedShard{id: "a", rows: rows[0]}})
+			eng.RegisterResolver(groupedResolver{&groupedShard{id: "b", rows: rows[1]}})
+			run := func(req *pb.ExecuteQueryRequest) []string {
+				t.Helper()
+				req.Sql, req.MergeKey = "SELECT 1", "raw"
+				req.Shards = []*pb.ShardDescriptor{{ShardId: "a"}, {ShardId: "b"}}
+				stream, err := eng.ExecuteQuery(context.Background(), req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				lines, err := DrainLineStream(context.Background(), stream)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var out []string
+				for _, l := range lines {
+					out = append(out, l.Raw)
+				}
+				return out
+			}
+			want := run(&pb.ExecuteQueryRequest{
+				Group:  &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_LINE},
+				Stages: []string{"wc -l"},
+			})
+			if len(want) != 1 {
+				t.Fatalf("reference printed %q, want one line", want)
+			}
+			got := run(&pb.ExecuteQueryRequest{Group: &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_DISTINCT_TOTAL}})
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("distinct total printed %q, the stages printed %q", got, want)
 			}
 		})
 	}
