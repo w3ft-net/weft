@@ -49,9 +49,9 @@ func TestGroup_RendersWhatTheLegacyAggregateDoes(t *testing.T) {
 		render pb.GroupRender
 		want   []string
 	}{
-		{"wc -l", planner.AggregateLines, pb.GroupRender_GROUP_RENDER_TOTAL, []string{"10"}},
-		{"sort -u", planner.AggregateDistinct, pb.GroupRender_GROUP_RENDER_LINE, []string{"a", "b", "c"}},
-		{"sort | uniq -c", planner.AggregateCountDistinct, pb.GroupRender_GROUP_RENDER_COUNT_LINE,
+		{"wc -l", legacyLines, pb.GroupRender_GROUP_RENDER_TOTAL, []string{"10"}},
+		{"sort -u", legacyDistinct, pb.GroupRender_GROUP_RENDER_LINE, []string{"a", "b", "c"}},
+		{"sort | uniq -c", legacyCountDistinct, pb.GroupRender_GROUP_RENDER_COUNT_LINE,
 			[]string{"      2 a", "      7 b", "      1 c"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -98,10 +98,30 @@ func TestGroup_UnspecifiedRenderFailsTheQuery(t *testing.T) {
 
 func TestGroup_BothFormsFailTheQuery(t *testing.T) {
 	_, err := (&Engine{}).ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
-		Aggregate: planner.AggregateLines,
+		Aggregate: legacyLines,
 		Group:     &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_TOTAL},
 	})
 	if err == nil {
 		t.Fatal("a request naming both forms was accepted")
+	}
+}
+
+// GroupToProto is what the coordinator sends: every render the planner
+// produces must reach compute as the render that prints the same text.
+func TestGroupToProto(t *testing.T) {
+	if got := GroupToProto(nil); got != nil {
+		t.Errorf("GroupToProto(nil) = %v, want nil", got)
+	}
+	for _, tc := range []struct {
+		render planner.GroupRender
+		want   pb.GroupRender
+	}{
+		{planner.RenderTotal, pb.GroupRender_GROUP_RENDER_TOTAL},
+		{planner.RenderLine, pb.GroupRender_GROUP_RENDER_LINE},
+		{planner.RenderCountLine, pb.GroupRender_GROUP_RENDER_COUNT_LINE},
+	} {
+		if got := GroupToProto(&planner.GroupSpec{Render: tc.render}); got.GetRender() != tc.want {
+			t.Errorf("%s: render = %s, want %s", tc.render, got.GetRender(), tc.want)
+		}
 	}
 }

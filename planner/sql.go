@@ -40,9 +40,9 @@ type Query struct {
 	// includePayload appends the row's payload as a PayloadColumn
 	// column, for a jq row stage or a stage reading the payload.
 	includePayload bool
-	// aggregate makes this the shard half of a QueryPlan.Aggregate: it
-	// groups the lines of its subquery's raw (see Aggregate).
-	aggregate string
+	// group makes this the shard half of a QueryPlan.Group: it groups the
+	// lines of its subquery's raw (see Group).
+	group GroupRender
 	// spanKind makes this a span query (see spans.go): the shard half of
 	// one of the AggregateSpan* aggregates, rendered straight from the
 	// table.
@@ -246,19 +246,19 @@ func (q *Query) Lines(preds []Predicate) *Query {
 	}
 }
 
-// Aggregate returns the shard half of an aggregate over q's lines, as
-// Lines splits and filters them. It selects each line with its
-// CountColumn (AggregateLines: one row, an empty line with the total),
-// in the order compute merges on. q must have no limit; its
-// meta-variable and payload columns are dropped.
-func (q *Query) Aggregate(fn, orderBy string, preds []Predicate) *Query {
+// Group returns the shard half of a grouping over q's lines, as Lines
+// splits and filters them. It selects each line with its CountColumn
+// (RenderTotal: one row, an empty line with the total), in the order
+// compute merges on. q must have no limit; its meta-variable and payload
+// columns are dropped.
+func (q *Query) Group(render GroupRender, orderBy string, preds []Predicate) *Query {
 	inner := q.lineSplit()
 	inner.includeMetaVars, inner.includePayload = false, false
 	return &Query{
 		from:       From{Subquery: inner, Alias: "t"},
 		predicates: preds,
 		orderBy:    orderBy,
-		aggregate:  fn,
+		group:      render,
 	}
 }
 
@@ -348,16 +348,16 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 		return
 	}
 	b.WriteString("SELECT ")
-	if q.aggregate != "" {
+	if q.group != "" {
 		key := "raw"
-		if q.aggregate == AggregateLines {
+		if q.group == RenderTotal {
 			key = "'' AS raw"
 		}
 		fmt.Fprintf(b, "%s, min(ts) AS ts, count(*) AS %s FROM (", key, CountColumn)
 		q.from.Subquery.renderInto(b, onArg)
 		b.WriteString(") AS " + q.from.Alias)
 		q.renderWhere(b, onArg)
-		if q.aggregate == AggregateLines {
+		if q.group == RenderTotal {
 			// No row without lines: ts can't be NULL.
 			b.WriteString(" HAVING count(*) > 0")
 		} else {

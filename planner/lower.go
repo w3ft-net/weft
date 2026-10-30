@@ -43,7 +43,9 @@ import (
 // not a prefilter plus a compute stage.
 // v11: the span aggregates group by service and count the rows that carry a
 // level (null errors when none do), and a trace's arguments changed.
-const PlannerVersion = 11
+// v12: the shard-side grouping of wc -l, sort -u and sort | uniq [-c] is a
+// Group, not an Aggregate string.
+const PlannerVersion = 12
 
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to
@@ -87,6 +89,7 @@ type LoweredPlan struct {
 	LiveStages        []string      `json:"live_stages,omitempty"`
 	MergeKey          string        `json:"merge_key,omitempty"`
 	Aggregate         string        `json:"aggregate,omitempty"`
+	Group             *GroupSpec    `json:"group,omitempty"`
 	Limit             int           `json:"limit,omitempty"`
 	ShardLimit        int           `json:"shard_limit,omitempty"`
 	TailMode          bool          `json:"tail_mode,omitempty"`
@@ -200,6 +203,7 @@ func Lower(pipeline string, customerID int64, tier string, resolveBin BinResolve
 		LiveStages:        plan.LiveStages,
 		MergeKey:          plan.ShardOrderBy,
 		Aggregate:         plan.Aggregate,
+		Group:             plan.Group,
 		Limit:             plan.Limit,
 		ShardLimit:        plan.ShardLimit,
 		TailMode:          plan.TailMode,

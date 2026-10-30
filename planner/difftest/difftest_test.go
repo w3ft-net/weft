@@ -34,17 +34,17 @@ import (
 // Every aggregate the planner computes in the shard must appear in it.
 func TestDifferential(t *testing.T) {
 	h := newHarness(t, generateRows(400), 2)
-	aggregates := map[string]int{}
+	renders := map[planner.GroupRender]int{}
 	for _, p := range corpus(t) {
 		t.Run(p, func(t *testing.T) {
-			if plan := h.check(t, p); plan != nil {
-				aggregates[plan.Aggregate]++
+			if plan := h.check(t, p); plan != nil && plan.Group != nil {
+				renders[plan.Group.Render]++
 			}
 		})
 	}
-	for _, fn := range []string{planner.AggregateLines, planner.AggregateDistinct, planner.AggregateCountDistinct} {
-		if aggregates[fn] == 0 {
-			t.Errorf("no pipeline in the corpus aggregates %s in the shard", fn)
+	for _, r := range []planner.GroupRender{planner.RenderTotal, planner.RenderLine, planner.RenderCountLine} {
+		if renders[r] == 0 {
+			t.Errorf("no pipeline in the corpus groups as %s in the shard", r)
 		}
 	}
 }
@@ -76,7 +76,7 @@ func TestDifferentialLineSplits(t *testing.T) {
 		`cat /log/acme/api/main.log | sort | grep -v b | uniq -c`,
 	} {
 		t.Run(p, func(t *testing.T) {
-			if plan := h.check(t, p); plan != nil && plan.Aggregate == "" {
+			if plan := h.check(t, p); plan != nil && plan.Group == nil {
 				t.Errorf("didn't aggregate in the shard:\n%s", planner.Explain(p))
 			}
 		})
@@ -280,6 +280,7 @@ func (h *harness) runPlan(plan *planner.QueryPlan) (string, error) {
 		StagesReadPayload: plan.StagesReadPayload,
 		MergeKey:          plan.ShardOrderBy,
 		Aggregate:         plan.Aggregate,
+		Group:             compute.GroupToProto(plan.Group),
 		Limit:             int32(plan.Limit),
 		KeepLast:          plan.TailMode,
 	})

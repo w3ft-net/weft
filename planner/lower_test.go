@@ -194,8 +194,8 @@ func TestLower_InlinesBinScript(t *testing.T) {
 
 	// The trailing `| wc -l` from the outer pipeline survives, as the
 	// shard's line count.
-	if lp.Aggregate != AggregateLines {
-		t.Errorf("outer pipeline's `wc -l` lost during inlining; got aggregate %q, compute stages %v", lp.Aggregate, lp.ComputeStages)
+	if lp.Group == nil || lp.Group.Render != RenderTotal {
+		t.Errorf("outer pipeline's `wc -l` lost during inlining; got group %+v, compute stages %v", lp.Group, lp.ComputeStages)
 	}
 }
 

@@ -29,16 +29,47 @@ type rowAggregator interface {
 	failure() error
 }
 
+// The aggregate names a coordinator that predates GroupSpec sends in
+// ExecuteQueryRequest.Aggregate. They are also the aggregator's own names
+// for these shapes. Delete the wire use with that coordinator's last
+// release (docs/plans/internal-wire-versioning.md).
+const (
+	// legacyLines is `wc -l`: the total.
+	legacyLines = "lines"
+	// legacyDistinct is `sort -u` or `sort | uniq`: each line once.
+	legacyDistinct = "distinct"
+	// legacyCountDistinct is `sort | uniq -c`: each line with its count,
+	// as uniq -c prints it.
+	legacyCountDistinct = "count_distinct"
+)
+
+// GroupToProto is the GroupSpec a coordinator sends for a plan's grouping,
+// nil for none.
+func GroupToProto(g *planner.GroupSpec) *pb.GroupSpec {
+	if g == nil {
+		return nil
+	}
+	switch g.Render {
+	case planner.RenderTotal:
+		return &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_TOTAL}
+	case planner.RenderLine:
+		return &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_LINE}
+	case planner.RenderCountLine:
+		return &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_COUNT_LINE}
+	}
+	panic("compute: no GroupSpec for render " + string(g.Render))
+}
+
 // groupAggregate is the aggregate a GroupSpec asks for, named as the
 // legacy aggregate string for the same shape.
 func groupAggregate(g *pb.GroupSpec) (string, error) {
 	switch g.Render {
 	case pb.GroupRender_GROUP_RENDER_TOTAL:
-		return planner.AggregateLines, nil
+		return legacyLines, nil
 	case pb.GroupRender_GROUP_RENDER_LINE:
-		return planner.AggregateDistinct, nil
+		return legacyDistinct, nil
 	case pb.GroupRender_GROUP_RENDER_COUNT_LINE:
-		return planner.AggregateCountDistinct, nil
+		return legacyCountDistinct, nil
 	}
 	return "", fmt.Errorf("compute: unknown group render %s", g.Render)
 }
@@ -53,7 +84,7 @@ func newAggregator(fn string, sink func(*pb.ResultRow) bool) (rowAggregator, err
 		return &traceListAggregator{sink: sink, groups: map[string]*traceGroup{}}, nil
 	case planner.AggregateSpanRows, planner.AggregateSpanSamples:
 		return &spanRowAggregator{fn: fn, sink: sink}, nil
-	case planner.AggregateLines, planner.AggregateDistinct, planner.AggregateCountDistinct:
+	case legacyLines, legacyDistinct, legacyCountDistinct:
 		return &aggregator{fn: fn, sink: sink}, nil
 	}
 	return nil, fmt.Errorf("compute: unknown aggregate %q", fn)
@@ -66,7 +97,7 @@ func (a *aggregator) push(row *pb.ResultRow) bool {
 		a.err = fmt.Errorf("compute: aggregate row without a %s: %w", planner.CountColumn, err)
 		return false
 	}
-	if a.fn != planner.AggregateLines && a.seen && row.Raw != a.line {
+	if a.fn != legacyLines && a.seen && row.Raw != a.line {
 		if !a.emit() {
 			return false
 		}
@@ -81,7 +112,7 @@ func (a *aggregator) failure() error { return a.err }
 
 // flush emits the last line. wc -l prints its total even with no rows.
 func (a *aggregator) flush() {
-	if a.err == nil && (a.seen || a.fn == planner.AggregateLines) {
+	if a.err == nil && (a.seen || a.fn == legacyLines) {
 		a.emit()
 	}
 }
@@ -89,11 +120,11 @@ func (a *aggregator) flush() {
 func (a *aggregator) emit() bool {
 	var text string
 	switch a.fn {
-	case planner.AggregateLines:
+	case legacyLines:
 		text = strconv.FormatInt(a.n, 10)
-	case planner.AggregateDistinct:
+	case legacyDistinct:
 		text = a.line
-	case planner.AggregateCountDistinct:
+	case legacyCountDistinct:
 		text = fmt.Sprintf("%7d %s", a.n, a.line)
 	}
 	return a.sink(&pb.ResultRow{Raw: text})

@@ -117,7 +117,7 @@ func (c *compiled) explainNodes(b *strings.Builder) {
 		case *sortNode, *uniqNode, *countNode:
 			l.desc = c.stage(n).src
 			if slices.Contains(c.aggregated, n) {
-				l.note = "the GROUP BY: " + c.aggregate
+				l.note = "the GROUP BY: " + string(c.group.Render)
 			}
 		case *opaqueNode:
 			l.desc = c.stage(n).src

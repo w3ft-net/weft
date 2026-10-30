@@ -758,6 +758,7 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 		StagesReadPayload: lp.StagesReadPayload,
 		MergeKey:          lp.MergeKey,
 		Aggregate:         lp.Aggregate,
+		Group:             compute.GroupToProto(lp.Group),
 		Limit:             int32(lp.Limit),
 		KeepLast:          lp.TailMode,
 		// TraceTag is never set here: this path only ever serves a
@@ -1173,6 +1174,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 		StagesReadPayload: plan.StagesReadPayload,
 		MergeKey:          plan.ShardOrderBy,
 		Aggregate:         plan.Aggregate,
+		Group:             compute.GroupToProto(plan.Group),
 		Limit:             int32(plan.Limit),
 		// tail-mode: shard SQL wraps to ASC; compute must retain
 		// last-N instead of stopping after first-N emitted.

@@ -79,11 +79,16 @@ type QueryPlan struct {
 	ShardOrderBy string // "", "ts[ DESC]", or "raw[ DESC]"
 	ShardLimit   int    // per-shard LIMIT; 0 when pushdown is unsafe
 
-	// Aggregate, when set, says the shard SQL groups the rows (wc -l,
-	// sort -u, sort | uniq [-c]): each shard row is a distinct line with
-	// its CountColumn, merged on ShardOrderBy. Compute sums the counts
-	// across shards and prints the aggregated stages' output, which
-	// ComputeStages then read. One of the Aggregate* constants.
+	// Group, when set, says the shard SQL groups the rows (wc -l, sort -u,
+	// sort | uniq [-c]): each shard row is a distinct line with its
+	// CountColumn, merged on ShardOrderBy. Compute sums the counts across
+	// shards and prints the grouped stages' output, which ComputeStages
+	// then read.
+	Group *GroupSpec
+
+	// Aggregate is the trace and span queries' shard-side aggregate (one
+	// of the AggregateSpan* / AggregateTrace* constants), which compute
+	// finishes the same way.
 	Aggregate string
 
 	// TraceStats, when set, is the second step of the trace list: the
@@ -109,17 +114,23 @@ type QueryPlan struct {
 	RedirectAppend bool
 }
 
-// The aggregates a shard can compute (QueryPlan.Aggregate), named for
-// what compute prints from the summed counts.
+// GroupRender is what compute prints from a group's summed counts.
+type GroupRender string
+
 const (
-	// AggregateLines is `wc -l`: the total.
-	AggregateLines = "lines"
-	// AggregateDistinct is `sort -u` or `sort | uniq`: each line once.
-	AggregateDistinct = "distinct"
-	// AggregateCountDistinct is `sort | uniq -c`: each line with its
-	// count, as uniq -c prints it.
-	AggregateCountDistinct = "count_distinct"
+	// RenderTotal is `wc -l`: one bare total of every count.
+	RenderTotal GroupRender = "total"
+	// RenderLine is `sort -u` or `sort | uniq`: each line once.
+	RenderLine GroupRender = "line"
+	// RenderCountLine is `sort | uniq -c`: each line with its count, as
+	// uniq -c prints it.
+	RenderCountLine GroupRender = "count_line"
 )
+
+// GroupSpec is the shard-side grouping a plan asks for (QueryPlan.Group).
+type GroupSpec struct {
+	Render GroupRender `json:"render"`
+}
 
 // GrepPattern captures a grep filter for live tail matching.
 type GrepPattern struct {
@@ -282,7 +293,7 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 
 	orderDesc := sql.orderBy == "ts DESC"
 	c.fuseAggregate(sql.limit > 0 || sql.offset > 0)
-	if c.aggregate == "" {
+	if c.aggregate == "" && c.group == nil {
 		c.fuseSort(orderDesc, sql.limit)
 	}
 
@@ -312,9 +323,9 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 	if c.shardOrderBy == "ts DESC" {
 		directQuery = directInner.Wrap("ts ASC")
 	}
-	if c.aggregate != "" {
+	if c.group != nil {
 		// No line count to keep apart: both paths group.
-		shardQuery = sql.Aggregate(c.aggregate, c.shardOrderBy, linePreds)
+		shardQuery = sql.Group(c.group.Render, c.shardOrderBy, linePreds)
 		directQuery = shardQuery
 		shardSQL, shardArgs, shardArgSources = shardQuery.ToSQLWithSources()
 	}
@@ -367,6 +378,7 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 		AlertArgs:         alertArgs,
 		ShardOrderBy:      mergeOrderBy,
 		ShardLimit:        c.shardLimit,
+		Group:             c.group,
 		Aggregate:         c.aggregate,
 		RedirectTarget:    redirTarget,
 		RedirectAppend:    redirAppend,

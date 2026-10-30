@@ -27,8 +27,10 @@ type compiled struct {
 	readsMeta    bool
 	shardOrderBy string
 	shardLimit   int
-	// aggregate is the shard-side aggregate that replaced the first
-	// compute stages, if any; aggregated is those stages' nodes.
+	// group is the shard-side grouping that replaced the first compute
+	// stages, if any; aggregated is those stages' nodes. aggregate is a
+	// trace or span source's own aggregate (spans.go).
+	group      *GroupSpec
 	aggregate  string
 	aggregated []node
 	passes     []passStep
@@ -336,12 +338,12 @@ func (c *compiled) fuseAggregate(limited bool) {
 	if len(c.compute) == 0 {
 		return
 	}
-	var fn string
+	var render GroupRender
 	var n int // stages the aggregate covers
 	var reverse bool
 	switch first := c.compute[0].nodes[0].(type) {
 	case *countNode:
-		fn, n = AggregateLines, 1
+		render, n = RenderTotal, 1
 	case *sortNode:
 		if first.keyed {
 			return
@@ -353,11 +355,11 @@ func (c *compiled) fuseAggregate(limited bool) {
 		}
 		switch {
 		case uniq != nil && uniq.count && !first.unique:
-			fn, n = AggregateCountDistinct, 2
+			render, n = RenderCountLine, 2
 		case uniq != nil && !uniq.count:
-			fn, n = AggregateDistinct, 2
+			render, n = RenderLine, 2
 		case first.unique:
-			fn, n = AggregateDistinct, 1
+			render, n = RenderLine, 1
 		default:
 			return
 		}
@@ -391,14 +393,14 @@ func (c *compiled) fuseAggregate(limited bool) {
 	}
 	c.shard += len(c.aggregated)
 	c.compute = c.compute[n:]
-	c.aggregate = fn
+	c.group = &GroupSpec{Render: render}
 	switch {
-	case fn == AggregateLines:
+	case render == RenderTotal:
 		c.shardOrderBy = ""
 	case reverse:
 		c.shardOrderBy = "raw DESC"
 	default:
 		c.shardOrderBy = "raw"
 	}
-	c.logf(pass, "%s became the shard's GROUP BY (%s)", label, fn)
+	c.logf(pass, "%s became the shard's GROUP BY (%s)", label, render)
 }

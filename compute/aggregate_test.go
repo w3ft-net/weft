@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -23,7 +22,7 @@ func TestAggregate_UnknownFailsTheQuery(t *testing.T) {
 // is an error, not a count of 0.
 func TestAggregate_RowWithoutCountFails(t *testing.T) {
 	job := (&Engine{}).NewJob(nil, 1, "raw", 0, false, false)
-	job.aggregate = planner.AggregateCountDistinct
+	job.aggregate = legacyCountDistinct
 	go func() {
 		job.SendRow(&pb.ResultRow{Raw: "a"}, "s")
 		job.SendSentinel("s")
