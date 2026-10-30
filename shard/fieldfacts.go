@@ -2,7 +2,10 @@ package shard
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/tidwall/gjson"
@@ -102,16 +105,19 @@ type FieldClassifier struct {
 	sources map[sourceKey]*factSource
 	epoch   uint64
 	acked   uint64
-	// ready is false while a scan of rows from before this classifier
-	// existed is still running: facts learned meanwhile are partial.
-	ready    bool
+	// changed: a classification result differs from the one last persisted
+	// (a source or locator started being tracked, or one became typed or
+	// dirty). Counting more conforming rows is not a change.
+	changed bool
+	// persist keeps a snapshot of the results where a roll will find it.
+	// Called on the classifier goroutine, only when changed.
+	persist  func([]byte) error
 	disabled bool
 }
 
 // NewFieldClassifier starts a classifier. Stop it with Stop.
 func NewFieldClassifier() *FieldClassifier {
 	c := &FieldClassifier{
-		ready:   true,
 		in:      make(chan []*pb.LogRow, factQueueDepth),
 		done:    make(chan struct{}),
 		sources: map[sourceKey]*factSource{},
@@ -154,62 +160,9 @@ func (c *FieldClassifier) Observe(rows []*pb.LogRow) {
 	}
 }
 
-// ScanRow is one stored row handed to Scan: its source, its awk fields and
-// its payload.
-type ScanRow struct {
-	CustomerID                    int64
-	Namespace, Service, Kind, Env string
-	Fields                        []string
-	Payload                       []byte
-}
-
-// BeginScan marks the classifier not ready: the shard holds rows it has not
-// seen, so nothing is reported until EndScan. Batches observed meanwhile are
-// still classified.
-func (c *FieldClassifier) BeginScan() {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	c.ready = false
-	c.mu.Unlock()
-}
-
-// Scan folds stored rows in. A locator first seen here after live rows were
-// classified is treated as late, so it stays dirty: scanning may lose a
-// typing, never invent one.
-func (c *FieldClassifier) Scan(rows []ScanRow) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.disabled {
-		return
-	}
-	for _, r := range rows {
-		c.classifyRow(sourceKey{r.CustomerID, r.Namespace, r.Service, r.Kind, r.Env}, r.Fields, r.Payload)
-	}
-}
-
-// EndScan says every stored row has been through Scan.
-func (c *FieldClassifier) EndScan() {
-	c.mu.Lock()
-	c.ready = true
-	// Nothing was reported while scanning, so a locator that went typed
-	// and dirty in the scan has nothing to retract.
-	for _, src := range c.sources {
-		for _, ls := range src.order {
-			if ls.state == FactDirty {
-				ls.wasTyped = false
-			}
-		}
-	}
-	c.mu.Unlock()
-}
-
-// Done is closed when the classifier is stopped.
-func (c *FieldClassifier) Done() <-chan struct{} { return c.done }
-
 // Disable turns the classifier off, e.g. for a shard that opened with rows
-// it has not classified.
+// it has not classified. Rows are append-only and never rescanned: a shard
+// whose saved state doesn't match its rows simply has no facts.
 func (c *FieldClassifier) Disable(reason string) { c.disable(reason) }
 
 func (c *FieldClassifier) disable(reason string) {
@@ -237,7 +190,16 @@ func (c *FieldClassifier) run() {
 					c.classify(r)
 				}
 			}
+			snap, save := c.takeChange()
 			c.mu.Unlock()
+			if save {
+				if err := c.persist(snap); err != nil {
+					weftsdk.Warnf(context.Background(), "field facts: not saved: %v", err)
+					c.mu.Lock()
+					c.changed = true // the next batch tries again
+					c.mu.Unlock()
+				}
+			}
 			c.inflight.Done()
 		}
 	}
@@ -275,6 +237,7 @@ func (c *FieldClassifier) classifyRow(sk sourceKey, fields []string, payload []b
 	if src == nil {
 		src = &factSource{awk: map[int]*locatorState{}, jq: map[string]*locatorState{}}
 		c.sources[sk] = src
+		c.changed = true
 	}
 	mark := src.rows + 1
 	for i, f := range fields {
@@ -285,6 +248,7 @@ func (c *FieldClassifier) classifyRow(sk sourceKey, fields []string, payload []b
 				continue
 			}
 			src.awk[n] = ls
+			c.changed = true
 		}
 		ls.seen = mark
 		c.observe(ls, awk.LooksNumeric(f), sk)
@@ -298,6 +262,7 @@ func (c *FieldClassifier) classifyRow(sk sourceKey, fields []string, payload []b
 					return true
 				}
 				src.jq[key] = ls
+				c.changed = true
 			}
 			ls.seen = mark
 			// jq compares a JSON number as a number and everything else
@@ -338,6 +303,7 @@ func (c *FieldClassifier) observe(ls *locatorState, numeric bool, sk sourceKey) 
 	case FactTyped:
 		if !numeric {
 			c.epoch++
+			c.changed = true
 			ls.state, ls.epoch = FactDirty, c.epoch
 			weftsdk.Infof(context.Background(), "field fact flipped dirty: customer=%d %s/%s/%s env=%s locator=%s",
 				sk.customerID, sk.namespace, sk.service, sk.kind, sk.env, ls.locator)
@@ -345,10 +311,12 @@ func (c *FieldClassifier) observe(ls *locatorState, numeric bool, sk sourceKey) 
 	default:
 		if !numeric {
 			ls.state = FactDirty
+			c.changed = true
 			return
 		}
 		ls.conform++
 		if ls.conform >= factTypedAfter {
+			c.changed = true
 			c.epoch++
 			ls.state, ls.epoch, ls.wasTyped = FactTyped, c.epoch, true
 		}
@@ -365,7 +333,7 @@ func (c *FieldClassifier) Pending() []FieldFact {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.disabled || !c.ready {
+	if c.disabled {
 		return nil
 	}
 	var out []FieldFact
@@ -393,5 +361,109 @@ func (c *FieldClassifier) Ack(epoch uint64) {
 	if epoch > c.acked {
 		c.acked = epoch
 	}
+	c.mu.Unlock()
+}
+
+// Drain waits for every batch handed to Observe to be classified, and any
+// change it made to be persisted.
+func (c *FieldClassifier) Drain() {
+	if c != nil {
+		c.inflight.Wait()
+	}
+}
+
+// takeChange is the snapshot to persist, if a result changed since the last
+// one. Caller holds c.mu.
+func (c *FieldClassifier) takeChange() ([]byte, bool) {
+	if c.persist == nil || c.disabled || !c.changed {
+		return nil, false
+	}
+	b, err := c.snapshot()
+	if err != nil {
+		return nil, false
+	}
+	c.changed = false
+	return b, true
+}
+
+// savedFacts is the classification results as they are kept in the shard's
+// own database, so a roll (a new instance opening the same volume) carries
+// them over. Counts of rows still on their way to being typed are not kept: a
+// locator that was part-way starts counting again, which is slower and safe.
+type savedFacts struct {
+	Epoch   uint64
+	Sources []savedSource
+}
+
+type savedSource struct {
+	CustomerID                    int64
+	Namespace, Service, Kind, Env string
+	Locators                      []savedLocator
+}
+
+type savedLocator struct {
+	Locator  string
+	State    FactState
+	WasTyped bool
+	Epoch    uint64
+}
+
+// snapshot encodes the results. Caller holds c.mu.
+func (c *FieldClassifier) snapshot() ([]byte, error) {
+	out := savedFacts{Epoch: c.epoch}
+	for sk, src := range c.sources {
+		ss := savedSource{CustomerID: sk.customerID, Namespace: sk.namespace, Service: sk.service,
+			Kind: sk.kind, Env: sk.env}
+		for _, ls := range src.order {
+			ss.Locators = append(ss.Locators, savedLocator{ls.locator, ls.state, ls.wasTyped, ls.epoch})
+		}
+		out.Sources = append(out.Sources, ss)
+	}
+	return json.Marshal(out)
+}
+
+// Restore loads results saved by snapshot into a fresh classifier. A restored
+// source counts as having had rows, so a locator it did not save is one the
+// earlier rows lacked, and stays dirty.
+func (c *FieldClassifier) Restore(b []byte) error {
+	var in savedFacts
+	if err := json.Unmarshal(b, &in); err != nil {
+		return fmt.Errorf("saved field facts: %w", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.epoch = in.Epoch
+	for _, ss := range in.Sources {
+		src := &factSource{rows: 1, awk: map[int]*locatorState{}, jq: map[string]*locatorState{}}
+		for _, sl := range ss.Locators {
+			ls := &locatorState{locator: sl.Locator, state: sl.State, wasTyped: sl.WasTyped, epoch: sl.Epoch}
+			src.order = append(src.order, ls)
+			switch {
+			case strings.HasPrefix(sl.Locator, "$"):
+				n, err := strconv.Atoi(sl.Locator[1:])
+				if err != nil {
+					return fmt.Errorf("saved field facts: locator %q", sl.Locator)
+				}
+				src.awk[n] = ls
+			case strings.HasPrefix(sl.Locator, "."):
+				src.jq[sl.Locator[1:]] = ls
+			default:
+				return fmt.Errorf("saved field facts: locator %q", sl.Locator)
+			}
+		}
+		c.sources[sourceKey{ss.CustomerID, ss.Namespace, ss.Service, ss.Kind, ss.Env}] = src
+	}
+	c.changed = false
+	return nil
+}
+
+// SetPersist installs the function that keeps the results. It must be set
+// before the classifier sees a row.
+func (c *FieldClassifier) SetPersist(f func([]byte) error) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.persist = f
 	c.mu.Unlock()
 }

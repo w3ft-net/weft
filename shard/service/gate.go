@@ -277,6 +277,9 @@ func (s *Server) Pause(ctx context.Context, req *pb.PauseRequest) (*pb.PauseResp
 
 	if ds := s.Shard(); ds != nil {
 		if err := inSpan(ctx, "pause.checkpoint", func(ctx context.Context) error {
+			// Ingest has stopped: let the classifier finish, so the facts
+			// it kept on the volume are current when the successor opens it.
+			ds.FlushFieldFacts()
 			if err := ds.Checkpoint(ctx); err != nil {
 				return fmt.Errorf("checkpoint: %w", err)
 			}

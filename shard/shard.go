@@ -372,12 +372,12 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 	}
 	ds.rowCount.Store(existing)
 	ds.facts = NewFieldClassifier()
-	if existing > 0 {
-		// Rows this classifier never saw may already break a fact, so it
-		// reports nothing until a scan has seen them.
-		ds.facts.BeginScan()
-		go ds.scanFieldFacts()
+	if _, err := db.Exec(factsStateSQL); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create field_facts_state: %w", err)
 	}
+	ds.restoreFieldFacts(existing)
+	ds.facts.SetPersist(ds.persistFieldFacts)
 	ds.openTiming = fmt.Sprintf("open=%s create=%s migrate=%s count=%s",
 		connected.Sub(t0).Round(time.Microsecond), created.Sub(connected).Round(time.Microsecond),
 		cmp.Or(migrate, migrated.Sub(created).Round(time.Microsecond).String()), time.Since(migrated).Round(time.Microsecond))
@@ -537,44 +537,37 @@ func (s *DuckDBShard) Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestR
 	return nil
 }
 
-// scanFieldFacts feeds the classifier the rows the shard held when it opened.
-func (s *DuckDBShard) scanFieldFacts() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		<-s.facts.Done()
-		cancel()
-	}()
-	rows, err := s.db.QueryContext(ctx, `SELECT customer_id, namespace, service, kind, env, fields, CAST(payload AS VARCHAR) FROM logs`)
-	if err != nil {
-		s.facts.Disable("scan: " + err.Error())
+// factsStateSQL keeps the field classifier's results in the shard's own
+// database, so they travel with the volume through a roll.
+const factsStateSQL = `CREATE TABLE IF NOT EXISTS field_facts_state (
+	id INTEGER PRIMARY KEY, state VARCHAR NOT NULL)`
+
+// persistFieldFacts keeps the classifier's results in the database; the
+// classifier calls it only when a result changes.
+func (s *DuckDBShard) persistFieldFacts(b []byte) error {
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO field_facts_state (id, state) VALUES (1, ?)`, string(b))
+	return err
+}
+
+// FlushFieldFacts waits until every row ingested so far is classified and
+// any resulting change is saved. A roll calls it once ingest has stopped.
+func (s *DuckDBShard) FlushFieldFacts() { s.facts.Drain() }
+
+// restoreFieldFacts brings back the results persistFieldFacts kept. A shard
+// with rows but nothing kept (one that predates this) gets no facts: its rows
+// are never rescanned.
+func (s *DuckDBShard) restoreFieldFacts(rows int64) {
+	if rows == 0 {
 		return
 	}
-	defer rows.Close()
-	const batchSize = 4096
-	batch := make([]ScanRow, 0, batchSize)
-	for rows.Next() {
-		var r ScanRow
-		var cust sql.NullInt64
-		var ns, svc, kind, env, payload sql.NullString
-		var fields duckdb.Composite[[]string]
-		if err := rows.Scan(&cust, &ns, &svc, &kind, &env, &fields, &payload); err != nil {
-			s.facts.Disable("scan: " + err.Error())
-			return
-		}
-		r = ScanRow{CustomerID: cust.Int64, Namespace: ns.String, Service: svc.String, Kind: kind.String, Env: env.String, Fields: fields.Get(), Payload: []byte(payload.String)}
-		if batch = append(batch, r); len(batch) == batchSize {
-			s.facts.Scan(batch)
-			batch = batch[:0]
-		}
-	}
-	if err := rows.Err(); err != nil {
-		// Closing the shard cancels the scan; either way no fact is trusted.
-		s.facts.Disable("scan: " + err.Error())
+	var state string
+	if err := s.db.QueryRow(`SELECT state FROM field_facts_state WHERE id = 1`).Scan(&state); err != nil {
+		s.facts.Disable(fmt.Sprintf("no saved facts for the %d rows already here", rows))
 		return
 	}
-	s.facts.Scan(batch)
-	s.facts.EndScan()
+	if err := s.facts.Restore([]byte(state)); err != nil {
+		s.facts.Disable(err.Error())
+	}
 }
 
 // FieldFacts is what the shard's classifier has learned that the coordinator

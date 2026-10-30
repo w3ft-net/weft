@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -180,80 +179,6 @@ func TestIngest_ClassifiesCommittedRows(t *testing.T) {
 
 func f(ds *DuckDBShard) FieldFact { x, _ := factFor(ds.FieldFacts(), "$2"); return x }
 
-func waitScanned(t *testing.T, c *FieldClassifier) {
-	t.Helper()
-	for i := 0; i < 5000; i++ {
-		c.mu.Lock()
-		ready, disabled := c.ready, c.disabled
-		c.mu.Unlock()
-		if disabled {
-			t.Fatal("classifier disabled during the scan")
-		}
-		if ready {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("scan never finished")
-}
-
-// reopen ingests first into a shard on disk, closes it, and opens it again.
-func reopen(t *testing.T, first []*pb.LogRow) *DuckDBShard {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "s.duckdb")
-	ds, err := NewDuckDBShard("a", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ds.Ingest(t.Context(), first, nil); err != nil {
-		t.Fatal(err)
-	}
-	ds.Close()
-	ds, err = NewDuckDBShard("a", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ds.Close() })
-	return ds
-}
-
-func TestReopenedShardScansItsRowsBeforeReportingFacts(t *testing.T) {
-	ds := reopen(t, numRows(factTypedAfter, "x 7"))
-	waitScanned(t, ds.facts)
-	if f, ok := factFor(ds.FieldFacts(), "$2"); !ok || f.State != FactTyped {
-		t.Errorf("scan of %d numeric rows: want $2 typed, got %+v (ok=%v)", factTypedAfter, f, ok)
-	}
-}
-
-func TestReopenedShardScanSeesTheViolationsAlreadyOnDisk(t *testing.T) {
-	rows := append(numRows(factTypedAfter, "x 7"), numRows(1, "x 7abc")...)
-	ds := reopen(t, rows)
-	waitScanned(t, ds.facts)
-	// Plenty of new numeric rows must not make up for the stored one.
-	if err := ds.Ingest(t.Context(), numRows(factTypedAfter, "x 7"), nil); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, ds.facts)
-	if f, ok := factFor(ds.FieldFacts(), "$2"); ok {
-		t.Errorf("$2 held 7abc on disk but reported %+v", f)
-	}
-}
-
-func TestReopenedShardReportsNothingWhileScanning(t *testing.T) {
-	c := NewFieldClassifier()
-	defer c.Stop()
-	c.BeginScan()
-	c.Observe(numRows(factTypedAfter, "x 7"))
-	settle(t, c)
-	if got := c.Pending(); got != nil {
-		t.Errorf("reported %+v before the scan ended", got)
-	}
-	c.EndScan()
-	if _, ok := factFor(c.Pending(), "$2"); !ok {
-		t.Error("nothing reported after the scan ended")
-	}
-}
-
 func jsonRows(n int, payload string) []*pb.LogRow {
 	rows := numRows(n, payload)
 	for _, r := range rows {
@@ -354,19 +279,6 @@ func TestFieldClassifier_TracksAtMostFactMaxJQKeys(t *testing.T) {
 	}
 }
 
-func TestReopenedShardScansStoredPayloads(t *testing.T) {
-	rows := append(jsonRows(factTypedAfter, `{"q":7,"s":3}`), jsonRows(1, `{"q":7,"s":"three"}`)...)
-	ds := reopen(t, rows)
-	waitScanned(t, ds.facts)
-	facts := ds.FieldFacts()
-	if f, ok := factFor(facts, ".q"); !ok || f.State != FactTyped {
-		t.Errorf(".q want typed from the stored payloads, got %+v (ok=%v)", f, ok)
-	}
-	if f, ok := factFor(facts, ".s"); ok {
-		t.Errorf(".s held a string on disk but reported %+v", f)
-	}
-}
-
 // Ingest is the only writer of row values, so it is the only place the
 // classifier sees them. This fails if another path starts writing fields or
 // payload, which would make every fact a guess about rows it never saw.
@@ -411,5 +323,157 @@ func BenchmarkClassifyJSONRow(b *testing.B) {
 		c.mu.Lock()
 		c.classify(row)
 		c.mu.Unlock()
+	}
+}
+
+func openAt(t *testing.T, path string) *DuckDBShard {
+	t.Helper()
+	ds, err := NewDuckDBShard("a", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ds.Close() })
+	return ds
+}
+
+// mixedRows is n rows of one source with a numeric awk field ($2) and a numeric
+// payload key (.q).
+func mixedRows(n int, awk, q string) []*pb.LogRow {
+	rows := jsonRows(n, `{"q":`+q+`}`)
+	for _, r := range rows {
+		r.Raw = "x " + awk
+	}
+	return rows
+}
+
+func ingest(t *testing.T, ds *DuckDBShard, rows []*pb.LogRow) {
+	t.Helper()
+	if err := ds.Ingest(t.Context(), rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, ds.facts)
+}
+
+func stateRows(t *testing.T, ds *DuckDBShard) int {
+	t.Helper()
+	var n int
+	if err := ds.db.QueryRow(`SELECT COUNT(*) FROM field_facts_state`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// roll is what a handoff does: wait for the classifier, then close.
+func roll(t *testing.T, ds *DuckDBShard) {
+	t.Helper()
+	ds.FlushFieldFacts()
+	ds.Close()
+}
+
+func TestFieldFacts_RestoredByTheNextInstance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.duckdb")
+	ds := openAt(t, path)
+	ingest(t, ds, mixedRows(factTypedAfter, "7", "3"))
+	roll(t, ds)
+
+	next := openAt(t, path)
+	facts := next.FieldFacts()
+	for _, loc := range []string{"$2", ".q"} {
+		if f, ok := factFor(facts, loc); !ok || f.State != FactTyped {
+			t.Errorf("%s want typed straight after the roll, got %+v (ok=%v)", loc, f, ok)
+		}
+	}
+}
+
+// Results are kept, counts on the way to a result are not: a locator that was
+// 600 rows in starts again, so it takes a full 1,000 more.
+func TestFieldFacts_ACountOnItsWayRestartsAfterARoll(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.duckdb")
+	ds := openAt(t, path)
+	ingest(t, ds, mixedRows(600, "7", "3"))
+	roll(t, ds)
+
+	next := openAt(t, path)
+	ingest(t, next, mixedRows(600, "7", "3"))
+	if got := next.FieldFacts(); len(got) != 0 {
+		t.Fatalf("typed on 600 rows after the roll: %+v", got)
+	}
+	ingest(t, next, mixedRows(400, "7", "3"))
+	if f, ok := factFor(next.FieldFacts(), "$2"); !ok || f.State != FactTyped {
+		t.Errorf("want $2 typed after 1,000 rows since the roll, got %+v (ok=%v)", f, ok)
+	}
+}
+
+// A dirty locator stays dirty after a roll, and a locator the earlier rows
+// lacked can't be typed by the rows that follow.
+func TestFieldFacts_DirtyAndLateStayOffAfterARoll(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.duckdb")
+	ds := openAt(t, path)
+	ingest(t, ds, append(mixedRows(1, "7abc", `"s"`), mixedRows(10, "7", "3")...))
+	roll(t, ds)
+
+	next := openAt(t, path)
+	late := mixedRows(factTypedAfter, "7 8", "3") // $3 was absent from the earlier rows
+	ingest(t, next, late)
+	for _, loc := range []string{"$2", ".q", "$3"} {
+		if f, ok := factFor(next.FieldFacts(), loc); ok {
+			t.Errorf("%s must not type after the roll, got %+v", loc, f)
+		}
+	}
+}
+
+// A shard with rows and nothing kept (one from before this, or whose state
+// was lost) has no facts, and is not rescanned.
+func TestFieldFacts_OffForAShardWithRowsAndNoSavedState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.duckdb")
+	ds := openAt(t, path)
+	ingest(t, ds, mixedRows(5, "7", "3"))
+	if _, err := ds.db.Exec(`DELETE FROM field_facts_state`); err != nil {
+		t.Fatal(err)
+	}
+	ds.Close()
+
+	next := openAt(t, path)
+	ingest(t, next, mixedRows(factTypedAfter*2, "7", "3"))
+	if got := next.FieldFacts(); got != nil {
+		t.Errorf("reported %+v for rows it never classified", got)
+	}
+}
+
+// The value is written when a result changes, not when rows are classified.
+func TestFieldFacts_WrittenOnlyWhenAResultChanges(t *testing.T) {
+	ds := openAt(t, filepath.Join(t.TempDir(), "s.duckdb"))
+	stored := func() string {
+		t.Helper()
+		var s string
+		if err := ds.db.QueryRow(`SELECT state FROM field_facts_state WHERE id = 1`).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	overwrite := func() {
+		t.Helper()
+		if _, err := ds.db.Exec(`UPDATE field_facts_state SET state = 'sentinel' WHERE id = 1`); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ingest(t, ds, mixedRows(3, "7", "3"))
+	if stored() == "" {
+		t.Fatal("a new source was not recorded")
+	}
+	overwrite()
+	ingest(t, ds, mixedRows(500, "7", "3")) // more of the same: no result changes
+	if got := stored(); got != "sentinel" {
+		t.Fatalf("rewritten with no change in any result: %q", got)
+	}
+	ingest(t, ds, mixedRows(500, "7", "3")) // crosses 1,000: $2 and .q become typed
+	if got := stored(); got == "sentinel" {
+		t.Error("became typed but was not written")
+	}
+	overwrite()
+	ingest(t, ds, mixedRows(1, "7abc", "3")) // $2 goes dirty
+	if got := stored(); got == "sentinel" {
+		t.Error("went dirty but was not written")
 	}
 }

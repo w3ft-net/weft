@@ -477,3 +477,34 @@ func TestPause_RecordsItsStepsAsSpans(t *testing.T) {
 		}
 	}
 }
+
+// A roll keeps the shard's field facts: they live on the volume, Pause lets the
+// classifier finish first, and the instance that opens it next has them without
+// rescanning a row.
+func TestPause_KeepsFieldFactsForTheNextInstance(t *testing.T) {
+	vol := newFakeVolume(true)
+	srv, dir := seededServer(t, vol)
+	rows := make([]*pb.LogRow, 1000)
+	for i := range rows {
+		rows[i] = &pb.LogRow{Raw: "x 7", TsUnixNs: time.Unix(1500, 0).UnixNano(), Service: "svc", Namespace: "ns", CustomerId: 1}
+	}
+	if err := srv.Shard().Ingest(context.Background(), rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.Pause(context.Background(), &pb.PauseRequest{SuccessorAddr: "succ:9000"}); err != nil {
+		t.Fatal(err)
+	}
+
+	next, err := shard.NewDuckDBShard("shard-pause", filepath.Join(dir, "shard.duckdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	var typed bool
+	for _, f := range next.FieldFacts() {
+		typed = typed || (f.Locator == "$2" && f.State == shard.FactTyped)
+	}
+	if !typed {
+		t.Errorf("successor has no typed $2 after the roll: %+v", next.FieldFacts())
+	}
+}

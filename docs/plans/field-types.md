@@ -115,9 +115,26 @@ else the base plan. `ExecuteQueryRequest` carries per-shard variants.
      that doesn't fit turns the classifier off for good, never a guess). Typed after
      1,000 numeric rows, dirty on the first non-numeric or missing value. A locator
      first seen after earlier rows is dirty from the start.
-   - Reopening a shard with rows scans them in the background and reports nothing
-     until the scan ends; a scan can lose a typing, never invent one. Sealed shards do
-     not persist facts: the scan rebuilds them.
+   - **No rescan, ever.** Rows are append-only, so the classification results are all
+     there is to keep. They live in a one-row table in the shard's own DuckDB file
+     (`field_facts_state`), which travels with the volume through a roll. The classifier
+     writes it itself, **only when a result changes**: a source or locator starts being
+     tracked, or one becomes typed or goes dirty. Classifying another conforming row is
+     not a change, so a steady source writes nothing. The next instance restores it at
+     open. `Pause` just waits for the classifier to finish before the checkpoint.
+   - What is kept is results, not counts: a locator part-way to 1,000 rows starts
+     counting again after a roll (slower, safe), and a restored source counts as having
+     had rows, so a locator it didn't save stays dirty. A shard with rows and no saved
+     state (one from before this) opens with its facts off and stays off for its life;
+     it is never scanned, so for the shards that exist at the first deploy that means no
+     facts until their window rotates. (An earlier version rescanned the table on open.
+     On a ~1 GB host holding several GB it left a rolled shard stuck in LAUNCHING, so it
+     was removed.)
+   - **Accepted gap:** if a shard is killed (not rolled) between a row committing and the
+     classifier seeing it, that row is never classified, and a violation in it could leave
+     a locator typed that shouldn't be. This is the plan's tolerated window made
+     permanent for that shard. Closing it needs a "shut down cleanly" marker restored only
+     when set (costing the facts after every crash), which is not built.
    - `ShardHeartbeatRequest.field_facts` and `HeartbeatResponse.field_facts_acked`. Only
      typed facts and retractions of typed ones are sent; absence is unknown.
    - `logdb.Shard.FieldTyped(key)`, `ShardRegistry.FoldFieldFacts`, and migration 110
