@@ -128,6 +128,9 @@ const (
 	// RenderDistinctTotal is one bare number, how many distinct lines there
 	// are: `sort -u | wc -l`.
 	RenderDistinctTotal GroupRender = "distinct_total"
+	// RenderKeyCount is each distinct line, a space, and its count: an awk
+	// tally.
+	RenderKeyCount GroupRender = "key_count"
 )
 
 // GroupSpec is the shard-side grouping a plan asks for (QueryPlan.Group).
@@ -301,6 +304,9 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 
 	orderDesc := sql.orderBy == "ts DESC"
 	c.fuseAggregate(sql.limit > 0 || sql.offset > 0)
+	if c.groupKey != "" {
+		sql.setSelect(c.groupKey)
+	}
 	if c.aggregate == "" && c.group == nil {
 		c.fuseSort(orderDesc, sql.limit)
 	}

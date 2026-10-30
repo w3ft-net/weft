@@ -35,6 +35,23 @@ func TestGroupOrder(t *testing.T) {
 		// Not a count of distinct lines: uniq -c's lines are, but sort -n compares keys.
 		{`cat vimgym.log | sort -n | uniq | wc -l`, GroupSpec{}, 3},
 		{`cat vimgym.log | sort | wc -l`, GroupSpec{}, 2},
+		// awk's count per key.
+		{`cat vimgym.log | awk '{ c[$2]++ } END { for (k in c) print k, c[k] }'`, GroupSpec{Render: RenderKeyCount}, 0},
+		{`cat vimgym.log | grep a | awk '{ n[$1 "|" $2]++ } END { for (x in n) print x, n[x] }'`, GroupSpec{Render: RenderKeyCount}, 0},
+		{`cat vimgym.log | awk '{ ++c[$2] } END { for (k in c) print k, c[k] }'`, GroupSpec{Render: RenderKeyCount}, 0},
+		{`cat vimgym.log | awk '{ c[$2]++ } END { for (k in c) print k, c[k] }' | sort -rn`, GroupSpec{Render: RenderKeyCount}, 1},
+		// Not the whole tally shape: a pattern, a sum, another print, a second
+		// array, an order of the output, a key SQL can't compute.
+		{`cat vimgym.log | awk '/a/ { c[$2]++ } END { for (k in c) print k, c[k] }'`, GroupSpec{}, 1},
+		{`cat vimgym.log | awk '{ c[$2] += $3 } END { for (k in c) print k, c[k] }'`, GroupSpec{}, 1},
+		{`cat vimgym.log | awk '{ c[$2]++ } END { for (k in c) print c[k], k }'`, GroupSpec{}, 1},
+		{`cat vimgym.log | awk '{ c[$2]++; d[$3]++ } END { for (k in c) print k, c[k] }'`, GroupSpec{}, 1},
+		{`cat vimgym.log | awk '{ c[$2]++ } END { for (k in c) print k, c[k] > "/dev/stderr" }'`, GroupSpec{}, 1},
+		{`cat vimgym.log | awk '{ c[toupper($2)]++ } END { for (k in c) print k, c[k] }'`, GroupSpec{}, 1},
+		// The key would read the text a projection ahead of it made.
+		{`cat vimgym.log | cut -d ' ' -f 2- | awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'`, GroupSpec{}, 1},
+		// A pushed line count is applied after the shards.
+		{`tail -n 5 vimgym.log | awk '{ c[$2]++ } END { for (k in c) print k, c[k] }'`, GroupSpec{}, 1},
 		// An order has no meaning over a line or a total.
 		{`cat vimgym.log | sort -u | sort -rn | head -n 5`, GroupSpec{Render: RenderLine}, 2},
 	} {

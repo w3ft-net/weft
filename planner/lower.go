@@ -45,8 +45,9 @@ import (
 // level (null errors when none do), and a trace's arguments changed.
 // v12: the shard-side grouping of wc -l, sort -u and sort | uniq [-c] is a
 // Group, not an Aggregate string.
-// v13: sort | uniq -c | sort -rn [| head -n N] is a Group ordered by count
-// and cut to N in compute, not stages.
+// v13: more Groups: sort | uniq -c | sort -rn [| head -n N] is ordered by
+// count and cut to N in compute, sort -u | wc -l is a distinct total, and
+// awk's count per key is a key count.
 const PlannerVersion = 13
 
 // LoweredPlan is the persisted shape we store next to a watch's

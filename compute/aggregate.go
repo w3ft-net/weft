@@ -121,6 +121,8 @@ func GroupToProto(g *planner.GroupSpec) *pb.GroupSpec {
 		out.Render = pb.GroupRender_GROUP_RENDER_COUNT_LINE
 	case planner.RenderDistinctTotal:
 		out.Render = pb.GroupRender_GROUP_RENDER_DISTINCT_TOTAL
+	case planner.RenderKeyCount:
+		out.Render = pb.GroupRender_GROUP_RENDER_KEY_COUNT
 	default:
 		panic("compute: no GroupSpec for render " + string(g.Render))
 	}

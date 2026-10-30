@@ -120,7 +120,13 @@ func lowerAwk(ls *loweredStage, a at) []node {
 	if pd != nil && (pd.limit > 0 || pd.offset > 0) {
 		return []node{&limitNode{at: a, n: pd.limit, offset: pd.offset}}
 	}
-	return awkRowStage(prog, pd, why).nodes(a)
+	nodes := awkRowStage(prog, pd, why).nodes(a)
+	if key, ok := awkTally(prog); ok && len(nodes) == 1 {
+		if o, ok := nodes[0].(*opaqueNode); ok {
+			return []node{&tallyNode{at: a, key: key, why: o.why}}
+		}
+	}
+	return nodes
 }
 
 // awkRowStage says what an awk program does to a row in the terms every

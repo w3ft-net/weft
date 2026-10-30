@@ -49,7 +49,7 @@ func TestDifferential(t *testing.T) {
 			}
 		})
 	}
-	for _, r := range []planner.GroupRender{planner.RenderTotal, planner.RenderLine, planner.RenderCountLine, planner.RenderDistinctTotal} {
+	for _, r := range []planner.GroupRender{planner.RenderTotal, planner.RenderLine, planner.RenderCountLine, planner.RenderDistinctTotal, planner.RenderKeyCount} {
 		if renders[r] == 0 {
 			t.Errorf("no pipeline in the corpus groups as %s in the shard", r)
 		}
@@ -663,6 +663,26 @@ var extraCorpus = []string{
 	`cat /log/acme/api/main.log | grep no-such-line | sort -u | wc -l`,
 	`cat /log/acme/api/main.log | jq -r '.action' | sort -u | wc -l | awk '{ print $1 * 2 }'`,
 	`tail -n 60 /log/acme/api/main.log | sort -u | wc -l`,
+	// awk's count per key: the key is projected, the shard groups it.
+	`cat /log/acme/api/main.log | awk '{ c[$3]++ } END { for (k in c) print k, c[k] }'`,
+	`cat /log/acme/api/main.log | awk '{ ++n[$2] } END { for (x in n) print x, n[x] }'`,
+	`cat /log/acme/api/main.log | awk '{ c[$99]++ } END { for (k in c) print k, c[k] }'`,
+	`cat /log/acme/api/main.log | awk '{ c[$0]++ } END { for (k in c) print k, c[k] }'`,
+	`cat /log/acme/api/main.log | awk '{ c[$2 "|" $3]++ } END { for (k in c) print k, c[k] }'`,
+	`cat /log/acme/api/main.log | awk '{ c[HOST]++ } END { for (k in c) print k, c[k] }'`,
+	`cat /log/acme/api/main.log | grep -v warmed | awk '{ c[$3]++ } END { for (k in c) print k, c[k] }'`,
+	`cat /log/acme/api/main.log | grep no-such-line | awk '{ c[$3]++ } END { for (k in c) print k, c[k] }'`,
+	`cat vimgym.log | awk '{ c[$2]++ } END { for (k in c) print k, c[k] }'`,
+	`cat /log/acme/api/main.log | awk '{ c[$3]++ } END { for (k in c) print k, c[k] }' | sort -rn | head -n 3`,
+	`cat /log/acme/api/main.log | awk '{ c[$3]++ } END { for (k in c) print k, c[k] }' | awk '{ print $2 }'`,
+	// Not a tally: a pattern, a sum, the count first, a computed key, a
+	// projection ahead, a pushed line count.
+	`cat /log/acme/api/main.log | awk '/warmed/ { c[$3]++ } END { for (k in c) print k, c[k] }'`,
+	`cat /log/acme/api/main.log | awk '{ c[$3] += $5 } END { for (k in c) print k, c[k] }'`,
+	`cat /log/acme/api/main.log | awk '{ c[$3]++ } END { for (k in c) print c[k], k }'`,
+	`cat /log/acme/api/main.log | awk '{ c[toupper($3)]++ } END { for (k in c) print k, c[k] }'`,
+	`cat /log/acme/api/main.log | cut -d ' ' -f 2- | awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'`,
+	`tail -n 60 /log/acme/api/main.log | awk '{ c[$3]++ } END { for (k in c) print k, c[k] }'`,
 	// Not top-N: head -n 0, another order, tail, and a keyed sort.
 	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rn | head -n 0`,
 	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -n | head -n 3`,

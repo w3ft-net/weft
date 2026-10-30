@@ -31,6 +31,7 @@ type compiled struct {
 	// stages, if any; aggregated is those stages' nodes. aggregate is a
 	// trace or span source's own aggregate (spans.go).
 	group      *GroupSpec
+	groupKey   string // the SQL a tally groups by, in place of raw
 	aggregate  string
 	aggregated []node
 	passes     []passStep
@@ -79,6 +80,8 @@ func nodeKind(n node) string {
 		return "Uniq"
 	case *countNode:
 		return "Count"
+	case *tallyNode:
+		return "Tally"
 	}
 	return "Opaque"
 }
@@ -344,9 +347,12 @@ func (c *compiled) fuseAggregate(limited bool) {
 	var reverse bool
 	var ordered bool
 	var limit int
+	var key string
 	switch first := c.compute[0].nodes[0].(type) {
 	case *countNode:
 		render, n = RenderTotal, 1
+	case *tallyNode:
+		render, n, key = RenderKeyCount, 1, first.key
 	case *sortNode:
 		if first.keyed {
 			return
@@ -390,6 +396,9 @@ func (c *compiled) fuseAggregate(limited bool) {
 	case c.source.follow:
 		c.logf(pass, "skipped %s: follow runs the stages on live rows", label)
 		return
+	case key != "" && c.selected != nil:
+		c.logf(pass, "skipped %s: the key reads the text %s projected, not the row", label, c.label(c.selected))
+		return
 	case c.source.cmd == "trace" || c.source.cmd == "trace_spans" || c.source.cmd == "trace_list":
 		c.logf(pass, "skipped %s: a trace source", label)
 		return
@@ -404,6 +413,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 	c.shard += len(c.aggregated)
 	c.compute = c.compute[n:]
 	c.group = &GroupSpec{Render: render, ByCount: ordered, Limit: limit}
+	c.groupKey = key
 	switch {
 	case render == RenderTotal:
 		c.shardOrderBy = ""

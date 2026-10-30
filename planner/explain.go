@@ -114,7 +114,7 @@ func (c *compiled) explainNodes(b *strings.Builder) {
 			if n == c.selected {
 				l.note = "the SELECT"
 			}
-		case *sortNode, *uniqNode, *countNode:
+		case *sortNode, *uniqNode, *countNode, *tallyNode:
 			l.desc = c.stage(n).src
 			if slices.Contains(c.aggregated, n) {
 				l.note = "the GROUP BY: " + string(c.group.Render)

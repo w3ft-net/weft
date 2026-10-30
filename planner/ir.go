@@ -88,6 +88,15 @@ type countNode struct {
 	at
 }
 
+// tallyNode is an awk count per key (awkTally): key is the SQL for the
+// key. It is an aggregate on its own, like countNode; why says why the stage
+// would run in compute if the aggregate isn't fused.
+type tallyNode struct {
+	at
+	key string
+	why reason
+}
+
 // opaqueNode runs its stage, verbatim, in compute.
 type opaqueNode struct {
 	at
