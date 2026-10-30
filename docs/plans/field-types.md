@@ -168,6 +168,57 @@ Each step also needs a differential test against the real stages on data that
 includes the violating rows, because the window is tolerated but the steady state
 is not.
 
+## Keyed sum/min/max: design (2026-10-30)
+
+The benchmark's keyed queries look like
+`jq -r '[.shard_id, .q_count] | @tsv' | awk '{ s[$1] += $2 } END { for (k in s) print k, s[k] }'`.
+`fuseAggregate` already turns the count form (`{ c[KEY]++ }`, `tallyNode`) into a
+shard `GROUP BY`, but only over the row: it skips a key that reads "the text a
+projection projected" (`c.selected != nil`). A keyed sum has to read that text, and
+doing it exactly raises a hazard the first sketch missed.
+
+**The shift hazard.** awk's `$2` is the second whitespace-separated token of the
+projected line. `@tsv` escapes tabs but not spaces, so if `.shard_id` ever holds a
+space, `$2` is a piece of the id, not `.q_count`. A fact "`.q_count` is always a
+number" therefore does **not** prove "`$2` is always a number". It proves field K only
+when every earlier element of the projection is also known to hold no whitespace,
+which is what "typed numeric" gives and what a string key never does.
+
+So the rule is: field K of a `[e1, ..., en] | @tsv` projection is provably numeric
+when `eK` is typed and each of `e1..e(K-1)` is typed (or K is 1). The **key** side
+needs no proof: SQL splits the same projected text the way awk does
+(`list_filter(string_split_regex(text, '[ \t\n\r]+'), x -> x <> '')[K]`, the split
+ingest already uses for `fields`), so a key with a space is truncated identically.
+
+Consequences:
+
+- The benchmark's `[.shard_id, .q_count]` order is unprovable. The value-first
+  forms `[.q_count, .shard_id] | @tsv` with `s[$2] += $1` are provable, and are what
+  `queries.json` now carries as the targets (the original forms stay as controls and
+  should NOT change).
+- The sum is exact only if every value parses the way awk reads it. A typed field
+  gives `SUM(CAST(field AS DOUBLE))` per shard; compute adds the per-shard sums per
+  key and prints them as awk does (integers whole, else six significant digits, as
+  `formatAwkValue`). Float sums can differ in the last digits from awk's one running
+  total, so a sum lowers only where the typed fact also says the values are integers
+  within 2^53 (the class set and largest absolute value this release deliberately
+  left out), or the result is rounded to the six digits awk prints (to be checked by
+  the differential test before choosing).
+- Min/max have no clean merge across shards that are not all typed (see the table),
+  so they use the all-typed-or-nothing rule.
+- The base shards (untyped) keep running the original stage: compute runs it per shard
+  and adds that shard's `key sum` partials to the typed shards' (the sum/count row of
+  the table above). This needs **per-shard stages on the wire**; an old compute must
+  fail the query rather than ignore them (see Deploy gates).
+
+Pieces, in build order: (1) the projection records its elements so a later stage can
+resolve field K to a typed-checkable expression; (2) `tallyNode` becomes an aggregate
+node with an operation (count, sum, max, min) and a value expression; (3) the planner
+emits the base plan plus an optimistic variant and its requirements (source, locators);
+(4) the wire carries per-shard stage/group variants and compute merges them;
+(5) `executeQuery` picks per shard from the registry; (6) differential tests against
+the real awk and jq on data with violating rows.
+
 ## Open questions
 
 1. What a source with hundreds of distinct JSON keys should track: the first 50

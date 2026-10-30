@@ -39,9 +39,10 @@ def sh(rng, pipeline, retries=2):
     return r, retries
 
 
-def record(label, runs, note):
+def record(label, runs, note, only):
     spec = json.loads((HERE / "queries.json").read_text())
-    out = {
+    path = RESULTS / f"{label}.json"
+    out = json.loads(path.read_text()) if only and path.exists() else {
         "label": label,
         "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "weft_cli": weft("version").stdout.strip(),
@@ -51,7 +52,11 @@ def record(label, runs, note):
         "note": note,
         "queries": {},
     }
+    out["queries"] = out.get("queries", {})
+    out.setdefault("queries", {})
     for q in spec["queries"]:
+        if only and q["id"] not in only:
+            continue
         times, first, retried = [], None, 0
         for _ in range(runs):
             t = time.monotonic()
@@ -112,12 +117,13 @@ def main():
     r.add_argument("label")
     r.add_argument("--runs", type=int, default=5)
     r.add_argument("--note", default="")
+    r.add_argument("--only", default="", help="comma-separated ids: add these to an existing label")
     c = sub.add_parser("compare")
     c.add_argument("before")
     c.add_argument("after")
     args = p.parse_args()
     if args.cmd == "record":
-        record(args.label, args.runs, args.note)
+        record(args.label, args.runs, args.note, set(filter(None, args.only.split(","))))
     else:
         compare(args.before, args.after)
 
