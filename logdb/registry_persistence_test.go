@@ -33,6 +33,7 @@ type fakeRegistryStore struct {
 	// stamps); christen/reconciler tests set it to model a bucket's
 	// log_groups.
 	shardServices  []store.ShardService
+	fieldFacts     []store.ShardFieldFact
 	bucketServices map[int64][]store.ShardService
 	// ingestFailureWrites counts SetShardIngestFailures calls — separate
 	// from saves (SaveShard) since RecordIngestFailure/ResetIngestFailures
@@ -139,6 +140,41 @@ func (f *fakeRegistryStore) ListShardServices() ([]store.ShardService, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]store.ShardService(nil), f.shardServices...), nil
+}
+
+// ListShardFieldFacts returns every typed fact applied so far.
+func (f *fakeRegistryStore) ListShardFieldFacts() ([]store.ShardFieldFact, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.ShardFieldFact(nil), f.fieldFacts...), nil
+}
+
+// ApplyShardFieldFacts upserts typed rows and deletes dropped ones.
+func (f *fakeRegistryStore) ApplyShardFieldFacts(shardID string, typed, dropped []store.ShardFieldFact) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	same := func(a, b store.ShardFieldFact) bool {
+		a.Epoch, b.Epoch, a.ShardID, b.ShardID = 0, 0, "", ""
+		return a == b
+	}
+	var kept []store.ShardFieldFact
+	for _, r := range f.fieldFacts {
+		drop := false
+		for _, d := range append(append([]store.ShardFieldFact(nil), dropped...), typed...) {
+			if r.ShardID == shardID && same(r, d) {
+				drop = true
+			}
+		}
+		if !drop {
+			kept = append(kept, r)
+		}
+	}
+	for _, t := range typed {
+		t.ShardID = shardID
+		kept = append(kept, t)
+	}
+	f.fieldFacts = kept
+	return nil
 }
 
 // AddShardService appends a single (shard, namespace, service) row.

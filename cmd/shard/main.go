@@ -23,6 +23,7 @@ import (
 	"github.com/graybeardcorp/weft/auth"
 	weftcfg "github.com/graybeardcorp/weft/config"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 	shardsvc "github.com/graybeardcorp/weft/shard/service"
 )
 
@@ -347,6 +348,9 @@ func heartbeatFor(srv *shardsvc.Server, addr, instanceID string) (*pb.ShardHeart
 		diskBytes = ds.DiskUsage().TotalBytes()
 	}
 	req := buildHeartbeatRequest(shardID, addr, instanceID, state, rowCount, diskBytes)
+	if ds := srv.Shard(); ds != nil && !srv.Spare() {
+		req.FieldFacts = fieldFactDeltas(ds.FieldFacts())
+	}
 	if srv.Spare() {
 		req.State = "SPARE"
 		req.Spare = true
@@ -373,11 +377,37 @@ func sendHeartbeat(client pb.WeftCoordinatorClient, addr, instanceID string, srv
 	}
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tok)
 
-	if _, err := client.Heartbeat(ctx, req); err != nil {
+	resp, err := client.Heartbeat(ctx, req)
+	if err != nil {
 		weftsdk.Infof(ctx, "heartbeat: %v", err)
 		return false
 	}
+	if ds := srv.Shard(); ds != nil {
+		ds.AckFieldFacts(resp.FieldFactsAcked)
+	}
 	return true
+}
+
+// fieldFactDeltas puts the shard's unacknowledged field facts on the wire.
+func fieldFactDeltas(facts []shard.FieldFact) []*pb.FieldFactDelta {
+	out := make([]*pb.FieldFactDelta, len(facts))
+	for i, f := range facts {
+		state := pb.FieldFactState_FIELD_FACT_STATE_TYPED
+		if f.State == shard.FactDirty {
+			state = pb.FieldFactState_FIELD_FACT_STATE_DIRTY
+		}
+		out[i] = &pb.FieldFactDelta{
+			CustomerId: f.CustomerID,
+			Namespace:  f.Namespace,
+			Service:    f.Service,
+			Kind:       f.Kind,
+			Env:        f.Env,
+			Locator:    f.Locator,
+			State:      state,
+			Epoch:      f.Epoch,
+		}
+	}
+	return out
 }
 
 // getInstanceID returns the shard's instance id, the key the coordinator

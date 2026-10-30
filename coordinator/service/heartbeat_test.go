@@ -246,3 +246,35 @@ func TestHeartbeat_SpareIsNotRecordedAsAShardHeartbeat(t *testing.T) {
 		}
 	}
 }
+
+func TestHeartbeat_FieldFactsAreFoldedAndAcked(t *testing.T) {
+	srv := newRegisteredShard(t, "shard-a", "good-token")
+	resp, err := srv.Heartbeat(heartbeatCtx("good-token"), &pb.ShardHeartbeatRequest{
+		ShardId: "shard-a",
+		Addr:    "10.0.0.1:9000",
+		State:   "INGESTING",
+		FieldFacts: []*pb.FieldFactDelta{
+			{CustomerId: 1, Namespace: "ns", Service: "svc", Kind: "main", Env: "prod", Locator: "$5",
+				State: pb.FieldFactState_FIELD_FACT_STATE_TYPED, Epoch: 4},
+			{CustomerId: 1, Namespace: "ns", Service: "svc", Kind: "main", Env: "prod", Locator: "$6",
+				State: pb.FieldFactState_FIELD_FACT_STATE_TYPED, Epoch: 7},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.FieldFactsAcked != 7 {
+		t.Errorf("acked = %d, want the highest epoch, 7", resp.FieldFactsAcked)
+	}
+}
+
+func TestHeartbeat_NoFieldFactsAcksNothing(t *testing.T) {
+	srv := newRegisteredShard(t, "shard-a", "good-token")
+	resp, err := srv.Heartbeat(heartbeatCtx("good-token"), &pb.ShardHeartbeatRequest{ShardId: "shard-a", State: "INGESTING"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.FieldFactsAcked != 0 {
+		t.Errorf("acked = %d with nothing to ack", resp.FieldFactsAcked)
+	}
+}

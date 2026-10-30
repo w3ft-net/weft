@@ -527,6 +527,12 @@ func (p *Provisioner) adoptFromHeartbeats() {
 	p.registry.MarkLivenessRead(readAt)
 }
 
+// FoldFieldFacts records the field facts in a shard's heartbeat and returns
+// the epoch the response should acknowledge; see ShardRegistry.FoldFieldFacts.
+func (p *Provisioner) FoldFieldFacts(shardID string, deltas []*pb.FieldFactDelta) uint64 {
+	return p.registry.FoldFieldFacts(shardID, deltas)
+}
+
 // AuthenticateShard validates the bearer presented for shardID
 // against the heartbeat token the provisioner minted at christen.
 // Lookup order is registry → store: a coordinator restart leaves the

@@ -40,6 +40,10 @@ import (
 type Shard struct {
 	mu sync.RWMutex `gorm:"-"`
 
+	// facts is what the shard has reported about its field values; see
+	// fieldfacts.go. Guarded by its own lock, not mu.
+	facts fieldFactSet
+
 	// ── persisted (maps to table shard_records) ──
 	ID              string     `gorm:"primaryKey"`
 	WindowStart     time.Time  `gorm:"not null"` // timestamptz (migration 062)
@@ -281,6 +285,12 @@ type RegistryStore interface {
 	// AddShardService records that a shard serves (namespaceID, service)
 	// — the live-add persistence behind AddServiceToShard.
 	AddShardService(shardID string, namespaceID uint, service string) error
+	// ListShardFieldFacts returns every shard's typed field facts, loaded
+	// at boot and on refresh like ListShardServices.
+	ListShardFieldFacts() ([]store.ShardFieldFact, error)
+	// ApplyShardFieldFacts records one heartbeat's changes to a shard's
+	// field facts: typed facts upserted, dropped ones deleted.
+	ApplyShardFieldFacts(shardID string, typed, dropped []store.ShardFieldFact) error
 }
 
 // ShardRegistry tracks all shard entries. Thread-safe.
@@ -454,6 +464,7 @@ func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 		return
 	}
 	svcByShard, svcOK := r.servicesByShard()
+	factsByShard, factsOK := r.fieldFactsByShard()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if dropDeleted {
@@ -479,6 +490,9 @@ func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 		if !ok {
 			if svcOK {
 				f.Services = svcByShard[f.ID]
+			}
+			if factsOK {
+				f.replaceFieldFacts(factsByShard[f.ID])
 			}
 			if r.reconstruct != nil {
 				f.Live, _ = r.reconstruct(f)
@@ -559,6 +573,11 @@ func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 			entry.Services = svcByShard[f.ID]
 		}
 		entry.mu.Unlock()
+		// The store is never behind memory for facts (a heartbeat persists
+		// before it acknowledges), so a follower takes the store's view.
+		if factsOK {
+			entry.replaceFieldFacts(factsByShard[f.ID])
+		}
 	}
 }
 
@@ -608,6 +627,7 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(sh *Shard) (shard.Shard, 
 		return err
 	}
 	svcByShard, _ := r.servicesByShard()
+	factsByShard, factsOK := r.fieldFactsByShard()
 	for _, sh := range shards {
 		// The loaded *Shard IS the registry entry — no Record↔Entry
 		// mapping. reconstruct's error is informational: a non-ARCHIVED
@@ -616,6 +636,9 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(sh *Shard) (shard.Shard, 
 		// reattaches later.
 		live, _ := reconstruct(sh)
 		sh.Services = svcByShard[sh.ID]
+		if factsOK {
+			sh.replaceFieldFacts(factsByShard[sh.ID])
+		}
 		sh.Live = live
 
 		r.mu.Lock()

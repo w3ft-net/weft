@@ -1,0 +1,341 @@
+package shard
+
+import (
+	"context"
+	"strconv"
+	"sync"
+
+	weftsdk "github.com/w3ft-net/weft-go"
+
+	"github.com/graybeardcorp/warp/pkg/awk"
+	pb "github.com/graybeardcorp/weft/proto/weftpb"
+)
+
+// Field facts are what this shard has learned about the values of an awk
+// field in each source: whether every row it has seen held a number. The
+// planner lowers `$5 > 500` exactly only where that is so. See
+// docs/plans/field-types.md.
+//
+// A fact is a guess promoted by evidence. A locator is Typed once
+// factTypedAfter rows of its source have all had a numeric value there, and
+// Dirty (permanently, for this shard) from the first row that did not. The
+// classifier runs on its own goroutine, handed each batch after the append
+// commits, so it adds nothing to the ingest path.
+
+const (
+	// factTypedAfter is how many consecutive conforming rows type a locator.
+	factTypedAfter = 1000
+	// factMaxLocators caps the locators tracked per source; later ones are
+	// simply unknown.
+	factMaxLocators = 50
+	// factQueueDepth is how many batches may await the classifier. A batch
+	// that doesn't fit disables the classifier (see Observe).
+	factQueueDepth = 1024
+)
+
+// FactState is where a locator is on its way to being typed.
+type FactState int8
+
+const (
+	FactUnknown FactState = iota
+	FactTyped
+	FactDirty
+)
+
+// FactKey names a locator in a source. Customer is part of the key because
+// shards are shared across customers; env so that a stray row in staging
+// doesn't downgrade production. Locator is "$N" for awk field N.
+type FactKey struct {
+	CustomerID int64
+	Namespace  string
+	Service    string
+	Kind       string
+	Env        string
+	Locator    string
+}
+
+// FieldFact is one locator's reportable state. Epoch increases with every
+// transition the coordinator needs to hear about (typed, or typed then
+// dirty), across all of the shard's facts.
+type FieldFact struct {
+	FactKey
+	State FactState
+	Epoch uint64
+}
+
+type locatorState struct {
+	state    FactState
+	conform  int64
+	wasTyped bool // reached Typed once, so the coordinator may hold it
+	epoch    uint64
+}
+
+type factSource struct {
+	rows     int64
+	byField  map[int]*locatorState
+	fieldIDs []int // tracked fields in first-seen order
+}
+
+type sourceKey struct {
+	customerID                    int64
+	namespace, service, kind, env string
+}
+
+// FieldClassifier learns field facts from the batches a shard ingests. A nil
+// *FieldClassifier is valid and holds no facts.
+type FieldClassifier struct {
+	in   chan []*pb.LogRow
+	done chan struct{}
+	// inflight counts batches queued or being classified; tests wait on it.
+	inflight sync.WaitGroup
+
+	mu      sync.Mutex
+	sources map[sourceKey]*factSource
+	epoch   uint64
+	acked   uint64
+	// ready is false while a scan of rows from before this classifier
+	// existed is still running: facts learned meanwhile are partial.
+	ready    bool
+	disabled bool
+}
+
+// NewFieldClassifier starts a classifier. Stop it with Stop.
+func NewFieldClassifier() *FieldClassifier {
+	c := &FieldClassifier{
+		ready:   true,
+		in:      make(chan []*pb.LogRow, factQueueDepth),
+		done:    make(chan struct{}),
+		sources: map[sourceKey]*factSource{},
+	}
+	go c.run()
+	return c
+}
+
+// Stop ends the classifier's goroutine. Observe after Stop is a no-op.
+func (c *FieldClassifier) Stop() {
+	if c == nil {
+		return
+	}
+	select {
+	case <-c.done:
+	default:
+		close(c.done)
+	}
+}
+
+// Observe hands the classifier a committed batch. It never blocks. A batch
+// that doesn't fit the queue was not classified, so any fact could now be
+// wrong: the classifier turns itself off for good and reports nothing, which
+// every consumer reads as "unknown".
+func (c *FieldClassifier) Observe(rows []*pb.LogRow) {
+	if c == nil || len(rows) == 0 {
+		return
+	}
+	// The caller may reuse its slice (the ingest stream does), the rows
+	// themselves are not mutated.
+	batch := append([]*pb.LogRow(nil), rows...)
+	c.inflight.Add(1)
+	select {
+	case c.in <- batch:
+	case <-c.done:
+		c.inflight.Done()
+	default:
+		c.inflight.Done()
+		c.disable("classifier queue full")
+	}
+}
+
+// ScanRow is one stored row handed to Scan: its source and its awk fields.
+type ScanRow struct {
+	CustomerID                    int64
+	Namespace, Service, Kind, Env string
+	Fields                        []string
+}
+
+// BeginScan marks the classifier not ready: the shard holds rows it has not
+// seen, so nothing is reported until EndScan. Batches observed meanwhile are
+// still classified.
+func (c *FieldClassifier) BeginScan() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.ready = false
+	c.mu.Unlock()
+}
+
+// Scan folds stored rows in. A locator first seen here after live rows were
+// classified is treated as late, so it stays dirty: scanning may lose a
+// typing, never invent one.
+func (c *FieldClassifier) Scan(rows []ScanRow) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.disabled {
+		return
+	}
+	for _, r := range rows {
+		c.classifyFields(sourceKey{r.CustomerID, r.Namespace, r.Service, r.Kind, r.Env}, r.Fields)
+	}
+}
+
+// EndScan says every stored row has been through Scan.
+func (c *FieldClassifier) EndScan() {
+	c.mu.Lock()
+	c.ready = true
+	// Nothing was reported while scanning, so a locator that went typed
+	// and dirty in the scan has nothing to retract.
+	for _, src := range c.sources {
+		for _, ls := range src.byField {
+			if ls.state == FactDirty {
+				ls.wasTyped = false
+			}
+		}
+	}
+	c.mu.Unlock()
+}
+
+// Done is closed when the classifier is stopped.
+func (c *FieldClassifier) Done() <-chan struct{} { return c.done }
+
+// Disable turns the classifier off, e.g. for a shard that opened with rows
+// it has not classified.
+func (c *FieldClassifier) Disable(reason string) { c.disable(reason) }
+
+func (c *FieldClassifier) disable(reason string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	already := c.disabled
+	c.disabled = true
+	c.mu.Unlock()
+	if !already {
+		weftsdk.Warnf(context.Background(), "field facts disabled: %s", reason)
+	}
+}
+
+func (c *FieldClassifier) run() {
+	for {
+		select {
+		case <-c.done:
+			return
+		case batch := <-c.in:
+			c.mu.Lock()
+			if !c.disabled {
+				for _, r := range batch {
+					c.classify(r)
+				}
+			}
+			c.mu.Unlock()
+			c.inflight.Done()
+		}
+	}
+}
+
+// classify folds one row in. Caller holds c.mu.
+func (c *FieldClassifier) classify(r *pb.LogRow) {
+	kind := r.Kind
+	if kind == "" {
+		kind = "main"
+	}
+	c.classifyFields(sourceKey{r.CustomerId, r.Namespace, r.Service, kind, r.Env}, awkFields(r.Raw))
+}
+
+// classifyFields folds one row's awk fields in. Caller holds c.mu.
+func (c *FieldClassifier) classifyFields(sk sourceKey, fields []string) {
+	src := c.sources[sk]
+	if src == nil {
+		src = &factSource{byField: map[int]*locatorState{}}
+		c.sources[sk] = src
+	}
+	for i, f := range fields {
+		n := i + 1
+		ls := src.byField[n]
+		if ls == nil {
+			if len(src.fieldIDs) >= factMaxLocators {
+				continue
+			}
+			ls = &locatorState{}
+			// Rows before this one had no such field, so they would not
+			// have been numeric there.
+			if src.rows > 0 {
+				ls.state = FactDirty
+			}
+			src.byField[n] = ls
+			src.fieldIDs = append(src.fieldIDs, n)
+		}
+		c.observe(ls, awk.LooksNumeric(f), sk, n)
+	}
+	for _, n := range src.fieldIDs {
+		if n > len(fields) {
+			c.observe(src.byField[n], false, sk, n)
+		}
+	}
+	src.rows++
+}
+
+// observe folds one value's verdict into a locator. Caller holds c.mu.
+func (c *FieldClassifier) observe(ls *locatorState, numeric bool, sk sourceKey, n int) {
+	switch ls.state {
+	case FactDirty:
+		return
+	case FactTyped:
+		if !numeric {
+			c.epoch++
+			ls.state, ls.epoch = FactDirty, c.epoch
+			weftsdk.Infof(context.Background(), "field fact flipped dirty: customer=%d %s/%s/%s env=%s field=$%d",
+				sk.customerID, sk.namespace, sk.service, sk.kind, sk.env, n)
+		}
+	default:
+		if !numeric {
+			ls.state = FactDirty
+			return
+		}
+		ls.conform++
+		if ls.conform >= factTypedAfter {
+			c.epoch++
+			ls.state, ls.epoch, ls.wasTyped = FactTyped, c.epoch, true
+		}
+	}
+}
+
+// Pending returns the facts the coordinator has not acknowledged: typed
+// ones, and ones that were typed and went dirty (the coordinator must drop
+// them). A locator that was never typed is not reported; absence means
+// unknown.
+func (c *FieldClassifier) Pending() []FieldFact {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.disabled || !c.ready {
+		return nil
+	}
+	var out []FieldFact
+	for sk, src := range c.sources {
+		for n, ls := range src.byField {
+			if !ls.wasTyped || ls.epoch <= c.acked {
+				continue
+			}
+			out = append(out, FieldFact{
+				FactKey: FactKey{sk.customerID, sk.namespace, sk.service, sk.kind, sk.env, "$" + strconv.Itoa(n)},
+				State:   ls.state,
+				Epoch:   ls.epoch,
+			})
+		}
+	}
+	return out
+}
+
+// Ack records that the coordinator has every fact up to epoch.
+func (c *FieldClassifier) Ack(epoch uint64) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	if epoch > c.acked {
+		c.acked = epoch
+	}
+	c.mu.Unlock()
+}

@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shard"
 	shardsvc "github.com/graybeardcorp/weft/shard/service"
 )
 
@@ -156,5 +157,24 @@ func TestSendHeartbeat_UnchristenedShardPresentsTheFleetSecret(t *testing.T) {
 	}
 	if len(spy.got) != 1 || spy.got[0] != "Bearer fleet-secret" {
 		t.Errorf("authorization = %v, want [Bearer fleet-secret]", spy.got)
+	}
+}
+
+func TestFieldFactDeltas_CarryEveryKeyFieldAndTheState(t *testing.T) {
+	key := shard.FactKey{CustomerID: 7, Namespace: "ns", Service: "svc", Kind: "main", Env: "prod", Locator: "$5"}
+	got := fieldFactDeltas([]shard.FieldFact{
+		{FactKey: key, State: shard.FactTyped, Epoch: 3},
+		{FactKey: key, State: shard.FactDirty, Epoch: 4},
+	})
+	if len(got) != 2 {
+		t.Fatalf("want 2 deltas, got %d", len(got))
+	}
+	d := got[0]
+	if d.CustomerId != 7 || d.Namespace != "ns" || d.Service != "svc" || d.Kind != "main" || d.Env != "prod" ||
+		d.Locator != "$5" || d.Epoch != 3 || d.State != pb.FieldFactState_FIELD_FACT_STATE_TYPED {
+		t.Errorf("typed delta = %+v", d)
+	}
+	if got[1].State != pb.FieldFactState_FIELD_FACT_STATE_DIRTY || got[1].Epoch != 4 {
+		t.Errorf("dirty delta = %+v", got[1])
 	}
 }

@@ -131,6 +131,9 @@ type DuckDBShard struct {
 	rowCount atomic.Int64
 	qstats   queryStats
 
+	// facts learns which awk fields hold only numbers; see fieldfacts.go.
+	facts *FieldClassifier
+
 	// archiveMu guards the single in-flight archive attempt (see beginArchive).
 	archiveMu      sync.Mutex
 	archiveRunning bool
@@ -368,6 +371,13 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 		return nil, fmt.Errorf("seed rowCount from logs: %w", err)
 	}
 	ds.rowCount.Store(existing)
+	ds.facts = NewFieldClassifier()
+	if existing > 0 {
+		// Rows this classifier never saw may already break a fact, so it
+		// reports nothing until a scan has seen them.
+		ds.facts.BeginScan()
+		go ds.scanFieldFacts()
+	}
 	ds.openTiming = fmt.Sprintf("open=%s create=%s migrate=%s count=%s",
 		connected.Sub(t0).Round(time.Microsecond), created.Sub(connected).Round(time.Microsecond),
 		cmp.Or(migrate, migrated.Sub(created).Round(time.Microsecond).String()), time.Since(migrated).Round(time.Microsecond))
@@ -382,6 +392,7 @@ func (s *DuckDBShard) OpenTiming() string { return s.openTiming }
 func (s *DuckDBShard) ID() string { return s.id }
 
 func (s *DuckDBShard) Close() error {
+	s.facts.Stop()
 	return s.db.Close()
 }
 
@@ -519,11 +530,59 @@ func (s *DuckDBShard) Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestR
 		return wrapIngestError(s.id, err, rec)
 	}
 	s.rowCount.Add(int64(len(rows)))
+	s.facts.Observe(rows)
 	if rec != nil {
 		rec.ResetIngestFailures(s.id)
 	}
 	return nil
 }
+
+// scanFieldFacts feeds the classifier the rows the shard held when it opened.
+func (s *DuckDBShard) scanFieldFacts() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-s.facts.Done()
+		cancel()
+	}()
+	rows, err := s.db.QueryContext(ctx, `SELECT customer_id, namespace, service, kind, env, fields FROM logs`)
+	if err != nil {
+		s.facts.Disable("scan: " + err.Error())
+		return
+	}
+	defer rows.Close()
+	const batchSize = 4096
+	batch := make([]ScanRow, 0, batchSize)
+	for rows.Next() {
+		var r ScanRow
+		var cust sql.NullInt64
+		var ns, svc, kind, env sql.NullString
+		var fields duckdb.Composite[[]string]
+		if err := rows.Scan(&cust, &ns, &svc, &kind, &env, &fields); err != nil {
+			s.facts.Disable("scan: " + err.Error())
+			return
+		}
+		r = ScanRow{CustomerID: cust.Int64, Namespace: ns.String, Service: svc.String, Kind: kind.String, Env: env.String, Fields: fields.Get()}
+		if batch = append(batch, r); len(batch) == batchSize {
+			s.facts.Scan(batch)
+			batch = batch[:0]
+		}
+	}
+	if err := rows.Err(); err != nil {
+		// Closing the shard cancels the scan; either way no fact is trusted.
+		s.facts.Disable("scan: " + err.Error())
+		return
+	}
+	s.facts.Scan(batch)
+	s.facts.EndScan()
+}
+
+// FieldFacts is what the shard's classifier has learned that the coordinator
+// has not yet acknowledged.
+func (s *DuckDBShard) FieldFacts() []FieldFact { return s.facts.Pending() }
+
+// AckFieldFacts records that the coordinator holds every fact up to epoch.
+func (s *DuckDBShard) AckFieldFacts(epoch uint64) { s.facts.Ack(epoch) }
 
 // wrapIngestError reports err to rec (if non-nil) and returns an
 // enriched error that names shardID and the resulting consecutive-

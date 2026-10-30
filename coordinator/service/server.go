@@ -947,7 +947,13 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 	if s.Coord.Provisioner != nil {
 		go s.Coord.Provisioner.ProcessHeartbeat(hb)
 	}
-	return &pb.HeartbeatResponse{}, nil
+	// Facts are folded here, not in the goroutine above: the ack tells the
+	// shard what it may stop resending.
+	var acked uint64
+	if req.ShardId != "" && !hb.Spare && s.Coord.Provisioner != nil {
+		acked = s.Coord.Provisioner.FoldFieldFacts(req.ShardId, req.FieldFacts)
+	}
+	return &pb.HeartbeatResponse{FieldFactsAcked: acked}, nil
 }
 
 // authenticateFleetHeartbeat admits a heartbeat from a shard that has no
