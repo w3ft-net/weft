@@ -32,17 +32,17 @@ func TestJq_SelectNestedPathPushdown(t *testing.T) {
 // value the program holds, and the stage emits that value, so the whole
 // stage is a filter on the longer path plus a projection of the subject.
 func TestJq_SubjectRelativeSelect(t *testing.T) {
-	proj := func(path string) string { return jqProj("json_extract(payload, '" + path + "')") }
+	proj := func(steps ...string) string { return jqProj(leaf(steps...)) }
 	for _, tt := range []struct {
 		pipeline string
 		where    string // a fragment the WHERE clause holds
 		project  string // the projection
 	}{
-		{`jq '.foo | select(.bar == 1)'`, `json_extract(payload, '$.foo.bar')`, proj("$.foo")},
-		{`jq '.foo | select(.bar == 1) | .bar'`, `json_extract(payload, '$.foo.bar')`, proj("$.foo.bar")},
-		{`jq '.status | select(. > 100)'`, `json_extract(payload, '$.status')`, proj("$.status")},
-		{`jq '.items | select(.[1] == "two") | .[2]'`, `json_extract_string(payload, '$.items[1]')`, proj("$.items[2]")},
-		{`jq 'select($level == "ERROR") | .foo | select(.bar == 1)'`, `level = 'ERROR'`, proj("$.foo")},
+		{`jq '.foo | select(.bar == 1)'`, `json_extract(payload, '$.foo.bar')`, proj(".foo")},
+		{`jq '.foo | select(.bar == 1) | .bar'`, `json_extract(payload, '$.foo.bar')`, proj(".foo", ".bar")},
+		{`jq '.status | select(. > 100)'`, `json_extract(payload, '$.status')`, proj(".status")},
+		{`jq '.items | select(.[1] == "two") | .[2]'`, `json_extract_string(payload, '$.items[1]')`, proj(".items", "[2]")},
+		{`jq 'select($level == "ERROR") | .foo | select(.bar == 1)'`, `level = 'ERROR'`, proj(".foo")},
 	} {
 		t.Run(tt.pipeline, func(t *testing.T) {
 			plan, err := Plan("cat vimgym.log | "+tt.pipeline, 0, "", time.Time{}, time.Time{})

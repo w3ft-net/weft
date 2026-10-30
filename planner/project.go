@@ -119,22 +119,47 @@ func awkPrintArgToSQL(expr awk.Expr) (string, bool) {
 	return "", false
 }
 
-// wrapJqProjection renders a JSON-valued SQL expression as the text jq
-// prints for it: compact JSON, and `null` for a missing value. The cast
-// also keeps the driver from returning json_object/json_array as Go
-// maps and stripping the quotes off string scalars. With -r (raw), a
-// string prints as its unescaped text.
-func wrapJqProjection(sql string, raw bool) string {
-	json := "COALESCE(CAST(" + sql + " AS VARCHAR), 'null')"
+// jqPrintPathSQL is the text jq prints for the value at a payload path. With
+// -r a string prints as its unescaped text.
+func jqPrintPathSQL(path jqPath, raw bool) string {
+	leaf := jqLeafSQL(path)
 	if !raw {
-		return json
+		return leaf
 	}
-	return "CASE WHEN json_type(" + sql + ") = 'VARCHAR' THEN json_extract_string(" + sql + ", '$') ELSE " + json + " END"
+	p := path.jsonPath()
+	return fmt.Sprintf("CASE WHEN json_type(payload, %s) = 'VARCHAR' THEN json_extract_string(payload, %s) ELSE %s END", p, p, leaf)
 }
 
-// jqValueToSQL converts a jq expression into a SQL value expression IF the
-// whole expression is fully expressible in SQL (no leftover compute work).
-// Returns ok=false otherwise.
+// jqPrintTailSQL is the text jq prints for a lowered tail whose value is sql
+// (from jqValueToSQL). Only -r changes it, for a tail that is a bare string: a
+// payload path, or a string literal.
+func jqPrintTailSQL(tail jq.Expr, sql string, raw bool) string {
+	if !raw {
+		return sql
+	}
+	switch e := tail.(type) {
+	case jq.FieldExpr, jq.PipeExpr:
+		if path, ok := jqPathOf(e); ok && len(path) > 0 {
+			return jqPrintPathSQL(path, true)
+		}
+	case jq.LiteralExpr:
+		if e.Value.Type == jq.TypeString {
+			return "'" + escapeSQLString(e.Value.Str) + "'"
+		}
+	case jq.VarRef:
+		// A string meta-variable prints as its text, null as null.
+		if col, ok := JQMetaVars[e.Name]; ok && !JQNumericMetaColumn(col) {
+			return fmt.Sprintf("COALESCE(CAST(%s AS VARCHAR), 'null')", jqMetaSQL(col))
+		}
+	}
+	return sql
+}
+
+// jqValueToSQL converts a jq expression into SQL for the text jq prints for its
+// value (compact JSON), IF the whole expression is fully expressible in SQL
+// (no leftover compute work). Returns ok=false otherwise. Arrays and objects
+// are written out as text rather than built with json_array and json_object,
+// so each number in them is written the way jq writes it (jqLeafSQL).
 func jqValueToSQL(expr jq.Expr) (string, bool) {
 	switch e := expr.(type) {
 	case jq.VarRef:
@@ -143,10 +168,10 @@ func jqValueToSQL(expr jq.Expr) (string, bool) {
 			return "", false
 		}
 		// A string column is its text, a numeric one a number; NULL is null.
-		return fmt.Sprintf("to_json(%s)", jqMetaSQL(col)), true
+		return fmt.Sprintf("COALESCE(CAST(to_json(%s) AS VARCHAR), 'null')", jqMetaSQL(col)), true
 
 	case jq.FieldExpr:
-		return "json_extract(payload, " + jqPath{"." + e.Name}.jsonPath() + ")", true
+		return jqLeafSQL(jqPath{"." + e.Name}), true
 
 	case jq.LiteralExpr:
 		return jqLiteralToSQL(e.Value)
@@ -154,7 +179,7 @@ func jqValueToSQL(expr jq.Expr) (string, bool) {
 	case jq.PipeExpr:
 		// Pure path chain like .a.b[0] / .a | .b.
 		if path, ok := jqPathOf(expr); ok && len(path) > 0 {
-			return "json_extract(payload, " + path.jsonPath() + ")", true
+			return jqLeafSQL(path), true
 		}
 		return "", false
 
@@ -173,9 +198,12 @@ func jqValueToSQL(expr jq.Expr) (string, bool) {
 			if !ok {
 				return "", false
 			}
-			parts = append(parts, fmt.Sprintf("'%s', %s", escapeSQLString(keyStr), val))
+			parts = append(parts, fmt.Sprintf("'%s:' || %s", escapeSQLString(jqStringJSON(keyStr)), val))
 		}
-		return "json_object(" + strings.Join(parts, ", ") + ")", true
+		if len(parts) == 0 {
+			return "'{}'", true
+		}
+		return "'{' || " + strings.Join(parts, " || ',' || ") + " || '}'", true
 
 	case jq.ArrayExpr:
 		elems := jqFlattenComma(e.Elems)
@@ -187,7 +215,7 @@ func jqValueToSQL(expr jq.Expr) (string, bool) {
 			}
 			parts = append(parts, val)
 		}
-		return "json_array(" + strings.Join(parts, ", ") + ")", true
+		return "'[' || " + strings.Join(parts, " || ',' || ") + " || ']'", true
 	}
 	return "", false
 }
@@ -224,23 +252,20 @@ func jqValueGuards(expr jq.Expr) []string {
 	return guards
 }
 
-// jqLiteralToSQL emits a SQL literal for a jq Value.
+// jqLiteralToSQL emits the SQL text jq prints for a literal value.
 func jqLiteralToSQL(v jq.Value) (string, bool) {
 	switch v.Type {
 	case jq.TypeString:
-		return fmt.Sprintf("'%s'", escapeSQLString(v.Str)), true
+		return "'" + escapeSQLString(jqStringJSON(v.Str)) + "'", true
 	case jq.TypeNumber:
-		if v.Num == float64(int(v.Num)) {
-			return fmt.Sprintf("%d", int(v.Num)), true
-		}
-		return fmt.Sprintf("%g", v.Num), true
+		return "'" + jqNumberText(v.Num) + "'", true
 	case jq.TypeBool:
 		if v.Bool {
-			return "true", true
+			return "'true'", true
 		}
-		return "false", true
+		return "'false'", true
 	case jq.TypeNull:
-		return "NULL", true
+		return "'null'", true
 	}
 	return "", false
 }

@@ -56,7 +56,7 @@ func TestRawExpr_Jq(t *testing.T) {
 		{
 			name:      "jq field access",
 			pipeline:  `cat vimgym.log | jq '.status'`,
-			wantInSQL: "COALESCE(CAST(json_extract(payload, '$.status') AS VARCHAR), 'null') as raw",
+			wantInSQL: jqProj(leaf(".status")),
 			wantComp:  nil,
 		},
 	}

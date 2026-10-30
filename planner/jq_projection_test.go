@@ -15,10 +15,26 @@ import (
 // we catch both halves of the win: the right SQL shape AND the dropped
 // jq stage.
 //
-// jqProj wraps the inner SQL projection with the VARCHAR cast the planner
-// emits so downstream jq stages (and the Go driver) see consistent text.
-func jqProj(inner string) string {
-	return "COALESCE(CAST(" + inner + " AS VARCHAR), 'null') as raw"
+// jqProj is the projection column the planner emits for the SQL that writes
+// the text jq prints.
+func jqProj(inner string) string { return inner + " as raw" }
+
+// leaf is the SQL for the text jq prints for the value at a payload path,
+// given as its steps (".foo", ".bar", "[0]").
+func leaf(steps ...string) string { return jqLeafSQL(jqPath(steps)) }
+
+// jqObj and jqArr are the SQL that writes an object or array out as text,
+// from the SQL for each value (an object's as key, value pairs).
+func jqObj(pairs ...string) string {
+	var parts []string
+	for i := 0; i < len(pairs); i += 2 {
+		parts = append(parts, "'"+jqStringJSON(pairs[i])+":' || "+pairs[i+1])
+	}
+	return "'{' || " + strings.Join(parts, " || ',' || ") + " || '}'"
+}
+
+func jqArr(values ...string) string {
+	return "'[' || " + strings.Join(values, " || ',' || ") + " || ']'"
 }
 
 // TestRawExpr_JqNestedField — pure path access composes into a deep $.a.b.c
@@ -33,17 +49,17 @@ func TestRawExpr_JqNestedField(t *testing.T) {
 		{
 			name:      "two-level dotted",
 			pipeline:  `cat vimgym.log | jq '.foo.bar'`,
-			wantInSQL: jqProj("json_extract(payload, '$.foo.bar')"),
+			wantInSQL: jqProj(leaf(".foo", ".bar")),
 		},
 		{
 			name:      "three-level dotted",
 			pipeline:  `cat vimgym.log | jq '.a.b.c'`,
-			wantInSQL: jqProj("json_extract(payload, '$.a.b.c')"),
+			wantInSQL: jqProj(leaf(".a", ".b", ".c")),
 		},
 		{
 			name:      "pipe spelling of nested",
 			pipeline:  `cat vimgym.log | jq '.foo | .bar'`,
-			wantInSQL: jqProj("json_extract(payload, '$.foo.bar')"),
+			wantInSQL: jqProj(leaf(".foo", ".bar")),
 		},
 	}
 	for _, tt := range tests {
@@ -69,7 +85,7 @@ func TestRawExpr_JqArrayIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	want := jqProj("json_extract(payload, '$.items[0]')")
+	want := jqProj(leaf(".items", "[0]"))
 	if !strings.Contains(plan.ShardSQL, want) {
 		t.Errorf("ShardSQL missing %q\n got: %s", want, plan.ShardSQL)
 	}
@@ -90,12 +106,12 @@ func TestRawExpr_JqObject(t *testing.T) {
 		{
 			name:      "single-key object",
 			pipeline:  `cat vimgym.log | jq '{user: .user_id}'`,
-			wantInSQL: jqProj("json_object('user', json_extract(payload, '$.user_id'))"),
+			wantInSQL: jqProj(jqObj("user", leaf(".user_id"))),
 		},
 		{
 			name:      "two-key object",
 			pipeline:  `cat vimgym.log | jq '{user: .user_id, action: .action}'`,
-			wantInSQL: jqProj("json_object('user', json_extract(payload, '$.user_id'), 'action', json_extract(payload, '$.action'))"),
+			wantInSQL: jqProj(jqObj("user", leaf(".user_id"), "action", leaf(".action"))),
 		},
 		{
 			name: "shorthand object expands to full form",
@@ -103,17 +119,17 @@ func TestRawExpr_JqObject(t *testing.T) {
 			// — warp's parser already normalizes it, so the output should match
 			// the explicit form.
 			pipeline:  `cat vimgym.log | jq '{user_id, action}'`,
-			wantInSQL: jqProj("json_object('user_id', json_extract(payload, '$.user_id'), 'action', json_extract(payload, '$.action'))"),
+			wantInSQL: jqProj(jqObj("user_id", leaf(".user_id"), "action", leaf(".action"))),
 		},
 		{
 			name:      "object with string literal value",
 			pipeline:  `cat vimgym.log | jq '{type: "log", value: .pct}'`,
-			wantInSQL: jqProj("json_object('type', 'log', 'value', json_extract(payload, '$.pct'))"),
+			wantInSQL: jqProj(jqObj("type", `'"log"'`, "value", leaf(".pct"))),
 		},
 		{
 			name:      "object with metavar value",
 			pipeline:  `cat vimgym.log | jq '{when: $ts, who: .user_id}'`,
-			wantInSQL: jqProj("json_object('when', to_json(CAST(ts AS VARCHAR)), 'who', json_extract(payload, '$.user_id'))"),
+			wantInSQL: jqProj(jqObj("when", "COALESCE(CAST(to_json(CAST(ts AS VARCHAR)) AS VARCHAR), 'null')", "who", leaf(".user_id"))),
 		},
 	}
 	for _, tt := range tests {
@@ -143,12 +159,12 @@ func TestRawExpr_JqArray(t *testing.T) {
 		{
 			name:      "two-elem field array",
 			pipeline:  `cat vimgym.log | jq '[.user_id, .action]'`,
-			wantInSQL: jqProj("json_array(json_extract(payload, '$.user_id'), json_extract(payload, '$.action'))"),
+			wantInSQL: jqProj(jqArr(leaf(".user_id"), leaf(".action"))),
 		},
 		{
 			name:      "array with literal",
 			pipeline:  `cat vimgym.log | jq '[.user_id, "click"]'`,
-			wantInSQL: jqProj("json_array(json_extract(payload, '$.user_id'), 'click')"),
+			wantInSQL: jqProj(jqArr(leaf(".user_id"), `'"click"'`)),
 		},
 	}
 	for _, tt := range tests {

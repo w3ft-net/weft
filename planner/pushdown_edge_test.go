@@ -620,7 +620,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select then field access",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | .payload'`,
-			wantSQL:     `SELECT COALESCE(CAST(json_extract(payload, '$.payload') AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
+			wantSQL:     "SELECT " + leaf(".payload") + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: nil,
 		},
 		// select | select | object construction — both selects push as
@@ -629,7 +629,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "two selects then construction",
 			pipeline:    `cat vimgym.log | jq 'select($level == "ERROR") | select(.status == 500) | {ts: $ts}'`,
-			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR))) AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR' AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
+			wantSQL:     "SELECT " + jqObj("ts", "COALESCE(CAST(to_json(CAST(ts AS VARCHAR)) AS VARCHAR), 'null')") + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR' AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: nil,
 		},
 		// select | string-interpolation — the select pushes as a predicate
@@ -663,7 +663,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:     "select with --raw-output long spelling",
 			pipeline: `cat vimgym.log | jq --raw-output 'select(.status == 500) | .payload'`,
-			wantSQL:  `SELECT CASE WHEN json_type(json_extract(payload, '$.payload')) = 'VARCHAR' THEN json_extract_string(json_extract(payload, '$.payload'), '$') ELSE COALESCE(CAST(json_extract(payload, '$.payload') AS VARCHAR), 'null') END as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
+			wantSQL:  "SELECT " + jqPrintPathSQL(jqPath{".payload"}, true) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 		},
 	}
 
@@ -983,7 +983,7 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 		{
 			name:        "partial jq then sort",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | .payload' | sort`,
-			wantSQL:     `SELECT COALESCE(CAST(json_extract(payload, '$.payload') AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
+			wantSQL:     "SELECT " + leaf(".payload") + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: []string{`sort`},
 		},
 		// wc without -l flag — not pushable

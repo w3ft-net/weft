@@ -213,16 +213,17 @@ func jqRowStage(p *jqProgram) rowStage {
 		switch {
 		case p.tail == nil:
 			pred = strings.Join(append(p.subject.guards(), p.selects...), " AND ")
-			sql, ok = "json_extract(payload, "+p.subject.jsonPath()+")", true
+			sql, ok = jqPrintPathSQL(p.subject, p.raw), true
 		case len(p.subject) == 0:
 			if sql, ok = jqValueToSQL(p.tail); ok {
 				// Every path it reads must be readable, or jq errors and
 				// drops the row.
 				pred = strings.Join(append(jqValueGuards(p.tail), p.selects...), " AND ")
+				sql = jqPrintTailSQL(p.tail, sql, p.raw)
 			}
 		}
 		if ok {
-			return rowStage{pred: pred, predExact: true, proj: wrapJqProjection(sql, p.raw)}
+			return rowStage{pred: pred, predExact: true, proj: sql}
 		}
 	}
 	why := because(reasonJqTail)
