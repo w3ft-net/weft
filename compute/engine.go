@@ -3,6 +3,7 @@ package compute
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
@@ -138,13 +139,23 @@ func (p *Engine) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) 
 		job.rowStages = rs
 	}
 	job.stagesReadPayload = req.StagesReadPayload
-	if req.Aggregate != "" {
-		// Check the name now, so an aggregate this engine doesn't know
-		// fails the query instead of passing the shards' rows through.
-		if _, err := newAggregator(req.Aggregate, nil); err != nil {
+	aggregate := req.Aggregate
+	if req.Group != nil {
+		if aggregate != "" {
+			return nil, errors.New("compute: a request names both an aggregate and a group")
+		}
+		var err error
+		if aggregate, err = groupAggregate(req.Group); err != nil {
 			return nil, err
 		}
-		job.aggregate = req.Aggregate
+	}
+	if aggregate != "" {
+		// Check the name now, so an aggregate this engine doesn't know
+		// fails the query instead of passing the shards' rows through.
+		if _, err := newAggregator(aggregate, nil); err != nil {
+			return nil, err
+		}
+		job.aggregate = aggregate
 	}
 	go FanOutToShards(ctx, req, job, p.resolveShard)
 	return job.Stream(), nil

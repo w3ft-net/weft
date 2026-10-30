@@ -29,6 +29,20 @@ type rowAggregator interface {
 	failure() error
 }
 
+// groupAggregate is the aggregate a GroupSpec asks for, named as the
+// legacy aggregate string for the same shape.
+func groupAggregate(g *pb.GroupSpec) (string, error) {
+	switch g.Render {
+	case pb.GroupRender_GROUP_RENDER_TOTAL:
+		return planner.AggregateLines, nil
+	case pb.GroupRender_GROUP_RENDER_LINE:
+		return planner.AggregateDistinct, nil
+	case pb.GroupRender_GROUP_RENDER_COUNT_LINE:
+		return planner.AggregateCountDistinct, nil
+	}
+	return "", fmt.Errorf("compute: unknown group render %s", g.Render)
+}
+
 func newAggregator(fn string, sink func(*pb.ResultRow) bool) (rowAggregator, error) {
 	switch fn {
 	case planner.AggregateSpans:

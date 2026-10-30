@@ -286,6 +286,27 @@ message ExecuteQueryRequest {
   // (sort -u, sort | uniq) or "count_distinct" (sort | uniq -c). See
   // planner.QueryPlan.Aggregate.
   string aggregate = 12;
+  // group is the same instruction as aggregate, for a keyed aggregate:
+  // compute accepts either, and renders the same text for the same shape.
+  // Callers keep sending aggregate until every compute accepts group.
+  GroupSpec group = 13;
+}
+
+// GroupRender is what compute prints for each group it merged.
+enum GroupRender {
+  GROUP_RENDER_UNSPECIFIED = 0;
+  // GROUP_RENDER_TOTAL: one bare total of every count (wc -l).
+  GROUP_RENDER_TOTAL = 1;
+  // GROUP_RENDER_LINE: each distinct line once (sort -u, sort | uniq).
+  GROUP_RENDER_LINE = 2;
+  // GROUP_RENDER_COUNT_LINE: each distinct line with its count, as uniq -c
+  // prints it (sort | uniq -c).
+  GROUP_RENDER_COUNT_LINE = 3;
+}
+
+// GroupSpec says the shard sql groups each shard's rows (see aggregate).
+message GroupSpec {
+  GroupRender render = 1;
 }
 
 message ExecuteQueryStreamResponse {
