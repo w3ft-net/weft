@@ -1,8 +1,12 @@
 package compute
 
 import (
+	"cmp"
+	"errors"
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -21,6 +25,54 @@ type aggregator struct {
 	n    int64
 	seen bool
 	err  error
+	// collect, when set, takes each merged group instead of the sink
+	// (orderedAggregator).
+	collect *[]countedLine
+}
+
+type countedLine struct {
+	line string
+	n    int64
+}
+
+// orderedAggregator is a count_distinct aggregator whose groups print
+// highest count first, cut to the limit (0 keeps all): `sort -rn | head -n N`
+// after uniq -c. It holds one entry per distinct line until flush. Equal
+// counts print the line in descending byte order, as sort -rn leaves them
+// (its -r reverses the last-resort comparison too); the differential test
+// against the stages pins that.
+type orderedAggregator struct {
+	*aggregator
+	out    func(*pb.ResultRow) bool
+	limit  int
+	groups []countedLine
+}
+
+func newOrderedAggregator(a *aggregator, limit int, sink func(*pb.ResultRow) bool) *orderedAggregator {
+	o := &orderedAggregator{aggregator: a, out: sink, limit: limit}
+	a.collect = &o.groups
+	return o
+}
+
+func (o *orderedAggregator) flush() {
+	o.aggregator.flush()
+	if o.err != nil {
+		return
+	}
+	slices.SortFunc(o.groups, func(x, y countedLine) int {
+		if c := cmp.Compare(y.n, x.n); c != 0 {
+			return c
+		}
+		return strings.Compare(y.line, x.line)
+	})
+	if o.limit > 0 && len(o.groups) > o.limit {
+		o.groups = o.groups[:o.limit]
+	}
+	for _, g := range o.groups {
+		if !o.out(&pb.ResultRow{Raw: fmt.Sprintf("%7d %s", g.n, g.line)}) {
+			return
+		}
+	}
 }
 
 type rowAggregator interface {
@@ -74,6 +126,28 @@ func groupAggregate(g *pb.GroupSpec) (string, error) {
 	return "", fmt.Errorf("compute: unknown group render %s", g.Render)
 }
 
+// groupOrder is whether a GroupSpec orders its groups by count and how many
+// it keeps. An order or limit no shape uses is an error: ignoring it would
+// print the wrong text without a sign of it.
+func groupOrder(g *pb.GroupSpec) (byCount bool, limit int, err error) {
+	if g.Limit < 0 {
+		return false, 0, fmt.Errorf("compute: negative group limit %d", g.Limit)
+	}
+	switch g.Order {
+	case pb.GroupOrder_GROUP_ORDER_UNSPECIFIED:
+		if g.Limit != 0 {
+			return false, 0, errors.New("compute: a group limit needs an order")
+		}
+		return false, 0, nil
+	case pb.GroupOrder_GROUP_ORDER_COUNT_DESC:
+		if g.Render != pb.GroupRender_GROUP_RENDER_COUNT_LINE {
+			return false, 0, fmt.Errorf("compute: a group ordered by count needs %s, not %s", pb.GroupRender_GROUP_RENDER_COUNT_LINE, g.Render)
+		}
+		return true, int(g.Limit), nil
+	}
+	return false, 0, fmt.Errorf("compute: unknown group order %s", g.Order)
+}
+
 func newAggregator(fn string, sink func(*pb.ResultRow) bool) (rowAggregator, error) {
 	switch fn {
 	case planner.AggregateSpans:
@@ -118,6 +192,10 @@ func (a *aggregator) flush() {
 }
 
 func (a *aggregator) emit() bool {
+	if a.collect != nil {
+		*a.collect = append(*a.collect, countedLine{a.line, a.n})
+		return true
+	}
 	var text string
 	switch a.fn {
 	case legacyLines:

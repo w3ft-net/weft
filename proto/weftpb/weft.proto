@@ -304,9 +304,23 @@ enum GroupRender {
   GROUP_RENDER_COUNT_LINE = 3;
 }
 
+// GroupOrder is how compute orders the merged groups before printing them.
+enum GroupOrder {
+  // GROUP_ORDER_UNSPECIFIED prints groups in merge-key order, as they merge.
+  GROUP_ORDER_UNSPECIFIED = 0;
+  // GROUP_ORDER_COUNT_DESC is `sort -rn` over the uniq -c text: highest count
+  // first, equal counts in the order that sort leaves them. Only with
+  // GROUP_RENDER_COUNT_LINE.
+  GROUP_ORDER_COUNT_DESC = 1;
+}
+
 // GroupSpec says the shard sql groups each shard's rows (see aggregate).
 message GroupSpec {
   GroupRender render = 1;
+  GroupOrder order = 2;
+  // limit keeps the first limit groups after order is applied (`head -n`);
+  // 0 keeps all. Only with an order.
+  int64 limit = 3;
 }
 
 message ExecuteQueryStreamResponse {

@@ -148,6 +148,9 @@ func (p *Engine) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) 
 		if aggregate, err = groupAggregate(req.Group); err != nil {
 			return nil, err
 		}
+		if job.orderByCount, job.groupLimit, err = groupOrder(req.Group); err != nil {
+			return nil, err
+		}
 	}
 	if aggregate != "" {
 		// Check the name now, so an aggregate this engine doesn't know
@@ -215,7 +218,11 @@ type Job struct {
 	// aggregate finishes the shards' aggregate (planner.QueryPlan.
 	// Aggregate) on the merged rows; feedErr is its failure.
 	aggregate string
-	feedErr   error
+	// order and limit finish a count_distinct aggregate that a GroupSpec
+	// ordered (see orderedAggregator).
+	orderByCount bool
+	groupLimit   int
+	feedErr      error
 
 	ch        chan ComputeMessage // shards push rows + sentinels here
 	streamCh  chan Line           // consume() pushes output here
@@ -465,6 +472,9 @@ type rowAwkVars struct {
 func (j *Job) feed(sink func(*pb.ResultRow) bool) {
 	if j.aggregate != "" {
 		a, err := newAggregator(j.aggregate, sink)
+		if err == nil && j.orderByCount {
+			a = newOrderedAggregator(a.(*aggregator), j.groupLimit, sink)
+		}
 		if err != nil {
 			j.feedErr = err
 			return
