@@ -51,3 +51,56 @@ func TestPreseedScripts_LoomSecretAndBudget(t *testing.T) {
 		t.Errorf("loom run budget = %v, want 10s", d)
 	}
 }
+
+// grantLoomToEmail restores the read-only Loom seat the tour revokes, is safe
+// to repeat, and refuses an address that has no account rather than making one.
+func TestGrantLoomToEmail(t *testing.T) {
+	db, err := store.Open(store.TestDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable: %v", err)
+	}
+	s, rollback := db.BeginTest()
+	t.Cleanup(func() {
+		rollback()
+		db.Close()
+	})
+
+	org, err := s.FindOrCreateOrg("loom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns, err := s.FindOrCreateNamespace(org.ID, "loom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.CreateUser("dev@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ { // the second run changes nothing
+		if err := grantLoomToEmail(s, "dev@example.test"); err != nil {
+			t.Fatalf("run %d: %v", i+1, err)
+		}
+	}
+	if _, err := s.GetTeamMemberByUserID(org.ID, u.ID); err != nil {
+		t.Errorf("not a Loom member after the grant: %v", err)
+	}
+	perms, err := s.ListUserNamespacePermissions(u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var canRead bool
+	for _, p := range perms {
+		if p.NamespaceID == ns.ID && p.CanRead {
+			canRead = true
+		}
+	}
+	if !canRead {
+		t.Errorf("no read permission on the loom namespace: %+v", perms)
+	}
+
+	if err := grantLoomToEmail(s, "nobody@example.test"); err == nil {
+		t.Error("granted a seat to an address with no account")
+	}
+}

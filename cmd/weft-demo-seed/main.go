@@ -36,6 +36,7 @@ func main() {
 	tokensOut := flag.String("tokens-out", "dev/demo/tokens.env", "path to write minted token env vars to; '-' means stdout")
 	reset := flag.Bool("reset", false, "delete demo customers (cascades through users, namespaces, log_groups, tokens, scripts, watches) and exit")
 	prodLoom := flag.Bool("prod-loom", false, "seed only Loom Inc with two per-env tokens (loom-prod, loom-sand); idempotent — existing live tokens are not rotated. For setting up the prod producer host.")
+	grantLoom := flag.String("grant-loom", "", "email of an existing user to give a read-only Loom membership (the seat the onboarding tour revokes at graduation); idempotent. Touches nothing else.")
 	flag.Parse()
 
 	if *dsn == "" {
@@ -47,6 +48,13 @@ func main() {
 		log.Fatalf("store.Open: %v", err)
 	}
 	defer s.Close()
+
+	if *grantLoom != "" {
+		if err := grantLoomToEmail(s, *grantLoom); err != nil {
+			log.Fatalf("grant-loom: %v", err)
+		}
+		return
+	}
 
 	if *reset {
 		if err := resetDemo(s); err != nil {
@@ -981,6 +989,17 @@ func grantLoomMemberships(s *store.Store, users []nonLoomUser) error {
 		log.Printf("  granted loom membership to %s", u.email)
 	}
 	return nil
+}
+
+// grantLoomToEmail gives the existing user with this email the same read-only
+// Loom seat signup grants, so a developer can switch into Loom (WEFT_ORG=loom)
+// after the onboarding tour revoked it. It never creates a user.
+func grantLoomToEmail(s *store.Store, email string) error {
+	u, err := s.GetUserByEmail(email)
+	if err != nil {
+		return fmt.Errorf("no user %q: %w", email, err)
+	}
+	return grantLoomMemberships(s, []nonLoomUser{{user: u, email: u.Email}})
 }
 
 // --- reset ------------------------------------------------------------
