@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestHTTPCoordinator_QuerySendsRange pins the CLI body shape: Query must
@@ -112,5 +113,66 @@ func TestHTTPCoordinator_SendsClientHeader(t *testing.T) {
 	}
 	if gotHeader != "weft/0.4.2+abc123" {
 		t.Errorf("X-Weft-Client = %q, want %q", gotHeader, "weft/0.4.2+abc123")
+	}
+}
+
+// leaks lists what a user-facing transport error must never contain: the
+// server's address, the HTTP verb, or Go's own phrasing.
+func leaks(t *testing.T, err error, extra ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	msg := err.Error()
+	for _, bad := range append([]string{"127.0.0.1", "http://", "Client.Timeout", "context deadline", "Post ", "Get ", "net/http", "dial tcp"}, extra...) {
+		if strings.Contains(msg, bad) {
+			t.Errorf("error leaks %q: %s", bad, msg)
+		}
+	}
+}
+
+// TestHTTPCoordinator_TimeoutErrorIsUserFacing pins what a user sees when a
+// call outlives the client's deadline: no URL, no Go internals, and a hint they
+// can act on. Query's hint is about narrowing the query; other calls get the
+// plain message.
+func TestHTTPCoordinator_TimeoutErrorIsUserFacing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer srv.Close()
+
+	c := NewHTTPCoordinator(srv.URL, "tok", "org")
+	c.client.Timeout = 50 * time.Millisecond
+
+	_, err := c.Query("cat api.log | grep x", "1d..", nil)
+	leaks(t, err, srv.URL)
+	for _, want := range []string{"timed out", "explain"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("query timeout message lacks %q: %s", want, err)
+		}
+	}
+
+	_, err = c.ListApps()
+	leaks(t, err, srv.URL)
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("timeout message lacks %q: %s", "timed out", err)
+	}
+}
+
+// TestHTTPCoordinator_UnreachableErrorIsUserFacing: a refused connection
+// must not print the address that refused it.
+func TestHTTPCoordinator_UnreachableErrorIsUserFacing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+
+	c := NewHTTPCoordinator(url, "tok", "org")
+	_, err := c.Query("cat api.log", "1h..", nil)
+	leaks(t, err, url)
+	if !strings.Contains(err.Error(), "could not reach") {
+		t.Errorf("unreachable message lacks %q: %s", "could not reach", err)
 	}
 }

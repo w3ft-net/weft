@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -108,8 +109,8 @@ type HTTPCoordinator struct {
 	token        string // JWT for Authorization header
 	org          string // X-Active-Org for the user's currently-selected org
 	clientID     string // X-Weft-Client; set by cmd/weft via SetClientID
-	client       *http.Client
-	streamClient *http.Client
+	client       remoteClient
+	streamClient remoteClient
 }
 
 func NewHTTPCoordinator(baseURL, token, org string) *HTTPCoordinator {
@@ -117,8 +118,8 @@ func NewHTTPCoordinator(baseURL, token, org string) *HTTPCoordinator {
 		baseURL:      strings.TrimSuffix(baseURL, "/"),
 		token:        token,
 		org:          org,
-		client:       &http.Client{Timeout: 10 * time.Second},
-		streamClient: &http.Client{},
+		client:       remoteClient{&http.Client{Timeout: 10 * time.Second}},
+		streamClient: remoteClient{&http.Client{}},
 	}
 }
 
@@ -160,6 +161,10 @@ func httpError(resp *http.Response) error {
 	return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 }
 
+// errQueryTimedOut is what a user sees when a query outlives the client's
+// deadline. It says what to do about it, without naming anything of ours.
+var errQueryTimedOut = errors.New("query timed out — narrow the time range, filter earlier in the pipeline, or run `explain` on it to see where the time goes")
+
 // Query runs a one-shot pipeline against the given range spec. rangeSpec is
 // the un-resolved string the user typed ("1d..", "30m..10m",
 // "2026-04-01..2026-04-12"); the API server resolves it against its own clock
@@ -182,6 +187,9 @@ func (h *HTTPCoordinator) Query(pipeline, rangeSpec string, dirStack []string) (
 
 	resp, err := h.client.Do(req)
 	if err != nil {
+		if isTimeout(err) {
+			return nil, errQueryTimedOut
+		}
 		return nil, fmt.Errorf("query: %w", err)
 	}
 	defer resp.Body.Close()
