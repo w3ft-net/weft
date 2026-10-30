@@ -56,6 +56,14 @@ type Analysis struct {
 	// Barrier is the first stage not entirely optimized, and every
 	// stage after it runs on the rows it returns. 0 means there is none.
 	Barrier int
+	// RetrievalCount is a pipeline that prints how many rows the optimized
+	// retrieval returns (retrievalCount), empty when none is worth running.
+	// The caller runs it, as it would any query of the user's, and reports
+	// the result with Retrieved, or says why it couldn't in RowsNote.
+	RetrievalCount string
+	Rows           int64
+	HasRows        bool
+	RowsNote       string
 }
 
 // Analyze compiles a pipeline and reports where each stage runs. cwd
@@ -73,7 +81,9 @@ func Analyze(pipeline, cwd string, resolveBin BinResolver) (*Analysis, error) {
 	if c == nil { // an alert with no query in front of it
 		return &Analysis{}, nil
 	}
-	return c.analyze(), nil
+	a := c.analyze()
+	a.RetrievalCount = c.retrievalCount(pipeline, a.Barrier)
+	return a, nil
 }
 
 // analyze derives each stage's placement from the lists a run uses: a
@@ -305,6 +315,9 @@ func (a *Analysis) Render(color bool) string {
 		width = max(width, min(len([]rune(oneLine(s.Src))), 56))
 	}
 	for _, s := range a.Stages {
+		if s.Index == a.Barrier {
+			b.WriteString(a.rowsLine())
+		}
 		src := truncate(oneLine(s.Src), 56)
 		fmt.Fprintf(&b, "  %d  %-*s  %s\n", s.Index, width, src, s.Where.label(color))
 		if s.Split != "" {
