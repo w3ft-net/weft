@@ -171,19 +171,19 @@ func TestRawExpr_JqArray(t *testing.T) {
 // a path but whose tail isn't SQL runs whole, as written, over the
 // row's payload (see docs/plans/planner-ir.md, "Never regenerate source").
 func TestRawExpr_JqInternalPipeBreak(t *testing.T) {
-	for _, pipeline := range []string{
-		`cat vimgym.log | jq '.foo | length'`,
-		`cat vimgym.log | jq '.tags | tostring'`,
-		`cat vimgym.log | jq '.items[]'`,
+	for pipeline, key := range map[string]string{
+		`cat vimgym.log | jq '.foo | length'`:    "foo",
+		`cat vimgym.log | jq '.tags | tostring'`: "tags",
+		`cat vimgym.log | jq '.items[]'`:         "items",
 	} {
 		t.Run(pipeline, func(t *testing.T) {
 			plan, err := Plan(pipeline, 0, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
-			// The stage reads the payload, not raw.
-			if !strings.HasPrefix(plan.ShardSQL, "SELECT CAST(payload AS VARCHAR) as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs") {
-				t.Errorf("expected the payload as the stage's input, got: %s", plan.ShardSQL)
+			// The stage reads the payload, not raw: just the key it reads.
+			if want := "SELECT " + narrowedPayloadSQL([]string{key}) + " as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs"; !strings.HasPrefix(plan.ShardSQL, want) {
+				t.Errorf("expected the payload's %q as the stage's input, got: %s", key, plan.ShardSQL)
 			}
 			stage := strings.TrimPrefix(pipeline, "cat vimgym.log | ")
 			if len(plan.ComputeStages) != 1 || plan.ComputeStages[0] != stage {

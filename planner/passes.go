@@ -35,9 +35,12 @@ type compiled struct {
 	// fieldSelect, when set, is the SQL for a record of just the fields the
 	// first compute stage reads (projectFields), in place of each line.
 	fieldSelect string
-	aggregate   string
-	aggregated  []node
-	passes      []passStep
+	// payloadSelect, when set, is the SQL for a payload of just the keys the
+	// first compute stage (a jq) reads (projectPayload), in place of all of it.
+	payloadSelect string
+	aggregate     string
+	aggregated    []node
+	passes        []passStep
 }
 
 // passStep is one line of the pass log: what a pass did or declined.

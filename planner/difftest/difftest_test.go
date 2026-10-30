@@ -258,6 +258,131 @@ func TestFieldProjectionShrinksTheWire(t *testing.T) {
 	h.check(t, cut)
 }
 
+// TestDifferentialJqPayloadKeys: a jq stage that reads only some top-level
+// keys is sent an object of just those. It must read the same values, down to
+// how a number is written, and anything that looks at the whole object must
+// still see all of it. The payloads are the awkward ones: odd numbers,
+// escapes, nulls, duplicate keys, and payloads that aren't objects.
+func TestDifferentialJqPayloadKeys(t *testing.T) {
+	var rows []*pb.LogRow
+	base := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for i, payload := range []string{
+		`{"a":1.50,"b":1e3,"c":-0,"d":12345678901234567890,"e":"é\u00e9\n\t\"q\"","f":[1,{"g":null}],"h":null}`,
+		`{}`,
+		`{"a":{"b":{"c":1}},"items":[3,1,2],"tags":["x","y"],"status":500,"action":"login"}`,
+		`{"status":"500","action":"Logout","items":[],"tags":[]}`,
+		`{"status":200,"action":"naïve café","foo":{"bar":"baz"},"duration_ms":12.5}`,
+		`{"a":1,"a":2,"status":404}`,
+		`[1,2,3]`,
+		`"just a string"`,
+		`3`,
+		`null`,
+		`{"a":true,"b":false,"c":0.1,"d":1e-7,"e":123456789012,"f":0.30000000000000004}`,
+		`{"status":500,"action":"login","extra":{"deep":[{"k":1},{"k":2}]},"items":[1,2,3]}`,
+		`{"a":"web-0","b":"x: -0, y","c":[-0, 1],"d":{"e":-0},"status":201}`,
+		`{"a":"kafka-0","b":-0.0,"c":-0e5,"d":[ -0 ],"action":"-0"}`,
+	} {
+		rows = append(rows, &pb.LogRow{
+			Raw: fmt.Sprintf("row %d", i), TsUnixNs: base.Add(time.Duration(i) * time.Second).UnixNano(),
+			Namespace: "acme", Service: "api", Kind: "main", CustomerId: 1, PayloadJson: []byte(payload),
+		})
+	}
+	h := newHarness(t, rows, 2)
+	projected := []string{
+		`jq '.a'`, `jq '.b, .c, .d'`, `jq -r '.e'`, `jq '.f'`, `jq '.h'`, `jq '.a.b.c'`,
+		`jq '.foo | length'`, `jq '.items[]'`, `jq '.tags | tostring'`, `jq '.items | add'`,
+		`jq '.items | map(. * 2)'`, `jq '[.status, .action] | join(",")'`,
+		`jq '{s: .status, a: .action}'`, `jq '{status, action}'`, `jq '[.a, .b, .c]'`,
+		`jq '.duration_ms * 2'`, `jq '"\(.action)-\(.status)"'`, `jq '.foo.bar // "none"'`,
+		`jq 'if .status == 500 then .action else empty end'`, `jq '.action | ascii_downcase'`,
+		`jq '.status | tostring'`, `jq 'select(.action | test("log")) | .status'`,
+		`jq 'select(.status == 500) | .extra.deep[0]'`, `jq '(.a // 0) + (.b // 0)'`,
+		`jq '.missing'`, `jq '.missing.deeper'`, `jq '.a == null'`, `jq '[.items[] | select(. > 1)]'`,
+		`jq -c '{a, d, e}'`, `jq '.c, .d, .a | tostring'`,
+	}
+	whole := []string{
+		`jq '.'`, `jq 'keys'`, `jq 'length'`, `jq 'to_entries'`, `jq 'has("a")'`, `jq 'del(.a)'`,
+		`jq '. + {x: 1}'`, `jq '[.[]]'`, `jq '..'`, `jq 'with_entries(.)'`, `jq 'select(.status == 500) | .'`,
+		`jq '.a, .'`, `jq '[., .a]'`, `jq 'map_values(.)'`, `jq '. as $o | $o.a'`, `jq 'tojson'`,
+		`jq '{a: .a} + .'`, `jq 'if .status then . else empty end'`, `jq -s 'length'`,
+	}
+	// A program the planner lowers whole has no compute stage and nothing to
+	// cut; only the stages that stay in compute are this test's.
+	for _, p := range projected {
+		p := `cat /log/acme/api/main.log | ` + p
+		t.Run(p, func(t *testing.T) {
+			plan, err := planner.Plan(p, 0, "", time.Time{}, time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.ComputeStages) == 0 {
+				t.Skip("lowered whole")
+			}
+			if !strings.Contains(plan.DirectShardSQL, "json_object(") {
+				t.Errorf("not cut down to its keys:\n%s", planner.Explain(p))
+			}
+			h.check(t, p)
+		})
+	}
+	for _, p := range whole {
+		p := `cat /log/acme/api/main.log | ` + p
+		t.Run(p, func(t *testing.T) {
+			plan := h.check(t, p)
+			if plan != nil && strings.Contains(plan.DirectShardSQL, "json_object(") {
+				t.Errorf("cut down, but it reads the whole object:\n%s", planner.Explain(p))
+			}
+		})
+	}
+}
+
+// TestJqProjectionShrinksTheWire: a jq stage reading two keys of a wide
+// payload is sent a fraction of the payload, for the same rows.
+func TestJqProjectionShrinksTheWire(t *testing.T) {
+	var rows []*pb.LogRow
+	base := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 100; i++ {
+		payload := map[string]any{"status": 200 + i%5, "action": fmt.Sprintf("act-%d", i%4)}
+		for k := 0; k < 30; k++ {
+			payload[fmt.Sprintf("field_%02d", k)] = fmt.Sprintf("a longish value for field %d of row %d, to take up room", k, i)
+		}
+		body, _ := json.Marshal(payload)
+		rows = append(rows, &pb.LogRow{
+			Raw: fmt.Sprintf("row %d", i), TsUnixNs: base.Add(time.Duration(i) * time.Second).UnixNano(),
+			Namespace: "acme", Service: "api", Kind: "main", CustomerId: 1, PayloadJson: body,
+		})
+	}
+	h := newHarness(t, rows, 2)
+	const whole = `cat /log/acme/api/main.log | jq 'keys'`
+	const cut = `cat /log/acme/api/main.log | jq '[.status, .action] | join("/")'`
+	wire := func(p string) (n, bytes int) {
+		plan, err := planner.Plan(p, 0, "", time.Time{}, time.Time{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, sh := range h.shards {
+			got, err := sh.Query(context.Background(), plan.DirectShardSQL, toAny(argStrings(plan.Args))...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range got {
+				n++
+				bytes += len(r.Raw)
+			}
+		}
+		return n, bytes
+	}
+	wholeRows, wholeBytes := wire(whole)
+	cutRows, cutBytes := wire(cut)
+	if cutRows != wholeRows || wholeRows != 100 {
+		t.Errorf("rows: whole %d, cut %d, want 100 each", wholeRows, cutRows)
+	}
+	if cutBytes*5 > wholeBytes {
+		t.Errorf("the cut sends %d bytes of %d: not under a fifth", cutBytes, wholeBytes)
+	}
+	t.Logf("whole payloads %d bytes, cut %d bytes (%.1f%%)", wholeBytes, cutBytes, 100*float64(cutBytes)/float64(wholeBytes))
+	h.check(t, cut)
+}
+
 // TestDifferentialEventMetaVars checks EVENT_ID and LINE_NO, which
 // one-line events leave unset, over events of several lines.
 func TestDifferentialEventMetaVars(t *testing.T) {

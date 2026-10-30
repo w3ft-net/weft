@@ -49,7 +49,8 @@ import (
 // count and cut to N in compute, sort -u | wc -l is a distinct total, and
 // awk's count per key is a key count.
 // v14: a first awk stage that reads only some fields gets a record of just
-// those from the shard, and grep -E, awk's $NF and length lower.
+// those from the shard, a first jq stage that reads only some payload keys an
+// object of just those, and grep -E, awk's $NF and length lower.
 const PlannerVersion = 14
 
 // LoweredPlan is the persisted shape we store next to a watch's

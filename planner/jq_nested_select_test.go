@@ -89,7 +89,7 @@ func TestJq_SelectUnpushableNestedPaths(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
-			if strings.Contains(plan.ShardSQL, "json_type(") {
+			if strings.Contains(plan.ShardSQL, "json_type(payload, ") {
 				t.Errorf("pushed down: %s", plan.ShardSQL)
 			}
 		})

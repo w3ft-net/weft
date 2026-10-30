@@ -48,6 +48,12 @@ treatment:</p>
 </ul>
 <p>In awk, <code>$NF</code> (the last field) and <code>length</code> (in bytes) are optimized wherever
 <code>$1</code> or <code>$0</code> would be.</p>
+<p>A stage that stays post-retrieval is still sent less when weft can tell which
+parts of each line it reads. An awk program that only uses fields (<code>$4</code>, <code>$NF</code>,
+<code>NF</code>) is sent just those fields, and a jq program that only reads top-level keys
+(<code>.status</code>, <code>.user.id</code>) is sent an object with just those keys. A stage that
+looks at the whole line or object (a bare <code>print</code>, <code>$0</code>, <code>/regex/</code> on its own,
+<code>keys</code>, <code>.</code>) is sent all of it. Either way the stage runs exactly as written.</p>
 <p>Anything else is going to execute post-retrieval. If your 1-liners are timing
 out, you might want to run <code>explain</code> for hints of what could move into
 optimized retrieval.</p>

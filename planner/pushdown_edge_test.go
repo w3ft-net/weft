@@ -641,7 +641,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select then string interpolation",
 			pipeline:    `cat vimgym.log | jq 'select(.type == "disk") | "\(.host) \(.used_gb)"'`,
-			wantSQL:     `SELECT CAST(payload AS VARCHAR) as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
+			wantSQL:     "SELECT " + narrowedPayloadSQL([]string{"host", "type", "used_gb"}) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
 			wantCompute: []string{`jq 'select(.type == "disk") | "\(.host) \(.used_gb)"'`},
 		},
 		// -r flag must not prevent predicate pushdown, and must be preserved
@@ -655,7 +655,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select with -r then string interpolation",
 			pipeline:    `cat vimgym.log | jq -r 'select(.type == "disk") | "\(.host) \(.used_gb)"'`,
-			wantSQL:     `SELECT CAST(payload AS VARCHAR) as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
+			wantSQL:     "SELECT " + narrowedPayloadSQL([]string{"host", "type", "used_gb"}) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
 			wantCompute: []string{`jq -r 'select(.type == "disk") | "\(.host) \(.used_gb)"'`},
 		},
 		// --raw-output (long spelling) with a field projection: a string

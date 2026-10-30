@@ -309,6 +309,10 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 	}
 	if c.group == nil {
 		c.projectFields(sql.limit > 0 || sql.offset > 0)
+		c.projectPayload()
+		if c.payloadSelect != "" {
+			sql.setSelect(c.payloadSelect)
+		}
 	}
 	if c.aggregate == "" && c.group == nil {
 		c.fuseSort(orderDesc, sql.limit)
