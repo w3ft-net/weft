@@ -138,6 +138,32 @@ else the base plan. `ExecuteQueryRequest` carries per-shard variants.
 3. **Planner variants**, in this order: numeric filters, then sum/count per key.
    Min/max with its all-typed-or-nothing rule last.
 
+   > **Finding (2026-10-30, reading `planner/jq.go` and `planner/awk.go`):** the first
+   > item buys less than the plan assumed, and the order should change.
+   >
+   > - **jq numeric filters are already exact.** `jqPathComparisonToSQL` lowers
+   >   `select(.q_max_ms > 10)` as jq evaluates it, branching on the value's JSON type
+   >   (numbers sort below strings, a missing key is null). A typed key only lets that SQL
+   >   drop the type branches: `CAST(json_extract(payload, '$.q_max_ms') AS DOUBLE) > 10`.
+   >   That is cheaper per row on the shard, but it ships no fewer rows and changes no
+   >   plan, so none of the benchmark's filter queries will move much.
+   > - **awk `$N` comparisons are the real filter win.** Today `$5 > 500` is a prefilter
+   >   (`awkPushdown.why = reasonAwkStrnum`): it ORs a numeric test with a *string*
+   >   compare and an inf/nan/hex escape, so it ships every row whose text sorts above
+   >   "500" ("60", "7"). A typed `$5` is exactly `TRY_CAST(fields[5] AS DOUBLE) > 500`,
+   >   which ships only the matches. No weft-owned source has numeric awk columns, so
+   >   this needs a different benchmark source.
+   > - **The keyed aggregates are where the benchmark moves.** `keyed-max-qmax`,
+   >   `keyed-sum-qcount`, `keyed-sum-qrows` and `sortn-max-qmax` ship every row to
+   >   compute today. Lowered to a per-shard GROUP BY they ship one row per key per
+   >   shard. That is the keyed-aggregate IR node `query-limits.md` already names as
+   >   next, and the sum/count merge in the table above. It needs per-shard stages on
+   >   the wire, so **compute must be deployed with it first** (see Deploy gates).
+   >
+   > So: do the keyed sum/count (and max/min) lowering next, designed together with the
+   > keyed-aggregate node, and treat the awk numeric prefilter and the jq SQL
+   > simplification as small follow-ons that reuse the same variant plumbing.
+
 Each step also needs a differential test against the real stages on data that
 includes the violating rows, because the window is tolerated but the steady state
 is not.
