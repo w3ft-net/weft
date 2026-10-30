@@ -56,10 +56,6 @@ type ResolveShardFunc func(ctx context.Context, d *pb.ShardDescriptor) (shard.Sh
 // dumb about lifecycle — it does not Close the handle on return,
 // because the engine's cache may keep it for the next query.
 func FanOutToShards(ctx context.Context, req *pb.ExecuteQueryRequest, job shard.RowSink, resolve ResolveShardFunc) {
-	args := make([]any, len(req.Args))
-	for i, a := range req.Args {
-		args[i] = a
-	}
 	var wg sync.WaitGroup
 	wg.Add(len(req.Shards))
 	for _, desc := range req.Shards {
@@ -72,7 +68,15 @@ func FanOutToShards(ctx context.Context, req *pb.ExecuteQueryRequest, job shard.
 				job.SendSentinel(d.ShardId)
 				return
 			}
-			sh.QueryToSink(ctx, req.Sql, args, job)
+			sql, strArgs := req.Sql, req.Args
+			if d.Sql != "" {
+				sql, strArgs = d.Sql, d.Args
+			}
+			args := make([]any, len(strArgs))
+			for i, a := range strArgs {
+				args[i] = a
+			}
+			sh.QueryToSink(ctx, sql, args, job)
 		}(desc)
 	}
 	wg.Wait()

@@ -217,6 +217,13 @@ message ShardDescriptor {
   string parquet_path = 4;
   // Services this shard covers (cold shards need this for ColdShard construction).
   repeated string services = 5;
+  // sql and args, when sql is set, are what this shard runs instead of the
+  // request's sql and args (the placeholders in sql bind to this args, not
+  // the request's). The coordinator sets them to give a shard whose field
+  // facts allow it a plan the other shards can't run exactly; see
+  // docs/plans/field-types.md. Empty = the request's sql and args.
+  string sql = 6;
+  repeated string args = 7;
 }
 
 message ExecuteQueryRequest {
@@ -492,9 +499,47 @@ message ShardHeartbeatRequest {
   // heartbeat only keeps the pool's record of it fresh and never promotes
   // a shard. shard_id is empty on a spare.
   bool spare = 11;
+  // field_facts are the shard's field facts the coordinator has not yet
+  // acknowledged (see HeartbeatResponse.field_facts_acked). Absent from an
+  // older shard, which the coordinator reads as "nothing known".
+  repeated FieldFactDelta field_facts = 12;
 }
 
-message HeartbeatResponse {}
+// FieldFactState is what a shard has learned about a locator's values.
+enum FieldFactState {
+  FIELD_FACT_STATE_UNSPECIFIED = 0;
+  // TYPED: every row the shard has seen held a number there, and enough rows
+  // were seen to believe it.
+  FIELD_FACT_STATE_TYPED = 1;
+  // DIRTY: a row did not. Permanent for this shard. Sent only to retract a
+  // TYPED the coordinator may hold; a locator that was never typed is not
+  // reported at all.
+  FIELD_FACT_STATE_DIRTY = 2;
+}
+
+// FieldFactDelta is one transition of a locator's fact. See
+// docs/plans/field-types.md.
+message FieldFactDelta {
+  int64 customer_id = 1;
+  string namespace = 2;
+  string service = 3;
+  string kind = 4;
+  string env = 5;
+  // locator is "$N" for awk field N.
+  string locator = 6;
+  FieldFactState state = 7;
+  // epoch increases with every transition across the shard's facts, so the
+  // coordinator can order them and acknowledge them.
+  uint64 epoch = 8;
+}
+
+message HeartbeatResponse {
+  // field_facts_acked is the highest epoch of field_facts the coordinator
+  // has recorded. The shard resends anything newer, so a lost retraction is
+  // sent again. 0 from a coordinator that predates facts, which makes the
+  // shard resend each beat; that coordinator drops them.
+  uint64 field_facts_acked = 1;
+}
 
 message GetUsageRequest {
   reserved 1;
