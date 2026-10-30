@@ -153,12 +153,12 @@ func TestEdge_Awk_NonPushable(t *testing.T) {
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ?`,
 			wantCompute: []string{`awk '{ x = $3 + 1; print x }'`},
 		},
-		// Non-pushable field access: $NF (variable index, not a literal)
+		// Non-pushable field access: a variable index other than NF.
 		{
-			name:        "variable field index NF",
-			pipeline:    `cat vimgym.log | awk '$NF == "ERROR"'`,
+			name:        "variable field index",
+			pipeline:    `cat vimgym.log | awk '$i == "ERROR"'`,
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk '$NF == "ERROR"'`},
+			wantCompute: []string{`awk '$i == "ERROR"'`},
 		},
 		// Field compared to another field — can't push down
 		{
@@ -167,12 +167,12 @@ func TestEdge_Awk_NonPushable(t *testing.T) {
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ?`,
 			wantCompute: []string{`awk '$3 > $4'`},
 		},
-		// Function call in pattern — can't push down
+		// Function call in pattern — can't push down (length is the one that does)
 		{
 			name:        "function call in pattern",
-			pipeline:    `cat vimgym.log | awk 'length($0) > 100'`,
+			pipeline:    `cat vimgym.log | awk 'toupper($1) == "ERROR"'`,
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk 'length($0) > 100'`},
+			wantCompute: []string{`awk 'toupper($1) == "ERROR"'`},
 		},
 	}
 
@@ -288,6 +288,23 @@ func TestEdge_Awk_Pushable(t *testing.T) {
 			name:     "field zero equals string",
 			pipeline: `cat vimgym.log | awk '$0 == "exact match"'`,
 			wantSQL:  `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND raw = 'exact match'`,
+		},
+		// $NF is the last field, or $0 on a line with none.
+		{
+			name:     "last field equals string",
+			pipeline: `cat vimgym.log | awk '$NF == "ERROR"'`,
+			wantSQL:  `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(list_extract(fields, -1), raw) = 'ERROR'`,
+		},
+		// length counts bytes, as the awk that runs the stage does.
+		{
+			name:     "length of the record",
+			pipeline: `cat vimgym.log | awk 'length($0) > 100'`,
+			wantSQL:  `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND strlen(raw) > 100`,
+		},
+		{
+			name:     "bare length of a field",
+			pipeline: `cat vimgym.log | awk 'length($3) == 0'`,
+			wantSQL:  `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(strlen(COALESCE(list_extract(fields, 3), '')), 0) = 0`,
 		},
 		// Meta-var less-than (non-standard but expressible)
 		{
@@ -698,12 +715,6 @@ func TestEdge_Grep(t *testing.T) {
 				wantCompute: []string{`grep -n ERROR`},
 			},
 			{
-				name:        "grep -E extended regex",
-				pipeline:    `cat vimgym.log | grep -E 'error|warn'`,
-				wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ?`,
-				wantCompute: []string{`grep -E 'error|warn'`},
-			},
-			{
 				name:        "grep -w word match",
 				pipeline:    `cat vimgym.log | grep -w error`,
 				wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ?`,
@@ -731,6 +742,29 @@ func TestEdge_Grep(t *testing.T) {
 			})
 		}
 	})
+}
+
+// -E changes nothing for the grep that runs the stage (every pattern is RE2
+// there), so it pushes as any pattern does.
+func TestEdge_Grep_ExtendedRegexPushes(t *testing.T) {
+	for _, tt := range []struct{ pipeline, where string }{
+		{`cat vimgym.log | grep -E 'error|warn'`, `regexp_matches(raw, 'error|warn')`},
+		{`cat vimgym.log | grep -Ei 'error|warn'`, `regexp_matches(raw, 'error|warn', 'i')`},
+		{`cat vimgym.log | grep -Ev 'health|ping'`, `NOT regexp_matches(raw, 'health|ping')`},
+	} {
+		t.Run(tt.pipeline, func(t *testing.T) {
+			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := "WHERE namespace = ? AND " + tt.where; !strings.Contains(plan.ShardSQL, want) {
+				t.Errorf("ShardSQL = %s, want it to contain %s", plan.ShardSQL, want)
+			}
+			if len(plan.ComputeStages) != 0 {
+				t.Errorf("compute stages = %v, want none", plan.ComputeStages)
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

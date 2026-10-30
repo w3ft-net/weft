@@ -193,7 +193,7 @@ func (r reason) String() string {
 	case reasonAwkRecordCounter:
 		return "NR/FNR outside an NR window: a filter changes what they count"
 	case reasonAwkComputedField:
-		return "reads a field by a computed index ($NF, $i)"
+		return "reads a field by a computed index ($i, $(n+1))"
 	case reasonAwkStrnum:
 		return "compares with a number: awk compares as numbers or as strings by the value"
 	case reasonAwkTS:

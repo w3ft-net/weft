@@ -20,6 +20,10 @@ func grepFilter(args []string) (pred string, pat GrepPattern, why reason) {
 					pat.IgnoreCase = true
 				case 'v':
 					pat.Invert = true
+				case 'E':
+					// The grep that runs these lines compiles every pattern as
+					// RE2, which is extended syntax already, so -E changes
+					// nothing there or here.
 				default:
 					return "", pat, reason{code: reasonFlag, detail: arg}
 				}

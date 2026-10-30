@@ -73,11 +73,17 @@ func TestFrontends(t *testing.T) {
 		{`awk 'NR >= 2 && NR <= 5'`, "Limit", nil},
 		{`awk '{ print LEVEL }'`, "Project", nil},
 		{`awk '{ print $2 }'`, "Project", nil},
-		{`awk '{ print $NF }'`, "Opaque", []reasonCode{reasonAwkComputedField}},
+		{`awk '{ print $NF }'`, "Project", nil},
+		{`awk '{ print length }'`, "Project", nil},
+		{`awk '{ print $(NF-1) }'`, "Opaque", []reasonCode{reasonAwkComputedField}},
+		{`awk '{ print $i }'`, "Opaque", []reasonCode{reasonAwkComputedField}},
 		{`awk '{ x++ } END { print x }'`, "Opaque", []reasonCode{reasonAwkUnpatterned}},
 		{`awk '$4 == "ERROR"'`, "Filter=", nil},
 		{`awk '$2 ~ /time/'`, "Filter=", nil},
-		{`awk '$NF == "x"'`, "Opaque", []reasonCode{reasonAwkComputedField}},
+		{`awk '$NF == "x"'`, "Filter=", nil},
+		{`awk 'length > 80'`, "Filter=", nil},
+		{`awk 'length($3) == 0'`, "Filter=", nil},
+		{`awk '$(NF-1) == "x"'`, "Opaque", []reasonCode{reasonAwkComputedField}},
 		{`awk '$3 > 10'`, "Filter~ Opaque", []reasonCode{reasonAwkStrnum, reasonAwkStrnum}},
 		{`awk 'LEVEL == "500"'`, "Filter~ Opaque", []reasonCode{reasonAwkStrnum, reasonAwkStrnum}},
 		{`awk 'TS > "2026"'`, "Opaque", []reasonCode{reasonAwkTS}},
@@ -85,7 +91,9 @@ func TestFrontends(t *testing.T) {
 		{`awk 'NR > 1 && LEVEL == "x"'`, "Opaque", []reasonCode{reasonAwkRecordCounter}},
 		{`awk -F, 'LEVEL == "x"'`, "Opaque", []reasonCode{reasonFlag}},
 		// The predicate is partial for one reason, the stage runs for another.
-		{`awk '$NF > 10 && LEVEL == "x" { print $1 }'`, "Filter~ Opaque", []reasonCode{reasonAwkComputedField, reasonAwkAction}},
+		{`awk '$(NF-1) > 10 && LEVEL == "x" { printf "%s\n", $1 }'`, "Filter~ Opaque", []reasonCode{reasonAwkComputedField, reasonAwkAction}},
+		// The action is a print SQL computes: only the pattern holds the stage back.
+		{`awk '$NF > 10 && LEVEL == "x" { print $1 }'`, "Filter~ Opaque", []reasonCode{reasonAwkStrnum, reasonAwkStrnum}},
 		{`awk 'LEVEL == "a" { print "A" } LEVEL == "b" { print "B" }'`, "Filter~ Opaque", []reasonCode{reasonAwkRules, reasonAwkRules}},
 
 		{`jq 'select(.status == 500)'`, "Filter=", nil},
@@ -159,7 +167,7 @@ func TestPasses(t *testing.T) {
 		{`cat vimgym.log | awk '{ print $2 }' | wc -l`, 2, "Count[2: wc] became the shard's GROUP BY (total)"},
 		{`tail -n 5 vimgym.log | wc -l`, 1, "skipped Count[1: wc]: a pushed line count is applied after the shards"},
 		{`cat vimgym.log | sort | uniq -c | awk '{ print LEVEL }'`, 0, "skipped Sort[1: sort] + Uniq[2: uniq]: Project[3: awk] names a meta-variable"},
-		{`cat vimgym.log | grep -E x | jq 'select(.a == 1)' | wc -l`, 0, "skipped Count[3: wc]: row stages run in compute"},
+		{`cat vimgym.log | grep -E x | jq 'select(.a | test("b"))' | wc -l`, 1, "skipped Count[3: wc]: row stages run in compute"},
 		{`cat vimgym.log | sort -n | uniq -c`, 0, "skipped Sort[1: sort]: a flag changes its compare key"},
 		{`cat vimgym.log | jq 'select(.a == 1) | keys' | grep b`, 1, "Filter[1: jq] into shard SQL (prefilter; its stage still runs)"},
 		{`cat vimgym.log | grep a | awk '{ print LEVEL }'`, 2, "Project[2: awk] became the SELECT"},
@@ -200,17 +208,17 @@ func TestPasses(t *testing.T) {
 
 // TestExplainShowsIR golden-tests Explain's IR and pass sections.
 func TestExplainShowsIR(t *testing.T) {
-	got := Explain(`cat /log/acme/api/main.log | awk '$NF > 10 && LEVEL == "ERROR" { print $1 $2 }' | head -5`)
-	want := `Pipeline: cat /log/acme/api/main.log | awk '$NF > 10 && LEVEL == "ERROR" { print $1 $2 }' | head -5
+	got := Explain(`cat /log/acme/api/main.log | awk '$(NF-1) > 10 && LEVEL == "ERROR" { print $1 $2 }' | head -5`)
+	want := `Pipeline: cat /log/acme/api/main.log | awk '$(NF-1) > 10 && LEVEL == "ERROR" { print $1 $2 }' | head -5
 
 Plan:
   Scan     namespace=acme service=api kind=main
-  Filter   prefilter  level = 'ERROR'                          [1: awk]
-           not exact: reads a field by a computed index ($NF, $i)
+  Filter   prefilter  level = 'ERROR'                              [1: awk]
+           not exact: reads a field by a computed index ($i, $(n+1))
   ─── shard │ compute ───
-  Opaque   awk '$NF > 10 && LEVEL == "ERROR" { print $1 $2 }'  [1: awk]
-           the action isn't the default print
-  Limit    5  ts ASC                                           [2: head]
+  Opaque   awk '$(NF-1) > 10 && LEVEL == "ERROR" { print $1 $2 }'  [1: awk]
+           reads a field by a computed index ($i, $(n+1))
+  Limit    5  ts ASC                                               [2: head]
 
 Passes:
   filter-pushdown      Filter[1: awk] into shard SQL (prefilter; its stage still runs)

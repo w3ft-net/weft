@@ -212,8 +212,8 @@ func adviceFor(r reason, cmd string) *Advice {
 		}
 	case reasonAwkComputedField:
 		return &Advice{
-			Because: "Computed field position ($NF, $i).",
-			Try:     "Use a fixed position ($1, $2), or jq on a JSON source.",
+			Because: "Computed field position ($i, $(n+1)).",
+			Try:     "Use a fixed position ($1, $2) or the last field ($NF), or jq on a JSON source.",
 		}
 	case reasonAwkStrnum:
 		return &Advice{Because: "Number comparison: awk picks number or text per value."}

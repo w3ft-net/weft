@@ -240,9 +240,9 @@ func TestPrefilter_PositionalFields(t *testing.T) {
 		},
 		{
 			name:        "computed field never pushes",
-			pipeline:    `cat vimgym.log | awk '$NF == "x"'`,
+			pipeline:    `cat vimgym.log | awk '$(NF-1) == "x"'`,
 			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ?`,
-			wantCompute: []string{`awk '$NF == "x"'`},
+			wantCompute: []string{`awk '$(NF-1) == "x"'`},
 		},
 		{
 			// cut splits on each tab, not on runs of blanks like

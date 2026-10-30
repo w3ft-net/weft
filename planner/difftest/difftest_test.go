@@ -112,6 +112,56 @@ func TestDifferentialLineSplits(t *testing.T) {
 	}
 }
 
+// TestDifferentialLineShapes checks $NF, length and grep -E over the lines
+// they are easiest to get wrong on: blank, only blanks, one field, runs of
+// blanks and tabs, and text whose bytes outnumber its characters. Each row is
+// one line, so the stage reads what the shard's row holds.
+func TestDifferentialLineShapes(t *testing.T) {
+	var rows []*pb.LogRow
+	base := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	for i, raw := range []string{
+		"", "   ", "\t", "a", "a b", "a  b   c", " lead trail ", "x\ty", "naïve café", "日本語 テスト",
+		"é", "ß", "12 5", "7", "ERROR boom", "warn 12",
+	} {
+		rows = append(rows, &pb.LogRow{
+			Raw: raw, TsUnixNs: base.Add(time.Duration(i) * time.Second).UnixNano(),
+			Namespace: "acme", Service: "api", Kind: "main", CustomerId: 1, PayloadJson: []byte("{}"),
+		})
+	}
+	h := newHarness(t, rows, 2)
+	for _, p := range []string{
+		`cat /log/acme/api/main.log | awk '{ print $NF }'`,
+		`cat /log/acme/api/main.log | awk '{ print $1, $NF }'`,
+		`cat /log/acme/api/main.log | awk '$NF == "b"'`,
+		`cat /log/acme/api/main.log | awk '$NF == ""'`,
+		`cat /log/acme/api/main.log | awk '$NF ~ /^[a-z]/'`,
+		`cat /log/acme/api/main.log | awk '{ print $NF }' | sort | uniq -c`,
+		`cat /log/acme/api/main.log | awk '{ c[$NF]++ } END { for (k in c) print k, c[k] }'`,
+		`cat /log/acme/api/main.log | awk '{ print length }'`,
+		`cat /log/acme/api/main.log | awk '{ print length($0), length($1), length($NF) }'`,
+		`cat /log/acme/api/main.log | awk 'length > 3'`,
+		`cat /log/acme/api/main.log | awk 'length($0) == 0'`,
+		`cat /log/acme/api/main.log | awk 'length($2) == 0'`,
+		`cat /log/acme/api/main.log | awk 'length($NF) >= 2 { print $0 }'`,
+		`cat /log/acme/api/main.log | awk '{ print length }' | sort | uniq -c`,
+		`cat /log/acme/api/main.log | grep -E 'a|b'`,
+		`cat /log/acme/api/main.log | grep -Ei 'ERROR|WARN'`,
+		`cat /log/acme/api/main.log | grep -Ei 'É'`,
+		`cat /log/acme/api/main.log | grep -Ev '^$|^ '`,
+		`cat /log/acme/api/main.log | grep -E '^\s*$'`,
+		`cat /log/acme/api/main.log | grep -E '[0-9]+$' | wc -l`,
+	} {
+		t.Run(p, func(t *testing.T) {
+			if plan := h.check(t, p); plan != nil && len(plan.ComputeStages) != 0 {
+				t.Errorf("stages left in compute %q, want them lowered:\n%s", plan.ComputeStages, planner.Explain(p))
+			}
+		})
+	}
+	// A comparison with a number is a prefilter: awk decides number or text
+	// per value, so the stage still runs.
+	h.check(t, `cat /log/acme/api/main.log | awk '$NF > 6'`)
+}
+
 // TestDifferentialEventMetaVars checks EVENT_ID and LINE_NO, which
 // one-line events leave unset, over events of several lines.
 func TestDifferentialEventMetaVars(t *testing.T) {
@@ -683,6 +733,12 @@ var extraCorpus = []string{
 	`cat /log/acme/api/main.log | awk '{ c[toupper($3)]++ } END { for (k in c) print k, c[k] }'`,
 	`cat /log/acme/api/main.log | cut -d ' ' -f 2- | awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'`,
 	`tail -n 60 /log/acme/api/main.log | awk '{ c[$3]++ } END { for (k in c) print k, c[k] }'`,
+	// $NF, length and grep -E lower: see also TestDifferentialLineShapes.
+	`cat /log/acme/api/main.log | awk '{ print $NF }' | sort | uniq -c | sort -rn | head -n 3`,
+	`cat /log/acme/api/main.log | awk '$NF == "ingest-stream:"'`,
+	`cat /log/acme/api/main.log | awk 'length > 80 { print $3 }'`,
+	`cat /log/acme/api/main.log | grep -E 'warm|timeout' | wc -l`,
+	`cat /log/acme/api/main.log | grep -Ei 'IT.S|NA[IÏ]VE'`,
 	// Not top-N: head -n 0, another order, tail, and a keyed sort.
 	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rn | head -n 0`,
 	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -n | head -n 3`,

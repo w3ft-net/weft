@@ -108,7 +108,7 @@ func tryAwkPushdown(prog *awk.Program) (*awkPushdown, reason) {
 		why = because(reasonAwkRules)
 	case len(prog.Rules) > 1:
 		why = because(reasonAwkEnd)
-	case !exact:
+	case !exact && !actionLowers(main[0].Action):
 		why = because(reasonAwkAction)
 	}
 	// why is the stage's reason to run: its rules do more than filter.
@@ -142,6 +142,16 @@ func tryAwkPushdown(prog *awk.Program) (*awkPushdown, reason) {
 	return &awkPushdown{predicate: "(" + strings.Join(preds, " OR ") + ")", why: patternWhy}, why
 }
 
+// actionLowers is whether a rule's action is something SQL computes, so a
+// stage that still runs with it is held back by its pattern, not by it.
+func actionLowers(action *awk.Block) bool {
+	if action == nil || isDefaultPrintAction(action) {
+		return true
+	}
+	_, ok := awkActionProjection(action)
+	return ok
+}
+
 // awkPatternReason says why an expression doesn't lower: the common
 // causes by name, else that it has no lowering at all.
 func awkPatternReason(n any) reason {
@@ -157,11 +167,14 @@ func awkPatternReason(n any) reason {
 	return because(reasonAwkPattern)
 }
 
-// isAwkComputedField matches a field whose index isn't a constant:
-// $NF, $i, $(n+1).
+// isAwkComputedField matches a field whose index isn't a constant, and
+// isn't $NF, which lowers: $i, $(n+1).
 func isAwkComputedField(n any) bool {
 	fe, ok := n.(*awk.FieldExpr)
 	if !ok {
+		return false
+	}
+	if id, ok := fe.Index.(*awk.IdentExpr); ok && id.Name == "NF" {
 		return false
 	}
 	_, ok = fe.Index.(*awk.NumberLit)
@@ -568,12 +581,32 @@ type awkColumn struct {
 // awkColumnToSQL maps what an awk comparison can read to a shard column:
 // $0 is raw, $N (a constant N) is fields[N], which ingest splits the way
 // awk does, and a bare reserved name (LEVEL, HOST, ...) is its
-// meta-variable column (see AwkMetaVars). A computed field ($NF, $i)
-// doesn't lower, and neither does TS, which awk sees as text and SQL as
-// a TIMESTAMP.
+// meta-variable column (see AwkMetaVars). $NF is the last field, or $0 on a
+// line with none, as awk reads it; length is the byte length of its operand
+// (the awk that runs these stages counts bytes). Any other computed field
+// ($i, $(n+1)) doesn't lower, and neither does TS, which awk sees as text and
+// SQL as a TIMESTAMP.
+// awkLastField is $NF: the last of the fields (a negative index counts from
+// the end), which is $0 when there are none: NF is 0 on a blank line.
+const awkLastField = "COALESCE(list_extract(fields, -1), raw)"
+
 func awkColumnToSQL(expr awk.Expr) (awkColumn, bool) {
 	switch e := expr.(type) {
+	case *awk.CallExpr:
+		if e.Name == "length" && len(e.Args) <= 1 {
+			operand := "raw"
+			if len(e.Args) == 1 {
+				var ok bool
+				if operand, ok = awkPrintArgToSQL(e.Args[0]); !ok {
+					return awkColumn{}, false
+				}
+			}
+			return awkColumn{sql: "strlen(" + operand + ")", number: true}, true
+		}
 	case *awk.FieldExpr:
+		if id, ok := e.Index.(*awk.IdentExpr); ok && id.Name == "NF" {
+			return awkColumn{sql: awkLastField}, true
+		}
 		idx, ok := e.Index.(*awk.NumberLit)
 		switch {
 		case !ok || idx.Value != float64(int(idx.Value)) || idx.Value < 0:
@@ -583,6 +616,9 @@ func awkColumnToSQL(expr awk.Expr) (awkColumn, bool) {
 			return awkColumn{sql: fmt.Sprintf("list_extract(fields, %d)", int(idx.Value)), nullable: true}, true
 		}
 	case *awk.IdentExpr:
+		if e.Name == "length" {
+			return awkColumn{sql: "strlen(raw)", number: true}, true
+		}
 		switch col := AwkMetaVars[e.Name]; col {
 		case "", "ts":
 		case "duration_ns", "line_no":

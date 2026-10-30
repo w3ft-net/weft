@@ -14,9 +14,9 @@ $ awk '$3 == "x" { printf "%s\n", $0 }' | grep y
 Barrier: stage 1.
 
 $ awk '$NF > 10 { print $1 }'
-  1  awk '$NF > 10 { print $1 }'  post-retrieval
-       Computed field position ($NF, $i).
-       Try: Use a fixed position ($1, $2), or jq on a JSON source.
+  1  awk '$NF > 10 { print $1 }'  partly optimized
+       pattern: optimized; action: post-retrieval
+       Number comparison: awk picks number or text per value.
 
 Barrier: stage 1.
 

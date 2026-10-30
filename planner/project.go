@@ -92,7 +92,18 @@ func awkPrintArgToSQL(expr awk.Expr) (string, bool) {
 		}
 		return fmt.Sprintf("concat(%s, %s)", left, right), true
 
+	case *awk.CallExpr:
+		// length prints as the integer it is.
+		c, ok := awkColumnToSQL(e)
+		if !ok {
+			return "", false
+		}
+		return "CAST(" + c.sql + " AS VARCHAR)", true
+
 	case *awk.IdentExpr:
+		if e.Name == "length" {
+			return "CAST(strlen(raw) AS VARCHAR)", true
+		}
 		// A NULL column reaches awk as an unset variable, which prints
 		// as "". TS doesn't lower: awk sees its text form.
 		switch col := AwkMetaVars[e.Name]; col {
