@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
@@ -15,11 +17,13 @@ import (
 func TestExecuteQuery_GroupedPipelineSendsAGroupSpec(t *testing.T) {
 	for _, tc := range []struct {
 		pipeline string
-		want     pb.GroupRender
+		want     *pb.GroupSpec
 	}{
-		{`cat /log/vimgym.log | wc -l`, pb.GroupRender_GROUP_RENDER_TOTAL},
-		{`cat /log/vimgym.log | sort -u`, pb.GroupRender_GROUP_RENDER_LINE},
-		{`cat /log/vimgym.log | sort | uniq -c`, pb.GroupRender_GROUP_RENDER_COUNT_LINE},
+		{`cat /log/vimgym.log | wc -l`, &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_TOTAL}},
+		{`cat /log/vimgym.log | sort -u`, &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_LINE}},
+		{`cat /log/vimgym.log | sort | uniq -c`, &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_COUNT_LINE}},
+		{`cat /log/vimgym.log | sort | uniq -c | sort -rn | head -n 5`, &pb.GroupSpec{
+			Render: pb.GroupRender_GROUP_RENDER_COUNT_LINE, Order: pb.GroupOrder_GROUP_ORDER_COUNT_DESC, Limit: 5}},
 	} {
 		t.Run(tc.pipeline, func(t *testing.T) {
 			c := setupTestCoordinator(t)
@@ -57,13 +61,13 @@ func TestExecuteQuery_GroupedPipelineSendsAGroupSpec(t *testing.T) {
 	}
 }
 
-func checkGroupRequest(t *testing.T, path string, pool *spyCompute, want pb.GroupRender) {
+func checkGroupRequest(t *testing.T, path string, pool *spyCompute, want *pb.GroupSpec) {
 	t.Helper()
 	if pool.lastReq == nil {
 		t.Fatalf("%s: ExecuteQuery was never called", path)
 	}
-	if got := pool.lastReq.GetGroup().GetRender(); got != want {
-		t.Errorf("%s: group render = %s, want %s", path, got, want)
+	if got := pool.lastReq.GetGroup(); !proto.Equal(got, want) {
+		t.Errorf("%s: group = %v, want %v", path, got, want)
 	}
 	if pool.lastReq.Aggregate != "" {
 		t.Errorf("%s: aggregate = %q, want none: the group is the instruction", path, pool.lastReq.Aggregate)

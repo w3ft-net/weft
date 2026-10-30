@@ -41,12 +41,13 @@ func lowerStage(s stageInfo, index int) *loweredStage {
 		ls.nodes = []node{&limitNode{at: a, n: parseLineCount(s.args), order: order}}
 	case "sort":
 		sn := &sortNode{at: a}
+		other := false
 		for _, f := range s.args {
 			if !strings.HasPrefix(f, "-") {
 				// A flag's value (-k 2) or a file operand, which sort
 				// reads instead of its input: either way, not the
 				// lines' bytes in order.
-				sn.keyed = true
+				sn.keyed, other = true, true
 				continue
 			}
 			for _, flag := range f[1:] {
@@ -55,11 +56,14 @@ func lowerStage(s stageInfo, index int) *loweredStage {
 					sn.reverse = true
 				case 'u':
 					sn.unique = true
+				case 'n':
+					sn.keyed, sn.numeric = true, true
 				default:
-					sn.keyed = true
+					sn.keyed, other = true, true
 				}
 			}
 		}
+		sn.numeric = sn.numeric && !other
 		ls.nodes = []node{sn}
 	case "uniq":
 		switch strings.Join(s.args, " ") {

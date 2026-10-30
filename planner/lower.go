@@ -45,7 +45,9 @@ import (
 // level (null errors when none do), and a trace's arguments changed.
 // v12: the shard-side grouping of wc -l, sort -u and sort | uniq [-c] is a
 // Group, not an Aggregate string.
-const PlannerVersion = 12
+// v13: sort | uniq -c | sort -rn [| head -n N] is a Group ordered by count
+// and cut to N in compute, not stages.
+const PlannerVersion = 13
 
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to

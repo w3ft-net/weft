@@ -111,15 +111,21 @@ func GroupToProto(g *planner.GroupSpec) *pb.GroupSpec {
 	if g == nil {
 		return nil
 	}
+	out := &pb.GroupSpec{Limit: int64(g.Limit)}
 	switch g.Render {
 	case planner.RenderTotal:
-		return &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_TOTAL}
+		out.Render = pb.GroupRender_GROUP_RENDER_TOTAL
 	case planner.RenderLine:
-		return &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_LINE}
+		out.Render = pb.GroupRender_GROUP_RENDER_LINE
 	case planner.RenderCountLine:
-		return &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_COUNT_LINE}
+		out.Render = pb.GroupRender_GROUP_RENDER_COUNT_LINE
+	default:
+		panic("compute: no GroupSpec for render " + string(g.Render))
 	}
-	panic("compute: no GroupSpec for render " + string(g.Render))
+	if g.ByCount {
+		out.Order = pb.GroupOrder_GROUP_ORDER_COUNT_DESC
+	}
+	return out
 }
 
 // groupAggregate is the aggregate a GroupSpec asks for, named as the

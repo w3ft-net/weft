@@ -35,10 +35,17 @@ import (
 func TestDifferential(t *testing.T) {
 	h := newHarness(t, generateRows(400), 2)
 	renders := map[planner.GroupRender]int{}
+	var ordered, limited int
 	for _, p := range corpus(t) {
 		t.Run(p, func(t *testing.T) {
 			if plan := h.check(t, p); plan != nil && plan.Group != nil {
 				renders[plan.Group.Render]++
+				if plan.Group.ByCount {
+					ordered++
+				}
+				if plan.Group.Limit > 0 {
+					limited++
+				}
 			}
 		})
 	}
@@ -46,6 +53,9 @@ func TestDifferential(t *testing.T) {
 		if renders[r] == 0 {
 			t.Errorf("no pipeline in the corpus groups as %s in the shard", r)
 		}
+	}
+	if ordered == 0 || limited == 0 {
+		t.Errorf("the corpus orders %d and limits %d groups by count, want both", ordered, limited)
 	}
 }
 
@@ -637,6 +647,18 @@ var extraCorpus = []string{
 	`cat /log/acme/api/main.log | awk '{ print $5 }' | wc -l`,
 	`cat vimgym.log | awk '{ print $2 }' | sort | uniq -c`,
 	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rn`,
+	// Top-N: compute orders the groups by count and keeps N.
+	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rn | head -n 3`,
+	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rn | head -1`,
+	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rn | head -n 500`,
+	`cat /log/acme/api/main.log | awk '{ print $3 }' | sort | uniq -c | sort -rn | head -n 5`,
+	`cat /log/acme/api/main.log | awk '{ print $2 }' | sort -r | uniq -c | sort -nr | head -n 4`,
+	`cat vimgym.log | awk '{ print $2 }' | sort | uniq -c | sort -rn | head -n 2 | awk '{ print $2 }'`,
+	// Not top-N: head -n 0, another order, tail, and a keyed sort.
+	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rn | head -n 0`,
+	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -n | head -n 3`,
+	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rn | tail -n 3`,
+	`cat /log/acme/api/main.log | jq -r '.action' | sort | uniq -c | sort -rnk2 | head -n 3`,
 	`cat /log/acme/api/main.log | jq '.status' | sort -u`,
 	`cat /log/acme/api/main.log | jq -r '.status' | sort -r | uniq`,
 	`cat /log/acme/api/main.log | cut -d ' ' -f 2 | sort | uniq -c`,

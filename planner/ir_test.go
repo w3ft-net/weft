@@ -154,7 +154,7 @@ func TestPasses(t *testing.T) {
 		{`tail -n 5 vimgym.log | grep a`, 1, "Filter[1: grep] held above Limit[source: tail]: a line count ends predicate pushdown"},
 		{`cat vimgym.log | head -3 | head -2`, 1, "Limit[2: head] held above Limit[1: head]"},
 		{`cat vimgym.log | uniq | grep a`, 0, "stopped at Uniq[1: uniq]"},
-		{`cat vimgym.log | grep a | sort | uniq -c | sort -rn`, 3, "Sort[2: sort] + Uniq[3: uniq] became the shard's GROUP BY (count_line)"},
+		{`cat vimgym.log | grep a | sort | uniq -c | sort -rn`, 4, "Sort[2: sort] + Uniq[3: uniq] + Sort[4: sort] became the shard's GROUP BY (count_line)"},
 		{`cat vimgym.log | sort -ru`, 1, "Sort[1: sort] became the shard's GROUP BY (line)"},
 		{`cat vimgym.log | awk '{ print $2 }' | wc -l`, 2, "Count[2: wc] became the shard's GROUP BY (total)"},
 		{`tail -n 5 vimgym.log | wc -l`, 1, "skipped Count[1: wc]: a pushed line count is applied after the shards"},

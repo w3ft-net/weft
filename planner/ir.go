@@ -71,6 +71,9 @@ type sortNode struct {
 	reverse bool
 	unique  bool // -u
 	keyed   bool
+	// numeric is -n, with no other flag or operand beyond -r and -u:
+	// `sort -rn` over uniq -c text compares the count in front.
+	numeric bool
 }
 
 // uniqNode is a uniq stage, with -c or without flags. Right after a

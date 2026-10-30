@@ -130,6 +130,11 @@ const (
 // GroupSpec is the shard-side grouping a plan asks for (QueryPlan.Group).
 type GroupSpec struct {
 	Render GroupRender `json:"render"`
+	// ByCount orders the groups highest count first (count_line only),
+	// and Limit keeps that many of them (0 keeps all): `sort -rn | head
+	// -n N` after uniq -c.
+	ByCount bool `json:"by_count,omitempty"`
+	Limit   int  `json:"limit,omitempty"`
 }
 
 // GrepPattern captures a grep filter for live tail matching.

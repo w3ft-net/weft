@@ -341,6 +341,8 @@ func (c *compiled) fuseAggregate(limited bool) {
 	var render GroupRender
 	var n int // stages the aggregate covers
 	var reverse bool
+	var ordered bool
+	var limit int
 	switch first := c.compute[0].nodes[0].(type) {
 	case *countNode:
 		render, n = RenderTotal, 1
@@ -356,6 +358,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 		switch {
 		case uniq != nil && uniq.count && !first.unique:
 			render, n = RenderCountLine, 2
+			ordered, limit, n = topN(c.compute[n:], n)
 		case uniq != nil && !uniq.count:
 			render, n = RenderLine, 2
 		case first.unique:
@@ -367,8 +370,8 @@ func (c *compiled) fuseAggregate(limited bool) {
 		return
 	}
 	label := c.label(c.compute[0].nodes[0])
-	if n == 2 {
-		label += " + " + c.label(c.compute[1].nodes[0])
+	for _, s := range c.compute[1:n] {
+		label += " + " + c.label(s.nodes[0])
 	}
 	switch {
 	case limited:
@@ -393,7 +396,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 	}
 	c.shard += len(c.aggregated)
 	c.compute = c.compute[n:]
-	c.group = &GroupSpec{Render: render}
+	c.group = &GroupSpec{Render: render, ByCount: ordered, Limit: limit}
 	switch {
 	case render == RenderTotal:
 		c.shardOrderBy = ""
@@ -403,4 +406,25 @@ func (c *compiled) fuseAggregate(limited bool) {
 		c.shardOrderBy = "raw"
 	}
 	c.logf(pass, "%s became the shard's GROUP BY (%s)", label, render)
+}
+
+// topN is the ordering after a sort | uniq -c: `sort -rn` (highest count
+// first), then optionally `head -n N`. It returns whether the sort is
+// there, the line count (0 keeps every group), and the stage count the
+// aggregate now covers, n plus what it took. A head -n 0 stays a stage:
+// a limit of 0 means every group.
+func topN(rest []*loweredStage, n int) (ordered bool, limit, covered int) {
+	if len(rest) == 0 || len(rest[0].nodes) != 1 {
+		return false, 0, n
+	}
+	sort, ok := rest[0].nodes[0].(*sortNode)
+	if !ok || !sort.numeric || !sort.reverse || sort.unique {
+		return false, 0, n
+	}
+	if len(rest) > 1 && len(rest[1].nodes) == 1 {
+		if head, ok := rest[1].nodes[0].(*limitNode); ok && head.order == "ts ASC" && head.offset == 0 && head.n > 0 {
+			return true, head.n, n + 2
+		}
+	}
+	return true, 0, n + 1
 }
