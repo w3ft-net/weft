@@ -245,3 +245,34 @@ func TestGroup_DistinctTotalMatchesTheStages(t *testing.T) {
 		})
 	}
 }
+
+// TestGroup_KeyCountPrintsAnAwkTally: the render prints `key count` for each
+// distinct line, summing across shards, keys in byte order, as an awk
+// `for (k in c)` tally over the same lines does. An empty key keeps its
+// leading space.
+func TestGroup_KeyCountPrintsAnAwkTally(t *testing.T) {
+	a := &groupedShard{id: "a", rows: []groupedRow{{"", 1}, {"a", 2}, {"b", 3}}}
+	b := &groupedShard{id: "b", rows: []groupedRow{{"b", 4}, {"é", 1}}}
+	eng := &Engine{}
+	eng.RegisterResolver(groupedResolver{a})
+	eng.RegisterResolver(groupedResolver{b})
+	stream, err := eng.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
+		Sql: "SELECT 1", MergeKey: "raw",
+		Shards: []*pb.ShardDescriptor{{ShardId: "a"}, {ShardId: "b"}},
+		Group:  &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_KEY_COUNT},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines, err := DrainLineStream(context.Background(), stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, l := range lines {
+		got = append(got, l.Raw)
+	}
+	if want := []string{" 1", "a 2", "b 7", "é 1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("printed %q, want %q", got, want)
+	}
+}

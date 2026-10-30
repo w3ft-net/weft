@@ -305,6 +305,9 @@ enum GroupRender {
   // GROUP_RENDER_DISTINCT_TOTAL: one bare number, how many distinct lines
   // there are (sort -u | wc -l).
   GROUP_RENDER_DISTINCT_TOTAL = 4;
+  // GROUP_RENDER_KEY_COUNT: each distinct line, a space, then its count
+  // (awk '{ c[$1]++ } END { for (k in c) print k, c[k] }').
+  GROUP_RENDER_KEY_COUNT = 5;
 }
 
 // GroupOrder is how compute orders the merged groups before printing them.

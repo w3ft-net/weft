@@ -101,6 +101,10 @@ const (
 // legacy aggregate string; only a GroupSpec asks for it.
 const distinctTotal = "distinct_total"
 
+// keyCount is an awk tally, `key count` per distinct line. Only a GroupSpec
+// asks for it.
+const keyCount = "key_count"
+
 // GroupToProto is the GroupSpec a coordinator sends for a plan's grouping,
 // nil for none.
 func GroupToProto(g *planner.GroupSpec) *pb.GroupSpec {
@@ -130,6 +134,8 @@ func groupAggregate(g *pb.GroupSpec) (string, error) {
 		return legacyCountDistinct, nil
 	case pb.GroupRender_GROUP_RENDER_DISTINCT_TOTAL:
 		return distinctTotal, nil
+	case pb.GroupRender_GROUP_RENDER_KEY_COUNT:
+		return keyCount, nil
 	}
 	return "", fmt.Errorf("compute: unknown group render %s", g.Render)
 }
@@ -166,7 +172,7 @@ func newAggregator(fn string, sink func(*pb.ResultRow) bool) (rowAggregator, err
 		return &traceListAggregator{sink: sink, groups: map[string]*traceGroup{}}, nil
 	case planner.AggregateSpanRows, planner.AggregateSpanSamples:
 		return &spanRowAggregator{fn: fn, sink: sink}, nil
-	case legacyLines, legacyDistinct, legacyCountDistinct, distinctTotal:
+	case legacyLines, legacyDistinct, legacyCountDistinct, distinctTotal, keyCount:
 		return &aggregator{fn: fn, sink: sink}, nil
 	}
 	return nil, fmt.Errorf("compute: unknown aggregate %q", fn)
@@ -222,6 +228,8 @@ func (a *aggregator) emit() bool {
 		text = a.line
 	case legacyCountDistinct:
 		text = fmt.Sprintf("%7d %s", a.n, a.line)
+	case keyCount:
+		text = fmt.Sprintf("%s %d", a.line, a.n)
 	}
 	return a.sink(&pb.ResultRow{Raw: text})
 }
