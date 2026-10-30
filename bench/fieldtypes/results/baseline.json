@@ -1,0 +1,161 @@
+{
+  "label": "baseline",
+  "recorded_at": "2026-10-30T19:42:44+00:00",
+  "weft_cli": "weft/0.12.0",
+  "git_head": "ab60b9541daf23f1ba5d29a5b72c8eb210e7a8f3",
+  "range": "2026-10-27..2026-10-29",
+  "runs": 5,
+  "note": "before field facts: steps 1 and 2 not deployed. CLI rebuilt from local main (0.12.0, no client query deadline)",
+  "queries": {
+    "filter-count-qmax": {
+      "kind": "target",
+      "times_s": [
+        9.203,
+        4.455,
+        8.626,
+        7.125,
+        8.195
+      ],
+      "client_timeouts_retried": 0,
+      "median_s": 8.195,
+      "output_sha256": "9392c4c2ec6c6b75516725af53831013082086e0541ac7b439a64daa9e8fe86d",
+      "output_sample": "10443\n",
+      "explain": "\u001b[32mEvery stage: optimized retrieval.\u001b[0m"
+    },
+    "filter-count-errors": {
+      "kind": "target",
+      "times_s": [
+        1.464,
+        0.992,
+        0.959,
+        0.941,
+        0.958
+      ],
+      "client_timeouts_retried": 0,
+      "median_s": 0.959,
+      "output_sha256": "7de1555df0c2700329e815b93b32c571c3ea54dc967b89e81ab73b9972b72d1d",
+      "output_sample": "4\n",
+      "explain": "\u001b[32mEvery stage: optimized retrieval.\u001b[0m"
+    },
+    "filter-count-disk": {
+      "kind": "target",
+      "times_s": [
+        1.596,
+        1.57,
+        1.455,
+        1.596,
+        2.556
+      ],
+      "client_timeouts_retried": 0,
+      "median_s": 1.596,
+      "output_sha256": "180dc9c8e8c0c6a974eae334b3340bb2d94148561c866786d8e24db4fa10cbc5",
+      "output_sample": "463\n",
+      "explain": "\u001b[32mEvery stage: optimized retrieval.\u001b[0m"
+    },
+    "filter-slice-slow": {
+      "kind": "target",
+      "times_s": [
+        1.491,
+        1.431,
+        1.149,
+        1.192,
+        1.326
+      ],
+      "client_timeouts_retried": 0,
+      "median_s": 1.326,
+      "output_sha256": "3730ac2b4641d42ac7d6c70559b0fca819e179541f8642a359fcc43425dcf41c",
+      "output_sample": "2026-10-27T19:47:46.058559171Z\n2026-10-27T19:48:00.318068418Z\n2026-10-27T19:48:02.389670736Z\n2026-10-27T19:48:02.729705909Z\n",
+      "explain": "1  jq -r 'select(.q_max_ms > 1000) | .ts'  \u001b[32moptimized retrieval\u001b[0m\n       4 lines retrieved with optimization\n  2  head -n 20                              \u001b[31mpost-retrieval\u001b[0m\n       No optimized form.\n\nBarrier: stage 2."
+    },
+    "sortn-max-qmax": {
+      "kind": "target",
+      "times_s": [
+        3.047,
+        2.387,
+        2.266,
+        2.517,
+        2.33
+      ],
+      "client_timeouts_retried": 0,
+      "median_s": 2.387,
+      "output_sha256": "047329c67ca2a7b58c782443b69fa382d41cd67339fe0f321cb405800253edc6",
+      "output_sample": "10498.08\n",
+      "explain": "\u001b[32mEvery stage: optimized retrieval.\u001b[0m"
+    },
+    "keyed-max-qmax": {
+      "kind": "target",
+      "times_s": [
+        1.293,
+        1.304,
+        1.579,
+        1.318,
+        1.296
+      ],
+      "client_timeouts_retried": 0,
+      "median_s": 1.304,
+      "output_sha256": "89d11363f89efa87a1c84302d998e2e8dd1d17b070d77c6971a7839a62e647c1",
+      "output_sample": "shard-20261019T0000-bc9344c4 10496.417\nshard-20261019T0000-fb43abd8 10498.08\nshard-20261026T0000-a70003d3 9371.058\nshard-20261026T0000-bfed2003 7490.165\n",
+      "explain": "line count unavailable: took longer than 5s\n  1  jq -r '[.shard_id, .q_max_ms] | @tsv'                     \u001b[31mpost-retrieval\u001b[0m\n       After the selects: more than picking fields.\n  2  awk '{ if ($2 > m[$1]) m[$1] = $2 } END { for (k in m) \u2026  \u001b[31mpost-retrieval\u001b[0m\n       Rule without a pattern: acts on every row.\n       Try: To select rows, add a pattern. Totals (n++, sums) are post-retrieval; to count, use `grep PATTERN | wc -l`.\n  3  sort                                                      \u001b[31mpost-retrieval\u001b[0m\n\nBarrier: stage 1."
+    },
+    "keyed-sum-qcount": {
+      "kind": "target",
+      "times_s": [
+        2.826,
+        2.223,
+        1.855,
+        1.391,
+        1.298
+      ],
+      "client_timeouts_retried": 0,
+      "median_s": 1.855,
+      "output_sha256": "1701ba431dc65dfabe41f1e7ac1a8601ab0478f18fc02c9d3c59d2297435f272",
+      "output_sample": "shard-20261019T0000-bc9344c4 217913\nshard-20261019T0000-fb43abd8 217774\nshard-20261026T0000-a70003d3 225825\nshard-20261026T0000-bfed2003 214703\n",
+      "explain": "line count unavailable: took longer than 5s\n  1  jq -r '[.shard_id, .q_count] | @tsv'                      \u001b[31mpost-retrieval\u001b[0m\n       After the selects: more than picking fields.\n  2  awk '{ s[$1] += $2 } END { for (k in s) print k, s[k] }'  \u001b[31mpost-retrieval\u001b[0m\n       Rule without a pattern: acts on every row.\n       Try: To select rows, add a pattern. Totals (n++, sums) are post-retrieval; to count, use `grep PATTERN | wc -l`.\n  3  sort                                                      \u001b[31mpost-retrieval\u001b[0m\n\nBarrier: stage 1."
+    },
+    "keyed-sum-qrows": {
+      "kind": "target",
+      "times_s": [
+        3.215,
+        1.308,
+        1.441,
+        1.314,
+        1.337
+      ],
+      "client_timeouts_retried": 0,
+      "median_s": 1.337,
+      "output_sha256": "c24d5e5c7d22a41145777cec90753618e97171a53b4928ebfdf617078c0f1532",
+      "output_sample": "shard-20261019T0000-bc9344c4 215557\nshard-20261019T0000-fb43abd8 215428\nshard-20261026T0000-a70003d3 7356277\nshard-20261026T0000-bfed2003 6378346\n",
+      "explain": "20,670 lines retrieved\n  1  jq -r '[.shard_id, .q_rows] | @tsv'                       \u001b[31mpost-retrieval\u001b[0m\n       After the selects: more than picking fields.\n  2  awk '{ s[$1] += $2 } END { for (k in s) print k, s[k] }'  \u001b[31mpost-retrieval\u001b[0m\n       Rule without a pattern: acts on every row.\n       Try: To select rows, add a pattern. Totals (n++, sums) are post-retrieval; to count, use `grep PATTERN | wc -l`.\n  3  sort                                                      \u001b[31mpost-retrieval\u001b[0m\n\nBarrier: stage 1."
+    },
+    "control-count": {
+      "kind": "control",
+      "times_s": [
+        7.242,
+        3.252,
+        3.901,
+        6.621,
+        3.9
+      ],
+      "client_timeouts_retried": 0,
+      "median_s": 3.901,
+      "output_sha256": "05ada11ac786cbc66cea3f528715c957ff8f6a0e1c5b882f9d369bddb8891ed1",
+      "output_sample": "20670\n",
+      "explain": "\u001b[32mEvery stage: optimized retrieval.\u001b[0m"
+    },
+    "control-grep-count": {
+      "kind": "control",
+      "times_s": [
+        4.965,
+        3.773,
+        3.894,
+        3.874,
+        4.194
+      ],
+      "client_timeouts_retried": 0,
+      "median_s": 3.894,
+      "output_sha256": "05ada11ac786cbc66cea3f528715c957ff8f6a0e1c5b882f9d369bddb8891ed1",
+      "output_sample": "20670\n",
+      "explain": "\u001b[32mEvery stage: optimized retrieval.\u001b[0m"
+    }
+  }
+}
