@@ -17,7 +17,15 @@ type groupedShard struct {
 	shard.Shard
 	id   string
 	rows []groupedRow
+	// bytes, when set, is the byte total of a RenderBytes shard, which
+	// sends one row holding it instead of rows.
+	bytes *int
+	// keyed, when set, are the rows of a numeric extreme: a line and its
+	// planner.SortKeyColumn, which the shard sends instead of rows.
+	keyed []keyedRow
 }
+
+type keyedRow struct{ line, key string }
 
 type groupedRow struct {
 	line  string
@@ -26,6 +34,12 @@ type groupedRow struct {
 
 func (s *groupedShard) ID() string { return s.id }
 func (s *groupedShard) QueryToSink(_ context.Context, _ string, _ []any, sink shard.RowSink) {
+	if s.bytes != nil {
+		sink.SendRow(&pb.ResultRow{MetaVars: map[string]string{planner.CountColumn: "1", planner.BytesColumn: strconv.Itoa(*s.bytes)}}, s.id)
+	}
+	for _, r := range s.keyed {
+		sink.SendRow(&pb.ResultRow{Raw: r.line, MetaVars: map[string]string{planner.CountColumn: "1", planner.SortKeyColumn: r.key}}, s.id)
+	}
 	for _, r := range s.rows {
 		sink.SendRow(&pb.ResultRow{Raw: r.line, MetaVars: map[string]string{planner.CountColumn: strconv.Itoa(r.count)}}, s.id)
 	}
@@ -277,5 +291,95 @@ func TestGroup_KeyCountPrintsAnAwkTally(t *testing.T) {
 	}
 	if want := []string{" 1", "a 2", "b 7", "é 1"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("printed %q, want %q", got, want)
+	}
+}
+
+// TestGroup_BytesPrintsWcC: the render sums the shards' byte totals and
+// prints one bare number, as wc -c does, and 0 when no shard had a line.
+func TestGroup_BytesPrintsWcC(t *testing.T) {
+	n := func(v int) *int { return &v }
+	for _, tc := range []struct {
+		name string
+		a, b *int
+		want string
+	}{
+		{"sums across shards", n(10), n(25), "35"},
+		{"one shard empty", n(10), nil, "10"},
+		{"no lines", nil, nil, "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eng := &Engine{}
+			eng.RegisterResolver(groupedResolver{&groupedShard{id: "a", bytes: tc.a}})
+			eng.RegisterResolver(groupedResolver{&groupedShard{id: "b", bytes: tc.b}})
+			stream, err := eng.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
+				Sql: "SELECT 1", MergeKey: "raw",
+				Shards: []*pb.ShardDescriptor{{ShardId: "a"}, {ShardId: "b"}},
+				Group:  &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_BYTES},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines, err := DrainLineStream(context.Background(), stream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(lines) != 1 || lines[0].Raw != tc.want {
+				t.Errorf("printed %v, want %q", lines, tc.want)
+			}
+		})
+	}
+}
+
+// TestGroup_NumericExtremePicksWhatSortPrints: each shard sends its one best
+// line with the number sort -n compares; compute keeps the greatest (or least)
+// number and breaks a tie by the line's bytes, in the same direction, as
+// sort's last-resort compare does. No lines prints nothing.
+func TestGroup_NumericExtremePicksWhatSortPrints(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		render pb.GroupRender
+		a, b   []keyedRow
+		want   []string
+	}{
+		{"max across shards", pb.GroupRender_GROUP_RENDER_NUMERIC_MAX,
+			[]keyedRow{{"x 5", "5"}}, []keyedRow{{"y 7", "7"}}, []string{"y 7"}},
+		{"max tie takes the greater line", pb.GroupRender_GROUP_RENDER_NUMERIC_MAX,
+			[]keyedRow{{"7 b", "7"}}, []keyedRow{{"7 a", "7"}}, []string{"7 b"}},
+		{"min across shards", pb.GroupRender_GROUP_RENDER_NUMERIC_MIN,
+			[]keyedRow{{"x 5", "5"}}, []keyedRow{{"y -7", "-7"}}, []string{"y -7"}},
+		{"min tie takes the lesser line", pb.GroupRender_GROUP_RENDER_NUMERIC_MIN,
+			[]keyedRow{{"7 b", "7"}}, []keyedRow{{"7 a", "7"}}, []string{"7 a"}},
+		{"keys compare as numbers, not text", pb.GroupRender_GROUP_RENDER_NUMERIC_MAX,
+			[]keyedRow{{"nine", "9"}}, []keyedRow{{"ten", "10"}}, []string{"ten"}},
+		{"exponent keys from the shard", pb.GroupRender_GROUP_RENDER_NUMERIC_MAX,
+			[]keyedRow{{"big", "1e+21"}}, []keyedRow{{"small", "5"}}, []string{"big"}},
+		{"one shard empty", pb.GroupRender_GROUP_RENDER_NUMERIC_MIN,
+			[]keyedRow{{"only", "3"}}, nil, []string{"only"}},
+		{"no lines", pb.GroupRender_GROUP_RENDER_NUMERIC_MAX, nil, nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eng := &Engine{}
+			eng.RegisterResolver(groupedResolver{&groupedShard{id: "a", keyed: tc.a}})
+			eng.RegisterResolver(groupedResolver{&groupedShard{id: "b", keyed: tc.b}})
+			stream, err := eng.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
+				Sql: "SELECT 1", MergeKey: "raw",
+				Shards: []*pb.ShardDescriptor{{ShardId: "a"}, {ShardId: "b"}},
+				Group:  &pb.GroupSpec{Render: tc.render},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines, err := DrainLineStream(context.Background(), stream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, l := range lines {
+				got = append(got, l.Raw)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("printed %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

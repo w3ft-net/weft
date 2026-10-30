@@ -82,6 +82,23 @@ func orderClause(order string) string {
 // AggregateLines).
 const CountColumn = "count"
 
+// BytesColumn names the extra column carrying a RenderBytes aggregate's
+// byte total: each line's bytes and the newline wc counts after it.
+const BytesColumn = "bytes"
+
+// SortKeyColumn names the extra column carrying a numeric extreme's number:
+// the value sort -n compares the line by.
+const SortKeyColumn = "sortkey"
+
+// sortNumberSQL is the number sort -n compares col by, as warp reads it: the
+// leading sign, digits and at most one dot after any spaces and tabs, 0 when
+// there is no number in them or it doesn't fit a float64. Adding 0.0 turns -0
+// into 0, which sort -n treats as equal.
+func sortNumberSQL(col string) string {
+	k := `TRY_CAST(regexp_extract(` + col + `, '^[ \t]*([+-]?[0-9]*[.]?[0-9]*)', 1) AS DOUBLE)`
+	return `CASE WHEN isfinite(` + k + `) THEN ` + k + ` + 0.0 ELSE 0.0 END`
+}
+
 // From identifies the SELECT's source — either a base table ("logs")
 // or a nested *Query rendered as a subquery with an alias. Exactly
 // one of Table / Subquery is set.
@@ -348,16 +365,33 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 		return
 	}
 	b.WriteString("SELECT ")
-	if q.group != "" {
-		key := "raw"
-		if q.group == RenderTotal {
-			key = "'' AS raw"
+	if q.group == RenderNumericMax || q.group == RenderNumericMin {
+		// The shard's one best line; compute picks across shards.
+		dir := "DESC"
+		if q.group == RenderNumericMin {
+			dir = "ASC"
 		}
-		fmt.Fprintf(b, "%s, min(ts) AS ts, count(*) AS %s FROM (", key, CountColumn)
+		fmt.Fprintf(b, "raw, ts, %s AS %s FROM (", sortNumberSQL("raw"), SortKeyColumn)
 		q.from.Subquery.renderInto(b, onArg)
 		b.WriteString(") AS " + q.from.Alias)
 		q.renderWhere(b, onArg)
-		if q.group == RenderTotal {
+		fmt.Fprintf(b, " ORDER BY %s %s, raw %s LIMIT 1", SortKeyColumn, dir, dir)
+		return
+	}
+	if q.group != "" {
+		key := "raw"
+		if q.group == RenderTotal || q.group == RenderBytes {
+			key = "'' AS raw"
+		}
+		extra := ""
+		if q.group == RenderBytes {
+			extra = fmt.Sprintf(", CAST(sum(strlen(raw) + 1) AS BIGINT) AS %s", BytesColumn)
+		}
+		fmt.Fprintf(b, "%s, min(ts) AS ts, count(*) AS %s%s FROM (", key, CountColumn, extra)
+		q.from.Subquery.renderInto(b, onArg)
+		b.WriteString(") AS " + q.from.Alias)
+		q.renderWhere(b, onArg)
+		if q.group == RenderTotal || q.group == RenderBytes {
 			// No row without lines: ts can't be NULL.
 			b.WriteString(" HAVING count(*) > 0")
 		} else {

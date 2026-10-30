@@ -307,6 +307,15 @@ enum GroupRender {
   // GROUP_RENDER_KEY_COUNT: each distinct line, a space, then its count
   // (awk '{ c[$1]++ } END { for (k in c) print k, c[k] }').
   GROUP_RENDER_KEY_COUNT = 5;
+  // GROUP_RENDER_BYTES: one bare number, the bytes of every line with a
+  // newline after each (wc -c).
+  GROUP_RENDER_BYTES = 6;
+  // GROUP_RENDER_NUMERIC_MAX: the one line sort -n puts last (or sort -rn
+  // puts first): the greatest leading number, ties to the greater line.
+  GROUP_RENDER_NUMERIC_MAX = 7;
+  // GROUP_RENDER_NUMERIC_MIN: the one line sort -n puts first (or sort -rn
+  // puts last): the least leading number, ties to the lesser line.
+  GROUP_RENDER_NUMERIC_MIN = 8;
 }
 
 // GroupOrder is how compute orders the merged groups before printing them.

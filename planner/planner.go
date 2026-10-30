@@ -131,6 +131,14 @@ const (
 	// RenderKeyCount is each distinct line, a space, and its count: an awk
 	// tally.
 	RenderKeyCount GroupRender = "key_count"
+	// RenderBytes is one bare number, the bytes of every line with a
+	// newline after each: `wc -c`.
+	RenderBytes GroupRender = "bytes"
+	// RenderNumericMax is the one line `sort -n | tail -n 1` (or `sort -rn |
+	// head -n 1`) prints: the greatest leading number, ties to the greater
+	// line. RenderNumericMin is the other end.
+	RenderNumericMax GroupRender = "numeric_max"
+	RenderNumericMin GroupRender = "numeric_min"
 )
 
 // GroupSpec is the shard-side grouping a plan asks for (QueryPlan.Group).

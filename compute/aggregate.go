@@ -96,6 +96,11 @@ const (
 	aggDistinctTotal = "distinct_total"
 	// aggKeyCount is an awk tally, `key count` per distinct line.
 	aggKeyCount = "key_count"
+	// aggBytes is `wc -c`: the shards' byte totals summed.
+	aggBytes = "bytes"
+	// aggNumericMax and aggNumericMin are the line sort -n puts last or first.
+	aggNumericMax = "numeric_max"
+	aggNumericMin = "numeric_min"
 )
 
 // isGroupAggregate is whether name is one of the group aggregators, which
@@ -103,7 +108,7 @@ const (
 // span aggregates.
 func isGroupAggregate(name string) bool {
 	switch name {
-	case aggLines, aggDistinct, aggCountDistinct, aggDistinctTotal, aggKeyCount:
+	case aggLines, aggDistinct, aggCountDistinct, aggDistinctTotal, aggKeyCount, aggBytes, aggNumericMax, aggNumericMin:
 		return true
 	}
 	return false
@@ -127,6 +132,12 @@ func GroupToProto(g *planner.GroupSpec) *pb.GroupSpec {
 		out.Render = pb.GroupRender_GROUP_RENDER_DISTINCT_TOTAL
 	case planner.RenderKeyCount:
 		out.Render = pb.GroupRender_GROUP_RENDER_KEY_COUNT
+	case planner.RenderBytes:
+		out.Render = pb.GroupRender_GROUP_RENDER_BYTES
+	case planner.RenderNumericMax:
+		out.Render = pb.GroupRender_GROUP_RENDER_NUMERIC_MAX
+	case planner.RenderNumericMin:
+		out.Render = pb.GroupRender_GROUP_RENDER_NUMERIC_MIN
 	default:
 		panic("compute: no GroupSpec for render " + string(g.Render))
 	}
@@ -149,6 +160,12 @@ func groupAggregate(g *pb.GroupSpec) (string, error) {
 		return aggDistinctTotal, nil
 	case pb.GroupRender_GROUP_RENDER_KEY_COUNT:
 		return aggKeyCount, nil
+	case pb.GroupRender_GROUP_RENDER_BYTES:
+		return aggBytes, nil
+	case pb.GroupRender_GROUP_RENDER_NUMERIC_MAX:
+		return aggNumericMax, nil
+	case pb.GroupRender_GROUP_RENDER_NUMERIC_MIN:
+		return aggNumericMin, nil
 	}
 	return "", fmt.Errorf("compute: unknown group render %s", g.Render)
 }
@@ -187,6 +204,10 @@ func newAggregator(fn string, sink func(*pb.ResultRow) bool) (rowAggregator, err
 		return &spanRowAggregator{fn: fn, sink: sink}, nil
 	case aggLines, aggDistinct, aggCountDistinct, aggDistinctTotal, aggKeyCount:
 		return &aggregator{fn: fn, sink: sink}, nil
+	case aggBytes:
+		return &bytesAggregator{sink: sink}, nil
+	case aggNumericMax, aggNumericMin:
+		return &extremeAggregator{max: fn == aggNumericMax, sink: sink}, nil
 	}
 	return nil, fmt.Errorf("compute: unknown aggregate %q", fn)
 }
@@ -246,3 +267,67 @@ func (a *aggregator) emit() bool {
 	}
 	return a.sink(&pb.ResultRow{Raw: text})
 }
+
+// bytesAggregator is `wc -c`: each shard sends one row with its byte total
+// (planner.BytesColumn), and the total prints even when no shard had a line.
+type bytesAggregator struct {
+	sink  func(*pb.ResultRow) bool
+	total int64
+	err   error
+}
+
+func (b *bytesAggregator) push(row *pb.ResultRow) bool {
+	n, err := strconv.ParseInt(row.MetaVars[planner.BytesColumn], 10, 64)
+	if err != nil {
+		b.err = fmt.Errorf("compute: aggregate row without a %s: %w", planner.BytesColumn, err)
+		return false
+	}
+	b.total += n
+	return true
+}
+
+func (b *bytesAggregator) flush() {
+	if b.err == nil {
+		b.sink(&pb.ResultRow{Raw: strconv.FormatInt(b.total, 10)})
+	}
+}
+
+func (b *bytesAggregator) failure() error { return b.err }
+
+// extremeAggregator is the line sort -n puts last (max) or first: each shard
+// sends its best line with the number sort compares it by
+// (planner.SortKeyColumn), and the best of those is the answer. Equal numbers
+// go to the greater line (the lesser for min), as sort's last-resort compare
+// of the lines does. With no line at all it prints nothing.
+type extremeAggregator struct {
+	max  bool
+	sink func(*pb.ResultRow) bool
+	err  error
+	seen bool
+	key  float64
+	line string
+}
+
+func (e *extremeAggregator) push(row *pb.ResultRow) bool {
+	key, err := strconv.ParseFloat(row.MetaVars[planner.SortKeyColumn], 64)
+	if err != nil {
+		e.err = fmt.Errorf("compute: aggregate row without a %s: %w", planner.SortKeyColumn, err)
+		return false
+	}
+	c := cmp.Compare(key, e.key)
+	if c == 0 {
+		c = strings.Compare(row.Raw, e.line)
+	}
+	if !e.seen || (e.max && c > 0) || (!e.max && c < 0) {
+		e.seen, e.key, e.line = true, key, row.Raw
+	}
+	return true
+}
+
+func (e *extremeAggregator) flush() {
+	if e.err == nil && e.seen {
+		e.sink(&pb.ResultRow{Raw: e.line})
+	}
+}
+
+func (e *extremeAggregator) failure() error { return e.err }

@@ -39,6 +39,15 @@ const (
 	// GROUP_RENDER_KEY_COUNT: each distinct line, a space, then its count
 	// (awk '{ c[$1]++ } END { for (k in c) print k, c[k] }').
 	GroupRender_GROUP_RENDER_KEY_COUNT GroupRender = 5
+	// GROUP_RENDER_BYTES: one bare number, the bytes of every line with a
+	// newline after each (wc -c).
+	GroupRender_GROUP_RENDER_BYTES GroupRender = 6
+	// GROUP_RENDER_NUMERIC_MAX: the one line sort -n puts last (or sort -rn
+	// puts first): the greatest leading number, ties to the greater line.
+	GroupRender_GROUP_RENDER_NUMERIC_MAX GroupRender = 7
+	// GROUP_RENDER_NUMERIC_MIN: the one line sort -n puts first (or sort -rn
+	// puts last): the least leading number, ties to the lesser line.
+	GroupRender_GROUP_RENDER_NUMERIC_MIN GroupRender = 8
 )
 
 // Enum value maps for GroupRender.
@@ -50,6 +59,9 @@ var (
 		3: "GROUP_RENDER_COUNT_LINE",
 		4: "GROUP_RENDER_DISTINCT_TOTAL",
 		5: "GROUP_RENDER_KEY_COUNT",
+		6: "GROUP_RENDER_BYTES",
+		7: "GROUP_RENDER_NUMERIC_MAX",
+		8: "GROUP_RENDER_NUMERIC_MIN",
 	}
 	GroupRender_value = map[string]int32{
 		"GROUP_RENDER_UNSPECIFIED":    0,
@@ -58,6 +70,9 @@ var (
 		"GROUP_RENDER_COUNT_LINE":     3,
 		"GROUP_RENDER_DISTINCT_TOTAL": 4,
 		"GROUP_RENDER_KEY_COUNT":      5,
+		"GROUP_RENDER_BYTES":          6,
+		"GROUP_RENDER_NUMERIC_MAX":    7,
+		"GROUP_RENDER_NUMERIC_MIN":    8,
 	}
 )
 
@@ -4330,14 +4345,17 @@ const file_weft_proto_rawDesc = "" +
 	"\x04tier\x18\x04 \x01(\tR\x04tier\x12\x14\n" +
 	"\x05state\x18\x05 \x01(\tR\x05state\"A\n" +
 	"\x13ListBucketsResponse\x12*\n" +
-	"\abuckets\x18\x01 \x03(\v2\x10.weft.BucketInfoR\abuckets*\xb4\x01\n" +
+	"\abuckets\x18\x01 \x03(\v2\x10.weft.BucketInfoR\abuckets*\x88\x02\n" +
 	"\vGroupRender\x12\x1c\n" +
 	"\x18GROUP_RENDER_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12GROUP_RENDER_TOTAL\x10\x01\x12\x15\n" +
 	"\x11GROUP_RENDER_LINE\x10\x02\x12\x1b\n" +
 	"\x17GROUP_RENDER_COUNT_LINE\x10\x03\x12\x1f\n" +
 	"\x1bGROUP_RENDER_DISTINCT_TOTAL\x10\x04\x12\x1a\n" +
-	"\x16GROUP_RENDER_KEY_COUNT\x10\x05*E\n" +
+	"\x16GROUP_RENDER_KEY_COUNT\x10\x05\x12\x16\n" +
+	"\x12GROUP_RENDER_BYTES\x10\x06\x12\x1c\n" +
+	"\x18GROUP_RENDER_NUMERIC_MAX\x10\a\x12\x1c\n" +
+	"\x18GROUP_RENDER_NUMERIC_MIN\x10\b*E\n" +
 	"\n" +
 	"GroupOrder\x12\x1b\n" +
 	"\x17GROUP_ORDER_UNSPECIFIED\x10\x00\x12\x1a\n" +
