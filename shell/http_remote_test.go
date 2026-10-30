@@ -146,6 +146,7 @@ func TestHTTPCoordinator_TimeoutErrorIsUserFacing(t *testing.T) {
 
 	c := NewHTTPCoordinator(srv.URL, "tok", "org")
 	c.client.Timeout = 50 * time.Millisecond
+	c.streamClient.Timeout = 50 * time.Millisecond // a query has none by default
 
 	_, err := c.Query("cat api.log | grep x", "1d..", nil)
 	leaks(t, err, srv.URL)
@@ -174,5 +175,35 @@ func TestHTTPCoordinator_UnreachableErrorIsUserFacing(t *testing.T) {
 	leaks(t, err, url)
 	if !strings.Contains(err.Error(), "could not reach") {
 		t.Errorf("unreachable message lacks %q: %s", "could not reach", err)
+	}
+}
+
+// TestHTTPCoordinator_QueryIsNotCutOffByTheClient: how long a one-shot query
+// may run is the server's to decide (the query deadline), so the client's
+// short deadline for management calls must not apply to it. The server here
+// answers after the short client deadline has passed.
+func TestHTTPCoordinator_QueryIsNotCutOffByTheClient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte("data: {\"type\":\"line\",\"data\":{\"raw\":\"hello\"}}\n\ndata: {\"type\":\"done\"}\n\n"))
+	}))
+	defer srv.Close()
+
+	c := NewHTTPCoordinator(srv.URL, "tok", "org")
+	c.client.Timeout = 50 * time.Millisecond
+
+	res, err := c.Query("cat api.log", "1d..", nil)
+	if err != nil {
+		t.Fatalf("Query was cut off by the client's deadline: %v", err)
+	}
+	if len(res.Rows) != 1 {
+		t.Errorf("rows = %d, want the one the server sent", len(res.Rows))
+	}
+
+	// A management call still has the short deadline.
+	if _, err := c.ListApps(); err == nil {
+		t.Error("ListApps outlived the client's deadline")
 	}
 }

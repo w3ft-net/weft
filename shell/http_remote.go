@@ -161,8 +161,9 @@ func httpError(resp *http.Response) error {
 	return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 }
 
-// errQueryTimedOut is what a user sees when a query outlives the client's
-// deadline. It says what to do about it, without naming anything of ours.
+// errQueryTimedOut is what a user sees when a query's connection times out
+// on the client's side. It says what to do about it, without naming anything
+// of ours.
 var errQueryTimedOut = errors.New("query timed out — narrow the time range, filter earlier in the pipeline, or run `explain` on it to see where the time goes")
 
 // Query runs a one-shot pipeline against the given range spec. rangeSpec is
@@ -185,7 +186,10 @@ func (h *HTTPCoordinator) Query(pipeline, rangeSpec string, dirStack []string) (
 	req.Header.Set("Content-Type", "application/json")
 	h.setAuthHeaders(req)
 
-	resp, err := h.client.Do(req)
+	// A query has no deadline of the client's: how long it may run is the
+	// server's to say (its query deadline, which answers with its own message),
+	// not the short deadline the other calls have.
+	resp, err := h.streamClient.Do(req)
 	if err != nil {
 		if isTimeout(err) {
 			return nil, errQueryTimedOut
