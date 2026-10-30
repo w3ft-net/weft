@@ -620,7 +620,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select then field access",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | .payload'`,
-			wantSQL:     `SELECT COALESCE(CAST(json_extract(payload, '$.payload') AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantSQL:     `SELECT COALESCE(CAST(json_extract(payload, '$.payload') AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: nil,
 		},
 		// select | select | object construction — both selects push as
@@ -629,7 +629,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "two selects then construction",
 			pipeline:    `cat vimgym.log | jq 'select($level == "ERROR") | select(.status == 500) | {ts: $ts}'`,
-			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR))) AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR' AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR))) AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR' AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: nil,
 		},
 		// select | string-interpolation — the select pushes as a predicate
@@ -641,7 +641,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select then string interpolation",
 			pipeline:    `cat vimgym.log | jq 'select(.type == "disk") | "\(.host) \(.used_gb)"'`,
-			wantSQL:     "SELECT " + narrowedPayloadSQL([]string{"host", "type", "used_gb"}) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
+			wantSQL:     "SELECT " + narrowedPayloadSQL([]string{"host", "type", "used_gb"}) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk'))`,
 			wantCompute: []string{`jq 'select(.type == "disk") | "\(.host) \(.used_gb)"'`},
 		},
 		// -r flag must not prevent predicate pushdown, and must be preserved
@@ -649,13 +649,13 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select with -r, full pushdown",
 			pipeline:    `cat vimgym.log | jq -r 'select(.status == 500)'`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: nil,
 		},
 		{
 			name:        "select with -r then string interpolation",
 			pipeline:    `cat vimgym.log | jq -r 'select(.type == "disk") | "\(.host) \(.used_gb)"'`,
-			wantSQL:     "SELECT " + narrowedPayloadSQL([]string{"host", "type", "used_gb"}) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
+			wantSQL:     "SELECT " + narrowedPayloadSQL([]string{"host", "type", "used_gb"}) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk'))`,
 			wantCompute: []string{`jq -r 'select(.type == "disk") | "\(.host) \(.used_gb)"'`},
 		},
 		// --raw-output (long spelling) with a field projection: a string
@@ -663,7 +663,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:     "select with --raw-output long spelling",
 			pipeline: `cat vimgym.log | jq --raw-output 'select(.status == 500) | .payload'`,
-			wantSQL:  `SELECT CASE WHEN json_type(json_extract(payload, '$.payload')) = 'VARCHAR' THEN json_extract_string(json_extract(payload, '$.payload'), '$') ELSE COALESCE(CAST(json_extract(payload, '$.payload') AS VARCHAR), 'null') END as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantSQL:  `SELECT CASE WHEN json_type(json_extract(payload, '$.payload')) = 'VARCHAR' THEN json_extract_string(json_extract(payload, '$.payload'), '$') ELSE COALESCE(CAST(json_extract(payload, '$.payload') AS VARCHAR), 'null') END as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 		},
 	}
 
@@ -983,7 +983,7 @@ func TestEdge_PipelineOrdering(t *testing.T) {
 		{
 			name:        "partial jq then sort",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | .payload' | sort`,
-			wantSQL:     `SELECT COALESCE(CAST(json_extract(payload, '$.payload') AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantSQL:     `SELECT COALESCE(CAST(json_extract(payload, '$.payload') AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: []string{`sort`},
 		},
 		// wc without -l flag — not pushable
@@ -1045,21 +1045,21 @@ func TestEdge_CrossTool(t *testing.T) {
 		{
 			name:        "jq select then awk print",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500)' | awk '{ print $1 }'`,
-			wantSQL:     `SELECT COALESCE(list_extract(fields, 1), '') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantSQL:     `SELECT COALESCE(list_extract(fields, 1), '') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: nil,
 		},
 		// grep then jq select then sort
 		{
 			name:        "grep then jq select then sort",
 			pipeline:    `cat vimgym.log | grep error | jq 'select(.status == 500)' | sort`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND regexp_matches(raw, 'error') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND regexp_matches(raw, 'error') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: []string{`sort`},
 		},
 		// awk filter then jq select — both push
 		{
 			name:        "awk filter then jq select",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | jq 'select(.status == 500)'`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR' AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR' AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: nil,
 		},
 		// sed filter then grep — both push
@@ -1073,7 +1073,7 @@ func TestEdge_CrossTool(t *testing.T) {
 		{
 			name:        "four tools all pushable",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | grep timeout | jq 'select(.status == 500)' | sed -n '/fatal/p'`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR' AND regexp_matches(raw, 'timeout') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500) AND regexp_matches(raw, 'fatal')`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR' AND regexp_matches(raw, 'timeout') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)) AND regexp_matches(raw, 'fatal')`,
 			wantCompute: nil,
 		},
 	}

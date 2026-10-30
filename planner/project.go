@@ -192,6 +192,38 @@ func jqValueToSQL(expr jq.Expr) (string, bool) {
 	return "", false
 }
 
+// jqValueGuards are the conditions under which every payload path a
+// jqValueToSQL expression reads is readable: where one isn't, jq errors and
+// the row prints nothing. Each condition once.
+func jqValueGuards(expr jq.Expr) []string {
+	var guards []string
+	seen := map[string]bool{}
+	var walk func(e jq.Expr)
+	walk = func(e jq.Expr) {
+		switch e := e.(type) {
+		case jq.FieldExpr, jq.PipeExpr:
+			if path, ok := jqPathOf(e); ok {
+				for _, g := range path.guards() {
+					if !seen[g] {
+						seen[g] = true
+						guards = append(guards, g)
+					}
+				}
+			}
+		case jq.ObjectExpr:
+			for _, p := range e.Pairs {
+				walk(p.Value)
+			}
+		case jq.ArrayExpr:
+			for _, elem := range jqFlattenComma(e.Elems) {
+				walk(elem)
+			}
+		}
+	}
+	walk(expr)
+	return guards
+}
+
 // jqLiteralToSQL emits a SQL literal for a jq Value.
 func jqLiteralToSQL(v jq.Value) (string, bool) {
 	switch v.Type {

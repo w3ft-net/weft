@@ -215,7 +215,11 @@ func jqRowStage(p *jqProgram) rowStage {
 			pred = strings.Join(append(p.subject.guards(), p.selects...), " AND ")
 			sql, ok = "json_extract(payload, "+p.subject.jsonPath()+")", true
 		case len(p.subject) == 0:
-			sql, ok = jqValueToSQL(p.tail)
+			if sql, ok = jqValueToSQL(p.tail); ok {
+				// Every path it reads must be readable, or jq errors and
+				// drops the row.
+				pred = strings.Join(append(jqValueGuards(p.tail), p.selects...), " AND ")
+			}
 		}
 		if ok {
 			return rowStage{pred: pred, predExact: true, proj: wrapJqProjection(sql, p.raw)}

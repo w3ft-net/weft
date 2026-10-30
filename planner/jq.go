@@ -148,12 +148,13 @@ func (p jqPath) jsonPath() string {
 
 // guards are the SQL conditions under which jq can read the path
 // without an error. A step through the wrong type (.a.b with .a a
-// string, .a[0] with .a an object) is an error, which drops the row;
-// null and missing read as null. json_extract reads all of them as
-// NULL, so each step's parent must have the type the step needs.
+// string, .a[0] with .a an object, .a with the payload itself an array
+// or a string) is an error, which drops the row; null and missing read as
+// null. json_extract reads all of them as NULL, so each step's parent,
+// the payload included, must have the type the step needs.
 func (p jqPath) guards() []string {
 	var guards []string
-	for i := 1; i < len(p); i++ {
+	for i := 0; i < len(p); i++ {
 		parent := jqPath(p[:i]).jsonPath()
 		want := "OBJECT"
 		if strings.HasPrefix(p[i], "[") {

@@ -464,7 +464,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "awk filter then jq construction",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR"' | jq '{ts: $ts, msg: .message}'`,
-			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR)), 'msg', json_extract(payload, '$.message')) AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR'`,
+			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR)), 'msg', json_extract(payload, '$.message')) AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND level = 'ERROR' AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT')`,
 			wantCompute: nil,
 		},
 
@@ -486,7 +486,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "jq select then sort",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500)' | sort`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: []string{`sort`},
 		},
 
@@ -542,7 +542,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "jq select piped to object construction",
 			pipeline:    `cat vimgym.log | jq 'select(.status == 500) | {ts: $ts, msg: .message}'`,
-			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR)), 'msg', json_extract(payload, '$.message')) AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500)`,
+			wantSQL:     `SELECT COALESCE(CAST(json_object('ts', to_json(CAST(ts AS VARCHAR)), 'msg', json_extract(payload, '$.message')) AS VARCHAR), 'null') as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 			wantCompute: nil,
 		},
 	}

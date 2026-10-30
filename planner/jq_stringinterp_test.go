@@ -20,17 +20,17 @@ func TestJqFrontend_StringInterp(t *testing.T) {
 		{
 			name:          "two interpolations, literal in between",
 			expression:    `select(.type == "disk") | "\(.host) \(.used_gb)"`,
-			wantPredicate: `(COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
+			wantPredicate: `(COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk'))`,
 		},
 		{
 			name:          "leading literal then interpolation",
 			expression:    `select(.type == "disk") | "host: \(.host)"`,
-			wantPredicate: `(COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
+			wantPredicate: `(COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk'))`,
 		},
 		{
 			name:          "single interpolation, no literals",
 			expression:    `select(.type == "disk") | "\(.host)"`,
-			wantPredicate: `(COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk')`,
+			wantPredicate: `(COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk'))`,
 		},
 	}
 

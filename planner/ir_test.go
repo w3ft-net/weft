@@ -171,7 +171,7 @@ func TestPasses(t *testing.T) {
 		{`cat vimgym.log | sort -n | uniq -c`, 0, "skipped Sort[1: sort]: a flag changes its compare key"},
 		{`cat vimgym.log | jq 'select(.a == 1) | keys' | grep b`, 1, "Filter[1: jq] into shard SQL (prefilter; its stage still runs)"},
 		{`cat vimgym.log | grep a | awk '{ print LEVEL }'`, 2, "Project[2: awk] became the SELECT"},
-		{`cat vimgym.log | jq '.a' | awk 'LEVEL == "x"'`, 0, "Project[1: jq] stays in compute: Filter[2: awk] names a meta-variable"},
+		{`cat vimgym.log | jq '.a' | awk 'LEVEL == "x"'`, 1, "Project[1: jq] stays in compute: Filter[2: awk] names a meta-variable"},
 		{`tail -n 5 vimgym.log | grep a | sort`, 1, "skipped Sort[2: sort]: it sorts what a pushed line count kept"},
 		{`cat vimgym.log | grep a | sort -r`, 1, "Sort[2: sort] became the shard's ORDER BY raw DESC"},
 		{`cat vimgym.log | sort -n`, 0, "skipped Sort[1: sort]: a flag changes its compare key"},
@@ -182,8 +182,8 @@ func TestPasses(t *testing.T) {
 		{`cat vimgym.log | sort access.log | uniq -c`, 0, "skipped Sort[1: sort]: a flag changes its compare key"},
 		{`tail -n 5 vimgym.log | sort | grep a`, 1, "skipped Filter[2: grep]: a pushed line count picks its rows before the filter"},
 		{`cat vimgym.log | sort | jq 'select(.a == 1)'`, 0, "stopped at Sort[1: sort]"},
-		{`cat vimgym.log | jq -r .a | grep x | sort`, 2, "Filter[2: grep] moved below Project[1: jq]: the shard filters each line"},
-		{`cat vimgym.log | jq -r .a | grep x | awk '{ print LEVEL }'`, 1, "skipped Filter[2: grep]: Project[3: awk] names a meta-variable"},
+		{`cat vimgym.log | jq -r .a | grep x | sort`, 3, "Filter[2: grep] moved below Project[1: jq]: the shard filters each line"},
+		{`cat vimgym.log | jq -r .a | grep x | awk '{ print LEVEL }'`, 2, "skipped Filter[2: grep]: Project[3: awk] names a meta-variable"},
 		{`cat vimgym.log | grep x | awk '{ print $2 }' | grep y | sort | uniq -c`, 5, "Filter[3: grep] moved below Project[2: awk]"},
 	}
 	for _, tt := range tests {
