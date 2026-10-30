@@ -33,11 +33,6 @@ const (
 	// factMaxLocators caps the locators tracked per source; later ones are
 	// simply unknown.
 	factMaxLocators = 50
-	// factCheckpointEvery is how many more conforming rows an unresolved
-	// locator counts before its progress is saved, so a slow source keeps most
-	// of its count through a roll. A saved count is never above the true one,
-	// so a stale one can only delay typing.
-	factCheckpointEvery = 100
 	// factQueueDepth is how many batches may await the classifier. A batch
 	// that doesn't fit disables the classifier (see Observe).
 	factQueueDepth = 1024
@@ -320,9 +315,6 @@ func (c *FieldClassifier) observe(ls *locatorState, numeric bool, sk sourceKey) 
 			return
 		}
 		ls.conform++
-		if ls.conform%factCheckpointEvery == 0 {
-			c.changed = true
-		}
 		if ls.conform >= factTypedAfter {
 			c.changed = true
 			c.epoch++
@@ -396,8 +388,8 @@ func (c *FieldClassifier) takeChange() ([]byte, bool) {
 
 // savedFacts is the classification results as they are kept in the shard's
 // own database, so a roll (a new instance opening the same volume) carries
-// them over. The count of a locator still on its way to being typed is kept
-// at checkpoints (every factCheckpointEvery rows), not row by row.
+// them over. Counts of rows still on their way to being typed are not kept: a
+// locator that was part-way starts counting again, which is slower and safe.
 type savedFacts struct {
 	Epoch   uint64
 	Sources []savedSource
@@ -412,7 +404,6 @@ type savedSource struct {
 type savedLocator struct {
 	Locator  string
 	State    FactState
-	Conform  int64 // as of the last checkpoint, at most the true count
 	WasTyped bool
 	Epoch    uint64
 }
@@ -424,7 +415,7 @@ func (c *FieldClassifier) snapshot() ([]byte, error) {
 		ss := savedSource{CustomerID: sk.customerID, Namespace: sk.namespace, Service: sk.service,
 			Kind: sk.kind, Env: sk.env}
 		for _, ls := range src.order {
-			ss.Locators = append(ss.Locators, savedLocator{ls.locator, ls.state, ls.conform, ls.wasTyped, ls.epoch})
+			ss.Locators = append(ss.Locators, savedLocator{ls.locator, ls.state, ls.wasTyped, ls.epoch})
 		}
 		out.Sources = append(out.Sources, ss)
 	}
@@ -445,7 +436,7 @@ func (c *FieldClassifier) Restore(b []byte) error {
 	for _, ss := range in.Sources {
 		src := &factSource{rows: 1, awk: map[int]*locatorState{}, jq: map[string]*locatorState{}}
 		for _, sl := range ss.Locators {
-			ls := &locatorState{locator: sl.Locator, state: sl.State, conform: sl.Conform, wasTyped: sl.WasTyped, epoch: sl.Epoch}
+			ls := &locatorState{locator: sl.Locator, state: sl.State, wasTyped: sl.WasTyped, epoch: sl.Epoch}
 			src.order = append(src.order, ls)
 			switch {
 			case strings.HasPrefix(sl.Locator, "$"):
