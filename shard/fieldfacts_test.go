@@ -385,22 +385,23 @@ func TestFieldFacts_RestoredByTheNextInstance(t *testing.T) {
 	}
 }
 
-// Results are kept, counts on the way to a result are not: a locator that was
-// 600 rows in starts again, so it takes a full 1,000 more.
-func TestFieldFacts_ACountOnItsWayRestartsAfterARoll(t *testing.T) {
+// A count on its way to a result is checkpointed every factCheckpointEvery
+// rows, so a roll costs a slow source at most the rows since its last one.
+func TestFieldFacts_ASlowSourceKeepsItsCountThroughARoll(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.duckdb")
 	ds := openAt(t, path)
-	ingest(t, ds, mixedRows(600, "7", "3"))
+	ingest(t, ds, mixedRows(600, "7", "3")) // a checkpoint is saved after this batch
+	ingest(t, ds, mixedRows(50, "7", "3"))  // 650, but no checkpoint passed since 600
 	roll(t, ds)
 
 	next := openAt(t, path)
-	ingest(t, next, mixedRows(600, "7", "3"))
+	ingest(t, next, mixedRows(399, "7", "3")) // 600 + 399 = 999
 	if got := next.FieldFacts(); len(got) != 0 {
-		t.Fatalf("typed on 600 rows after the roll: %+v", got)
+		t.Fatalf("typed at 999 counted rows: %+v", got)
 	}
-	ingest(t, next, mixedRows(400, "7", "3"))
+	ingest(t, next, mixedRows(1, "7", "3"))
 	if f, ok := factFor(next.FieldFacts(), "$2"); !ok || f.State != FactTyped {
-		t.Errorf("want $2 typed after 1,000 rows since the roll, got %+v (ok=%v)", f, ok)
+		t.Errorf("want $2 typed at 1,000 rows counted across the roll, got %+v (ok=%v)", f, ok)
 	}
 }
 
@@ -440,7 +441,8 @@ func TestFieldFacts_OffForAShardWithRowsAndNoSavedState(t *testing.T) {
 	}
 }
 
-// The value is written when a result changes, not when rows are classified.
+// The value is written when a result changes (or a count reaches a
+// checkpoint), not when rows are classified.
 func TestFieldFacts_WrittenOnlyWhenAResultChanges(t *testing.T) {
 	ds := openAt(t, filepath.Join(t.TempDir(), "s.duckdb"))
 	stored := func() string {
@@ -463,15 +465,25 @@ func TestFieldFacts_WrittenOnlyWhenAResultChanges(t *testing.T) {
 		t.Fatal("a new source was not recorded")
 	}
 	overwrite()
-	ingest(t, ds, mixedRows(500, "7", "3")) // more of the same: no result changes
+	ingest(t, ds, mixedRows(50, "7", "3")) // 53: no checkpoint, no result
 	if got := stored(); got != "sentinel" {
-		t.Fatalf("rewritten with no change in any result: %q", got)
+		t.Fatalf("rewritten with nothing to record: %q", got)
 	}
-	ingest(t, ds, mixedRows(500, "7", "3")) // crosses 1,000: $2 and .q become typed
+	ingest(t, ds, mixedRows(60, "7", "3")) // 113: past the first checkpoint
+	if got := stored(); got == "sentinel" {
+		t.Error("passed a checkpoint but was not written")
+	}
+	ingest(t, ds, mixedRows(800, "7", "3")) // 913
+	overwrite()
+	ingest(t, ds, mixedRows(87, "7", "3")) // 1,000: $2 and .q become typed
 	if got := stored(); got == "sentinel" {
 		t.Error("became typed but was not written")
 	}
 	overwrite()
+	ingest(t, ds, mixedRows(500, "7", "3")) // typed and staying typed: nothing to record
+	if got := stored(); got != "sentinel" {
+		t.Errorf("rewritten for a locator that is already typed: %q", got)
+	}
 	ingest(t, ds, mixedRows(1, "7abc", "3")) // $2 goes dirty
 	if got := stored(); got == "sentinel" {
 		t.Error("went dirty but was not written")

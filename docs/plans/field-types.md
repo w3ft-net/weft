@@ -119,15 +119,17 @@ else the base plan. `ExecuteQueryRequest` carries per-shard variants.
      there is to keep. They live in a one-row table in the shard's own DuckDB file
      (`field_facts_state`), which travels with the volume through a roll. The classifier
      writes it itself, **only when a result changes**: a source or locator starts being
-     tracked, or one becomes typed or goes dirty. Classifying another conforming row is
-     not a change, so a steady source writes nothing. The next instance restores it at
+     tracked, one becomes typed or goes dirty, or an unresolved count reaches a checkpoint.
+     Classifying another conforming row is not a change, so a steady source writes nothing. The next instance restores it at
      open. `Pause` just waits for the classifier to finish before the checkpoint.
-   - What is kept is results, not counts: a locator part-way to 1,000 rows starts
-     counting again after a roll (slower, safe), and a restored source counts as having
-     had rows, so a locator it didn't save stays dirty. A shard with rows and no saved
-     state (one from before this) opens with its facts off and stays off for its life;
-     it is never scanned, so for the shards that exist at the first deploy that means no
-     facts until their window rotates. (An earlier version rescanned the table on open.
+   - A locator still on its way to being typed saves its **count at checkpoints**, every
+     100 conforming rows, so a slow source keeps most of its progress through a roll and a
+     locator writes at most ten times before it types (then never again). A saved count is
+     never above the true one, so a stale one only delays typing. A restored source counts
+     as having had rows, so a locator it didn't save stays dirty. A shard with rows and no
+     saved state (one from before this) opens with its facts off and stays off for its
+     life; it is never scanned, so for the shards that exist at the first deploy that means
+     no facts until their window rotates. (An earlier version rescanned the table on open.
      On a ~1 GB host holding several GB it left a rolled shard stuck in LAUNCHING, so it
      was removed.)
    - **Accepted gap:** if a shard is killed (not rolled) between a row committing and the
