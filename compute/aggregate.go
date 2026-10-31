@@ -127,6 +127,10 @@ func GroupToProto(g *planner.GroupSpec) *pb.GroupSpec {
 		return nil
 	}
 	out := &pb.GroupSpec{Limit: int64(g.Limit)}
+	if g.Order != nil {
+		out.Order = pb.GroupOrder_GROUP_ORDER_VALUE
+		out.OrderReverse, out.OrderTieReverse = g.Order.Reverse, g.Order.TieReverse
+	}
 	switch g.Render {
 	case planner.RenderTotal:
 		out.Render = pb.GroupRender_GROUP_RENDER_TOTAL
@@ -206,6 +210,13 @@ func groupOrder(g *pb.GroupSpec) (byCount bool, limit int, err error) {
 			return false, 0, fmt.Errorf("compute: a group ordered by count needs %s, not %s", pb.GroupRender_GROUP_RENDER_COUNT_LINE, g.Render)
 		}
 		return true, int(g.Limit), nil
+	case pb.GroupOrder_GROUP_ORDER_VALUE:
+		switch g.Render {
+		case pb.GroupRender_GROUP_RENDER_KEY_COUNT, pb.GroupRender_GROUP_RENDER_KEY_SUM,
+			pb.GroupRender_GROUP_RENDER_KEY_MAX, pb.GroupRender_GROUP_RENDER_KEY_MIN:
+			return false, int(g.Limit), nil
+		}
+		return false, 0, fmt.Errorf("compute: a group ordered by value needs a key render, not %s", g.Render)
 	}
 	return false, 0, fmt.Errorf("compute: unknown group order %s", g.Order)
 }

@@ -277,3 +277,207 @@ func TestDifferentialKeyedTiesKeepTheFirstSpelling(t *testing.T) {
 		}
 	}
 }
+
+// sortRows have keys that tie on their sums and maxima, a key with a blank in
+// it, and spellings sort -n reads differently from awk (1e3 is 1 to sort).
+func sortRows() []*pb.LogRow {
+	return lines(
+		"a 5", "b 5", "c 7", "d 5", "e -2", "f -2", "g 0", "h 12", "i 12", "j 1000", "k 3",
+		"a 1", "b 1", "c -7", "d 4", "e 2", "f 2", "g 0", "h 0", "i 0", "j 5", "k 3",
+	)
+}
+
+func sortRowsFloat() []*pb.LogRow {
+	return lines(
+		"a 5", "b 5.0", "c 7", "d 5e0", "e 1e3", "f 1000", "g 1e2", "h 100", "i .5", "j 0.5", "k 5.", "l +5",
+		"a 1", "b 2", "c 3", "d 4", "e 1e3", "f 999", "g 100.0", "h 99", "i 1", "j 1e0", "k 5", "l 6",
+	)
+}
+
+// checkKeyedPipeline runs `awk program | tail` against the reference. It
+// returns the base and exact plans, and whether the stage after the aggregate
+// is gone from the exact plan (folded into the group).
+func checkKeyedPipeline(t *testing.T, h *harness, program, tail string) (base, exact *planner.QueryPlan) {
+	t.Helper()
+	pipeline := "cat /log/keyed/api/main.log | awk '" + program + "'"
+	if tail != "" {
+		pipeline += " | " + tail
+	}
+	base, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("%s: %v", pipeline, err)
+	}
+	exact = base
+	if base.Typed != nil {
+		exact = base.Typed.Exact
+	}
+	source, stages := splitSource(t, pipeline)
+	want, wantErr := h.runReference(source, stages, false)
+	for name, plan := range map[string]*planner.QueryPlan{"base": base, "exact": exact} {
+		got, err := h.runPlan(plan)
+		if (err != nil) != (wantErr != nil) {
+			t.Errorf("%s: %s plan error %v, reference error %v", pipeline, name, err, wantErr)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s: %s plan differs from the reference: %s", pipeline, name, firstDiff(got, want))
+		}
+	}
+	return base, exact
+}
+
+const (
+	sumProg   = `{ s[$1] += $2 } END { for (k in s) print k, s[k] }`
+	countProg = `{ c[$2]++ } END { for (k in c) print k, c[k] }`
+	maxProg   = `{ if ($2 > m[$1]) m[$1] = $2 } END { for (k in m) print k, m[k] }`
+	minProg   = `{ if ($2 < m[$1]) m[$1] = $2 } END { for (k in m) print k, m[k] }`
+)
+
+// A sort by the value, and a head after it, are folded into the group and
+// applied to the aggregate's lines in compute, as the stages would have.
+func TestDifferentialKeyedSortAfter(t *testing.T) {
+	sorts := []string{
+		"sort -k2 -n", "sort -k2 -rn", "sort -k2,2 -n", "sort -k2,2nr", "sort -k2n", "sort -k2nr", "sort -k 2 -n",
+		"sort -n -k2", "sort -r -n -k2", "sort -rn -k2", "sort -k2 -nr", "sort -k2,2n -r", "sort -k2,2nr -r", "sort -k2,2n",
+		"sort -k2,2rn",
+	}
+	heads := []string{"", " | head -n 1", " | head -n 3", " | head -2"}
+	for _, c := range []struct {
+		name, prog string
+		rows       func() []*pb.LogRow
+	}{
+		{"sum", sumProg, sortRows}, {"count", countProg, sortRows}, {"max", maxProg, sortRowsFloat}, {"min", minProg, sortRowsFloat},
+	} {
+		for shards := 1; shards <= 3; shards += 2 {
+			h := newHarness(t, c.rows(), shards)
+			for _, sortCmd := range sorts {
+				for _, head := range heads {
+					t.Run(fmt.Sprintf("%s/%d shards/%s%s", c.name, shards, sortCmd, head), func(t *testing.T) {
+						base, exact := checkKeyedPipeline(t, h, c.prog, sortCmd+head)
+						lowered := exact
+						if c.name == "count" {
+							lowered = base
+						}
+						if lowered.Group == nil || lowered.Group.Order == nil || len(lowered.ComputeStages) != 0 {
+							t.Errorf("the sort was not folded into the group: group %+v compute %v", lowered.Group, lowered.ComputeStages)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+// Sorts and heads that do not fold: they run in compute after the group, and
+// the answer is the same.
+func TestDifferentialKeyedSortAfterThatDoesNotFold(t *testing.T) {
+	h := newHarness(t, sortRows(), 2)
+	for _, tail := range []string{
+		"sort -k2", "sort -n", "sort -rn", "sort -k1 -n", "sort -k2 -n -u", "sort -u -k2,2n", "sort -k2,3n", "sort -k2n -k1",
+		"sort -k2 -n | tail -n 1", "sort -k2 -rn | head -n 0", "sort -k2 -n | head -n 2 | tail -n 1", "sort -t ' ' -k2 -n", "sort -k2.1 -n",
+		"sort -k2 -n -", "sort -k2 -n -z",
+	} {
+		t.Run(tail, func(t *testing.T) {
+			_, exact := checkKeyedPipeline(t, h, sumProg, tail)
+			if exact.Group != nil && exact.Group.Order != nil && len(exact.ComputeStages) == 0 && tail != "sort -k2 -n | head -n 2 | tail -n 1" {
+				t.Errorf("%q folded into the group", tail)
+			}
+		})
+	}
+}
+
+// Keys that are not one word: with a blank in it the key takes fields of its own,
+// and an empty one leaves the value as the first field, so the sort's key is
+// something else. The order is computed on the printed lines, so it follows.
+func TestDifferentialKeyedSortAfterOddKeys(t *testing.T) {
+	// Some rows have a third field, so keying on it leaves an empty key beside
+	// others: the line for it is ` value`, whose first field is the value.
+	rows := lines(
+		"a 5 x", "b 5", "c 7 y", "d 5", "e -2 x", "f -2 z", "g 0", "h 12 y", "i 12", "j 1000 z", "k 3",
+		"a 1 x", "b 1", "c -7 y", "d 4 z", "e 2", "f 2 z", "g 0", "h 0 x", "i 0", "j 5", "k 3 q",
+	)
+	h := newHarness(t, rows, 2)
+	for _, prog := range []string{
+		`{ s[$3] += $2 } END { for (k in s) print k, s[k] }`,
+		`{ s[$3 $1] += $2 } END { for (k in s) print k, s[k] }`,
+		`{ s[$1 " x"] += $2 } END { for (k in s) print k, s[k] }`,
+		`{ s[$1 " " $1] += $2 } END { for (k in s) print k, s[k] }`,
+		`{ s[$99] += $2 } END { for (k in s) print k, s[k] }`,
+		`{ s[$1 $99] += $2 } END { for (k in s) print k, s[k] }`,
+	} {
+		for _, tail := range []string{"sort -k2 -n", "sort -k2,2nr", "sort -k2 -rn | head -n 2", "sort -r -n -k2"} {
+			t.Run(prog+" | "+tail, func(t *testing.T) { checkKeyedPipeline(t, h, prog, tail) })
+		}
+	}
+}
+
+// A sort ahead of a count or a sum does not change it, so it is dropped and the
+// aggregate lowers; ahead of a max or min the first row of a tie decides, so it
+// stays.
+func TestDifferentialKeyedSortBefore(t *testing.T) {
+	h := newHarness(t, sortRows(), 2)
+	hf := newHarness(t, sortRowsFloat(), 2)
+	for _, sortCmd := range []string{"sort", "sort -r", "sort -n", "sort -rn", "sort -k2 -n", "sort -k2,2nr", "sort -k 1", "sort -k1,1 -r", "sort -nr -k2"} {
+		for _, c := range []struct {
+			name, prog string
+			dropped    bool
+		}{{"sum", sumProg, true}, {"count", countProg, true}, {"max", maxProg, false}, {"min", minProg, false}} {
+			t.Run(c.name+"/"+sortCmd, func(t *testing.T) {
+				rows := h
+				if !c.dropped {
+					rows = hf
+				}
+				pipeline := "cat /log/keyed/api/main.log | " + sortCmd + " | awk '" + c.prog + "'"
+				base, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				exact := base
+				if base.Typed != nil {
+					exact = base.Typed.Exact
+				}
+				source, stages := splitSource(t, pipeline)
+				want, wantErr := rows.runReference(source, stages, false)
+				for name, plan := range map[string]*planner.QueryPlan{"base": base, "exact": exact} {
+					if got, err := rows.runPlan(plan); err != nil || wantErr != nil || got != want {
+						t.Errorf("%s plan = %q, %v; reference %q, %v", name, got, err, want, wantErr)
+					}
+				}
+				lowered := exact
+				if c.name == "count" {
+					lowered = base
+				}
+				if got := lowered.Group != nil && len(lowered.ComputeStages) == 0; got != c.dropped {
+					t.Errorf("lowered=%v, want %v (compute %v)", got, c.dropped, lowered.ComputeStages)
+				}
+			})
+		}
+	}
+}
+
+// Sorts that can change the answer or are not plain sorts stay, whatever follows.
+func TestKeyedSortBeforeThatStays(t *testing.T) {
+	for _, sortCmd := range []string{"sort -u", "sort -k2 -u", "sort -t ' '", "sort -z", "sort somefile", "sort -k", "sort -k 0", "sort -k2,1"} {
+		pipeline := "cat /log/keyed/api/main.log | " + sortCmd + " | awk '" + sumProg + "'"
+		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		exact := plan
+		if plan.Typed != nil {
+			exact = plan.Typed.Exact
+		}
+		// `sort -u` alone becomes a distinct-lines group of its own (the
+		// existing lowering); what must not happen is the awk joining a group,
+		// or the sort being dropped.
+		var render planner.GroupRender
+		if exact.Group != nil {
+			render = exact.Group.Render
+		}
+		stages := strings.Join(exact.ComputeStages, " | ")
+		sortStays := exact.Group != nil && render == planner.RenderLine || strings.Contains(stages, "sort")
+		if !strings.Contains(stages, "awk") || !sortStays || render == planner.RenderKeySum {
+			t.Errorf("%s: group %+v compute %v; the sort and the awk must both stay", sortCmd, exact.Group, exact.ComputeStages)
+		}
+	}
+}

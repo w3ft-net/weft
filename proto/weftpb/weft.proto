@@ -378,6 +378,11 @@ enum GroupOrder {
   // first, equal counts in the order that sort leaves them. Only with
   // GROUP_RENDER_COUNT_LINE.
   GROUP_ORDER_COUNT_DESC = 1;
+  // GROUP_ORDER_VALUE is `sort -k2 -n` (or -rn, or -k2,2nr) over the lines an awk
+  // aggregate prints, `key value`: the lines ordered as warp's sort orders them
+  // by the number leading field 2. order_reverse and order_tie_reverse say how.
+  // Only with GROUP_RENDER_KEY_*.
+  GROUP_ORDER_VALUE = 2;
 }
 
 // GroupSpec says the shard sql groups each shard's rows (see group).
@@ -387,6 +392,12 @@ message GroupSpec {
   // limit keeps the first limit groups after order is applied (`head -n`);
   // 0 keeps all. Only with an order.
   int64 limit = 3;
+  // For GROUP_ORDER_VALUE, the sort's key is field 2, the value. order_reverse
+  // reverses the key's order; order_tie_reverse reverses the comparison of whole
+  // lines that breaks ties, which is not the same thing: `sort -k2,2nr`
+  // reverses the first but not the second, `sort -r -n -k2` both.
+  bool order_reverse = 4;
+  bool order_tie_reverse = 5;
 }
 
 message ExecuteQueryStreamResponse {

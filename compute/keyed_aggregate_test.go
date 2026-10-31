@@ -141,3 +141,91 @@ func TestKeyedAggregator_AMissingColumnIsAnErrorNotZero(t *testing.T) {
 		t.Errorf("error %v, want a plain failure for a shard that sent no %s", err, planner.AbsSumColumn)
 	}
 }
+
+func runKeyedGroupSpec(t *testing.T, spec *pb.GroupSpec, shards ...*keyedShard) ([]string, error) {
+	t.Helper()
+	eng := &Engine{}
+	var descs []*pb.ShardDescriptor
+	for _, sh := range shards {
+		eng.RegisterResolver(keyedResolver{sh})
+		descs = append(descs, &pb.ShardDescriptor{ShardId: sh.id})
+	}
+	stream, err := eng.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{Sql: "SELECT 1", MergeKey: "raw", Shards: descs, Group: spec})
+	if err != nil {
+		return nil, err
+	}
+	lines, err := DrainLineStream(context.Background(), stream)
+	var got []string
+	for _, l := range lines {
+		got = append(got, l.Raw)
+	}
+	return got, err
+}
+
+// The value order sorts the aggregate's printed lines as warp's sort would, and
+// head keeps the first of them.
+func TestKeyedAggregator_ValueOrderMatchesSort(t *testing.T) {
+	a := &keyedShard{id: "a", rows: []map[string]string{sumRow("a", "5", "5"), sumRow("b", "5", "5"), sumRow("c", "9", "9"), sumRow("d", "-2", "2")}}
+	for name, c := range map[string]struct {
+		spec *pb.GroupSpec
+		want []string
+	}{
+		"ascending":         {&pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_KEY_SUM, Order: pb.GroupOrder_GROUP_ORDER_VALUE}, []string{"d -2", "a 5", "b 5", "c 9"}},
+		"key reversed only": {&pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_KEY_SUM, Order: pb.GroupOrder_GROUP_ORDER_VALUE, OrderReverse: true}, []string{"c 9", "a 5", "b 5", "d -2"}},
+		"both reversed":     {&pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_KEY_SUM, Order: pb.GroupOrder_GROUP_ORDER_VALUE, OrderReverse: true, OrderTieReverse: true}, []string{"c 9", "b 5", "a 5", "d -2"}},
+		"head":              {&pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_KEY_SUM, Order: pb.GroupOrder_GROUP_ORDER_VALUE, OrderReverse: true, Limit: 2}, []string{"c 9", "a 5"}},
+	} {
+		got, err := runKeyedGroupSpec(t, c.spec, a)
+		if err != nil || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: printed %q, %v; want %q", name, got, err, c.want)
+		}
+	}
+}
+
+// An inexact aggregate fails the whole query, ordered or not, and prints nothing.
+func TestKeyedAggregator_ValueOrderDoesNotHideInexact(t *testing.T) {
+	bad := sumRow("y", "3", "3")
+	bad[planner.BadColumn] = "1"
+	got, err := runKeyedGroupSpec(t, &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_KEY_SUM, Order: pb.GroupOrder_GROUP_ORDER_VALUE},
+		&keyedShard{id: "a", rows: []map[string]string{sumRow("x", "1", "1"), bad}})
+	var inexact *InexactAggregateError
+	if !errors.As(err, &inexact) || len(got) != 0 {
+		t.Errorf("printed %q, %v; want nothing and an InexactAggregateError", got, err)
+	}
+}
+
+// A value order or its flags where compute does not understand them fail the
+// request rather than print the lines in the wrong order.
+func TestGroup_ValueOrderNeedsAKeyRender(t *testing.T) {
+	for _, spec := range []*pb.GroupSpec{
+		{Render: pb.GroupRender_GROUP_RENDER_COUNT_LINE, Order: pb.GroupOrder_GROUP_ORDER_VALUE},
+		{Render: pb.GroupRender_GROUP_RENDER_TOTAL, Order: pb.GroupOrder_GROUP_ORDER_VALUE},
+		{Render: pb.GroupRender_GROUP_RENDER_KEY_SUM, OrderReverse: true},
+		{Render: pb.GroupRender_GROUP_RENDER_KEY_SUM, OrderTieReverse: true},
+		{Render: pb.GroupRender_GROUP_RENDER_KEY_SUM, Limit: 3},
+	} {
+		if _, err := runKeyedGroupSpec(t, spec, &keyedShard{id: "a"}); err == nil {
+			t.Errorf("%+v was accepted", spec)
+		}
+	}
+}
+
+func TestGroupToProto_ValueOrder(t *testing.T) {
+	got := GroupToProto(&planner.GroupSpec{Render: planner.RenderKeyCount, Limit: 4, Order: &planner.ValueOrder{Reverse: true, TieReverse: true}})
+	if got.Order != pb.GroupOrder_GROUP_ORDER_VALUE || !got.OrderReverse || !got.OrderTieReverse || got.Limit != 4 {
+		t.Errorf("GroupToProto = %v", got)
+	}
+}
+
+// parseLeadingFloat must read what warp's sort reads: no exponent, one dot, a
+// sign, blanks first, 0 for anything else.
+func TestParseLeadingFloat(t *testing.T) {
+	for s, want := range map[string]float64{
+		"5": 5, "-5": -5, "+5": 5, " \t7": 7, "5.5": 5.5, ".5": 0.5, "5.": 5, "1e3": 1, "1.2.3": 1.2, "12abc": 12,
+		"": 0, "abc": 0, "-": 0, "+": 0, ".": 0, "-.": 0, "--5": 0, "0x10": 0, "1e999": 1, "99999999999999999999999": 1e23,
+	} {
+		if got := parseLeadingFloat(s); got != want {
+			t.Errorf("parseLeadingFloat(%q) = %v, want %v", s, got, want)
+		}
+	}
+}

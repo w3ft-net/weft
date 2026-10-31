@@ -162,9 +162,22 @@ const (
 	RenderNumericMin GroupRender = "numeric_min"
 )
 
+// ValueOrder is how compute orders the lines of an awk aggregate, `key value`,
+// before printing them: `sort -k2 -n` and its relatives (see sortArgs), applied
+// to the printed lines as warp's sort applies it. Reverse reverses the key's
+// order; TieReverse reverses the comparison of whole lines that settles ties,
+// which `sort -k2,2nr` does not and `sort -r -n -k2` does.
+type ValueOrder struct {
+	Reverse    bool `json:"reverse,omitempty"`
+	TieReverse bool `json:"tie_reverse,omitempty"`
+}
+
 // GroupSpec is the shard-side grouping a plan asks for (QueryPlan.Group).
 type GroupSpec struct {
 	Render GroupRender `json:"render"`
+	// Order, for an awk aggregate, orders its lines by value, and Limit keeps
+	// the first of them (`sort -k2 -rn | head -n N`).
+	Order *ValueOrder `json:"order,omitempty"`
 	// ByCount orders the groups highest count first (count_line only),
 	// and Limit keeps that many of them (0 keeps all): `sort -rn | head
 	// -n N` after uniq -c.

@@ -281,8 +281,21 @@ stage, as for the numeric filters. What changed from the design below, and why:
   text, so `5.0` and `5` are different answers; the first row in `(ts, event_id, line_no)` order
   holding the best number wins, within a shard (`first(... ORDER BY ...)`) and across shards (the
   winning row's `ts`, `agg_best_ns`; shards in one window never tie on it).
+- **`sort -k` around the aggregate.** A sort *before* a count or a sum is dropped, since
+  neither depends on row order (a sum is proven exact, so addition order is moot), and the aggregate
+  lowers; before a max or min it stays, because the first row of a tie is the one whose spelling
+  prints. A sort *after* it, `sort -k2 -n` or `-rn`, `-k2,2nr` and the other plain forms, plus a
+  `head -n N`, folds into the group as `GroupSpec.Order` and `Limit`, and compute applies it to the
+  aggregate's printed lines with warp's own comparison (`compute/value_order.go`: fields split
+  on blanks, the number a key leads with, ties by the whole line, reversed only by the global `-r`;
+  `-k2,2nr` reverses the key but not the ties, `-r -n -k2` both). It works on the printed lines, so
+  a key with a blank in it, or an empty one, shifts the fields exactly as it does for the real
+  stage. Warp does not accept `-nk2`, so neither does the planner. Not folded: `sort -u`, `-t`,
+  file operands, a string sort, a key other than field 2, several keys, `tail`, `head -n 0`.
+  This applies to the count too, which lowers without facts. A new `GroupOrder` value carries it, so
+  a compute from before this fails the request instead of printing the lines unsorted.
 - **Not covered:** crons and dashboards (their `LoweredPlan` carries the base plan, as for the
-  numeric filters); a key or value that is not a plain `$N` field (`$NF`, `$(i+1)`, an expression);
+  numeric filters; a count with its order is in it, since a count needs no facts); a key or value that is not a plain `$N` field (`$NF`, `$(i+1)`, an expression);
   more than 50 awk fields per source, past which a field has no fact; rows ingested before
   2026-10-14, whose `fields` is the older split, as for every lowering over `$N`; a stage after the
   aggregate that prints without reading input.

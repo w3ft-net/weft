@@ -64,6 +64,9 @@ func lowerStage(s stageInfo, index int, typed bool) *loweredStage {
 			}
 		}
 		sn.numeric = sn.numeric && !other
+		if sa := parseSortArgs(s.args); sa.plain {
+			sn.plain, sn.order = true, sa.order
+		}
 		ls.nodes = []node{sn}
 	case "uniq":
 		switch strings.Join(s.args, " ") {

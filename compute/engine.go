@@ -159,6 +159,9 @@ func (p *Engine) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) 
 		if job.orderByCount, job.groupLimit, err = groupOrder(req.Group); err != nil {
 			return nil, err
 		}
+		if job.valueOrder, err = groupValueOrder(req.Group); err != nil {
+			return nil, err
+		}
 	}
 	if aggregate != "" {
 		// Check the name now, so an aggregate this engine doesn't know
@@ -247,8 +250,10 @@ type Job struct {
 	// order and limit finish a count_distinct aggregate that a GroupSpec
 	// ordered (see orderedAggregator).
 	orderByCount bool
-	groupLimit   int
-	feedErr      error
+	// valueOrder orders the lines of an awk aggregate (see sortedAggregator).
+	valueOrder *valueOrder
+	groupLimit int
+	feedErr    error
 
 	ch        chan ComputeMessage // shards push rows + sentinels here
 	streamCh  chan Line           // consume() pushes output here
@@ -500,6 +505,9 @@ func (j *Job) feed(sink func(*pb.ResultRow) bool) {
 		a, err := newAggregator(j.aggregate, sink)
 		if err == nil && j.orderByCount {
 			a = newOrderedAggregator(a.(*aggregator), j.groupLimit, sink)
+		}
+		if err == nil && j.valueOrder != nil {
+			a, err = newSortedAggregator(j.aggregate, j.valueOrder, j.groupLimit, sink)
 		}
 		if err != nil {
 			j.feedErr = err

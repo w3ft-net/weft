@@ -128,6 +128,11 @@ const (
 	// first, equal counts in the order that sort leaves them. Only with
 	// GROUP_RENDER_COUNT_LINE.
 	GroupOrder_GROUP_ORDER_COUNT_DESC GroupOrder = 1
+	// GROUP_ORDER_VALUE is `sort -k2 -n` (or -rn, or -k2,2nr) over the lines an awk
+	// aggregate prints, `key value`: the lines ordered as warp's sort orders them
+	// by the number leading field 2. order_reverse and order_tie_reverse say how.
+	// Only with GROUP_RENDER_KEY_*.
+	GroupOrder_GROUP_ORDER_VALUE GroupOrder = 2
 )
 
 // Enum value maps for GroupOrder.
@@ -135,10 +140,12 @@ var (
 	GroupOrder_name = map[int32]string{
 		0: "GROUP_ORDER_UNSPECIFIED",
 		1: "GROUP_ORDER_COUNT_DESC",
+		2: "GROUP_ORDER_VALUE",
 	}
 	GroupOrder_value = map[string]int32{
 		"GROUP_ORDER_UNSPECIFIED": 0,
 		"GROUP_ORDER_COUNT_DESC":  1,
+		"GROUP_ORDER_VALUE":       2,
 	}
 )
 
@@ -1652,9 +1659,15 @@ type GroupSpec struct {
 	Order  GroupOrder             `protobuf:"varint,2,opt,name=order,proto3,enum=weft.GroupOrder" json:"order,omitempty"`
 	// limit keeps the first limit groups after order is applied (`head -n`);
 	// 0 keeps all. Only with an order.
-	Limit         int64 `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Limit int64 `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	// For GROUP_ORDER_VALUE, the sort's key is field 2, the value. order_reverse
+	// reverses the key's order; order_tie_reverse reverses the comparison of whole
+	// lines that breaks ties, which is not the same thing: `sort -k2,2nr`
+	// reverses the first but not the second, `sort -r -n -k2` both.
+	OrderReverse    bool `protobuf:"varint,4,opt,name=order_reverse,json=orderReverse,proto3" json:"order_reverse,omitempty"`
+	OrderTieReverse bool `protobuf:"varint,5,opt,name=order_tie_reverse,json=orderTieReverse,proto3" json:"order_tie_reverse,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GroupSpec) Reset() {
@@ -1706,6 +1719,20 @@ func (x *GroupSpec) GetLimit() int64 {
 		return x.Limit
 	}
 	return 0
+}
+
+func (x *GroupSpec) GetOrderReverse() bool {
+	if x != nil {
+		return x.OrderReverse
+	}
+	return false
+}
+
+func (x *GroupSpec) GetOrderTieReverse() bool {
+	if x != nil {
+		return x.OrderTieReverse
+	}
+	return false
 }
 
 type ExecuteQueryStreamResponse struct {
@@ -4536,11 +4563,13 @@ const file_weft_proto_rawDesc = "" +
 	"\x05group\x18\r \x01(\v2\x0f.weft.GroupSpecR\x05group\x12\x1b\n" +
 	"\tfield_sql\x18\x0e \x01(\tR\bfieldSql\x12.\n" +
 	"\n" +
-	"field_spec\x18\x0f \x01(\v2\x0f.weft.FieldSpecR\tfieldSpecJ\x04\b\x06\x10\aR\fshard_secret\"t\n" +
+	"field_spec\x18\x0f \x01(\v2\x0f.weft.FieldSpecR\tfieldSpecJ\x04\b\x06\x10\aR\fshard_secret\"\xc5\x01\n" +
 	"\tGroupSpec\x12)\n" +
 	"\x06render\x18\x01 \x01(\x0e2\x11.weft.GroupRenderR\x06render\x12&\n" +
 	"\x05order\x18\x02 \x01(\x0e2\x10.weft.GroupOrderR\x05order\x12\x14\n" +
-	"\x05limit\x18\x03 \x01(\x03R\x05limit\"\x87\x01\n" +
+	"\x05limit\x18\x03 \x01(\x03R\x05limit\x12#\n" +
+	"\rorder_reverse\x18\x04 \x01(\bR\forderReverse\x12*\n" +
+	"\x11order_tie_reverse\x18\x05 \x01(\bR\x0forderTieReverse\"\x87\x01\n" +
 	"\x1aExecuteQueryStreamResponse\x12\x14\n" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12#\n" +
@@ -4750,11 +4779,12 @@ const file_weft_proto_rawDesc = "" +
 	"\x14GROUP_RENDER_KEY_SUM\x10\t\x12\x18\n" +
 	"\x14GROUP_RENDER_KEY_MAX\x10\n" +
 	"\x12\x18\n" +
-	"\x14GROUP_RENDER_KEY_MIN\x10\v*E\n" +
+	"\x14GROUP_RENDER_KEY_MIN\x10\v*\\\n" +
 	"\n" +
 	"GroupOrder\x12\x1b\n" +
 	"\x17GROUP_ORDER_UNSPECIFIED\x10\x00\x12\x1a\n" +
-	"\x16GROUP_ORDER_COUNT_DESC\x10\x01*j\n" +
+	"\x16GROUP_ORDER_COUNT_DESC\x10\x01\x12\x15\n" +
+	"\x11GROUP_ORDER_VALUE\x10\x02*j\n" +
 	"\x0eFieldFactState\x12 \n" +
 	"\x1cFIELD_FACT_STATE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16FIELD_FACT_STATE_TYPED\x10\x01\x12\x1a\n" +

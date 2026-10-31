@@ -33,6 +33,9 @@ type compiled struct {
 	group    *GroupSpec
 	groupKey string    // the SQL an awk aggregate groups by, in place of raw
 	groupAgg *keyedAgg // the awk aggregate the group is, if it is one
+	// aggNotes is what Explain says of an aggregated node that isn't itself
+	// the GROUP BY.
+	aggNotes map[node]string
 	// fieldSpec, when set, is the fields the first compute stage reads
 	// (projectFields), for the field form of the query that sends their
 	// values in place of each line (QueryPlan.FieldSQL).
@@ -370,7 +373,13 @@ func (c *compiled) fuseAggregate(limited bool) {
 	var limit int
 	var key string
 	var agg *keyedAgg
-	switch first := c.compute[0].nodes[0].(type) {
+	var order *ValueOrder
+	var first node = c.compute[0].nodes[0]
+	skipped := 0 // sorts ahead of an aggregate that doesn't depend on row order
+	if an, dropped := leadingAggregate(c.compute); an != nil {
+		first, skipped = an, dropped
+	}
+	switch first := first.(type) {
 	case *countNode:
 		render, n = RenderTotal, 1
 		if first.bytes {
@@ -381,7 +390,19 @@ func (c *compiled) fuseAggregate(limited bool) {
 			c.logf(pass, "skipped %s: $%d is not known to hold only %s", c.label(first), first.agg.field, first.agg.holds())
 			return
 		}
-		render, n, key, agg = first.agg.render(), 1, first.agg.key, &first.agg
+		render, n, key, agg = first.agg.render(), 1+skipped, first.agg.key, &first.agg
+		// The aggregate's own lines, ordered by value and cut to a count: the
+		// `sort -k2 -rn | head -n N` after it.
+		if rest := c.compute[n:]; len(rest) > 0 && len(rest[0].nodes) == 1 {
+			if sn, ok := rest[0].nodes[0].(*sortNode); ok && sn.order != nil {
+				order, n = sn.order, n+1
+				if len(rest) > 1 && len(rest[1].nodes) == 1 {
+					if hd, ok := rest[1].nodes[0].(*limitNode); ok && hd.order == "ts ASC" && hd.offset == 0 && hd.n > 0 {
+						limit, n = hd.n, n+1
+					}
+				}
+			}
+		}
 	case *sortNode:
 		if first.keyed {
 			r, ok := numericEnd(first, c.compute[1:])
@@ -446,7 +467,8 @@ func (c *compiled) fuseAggregate(limited bool) {
 	}
 	c.shard += len(c.aggregated)
 	c.compute = c.compute[n:]
-	c.group = &GroupSpec{Render: render, ByCount: ordered, Limit: limit}
+	c.group = &GroupSpec{Render: render, ByCount: ordered, Limit: limit, Order: order}
+	c.noteAggregate(skipped, order != nil, limit)
 	c.groupKey, c.groupAgg = key, agg
 	switch {
 	case render == RenderTotal || render == RenderBytes || render == RenderNumericMax || render == RenderNumericMin:
@@ -497,4 +519,49 @@ func topN(rest []*loweredStage, n int) (ordered bool, limit, covered int) {
 		}
 	}
 	return true, 0, n + 1
+}
+
+// leadingAggregate is the awk aggregate that starts the compute stages: the
+// first stage, or the second behind a sort, which a count or a sum doesn't depend
+// on (a sum is exact, so adding in any order is the same). A max or min is not
+// that: the row it keeps from a tie is the first one met, in the sort's order.
+// It returns the aggregate and how many sorts come before it, nil if none.
+func leadingAggregate(compute []*loweredStage) (*aggregateNode, int) {
+	if len(compute) == 0 || len(compute[0].nodes) != 1 {
+		return nil, 0
+	}
+	switch n := compute[0].nodes[0].(type) {
+	case *aggregateNode:
+		return n, 0
+	case *sortNode:
+		if !n.plain || len(compute) < 2 || len(compute[1].nodes) != 1 {
+			return nil, 0
+		}
+		if an, ok := compute[1].nodes[0].(*aggregateNode); ok && (an.agg.op == aggCount || an.agg.op == aggSum) {
+			return an, 1
+		}
+	}
+	return nil, 0
+}
+
+// noteAggregate says what the aggregate pass did to the stages around the
+// aggregate, for Explain: the sorts it dropped, and the order and limit it kept
+// for compute to apply.
+func (c *compiled) noteAggregate(dropped int, ordered bool, limit int) {
+	if c.aggNotes == nil {
+		c.aggNotes = map[node]string{}
+	}
+	i := 0
+	if dropped > 0 {
+		c.aggNotes[c.aggregated[0]] = "dropped: the aggregate does not depend on row order"
+		i = 2
+	} else {
+		i = 1
+	}
+	if ordered && i < len(c.aggregated) {
+		c.aggNotes[c.aggregated[i]] = "applied to the aggregate's lines in compute"
+		if limit > 0 && i+1 < len(c.aggregated) {
+			c.aggNotes[c.aggregated[i+1]] = "keeps the first of them"
+		}
+	}
 }

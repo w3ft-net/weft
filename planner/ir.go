@@ -77,6 +77,11 @@ type sortNode struct {
 	// numeric is -n, with no other flag or operand beyond -r and -u:
 	// `sort -rn` over uniq -c text compares the count in front.
 	numeric bool
+	// plain: every argument is one warp's sort takes in a form the planner
+	// reads, and none is -u, -t or a file. order, if set, is how it orders
+	// the lines an awk aggregate prints (see sortArgs).
+	plain bool
+	order *ValueOrder
 }
 
 // uniqNode is a uniq stage, with -c or without flags. Right after a

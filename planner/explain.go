@@ -109,6 +109,10 @@ func (c *compiled) explainNodes(b *strings.Builder) {
 			if n.order != "" {
 				l.desc += "  " + n.order
 			}
+			// A head the aggregate pass folded into the group.
+			if note, ok := c.aggNotes[n]; ok {
+				l.note = note
+			}
 		case *projectNode:
 			l.desc = n.expr
 			if n == c.selected {
@@ -118,6 +122,9 @@ func (c *compiled) explainNodes(b *strings.Builder) {
 			l.desc = c.stage(n).src
 			if slices.Contains(c.aggregated, n) {
 				l.note = "the GROUP BY: " + string(c.group.Render)
+				if note, ok := c.aggNotes[n]; ok {
+					l.note = note
+				}
 			}
 		case *opaqueNode:
 			l.desc = c.stage(n).src

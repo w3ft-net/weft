@@ -56,10 +56,8 @@ func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, direc
 	// An awk aggregate that stays in compute becomes the shard's GROUP BY on
 	// shards with its facts. It swaps no SQL: its plan is the Exact one.
 	var aggFacts []string
-	if len(c.compute) > 0 {
-		if a, ok := c.compute[0].nodes[0].(*aggregateNode); ok {
-			aggFacts = a.agg.facts()
-		}
+	if a, _ := leadingAggregate(c.compute); a != nil {
+		aggFacts = a.agg.facts()
 	}
 	if len(leaves) == 0 && len(aggFacts) == 0 {
 		return nil
