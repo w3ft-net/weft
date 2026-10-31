@@ -128,6 +128,18 @@ func awkFieldReads(prog *awk.Program) (reads fieldReads, why string) {
 	return reads, ""
 }
 
+// FieldSpec is which fields a compute stage reads, so the shards send only
+// those (QueryPlan.FieldSpec): the positions ($1, $3, ...) in order, whether it
+// reads the last field ($NF), and whether it reads the count (NF).
+type FieldSpec struct {
+	Positions []int
+	Last, NF  bool
+}
+
+func (r fieldReads) spec() *FieldSpec {
+	return &FieldSpec{Positions: r.positions, Last: r.last, NF: r.nf}
+}
+
 // fieldReads is what awkFieldReads found: the constant positions read, in
 // order, whether $NF is, and whether NF is.
 type fieldReads struct {
@@ -264,20 +276,14 @@ func (c *compiled) projectFields(limited bool) {
 	case c.source.follow || c.source.cmd != "cat":
 		return
 	}
-	src, ok := awkProgramArg(stage.args)
-	if !ok {
+	if stage.fields == nil {
+		if stage.fieldsWhy != "" {
+			c.logf(pass, "skipped %s: %s", label, stage.fieldsWhy)
+		}
 		return
 	}
-	prog, err := awk.Parse(src)
-	if err != nil {
-		return
-	}
-	reads, why := awkFieldReads(prog)
-	if why != "" {
-		c.logf(pass, "skipped %s: %s", label, why)
-		return
-	}
-	c.fieldSelect = syntheticRecordSQL(reads)
+	reads := *stage.fields
+	c.fieldSelect, c.fieldSpec = syntheticRecordSQL(reads), &reads
 	c.logf(pass, "%s reads only %s: the shard sends just those", label, describeFields(reads))
 }
 

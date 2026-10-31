@@ -1177,6 +1177,8 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	}
 	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:               directSQL,
+		FieldSql:          run.FieldSQL,
+		FieldSpec:         compute.FieldSpecToProto(run.FieldSpec),
 		Args:              argStrs,
 		Shards:            descs,
 		Stages:            run.ComputeStages,
@@ -1233,7 +1235,7 @@ func (c *Coordinator) applyTypedVariant(plan *planner.QueryPlan, args []string, 
 	n := 0
 	for _, d := range descs {
 		if c.Provisioner.ShardFieldsTyped(d.ShardId, t.CustomerID, t.Namespace, t.Service, t.Kind, t.Env, t.Requires) {
-			d.Sql, d.Args = t.DirectShardSQL, args
+			d.Sql, d.Args, d.FieldSql = t.DirectShardSQL, args, t.FieldSQL
 			n++
 		}
 	}

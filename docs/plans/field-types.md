@@ -223,8 +223,10 @@ clause.
   form is the cast alone.
 
 Measured on 200k request lines, one shard (`BenchmarkAwkFilterPrint`), whole query through
-compute: `$3 > 1000` 974 ms to 22 ms, `$3 > 100` 1,203 ms to 145 ms. The exact plan's
-shard SQL costs the same as the handwritten `fields` form (54 ms at `> 100`).
+compute: `$3 > 1000` 823 ms to 11 ms, `$3 > 100` 1,062 ms to 93 ms (an earlier run of this
+benchmark counted dispatch's pre-run of each request's SQL, a whole extra query, and
+overstated the base). The exact plan's shard SQL costs the same as the handwritten
+`fields` form (54 ms at `> 100`).
 
 - **Tests:** planner unit tests; differential tests that run the base, mixed (the second
   shard holds `inf`, `nan` and hex floats) and exact plans against the reference stage;

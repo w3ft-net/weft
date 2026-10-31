@@ -262,10 +262,14 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 		weftsdk.Infof(ctx, "shard %s: query (sql=%s)", s.id, req.Sql)
 	}
 
-	rows, err := ds.QueryContext(ctx, req.Sql, stringArgsToAny(req.Args)...)
+	sql := req.Sql
+	if req.FieldSql != "" {
+		sql = req.FieldSql
+	}
+	rows, err := ds.QueryContext(ctx, sql, stringArgsToAny(req.Args)...)
 	if err != nil {
 		span.RecordError(err)
-		weftsdk.Errorf(ctx, "shard %s: query error: %v (sql=%s args=%v)", s.id, err, req.Sql, req.Args)
+		weftsdk.Errorf(ctx, "shard %s: query error: %v (sql=%s args=%v)", s.id, err, sql, req.Args)
 		return err
 	}
 

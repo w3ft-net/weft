@@ -68,13 +68,20 @@ func FanOutToShards(ctx context.Context, req *pb.ExecuteQueryRequest, job shard.
 				job.SendSentinel(d.ShardId)
 				return
 			}
-			sql, strArgs := req.Sql, req.Args
+			sql, strArgs, fieldSQL := req.Sql, req.Args, req.FieldSql
 			if d.Sql != "" {
-				sql, strArgs = d.Sql, d.Args
+				sql, strArgs, fieldSQL = d.Sql, d.Args, d.FieldSql
 			}
 			args := make([]any, len(strArgs))
 			for i, a := range strArgs {
 				args[i] = a
+			}
+			// A shard that has the field form gets it; one that doesn't (a
+			// cold shard, one from before it) runs sql, whose rows carry the
+			// same fields as a line.
+			if fq, ok := sh.(shard.FieldQuerier); ok && fieldSQL != "" {
+				fq.QueryFieldsToSink(ctx, sql, fieldSQL, args, job)
+				return
 			}
 			sh.QueryToSink(ctx, sql, args, job)
 		}(desc)

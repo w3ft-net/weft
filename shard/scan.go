@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -17,6 +18,10 @@ import (
 // bare "._"-prefixed meta-variable for output, so the common (raw,
 // ts)-only shape allocates nothing extra. The event_id and line_no
 // columns the planner always selects fill ResultRow's typed fields.
+//
+// Columns named field_<N>, field_last and nf are a row in field form
+// (planner.QueryPlan.FieldSQL): they fill ResultRow.Fields in column order and
+// ResultRow.FieldCount instead of MetaVars.
 func ScanResultRows(sqlRows *sql.Rows) ([]*pb.ResultRow, error) {
 	cols, err := sqlRows.Columns()
 	if err != nil {
@@ -54,6 +59,21 @@ func ScanResultRow(sqlRows *sql.Rows, extraCols []string) (*pb.ResultRow, error)
 		TsUnixNs: ts.UnixNano(),
 	}
 	for i, col := range extraCols {
+		// A field column is a position in the row's fields, so a NULL (the
+		// row has fewer fields) is an empty entry, not a skipped column.
+		if col == "nf" {
+			n, err := strconv.ParseInt(extraVals[i].String, 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("nf %q: %w", extraVals[i].String, err)
+			}
+			count := int32(n)
+			row.FieldCount = &count
+			continue
+		}
+		if col == "field_last" || strings.HasPrefix(col, "field_") {
+			row.Fields = append(row.Fields, extraVals[i].String)
+			continue
+		}
 		if !extraVals[i].Valid {
 			continue
 		}

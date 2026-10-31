@@ -56,7 +56,8 @@ This is the pattern `ShardDescriptor.sql` and the typed variant already use.
 Ships together with the local commits that are not yet deployed (typed filters, exact
 plan, strict-decimal classifier, warp bump, benchmarks).
 
-- **Warp:** release v0.2.57 with the `SetFields` API, and bump weft to it before the push.
+- **No warp release.** Compute rebuilds the text record from the fields (`compute.RebuildRecord`);
+  a warp `SetFields` API that skips `setRecord` is a later optimization.
 - **Coordinator:** the planner emits the row-spec IR node and a second SQL, `field_sql`,
   that selects the field columns (no regexp). `ExecuteQueryRequest` gains `field_spec` and
   `field_sql`. The request's `sql` stays the current text-record SQL.

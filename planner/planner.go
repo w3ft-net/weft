@@ -90,6 +90,16 @@ type QueryPlan struct {
 	// the locators it needs are all numbers; see TypedPlan.
 	Typed *TypedPlan
 
+	// FieldSQL and FieldSpec are, for a first compute stage that reads only
+	// some of each row's fields, the field form of DirectShardSQL: the same
+	// query returning those fields' values (see Query.fieldForm) instead of a
+	// line built from them. A shard that has it runs FieldSQL, compute
+	// rebuilds the line from FieldSpec, and a shard that doesn't runs
+	// DirectShardSQL, whose line carries the same fields. Both empty when the
+	// stage reads more, or the query has no field form.
+	FieldSQL  string
+	FieldSpec *FieldSpec
+
 	// Aggregate is the trace and span queries' shard-side aggregate (one
 	// of the AggregateSpan* / AggregateTrace* constants), which compute
 	// finishes the same way.
@@ -409,17 +419,29 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 		liveStages = stageTexts(liveRest)
 	}
 
-	typed := typedVariant(c, info.source, customerID, shardSQL, directShardSQL)
+	// The field form of the query, where the stage's rows are the table's
+	// (no line split, no pushed line count): same WHERE and order, with the
+	// fields as columns.
+	var fieldSQL string
+	var fieldSpec *FieldSpec
+	if c.fieldSpec != nil && len(linePreds) == 0 {
+		fieldSQL, _ = sql.fieldForm(c.fieldSpec).WithOrderLimit(c.shardOrderBy, c.shardLimit).ToSQL()
+		fieldSpec = c.fieldSpec.spec()
+	}
+
+	typed := typedVariant(c, info.source, customerID, shardSQL, directShardSQL, fieldSQL)
 	if assumeTyped {
 		// What the facts leave to swap (a jq key) is swapped in this plan,
 		// which is only ever used where they all hold.
 		if typed != nil {
-			shardSQL, directShardSQL = typed.ShardSQL, typed.DirectShardSQL
+			shardSQL, directShardSQL, fieldSQL = typed.ShardSQL, typed.DirectShardSQL, typed.FieldSQL
 		}
 		typed = nil
 	}
 	return &QueryPlan{
 		Typed:             typed,
+		FieldSQL:          fieldSQL,
+		FieldSpec:         fieldSpec,
 		ShardSQL:          shardSQL,
 		Args:              shardArgs,
 		ArgSources:        shardArgSources,

@@ -40,6 +40,9 @@ type Query struct {
 	// includePayload appends the row's payload as a PayloadColumn
 	// column, for a jq row stage or a stage reading the payload.
 	includePayload bool
+	// fieldSpec makes this the field form of the query: the SELECT also
+	// returns the values of the fields it names (see fieldForm).
+	fieldSpec *fieldReads
 	// group makes this the shard half of a QueryPlan.Group: it groups the
 	// lines of its subquery's raw (see Group).
 	group GroupRender
@@ -76,6 +79,16 @@ func orderClause(order string) string {
 	}
 	return order
 }
+
+// The field form's columns, after the ones every row query returns. They
+// carry the values of the fields a stage reads, in the spec's order, and the
+// row's field count; ScanResultRows moves them into ResultRow.Fields and
+// FieldCount, and compute.RebuildRecord makes the line from them.
+const (
+	FieldColumnPrefix = "field_"
+	FieldLastColumn   = "field_last"
+	FieldCountColumn  = "nf"
+)
 
 // CountColumn names the extra column carrying an aggregate's count: the
 // lines a shard saw of each distinct raw (or of all of them, for
@@ -263,6 +276,21 @@ func (q *Query) Lines(preds []Predicate) *Query {
 	}
 }
 
+// fieldForm returns q selecting, in place of each line, the values of the
+// fields spec names and the field count: the row's `fields` column, which
+// ingest splits as awk does. A row with no fields keeps its raw only when the
+// stage reads the last field, where that is the line itself. q must be the
+// plain query on the table (no Lines or Wrap).
+func (q *Query) fieldForm(spec *fieldReads) *Query {
+	clone := *q
+	clone.rawExpr = "''"
+	if spec.last {
+		clone.rawExpr = "CASE WHEN COALESCE(len(fields), 0) = 0 THEN raw ELSE '' END"
+	}
+	clone.fieldSpec = spec
+	return &clone
+}
+
 // Group returns the shard half of a grouping over q's lines, as Lines
 // splits and filters them. It selects each line with its CountColumn
 // (RenderTotal: one row, an empty line with the total), in the order
@@ -426,6 +454,15 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 		} else {
 			b.WriteString(", CAST(payload AS VARCHAR) AS " + PayloadColumn)
 		}
+	}
+	if q.fieldSpec != nil {
+		for _, p := range q.fieldSpec.positions {
+			fmt.Fprintf(b, ", list_extract(fields, %d) AS %s%d", p, FieldColumnPrefix, p)
+		}
+		if q.fieldSpec.last {
+			b.WriteString(", list_extract(fields, -1) AS " + FieldLastColumn)
+		}
+		b.WriteString(", COALESCE(len(fields), 0) AS " + FieldCountColumn)
 	}
 	b.WriteString(" FROM ")
 	if q.from.Subquery != nil {

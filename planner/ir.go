@@ -115,6 +115,11 @@ type loweredStage struct {
 	// rowwise: the stage passes rows through unchanged, so the stage
 	// after it still reads rows (docs/plans/planner-ir.md, "Row identity").
 	rowwise bool
+	// fields is what an awk stage reads of a row when that is only some of
+	// its fields (awkFieldReads), nil when it reads more or can't be told;
+	// fieldsWhy says why not. Field projection (projectFields) acts on it.
+	fields    *fieldReads
+	fieldsWhy string
 	// readsMeta: the stage names a meta-variable, so the shard projects
 	// MetaVarColumns for compute to hand it.
 	readsMeta bool

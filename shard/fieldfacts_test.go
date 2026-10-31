@@ -1,11 +1,13 @@
 package shard
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -528,5 +530,57 @@ func TestFieldClassifier_OnlyFiniteDecimalsTypeAField(t *testing.T) {
 	settle(t, c)
 	if f, ok := factFor(c.Pending(), "$2"); ok && f.State == FactTyped {
 		t.Errorf("a field of inf values was typed: %+v", f)
+	}
+}
+
+// A query's field columns come back as ResultRow.fields in column order, with
+// the row's field count, and a missing field is an empty entry.
+func TestScanResultRow_FieldForm(t *testing.T) {
+	s, err := NewDuckDBShard("fieldform", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rows := numRows(1, "a b c d")
+	rows = append(rows, numRows(1, "x")[0], numRows(1, "")[0])
+	rows[0].TsUnixNs, rows[1].TsUnixNs, rows[2].TsUnixNs = 1e9, 2e9, 3e9
+	if err := s.Ingest(context.Background(), rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Query(context.Background(),
+		`SELECT CASE WHEN len(fields) = 0 THEN raw ELSE '' END AS raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, `+
+			`list_extract(fields, 1) AS field_1, list_extract(fields, 3) AS field_3, list_extract(fields, -1) AS field_last, len(fields) AS nf `+
+			`FROM logs ORDER BY ts`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		fields []string
+		count  int32
+		raw    string
+	}{
+		{[]string{"a", "c", "d"}, 4, ""},
+		{[]string{"x", "", "x"}, 1, ""},
+		{[]string{"", "", ""}, 0, ""},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%d rows, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		r := got[i]
+		if r.FieldCount == nil || *r.FieldCount != w.count || !slices.Equal(r.Fields, w.fields) || r.Raw != w.raw {
+			t.Errorf("row %d: fields=%q count=%v raw=%q, want fields=%q count=%d raw=%q", i, r.Fields, r.FieldCount, r.Raw, w.fields, w.count, w.raw)
+		}
+		if len(r.MetaVars) != 0 {
+			t.Errorf("row %d: field columns leaked into meta_vars: %v", i, r.MetaVars)
+		}
+	}
+	// A query with no field columns leaves the row in raw form.
+	plain, err := s.Query(context.Background(), `SELECT raw, ts FROM logs ORDER BY ts LIMIT 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain[0].FieldCount != nil || len(plain[0].Fields) != 0 {
+		t.Errorf("a plain row has field form: %v %v", plain[0].Fields, plain[0].FieldCount)
 	}
 }

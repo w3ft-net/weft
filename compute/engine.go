@@ -139,6 +139,7 @@ func (p *Engine) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) 
 		job.rowStages = rs
 	}
 	job.stagesReadPayload = req.StagesReadPayload
+	job.fieldSpec = req.FieldSpec
 	aggregate := req.Aggregate
 	if isGroupAggregate(aggregate) {
 		// A coordinator from before GroupSpec; every one sends it now.
@@ -216,6 +217,10 @@ type Job struct {
 	// stagesReadPayload feeds the first stage each row's payload instead
 	// of its raw line (planner.QueryPlan.StagesReadPayload).
 	stagesReadPayload bool
+	// fieldSpec, when set, says which fields the first stage reads: a row
+	// that arrives in field form is rebuilt into the line it reads as it
+	// enters the job (RebuildRecord).
+	fieldSpec *pb.FieldSpec
 	// spliceMeta: the first stage names a meta-variable, so a jq there
 	// reads them spliced into its input.
 	spliceMeta bool
@@ -256,6 +261,9 @@ func (j *Job) Send(msg ComputeMessage) {
 
 // SendRow implements shard.RowSink.
 func (j *Job) SendRow(row *pb.ResultRow, shardID string) {
+	if j.fieldSpec != nil && row.FieldCount != nil {
+		row.Raw = RebuildRecord(j.fieldSpec, row)
+	}
 	j.Send(ComputeMessage{Row: row, ShardID: shardID})
 }
 

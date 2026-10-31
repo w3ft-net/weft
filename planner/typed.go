@@ -32,6 +32,7 @@ type TypedPlan struct {
 	Env            string
 	ShardSQL       string
 	DirectShardSQL string
+	FieldSQL       string // the plan's FieldSQL with the same swap; empty if it has none
 	// Exact is the whole plan for a query whose every shard has the facts
 	// Requires: the typed comparisons are exact there, so it needs no more
 	// compute than the pipeline's other stages do. Its Typed is nil.
@@ -42,7 +43,7 @@ type TypedPlan struct {
 // typed leaf's predicate for its typed form. It declines (nil) unless the
 // source is one stream, and unless every leaf's text occurs exactly once in
 // both SQL strings, so a swap can't land on the wrong text.
-func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, directSQL string) *TypedPlan {
+func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, directSQL, fieldSQL string) *TypedPlan {
 	if len(src.namespaces) != 1 || len(src.services) != 1 || len(src.kinds) != 1 || src.follow {
 		return nil
 	}
@@ -74,6 +75,11 @@ func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, direc
 	if !ok {
 		return nil
 	}
+	if fieldSQL != "" {
+		if fieldSQL, ok = swap(fieldSQL); !ok {
+			return nil
+		}
+	}
 	var requires []string
 	for _, l := range leaves {
 		if !slices.Contains(requires, l.locator) {
@@ -84,7 +90,7 @@ func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, direc
 	return &TypedPlan{
 		Requires: requires, CustomerID: customerID,
 		Namespace: src.namespaces[0], Service: src.services[0], Kind: src.kinds[0], Env: src.env,
-		ShardSQL: shard, DirectShardSQL: direct,
+		ShardSQL: shard, DirectShardSQL: direct, FieldSQL: fieldSQL,
 	}
 }
 

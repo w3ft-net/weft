@@ -32,6 +32,15 @@ type RowSink interface {
 	SendSentinel(shardID string)
 }
 
+// FieldQuerier is a shard that understands a query's field form: fieldSQL
+// returns just some of each row's fields as field columns (see
+// ScanResultRows), and runs in place of sql. Compute asks a shard that has it
+// and plain-queries one that doesn't (a cold shard, a shard from before it),
+// so sql must be correct on its own.
+type FieldQuerier interface {
+	QueryFieldsToSink(ctx context.Context, sql, fieldSQL string, args []any, sink RowSink)
+}
+
 // Shard is the interface the coordinator uses to interact with a shard node.
 // Shards are dumb storage — the coordinator manages time windows and routing.
 //
@@ -422,6 +431,12 @@ func (s *DuckDBShard) QueryToSink(ctx context.Context, query string, args []any,
 	for _, r := range rows {
 		sink.SendRow(r, s.id)
 	}
+}
+
+// QueryFieldsToSink is QueryToSink for a query's field form: fieldSQL runs in
+// place of sql, which only shards without this method need.
+func (s *DuckDBShard) QueryFieldsToSink(ctx context.Context, _, fieldSQL string, args []any, sink RowSink) {
+	s.QueryToSink(ctx, fieldSQL, args, sink)
 }
 
 // logColumns is the explicit column order the Appender binds to. Naming the

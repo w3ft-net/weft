@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -468,9 +469,36 @@ func TestRowStagesAreRowwise(t *testing.T) {
 type harness struct {
 	engine *compute.Engine
 	shards []*shard.DuckDBShard
+	// fieldQueries counts the queries shards were asked in their field form.
+	fieldQueries atomic.Int32
+	// unchecked skips dispatch's pre-run of each request's SQL, which a
+	// benchmark must not pay for: it would add a whole query per iteration.
+	unchecked bool
+}
+
+// countingShard is a current shard that counts the field-form queries it gets.
+type countingShard struct {
+	*shard.DuckDBShard
+	n *atomic.Int32
+}
+
+func (c countingShard) QueryFieldsToSink(ctx context.Context, sql, fieldSQL string, args []any, sink shard.RowSink) {
+	c.n.Add(1)
+	c.DuckDBShard.QueryFieldsToSink(ctx, sql, fieldSQL, args, sink)
 }
 
 func newHarness(t testing.TB, rows []*pb.LogRow, nShards int) *harness {
+	t.Helper()
+	return newHarnessWith(t, rows, nShards, nil)
+}
+
+// oldShard is a shard from before field SQL: the shard.Shard methods only, so
+// it has no QueryFieldsToSink and compute runs its plain sql.
+type oldShard struct{ shard.Shard }
+
+// newHarnessWith is newHarness where the shards for which old reports true
+// are oldShards.
+func newHarnessWith(t testing.TB, rows []*pb.LogRow, nShards int, old func(i int) bool) *harness {
 	t.Helper()
 	h := &harness{engine: &compute.Engine{}}
 	for i := 0; i < nShards; i++ {
@@ -479,7 +507,11 @@ func newHarness(t testing.TB, rows []*pb.LogRow, nShards int) *harness {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { sh.Close() })
-		h.engine.RegisterResolver(computetest.NewInProcessResolver(sh.ID(), sh))
+		var handle shard.Shard = countingShard{sh, &h.fieldQueries}
+		if old != nil && old(i) {
+			handle = oldShard{sh}
+		}
+		h.engine.RegisterResolver(computetest.NewInProcessResolver(sh.ID(), handle))
 		h.shards = append(h.shards, sh)
 	}
 	// Round-robin, so every shard holds a slice of each source.
@@ -572,8 +604,13 @@ func (h *harness) dispatch(req *pb.ExecuteQueryRequest) (string, error) {
 	// A shard that fails its SQL just ends its stream, so check the SQL
 	// first or an error would look like an empty result.
 	for _, sh := range h.shards {
-		if _, err := sh.Query(context.Background(), req.Sql, toAny(req.Args)...); err != nil {
-			return "", fmt.Errorf("shard SQL %s: %w", req.Sql, err)
+		for _, sql := range []string{req.Sql, req.FieldSql} {
+			if sql == "" || h.unchecked {
+				continue
+			}
+			if _, err := sh.Query(context.Background(), sql, toAny(req.Args)...); err != nil {
+				return "", fmt.Errorf("shard SQL %s: %w", sql, err)
+			}
 		}
 		req.Shards = append(req.Shards, &pb.ShardDescriptor{ShardId: sh.ID()})
 	}

@@ -34,7 +34,10 @@ type compiled struct {
 	groupKey string // the SQL a tally groups by, in place of raw
 	// fieldSelect, when set, is the SQL for a record of just the fields the
 	// first compute stage reads (projectFields), in place of each line.
+	// fieldSpec is those fields, for the field form of the query that sends
+	// them as values (QueryPlan.FieldSQL).
 	fieldSelect string
+	fieldSpec   *fieldReads
 	// payloadSelect, when set, is the SQL for a payload of just the keys the
 	// first compute stage (a jq) reads (projectPayload), in place of all of it.
 	payloadSelect string

@@ -104,6 +104,7 @@ func requestRows(n int) []*pb.LogRow {
 func BenchmarkAwkFilterPrint(b *testing.B) {
 	h := newHarness(b, requestRows(benchRows), 1)
 	sh := h.shards[0]
+	defer func() { h.unchecked = false }()
 	for _, thr := range []string{"1000", "100"} {
 		pipeline := fmt.Sprintf("cat /log/typed/api/main.log | awk '$3 > %s {print $1, $3}'", thr)
 		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
@@ -154,8 +155,74 @@ func BenchmarkAwkFilterPrint(b *testing.B) {
 				}
 			}
 		}
+		for _, run := range []func(*planner.QueryPlan) (string, error){h.runPlan, h.runTyped, h.runExact} {
+			if _, err := run(plan); err != nil { // checked once, so a bad SQL is an error here
+				b.Fatal(err)
+			}
+		}
+		h.unchecked = true
 		b.Run("gt"+thr+"/query/base", query(h.runPlan))
 		b.Run("gt"+thr+"/query/typed", query(h.runTyped))
 		b.Run("gt"+thr+"/query/exact", query(h.runExact))
 	}
+}
+
+// BenchmarkFieldRowSpec is a stage that stays in compute and reads one field,
+// `awk '{ s += $3 } END { print s }'`: the shard building the text record it
+// reads (a regexp over raw per position) against the shard returning the
+// field's value, and the whole query through compute either way.
+//
+//	go test -tags test -run xxx -bench FieldRowSpec -benchtime 5x ./planner/difftest
+func BenchmarkFieldRowSpec(b *testing.B) {
+	h := newHarness(b, requestRows(benchRows), 1)
+	sh := h.shards[0]
+	pipeline := "cat /log/typed/api/main.log | awk '{ s += $3 } END { print s }'"
+	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	if err != nil || plan.FieldSQL == "" {
+		b.Fatalf("%s: %v, field sql %q", pipeline, err, plan.FieldSQL)
+	}
+	args := toAny(argStrings(plan.Args))
+
+	shardQuery := func(sql string) func(*testing.B) {
+		return func(b *testing.B) {
+			var n, bytes int
+			for i := 0; i < b.N; i++ {
+				got, err := sh.Query(context.Background(), sql, args...)
+				if err != nil {
+					b.Fatal(err)
+				}
+				n, bytes = len(got), 0
+				for _, r := range got {
+					bytes += len(r.Raw)
+					for _, f := range r.Fields {
+						bytes += len(f)
+					}
+				}
+			}
+			b.ReportMetric(float64(n), "rows_shipped")
+			b.ReportMetric(float64(bytes)/1e6, "MB_values")
+		}
+	}
+	for _, run := range []func(*planner.QueryPlan) (string, error){h.runPlan, h.runFieldForm} {
+		if _, err := run(plan); err != nil { // checked once, so a bad SQL is an error here
+			b.Fatal(err)
+		}
+	}
+	h.unchecked = true
+	b.Run("shard/text-record", shardQuery(plan.DirectShardSQL))
+	b.Run("shard/field-form", shardQuery(plan.FieldSQL))
+	b.Run("query/text-record", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if _, err := h.runPlan(plan); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("query/field-form", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			if _, err := h.runFieldForm(plan); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }

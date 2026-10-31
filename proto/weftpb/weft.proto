@@ -98,6 +98,12 @@ message QueryRequest {
   // Positional placeholder values for `?` markers in sql, in render
   // order. See ExecuteQueryRequest.args for the binding contract.
   repeated string args = 2;
+  // field_sql, when set, is what a shard that understands it runs instead
+  // of sql; it binds the same args. It returns the values of just some of
+  // each row's fields as `field_<N>` columns (and `field_last`, `nf`) in
+  // place of a built-up line; see ResultRow.fields. A shard from before it
+  // ignores the field and runs sql, so sql must stay correct on its own.
+  string field_sql = 3;
 }
 
 // ResultRow is the query result type — shards return (raw, ts).
@@ -124,6 +130,25 @@ message ResultRow {
   // event_id first. See docs/plans/line-storage.md.
   string event_id = 5;
   int32 line_no = 6;
+  // fields and field_count are a row in field form, from a shard that ran
+  // a query's field_sql: the values of the fields the request's field_spec
+  // names, in order (its positions ascending, then the last field if the
+  // spec asks), and the row's real field count. raw is empty, except when
+  // the row has no fields and the spec reads the last one, where it is the
+  // line itself. Compute rebuilds the line a stage reads from them
+  // (compute.RebuildRecord). field_count has presence so a row of no
+  // fields is told apart from a row in raw form.
+  repeated string fields = 7;
+  optional int32 field_count = 8;
+}
+
+// FieldSpec says which fields of a row a compute stage reads, so the shards
+// send only those. It is the fields' positions ($1, $3, ...), whether the
+// stage reads the last field ($NF) and whether it reads the count (NF).
+message FieldSpec {
+  repeated int32 positions = 1;
+  bool last = 2;
+  bool nf = 3;
 }
 
 // LogRow is the ingestion type — weftd agents and CloudWatch poller send
@@ -224,6 +249,9 @@ message ShardDescriptor {
   // docs/plans/field-types.md. Empty = the request's sql and args.
   string sql = 6;
   repeated string args = 7;
+  // field_sql is what this shard runs, in place of the request's field_sql,
+  // when sql is set: the same override for the field form.
+  string field_sql = 8;
 }
 
 message ExecuteQueryRequest {
@@ -296,6 +324,14 @@ message ExecuteQueryRequest {
   // group. Before this existed, aggregate carried "lines", "distinct" and
   // "count_distinct"; compute no longer accepts them.
   GroupSpec group = 13;
+  // field_sql and field_spec, when set, are the field form of sql for a
+  // stage that stays in compute and reads only some fields: shards that
+  // understand it send those fields in ResultRow.fields, and compute
+  // rebuilds the record the stage reads. sql stays the plain query for
+  // shards that don't (cold shards, shards from before this), and compute
+  // takes each row in the form it arrives. See docs/plans/field-row-spec.md.
+  string field_sql = 14;
+  FieldSpec field_spec = 15;
 }
 
 // GroupRender is what compute prints for each group it merged.

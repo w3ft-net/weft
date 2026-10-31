@@ -71,3 +71,59 @@ func TestGRPCShard_TraceIDReachesShard(t *testing.T) {
 		t.Errorf("Ingest metadata = %v, want weft-trace-id=trace-query-123", srv.ingst)
 	}
 }
+
+// reqCaptureServer records the QueryRequest of every Query.
+type reqCaptureServer struct {
+	pb.UnimplementedShardQueryServer
+	mu   sync.Mutex
+	reqs []*pb.QueryRequest
+}
+
+func (s *reqCaptureServer) Query(req *pb.QueryRequest, stream grpc.ServerStreamingServer[pb.ResultRow]) error {
+	s.mu.Lock()
+	s.reqs = append(s.reqs, req)
+	s.mu.Unlock()
+	return stream.Send(&pb.ResultRow{Raw: "x"})
+}
+
+type discardSink struct{}
+
+func (discardSink) SendRow(*pb.ResultRow, string) {}
+func (discardSink) Fail(string, error)            {}
+func (discardSink) SendSentinel(string)           {}
+
+// QueryFieldsToSink puts the field form on the wire beside sql; QueryToSink
+// leaves it off, so a plain query is byte-for-byte what it was.
+func TestGRPCShard_QueryFieldsToSinkSendsFieldSQL(t *testing.T) {
+	srv := &reqCaptureServer{}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gs := grpc.NewServer()
+	pb.RegisterShardQueryServer(gs, srv)
+	go gs.Serve(lis)
+	defer gs.GracefulStop()
+
+	sh, err := NewGRPCShard("field-shard", lis.Addr().String(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sh.Close()
+
+	var _ FieldQuerier = sh
+	sh.QueryFieldsToSink(context.Background(), "SELECT plain", "SELECT fields", []any{"a"}, discardSink{})
+	sh.QueryToSink(context.Background(), "SELECT plain", []any{"a"}, discardSink{})
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.reqs) != 2 {
+		t.Fatalf("%d queries, want 2", len(srv.reqs))
+	}
+	if r := srv.reqs[0]; r.Sql != "SELECT plain" || r.FieldSql != "SELECT fields" || len(r.Args) != 1 {
+		t.Errorf("QueryFieldsToSink sent %+v", r)
+	}
+	if r := srv.reqs[1]; r.Sql != "SELECT plain" || r.FieldSql != "" {
+		t.Errorf("QueryToSink sent %+v, want no field_sql", r)
+	}
+}

@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -112,5 +113,46 @@ func TestExactPlan_OnlyWhenEveryShardHasTheFacts(t *testing.T) {
 	}
 	if got := c.exactPlan(noVariant, []*pb.ShardDescriptor{{ShardId: "a"}}); got != nil {
 		t.Errorf("a plan with no typed form got an exact plan")
+	}
+}
+
+// A typed shard's override carries the field form too, with the same typed
+// predicate, or it would run the typed filter in one form and not the other.
+func TestApplyTypedVariant_CarriesTheFieldForm(t *testing.T) {
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}})
+	logdb.SeedShard(c.Provisioner, &logdb.Shard{ID: "typed", State: logdb.StateIngesting, CreatedAt: time.Now()})
+	c.Provisioner.FoldFieldFacts("typed", []*pb.FieldFactDelta{typedFact(7, "acme", "api", "main", "", "$5", 1)})
+
+	plan, err := planner.Plan(`cat /log/acme/api/main.log | awk '$5 > 500 { n += $2 } END { print n }'`, 7, "", time.Time{}, time.Time{})
+	if err != nil || plan.Typed == nil || plan.FieldSQL == "" {
+		t.Fatalf("plan: %v, typed %+v, field sql %q", err, plan.Typed, plan.FieldSQL)
+	}
+	if plan.Typed.FieldSQL == "" || plan.Typed.FieldSQL == plan.FieldSQL {
+		t.Fatalf("the typed plan's field form %q is not the typed form of %q", plan.Typed.FieldSQL, plan.FieldSQL)
+	}
+	descs := []*pb.ShardDescriptor{{ShardId: "typed"}}
+	if n := c.applyTypedVariant(plan, nil, descs); n != 1 || descs[0].FieldSql != plan.Typed.FieldSQL {
+		t.Errorf("n=%d field sql=%q, want the typed plan's %q", n, descs[0].FieldSql, plan.Typed.FieldSQL)
+	}
+}
+
+// The request to compute carries the field form of a stage that reads only
+// some fields, beside the plain sql every compute and shard understands.
+func TestExecute_SendsTheFieldFormToCompute(t *testing.T) {
+	c := setupTestCoordinator(t)
+	spy := &spyCompute{inner: c.Compute}
+	c.Compute = spy
+
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk '{ n += $2 } END { print n }'`, fullRange, "kevlar", "")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	drainExec(t, res)
+	req := spy.lastReq
+	if req.FieldSql == "" || req.FieldSql == req.Sql {
+		t.Errorf("field sql %q beside sql %q", req.FieldSql, req.Sql)
+	}
+	if got := req.FieldSpec.GetPositions(); len(got) != 1 || got[0] != 2 || req.FieldSpec.Last || req.FieldSpec.Nf {
+		t.Errorf("field spec %v, want just $2", req.FieldSpec)
 	}
 }

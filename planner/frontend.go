@@ -112,9 +112,15 @@ func lowerAwk(ls *loweredStage, a at, typed bool) []node {
 		return ok && AwkMetaVars[id.Name] != ""
 	})
 	if len(ls.args) != 1 {
+		ls.fieldsWhy = "a flag changes how it splits and what it holds: " + ls.args[0]
 		return []node{&opaqueNode{at: a, why: reason{code: reasonFlag, detail: ls.args[0]}}}
 	}
 	ls.rowwise = awkIsRowFilter(prog)
+	if reads, why := awkFieldReads(prog); why == "" {
+		ls.fields = &reads
+	} else {
+		ls.fieldsWhy = why
+	}
 
 	pd, why := tryAwkPushdown(prog, typed)
 	if pd != nil && (pd.limit > 0 || pd.offset > 0) {

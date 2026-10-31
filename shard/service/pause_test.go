@@ -508,3 +508,38 @@ func TestPause_KeepsFieldFactsForTheNextInstance(t *testing.T) {
 		t.Errorf("successor has no typed $2 after the roll: %+v", next.FieldFacts())
 	}
 }
+
+// A Query that carries field_sql runs it in place of sql, and the rows come
+// back in field form; without it the shard runs sql, as one from before the
+// field did.
+func TestQuery_FieldSQLRunsInPlaceOfSQL(t *testing.T) {
+	srv, _ := seededServer(t, newFakeVolume(true))
+	c := serve(t, srv)
+	ctx := context.Background()
+	if _, err := c.Ingest(ctx, &pb.IngestRequest{Rows: []*pb.LogRow{{
+		Raw: "a b c", TsUnixNs: time.Unix(1500, 0).UnixNano(), Service: "svc",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	const plain = `SELECT raw, ts FROM logs`
+	const fields = `SELECT '' AS raw, ts, list_extract(fields, 2) AS field_2, COALESCE(len(fields), 0) AS nf FROM logs`
+	query := func(req *pb.QueryRequest) *pb.ResultRow {
+		t.Helper()
+		stream, err := c.Query(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		row, err := stream.Recv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+
+	if row := query(&pb.QueryRequest{Sql: plain, FieldSql: fields}); row.Raw != "" || len(row.Fields) != 1 || row.Fields[0] != "b" || row.GetFieldCount() != 3 {
+		t.Errorf("with field_sql: raw=%q fields=%q count=%v, want field form b/3", row.Raw, row.Fields, row.FieldCount)
+	}
+	if row := query(&pb.QueryRequest{Sql: plain}); row.Raw != "a b c" || row.FieldCount != nil {
+		t.Errorf("without field_sql: raw=%q count=%v, want the plain row", row.Raw, row.FieldCount)
+	}
+}
