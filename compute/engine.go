@@ -13,6 +13,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/warp/pkg/jq"
+	"github.com/tidwall/gjson"
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -199,7 +201,7 @@ func (p *Engine) NewJob(stages []string, shardCount int, mergeKey string, limit 
 	if j.meta.Reads() {
 		switch {
 		case firstStageIsJq(stages):
-			j.envelope = NewJqEnvelope(j.meta)
+			j.jqBinder = NewJqBinder(j.meta)
 		case firstStageIsAwk(stages):
 			j.binder = newAwkBinder(j.meta)
 		}
@@ -233,11 +235,10 @@ type Job struct {
 	// enters the job (RebuildRecord).
 	fieldSpec *pb.FieldSpec
 	// meta is the meta-variables the first stage reads, the only stage that
-	// reads shard rows': a jq there gets them spliced into its input (envelope),
-	// an awk binds them per record (binder). Nothing is built per row if it
-	// reads none.
+	// reads shard rows': a jq there has them bound for each input (jqBinder),
+	// an awk per record (binder). Nothing is built per row if it reads none.
 	meta     planner.MetaRead
-	envelope *JqEnvelope
+	jqBinder *JqBinder
 	binder   awkBinder
 	// aggregate finishes the shards' aggregate (planner.QueryPlan.
 	// Aggregate) on the merged rows; feedErr is its failure.
@@ -363,11 +364,11 @@ func (j *Job) MergedRows() ([]*pb.ResultRow, error) {
 // Zero-stage jobs forward each merged row directly to streamCh as
 // soon as the k-way merge determines its position.
 //
-// Staged jobs route the merged stream through warp via an io.Pipe:
-// a writer goroutine pumps merged rows into the pipe (one row + "\n"
-// per emit); warp's bash.RunStreaming reads from the pipe, runs the
-// pipeline (with stream-safe stages emitting incrementally), and
-// writes to a second io.Pipe whose read side is scanned line-by-line
+// Staged jobs route the merged stream through warp via a buffered pipe
+// (chunkPipe): a writer goroutine pumps merged rows into the pipe (one
+// row + "\n" per emit); warp's bash.RunStreaming reads from the pipe, runs
+// the pipeline (with stream-safe stages emitting incrementally), and
+// writes to a second pipe whose read side is scanned line-by-line
 // into streamCh. End-to-end this gives stream-safe pipelines (grep,
 // awk no-END, sed, head, cut, tr, tee, uniq) per-line latency from
 // shard arrival to client; batch-only stages (sort, wc, tail -N)
@@ -478,9 +479,6 @@ func (j *Job) stageInput(row *pb.ResultRow) string {
 	if j.stagesReadPayload {
 		in = row.MetaVars[planner.PayloadColumn]
 	}
-	if j.envelope != nil {
-		return j.envelope.Wrap(in, rowMetaVars(row, j.meta))
-	}
 	return in
 }
 
@@ -568,8 +566,8 @@ func (j *Job) consume() {
 	// that fail without writing to stderr (grep with no match) still
 	// aren't errors: the exit check below also needs stderr output.
 	pipeline := "set -o pipefail; " + strings.Join(j.stages, " | ")
-	stdinR, stdinW := io.Pipe()
-	stdoutR, stdoutW := io.Pipe()
+	stdinR, stdinW := newChunkPipe(pipeLimit)
+	stdoutR, stdoutW := newChunkPipe(pipeLimit)
 
 	// awkVarsCh carries each row's meta-var values, in the exact order
 	// rows are written to stdinW, to an AwkPerRecordVars hook the
@@ -587,6 +585,12 @@ func (j *Job) consume() {
 	if firstStageIsAwk(j.stages) && j.meta.Reads() {
 		awkVarsCh = make(chan rowAwkVars, 1024)
 	}
+	// The same for jq: its variables for each input, in the order its inputs
+	// are written.
+	var jqVarsCh chan map[string]jq.Value
+	if j.jqBinder != nil {
+		jqVarsCh = make(chan map[string]jq.Value, 1024)
+	}
 
 	// Writer: pump merged rows into warp's stdin. Closing stdinW
 	// signals EOF to the pipeline, which lets sort/wc/etc. flush.
@@ -598,6 +602,10 @@ func (j *Job) consume() {
 	// comes only after all shards drain — which is intrinsic to "last
 	// N" semantics (the merge can't know what the last N are until it
 	// has seen everything).
+	// stopped is closed once the pipeline has finished reading, so a writer
+	// waiting to queue a row's variables for a stage that will never read them
+	// (a BEGIN-only awk, jq -n) lets go.
+	stopped := make(chan struct{})
 	writerDone := make(chan struct{})
 	go func() {
 		defer close(writerDone)
@@ -605,37 +613,47 @@ func (j *Job) consume() {
 		if awkVarsCh != nil {
 			defer close(awkVarsCh)
 		}
-		// stdinW is an io.Pipe: every write blocks until the stage reads it,
-		// a goroutine handoff each. Rows are batched, and flushed whenever no
-		// merged row is waiting (so a slow producer's rows aren't held back)
-		// or the stage must read what's buffered for the writer to go on.
-		w := bufio.NewWriterSize(stdinW, 64<<10)
-		defer w.Flush()
+		if jqVarsCh != nil {
+			defer close(jqVarsCh)
+		}
 		j.feed(func(row *pb.ResultRow) bool {
 			in := j.stageInput(row)
-			if awkVarsCh != nil {
+			switch {
+			case awkVarsCh != nil:
 				// Queued before awk can read the row: a record waiting
 				// on its set while the writer waits on awk would
 				// deadlock.
-				if len(awkVarsCh) == cap(awkVarsCh) {
-					// About to block on a queue the stage drains as it reads:
-					// let it read what is buffered.
-					if err := w.Flush(); err != nil {
+				v := rowAwkVars{vars: j.binder.vars(rowMetaVars(row, j.meta)), records: strings.Count(in, "\n") + 1}
+				select {
+				case awkVarsCh <- v:
+				case <-stopped:
+					return false
+				}
+			case jqVarsCh != nil:
+				switch {
+				case strings.TrimSpace(in) == "":
+					// Nothing for jq to read: no input, so no variables.
+				case !gjson.Valid(in):
+					// jq reads variables by counting inputs, so a payload
+					// that is not exactly one JSON value (two, or none that
+					// parse) can't be let through: jq would read it as
+					// values of its own and every later row would take the
+					// wrong variables. A byte JSON never starts with fails
+					// the run there, as the invalid payload always has.
+					in = "\x00" + in
+				default:
+					select {
+					case jqVarsCh <- j.jqBinder.Vars(rowMetaVars(row, j.meta)):
+					case <-stopped:
 						return false
 					}
 				}
-				awkVarsCh <- rowAwkVars{vars: j.binder.vars(rowMetaVars(row, j.meta)), records: strings.Count(in, "\n") + 1}
 			}
-			if _, err := w.WriteString(in); err != nil {
+			if _, err := io.WriteString(stdinW, in); err != nil {
 				return false
 			}
-			if err := w.WriteByte('\n'); err != nil {
+			if _, err := stdinW.Write(newline); err != nil {
 				return false
-			}
-			if len(j.ch) == 0 {
-				if err := w.Flush(); err != nil {
-					return false
-				}
 			}
 			return true
 		})
@@ -654,10 +672,8 @@ func (j *Job) consume() {
 		// its output feeds line-oriented stages, and it matches what a
 		// projection SQL computes. See docs/plans/planner-ir.md, "jq".
 		opts := bash.StreamingOptions{JqCompact: true}
-		if j.envelope != nil {
-			// Only then does the first stage's input carry the envelope
-			// WrapJqInput makes; any other input is the user's own.
-			opts.JqPerInput = JqPerInput
+		if jqVarsCh != nil {
+			opts.JqInputVars = func() map[string]jq.Value { return <-jqVarsCh }
 		}
 		if awkVarsCh != nil {
 			var cur rowAwkVars
@@ -674,6 +690,7 @@ func (j *Job) consume() {
 		// writer: its writes now fail, and it drains the remaining shards to
 		// their sentinels without emitting.
 		stdinR.Close()
+		close(stopped)
 		if err != nil {
 			runErrCh <- fmt.Errorf("compute: %w", err)
 			return

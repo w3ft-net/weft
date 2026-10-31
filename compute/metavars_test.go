@@ -10,25 +10,17 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-// A jq stage's meta-variables ride in an envelope around the row's
-// payload (one jq process handles the whole stream, so there's no
-// per-row side channel), and JqPerInput takes it off, binding them.
 // allMeta is a stage that may read any meta-variable.
 var (
-	allMeta     = planner.MetaRead{All: true}
-	allEnvelope = NewJqEnvelope(allMeta)
-	allBinder   = newAwkBinder(allMeta)
+	allMeta   = planner.MetaRead{All: true}
+	allJq     = NewJqBinder(allMeta)
+	allBinder = newAwkBinder(allMeta)
 )
 
-func TestJqPerInput_UnwrapsPayloadAndBindsEveryAlias(t *testing.T) {
-	in, err := jq.ParseValue(allEnvelope.Wrap(`{"pct":42}`, map[string]string{"instance": "web-1", "duration_ns": "1500"}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, vars := JqPerInput(in)
-	if got.ToJSON() != `{"pct":42}` {
-		t.Errorf("payload = %s, want it as it was", got.ToJSON())
-	}
+// A jq stage's meta-variables are bound for each input as jq variables, typed:
+// the numeric columns as numbers, a column the row lacks as null.
+func TestJqBinder_BindsEveryAliasWithItsType(t *testing.T) {
+	vars := allJq.Vars(map[string]string{"instance": "web-1", "duration_ns": "1500"})
 	// "host" and "instance" alias the instance column.
 	if vars["host"].Str != "web-1" || vars["instance"].Str != "web-1" {
 		t.Errorf("host/instance = %v/%v, want web-1", vars["host"], vars["instance"])
@@ -41,35 +33,18 @@ func TestJqPerInput_UnwrapsPayloadAndBindsEveryAlias(t *testing.T) {
 	}
 }
 
-// The payload reaches the program untouched: a key named like a
-// meta-variable is just a key, and `keys` shows no spliced extras.
-func TestJqPerInput_PayloadKeysAreNotMetaVariables(t *testing.T) {
-	in, _ := jq.ParseValue(allEnvelope.Wrap(`{"level":"payload","keys":1}`, map[string]string{"level": "ERROR"}))
-	got, vars := JqPerInput(in)
-	if got.ObjGet("level").Str != "payload" || vars["level"].Str != "ERROR" || len(got.ObjMap()) != 2 {
-		t.Errorf("payload %s, $level %v", got.ToJSON(), vars["level"])
+// The payload reaches the program untouched: a key named like a meta-variable
+// is just a key, and `keys` shows no extras.
+func TestJob_JqPayloadKeysAreNotMetaVariables(t *testing.T) {
+	job := (&Engine{}).NewJob([]string{`jq -c '[.level, $level, keys]'`}, 1, "ts", 0, false, false)
+	job.SendRow(&pb.ResultRow{TsUnixNs: 1, Raw: `{"level":"payload","keys":1}`, MetaVars: map[string]string{"level": "ERROR"}}, "a")
+	job.SendSentinel("a")
+	out, err := job.Result()
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-// Input a later jq stage reads, which WrapJqInput didn't make, passes
-// through with nothing bound.
-func TestJqPerInput_OtherInputPassesThrough(t *testing.T) {
-	for _, raw := range []string{`{"a":1}`, `[1]`, `"s"`, `null`, `{"__weft_vars__":1}`} {
-		in, _ := jq.ParseValue(raw)
-		got, vars := JqPerInput(in)
-		if got.ToJSON() != in.ToJSON() || vars != nil {
-			t.Errorf("JqPerInput(%s) = %s, %v", raw, got.ToJSON(), vars)
-		}
-	}
-}
-
-// A row with nothing for jq to read stays nothing, so the stream
-// doesn't gain a value (or an error) for it.
-func TestWrapJqInput_EmptyPayloadStaysEmpty(t *testing.T) {
-	for _, p := range []string{"", "  "} {
-		if got := allEnvelope.Wrap(p, map[string]string{"level": "x"}); got != p {
-			t.Errorf("allEnvelope.Wrap(%q) = %q", p, got)
-		}
+	if got := strings.TrimSpace(out); got != `["payload","ERROR",["keys","level"]]` {
+		t.Errorf("got %s", got)
 	}
 }
 
@@ -119,8 +94,7 @@ func TestRowMetaVars_EventColumns(t *testing.T) {
 	if vars["EVENT_ID"] != many["event_id"] || vars["LINE_NO"] != "3" {
 		t.Errorf("awk vars: %v", vars)
 	}
-	in, _ := jq.ParseValue(allEnvelope.Wrap(`{"a":1}`, many))
-	if _, jv := JqPerInput(in); jv["line_no"].Num != 3 || jv["line_no"].Type != jq.TypeNumber || !strings.HasPrefix(jv["event_id"].Str, "01a13b66") {
+	if jv := allJq.Vars(many); jv["line_no"].Num != 3 || jv["line_no"].Type != jq.TypeNumber || !strings.HasPrefix(jv["event_id"].Str, "01a13b66") {
 		t.Errorf("jq vars: %v", jv)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/graybeardcorp/warp/pkg/jq"
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -67,11 +68,11 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 		}
 		return rowStages.Keep(row.Raw, string(row.PayloadJson), meta)
 	}
-	// The envelope carries the meta-variables a first jq stage reads.
-	var envelope *compute.JqEnvelope
+	// The meta-variables a first jq stage reads are bound for its input.
+	var jqVars *compute.JqBinder
 	if len(plan.LiveStages) > 0 && strings.HasPrefix(plan.LiveStages[0], "jq ") {
 		if read := planner.StageMetaRead(plan.LiveStages[0]); read.Reads() {
-			envelope = compute.NewJqEnvelope(read)
+			jqVars = compute.NewJqBinder(read)
 		}
 	}
 	input := func(row *pb.LogRow) string {
@@ -79,9 +80,6 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 			payload := string(row.PayloadJson)
 			if payload == "" {
 				payload = "{}"
-			}
-			if envelope != nil {
-				return envelope.Wrap(payload, liveMetaVars(row))
 			}
 			return payload
 		}
@@ -115,7 +113,11 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 		if !admit(row) {
 			return nil
 		}
-		return runStages(input(row), ast)
+		var vars map[string]jq.Value
+		if jqVars != nil {
+			vars = jqVars.Vars(liveMetaVars(row))
+		}
+		return runStages(input(row), ast, vars)
 	}
 }
 
@@ -154,10 +156,12 @@ func liveMetaVars(row *pb.LogRow) map[string]string {
 // keeps awk/sed/jq state isolated from prior rows — future work can
 // trade that for a long-lived per-subscription interpreter if the
 // per-row cost bites.
-func runStages(raw string, ast *bash.Script) []string {
+func runStages(raw string, ast *bash.Script, jqVars map[string]jq.Value) []string {
 	interp := bash.NewInterpreter()
 	interp.JqCompact = true // as in compute; see compute/engine.go
-	interp.JqPerInput = compute.JqPerInput
+	if jqVars != nil {
+		interp.JqInputVars = func() map[string]jq.Value { return jqVars }
+	}
 	bash.RegisterToolCommands(interp)
 	interp.SetStdin(strings.NewReader(raw + "\n"))
 	var out bytes.Buffer

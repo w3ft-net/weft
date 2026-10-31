@@ -1,7 +1,6 @@
 package compute
 
 import (
-	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -12,19 +11,11 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-// The envelope WrapJqInput puts around a payload, and JqPerInput takes off.
-const (
-	jqVarsKey  = "__weft_vars__"
-	jqInputKey = "__weft_input__"
-)
-
-// JqEnvelope carries a row's meta-variables next to its payload for a jq
-// stage that reads them (see planner.JQMetaVars), and only the ones it reads.
-// One jq process handles the whole row stream, so there's no per-row side
-// channel; the row's own input is the only thing that varies. JqPerInput
-// unwraps it and binds the variables, so the payload reaches the program as it
-// is.
-type JqEnvelope struct {
+// JqBinder binds a row's meta-variables for a jq stage that reads them (see
+// planner.JQMetaVars), and only the ones it reads. The stage gets each row's
+// variables from outside the stream (jq.Options.InputVars), so the payload
+// reaches the program as it is.
+type JqBinder struct {
 	vars []jqVar
 }
 
@@ -34,9 +25,9 @@ type jqVar struct {
 	numeric   bool
 }
 
-// NewJqEnvelope is the envelope for a stage that reads these meta-variables.
-func NewJqEnvelope(read planner.MetaRead) *JqEnvelope {
-	e := &JqEnvelope{}
+// NewJqBinder is the binder for a stage that reads these meta-variables.
+func NewJqBinder(read planner.MetaRead) *JqBinder {
+	e := &JqBinder{}
 	for name, col := range planner.JQMetaVars {
 		if read.Wants(col) {
 			e.vars = append(e.vars, jqVar{name, col, planner.JQNumericMetaColumn(col)})
@@ -45,61 +36,23 @@ func NewJqEnvelope(read planner.MetaRead) *JqEnvelope {
 	return e
 }
 
-// Wrap is the payload with the row's meta-variables beside it. A payload that
-// isn't JSON makes the envelope invalid, which jq reports as it would the bare
-// payload; an empty one stays empty.
-func (e *JqEnvelope) Wrap(payload string, meta map[string]string) string {
-	if strings.TrimSpace(payload) == "" {
-		return payload // no value for jq to read, as without the envelope
-	}
-	vars, _ := json.Marshal(e.values(meta))
-	return `{"` + jqVarsKey + `":` + string(vars) + `,"` + jqInputKey + `":` + payload + `}`
-}
-
-// JqPerInput is jq.Options.PerInput (bash.StreamingOptions.JqPerInput)
-// for inputs WrapJqInput made. Any other input, such as a later jq
-// stage's, passes through unbound.
-func JqPerInput(in jq.Value) (jq.Value, map[string]jq.Value) {
-	if in.Type != jq.TypeObject || len(in.Obj) != 2 || in.Obj[0].Key != jqVarsKey {
-		return in, nil
-	}
-	return in.ObjGet(jqInputKey), in.ObjGet(jqVarsKey).ObjMap()
-}
-
 // Vars is a row's meta-variables as jq reads them, for a caller that evaluates
 // a jq program directly.
-func (e *JqEnvelope) Vars(meta map[string]string) map[string]jq.Value {
+func (e *JqBinder) Vars(meta map[string]string) map[string]jq.Value {
 	vars := make(map[string]jq.Value, len(e.vars))
-	for name, v := range e.values(meta) {
-		switch x := v.(type) {
-		case string:
-			vars[name] = jq.StrValue(x)
-		case float64:
-			vars[name] = jq.NumValue(x)
-		default:
-			vars[name] = jq.NullValue()
-		}
-	}
-	return vars
-}
-
-// values maps each meta-variable the stage reads to its value: a string, a
-// float64 for the numeric columns, or nil when the row has none.
-func (e *JqEnvelope) values(meta map[string]string) map[string]any {
-	vars := make(map[string]any, len(e.vars))
 	for _, v := range e.vars {
 		text, ok := meta[v.col]
 		switch {
 		case !ok:
-			vars[v.name] = nil
+			vars[v.name] = jq.NullValue()
 		case v.numeric:
 			if n, err := strconv.ParseFloat(text, 64); err == nil {
-				vars[v.name] = n
+				vars[v.name] = jq.NumValue(n)
 			} else {
-				vars[v.name] = nil
+				vars[v.name] = jq.NullValue()
 			}
 		default:
-			vars[v.name] = text
+			vars[v.name] = jq.StrValue(text)
 		}
 	}
 	return vars

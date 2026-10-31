@@ -26,7 +26,7 @@ type RowStages struct {
 type rowStage struct {
 	jq     jq.Expr          // a select chain, over the payload
 	meta   planner.MetaRead // the meta-variables the stage names
-	env    *JqEnvelope      // for a jq stage that reads some
+	jqVars *JqBinder        // for a jq stage that reads some
 	script *bash.Script     // a filter over the raw line
 	interp *sync.Pool       // of *rowInterp, for script: built once, reused per row
 	head   int              // head -n N: keep the first N (when > -1)
@@ -66,7 +66,7 @@ func parseRowStage(src string) (rowStage, error) {
 			if !strings.HasPrefix(a, "-") {
 				st.jq, err = jq.Parse(a)
 				st.meta = planner.StageMetaRead(src)
-				st.env = NewJqEnvelope(st.meta)
+				st.jqVars = NewJqBinder(st.meta)
 				return st, err
 			}
 		}
@@ -163,7 +163,7 @@ func (st *rowStage) keep(raw, payload string, meta map[string]string) bool {
 		}
 		var opts jq.Options
 		if st.meta.Reads() {
-			opts.Vars = st.env.Vars(meta)
+			opts.Vars = st.jqVars.Vars(meta)
 		}
 		out, err := jq.EvalAllWithOptions(st.jq, v, opts)
 		return err == nil && len(out) > 0
