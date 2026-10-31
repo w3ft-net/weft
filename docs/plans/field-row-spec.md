@@ -104,6 +104,66 @@ integer-range facts that were left out on purpose, the aggregate node, and a wir
 per-shard group stages. Decide whether to build it before Deploy 1 by counting which
 pipelines still reach `projectFields`.
 
-## Open points
+## Open points for Deploy 1
 
-(To be added.)
+### 1. How the shard maps `field_sql` onto `ResultRow.fields`
+
+`shard.ScanResultRows` (`shard/scan.go`) is positional and string-typed: column 0 is `raw`
+(a non-null `string`), column 1 is `ts`, and every further column is scanned into a
+`sql.NullString` and routed by name: `event_id`, `line_no`, anything else into
+`ResultRow.MetaVars`. A DuckDB `LIST` column would not scan into a `NullString`, so the
+fields cannot ride as one array column without changing the scan.
+
+Proposal: keep the scan string-based and add two name conventions to its switch, so the
+SQL stays plain and legible:
+
+    SELECT '' AS raw, ts, event_id, line_no,
+           list_extract(fields, 1) AS field_1,
+           list_extract(fields, 3) AS field_3,
+           len(fields)             AS nf
+    FROM logs WHERE ...
+
+- `field_<N>` appends to `ResultRow.fields` in column order. The request's `field_spec`
+  says which positions those are, so the row carries values only. A NULL (the row has
+  fewer fields) is an empty entry.
+- `nf` sets `ResultRow.field_count`, and is always selected when a spec is present. Its
+  presence is what tells compute "this row is in field form", so a row with no fields
+  (`nf = 0`) is distinguishable from a row in raw form. That needs presence on the wire:
+  `optional int32 field_count`.
+- `raw` is `''` in field form, not NULL, because column 0 scans into a plain `string`.
+- Ordering and the merge key are untouched: `ts`, `event_id` and `line_no` are the same
+  columns as today.
+
+New proto fields: `ResultRow.fields` (repeated string), `ResultRow.field_count`
+(optional int32), `ExecuteQueryRequest.field_spec` and `.field_sql`, and the matching
+fields on the shard Query request. All are additions, so older receivers skip them.
+
+### 2. Multi-line rows
+
+A row's `raw` may hold several lines (a stack trace), and awk reads each line as its own
+record. The `fields` column is the split of the whole row, newlines included, so for a
+multi-line row `fields[2]` is not the second word of any one line. Today's synthetic
+record gets this right only by unnesting the row into lines first
+(`unnest(string_split(raw, chr(10)))`) and tokenizing each with a regexp.
+
+Proposal: do not unnest, and do not tokenize. A row that contains a newline is sent in
+**raw form** (whole, exactly as an unprojected query sends it), and compute's stage reads
+it the way it always has. Only single-line rows use field form:
+
+    CASE WHEN contains(raw, chr(10)) THEN raw ELSE '' END AS raw,
+    CASE WHEN contains(raw, chr(10)) THEN NULL ELSE len(fields) END AS nf,
+    CASE WHEN contains(raw, chr(10)) THEN NULL ELSE list_extract(fields, 1) END AS field_1,
+    ...
+
+A multi-line row has no `nf`, so compute treats it as raw. Compute handles both forms
+per row, which already has to be true for old shards. The unnest, which existed only so a
+per-line view could be tokenized, disappears.
+
+Cost to measure: `contains(raw, chr(10))` per row, against what the regexp cost.
+`TestDifferentialFieldProjectionLines` already covers multi-line rows for the old form;
+the same corpus must pass for the new one, with rows holding several lines, a blank line,
+a trailing newline and a lone `\r`.
+
+Not changed by this plan: the exact `$N` lowering reads `fields` for the whole row, as
+every exact `$N` filter and print does. Whether that is right for a multi-line row is a
+separate question and gets its own test.
