@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -58,6 +59,33 @@ func (s *Server) maybeHandleExplain(r *http.Request, session *auth.Session, line
 	return true, a.Render(true), nil
 }
 
+// deadlineGrace is how long endedByDeadline waits for the deadline to pass.
+const deadlineGrace = 100 * time.Millisecond
+
+// endedByDeadline is whether err, which ended a stream, was the deadline. The
+// coordinator enforces the deadline it was sent as well as we do, and the two
+// timers race for it, so its side can end the stream a moment before our context
+// has expired, as a cancellation or an expired deadline. Anything else that
+// ended the stream (a refusal, an unavailable coordinator) is not the deadline.
+// For those two codes the deadline is the usual cause, so it is waited for, for
+// at most deadlineGrace: if it has not passed by then, this was a cancellation
+// for some other reason, and it keeps its own message.
+func endedByDeadline(ctx context.Context, err error) bool {
+	switch status.Code(err) {
+	case codes.DeadlineExceeded, codes.Canceled:
+	default:
+		return false
+	}
+	grace := time.NewTimer(deadlineGrace)
+	defer grace.Stop()
+	select {
+	case <-ctx.Done():
+		return true
+	case <-grace.C:
+		return false
+	}
+}
+
 // countRetrieved runs a pipeline that prints one number, through the
 // coordinator as the caller would, within explainCountBudget. The error's
 // text is for the person reading explain: the coordinator's own message,
@@ -86,7 +114,7 @@ func (s *Server) countRetrieved(r *http.Request, pipeline string, dirStack []str
 		err = nil
 	}
 	switch {
-	case ctx.Err() != nil:
+	case ctx.Err() != nil, err != nil && endedByDeadline(ctx, err):
 		return 0, fmt.Errorf("took longer than %s", explainCountBudget)
 	case err != nil:
 		msg := err.Error()

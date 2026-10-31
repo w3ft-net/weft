@@ -146,28 +146,50 @@ func TestShellExec_ExplainOfAFullyOptimizedPipelineRunsNothing(t *testing.T) {
 func TestShellExec_ExplainSurvivesACountThatFails(t *testing.T) {
 	line := `explain cat /log/x/y/main.log | grep ERROR | awk '{ printf "%s\n", $0 }'`
 	for _, tt := range []struct {
-		name  string
-		reply func(*pb.CoordinatorExecuteRequest) ([]string, error)
-		want  string
+		name   string
+		reply  func(*pb.CoordinatorExecuteRequest) ([]string, error)
+		want   string
+		budget time.Duration // default 50ms
 	}{
 		{"an error", func(*pb.CoordinatorExecuteRequest) ([]string, error) {
 			return nil, status.Error(codes.PermissionDenied, "no access to x/y")
-		}, "line count unavailable: no access to x/y"},
+		}, "line count unavailable: no access to x/y", 0},
 		{"not a number", func(*pb.CoordinatorExecuteRequest) ([]string, error) { return []string{"many"}, nil },
-			"line count unavailable: no count came back"},
+			"line count unavailable: no count came back", 0},
 		{"more than a line", func(*pb.CoordinatorExecuteRequest) ([]string, error) { return []string{"1", "2"}, nil },
-			"line count unavailable: no count came back"},
+			"line count unavailable: no count came back", 0},
 		{"too slow", func(*pb.CoordinatorExecuteRequest) ([]string, error) {
 			time.Sleep(300 * time.Millisecond)
 			return []string{"1"}, nil
-		}, "line count unavailable: took longer than 50ms"},
+		}, "line count unavailable: took longer than 50ms", 0},
+		// The coordinator enforces the deadline it was sent, and its timer and ours
+		// race for it: when its wins, the stream ends before our context has expired,
+		// as a cancellation or an expired deadline. Either way the count took too long.
+		{"cancelled by the coordinator's own deadline", func(*pb.CoordinatorExecuteRequest) ([]string, error) {
+			return nil, status.Error(codes.Canceled, "stream terminated by RST_STREAM with error code: CANCEL")
+		}, "line count unavailable: took longer than 50ms", 0},
+		{"deadline exceeded by the coordinator's clock", func(*pb.CoordinatorExecuteRequest) ([]string, error) {
+			return nil, status.Error(codes.DeadlineExceeded, "context deadline exceeded")
+		}, "line count unavailable: took longer than 50ms", 0},
+		// A cancellation long before the deadline is not the deadline: it keeps its own
+		// reason, and is reported at once, not after waiting out the budget.
+		{"cancelled for another reason", func(*pb.CoordinatorExecuteRequest) ([]string, error) {
+			return nil, status.Error(codes.Canceled, "the coordinator is shutting down")
+		}, "line count unavailable: the coordinator is shutting down", 5 * time.Second},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			defer func(old time.Duration) { explainCountBudget = old }(explainCountBudget)
 			explainCountBudget = 50 * time.Millisecond
+			if tt.budget != 0 {
+				explainCountBudget = tt.budget
+			}
 			f := newShellExecFixture(t, "explainfail")
 			f.fake.reply = tt.reply
+			began := time.Now()
 			stream, _ := f.execStream(map[string]any{"pipeline": line})
+			if tt.budget >= time.Second && time.Since(began) > time.Second {
+				t.Errorf("a cancellation well before the deadline waited %s for it", time.Since(began))
+			}
 			for _, w := range []string{tt.want, "post-retrieval", "Barrier: stage 2"} {
 				if !strings.Contains(stream, w) {
 					t.Errorf("stream lacks %q:\n%s", w, stream)
