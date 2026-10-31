@@ -114,14 +114,12 @@ func TestProjectFields_Plan(t *testing.T) {
 	}
 }
 
-// A flagged awk stage is not cut down to its fields, and explain says why in
-// terms of the flag: -F changes how a line splits, so its fields can't be
-// picked by position; any other flag just isn't analyzed.
+// A flagged awk stage is not cut down to its fields, and explain names the flag.
 func TestExplain_FieldProjectionNamesTheFlagThatStopsIt(t *testing.T) {
 	for _, c := range []struct{ prog, want string }{
-		{`awk -F, '{ s += $2 } END { print s }'`, "skipped Opaque[1: awk]: -F changes how it splits a line, so the shard can't pick its fields by position"},
-		{`awk -F ',' '{ s += $2 } END { print s }'`, "skipped Opaque[1: awk]: -F changes how it splits a line, so the shard can't pick its fields by position"},
-		{`awk -v k=2 '{ s += $2 * k } END { print s }'`, "skipped Opaque[1: awk]: its flag -v isn't analyzed, so the shard sends whole lines"},
+		{`awk -F, '{ s += $2 } END { print s }'`, "skipped Opaque[1: awk]: -F cannot be optimized"},
+		{`awk -F ',' '{ s += $2 } END { print s }'`, "skipped Opaque[1: awk]: -F cannot be optimized"},
+		{`awk -v k=2 '{ s += $2 * k } END { print s }'`, "skipped Opaque[1: awk]: -v cannot be optimized"},
 	} {
 		out := Explain("cat /log/a/b/main.log | " + c.prog)
 		var line string

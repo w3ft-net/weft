@@ -173,9 +173,9 @@ func awkRowStage(prog *awk.Program, pd *awkPushdown, why reason, typed bool) row
 // the shard stores are not its fields; any other flag just isn't analyzed.
 func awkFlagFieldsWhy(flag string) string {
 	if strings.HasPrefix(flag, "-F") {
-		return "-F changes how it splits a line, so the shard can't pick its fields by position"
+		flag = "-F"
 	}
-	return "its flag " + flag + " isn't analyzed, so the shard sends whole lines"
+	return flag + " cannot be optimized"
 }
 
 // awkProgramArg finds the program among awk's arguments, past -F, -v
