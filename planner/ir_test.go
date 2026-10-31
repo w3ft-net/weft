@@ -38,7 +38,7 @@ func lowerText(t *testing.T, stage string) *loweredStage {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return lowerStage(parseStage(script.Commands[0].First.Commands[0].(*bash.SimpleCommand)), 1)
+	return lowerStage(parseStage(script.Commands[0].First.Commands[0].(*bash.SimpleCommand)), 1, false)
 }
 
 // TestFrontends pins what each frontend lowers a stage to, and the

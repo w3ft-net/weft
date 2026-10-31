@@ -1165,23 +1165,30 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	if plan.TraceStats != nil {
 		return c.executeTraceList(ctx, plan, argStrs, descs, tr, tier)
 	}
-	if n := c.applyTypedVariant(plan, argStrs, descs); n > 0 {
+	// The plan that runs: the typed plan's exact form when every shard has
+	// its facts, else the base plan, with the typed SQL on the shards that do.
+	run := plan
+	if exact := c.exactPlan(plan, descs); exact != nil {
+		run = exact
+		directSQL, argStrs = exact.DirectShardSQL, queryArgStrings(ctx, exact.Args)
+		logQuery(ctx, "query: all %d shards have the facts (%s): exact plan, compute=%v", len(descs), strings.Join(plan.Typed.Requires, ","), exact.ComputeStages)
+	} else if n := c.applyTypedVariant(plan, argStrs, descs); n > 0 {
 		logQuery(ctx, "query: %d of %d shards run the typed variant (%s)", n, len(descs), strings.Join(plan.Typed.Requires, ","))
 	}
 	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:               directSQL,
 		Args:              argStrs,
 		Shards:            descs,
-		Stages:            plan.ComputeStages,
-		RowStages:         plan.RowStages,
-		StagesReadPayload: plan.StagesReadPayload,
-		MergeKey:          plan.ShardOrderBy,
-		Aggregate:         plan.Aggregate,
-		Group:             compute.GroupToProto(plan.Group),
-		Limit:             int32(plan.Limit),
+		Stages:            run.ComputeStages,
+		RowStages:         run.RowStages,
+		StagesReadPayload: run.StagesReadPayload,
+		MergeKey:          run.ShardOrderBy,
+		Aggregate:         run.Aggregate,
+		Group:             compute.GroupToProto(run.Group),
+		Limit:             int32(run.Limit),
 		// tail-mode: shard SQL wraps to ASC; compute must retain
 		// last-N instead of stopping after first-N emitted.
-		KeepLast: plan.TailMode,
+		KeepLast: run.TailMode,
 		// Summary line + colored [namespace/service] badges only for a
 		// bare, interactively-typed `trace <id>`: never for a saved
 		// cron/watch/dashboard fire (alertCtx != nil) reached through this
@@ -1194,6 +1201,23 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 		return nil, err
 	}
 	return &ExecuteResult{Stream: stream}, nil
+}
+
+// exactPlan is the typed plan's exact form if every shard the query reads has
+// said every locator it needs is a finite decimal, else nil. The exact plan
+// has its own stages, which only fit shards whose rows come back already
+// filtered the same way, so a single shard without the facts rules it out.
+func (c *Coordinator) exactPlan(plan *planner.QueryPlan, descs []*pb.ShardDescriptor) *planner.QueryPlan {
+	t := plan.Typed
+	if t == nil || t.Exact == nil || len(descs) == 0 {
+		return nil
+	}
+	for _, d := range descs {
+		if !c.Provisioner.ShardFieldsTyped(d.ShardId, t.CustomerID, t.Namespace, t.Service, t.Kind, t.Env, t.Requires) {
+			return nil
+		}
+	}
+	return t.Exact
 }
 
 // applyTypedVariant gives each shard whose field facts allow it the plan's

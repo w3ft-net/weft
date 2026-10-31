@@ -470,7 +470,7 @@ type harness struct {
 	shards []*shard.DuckDBShard
 }
 
-func newHarness(t *testing.T, rows []*pb.LogRow, nShards int) *harness {
+func newHarness(t testing.TB, rows []*pb.LogRow, nShards int) *harness {
 	t.Helper()
 	h := &harness{engine: &compute.Engine{}}
 	for i := 0; i < nShards; i++ {

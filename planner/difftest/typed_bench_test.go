@@ -79,3 +79,83 @@ func BenchmarkTypedAwkFilter(b *testing.B) {
 		}
 	}
 }
+
+func requestRows(n int) []*pb.LogRow {
+	rng := rand.New(rand.NewSource(1))
+	base := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	rows := make([]*pb.LogRow, n)
+	for i := range rows {
+		ms := int(math.Exp(rng.NormFloat64()*1.1 + 4.6))
+		rows[i] = &pb.LogRow{
+			Raw:       fmt.Sprintf("req%07d GET %d /v1/items/%d status=200 bytes=%d", i, ms, rng.Intn(5000), rng.Intn(90000)),
+			TsUnixNs:  base.Add(time.Duration(i) * time.Millisecond).UnixNano(),
+			Namespace: "typed", Service: "api", Kind: "main",
+		}
+	}
+	return rows
+}
+
+// BenchmarkAwkFilterPrint is `awk '$3 > T {print $1, $3}'`: what the shard
+// spends building the record awk reads (regexp over raw, per position) against
+// the same record built from the stored fields column, and the whole query
+// through compute with and without the awk stage.
+//
+//	go test -tags test -run xxx -bench AwkFilterPrint -benchtime 5x ./planner/difftest
+func BenchmarkAwkFilterPrint(b *testing.B) {
+	h := newHarness(b, requestRows(benchRows), 1)
+	sh := h.shards[0]
+	for _, thr := range []string{"1000", "100"} {
+		pipeline := fmt.Sprintf("cat /log/typed/api/main.log | awk '$3 > %s {print $1, $3}'", thr)
+		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		if err != nil || plan.Typed == nil {
+			b.Fatalf("%s: %v, typed %+v", pipeline, err, plan.Typed)
+		}
+		args := toAny(argStrings(plan.Args))
+		// The record built from the fields column, with the exact filter: the
+		// shard work a fully lowered typed plan would do.
+		fieldsSQL := `SELECT list_extract(fields, 1) || ' ' || list_extract(fields, 3) AS raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs ` +
+			`WHERE namespace = ? AND service = ? AND kind = ? ` +
+			`AND TRY_CAST(list_extract(fields, 3) AS DOUBLE) > ` + thr + ` ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST`
+
+		shardQuery := func(sql string) func(*testing.B) {
+			return func(b *testing.B) {
+				var n int
+				for i := 0; i < b.N; i++ {
+					got, err := sh.Query(context.Background(), sql, args...)
+					if err != nil {
+						b.Fatal(err)
+					}
+					n = len(got)
+				}
+				b.ReportMetric(float64(n), "rows_shipped")
+			}
+		}
+		b.Run("gt"+thr+"/shard/regexp-base", shardQuery(plan.DirectShardSQL))
+		b.Run("gt"+thr+"/shard/regexp-typed", shardQuery(plan.Typed.DirectShardSQL))
+		b.Run("gt"+thr+"/shard/exact", shardQuery(plan.Typed.Exact.DirectShardSQL))
+		b.Run("gt"+thr+"/shard/fields", func(b *testing.B) {
+			var n int
+			for i := 0; i < b.N; i++ {
+				got, err := sh.Query(context.Background(), fieldsSQL, args...)
+				if err != nil {
+					b.Fatal(err)
+				}
+				n = len(got)
+			}
+			b.ReportMetric(float64(n), "rows_shipped")
+		})
+
+		query := func(run func(*planner.QueryPlan) (string, error)) func(*testing.B) {
+			return func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					if _, err := run(plan); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		}
+		b.Run("gt"+thr+"/query/base", query(h.runPlan))
+		b.Run("gt"+thr+"/query/typed", query(h.runTyped))
+		b.Run("gt"+thr+"/query/exact", query(h.runExact))
+	}
+}

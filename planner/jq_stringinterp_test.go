@@ -44,7 +44,7 @@ func TestJqFrontend_StringInterp(t *testing.T) {
 			} else {
 				t.Logf("parsed as %T", expr)
 			}
-			ls := lowerStage(stageInfo{cmd: "jq", args: []string{tt.expression}}, 1)
+			ls := lowerStage(stageInfo{cmd: "jq", args: []string{tt.expression}}, 1, false)
 			if len(ls.nodes) != 2 {
 				t.Fatalf("want a prefilter and an opaque stage, got %#v", ls.nodes)
 			}

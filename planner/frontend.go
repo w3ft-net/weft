@@ -9,12 +9,12 @@ import (
 // lowerStage runs a stage's frontend: it lowers the stage, from its own
 // syntax tree, into IR nodes. Unknown commands, flags and constructs
 // become an opaqueNode with the reason.
-func lowerStage(s stageInfo, index int) *loweredStage {
+func lowerStage(s stageInfo, index int, typed bool) *loweredStage {
 	ls := &loweredStage{stageInfo: s, index: index}
 	a := at(index)
 	switch s.cmd {
 	case "awk":
-		ls.nodes = lowerAwk(ls, a)
+		ls.nodes = lowerAwk(ls, a, typed)
 	case "jq":
 		ls.nodes = lowerJq(ls, a)
 	case "grep":
@@ -94,7 +94,7 @@ func lowerStage(s stageInfo, index int) *loweredStage {
 
 // lowerAwk is awk's frontend. Flags (-F, -v) change how awk splits and
 // what its variables hold, so only a bare program lowers.
-func lowerAwk(ls *loweredStage, a at) []node {
+func lowerAwk(ls *loweredStage, a at, typed bool) []node {
 	src, ok := awkProgramArg(ls.args)
 	if !ok {
 		// -f: the program isn't on the command line, so assume it reads
@@ -116,11 +116,11 @@ func lowerAwk(ls *loweredStage, a at) []node {
 	}
 	ls.rowwise = awkIsRowFilter(prog)
 
-	pd, why := tryAwkPushdown(prog)
+	pd, why := tryAwkPushdown(prog, typed)
 	if pd != nil && (pd.limit > 0 || pd.offset > 0) {
 		return []node{&limitNode{at: a, n: pd.limit, offset: pd.offset}}
 	}
-	nodes := awkRowStage(prog, pd, why).nodes(a)
+	nodes := awkRowStage(prog, pd, why, typed).nodes(a)
 	if key, ok := awkTally(prog); ok && len(nodes) == 1 {
 		if o, ok := nodes[0].(*opaqueNode); ok {
 			return []node{&tallyNode{at: a, key: key, why: o.why}}
@@ -131,7 +131,7 @@ func lowerAwk(ls *loweredStage, a at) []node {
 
 // awkRowStage says what an awk program does to a row in the terms every
 // row stage shares: pd is tryAwkPushdown's predicate and why its reason.
-func awkRowStage(prog *awk.Program, pd *awkPushdown, why reason) rowStage {
+func awkRowStage(prog *awk.Program, pd *awkPushdown, why reason, typed bool) rowStage {
 	if pd == nil {
 		if expr, ok := awkProjection(prog); ok {
 			return rowStage{proj: expr}
@@ -151,7 +151,7 @@ func awkRowStage(prog *awk.Program, pd *awkPushdown, why reason) rowStage {
 	}
 	// A pattern SQL evaluates exactly, over an action it can print.
 	if len(prog.Rules) == 1 {
-		if pat := extractAwkPattern(prog.Rules[0].Pattern); pat != nil && pat.exact {
+		if pat := extractAwkPattern(prog.Rules[0].Pattern, typed); pat != nil && pat.exact {
 			if expr, ok := awkActionProjection(prog.Rules[0].Action); ok {
 				rs.predExact, rs.proj = true, expr
 				return rs

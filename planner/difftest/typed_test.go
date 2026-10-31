@@ -3,6 +3,7 @@ package difftest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,17 +12,22 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-// awkNumbers are spellings awk compares as numbers: every one is what a shard
-// would call typed. (1e999 is not one: awk's number parse rejects a value out
-// of range, so a shard would mark it dirty.) Several sort above "500" as text, which is what makes the
-// base prefilter wide, and the odd forms (hex floats, inf, nan, a leading +,
-// a trailing dot, an integer past 2^53) are where DuckDB and Go could disagree.
+// awkNumbers are the spellings a typed field may hold: finite decimals, which
+// awk compares as numbers and DuckDB's cast reads the same way. Several sort
+// above "500" as text, which is what makes the base prefilter wide, and the odd
+// forms (a leading +, a trailing dot, an exponent, an integer past 2^53) are
+// where the two could disagree. inf, nan and hex floats are the spellings they
+// do disagree on, so a shard holding one never types the field; see oddNumbers.
+// (1e999 is not a number to awk either: its parse rejects a value out of
+// range, so a shard would mark it dirty.)
 var awkNumbers = []string{
-	"0", "-0", "7", "12", "49", "60", "99", "500", "500.0", "5e2", "+500", "501", "1000", "5000",
-	"-3", "-500", ".5", "5.", "1e3", "1E2", "007", "0x1p3", "0X1P-2",
-	"inf", "-inf", "Inf", "+Inf", "infinity", "NaN", "nan", "-nan",
-	"9007199254740993", "1e308", "4.9e-324", "1e-999",
+	"0", "-0", "7", "12", "49", "60", "99", "100", "100.0", "1e2", "+100", "101", "500", "500.0", "5e2", "+500",
+	"501", "1000", "5000", "-3", "-100", "-500", ".5", "5.", "1e3", "1E2", "007", "9007199254740993", "1e308",
+	"4.9e-324", "1e-999",
 }
+
+// oddNumbers are numbers to awk that a typed field never holds.
+var oddNumbers = []string{"0x1p3", "0X1P-2", "inf", "-inf", "Inf", "+Inf", "infinity", "NaN", "nan"}
 
 func awkRows() []*pb.LogRow {
 	var rows []*pb.LogRow
@@ -54,6 +60,12 @@ func (h *harness) runTyped(plan *planner.QueryPlan) (string, error) {
 	})
 }
 
+// runExact dispatches the plan the coordinator uses when every shard has the
+// facts: the typed plan's own SQL and stages.
+func (h *harness) runExact(plan *planner.QueryPlan) (string, error) {
+	return h.runPlan(plan.Typed.Exact)
+}
+
 // rowsShipped is how many rows the SQL returns across the harness's shards.
 func (h *harness) rowsShipped(t *testing.T, sql string, args []any) int {
 	t.Helper()
@@ -79,7 +91,7 @@ func checkTyped(t *testing.T, h *harness, pipeline, locator string) (base, typed
 	}
 	source, stages := splitSource(t, pipeline)
 	want, wantErr := h.runReference(source, stages, readsMetaVars(stages))
-	for name, run := range map[string]func(*planner.QueryPlan) (string, error){"base": h.runPlan, "typed": h.runTyped} {
+	for name, run := range map[string]func(*planner.QueryPlan) (string, error){"base": h.runPlan, "typed": h.runTyped, "exact": h.runExact} {
 		got, gotErr := run(plan)
 		if (gotErr != nil) != (wantErr != nil) {
 			t.Fatalf("%s %s: error %v, reference error %v", pipeline, name, gotErr, wantErr)
@@ -146,7 +158,18 @@ func TestDifferentialTypedJQComparison(t *testing.T) {
 // and the typed SQL on others, in one request. The merged answer is the
 // reference's.
 func TestDifferentialTypedMixedShards(t *testing.T) {
-	h := newHarness(t, awkRows(), 2)
+	// Rows alternate between the two shards: the first holds only finite
+	// decimals (the one with the facts), the second also holds inf, nan and
+	// hex floats, which awk compares as numbers.
+	var rows []*pb.LogRow
+	typedRows, untypedRows := awkRows(), awkRows()
+	for i, r := range untypedRows {
+		r.Raw = fmt.Sprintf("odd%d %s tail", i, oddNumbers[i%len(oddNumbers)])
+	}
+	for i := range typedRows {
+		rows = append(rows, typedRows[i], untypedRows[i])
+	}
+	h := newHarness(t, rows, 2)
 	for _, cond := range []string{"$2 > 500", "$2 <= 7", "$2 == 500", "$2 != 7"} {
 		pipeline := fmt.Sprintf("cat /log/typed/api/main.log | awk '%s'", cond)
 		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
@@ -181,6 +204,62 @@ func TestDifferentialTypedMixedShards(t *testing.T) {
 		}
 		if got, want = sortedLines(got), sortedLines(want); got != want {
 			t.Errorf("%s: mixed shards differ from the reference: %s", pipeline, firstDiff(got, want))
+		}
+	}
+}
+
+func decimalRows() []*pb.LogRow {
+	var rows []*pb.LogRow
+	for i, v := range awkNumbers {
+		for rep := 0; rep < 3; rep++ {
+			rows = append(rows, &pb.LogRow{
+				Raw:       fmt.Sprintf("id%d GET %s tail", i, v),
+				TsUnixNs:  time.Date(2026, 10, 30, 12, 0, i*3+rep, 0, time.UTC).UnixNano(),
+				Namespace: "typed", Service: "api", Kind: "main",
+			})
+		}
+	}
+	return rows
+}
+
+// An awk filter that prints some of its fields, over a stream whose compared
+// field is typed, is SQL all the way: the exact plan has no compute stage and
+// its shard SQL alone returns exactly the lines awk would print.
+func TestDifferentialTypedFilterAndPrintIsAllSQL(t *testing.T) {
+	h := newHarness(t, decimalRows(), 2)
+	for _, cond := range []string{
+		"$3 > 100", "$3 >= 100", "$3 < 50", "$3 <= 7", "$3 == 100", "$3 != 100", "$3 == 0",
+		"$3 > 10 && $3 < 1000", "$3 < 10 || $3 > 1000",
+	} {
+		pipeline := fmt.Sprintf("cat /log/typed/api/main.log | awk '%s {print $1, $3}'", cond)
+		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		if err != nil || plan.Typed == nil || plan.Typed.Exact == nil {
+			t.Fatalf("%s: err %v, typed %+v", pipeline, err, plan.Typed)
+		}
+		if got := plan.Typed.Requires; len(got) != 1 || got[0] != "$3" {
+			t.Fatalf("%s: requires %v, want [$3]", pipeline, got)
+		}
+		exact := plan.Typed.Exact
+		if len(exact.ComputeStages) != 0 || len(exact.RowStages) != 0 {
+			t.Errorf("%s: the exact plan still runs compute stages %v %v", pipeline, exact.ComputeStages, exact.RowStages)
+		}
+		if strings.Contains(exact.DirectShardSQL, "regexp") {
+			t.Errorf("%s: the exact plan's SQL has a regexp: %s", pipeline, exact.DirectShardSQL)
+		}
+		source, stages := splitSource(t, pipeline)
+		want, wantErr := h.runReference(source, stages, readsMetaVars(stages))
+		if wantErr != nil {
+			t.Fatalf("%s: reference: %v", pipeline, wantErr)
+		}
+		got, err := h.runExact(plan)
+		if err != nil {
+			t.Fatalf("%s: %v", pipeline, err)
+		}
+		if exact.ShardOrderBy == "" {
+			got, want = sortedLines(got), sortedLines(want)
+		}
+		if got != want {
+			t.Errorf("%s: the exact plan differs from awk: %s", pipeline, firstDiff(got, want))
 		}
 	}
 }

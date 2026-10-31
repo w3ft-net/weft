@@ -77,3 +77,40 @@ func TestApplyTypedVariant_NoVariantNoChange(t *testing.T) {
 		t.Errorf("n=%d sql=%q for a plan with no variant", n, descs[0].Sql)
 	}
 }
+
+// A query whose every shard has the facts runs the typed plan's whole
+// exactly-planned form; one shard without them keeps the base plan.
+func TestExactPlan_OnlyWhenEveryShardHasTheFacts(t *testing.T) {
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}})
+	for _, id := range []string{"a", "b", "old"} {
+		logdb.SeedShard(c.Provisioner, &logdb.Shard{ID: id, State: logdb.StateIngesting, CreatedAt: time.Now()})
+	}
+	for _, id := range []string{"a", "b"} {
+		c.Provisioner.FoldFieldFacts(id, []*pb.FieldFactDelta{typedFact(7, "acme", "api", "main", "", "$3", 1)})
+	}
+	plan, err := planner.Plan(`cat /log/acme/api/main.log | awk '$3 > 100 {print $1, $3}'`, 7, "", time.Time{}, time.Time{})
+	if err != nil || plan.Typed == nil || plan.Typed.Exact == nil {
+		t.Fatalf("plan: %v, typed %+v", err, plan.Typed)
+	}
+	if len(plan.ComputeStages) == 0 || len(plan.Typed.Exact.ComputeStages) != 0 {
+		t.Fatalf("base stages %v, exact stages %v: the test needs the exact plan to drop the stage",
+			plan.ComputeStages, plan.Typed.Exact.ComputeStages)
+	}
+
+	if got := c.exactPlan(plan, []*pb.ShardDescriptor{{ShardId: "a"}, {ShardId: "b"}}); got != plan.Typed.Exact {
+		t.Errorf("every shard typed: got %v, want the exact plan", got)
+	}
+	if got := c.exactPlan(plan, []*pb.ShardDescriptor{{ShardId: "a"}, {ShardId: "old"}}); got != nil {
+		t.Errorf("one shard without the facts still got the exact plan")
+	}
+	if got := c.exactPlan(plan, nil); got != nil {
+		t.Errorf("no shards: got an exact plan")
+	}
+	noVariant, err := planner.Plan(`cat /log/acme/api/main.log | grep error`, 7, "", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.exactPlan(noVariant, []*pb.ShardDescriptor{{ShardId: "a"}}); got != nil {
+		t.Errorf("a plan with no typed form got an exact plan")
+	}
+}

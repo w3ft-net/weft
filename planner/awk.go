@@ -63,7 +63,7 @@ var AwkMetaVars = metaVarNames(strings.ToUpper)
 //
 // The reason says why nothing pushed, or why the stage still runs; the
 // pushdown's own why says why its predicate is only a prefilter.
-func tryAwkPushdown(prog *awk.Program) (*awkPushdown, reason) {
+func tryAwkPushdown(prog *awk.Program, typed bool) (*awkPushdown, reason) {
 	if len(prog.Functions) > 0 {
 		return nil, because(reasonAwkFunction)
 	}
@@ -96,7 +96,7 @@ func tryAwkPushdown(prog *awk.Program) (*awkPushdown, reason) {
 
 	// NR window: only as the whole program, where it's a LIMIT/OFFSET.
 	if exact {
-		if pd := extractAwkPattern(main[0].Pattern); pd != nil && !pd.nrSentinel && pd.limit > 0 {
+		if pd := extractAwkPattern(main[0].Pattern, typed); pd != nil && !pd.nrSentinel && pd.limit > 0 {
 			return pd, reason{}
 		}
 	}
@@ -118,9 +118,9 @@ func tryAwkPushdown(prog *awk.Program) (*awkPushdown, reason) {
 	// of a pattern doesn't lower.
 	var patternWhy reason
 	var preds []string
-	var typed []typedLeaf
+	var leaves []typedLeaf
 	for _, r := range main {
-		pd := extractAwkPattern(r.Pattern)
+		pd := extractAwkPattern(r.Pattern, typed)
 		if pd == nil {
 			return nil, awkPatternReason(r.Pattern)
 		}
@@ -132,18 +132,18 @@ func tryAwkPushdown(prog *awk.Program) (*awkPushdown, reason) {
 		}
 		exact = exact && pd.exact
 		preds = append(preds, pd.predicate)
-		typed = append(typed, pd.typed...)
+		leaves = append(leaves, pd.typed...)
 	}
 	if why.code == reasonNone {
 		why = patternWhy
 	}
 	if len(preds) == 1 {
-		return &awkPushdown{predicate: preds[0], exact: exact, why: patternWhy, typed: typed}, why
+		return &awkPushdown{predicate: preds[0], exact: exact, why: patternWhy, typed: leaves}, why
 	}
 	for i, p := range preds {
 		preds[i] = parenthesizeIfCompound(p)
 	}
-	return &awkPushdown{predicate: "(" + strings.Join(preds, " OR ") + ")", why: patternWhy, typed: typed}, why
+	return &awkPushdown{predicate: "(" + strings.Join(preds, " OR ") + ")", why: patternWhy, typed: leaves}, why
 }
 
 // actionLowers is whether a rule's action is something SQL computes, so a
@@ -186,10 +186,10 @@ func isAwkComputedField(n any) bool {
 }
 
 // extractAwkPattern lowers one main rule's pattern.
-func extractAwkPattern(p awk.Pattern) *awkPushdown {
+func extractAwkPattern(p awk.Pattern, typed bool) *awkPushdown {
 	switch pat := p.(type) {
 	case *awk.ExprPattern:
-		return extractAwkExpr(pat.Expr)
+		return extractAwkExpr(pat.Expr, typed)
 	case *awk.RegexPattern:
 		// Defensive: current warp parsers represent a bare-regex pattern
 		// (awk '/pat/') as an ExprPattern wrapping a RegexLit, which
@@ -288,10 +288,10 @@ func isDefaultPrintAction(block *awk.Block) bool {
 }
 
 // extractAwkExpr recursively extracts a SQL predicate from an awk expression.
-func extractAwkExpr(expr awk.Expr) *awkPushdown {
+func extractAwkExpr(expr awk.Expr, typed bool) *awkPushdown {
 	switch e := expr.(type) {
 	case *awk.BinaryExpr:
-		return extractAwkBinary(e)
+		return extractAwkBinary(e, typed)
 	case *awk.MatchExpr:
 		return extractAwkMatch(e)
 	case *awk.RegexLit:
@@ -314,14 +314,14 @@ func extractAwkRegexLit(e *awk.RegexLit) *awkPushdown {
 	}
 }
 
-func extractAwkBinary(e *awk.BinaryExpr) *awkPushdown {
+func extractAwkBinary(e *awk.BinaryExpr, typed bool) *awkPushdown {
 	switch e.Op {
 	case "&&":
-		return extractAwkLogical(e, "AND")
+		return extractAwkLogical(e, "AND", typed)
 	case "||":
-		return extractAwkLogical(e, "OR")
+		return extractAwkLogical(e, "OR", typed)
 	case "==", "!=", "<", ">", "<=", ">=":
-		return extractAwkComparison(e)
+		return extractAwkComparison(e, typed)
 	}
 	return nil
 }
@@ -330,9 +330,9 @@ func extractAwkBinary(e *awk.BinaryExpr) *awkPushdown {
 // keeps the side that does, as a prefilter: dropping a conjunct only
 // widens the match. An OR needs both sides. There's no NOT over a
 // compound for the same reason: negating a prefilter would narrow it.
-func extractAwkLogical(e *awk.BinaryExpr, sqlOp string) *awkPushdown {
-	left := extractAwkExpr(e.Left)
-	right := extractAwkExpr(e.Right)
+func extractAwkLogical(e *awk.BinaryExpr, sqlOp string, typed bool) *awkPushdown {
+	left := extractAwkExpr(e.Left, typed)
+	right := extractAwkExpr(e.Right, typed)
 	if sqlOp == "AND" && (left == nil) != (right == nil) {
 		side := left
 		if side == nil {
@@ -402,7 +402,7 @@ func combineNRBounds(a, b *awkPushdown) *awkPushdown {
 	}
 }
 
-func extractAwkComparison(e *awk.BinaryExpr) *awkPushdown {
+func extractAwkComparison(e *awk.BinaryExpr, typed bool) *awkPushdown {
 	if nr := tryNRComparison(e); nr != nil {
 		return nr
 	}
@@ -449,6 +449,11 @@ func extractAwkComparison(e *awk.BinaryExpr) *awkPushdown {
 		}
 		return &awkPushdown{predicate: fmt.Sprintf("%s %s '%s'", sql, sqlOp, escapeSQLString(text)), exact: true}
 	}
+	// A field the shard has said holds a finite decimal in every row is a
+	// number whatever the row, so the cast alone is awk's comparison.
+	if typed && c.field > 0 {
+		return &awkPushdown{predicate: typedComparison(c.sql, sqlOp, n), exact: true}
+	}
 	// Which comparison applies depends on whether the value looks
 	// numeric to awk (Go's strconv.ParseFloat), which SQL can't decide
 	// exactly. A prefilter that holds under either reading is safe;
@@ -467,17 +472,22 @@ func extractAwkComparison(e *awk.BinaryExpr) *awkPushdown {
 		why:       because(reasonAwkStrnum),
 	}
 	if c.field > 0 {
-		// A field every row holds a number in needs no string comparison and
-		// no missing-field case. The escape for the forms DuckDB doesn't parse
-		// as a number stays, so the typed predicate is still a superset.
+		// A field every row holds a finite decimal in needs no string
+		// comparison, no missing-field case and no escape for the spellings
+		// DuckDB reads differently.
 		pd.typed = []typedLeaf{{
 			locator: "$" + strconv.Itoa(c.field),
 			base:    pd.predicate,
-			typed: fmt.Sprintf("(TRY_CAST(%[1]s AS DOUBLE) %[2]s %[3]s OR regexp_matches(%[1]s, '^[+-]?(?i:inf|nan|0x)'))",
-				c.sql, sqlOp, strconv.FormatFloat(n, 'g', -1, 64)),
+			typed:   typedComparison(c.sql, sqlOp, n),
 		}}
 	}
 	return pd
+}
+
+// typedComparison is a field compared with a number when the field is known
+// to hold a finite decimal in every row.
+func typedComparison(col, sqlOp string, n float64) string {
+	return fmt.Sprintf("TRY_CAST(%s AS DOUBLE) %s %s", col, sqlOp, typedNumber(n))
 }
 
 // awkLiteral is a constant as awk compares it: its text, and its value

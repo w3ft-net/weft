@@ -161,14 +161,14 @@ func splitRowStages(stages []*loweredStage) (rows, rest []*loweredStage) {
 // a jq stage only then.
 func StageReadsMetaVars(stage string) bool {
 	sc, ok := parseOneStage(stage)
-	return ok && lowerStage(parseStage(sc), 1).readsMeta
+	return ok && lowerStage(parseStage(sc), 1, false).readsMeta
 }
 
 // IsRowStage reports whether a stage, as written, passes rows through
 // unchanged. The differential harness builds its reference plan from it.
 func IsRowStage(stage string) bool {
 	sc, ok := parseOneStage(stage)
-	return ok && lowerStage(parseStage(sc), 1).rowwise
+	return ok && lowerStage(parseStage(sc), 1, false).rowwise
 }
 
 // parseOneStage parses a stage's text as the one command it is.

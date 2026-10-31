@@ -195,38 +195,50 @@ Each step also needs a differential test against the real stages on data that
 includes the violating rows, because the window is tolerated but the steady state
 is not.
 
-## Numeric filters: built (2026-10-30)
+## Numeric filters: built (2026-10-30, reworked 2026-10-31)
 
-`QueryPlan.Typed` (`planner/typed.go`) is the shard SQL for a shard whose facts say the
-locators it needs are all numbers, derived from the base plan by swapping each typed
-leaf's predicate text (and only when that text occurs exactly once in the SQL). It
-exists beside the base plan; the awk or jq stage still runs in compute on whatever the
-shard returns, so the variant only has to be a superset of the stage's matches.
+A typed field is a **finite decimal** in every row: digits, a sign, a point and an
+exponent, and nothing else (`shard.finiteDecimal`). awk also reads `inf`, `nan` and hex
+floats as numbers, but DuckDB's cast reads them differently or not at all, so a field
+holding one is dirty. That makes `TRY_CAST(fields[N] AS DOUBLE) op n` exactly awk's
+comparison on a typed shard, with no string compare, no missing-field case and no escape
+clause.
 
-- **awk `$N op number`**: the base prefilter ORs a numeric test with a *string* compare
-  and a missing-field case, so it ships every row whose text sorts above "500". The typed
-  form is `TRY_CAST(fields[N] AS DOUBLE) op n` plus the existing escape for the spellings
-  DuckDB doesn't parse (`inf`, `nan`, hex floats), which keeps it a superset. Comparisons
-  joined by `&&`/`||` carry all their leaves, so every locator must be typed.
-- **jq `select(.key op number)`** (top-level key): the base branches on the JSON type and
-  on the key being present, as jq's total order requires; the typed form is the cast
-  alone.
-- **Eligibility is the planner's:** one namespace, one service, one kind, no follow; env
-  from the path or empty. The coordinator (`applyTypedVariant`) then gives a shard the
-  variant (`ShardDescriptor.sql`/`args`) only if its facts say every required locator is
-  typed for that exact stream; other shards keep the base SQL, so a query over old and new
-  windows is a mix. An old compute ignores the descriptor's sql and runs the request's
-  base, which is correct, so there is no deploy ordering for this.
-- **Tests:** planner unit tests (what gets a variant, what must not); a differential test
-  that runs the typed SQL, the base and a mixed typed/untyped request against the
-  reference stage on numeric spellings that include text-greater-than-"500" values, hex
-  floats, `inf`, `nan` and integers past 2^53 (removing the escape clause makes it fail);
-  and the shard-to-coordinator-to-Postgres rig checking that the key a real `Plan` asks for
-  is the key the classifier reported.
+`QueryPlan.Typed` (`planner/typed.go`) carries two things for a query over one stream
+(one namespace, service and kind, no follow; env from the path or empty):
+
+- **The shard SQL** for a shard whose facts cover the locators, derived from the base plan
+  by swapping each typed leaf's predicate text (only when that text occurs exactly once).
+  The stage still runs in compute on what comes back, so the swap only has to keep every
+  row the stage would. The coordinator (`applyTypedVariant`) hands it to the shards that
+  qualify (`ShardDescriptor.sql`/`args`), so a query over old and new windows is a mix. An
+  old compute ignores the descriptor's sql and runs the base, which is correct.
+- **`Exact`**, the whole plan compiled again with the facts assumed (`compileFor`, which
+  threads `assumeTyped` into the awk lowering). A numeric comparison is then exact, so
+  `awk '$3 > 100 {print $1, $3}'` lowers entirely: a `WHERE` on the cast and a `concat_ws`
+  of the fields, with no compute stage and no regexp. Its stages only fit shards whose
+  rows come back already filtered, so the coordinator (`exactPlan`) runs it only when
+  **every** shard in the query has the facts; one shard without them keeps the mix above.
+- **jq `select(.key op number)`** (top-level key): the base was already exact; the typed
+  form is the cast alone.
+
+Measured on 200k request lines, one shard (`BenchmarkAwkFilterPrint`), whole query through
+compute: `$3 > 1000` 974 ms to 22 ms, `$3 > 100` 1,203 ms to 145 ms. The exact plan's
+shard SQL costs the same as the handwritten `fields` form (54 ms at `> 100`).
+
+- **Tests:** planner unit tests; differential tests that run the base, mixed (the second
+  shard holds `inf`, `nan` and hex floats) and exact plans against the reference stage;
+  the classifier test for the finite-decimal rule; the coordinator test that the exact
+  plan needs every shard; and the shard-to-coordinator-to-Postgres rig checking that the
+  key a real `Plan` asks for is the key the classifier reported.
 - **Not covered:** crons and dashboards (their persisted `LoweredPlan` carries the base
-  plan only); a negative literal (`$2 > -1`, `.q > -1`) is not lowered by either plan, so
-  it has no variant; nested jq paths; a value awk reads as out of range (`1e999`) is dirty
-  by `LooksNumeric`, so it never types a locator.
+  plan only); a negative literal (`$2 > -1`, `.q > -1`) is not lowered by either plan; nested
+  jq paths; a value awk reads as out of range (`1e999`) is dirty, so it never types a
+  locator.
+- **Open:** `projectFields` (the synthetic record, `planner/fieldproj.go`) still feeds
+  awk stages that remain in compute and read a few fields. It bypasses the IR and
+  re-tokenizes `raw` per line. Once aggregates lower it has no job; see the keyed
+  sum design below.
 
 ## Keyed sum/min/max: design (2026-10-30, revised)
 

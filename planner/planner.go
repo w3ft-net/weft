@@ -191,6 +191,24 @@ func PlanScoped(pipeline string, customerID int64, cwd string, start, end time.T
 // The IR is nil for an alert-only pipeline. readable, if non-nil, scopes trace
 // commands (see PlanScoped).
 func compile(pipeline string, customerID int64, cwd string, start, end time.Time, readable []string) (*QueryPlan, *compiled, error) {
+	plan, c, err := compileFor(pipeline, customerID, cwd, start, end, readable, false)
+	if err != nil || plan.Typed == nil {
+		return plan, c, err
+	}
+	// The same pipeline planned for shards that have said every field it
+	// compares is a finite decimal: the comparison is then exact, so SQL can
+	// compute all of the stage and compute has less (or nothing) to run.
+	exact, _, err := compileFor(pipeline, customerID, cwd, start, end, readable, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	plan.Typed.Exact = exact
+	return plan, c, nil
+}
+
+// compileFor is compile for one reading of the facts: assumeTyped says every
+// field the pipeline compares with a number holds a finite decimal.
+func compileFor(pipeline string, customerID int64, cwd string, start, end time.Time, readable []string, assumeTyped bool) (*QueryPlan, *compiled, error) {
 	queryPart, alertArgs := SplitAlertStage(pipeline)
 
 	// Alert-only pipeline (`alert ...` with nothing in front). Return
@@ -245,7 +263,7 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 		c.nodes = append(c.nodes, &limitNode{n: info.source.limit, order: "ts DESC"})
 	}
 	for i, st := range info.stages {
-		ls := lowerStage(st, i+1)
+		ls := lowerStage(st, i+1, assumeTyped)
 		c.stages = append(c.stages, ls)
 		c.nodes = append(c.nodes, ls.nodes...)
 	}
@@ -392,6 +410,14 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 	}
 
 	typed := typedVariant(c, info.source, customerID, shardSQL, directShardSQL)
+	if assumeTyped {
+		// What the facts leave to swap (a jq key) is swapped in this plan,
+		// which is only ever used where they all hold.
+		if typed != nil {
+			shardSQL, directShardSQL = typed.ShardSQL, typed.DirectShardSQL
+		}
+		typed = nil
+	}
 	return &QueryPlan{
 		Typed:             typed,
 		ShardSQL:          shardSQL,

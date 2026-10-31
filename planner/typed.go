@@ -32,6 +32,10 @@ type TypedPlan struct {
 	Env            string
 	ShardSQL       string
 	DirectShardSQL string
+	// Exact is the whole plan for a query whose every shard has the facts
+	// Requires: the typed comparisons are exact there, so it needs no more
+	// compute than the pipeline's other stages do. Its Typed is nil.
+	Exact *QueryPlan
 }
 
 // typedVariant derives the typed plan from the base SQL by swapping each

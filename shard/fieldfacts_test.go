@@ -496,3 +496,37 @@ func TestFieldFacts_ADisabledClassifierLeavesNothingToRestore(t *testing.T) {
 		t.Errorf("restored facts that missed a row: %+v", got)
 	}
 }
+
+// A typed field is one DuckDB's cast and awk's comparison read the same way
+// in every row, which the plan relies on to drop the awk stage. They disagree
+// on inf, nan and hex floats, so a field holding one is never typed.
+func TestFieldClassifier_OnlyFiniteDecimalsTypeAField(t *testing.T) {
+	typed := []string{"7", "-3", "+5", "12.5", ".5", "5.", "1e3", "1E-2", "007", "-0", "9007199254740993", "1e308", "4.9e-324"}
+	for _, v := range typed {
+		c := NewFieldClassifier()
+		c.Observe(numRows(factTypedAfter, "x "+v))
+		settle(t, c)
+		if f, ok := factFor(c.Pending(), "$2"); !ok || f.State != FactTyped {
+			t.Errorf("%q: want typed, got %+v (ok=%v)", v, f, ok)
+		}
+		c.Stop()
+	}
+	for _, v := range []string{"inf", "-inf", "Inf", "+Inf", "infinity", "nan", "NaN", "-nan", "0x1p3", "0X1P-2", "0x10"} {
+		c := NewFieldClassifier()
+		c.Observe(numRows(factTypedAfter, "x 7"))
+		c.Observe(numRows(1, "x "+v))
+		settle(t, c)
+		if f, ok := factFor(c.Pending(), "$2"); ok && f.State == FactTyped {
+			t.Errorf("%q: a spelling DuckDB reads differently from awk must not leave the field typed", v)
+		}
+		c.Stop()
+	}
+	// And a field made only of such spellings never gets typed at all.
+	c := NewFieldClassifier()
+	defer c.Stop()
+	c.Observe(numRows(factTypedAfter, "x inf"))
+	settle(t, c)
+	if f, ok := factFor(c.Pending(), "$2"); ok && f.State == FactTyped {
+		t.Errorf("a field of inf values was typed: %+v", f)
+	}
+}

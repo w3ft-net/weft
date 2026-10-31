@@ -264,7 +264,7 @@ func (c *FieldClassifier) classifyRow(sk sourceKey, fields []string, payload []b
 			c.changed = true
 		}
 		ls.seen = mark
-		c.observe(ls, awk.LooksNumeric(f), sk)
+		c.observe(ls, finiteDecimal(f), sk)
 	}
 	if root := gjson.ParseBytes(payload); root.IsObject() {
 		root.ForEach(func(k, v gjson.Result) bool {
@@ -479,4 +479,21 @@ func (c *FieldClassifier) SetPersist(keep func([]byte) error, forget func()) {
 	c.mu.Lock()
 	c.persist, c.forget = keep, forget
 	c.mu.Unlock()
+}
+
+// finiteDecimal is whether awk reads the field as a number and DuckDB's cast
+// reads it as the same one. awk's numbers include inf, nan and hex floats,
+// which the cast reads differently or not at all, so a field holding one is
+// not typed: the plan that skips awk's own comparison needs the two to agree
+// on every row. A field is spelled with digits, a sign, a point and an
+// exponent, nothing else.
+func finiteDecimal(f string) bool {
+	for i := 0; i < len(f); i++ {
+		switch c := f[i]; {
+		case c >= '0' && c <= '9', c == '+', c == '-', c == '.', c == 'e', c == 'E':
+		default:
+			return false
+		}
+	}
+	return awk.LooksNumeric(f)
 }
