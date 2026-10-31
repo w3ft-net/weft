@@ -55,7 +55,17 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 		rowStages = rs
 	}
 	admit := func(row *pb.LogRow) bool {
-		return gate.Match(row) && (rowStages == nil || rowStages.Keep(row.Raw, string(row.PayloadJson), liveMetaVars(row)))
+		if !gate.Match(row) {
+			return false
+		}
+		if rowStages == nil {
+			return true
+		}
+		var meta map[string]string
+		if rowStages.ReadsMeta() {
+			meta = liveMetaVars(row)
+		}
+		return rowStages.Keep(row.Raw, string(row.PayloadJson), meta)
 	}
 	wrapMeta := len(plan.LiveStages) > 0 && strings.HasPrefix(plan.LiveStages[0], "jq ") && planner.StageReadsMetaVars(plan.LiveStages[0])
 	input := func(row *pb.LogRow) string {

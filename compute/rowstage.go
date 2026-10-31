@@ -25,7 +25,7 @@ type RowStages struct {
 
 type rowStage struct {
 	jq     jq.Expr      // a select chain, over the payload
-	meta   bool         // the select chain names a meta-variable
+	meta   bool         // the stage names a meta-variable
 	script *bash.Script // a filter over the raw line
 	interp *sync.Pool   // of *rowInterp, for script: built once, reused per row
 	head   int          // head -n N: keep the first N (when > -1)
@@ -82,6 +82,7 @@ func parseRowStage(src string) (rowStage, error) {
 		return st, nil
 	}
 	st.script = script
+	st.meta = planner.StageReadsMetaVars(src)
 	st.interp = &sync.Pool{New: func() any { return newRowInterp() }}
 	return st, nil
 }
@@ -123,6 +124,17 @@ func lineCount(args []string) (int, error) {
 		return strconv.Atoi(args[0][1:])
 	}
 	return 0, fmt.Errorf("unsupported line count %q", args)
+}
+
+// ReadsMeta reports whether any stage names a meta-variable. A caller building
+// a row's meta-variables for Keep needs to only if it does.
+func (rs *RowStages) ReadsMeta() bool {
+	for _, st := range rs.stages {
+		if st.meta {
+			return true
+		}
+	}
+	return false
 }
 
 // Keep reports whether one row survives every filter, ignoring head and
@@ -200,7 +212,11 @@ func (r *rowRunner) push(i int, row *pb.ResultRow) bool {
 			r.buf[i] = append(r.buf[i], row)
 			return true
 		default:
-			if !st.keep(row.Raw, row.MetaVars[planner.PayloadColumn], rowMetaVars(row)) {
+			var meta map[string]string
+			if st.meta {
+				meta = rowMetaVars(row)
+			}
+			if !st.keep(row.Raw, row.MetaVars[planner.PayloadColumn], meta) {
 				return true
 			}
 		}

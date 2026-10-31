@@ -564,11 +564,12 @@ func (j *Job) consume() {
 	// the correlation mechanism instead: one send per row written, with
 	// the records awk reads from it (a record per line), in the same
 	// order.
-	// Only allocated when a stage is actually awk — the common case (no
-	// awk stage) skips it entirely, since nothing would ever drain it
-	// (a full buffer would then wedge the writer goroutine).
+	// Only allocated when the first stage is awk and names a meta-variable:
+	// the common case skips it, and the per-row work of building the values,
+	// entirely, since nothing would ever drain it (a full buffer would then
+	// wedge the writer goroutine).
 	var awkVarsCh chan rowAwkVars
-	if firstStageIsAwk(j.stages) {
+	if firstStageIsAwk(j.stages) && j.spliceMeta {
 		awkVarsCh = make(chan rowAwkVars, 1024)
 	}
 
@@ -589,19 +590,37 @@ func (j *Job) consume() {
 		if awkVarsCh != nil {
 			defer close(awkVarsCh)
 		}
+		// stdinW is an io.Pipe: every write blocks until the stage reads it,
+		// a goroutine handoff each. Rows are batched, and flushed whenever no
+		// merged row is waiting (so a slow producer's rows aren't held back)
+		// or the stage must read what's buffered for the writer to go on.
+		w := bufio.NewWriterSize(stdinW, 64<<10)
+		defer w.Flush()
 		j.feed(func(row *pb.ResultRow) bool {
 			in := j.stageInput(row)
 			if awkVarsCh != nil {
 				// Queued before awk can read the row: a record waiting
 				// on its set while the writer waits on awk would
 				// deadlock.
+				if len(awkVarsCh) == cap(awkVarsCh) {
+					// About to block on a queue the stage drains as it reads:
+					// let it read what is buffered.
+					if err := w.Flush(); err != nil {
+						return false
+					}
+				}
 				awkVarsCh <- rowAwkVars{vars: awkVarsFromMeta(rowMetaVars(row)), records: strings.Count(in, "\n") + 1}
 			}
-			if _, err := io.WriteString(stdinW, in); err != nil {
+			if _, err := w.WriteString(in); err != nil {
 				return false
 			}
-			if _, err := stdinW.Write([]byte{'\n'}); err != nil {
+			if err := w.WriteByte('\n'); err != nil {
 				return false
+			}
+			if len(j.ch) == 0 {
+				if err := w.Flush(); err != nil {
+					return false
+				}
 			}
 			return true
 		})
@@ -619,7 +638,12 @@ func (j *Job) consume() {
 		// jq prints compact (one value per line) by default in weft:
 		// its output feeds line-oriented stages, and it matches what a
 		// projection SQL computes. See docs/plans/planner-ir.md, "jq".
-		opts := bash.StreamingOptions{JqCompact: true, JqPerInput: JqPerInput}
+		opts := bash.StreamingOptions{JqCompact: true}
+		if j.spliceMeta && strings.HasPrefix(j.stages[0], "jq ") {
+			// Only then does the first stage's input carry the envelope
+			// WrapJqInput makes; any other input is the user's own.
+			opts.JqPerInput = JqPerInput
+		}
 		if awkVarsCh != nil {
 			var cur rowAwkVars
 			opts.AwkPerRecordVars = func(string) map[string]string {
