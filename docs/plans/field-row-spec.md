@@ -312,8 +312,14 @@ columns). Each safeguard was checked by removing it and watching its test fail.
   stderr, so no embedder needs a thread-safe writer. Pinned by
   `TestJob_ConcurrentStageErrorsDoNotRaceOnStderr` and warp's
   `TestPipelineStagesShareStderrSafely`, both failing before.
-- **Open: a race in warp's parallel pipeline path.** `TestParallelGrepSort` (`pkg/bash`,
-  `Parallelism` > 0) fails under `-race` in `fork` reading interpreter fields. It predates
-  this work. Nothing in weft sets `Parallelism`, so no weft path reaches it.
+- ~~A race in warp's parallel pipeline path.~~ Fixed in warp `a93fdda` (unpushed, untagged).
+  `TestParallelGrepSort` failed under `-race`: the chunks of a parallel segment run at once and
+  each wrote the shared interpreter's exit status while another forked from it. Writing it
+  concurrently also left the pipeline with no defined status (whichever chunk finished last), and a
+  segment fed no input never ran, so the status of the segment before it leaked through
+  (`grep NOPE | sort` exited 1 in parallel and 0 serially, on every run). A pipeline now ends
+  with the status serial gives it: success if any chunk succeeded, and a segment with no input
+  runs once for its own status. `TestParallelPipelineStatusMatchesSerial` pins it. Nothing in weft
+  sets `Parallelism`, so no weft path reached it.
 - `bench/fieldtypes/results/after.json` is the pre-rotation run and is still untracked.
 
