@@ -1,13 +1,15 @@
 # Field row spec: sending a compute stage only the fields it reads
 
-Status: 2026-10-31.
+Status: 2026-10-31. Everything below is on `origin/main`; the last CI run (`7e6ca66b`) is green and
+its Deploy workflow reported success, but the rollout itself was not confirmed from here (see "Still
+to verify").
 
 | | State |
 |---|---|
 | Deploy 1: add (row spec, `field_sql`, typed exact plan, `-F`/`-v` flag handling) | on `origin/main` (`2c6bd346` through `c8c26e38`) |
 | Deploy 2: remove (text record, regexp, `fieldSelect`; `LoweredPlan` carries the field form) | on `origin/main` (`39d6ac19`), pushed after the migrations collapse. The gate below was **not** checked by this plan's author: see "Still to verify". |
-| Compute performance (buffered pipes, meta-variable narrowing, jq per-input variables) | on `origin/main`, pushed 2026-10-31 with the warp changes below. |
-| Deploy 3: shard-side keyed aggregates (sum, max, min), `sort -k` folding | on `origin/main` (`08193a7d`); the run-time exactness check and retry that shipped in it are removed on branch `definitive-aggregates`, see `field-types.md`, "Keyed sum/min/max: built". Rolls coordinator, compute, shards. |
+| Compute performance (buffered pipes, meta-variable narrowing, jq per-input variables, awk per-record binding) | on `origin/main`, with warp v0.2.57 to v0.2.60 |
+| Deploy 3: shard-side keyed aggregates (sum, max, min) and `sort -k`/`head` folded around them | on `origin/main` (`08193a7d`, `0cf4a53e`, `7e6ca66b`), in the **definitive** form: the plan is chosen once from the field facts, with no run-time check and no retry. See "Deploy 3" below, `field-types.md` "Keyed sum/min/max: built", and `shard-plan-variants.md`. Rolls coordinator, compute, shards. |
 
 It follows `field-types.md`, whose exact plan (`QueryPlan.Typed.Exact`) already lowers an awk
 filter-and-print over typed fields to SQL alone.
@@ -41,11 +43,12 @@ rendered by the backend), so `explain` shows it and nothing re-reads a compute s
 ## Which cases use it
 
 Only awk stages that remain in compute and read a few fields: multiple rules, `printf` with
-arithmetic, an `END` that uses arrays, and the keyed sum or max/min until those lower. A
-program whose pattern and print both lower (`awk '$3 > 100 {print $1, $3}'` on a typed
-shard) has no stage and no record. Shard-side keyed aggregates (the deferred part of
-`field-types.md`) would remove most of the remaining cases, so Deploy 3 can make this work
-less valuable than it looks.
+arithmetic, an `END` that uses arrays, and the keyed sum or max/min where the shards lack the
+facts for them. A program whose pattern and print both lower (`awk '$3 > 100 {print $1, $3}'`
+on a typed shard) has no stage and no record. Shard-side keyed aggregates (Deploy 3) took over
+most of the remaining cases wherever every shard in the query has the facts, which made this work
+less valuable than it looked when it was planned; it still shrinks what compute receives
+everywhere else.
 
 ## Deploy rules
 
@@ -123,11 +126,29 @@ either way (707 ms whole lines, 727 ms field form), so the saving is wire bytes 
 
 Rollback: revert and redeploy; Deploy 1's compute and shard still accept both forms.
 
-## Deploy 3: shard-side aggregates (optional, separate)
+## Deploy 3: shard-side aggregates
 
-Keyed sum, max and min as shard `GROUP BY`, as designed in `field-types.md`. Needs the
-integer-range facts that were left out on purpose, the aggregate node, and a wire for
-per-shard group stages.
+Keyed sum, max and min as a shard `GROUP BY`, built in the form agreed with Paul after two
+other forms were tried and removed (`shard-plan-variants.md`):
+
+- **Definitive, not checked.** The coordinator picks the plan once, from what each shard has
+  said about its data, and nothing is verified afterwards: no run-time exactness test, no retry, no
+  fallback plan. If every shard in the query has the facts the aggregate needs, they all run the
+  `GROUP BY`; if any lacks them, the base plan runs for the whole query (`exactPlan`). A shard
+  that fails fails the query.
+- **A sum is exact integer arithmetic.** It needs a new fact, `$N#int` (a decimal integer of at
+  most 15 digits); the shard adds `BIGINT`s (128 bits in DuckDB), compute adds the totals in
+  arbitrary precision, and there is no bound to check. It differs from awk's float sum only beyond
+  2^53.
+- **max and min** follow warp's awk: a key whose values never beat 0 is absent, the printed text is
+  the first row holding the best number, and ties across shards go by time.
+- **`sort -k` and `head`** around the aggregate: a sort before a count or sum is dropped, and
+  `sort -k2 -n` (and `-rn`, `-k2,2nr`, the other plain forms) with a `head -n N` after it folds into
+  the group, applied to the printed lines with warp's own comparison.
+
+200k lines and about 5,000 keys, in process (`BenchmarkKeyedAggregate`): a keyed sum 172 ms to
+23 ms and a keyed max 156 ms to 33 ms through compute, with 200,000 rows from the shard down to
+5,000.
 
 Evidence on how much the row spec is used, from the coordinator's audit log
 (`/log/weft/coordinator/queries.log`, dogfood org only, 10-18 to 10-31): no query has reached
@@ -136,7 +157,7 @@ the field projection since it shipped (checked with a control query that did), a
 (`awk 'LEVEL == "ERROR"' | wc -l`) that the current planner lowers to a `count(*)`. About five
 ad-hoc queries over two weeks would have used the row spec, all keyed aggregates. That is weak
 evidence about customers, who do not exist yet. The decision was to build the row spec
-regardless; Deploy 3 would remove most of what is left for it.
+regardless; Deploy 3 has since removed most of what was left for it.
 
 ## Decisions for Deploy 1 (settled)
 
@@ -262,22 +283,36 @@ columns). Each safeguard was checked by removing it and watching its test fail.
   names the flag (`-F cannot be optimized`). `-v name=x` stages are projected again; `-v FS`,
   `-v RS` and `-v NF` are not, since they are `-F` by another route.
 - A jq stage unwrapped any payload that looked like the old envelope.
+- The integer fact (`$N#int`) broke two `cmd/shard` tests that count the facts a shard reports
+  (`TestFieldFacts_ShardToCoordinatorToPostgres`, `...ALostAckIsResentAndTheDuplicateIsHarmless`),
+  which failed two CI runs and kept both from deploying. They now expect the third fact, and
+  `TestFieldFacts_KeyedAggregatePlansAskForTheKeysTheShardReports` checks a sum plan's keys reach
+  the registry (`7e6ca66b`). The local runs behind the earlier "all green" used a hand-picked package
+  list that left out `cmd/*`; the check is `go test -tags test ./...`, which is what CI runs.
 - The pre-existing exact `$N` lowering is correct for stored text events (ingest splits them
   into lines); a test that fed multi-line rows straight to a shard looked like a bug and was
   not real input.
 
 ## Still to verify
 
+- **This deploy.** CI is green on `7e6ca66b` and the Deploy workflow reported success, but that
+  workflow only posts a status; the AMI build and rollout are driven elsewhere and were not
+  checked. Until compute has rolled, a count with a `sort`/`head` folded into it errors ("unknown
+  group order") on a coordinator that is already new; nothing else is affected, because no exact
+  plan can be chosen before shards report facts.
 - **Deploy 2's gate** (not checked by me): every non-archived shard, cold shards included, on
   Deploy 1's binary (`binary_sha` in `shard_records`); no stored row with both a newline and a
   JSON payload (the field form reads such a row wrongly); the retention horizon for rows
   ingested before 2026-10-14, whose `fields` is the older split. A shard without the field form
   now sends whole lines: 11.0 MB against 0.5 MB for one field of 200k.
 - **Facts in prod.** None exist until the Nov 2 rotation creates new-window shards. Then:
-  confirm shards report facts (`shard_field_facts`), record a baseline on a range inside the
-  new window with `bench/fieldtypes` and run `after` once the planner work is live. A shard
-  created mid-window since the deploy would carry facts under the old classifier grammar
-  (`inf`, `nan` and hex floats counted as numbers); none are expected.
+  confirm shards report facts (`shard_field_facts`), now including `$N#int` from the new shard
+  binary, and that a keyed aggregate over a typed range is routed to the `GROUP BY`; record a
+  baseline on a range inside the new window with `bench/fieldtypes` and run `after`. The keyed
+  aggregates have run only in process so far, and `bench/fieldtypes` has no source with numeric
+  awk columns for them (its own sources are JSON): they need a text source such as an access log.
+  A shard created mid-window since the facts deploy would carry facts under the old classifier
+  grammar (`inf`, `nan` and hex floats counted as numbers); none are expected.
 
 ## Next
 
@@ -320,4 +355,13 @@ columns). Each safeguard was checked by removing it and watching its test fail.
   runs once for its own status. `TestParallelPipelineStatusMatchesSerial` pins it. Nothing in weft
   sets `Parallelism`, so no weft path reached it.
 - `bench/fieldtypes/results/after.json` is the pre-rotation run and is still untracked.
-
+- **Open: a race in `explain`'s line count.** `TestShellExec_ExplainSurvivesACountThatFails/too_slow`
+  failed once in CI (it had passed on 20+ earlier runs) and passed on rerun. `countRetrieved`
+  (`api/explain.go`) reports "took longer than 50ms" only if its own context has expired, but the
+  server can cancel the stream a moment before the client's timer fires, giving `RST_STREAM
+  CANCEL` instead. Not touched by this work; not fixed.
+- **Open: per-shard plans.** A plan keyed to arrays of shards on the wire (a stage list per group
+  of shards) is not built. The keyed aggregates did not need it (a shard without the facts
+  cannot join an exact merge, so the whole query takes the base plan). The one candidate is the
+  numeric-filter exact plan, where shards with the facts need no awk stage and the rest do.
+- **Open: remaining jq cost** is the `Value` tree, about 26 allocations a row, not the parser.
