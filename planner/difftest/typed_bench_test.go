@@ -95,9 +95,9 @@ func requestRows(n int) []*pb.LogRow {
 	return rows
 }
 
-// BenchmarkAwkFilterPrint is `awk '$3 > T {print $1, $3}'`: what the shard
-// spends building the record awk reads (regexp over raw, per position) against
-// the same record built from the stored fields column, and the whole query
+// BenchmarkAwkFilterPrint is `awk '$3 > T {print $1, $3}'`: the shard SQL for
+// the base plan, the typed variant and the exact plan (no awk stage), against
+// the same query handwritten over the stored fields column, and the whole query
 // through compute with and without the awk stage.
 //
 //	go test -tags test -run xxx -bench AwkFilterPrint -benchtime 5x ./planner/difftest
@@ -131,8 +131,8 @@ func BenchmarkAwkFilterPrint(b *testing.B) {
 				b.ReportMetric(float64(n), "rows_shipped")
 			}
 		}
-		b.Run("gt"+thr+"/shard/regexp-base", shardQuery(plan.DirectShardSQL))
-		b.Run("gt"+thr+"/shard/regexp-typed", shardQuery(plan.Typed.DirectShardSQL))
+		b.Run("gt"+thr+"/shard/base", shardQuery(plan.DirectShardSQL))
+		b.Run("gt"+thr+"/shard/typed", shardQuery(plan.Typed.DirectShardSQL))
 		b.Run("gt"+thr+"/shard/exact", shardQuery(plan.Typed.Exact.DirectShardSQL))
 		b.Run("gt"+thr+"/shard/fields", func(b *testing.B) {
 			var n int
@@ -168,9 +168,9 @@ func BenchmarkAwkFilterPrint(b *testing.B) {
 }
 
 // BenchmarkFieldRowSpec is a stage that stays in compute and reads one field,
-// `awk '{ s += $3 } END { print s }'`: the shard building the text record it
-// reads (a regexp over raw per position) against the shard returning the
-// field's value, and the whole query through compute either way.
+// `awk '{ s += $3 } END { print s }'`: a shard without the field form sending
+// the whole lines (DirectShardSQL) against a shard returning the field's value
+// (FieldSQL), and the whole query through compute either way.
 //
 //	go test -tags test -run xxx -bench FieldRowSpec -benchtime 5x ./planner/difftest
 func BenchmarkFieldRowSpec(b *testing.B) {
@@ -209,9 +209,9 @@ func BenchmarkFieldRowSpec(b *testing.B) {
 		}
 	}
 	h.unchecked = true
-	b.Run("shard/text-record", shardQuery(plan.DirectShardSQL))
+	b.Run("shard/whole-lines", shardQuery(plan.DirectShardSQL))
 	b.Run("shard/field-form", shardQuery(plan.FieldSQL))
-	b.Run("query/text-record", func(b *testing.B) {
+	b.Run("query/whole-lines", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			if _, err := h.runPlan(plan); err != nil {
 				b.Fatal(err)

@@ -32,12 +32,10 @@ type compiled struct {
 	// trace or span source's own aggregate (spans.go).
 	group    *GroupSpec
 	groupKey string // the SQL a tally groups by, in place of raw
-	// fieldSelect, when set, is the SQL for a record of just the fields the
-	// first compute stage reads (projectFields), in place of each line.
-	// fieldSpec is those fields, for the field form of the query that sends
-	// them as values (QueryPlan.FieldSQL).
-	fieldSelect string
-	fieldSpec   *fieldReads
+	// fieldSpec, when set, is the fields the first compute stage reads
+	// (projectFields), for the field form of the query that sends their
+	// values in place of each line (QueryPlan.FieldSQL).
+	fieldSpec *fieldReads
 	// payloadSelect, when set, is the SQL for a payload of just the keys the
 	// first compute stage (a jq) reads (projectPayload), in place of all of it.
 	payloadSelect string

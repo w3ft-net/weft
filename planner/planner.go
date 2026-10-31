@@ -370,12 +370,8 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 	// Hoisted filters keep lines, so the shard returns those; a pushed
 	// line count declines hoisting, so there's no ts DESC to wrap.
 	rows := sql
-	if len(linePreds) > 0 || c.fieldSelect != "" {
+	if len(linePreds) > 0 {
 		rows = sql.Lines(linePreds)
-		if c.fieldSelect != "" {
-			// The lines are split first, then each is cut down to its fields.
-			rows.rawExpr = c.fieldSelect
-		}
 	}
 	shardQuery := rows
 	if sql.orderBy == "ts DESC" {

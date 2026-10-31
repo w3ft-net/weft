@@ -751,6 +751,8 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 	}
 	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:               lp.DirectShardSQL,
+		FieldSql:          lp.FieldSQL,
+		FieldSpec:         compute.FieldSpecToProto(lp.FieldSpec),
 		Args:              argStrs,
 		Shards:            descs,
 		Stages:            lp.ComputeStages,

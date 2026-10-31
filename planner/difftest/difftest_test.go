@@ -174,15 +174,17 @@ func TestDifferentialLineShapes(t *testing.T) {
 	} {
 		t.Run("projected "+p, func(t *testing.T) {
 			plan := h.check(t, p)
-			if plan != nil && (len(plan.ComputeStages) != 1 || !strings.Contains(plan.DirectShardSQL, "regexp_extract_all") && !strings.Contains(plan.DirectShardSQL, "'' as raw")) {
+			if plan != nil && (len(plan.ComputeStages) != 1 || plan.FieldSQL == "" || plan.FieldSpec == nil) {
 				t.Errorf("not cut down to its fields:\n%s", planner.Explain(p))
 			}
 		})
 	}
 }
 
-// TestDifferentialFieldProjectionLines: a row of several lines is cut down
-// line by line, as awk reads them: $1 is each line's first field, NF its count.
+// TestDifferentialFieldProjectionLines: an event of several lines is stored a
+// row per line (ingest.SplitLines), and a stage cut down to its fields reads
+// each line's own: $1 is its first field, NF its count. The stage gets the same
+// answer from whole lines and from the field form.
 func TestDifferentialFieldProjectionLines(t *testing.T) {
 	var rows []*pb.LogRow
 	base := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
@@ -191,10 +193,10 @@ func TestDifferentialFieldProjectionLines(t *testing.T) {
 	} {
 		rows = append(rows, &pb.LogRow{
 			Raw: raw, TsUnixNs: base.Add(time.Duration(i) * time.Second).UnixNano(),
-			Namespace: "acme", Service: "api", Kind: "main", CustomerId: 1, PayloadJson: []byte("{}"),
+			Namespace: "acme", Service: "api", Kind: "main", CustomerId: 1,
 		})
 	}
-	h := newHarness(t, rows, 2)
+	h := newHarness(t, ingest.SplitLines(rows), 2)
 	for _, p := range []string{
 		`cat /log/acme/api/main.log | awk '{ n++ } END { print n }'`,
 		`cat /log/acme/api/main.log | awk '{ s += $2 } END { print s }'`,
@@ -205,17 +207,29 @@ func TestDifferentialFieldProjectionLines(t *testing.T) {
 	} {
 		t.Run(p, func(t *testing.T) {
 			plan := h.check(t, p)
-			if plan != nil && !strings.Contains(plan.DirectShardSQL, "string_split") {
-				t.Errorf("rows not split into lines before the cut:\n%s", planner.Explain(p))
+			if plan == nil || plan.FieldSQL == "" {
+				t.Fatalf("no field form:\n%s", planner.Explain(p))
+			}
+			source, stages := splitSource(t, p)
+			want, wantErr := h.runReference(source, stages, readsMetaVars(stages))
+			got, gotErr := h.runFieldForm(plan)
+			if wantErr != nil || gotErr != nil {
+				t.Fatalf("errors: field form %v, reference %v", gotErr, wantErr)
+			}
+			if plan.ShardOrderBy == "" {
+				got, want = sortedLines(got), sortedLines(want)
+			}
+			if got != want {
+				t.Errorf("field form differs from the reference: %s", firstDiff(got, want))
 			}
 		})
 	}
 }
 
 // TestFieldProjectionShrinksTheWire: the point of the cut. Over long lines of
-// many fields, what the shards return for a stage reading two of them is a
-// fraction of what they return for the whole lines, and the same number of
-// lines.
+// many fields, what the shards return in the field form for a stage reading
+// two of them is a fraction of what they return for the whole lines, and the
+// same number of lines.
 func TestFieldProjectionShrinksTheWire(t *testing.T) {
 	var rows []*pb.LogRow
 	base := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
@@ -235,14 +249,21 @@ func TestFieldProjectionShrinksTheWire(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		sql := plan.DirectShardSQL
+		if plan.FieldSQL != "" {
+			sql = plan.FieldSQL
+		}
 		for _, sh := range h.shards {
-			got, err := sh.Query(context.Background(), plan.DirectShardSQL, toAny(argStrings(plan.Args))...)
+			got, err := sh.Query(context.Background(), sql, toAny(argStrings(plan.Args))...)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, r := range got {
 				lines++
 				bytes += len(r.Raw)
+				for _, f := range r.Fields {
+					bytes += len(f)
+				}
 			}
 		}
 		return lines, bytes

@@ -478,7 +478,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 			// to gate count++ — that re-check needs the real per-row
 			// value the same way an output read would, or count++ would
 			// silently never fire.
-			wantSQL:     projectedSQL(fieldReads{}, `namespace = ? AND level = 'ERROR'`, true),
+			wantSQL:     plainSQL(`namespace = ? AND level = 'ERROR'`, true),
 			wantCompute: []string{`awk 'LEVEL == "ERROR" { count++ } END { print count }'`},
 		},
 
@@ -494,7 +494,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 		{
 			name:        "grep then awk END block",
 			pipeline:    `cat vimgym.log | grep timeout | awk '{ count++ } END { print count }'`,
-			wantSQL:     projectedSQL(fieldReads{}, `namespace = ? AND regexp_matches(raw, 'timeout')`, false),
+			wantSQL:     plainSQL(`namespace = ? AND regexp_matches(raw, 'timeout')`, false),
 			wantCompute: []string{`awk '{ count++ } END { print count }'`},
 		},
 

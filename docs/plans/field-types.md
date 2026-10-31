@@ -237,10 +237,9 @@ overstated the base). The exact plan's shard SQL costs the same as the handwritt
   plan only); a negative literal (`$2 > -1`, `.q > -1`) is not lowered by either plan; nested
   jq paths; a value awk reads as out of range (`1e999`) is dirty, so it never types a
   locator.
-- **Open:** `projectFields` (the synthetic record, `planner/fieldproj.go`) still feeds
-  awk stages that remain in compute and read a few fields. It bypasses the IR and
-  re-tokenizes `raw` per line. Once aggregates lower it has no job; see the keyed
-  sum design below.
+- **Field projection** (`planner/fieldproj.go`) feeds awk stages that remain in compute
+  and read a few fields; see `field-row-spec.md`. The shard sends those fields' values
+  and compute rebuilds the record, so there is no text record built in SQL.
 
 ## Keyed sum/min/max: design (2026-10-30, revised)
 

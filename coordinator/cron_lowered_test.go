@@ -132,3 +132,47 @@ func TestExecuteForWatch_LoweredVersionMismatch(t *testing.T) {
 type noBinResolver struct{}
 
 func (noBinResolver) Source(name string) (string, string, bool) { return "", "", false }
+
+// A cron whose awk stage reads only some fields sends compute the field form
+// from its lowered plan, as an interactive query does, and gets the same
+// answer as a fire without the lowered plan.
+func TestExecuteForWatch_LoweredPlanSendsTheFieldForm(t *testing.T) {
+	c := setupTestCoordinator(t)
+	spy := &spyCompute{inner: c.Compute}
+	c.Compute = spy
+	cust, err := c.Store.GetOrgByName("kevlar")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pipeline := `cat /log/vimgym.log | awk '{ n += $2 } END { print n }'`
+	lp, err := planner.Lower(pipeline, 1, "bolt", noBinResolver{})
+	if err != nil {
+		t.Fatalf("Lower: %v", err)
+	}
+	loweredJSON, err := json.Marshal(lp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &store.CronWatch{OrgID: cust.ID, Name: "lowered-fields", Schedule: "every 1m", Pipeline: pipeline, Enabled: true, LoweredPlan: loweredJSON}
+
+	res, err := c.ExecuteForWatch(context.Background(), pipeline, fullRange, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowered := drainExec(t, res)
+	req := spy.lastReq
+	if req.FieldSql == "" || req.FieldSql == req.Sql || len(req.FieldSpec.GetPositions()) != 1 || req.FieldSpec.Positions[0] != 2 {
+		t.Errorf("lowered fire sent field sql %q spec %v beside sql %q", req.FieldSql, req.FieldSpec, req.Sql)
+	}
+
+	w.LoweredPlan = nil
+	res, err = c.ExecuteForWatch(context.Background(), pipeline, fullRange, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := drainExec(t, res)
+	if lowered.Text != fresh.Text || len(lowered.Rows) != len(fresh.Rows) {
+		t.Errorf("lowered fire %q differs from the fresh one %q", lowered.Text, fresh.Text)
+	}
+}

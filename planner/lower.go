@@ -116,6 +116,12 @@ type LoweredPlan struct {
 	BinDeps           []BinDep      `json:"bin_deps,omitempty"`
 	CompiledAt        time.Time     `json:"compiled_at"`
 	PlannerVersion    int           `json:"planner_version"`
+	// FieldSQL and FieldSpec are QueryPlan's field form of DirectShardSQL
+	// for a stage that reads only some fields. It binds the same args, so a
+	// fire hydrates one set for both. A plan lowered before these existed has
+	// neither and sends its DirectShardSQL, which still works.
+	FieldSQL  string     `json:"field_sql,omitempty"`
+	FieldSpec *FieldSpec `json:"field_spec,omitempty"`
 }
 
 // BinDep is one /bin/ script the lowered pipeline inlines. Hash is
@@ -230,6 +236,8 @@ func Lower(pipeline string, customerID int64, tier string, resolveBin BinResolve
 		BinDeps:           deps,
 		CompiledAt:        time.Now().UTC(),
 		PlannerVersion:    PlannerVersion,
+		FieldSQL:          plan.FieldSQL,
+		FieldSpec:         plan.FieldSpec,
 	}, nil
 }
 

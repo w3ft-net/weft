@@ -16,8 +16,9 @@ import (
 // empty or blank, so the line splits back into the same fields. A line with
 // no fields, read through $NF, is sent as it is: there $NF is $0.
 //
-// It must agree with the text-record SQL it replaces (planner.syntheticRecordSQL).
-// spec.Positions are ascending, as the planner makes them.
+// The stage sees the same $N, $NF and NF it would on the whole line, which is
+// what the planner relies on to send it only these. spec.Positions are
+// ascending, as the planner makes them.
 func RebuildRecord(spec *pb.FieldSpec, row *pb.ResultRow) string {
 	n := int(row.GetFieldCount())
 	if n == 0 && spec.Last {

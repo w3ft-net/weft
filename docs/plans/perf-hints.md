@@ -5,8 +5,10 @@ slowly. These are advisory: the original ran, results were returned, and we
 attach a "next time, try this" suggestion. They never expose planner or
 storage internals — only the rewritten pipeline and a one-line *why*.
 
-`explain` stays an internal-only debugging tool for working on the planner.
-Hints are the customer-facing equivalent: same insight, no architecture
+`explain` is customer-facing (`shell-explain.md`): it speaks only user terms,
+shows the retrieval's line count, and its report is attached to the error when a
+query hits the time limit (`query-limits.md`). Hints are the unprompted version of
+the same insight, attached to a query that ran slowly, with no architecture
 leakage.
 
 ## Trigger

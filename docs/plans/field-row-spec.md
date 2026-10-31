@@ -1,6 +1,7 @@
 # Field row spec: sending a compute stage only the fields it reads
 
-Status: plan, 2026-10-31. Nothing here is built. It follows `field-types.md`, whose exact
+Status: 2026-10-31. Deploy 1 is built (`bff25a8b` and after) and Deploy 2 is built locally, not
+shipped until the gate below passes. It follows `field-types.md`, whose exact
 plan (`QueryPlan.Typed.Exact`) already lowers an awk filter-and-print over typed fields to
 SQL alone.
 
@@ -90,13 +91,29 @@ accepts.
 
 ## Deploy 2: remove
 
-Coordinator only in effect.
+Coordinator only in effect. Built in the commit after Deploy 1's; do not push it until the
+gate passes.
 
-- Delete `projectFields`, `syntheticRecordSQL`, `fieldSelect` and the regexp.
-- `sql` becomes the plain unprojected query; `field_sql` is the only projected form.
-- Update `TestFieldProjectionShrinksTheWire` to assert the new wire shape.
+- Deleted: `syntheticRecordSQL`, `compiled.fieldSelect`, the `Lines` unnest the text record
+  needed, and the regexp. `projectFields` stays, as the pass that decides the field spec.
+- `DirectShardSQL` is now the plain query (whole lines); `FieldSQL` is the only projected
+  form. A shard without the field form (a cold shard, one from before Deploy 1) sends whole
+  lines, which compute takes as `raw`.
+- `LoweredPlan` carries `field_sql` and `field_spec`, so a cron or dashboard fire sends the
+  field form as an interactive query does. Without them a cron's awk stage would have lost the
+  projection it had when the text record was baked into `DirectShardSQL`. Plans lowered
+  before this still work: their `DirectShardSQL` holds the text record.
+- `TestFieldProjectionShrinksTheWire` measures the field form.
+  `TestDifferentialFieldProjectionLines` now stores events as `SplitLines` does and checks
+  the field form against the reference. (Its rows must not carry a JSON payload, which
+  `SplitLines` never splits; a multi-line row in the shard is the residue under open point 2.)
 
-Rollback: revert and redeploy; Deploy 1's compute and shard still accept the old form.
+What it costs where the field form isn't available, on 200k lines and a stage reading one
+field: the whole line is 11.0 MB of values against 0.5 MB in the field form, where the text
+record sent 1.3 MB. In-process, where bytes are free, the whole query takes the same time
+either way (707 ms whole lines, 727 ms field form), so the saving is wire bytes only.
+
+Rollback: revert and redeploy; Deploy 1's compute and shard still accept both forms.
 
 ## Deploy 3: shard-side aggregates (optional, separate)
 

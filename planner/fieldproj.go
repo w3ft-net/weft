@@ -9,8 +9,8 @@ import (
 	"github.com/graybeardcorp/warp/pkg/awk"
 )
 
-// maxProjectedField bounds how many positions a synthetic record spells out:
-// each position is a term in the shard's expression.
+// maxProjectedField bounds how many positions the field form selects: each
+// position is a column in the shard's query.
 const maxProjectedField = 32
 
 // awkFieldReads is which fields an awk program reads, when it reads nothing
@@ -132,8 +132,9 @@ func awkFieldReads(prog *awk.Program) (reads fieldReads, why string) {
 // those (QueryPlan.FieldSpec): the positions ($1, $3, ...) in order, whether it
 // reads the last field ($NF), and whether it reads the count (NF).
 type FieldSpec struct {
-	Positions []int
-	Last, NF  bool
+	Positions []int `json:"positions,omitempty"`
+	Last      bool  `json:"last,omitempty"`
+	NF        bool  `json:"nf,omitempty"`
 }
 
 func (r fieldReads) spec() *FieldSpec {
@@ -201,64 +202,15 @@ func awkNodeIsPlain(n any) bool {
 	return false
 }
 
-// syntheticRecordSQL is the SQL for a record that has the fields the program
-// reads where it expects them, and a placeholder in every position before the
-// last one it names so the rest keep their places. It reads a line in `raw`,
-// split on blanks as awk's default splitting does. Fields are never empty or
-// blank, so the record splits back into the same fields. Past the last
-// position named it adds placeholders (and the real final field for $NF) only
-// when the program reads NF or $NF, so NF is what the line's is; a program that
-// reads no fields at all gets an empty line. A line with no fields is sent as it
-// is when $NF is read, since there $NF is $0.
-func syntheticRecordSQL(r fieldReads) string {
-	if len(r.positions) == 0 && !r.last && !r.nf {
-		return "''"
-	}
-	const fs = `regexp_extract_all(raw, '[^ \t\r\n]+')`
-	n := "len(" + fs + ")"
-	field := func(i int) string { return fmt.Sprintf("list_extract(%s, %d)", fs, i) }
-
-	need := map[int]bool{}
-	m := 0
-	for _, p := range r.positions {
-		need[p] = true
-		m = max(m, p)
-	}
-	var terms []string
-	for i := 1; i <= m; i++ {
-		val := "'_'"
-		switch {
-		case need[i]:
-			val = field(i)
-		case r.last:
-			val = fmt.Sprintf("CASE WHEN %s = %d THEN %s ELSE '_' END", n, i, field(i))
-		}
-		terms = append(terms, fmt.Sprintf("CASE WHEN %s >= %d THEN ' ' || %s ELSE '' END", n, i, val))
-	}
-	switch {
-	case r.last:
-		terms = append(terms,
-			fmt.Sprintf("repeat(' _', greatest(%s - %d - 1, 0))", n, m),
-			fmt.Sprintf("CASE WHEN %s > %d THEN ' ' || list_extract(%s, %s) ELSE '' END", n, m, fs, n))
-	case r.nf:
-		terms = append(terms, fmt.Sprintf("repeat(' _', greatest(%s - %d, 0))", n, m))
-	}
-	record := "substr(concat(" + strings.Join(terms, ", ") + "), 2)"
-	if r.last {
-		// With no fields NF is 0 and $NF is $0, the line itself, blanks and
-		// all: pass such a line through.
-		return fmt.Sprintf("CASE WHEN %s = 0 THEN raw ELSE %s END", n, record)
-	}
-	return record
-}
-
 // projectFields is field projection: a first compute stage that is an awk
-// program reading only some fields (awkFieldReads) gets, from the shard, a
-// record with just those fields in place instead of each whole line, so far
-// fewer bytes cross to compute. The stage still runs, verbatim, and sees the
-// same $N, $NF and NF. It needs the stage to read shard lines as text, with
-// no other projection ahead of it, no pushed line count (the shard would
-// apply it to rows, not the lines this makes), and a finite log source.
+// program reading only some fields (awkFieldReads) gets, from a shard that
+// has the field form, just those fields' values instead of each whole line, so
+// far fewer bytes cross to compute (QueryPlan.FieldSQL). Compute rebuilds the
+// record, and the stage still runs, verbatim, and sees the same $N, $NF and NF.
+// A shard without the form sends the whole lines. It needs the stage to read
+// shard lines as text, with no other projection ahead of it, no pushed line
+// count (the shard would apply it to rows, and the form can't wrap a tail), and
+// a finite log source.
 func (c *compiled) projectFields(limited bool) {
 	const pass = "field-projection"
 	if len(c.compute) == 0 || c.compute[0].cmd != "awk" || len(c.rowStages) > 0 || c.group != nil {
@@ -283,7 +235,7 @@ func (c *compiled) projectFields(limited bool) {
 		return
 	}
 	reads := *stage.fields
-	c.fieldSelect, c.fieldSpec = syntheticRecordSQL(reads), &reads
+	c.fieldSpec = &reads
 	c.logf(pass, "%s reads only %s: the shard sends just those", label, describeFields(reads))
 }
 

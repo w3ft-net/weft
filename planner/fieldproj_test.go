@@ -106,10 +106,12 @@ func TestProjectFields_Plan(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := c != nil && c.fieldSelect != ""; got != tt.projected {
+			if got := c != nil && c.fieldSpec != nil; got != tt.projected {
 				t.Errorf("projected = %v, want %v\n%s", got, tt.projected, Explain(tt.pipeline))
 			}
-			_ = plan
+			if got := plan.FieldSQL != "" && plan.FieldSpec != nil; got != tt.projected {
+				t.Errorf("field form = %v, want %v\n%s", got, tt.projected, Explain(tt.pipeline))
+			}
 		})
 	}
 }

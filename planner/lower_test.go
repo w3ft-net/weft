@@ -216,3 +216,36 @@ func TestLower_NoArgSourcesWhenCustomerEmpty(t *testing.T) {
 		}
 	}
 }
+
+// A lowered plan keeps the field form of a stage that reads only some fields,
+// through JSON, and its args are the plain query's, so a fire hydrates one set
+// for both. Without it a cron's awk stage would be sent whole lines.
+func TestLower_KeepsTheFieldForm(t *testing.T) {
+	pipeline := `cat /log/weft/coordinator/main.log | awk '{ s += $3 } END { print s }'`
+	lp, err := Lower(pipeline, 1, "bolt", noResolver{})
+	if err != nil {
+		t.Fatalf("Lower: %v", err)
+	}
+	b, err := json.Marshal(lp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got LoweredPlan
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	live, err := Plan(pipeline, 1, "", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FieldSQL == "" || got.FieldSpec == nil || len(got.FieldSpec.Positions) != 1 || got.FieldSpec.Positions[0] != 3 {
+		t.Fatalf("lowered field form = %q %+v, want one over $3", got.FieldSQL, got.FieldSpec)
+	}
+	// Same text as a live plan once the time bounds are out of it.
+	if strings.Count(got.FieldSQL, "?") != strings.Count(got.DirectShardSQL, "?") {
+		t.Errorf("field sql has %d placeholders, the plain sql %d", strings.Count(got.FieldSQL, "?"), strings.Count(got.DirectShardSQL, "?"))
+	}
+	if live.FieldSQL == "" {
+		t.Errorf("the live plan has no field form either")
+	}
+}
