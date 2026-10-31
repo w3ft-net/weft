@@ -140,12 +140,14 @@ func TestFieldFacts_ShardToCoordinatorToPostgres(t *testing.T) {
 	r := newFactsRig(t)
 
 	r.ingest(factTypedAfterForTest, "7", "3")
-	if got := r.shard.Shard().FieldFacts(); len(got) != 2 {
-		t.Fatalf("shard has %d pending facts before the heartbeat, want $2 and .q: %+v", len(got), got)
+	// "7" is a number and a whole number: $2 and $2#int (the integer fact a keyed
+	// sum needs), and .q.
+	if got := r.shard.Shard().FieldFacts(); len(got) != 3 {
+		t.Fatalf("shard has %d pending facts before the heartbeat, want $2, $2#int and .q: %+v", len(got), got)
 	}
 	r.beat()
 
-	for _, loc := range []string{"$2", ".q"} {
+	for _, loc := range []string{"$2", "$2#int", ".q"} {
 		if !r.typedOnCoordinator(loc) {
 			t.Errorf("coordinator doesn't hold %s as typed after the heartbeat", loc)
 		}
@@ -159,17 +161,17 @@ func TestFieldFacts_ShardToCoordinatorToPostgres(t *testing.T) {
 
 	// Another beat with nothing new changes nothing.
 	r.beat()
-	if len(r.storedLocators()) != 2 {
+	if len(r.storedLocators()) != 3 {
 		t.Errorf("rows after an idle heartbeat: %v", r.storedLocators())
 	}
 
-	// A row that isn't a number retracts $2 and .q everywhere.
+	// A row that isn't a number retracts $2, $2#int and .q everywhere.
 	r.ingest(1, "7abc", `"s"`)
-	if got := r.shard.Shard().FieldFacts(); len(got) != 2 {
-		t.Fatalf("shard has %d pending retractions, want 2: %+v", len(got), got)
+	if got := r.shard.Shard().FieldFacts(); len(got) != 3 {
+		t.Fatalf("shard has %d pending retractions, want 3: %+v", len(got), got)
 	}
 	r.beat()
-	for _, loc := range []string{"$2", ".q"} {
+	for _, loc := range []string{"$2", "$2#int", ".q"} {
 		if r.typedOnCoordinator(loc) {
 			t.Errorf("coordinator still holds %s as typed after the retraction", loc)
 		}
@@ -212,6 +214,54 @@ func TestFieldFacts_ReachTheQueryPlannersKey(t *testing.T) {
 	}
 }
 
+// The keys a keyed aggregate's plan asks for reach the registry the same way: a
+// sum needs the integer fact beside the number one, a max or min only the number
+// one, so a field holding fractions types the second plan and not the first.
+func TestFieldFacts_KeyedAggregatePlansAskForTheKeysTheShardReports(t *testing.T) {
+	typedFor := func(r *factsRig, program string) bool {
+		plan, err := planner.Plan(`cat /log/ns/prod/svc/main.log | awk '`+program+`'`, 1, "", time.Time{}, time.Time{})
+		if err != nil || plan.Typed == nil {
+			t.Fatalf("plan %s: %v, typed %+v", program, err, plan.Typed)
+		}
+		tp := plan.Typed
+		return r.prov.ShardFieldsTyped(r.shardID, tp.CustomerID, tp.Namespace, tp.Service, tp.Kind, tp.Env, tp.Requires)
+	}
+	const sum = `{ s[$1] += $2 } END { for (k in s) print k, s[k] }`
+	const max = `{ if ($2 > m[$1]) m[$1] = $2 } END { for (k in m) print k, m[k] }`
+
+	// Each rig holds a database until its test ends, so each case is a subtest.
+	t.Run("whole numbers", func(t *testing.T) {
+		r := newFactsRig(t)
+		if typedFor(r, sum) || typedFor(r, max) {
+			t.Fatal("typed before any fact was reported")
+		}
+		r.ingest(factTypedAfterForTest, "7", "3")
+		r.beat()
+		if !typedFor(r, sum) || !typedFor(r, max) {
+			t.Error("a field of whole numbers does not type the sum and the max plans")
+		}
+		r.ingest(1, "7.5", "3")
+		r.beat()
+		if typedFor(r, sum) {
+			t.Error("the sum plan is still typed after a fraction retracted the integer fact")
+		}
+		if !typedFor(r, max) {
+			t.Error("a fraction retracted the number fact the max plan needs: it is still a number")
+		}
+	})
+	t.Run("fractions", func(t *testing.T) {
+		r := newFactsRig(t)
+		r.ingest(factTypedAfterForTest, "7.5", "3")
+		r.beat()
+		if typedFor(r, sum) {
+			t.Error("the sum plan is typed over a field that never held only whole numbers")
+		}
+		if !typedFor(r, max) {
+			t.Error("the max plan is not typed over a field of numbers")
+		}
+	})
+}
+
 // lossyAck delivers heartbeats but loses the acknowledgement on the way back.
 type lossyAck struct{ pb.WeftCoordinatorClient }
 
@@ -232,11 +282,11 @@ func TestFieldFacts_ALostAckIsResentAndTheDuplicateIsHarmless(t *testing.T) {
 	r.client = lossyAck{good}
 
 	r.beat()
-	if got := r.shard.Shard().FieldFacts(); len(got) != 2 {
-		t.Fatalf("after a lost ack the shard has %d pending facts, want 2 to resend", len(got))
+	if got := r.shard.Shard().FieldFacts(); len(got) != 3 {
+		t.Fatalf("after a lost ack the shard has %d pending facts, want 3 to resend", len(got))
 	}
 	r.beat() // the duplicate
-	if got := r.storedLocators(); len(got) != 2 || !r.typedOnCoordinator("$2") {
+	if got := r.storedLocators(); len(got) != 3 || !r.typedOnCoordinator("$2") {
 		t.Errorf("duplicate delivery changed the stored facts: %v", got)
 	}
 
