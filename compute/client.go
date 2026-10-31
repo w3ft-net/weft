@@ -69,6 +69,9 @@ func (s *grpcLineStream) Next(_ context.Context) (Line, bool, error) {
 		if resp.MissingShard != "" {
 			return Line{}, false, &MissingRowsError{ShardID: resp.MissingShard, Err: errors.New(resp.Error)}
 		}
+		if resp.Inexact {
+			return Line{}, false, &InexactAggregateError{Reason: resp.Error}
+		}
 		if resp.Error != "" {
 			return Line{}, false, fmt.Errorf("compute error: %s", resp.Error)
 		}

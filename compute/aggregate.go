@@ -101,6 +101,11 @@ const (
 	// aggNumericMax and aggNumericMin are the line sort -n puts last or first.
 	aggNumericMax = "numeric_max"
 	aggNumericMin = "numeric_min"
+	// aggKeySum, aggKeyMax and aggKeyMin are an awk sum, greatest or least of
+	// a field per key (keyedAggregator).
+	aggKeySum = "key_sum"
+	aggKeyMax = "key_max"
+	aggKeyMin = "key_min"
 )
 
 // isGroupAggregate is whether name is one of the group aggregators, which
@@ -108,7 +113,8 @@ const (
 // span aggregates.
 func isGroupAggregate(name string) bool {
 	switch name {
-	case aggLines, aggDistinct, aggCountDistinct, aggDistinctTotal, aggKeyCount, aggBytes, aggNumericMax, aggNumericMin:
+	case aggLines, aggDistinct, aggCountDistinct, aggDistinctTotal, aggKeyCount, aggBytes, aggNumericMax, aggNumericMin,
+		aggKeySum, aggKeyMax, aggKeyMin:
 		return true
 	}
 	return false
@@ -138,6 +144,12 @@ func GroupToProto(g *planner.GroupSpec) *pb.GroupSpec {
 		out.Render = pb.GroupRender_GROUP_RENDER_NUMERIC_MAX
 	case planner.RenderNumericMin:
 		out.Render = pb.GroupRender_GROUP_RENDER_NUMERIC_MIN
+	case planner.RenderKeySum:
+		out.Render = pb.GroupRender_GROUP_RENDER_KEY_SUM
+	case planner.RenderKeyMax:
+		out.Render = pb.GroupRender_GROUP_RENDER_KEY_MAX
+	case planner.RenderKeyMin:
+		out.Render = pb.GroupRender_GROUP_RENDER_KEY_MIN
 	default:
 		panic("compute: no GroupSpec for render " + string(g.Render))
 	}
@@ -166,6 +178,12 @@ func groupAggregate(g *pb.GroupSpec) (string, error) {
 		return aggNumericMax, nil
 	case pb.GroupRender_GROUP_RENDER_NUMERIC_MIN:
 		return aggNumericMin, nil
+	case pb.GroupRender_GROUP_RENDER_KEY_SUM:
+		return aggKeySum, nil
+	case pb.GroupRender_GROUP_RENDER_KEY_MAX:
+		return aggKeyMax, nil
+	case pb.GroupRender_GROUP_RENDER_KEY_MIN:
+		return aggKeyMin, nil
 	}
 	return "", fmt.Errorf("compute: unknown group render %s", g.Render)
 }
@@ -208,6 +226,8 @@ func newAggregator(fn string, sink func(*pb.ResultRow) bool) (rowAggregator, err
 		return &bytesAggregator{sink: sink}, nil
 	case aggNumericMax, aggNumericMin:
 		return &extremeAggregator{max: fn == aggNumericMax, sink: sink}, nil
+	case aggKeySum, aggKeyMax, aggKeyMin:
+		return &keyedAggregator{fn: fn, sink: sink}, nil
 	}
 	return nil, fmt.Errorf("compute: unknown aggregate %q", fn)
 }

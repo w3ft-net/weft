@@ -53,7 +53,15 @@ func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, direc
 			leaves = append(leaves, f.typed...)
 		}
 	}
-	if len(leaves) == 0 {
+	// An awk aggregate that stays in compute becomes the shard's GROUP BY on
+	// shards with its facts. It swaps no SQL: its plan is the Exact one.
+	var aggFacts []string
+	if len(c.compute) > 0 {
+		if a, ok := c.compute[0].nodes[0].(*aggregateNode); ok {
+			aggFacts = a.agg.facts()
+		}
+	}
+	if len(leaves) == 0 && len(aggFacts) == 0 {
 		return nil
 	}
 	swap := func(sql string) (string, bool) {
@@ -84,6 +92,11 @@ func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, direc
 	for _, l := range leaves {
 		if !slices.Contains(requires, l.locator) {
 			requires = append(requires, l.locator)
+		}
+	}
+	for _, loc := range aggFacts {
+		if !slices.Contains(requires, loc) {
+			requires = append(requires, loc)
 		}
 	}
 	slices.Sort(requires)

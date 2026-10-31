@@ -48,20 +48,32 @@ const (
 	// GROUP_RENDER_NUMERIC_MIN: the one line sort -n puts first (or sort -rn
 	// puts last): the least leading number, ties to the lesser line.
 	GroupRender_GROUP_RENDER_NUMERIC_MIN GroupRender = 8
+	// GROUP_RENDER_KEY_SUM, GROUP_RENDER_KEY_MAX and GROUP_RENDER_KEY_MIN: each
+	// distinct line, a space, then the sum, greatest or least of a field over
+	// its rows (awk '{ s[$1] += $2 } END { for (k in s) print k, s[k] }').
+	// Each shard row carries the value beside the key (planner.SumColumn and
+	// the columns after it) and compute merges them. A compute that does not know
+	// these fails the request, as it must: ignoring one would print counts.
+	GroupRender_GROUP_RENDER_KEY_SUM GroupRender = 9
+	GroupRender_GROUP_RENDER_KEY_MAX GroupRender = 10
+	GroupRender_GROUP_RENDER_KEY_MIN GroupRender = 11
 )
 
 // Enum value maps for GroupRender.
 var (
 	GroupRender_name = map[int32]string{
-		0: "GROUP_RENDER_UNSPECIFIED",
-		1: "GROUP_RENDER_TOTAL",
-		2: "GROUP_RENDER_LINE",
-		3: "GROUP_RENDER_COUNT_LINE",
-		4: "GROUP_RENDER_DISTINCT_TOTAL",
-		5: "GROUP_RENDER_KEY_COUNT",
-		6: "GROUP_RENDER_BYTES",
-		7: "GROUP_RENDER_NUMERIC_MAX",
-		8: "GROUP_RENDER_NUMERIC_MIN",
+		0:  "GROUP_RENDER_UNSPECIFIED",
+		1:  "GROUP_RENDER_TOTAL",
+		2:  "GROUP_RENDER_LINE",
+		3:  "GROUP_RENDER_COUNT_LINE",
+		4:  "GROUP_RENDER_DISTINCT_TOTAL",
+		5:  "GROUP_RENDER_KEY_COUNT",
+		6:  "GROUP_RENDER_BYTES",
+		7:  "GROUP_RENDER_NUMERIC_MAX",
+		8:  "GROUP_RENDER_NUMERIC_MIN",
+		9:  "GROUP_RENDER_KEY_SUM",
+		10: "GROUP_RENDER_KEY_MAX",
+		11: "GROUP_RENDER_KEY_MIN",
 	}
 	GroupRender_value = map[string]int32{
 		"GROUP_RENDER_UNSPECIFIED":    0,
@@ -73,6 +85,9 @@ var (
 		"GROUP_RENDER_BYTES":          6,
 		"GROUP_RENDER_NUMERIC_MAX":    7,
 		"GROUP_RENDER_NUMERIC_MIN":    8,
+		"GROUP_RENDER_KEY_SUM":        9,
+		"GROUP_RENDER_KEY_MAX":        10,
+		"GROUP_RENDER_KEY_MIN":        11,
 	}
 )
 
@@ -1699,7 +1714,11 @@ type ExecuteQueryStreamResponse struct {
 	Error string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
 	// missing_shard names the shard whose rows the answer is missing when
 	// error is that shard's failure; the query then has no answer.
-	MissingShard  string `protobuf:"bytes,3,opt,name=missing_shard,json=missingShard,proto3" json:"missing_shard,omitempty"`
+	MissingShard string `protobuf:"bytes,3,opt,name=missing_shard,json=missingShard,proto3" json:"missing_shard,omitempty"`
+	// inexact is set when error is compute.InexactAggregateError: a keyed
+	// aggregate the shards computed could not be shown to equal awk's. Nothing
+	// was printed, and the same query without the field facts has an answer.
+	Inexact       bool `protobuf:"varint,4,opt,name=inexact,proto3" json:"inexact,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1753,6 +1772,13 @@ func (x *ExecuteQueryStreamResponse) GetMissingShard() string {
 		return x.MissingShard
 	}
 	return ""
+}
+
+func (x *ExecuteQueryStreamResponse) GetInexact() bool {
+	if x != nil {
+		return x.Inexact
+	}
+	return false
 }
 
 type AuditFleetRequest struct {
@@ -4514,11 +4540,12 @@ const file_weft_proto_rawDesc = "" +
 	"\tGroupSpec\x12)\n" +
 	"\x06render\x18\x01 \x01(\x0e2\x11.weft.GroupRenderR\x06render\x12&\n" +
 	"\x05order\x18\x02 \x01(\x0e2\x10.weft.GroupOrderR\x05order\x12\x14\n" +
-	"\x05limit\x18\x03 \x01(\x03R\x05limit\"m\n" +
+	"\x05limit\x18\x03 \x01(\x03R\x05limit\"\x87\x01\n" +
 	"\x1aExecuteQueryStreamResponse\x12\x14\n" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12#\n" +
-	"\rmissing_shard\x18\x03 \x01(\tR\fmissingShard\"\x13\n" +
+	"\rmissing_shard\x18\x03 \x01(\tR\fmissingShard\x12\x18\n" +
+	"\ainexact\x18\x04 \x01(\bR\ainexact\"\x13\n" +
 	"\x11AuditFleetRequest\"\x9a\x01\n" +
 	"\x0fAuditShardState\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
@@ -4709,7 +4736,7 @@ const file_weft_proto_rawDesc = "" +
 	"\x04tier\x18\x04 \x01(\tR\x04tier\x12\x14\n" +
 	"\x05state\x18\x05 \x01(\tR\x05state\"A\n" +
 	"\x13ListBucketsResponse\x12*\n" +
-	"\abuckets\x18\x01 \x03(\v2\x10.weft.BucketInfoR\abuckets*\x88\x02\n" +
+	"\abuckets\x18\x01 \x03(\v2\x10.weft.BucketInfoR\abuckets*\xd6\x02\n" +
 	"\vGroupRender\x12\x1c\n" +
 	"\x18GROUP_RENDER_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12GROUP_RENDER_TOTAL\x10\x01\x12\x15\n" +
@@ -4719,7 +4746,11 @@ const file_weft_proto_rawDesc = "" +
 	"\x16GROUP_RENDER_KEY_COUNT\x10\x05\x12\x16\n" +
 	"\x12GROUP_RENDER_BYTES\x10\x06\x12\x1c\n" +
 	"\x18GROUP_RENDER_NUMERIC_MAX\x10\a\x12\x1c\n" +
-	"\x18GROUP_RENDER_NUMERIC_MIN\x10\b*E\n" +
+	"\x18GROUP_RENDER_NUMERIC_MIN\x10\b\x12\x18\n" +
+	"\x14GROUP_RENDER_KEY_SUM\x10\t\x12\x18\n" +
+	"\x14GROUP_RENDER_KEY_MAX\x10\n" +
+	"\x12\x18\n" +
+	"\x14GROUP_RENDER_KEY_MIN\x10\v*E\n" +
 	"\n" +
 	"GroupOrder\x12\x1b\n" +
 	"\x17GROUP_ORDER_UNSPECIFIED\x10\x00\x12\x1a\n" +

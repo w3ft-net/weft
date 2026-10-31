@@ -43,6 +43,9 @@ type Query struct {
 	// group makes this the shard half of a QueryPlan.Group: it groups the
 	// lines of its subquery's raw (see Group).
 	group GroupRender
+	// agg, on a group's subquery and on the group itself, is the awk
+	// aggregate they compute the value of (see Group).
+	agg *keyedAgg
 	// spanKind makes this a span query (see spans.go): the shard half of
 	// one of the AggregateSpan* aggregates, rendered straight from the
 	// table.
@@ -95,6 +98,32 @@ const CountColumn = "count"
 // BytesColumn names the extra column carrying a RenderBytes aggregate's
 // byte total: each line's bytes and the newline wc counts after it.
 const BytesColumn = "bytes"
+
+// The columns an awk aggregate's group query adds (see keyedAgg). The inner
+// query selects the value of the field beside each line (ValColumn, as a
+// DOUBLE, and for a max or min TxtColumn, its text); the group returns, per key:
+//
+//   - a sum: SumColumn, AbsSumColumn (the sum of the absolute values: the sum
+//     is exact when this stays within 2^53, since then every partial sum is a
+//     whole number a float holds) and BadColumn, how many values were not
+//     whole numbers;
+//   - a max or min: BestColumn (the greatest or least number), BestTxtColumn
+//     (the text of the first row, in merge order, holding it: awk assigns the
+//     field, so it prints as it was written), BestNsColumn (that row's ts, for
+//     ties between shards) and BadColumn, how many values were not numbers.
+//
+// A shard that reports bad rows had a value the fact that chose the plan said it
+// would not have; compute then fails the query so the base plan can run.
+const (
+	ValColumn     = "agg_val"
+	TxtColumn     = "agg_txt"
+	SumColumn     = "agg_sum"
+	AbsSumColumn  = "agg_abs"
+	BadColumn     = "agg_bad"
+	BestColumn    = "agg_best"
+	BestTxtColumn = "agg_best_txt"
+	BestNsColumn  = "agg_best_ns"
+)
 
 // SortKeyColumn names the extra column carrying a numeric extreme's number:
 // the value sort -n compares the line by.
@@ -293,14 +322,21 @@ func (q *Query) fieldForm(spec *fieldReads) *Query {
 // (RenderTotal: one row, an empty line with the total), in the order
 // compute merges on. q must have no limit; its meta-variable and payload
 // columns are dropped.
-func (q *Query) Group(render GroupRender, orderBy string, preds []Predicate) *Query {
+//
+// agg, for an awk sum, max or min, adds the field's value (see ValColumn) to
+// the subquery and what the aggregate reports of it to the group.
+func (q *Query) Group(render GroupRender, orderBy string, preds []Predicate, agg *keyedAgg) *Query {
 	inner := q.lineSplit()
 	inner.metaCols, inner.includePayload = nil, false
+	if agg != nil && agg.op != aggCount {
+		inner.agg = agg
+	}
 	return &Query{
 		from:       From{Subquery: inner, Alias: "t"},
 		predicates: preds,
 		orderBy:    orderBy,
 		group:      render,
+		agg:        inner.agg,
 	}
 }
 
@@ -412,6 +448,9 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 		if q.group == RenderBytes {
 			extra = fmt.Sprintf(", CAST(sum(strlen(raw) + 1) AS BIGINT) AS %s", BytesColumn)
 		}
+		if q.agg != nil {
+			extra += q.agg.groupColumns()
+		}
 		fmt.Fprintf(b, "%s, min(ts) AS ts, count(*) AS %s%s FROM (", key, CountColumn, extra)
 		q.from.Subquery.renderInto(b, onArg)
 		b.WriteString(") AS " + q.from.Alias)
@@ -449,6 +488,9 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 		} else {
 			b.WriteString(", CAST(payload AS VARCHAR) AS " + PayloadColumn)
 		}
+	}
+	if q.agg != nil && q.group == "" {
+		b.WriteString(q.agg.valueColumns())
 	}
 	if q.fieldSpec != nil {
 		for _, p := range q.fieldSpec.positions {
@@ -494,4 +536,33 @@ func (q *Query) renderWhere(b *strings.Builder, onArg func(ArgSource)) {
 			onArg(a)
 		}
 	}
+}
+
+// valueColumns are the columns a keyed aggregate's subquery adds to each line:
+// the field's number, and for a max or min its text. A value that is not a
+// number is NULL, which the group counts as bad.
+func (a *keyedAgg) valueColumns() string {
+	cols := fmt.Sprintf(", TRY_CAST(list_extract(fields, %d) AS DOUBLE) AS %s", a.field, ValColumn)
+	if a.op != aggSum {
+		cols += fmt.Sprintf(", list_extract(fields, %d) AS %s", a.field, TxtColumn)
+	}
+	return cols
+}
+
+// groupColumns are the columns a keyed aggregate's group returns per key
+// beyond the count.
+func (a *keyedAgg) groupColumns() string {
+	if a.op == aggSum {
+		return fmt.Sprintf(", CAST(sum(%[1]s) AS DOUBLE) AS %[2]s, CAST(sum(abs(%[1]s)) AS DOUBLE) AS %[3]s, count(*) FILTER (WHERE %[1]s IS NULL OR %[1]s <> trunc(%[1]s)) AS %[4]s",
+			ValColumn, SumColumn, AbsSumColumn, BadColumn)
+	}
+	// The first row, in the order awk meets them, holding the best value: awk
+	// replaces only for a strictly better one.
+	dir, best := "DESC", "max"
+	if a.op == aggMin {
+		dir, best = "ASC", "min"
+	}
+	first := fmt.Sprintf("ORDER BY %s %s, t.ts, t.%s NULLS FIRST, t.%s", ValColumn, dir, EventIDColumn, LineNoColumn)
+	return fmt.Sprintf(", %[1]s(%[2]s) AS %[3]s, first(%[4]s %[5]s) AS %[6]s, CAST(epoch_ns(first(t.ts %[5]s)) AS BIGINT) AS %[7]s, count(*) FILTER (WHERE %[2]s IS NULL) AS %[8]s",
+		best, ValColumn, BestColumn, TxtColumn, first, BestTxtColumn, BestNsColumn, BadColumn)
 }

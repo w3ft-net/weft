@@ -31,7 +31,8 @@ type compiled struct {
 	// stages, if any; aggregated is those stages' nodes. aggregate is a
 	// trace or span source's own aggregate (spans.go).
 	group    *GroupSpec
-	groupKey string // the SQL a tally groups by, in place of raw
+	groupKey string    // the SQL an awk aggregate groups by, in place of raw
+	groupAgg *keyedAgg // the awk aggregate the group is, if it is one
 	// fieldSpec, when set, is the fields the first compute stage reads
 	// (projectFields), for the field form of the query that sends their
 	// values in place of each line (QueryPlan.FieldSQL).
@@ -87,10 +88,23 @@ func nodeKind(n node) string {
 		return "Uniq"
 	case *countNode:
 		return "Count"
-	case *tallyNode:
-		return "Tally"
+	case *aggregateNode:
+		return aggregateKind(n.(*aggregateNode).agg.op)
 	}
 	return "Opaque"
+}
+
+// aggregateKind is what Explain calls an aggregate node.
+func aggregateKind(op aggOp) string {
+	switch op {
+	case aggSum:
+		return "Sum"
+	case aggMax:
+		return "Max"
+	case aggMin:
+		return "Min"
+	}
+	return "Tally"
 }
 
 // pushFilters is filter pushdown. Starting from the scan, filters and
@@ -355,14 +369,19 @@ func (c *compiled) fuseAggregate(limited bool) {
 	var ordered bool
 	var limit int
 	var key string
+	var agg *keyedAgg
 	switch first := c.compute[0].nodes[0].(type) {
 	case *countNode:
 		render, n = RenderTotal, 1
 		if first.bytes {
 			render = RenderBytes
 		}
-	case *tallyNode:
-		render, n, key = RenderKeyCount, 1, first.key
+	case *aggregateNode:
+		if len(first.agg.facts()) > 0 && !first.typed {
+			c.logf(pass, "skipped %s: $%d is not known to hold only %s", c.label(first), first.agg.field, first.agg.holds())
+			return
+		}
+		render, n, key, agg = first.agg.render(), 1, first.agg.key, &first.agg
 	case *sortNode:
 		if first.keyed {
 			r, ok := numericEnd(first, c.compute[1:])
@@ -428,7 +447,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 	c.shard += len(c.aggregated)
 	c.compute = c.compute[n:]
 	c.group = &GroupSpec{Render: render, ByCount: ordered, Limit: limit}
-	c.groupKey = key
+	c.groupKey, c.groupAgg = key, agg
 	switch {
 	case render == RenderTotal || render == RenderBytes || render == RenderNumericMax || render == RenderNumericMin:
 		c.shardOrderBy = ""

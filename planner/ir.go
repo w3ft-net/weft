@@ -92,13 +92,19 @@ type countNode struct {
 	bytes bool
 }
 
-// tallyNode is an awk count per key (awkTally): key is the SQL for the
-// key. It is an aggregate on its own, like countNode; why says why the stage
-// would run in compute if the aggregate isn't fused.
-type tallyNode struct {
+// aggregateNode is an awk aggregate per key (awkKeyed): a count, or a sum,
+// max or min of a field. It is an aggregate on its own, like countNode; why
+// says why the stage would run in compute if the aggregate isn't fused.
+//
+// A count is exact for any key. The others are exact only on shards whose
+// field facts say so (keyedAgg.facts): typed says the plan assumes they do, as
+// the plan the coordinator uses when every shard has them (QueryPlan.Typed).
+// Without it the node stays a compute stage.
+type aggregateNode struct {
 	at
-	key string
-	why reason
+	agg   keyedAgg
+	typed bool
+	why   reason
 }
 
 // opaqueNode runs its stage, verbatim, in compute.

@@ -136,6 +136,10 @@ func TestGroupToProto(t *testing.T) {
 		{planner.RenderTotal, pb.GroupRender_GROUP_RENDER_TOTAL},
 		{planner.RenderLine, pb.GroupRender_GROUP_RENDER_LINE},
 		{planner.RenderCountLine, pb.GroupRender_GROUP_RENDER_COUNT_LINE},
+		{planner.RenderKeyCount, pb.GroupRender_GROUP_RENDER_KEY_COUNT},
+		{planner.RenderKeySum, pb.GroupRender_GROUP_RENDER_KEY_SUM},
+		{planner.RenderKeyMax, pb.GroupRender_GROUP_RENDER_KEY_MAX},
+		{planner.RenderKeyMin, pb.GroupRender_GROUP_RENDER_KEY_MIN},
 	} {
 		if got := GroupToProto(&planner.GroupSpec{Render: tc.render}); got.GetRender() != tc.want {
 			t.Errorf("%s: render = %s, want %s", tc.render, got.GetRender(), tc.want)

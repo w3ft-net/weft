@@ -145,6 +145,13 @@ const (
 	// RenderKeyCount is each distinct line, a space, and its count: an awk
 	// tally.
 	RenderKeyCount GroupRender = "key_count"
+	// RenderKeySum, RenderKeyMax and RenderKeyMin are each distinct key, a
+	// space, and the sum, greatest or least of a field over its rows: an awk
+	// aggregate (see keyedAgg). The shard sends the value beside the key, and
+	// compute merges the shards' values.
+	RenderKeySum GroupRender = "key_sum"
+	RenderKeyMax GroupRender = "key_max"
+	RenderKeyMin GroupRender = "key_min"
 	// RenderBytes is one bare number, the bytes of every line with a
 	// newline after each: `wc -c`.
 	RenderBytes GroupRender = "bytes"
@@ -163,6 +170,13 @@ type GroupSpec struct {
 	// -n N` after uniq -c.
 	ByCount bool `json:"by_count,omitempty"`
 	Limit   int  `json:"limit,omitempty"`
+}
+
+// Exactness is whether the group's value depends on shard facts the query
+// can find unmet: an awk sum, max or min. Compute reports it as an
+// InexactAggregateError when it does, and the coordinator runs the base plan.
+func (g *GroupSpec) Exactness() bool {
+	return g.Render == RenderKeySum || g.Render == RenderKeyMax || g.Render == RenderKeyMin
 }
 
 // GrepPattern captures a grep filter for live tail matching.
@@ -389,7 +403,7 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 	}
 	if c.group != nil {
 		// No line count to keep apart: both paths group.
-		shardQuery = sql.Group(c.group.Render, c.shardOrderBy, linePreds)
+		shardQuery = sql.Group(c.group.Render, c.shardOrderBy, linePreds, c.groupAgg)
 		directQuery = shardQuery
 		shardSQL, shardArgs, shardArgSources = shardQuery.ToSQLWithSources()
 	}

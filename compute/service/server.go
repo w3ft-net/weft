@@ -39,6 +39,10 @@ func (s *Server) ExecuteQueryStream(req *pb.ExecuteQueryRequest, out pb.WeftComp
 			if errors.As(err, &missing) {
 				resp.MissingShard, resp.Error = missing.ShardID, missing.Err.Error()
 			}
+			var inexact *compute.InexactAggregateError
+			if errors.As(err, &inexact) {
+				resp.Inexact, resp.Error = true, inexact.Reason
+			}
 			return out.Send(resp)
 		}
 		if !ok {

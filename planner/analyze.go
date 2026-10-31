@@ -156,7 +156,7 @@ func whyAfter(s *loweredStage, barrier int, lineCount bool) *Advice {
 			if n.why.code != reasonNone {
 				return adviceFor(n.why, s.cmd)
 			}
-		case *tallyNode:
+		case *aggregateNode:
 			if n.why.code != reasonNone {
 				return adviceFor(n.why, s.cmd)
 			}

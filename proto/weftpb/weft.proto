@@ -359,6 +359,15 @@ enum GroupRender {
   // GROUP_RENDER_NUMERIC_MIN: the one line sort -n puts first (or sort -rn
   // puts last): the least leading number, ties to the lesser line.
   GROUP_RENDER_NUMERIC_MIN = 8;
+  // GROUP_RENDER_KEY_SUM, GROUP_RENDER_KEY_MAX and GROUP_RENDER_KEY_MIN: each
+  // distinct line, a space, then the sum, greatest or least of a field over
+  // its rows (awk '{ s[$1] += $2 } END { for (k in s) print k, s[k] }').
+  // Each shard row carries the value beside the key (planner.SumColumn and
+  // the columns after it) and compute merges them. A compute that does not know
+  // these fails the request, as it must: ignoring one would print counts.
+  GROUP_RENDER_KEY_SUM = 9;
+  GROUP_RENDER_KEY_MAX = 10;
+  GROUP_RENDER_KEY_MIN = 11;
 }
 
 // GroupOrder is how compute orders the merged groups before printing them.
@@ -386,6 +395,10 @@ message ExecuteQueryStreamResponse {
   // missing_shard names the shard whose rows the answer is missing when
   // error is that shard's failure; the query then has no answer.
   string missing_shard = 3;
+  // inexact is set when error is compute.InexactAggregateError: a keyed
+  // aggregate the shards computed could not be shown to equal awk's. Nothing
+  // was printed, and the same query without the field facts has an answer.
+  bool inexact = 4;
 }
 
 // ---------------------------------------------------------------------------
