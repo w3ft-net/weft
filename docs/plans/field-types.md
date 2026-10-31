@@ -299,11 +299,14 @@ stage, as for the numeric filters. What changed from the design below, and why:
   more than 50 awk fields per source, past which a field has no fact; rows ingested before
   2026-10-14, whose `fields` is the older split, as for every lowering over `$N`; a stage after the
   aggregate that prints without reading input.
-- **Deploy order:** compute first (it must know the three new `GroupRender` values, and an old
-  one fails the request, as it should), then the shards (they report `$N#int`; an old shard never
-  does, so the coordinator never picks the plan for it), then the coordinator. The coordinator
-  alone sends the exact plan, and only when every shard has the facts, so a half-rolled fleet
-  keeps the base plan.
+- **Deploy order.** Every deploy rolls coordinator, then compute, then shards, so this is what
+  that order does to it. The exact plan is chosen only when every shard reports the facts, and no
+  shard does until a new-window shard has classified 1,000 rows (and `$N#int` only from shards running
+  this release, which roll last), so the sum, max and min cannot reach an old compute. What can: a
+  count with a sort or head folded into it needs no facts, and a coordinator that sends it to a
+  compute from before `GROUP_ORDER_VALUE` gets an error ("unknown group order"), not a wrong
+  answer, until compute rolls. That window is the only exposure. A sort dropped ahead of a count
+  sends `key_count` as before, which an old compute understands.
 - **Tests:** `planner/keyed_test.go` (recognized shapes, requirements, pinned SQL, `explain`);
   differential tests in `planner/difftest/keyed_test.go` against the real awk over 1, 2, 3 and 5
   shards, with tie spellings, keys that never beat zero, and the inexact cases; `compute`
