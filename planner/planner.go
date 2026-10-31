@@ -288,8 +288,11 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 	c.splitCompute()
 	c.pushProjection()
 	c.hoistFilters()
-	for _, s := range append(c.rowStages, c.compute...) {
-		c.readsMeta = c.readsMeta || s.readsMeta
+	// Shard rows carry meta-variables to the row stages, which run on them, and
+	// to the first compute stage; a later stage reads what the one before it
+	// wrote.
+	for _, s := range append(slices.Clone(c.rowStages), c.compute[:min(len(c.compute), 1)]...) {
+		c.meta = c.meta.merge(s.meta)
 	}
 
 	// SQL backend: the source, then every node the shard runs.
@@ -338,8 +341,8 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 	// `HOST`) gets it from the row: the shard projects every
 	// MetaVarColumns column alongside raw, and compute (compute/
 	// metavars.go) hands the values to the stage.
-	if c.readsMeta {
-		sql.includeMetaVars = true
+	if c.meta.Reads() {
+		sql.metaCols = c.meta.Columns()
 	}
 
 	orderDesc := sql.orderBy == "ts DESC"
@@ -504,7 +507,7 @@ func addSourcePredicates(sql *Query, src sourceInfo) {
 	if (src.cmd == "trace" || src.cmd == "trace_spans") && spanAggregateOf(src) == "" {
 		// A trace fans out across every service a request touched, so its
 		// rows always carry namespace and service.
-		sql.includeMetaVars = true
+		sql.metaCols = MetaVarColumns
 	}
 }
 

@@ -15,13 +15,13 @@ func TestPrefilter_StageStillRuns(t *testing.T) {
 		{
 			name:        "nested AND inside OR",
 			pipeline:    `cat vimgym.log | awk '(LEVEL == "ERROR" && $3 > 100) || LEVEL == "FATAL"'`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, parent_span_id, duration_ns FROM logs WHERE namespace = ? AND ((level = 'ERROR' AND (TRY_CAST(list_extract(fields, 3) AS DOUBLE) > 100 OR list_extract(fields, 3) > '100' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))) OR level = 'FATAL')`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, level FROM logs WHERE namespace = ? AND ((level = 'ERROR' AND (TRY_CAST(list_extract(fields, 3) AS DOUBLE) > 100 OR list_extract(fields, 3) > '100' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))) OR level = 'FATAL')`,
 			wantCompute: []string{`awk '(LEVEL == "ERROR" && $3 > 100) || LEVEL == "FATAL"'`},
 		},
 		{
 			name:        "mixed AND with field and meta-var",
 			pipeline:    `cat vimgym.log | awk 'LEVEL == "ERROR" && $3 > 100'`,
-			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, namespace, service, kind, level, instance, deployment, env, version, region, cluster, k8s_namespace, pod, container, node, trace_id, span_name, span_id, parent_span_id, duration_ns FROM logs WHERE namespace = ? AND level = 'ERROR' AND (TRY_CAST(list_extract(fields, 3) AS DOUBLE) > 100 OR list_extract(fields, 3) > '100' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))`,
+			wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, level FROM logs WHERE namespace = ? AND level = 'ERROR' AND (TRY_CAST(list_extract(fields, 3) AS DOUBLE) > 100 OR list_extract(fields, 3) > '100' OR regexp_matches(list_extract(fields, 3), '^[+-]?(?i:inf|nan|0x)'))`,
 			wantCompute: []string{`awk 'LEVEL == "ERROR" && $3 > 100'`},
 		},
 		{

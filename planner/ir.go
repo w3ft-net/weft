@@ -120,16 +120,16 @@ type loweredStage struct {
 	// fieldsWhy says why not. Field projection (projectFields) acts on it.
 	fields    *fieldReads
 	fieldsWhy string
-	// readsMeta: the stage names a meta-variable, so the shard projects
-	// MetaVarColumns for compute to hand it.
-	readsMeta bool
+	// meta is the meta-variables the stage names, so the shard projects
+	// their columns for compute to hand it.
+	meta MetaRead
 }
 
 // readsRowMetadata reports whether a stage reads a row's payload or
 // meta-variables: any jq (it reads the payload), or an awk naming a
 // meta-variable.
 func (s *loweredStage) readsRowMetadata() bool {
-	return s.cmd == "jq" || (s.cmd == "awk" && s.readsMeta)
+	return s.cmd == "jq" || (s.cmd == "awk" && s.meta.Reads())
 }
 
 // reasonCode says why a frontend left a stage opaque, or lowered it only

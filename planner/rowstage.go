@@ -156,14 +156,6 @@ func splitRowStages(stages []*loweredStage) (rows, rest []*loweredStage) {
 	return stages[:n], stages[n:]
 }
 
-// StageReadsMetaVars reports whether a stage, as written, names a
-// meta-variable (an awk's HOST, a jq's $host). Compute carries them to
-// a jq stage only then.
-func StageReadsMetaVars(stage string) bool {
-	sc, ok := parseOneStage(stage)
-	return ok && lowerStage(parseStage(sc), 1, false).readsMeta
-}
-
 // IsRowStage reports whether a stage, as written, passes rows through
 // unchanged. The differential harness builds its reference plan from it.
 func IsRowStage(stage string) bool {

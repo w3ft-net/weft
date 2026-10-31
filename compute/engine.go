@@ -183,17 +183,28 @@ func (p *Engine) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) 
 // precedes the batch. Only ever set true for a bare, interactive
 // `trace <id>` — see coordinator.go's executeQuery.
 func (p *Engine) NewJob(stages []string, shardCount int, mergeKey string, limit int, keepLast bool, traceTag bool) *Job {
-	return &Job{
+	j := &Job{
 		stages:     stages,
 		shardCount: shardCount,
 		mergeKey:   mergeKey,
 		limit:      limit,
 		keepLast:   keepLast,
 		traceTag:   traceTag,
-		spliceMeta: len(stages) > 0 && planner.StageReadsMetaVars(stages[0]),
 		ch:         make(chan ComputeMessage, 1024),
 		streamCh:   make(chan Line, 1024),
 	}
+	if len(stages) > 0 {
+		j.meta = planner.StageMetaRead(stages[0])
+	}
+	if j.meta.Reads() {
+		switch {
+		case firstStageIsJq(stages):
+			j.envelope = NewJqEnvelope(j.meta)
+		case firstStageIsAwk(stages):
+			j.binder = newAwkBinder(j.meta)
+		}
+	}
+	return j
 }
 
 // Job collects rows from shards via a channel and pushes
@@ -221,9 +232,13 @@ type Job struct {
 	// that arrives in field form is rebuilt into the line it reads as it
 	// enters the job (RebuildRecord).
 	fieldSpec *pb.FieldSpec
-	// spliceMeta: the first stage names a meta-variable, so a jq there
-	// reads them spliced into its input.
-	spliceMeta bool
+	// meta is the meta-variables the first stage reads, the only stage that
+	// reads shard rows': a jq there gets them spliced into its input (envelope),
+	// an awk binds them per record (binder). Nothing is built per row if it
+	// reads none.
+	meta     planner.MetaRead
+	envelope *JqEnvelope
+	binder   awkBinder
 	// aggregate finishes the shards' aggregate (planner.QueryPlan.
 	// Aggregate) on the merged rows; feedErr is its failure.
 	aggregate string
@@ -463,8 +478,8 @@ func (j *Job) stageInput(row *pb.ResultRow) string {
 	if j.stagesReadPayload {
 		in = row.MetaVars[planner.PayloadColumn]
 	}
-	if j.spliceMeta && strings.HasPrefix(j.stages[0], "jq ") {
-		return WrapJqInput(in, rowMetaVars(row))
+	if j.envelope != nil {
+		return j.envelope.Wrap(in, rowMetaVars(row, j.meta))
 	}
 	return in
 }
@@ -569,7 +584,7 @@ func (j *Job) consume() {
 	// entirely, since nothing would ever drain it (a full buffer would then
 	// wedge the writer goroutine).
 	var awkVarsCh chan rowAwkVars
-	if firstStageIsAwk(j.stages) && j.spliceMeta {
+	if firstStageIsAwk(j.stages) && j.meta.Reads() {
 		awkVarsCh = make(chan rowAwkVars, 1024)
 	}
 
@@ -609,7 +624,7 @@ func (j *Job) consume() {
 						return false
 					}
 				}
-				awkVarsCh <- rowAwkVars{vars: awkVarsFromMeta(rowMetaVars(row)), records: strings.Count(in, "\n") + 1}
+				awkVarsCh <- rowAwkVars{vars: j.binder.vars(rowMetaVars(row, j.meta)), records: strings.Count(in, "\n") + 1}
 			}
 			if _, err := w.WriteString(in); err != nil {
 				return false
@@ -639,7 +654,7 @@ func (j *Job) consume() {
 		// its output feeds line-oriented stages, and it matches what a
 		// projection SQL computes. See docs/plans/planner-ir.md, "jq".
 		opts := bash.StreamingOptions{JqCompact: true}
-		if j.spliceMeta && strings.HasPrefix(j.stages[0], "jq ") {
+		if j.envelope != nil {
 			// Only then does the first stage's input carry the envelope
 			// WrapJqInput makes; any other input is the user's own.
 			opts.JqPerInput = JqPerInput

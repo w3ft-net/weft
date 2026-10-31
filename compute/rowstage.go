@@ -24,12 +24,13 @@ type RowStages struct {
 }
 
 type rowStage struct {
-	jq     jq.Expr      // a select chain, over the payload
-	meta   bool         // the stage names a meta-variable
-	script *bash.Script // a filter over the raw line
-	interp *sync.Pool   // of *rowInterp, for script: built once, reused per row
-	head   int          // head -n N: keep the first N (when > -1)
-	tail   int          // tail -n N: keep the last N (when > -1)
+	jq     jq.Expr          // a select chain, over the payload
+	meta   planner.MetaRead // the meta-variables the stage names
+	env    *JqEnvelope      // for a jq stage that reads some
+	script *bash.Script     // a filter over the raw line
+	interp *sync.Pool       // of *rowInterp, for script: built once, reused per row
+	head   int              // head -n N: keep the first N (when > -1)
+	tail   int              // tail -n N: keep the last N (when > -1)
 }
 
 // NewRowStages parses each stage once for every row.
@@ -64,7 +65,8 @@ func parseRowStage(src string) (rowStage, error) {
 		for _, a := range argv[1:] {
 			if !strings.HasPrefix(a, "-") {
 				st.jq, err = jq.Parse(a)
-				st.meta = planner.StageReadsMetaVars(src)
+				st.meta = planner.StageMetaRead(src)
+				st.env = NewJqEnvelope(st.meta)
 				return st, err
 			}
 		}
@@ -82,8 +84,9 @@ func parseRowStage(src string) (rowStage, error) {
 		return st, nil
 	}
 	st.script = script
-	st.meta = planner.StageReadsMetaVars(src)
-	st.interp = &sync.Pool{New: func() any { return newRowInterp() }}
+	st.meta = planner.StageMetaRead(src)
+	binder := newAwkBinder(st.meta)
+	st.interp = &sync.Pool{New: func() any { return newRowInterp(binder) }}
 	return st, nil
 }
 
@@ -100,11 +103,11 @@ type rowInterp struct {
 	out    bytes.Buffer
 }
 
-func newRowInterp() *rowInterp {
+func newRowInterp(binder awkBinder) *rowInterp {
 	ri := &rowInterp{interp: bash.NewInterpreter()}
 	ri.interp.AwkMaxSteps = 0
 	ri.interp.SedMaxSteps = 0
-	ri.interp.AwkPerRecordVars = func(string) map[string]string { return awkVarsFromMeta(ri.meta) }
+	ri.interp.AwkPerRecordVars = func(string) map[string]string { return binder.vars(ri.meta) }
 	ri.interp.SetStdout(&ri.out)
 	ri.interp.SetStderr(io.Discard)
 	bash.RegisterToolCommands(ri.interp)
@@ -130,7 +133,7 @@ func lineCount(args []string) (int, error) {
 // a row's meta-variables for Keep needs to only if it does.
 func (rs *RowStages) ReadsMeta() bool {
 	for _, st := range rs.stages {
-		if st.meta {
+		if st.meta.Reads() {
 			return true
 		}
 	}
@@ -159,8 +162,8 @@ func (st *rowStage) keep(raw, payload string, meta map[string]string) bool {
 			return false
 		}
 		var opts jq.Options
-		if st.meta {
-			opts.Vars = JqVars(meta)
+		if st.meta.Reads() {
+			opts.Vars = st.env.Vars(meta)
 		}
 		out, err := jq.EvalAllWithOptions(st.jq, v, opts)
 		return err == nil && len(out) > 0
@@ -213,8 +216,8 @@ func (r *rowRunner) push(i int, row *pb.ResultRow) bool {
 			return true
 		default:
 			var meta map[string]string
-			if st.meta {
-				meta = rowMetaVars(row)
+			if st.meta.Reads() {
+				meta = rowMetaVars(row, st.meta)
 			}
 			if !st.keep(row.Raw, row.MetaVars[planner.PayloadColumn], meta) {
 				return true

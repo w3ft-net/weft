@@ -144,7 +144,7 @@ func TestFrontendReadsMeta(t *testing.T) {
 		{`grep HOST`, false},
 	}
 	for _, tt := range tests {
-		if got := lowerText(t, tt.stage).readsMeta; got != tt.want {
+		if got := lowerText(t, tt.stage).meta.Reads(); got != tt.want {
 			t.Errorf("%s: readsMeta = %v, want %v", tt.stage, got, tt.want)
 		}
 	}

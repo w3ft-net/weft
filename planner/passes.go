@@ -24,7 +24,7 @@ type compiled struct {
 	// readsPayload: the shard returns the payload, as raw when there are
 	// no row stages, for a jq first compute stage.
 	readsPayload bool
-	readsMeta    bool
+	meta         MetaRead
 	shardOrderBy string
 	shardLimit   int
 	// group is the shard-side grouping that replaced the first compute
@@ -198,7 +198,7 @@ run:
 	case c.source.cmd == "trace" || c.source.cmd == "trace_spans" || c.source.cmd == "trace_list":
 		c.logf(pass, "skipped %s: a trace source", c.label(filters[0]))
 		return
-	case len(sorts) == 0 && end < len(c.nodes) && c.stage(c.nodes[end]).readsMeta:
+	case len(sorts) == 0 && end < len(c.nodes) && c.stage(c.nodes[end]).meta.Reads():
 		c.logf(pass, "skipped %s: %s names a meta-variable, which it would read from the row if it came first",
 			c.label(filters[0]), c.label(c.nodes[end]))
 		return
@@ -255,7 +255,7 @@ func (c *compiled) pushProjection() {
 		return
 	}
 	first := c.nodes[c.shard]
-	if p, ok := first.(*projectNode); ok && len(c.compute) > 1 && c.compute[1].readsMeta {
+	if p, ok := first.(*projectNode); ok && len(c.compute) > 1 && c.compute[1].meta.Reads() {
 		c.logf(pass, "%s stays in compute: %s names a meta-variable, which it would read from the row if it came first",
 			c.label(p), c.label(c.compute[1].nodes[0]))
 	} else if ok {
@@ -417,7 +417,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 	case c.source.cmd == "trace" || c.source.cmd == "trace_spans" || c.source.cmd == "trace_list":
 		c.logf(pass, "skipped %s: a trace source", label)
 		return
-	case len(c.compute) > n && c.compute[n].readsMeta:
+	case len(c.compute) > n && c.compute[n].meta.Reads():
 		c.logf(pass, "skipped %s: %s names a meta-variable, which it would read from the row if it came first",
 			label, c.label(c.compute[n].nodes[0]))
 		return

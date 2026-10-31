@@ -67,15 +67,21 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 		}
 		return rowStages.Keep(row.Raw, string(row.PayloadJson), meta)
 	}
-	wrapMeta := len(plan.LiveStages) > 0 && strings.HasPrefix(plan.LiveStages[0], "jq ") && planner.StageReadsMetaVars(plan.LiveStages[0])
+	// The envelope carries the meta-variables a first jq stage reads.
+	var envelope *compute.JqEnvelope
+	if len(plan.LiveStages) > 0 && strings.HasPrefix(plan.LiveStages[0], "jq ") {
+		if read := planner.StageMetaRead(plan.LiveStages[0]); read.Reads() {
+			envelope = compute.NewJqEnvelope(read)
+		}
+	}
 	input := func(row *pb.LogRow) string {
 		if plan.LiveReadsPayload {
 			payload := string(row.PayloadJson)
 			if payload == "" {
 				payload = "{}"
 			}
-			if wrapMeta {
-				return compute.WrapJqInput(payload, liveMetaVars(row))
+			if envelope != nil {
+				return envelope.Wrap(payload, liveMetaVars(row))
 			}
 			return payload
 		}

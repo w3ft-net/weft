@@ -6,14 +6,22 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/jq"
 
+	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // A jq stage's meta-variables ride in an envelope around the row's
 // payload (one jq process handles the whole stream, so there's no
 // per-row side channel), and JqPerInput takes it off, binding them.
+// allMeta is a stage that may read any meta-variable.
+var (
+	allMeta     = planner.MetaRead{All: true}
+	allEnvelope = NewJqEnvelope(allMeta)
+	allBinder   = newAwkBinder(allMeta)
+)
+
 func TestJqPerInput_UnwrapsPayloadAndBindsEveryAlias(t *testing.T) {
-	in, err := jq.ParseValue(WrapJqInput(`{"pct":42}`, map[string]string{"instance": "web-1", "duration_ns": "1500"}))
+	in, err := jq.ParseValue(allEnvelope.Wrap(`{"pct":42}`, map[string]string{"instance": "web-1", "duration_ns": "1500"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +44,7 @@ func TestJqPerInput_UnwrapsPayloadAndBindsEveryAlias(t *testing.T) {
 // The payload reaches the program untouched: a key named like a
 // meta-variable is just a key, and `keys` shows no spliced extras.
 func TestJqPerInput_PayloadKeysAreNotMetaVariables(t *testing.T) {
-	in, _ := jq.ParseValue(WrapJqInput(`{"level":"payload","keys":1}`, map[string]string{"level": "ERROR"}))
+	in, _ := jq.ParseValue(allEnvelope.Wrap(`{"level":"payload","keys":1}`, map[string]string{"level": "ERROR"}))
 	got, vars := JqPerInput(in)
 	if got.ObjGet("level").Str != "payload" || vars["level"].Str != "ERROR" || len(got.ObjMap()) != 2 {
 		t.Errorf("payload %s, $level %v", got.ToJSON(), vars["level"])
@@ -59,8 +67,8 @@ func TestJqPerInput_OtherInputPassesThrough(t *testing.T) {
 // doesn't gain a value (or an error) for it.
 func TestWrapJqInput_EmptyPayloadStaysEmpty(t *testing.T) {
 	for _, p := range []string{"", "  "} {
-		if got := WrapJqInput(p, map[string]string{"level": "x"}); got != p {
-			t.Errorf("WrapJqInput(%q) = %q", p, got)
+		if got := allEnvelope.Wrap(p, map[string]string{"level": "x"}); got != p {
+			t.Errorf("allEnvelope.Wrap(%q) = %q", p, got)
 		}
 	}
 }
@@ -84,34 +92,34 @@ func TestFirstStageIsAwk(t *testing.T) {
 }
 
 func TestAwkVarsFromMeta(t *testing.T) {
-	vars := awkVarsFromMeta(map[string]string{"instance": "web-1"})
+	vars := allBinder.vars(map[string]string{"instance": "web-1"})
 	if vars["HOST"] != "web-1" || vars["INSTANCE"] != "web-1" {
 		t.Errorf("awkVarsFromMeta = %v, want both HOST and INSTANCE set to web-1", vars)
 	}
 }
 
 func TestAwkVarsFromMeta_EmptyIsNil(t *testing.T) {
-	if got := awkVarsFromMeta(nil); got != nil {
-		t.Errorf("awkVarsFromMeta(nil) = %v, want nil", got)
+	if got := allBinder.vars(nil); got != nil {
+		t.Errorf("allBinder.vars(nil) = %v, want nil", got)
 	}
 }
 
 // A one-line event is line 0 of an event with no id, and both are always
 // set: awk keeps the last record's value for a name a record doesn't set.
 func TestRowMetaVars_EventColumns(t *testing.T) {
-	one := rowMetaVars(&pb.ResultRow{Raw: "x"})
+	one := rowMetaVars(&pb.ResultRow{Raw: "x"}, allMeta)
 	if one["event_id"] != "" || one["line_no"] != "0" {
 		t.Errorf("one-line event: event_id=%q line_no=%q, want \"\" and \"0\"", one["event_id"], one["line_no"])
 	}
-	many := rowMetaVars(&pb.ResultRow{Raw: "x", EventId: "01a13b66-0264-73c0-9c0d-d7fd05050994", LineNo: 3})
+	many := rowMetaVars(&pb.ResultRow{Raw: "x", EventId: "01a13b66-0264-73c0-9c0d-d7fd05050994", LineNo: 3}, allMeta)
 	if many["event_id"] != "01a13b66-0264-73c0-9c0d-d7fd05050994" || many["line_no"] != "3" {
 		t.Errorf("line 3: event_id=%q line_no=%q", many["event_id"], many["line_no"])
 	}
-	vars := awkVarsFromMeta(many)
+	vars := allBinder.vars(many)
 	if vars["EVENT_ID"] != many["event_id"] || vars["LINE_NO"] != "3" {
 		t.Errorf("awk vars: %v", vars)
 	}
-	in, _ := jq.ParseValue(WrapJqInput(`{"a":1}`, many))
+	in, _ := jq.ParseValue(allEnvelope.Wrap(`{"a":1}`, many))
 	if _, jv := JqPerInput(in); jv["line_no"].Num != 3 || jv["line_no"].Type != jq.TypeNumber || !strings.HasPrefix(jv["event_id"].Str, "01a13b66") {
 		t.Errorf("jq vars: %v", jv)
 	}

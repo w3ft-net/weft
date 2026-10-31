@@ -523,36 +523,28 @@ func (p *jqProgram) selectChain() bool {
 	return p.tail == nil && len(p.subject) == 0 && !p.slurp
 }
 
-// readsJqMetaVar reports whether a jq program reads a meta-variable
-// ($host), or rebinds a name it uses (see JQMetaVars), which it can't
-// tell from a read.
-func readsJqMetaVar(expr jq.Expr) bool {
-	return astContains(expr, func(n any) bool {
+// jqMetaRead is the meta-variables a jq program reads ($host), or rebinds a
+// name it uses (see JQMetaVars), which it can't tell from a read.
+func jqMetaRead(expr jq.Expr) MetaRead {
+	var cols []string
+	astContains(expr, func(n any) bool {
+		var name string
 		switch e := n.(type) {
 		case jq.VarRef:
-			_, ok := JQMetaVars[e.Name]
-			return ok
+			name = e.Name
+		case jq.AsExpr:
+			name = e.Var
+		case jq.ReduceExpr:
+			name = e.Var
+		case jq.ForeachExpr:
+			name = e.Var
 		}
-		return jqBindsMetaVar(n)
-	})
-}
-
-// jqBindsMetaVar reports whether a node binds a variable that has a
-// meta-variable's name.
-func jqBindsMetaVar(n any) bool {
-	var name string
-	switch e := n.(type) {
-	case jq.AsExpr:
-		name = e.Var
-	case jq.ReduceExpr:
-		name = e.Var
-	case jq.ForeachExpr:
-		name = e.Var
-	default:
+		if col, ok := JQMetaVars[name]; ok {
+			cols = append(cols, col)
+		}
 		return false
-	}
-	_, ok := JQMetaVars[name]
-	return ok
+	})
+	return metaReadOf(cols)
 }
 
 // jqFlattenPipe flattens a left-associative PipeExpr chain into a slice.

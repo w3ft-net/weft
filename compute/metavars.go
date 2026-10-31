@@ -18,18 +18,41 @@ const (
 	jqInputKey = "__weft_input__"
 )
 
-// WrapJqInput carries a row's meta-variables next to its payload for a
-// jq stage that reads them (see planner.JQMetaVars). One jq process
-// handles the whole row stream, so there's no per-row side channel; the
-// row's own input is the only thing that varies. JqPerInput unwraps it
-// and binds the variables, so the payload reaches the program as it is.
-// A payload that isn't JSON makes the envelope invalid, which jq reports
-// as it would the bare payload; an empty one stays empty.
-func WrapJqInput(payload string, meta map[string]string) string {
+// JqEnvelope carries a row's meta-variables next to its payload for a jq
+// stage that reads them (see planner.JQMetaVars), and only the ones it reads.
+// One jq process handles the whole row stream, so there's no per-row side
+// channel; the row's own input is the only thing that varies. JqPerInput
+// unwraps it and binds the variables, so the payload reaches the program as it
+// is.
+type JqEnvelope struct {
+	vars []jqVar
+}
+
+// jqVar is a meta-variable: the jq name it binds and the row column it reads.
+type jqVar struct {
+	name, col string
+	numeric   bool
+}
+
+// NewJqEnvelope is the envelope for a stage that reads these meta-variables.
+func NewJqEnvelope(read planner.MetaRead) *JqEnvelope {
+	e := &JqEnvelope{}
+	for name, col := range planner.JQMetaVars {
+		if read.Wants(col) {
+			e.vars = append(e.vars, jqVar{name, col, planner.JQNumericMetaColumn(col)})
+		}
+	}
+	return e
+}
+
+// Wrap is the payload with the row's meta-variables beside it. A payload that
+// isn't JSON makes the envelope invalid, which jq reports as it would the bare
+// payload; an empty one stays empty.
+func (e *JqEnvelope) Wrap(payload string, meta map[string]string) string {
 	if strings.TrimSpace(payload) == "" {
 		return payload // no value for jq to read, as without the envelope
 	}
-	vars, _ := json.Marshal(jqVars(meta))
+	vars, _ := json.Marshal(e.values(meta))
 	return `{"` + jqVarsKey + `":` + string(vars) + `,"` + jqInputKey + `":` + payload + `}`
 }
 
@@ -43,11 +66,11 @@ func JqPerInput(in jq.Value) (jq.Value, map[string]jq.Value) {
 	return in.ObjGet(jqInputKey), in.ObjGet(jqVarsKey).ObjMap()
 }
 
-// JqVars is a row's meta-variables as jq reads them, for a caller that
-// evaluates a jq program directly.
-func JqVars(meta map[string]string) map[string]jq.Value {
-	vars := make(map[string]jq.Value, len(planner.JQMetaVars))
-	for name, v := range jqVars(meta) {
+// Vars is a row's meta-variables as jq reads them, for a caller that evaluates
+// a jq program directly.
+func (e *JqEnvelope) Vars(meta map[string]string) map[string]jq.Value {
+	vars := make(map[string]jq.Value, len(e.vars))
+	for name, v := range e.values(meta) {
 		switch x := v.(type) {
 		case string:
 			vars[name] = jq.StrValue(x)
@@ -60,42 +83,57 @@ func JqVars(meta map[string]string) map[string]jq.Value {
 	return vars
 }
 
-// jqVars maps every jq meta-variable name to its value: a string, a
+// values maps each meta-variable the stage reads to its value: a string, a
 // float64 for the numeric columns, or nil when the row has none.
-func jqVars(meta map[string]string) map[string]any {
-	vars := make(map[string]any, len(planner.JQMetaVars))
-	for name, col := range planner.JQMetaVars {
-		text, ok := meta[col]
+func (e *JqEnvelope) values(meta map[string]string) map[string]any {
+	vars := make(map[string]any, len(e.vars))
+	for _, v := range e.vars {
+		text, ok := meta[v.col]
 		switch {
 		case !ok:
-			vars[name] = nil
-		case planner.JQNumericMetaColumn(col):
+			vars[v.name] = nil
+		case v.numeric:
 			if n, err := strconv.ParseFloat(text, 64); err == nil {
-				vars[name] = n
+				vars[v.name] = n
 			} else {
-				vars[name] = nil
+				vars[v.name] = nil
 			}
 		default:
-			vars[name] = text
+			vars[v.name] = text
 		}
 	}
 	return vars
 }
 
-// rowMetaVars is a row's meta-variable columns plus ts, event_id and
-// line_no, which every query selects as their own columns rather than
-// projecting them as meta-variables. Its text is DuckDB's CAST(ts AS VARCHAR), the form a
-// SQL projection of $ts or a TS comparison sees.
-func rowMetaVars(row *pb.ResultRow) map[string]string {
-	meta := make(map[string]string, len(row.MetaVars)+1)
-	for k, v := range row.MetaVars {
-		meta[k] = v
+// rowMetaVars is the meta-variables of a row that a stage reads: the columns
+// it names, and ts, event_id and line_no, which every query selects as their
+// own columns rather than projecting them as meta-variables, if it names
+// those. The ts is DuckDB's CAST(ts AS VARCHAR), the form a SQL projection of
+// $ts or a TS comparison sees.
+func rowMetaVars(row *pb.ResultRow, read planner.MetaRead) map[string]string {
+	meta := make(map[string]string, len(read.Columns())+3)
+	if read.All {
+		for k, v := range row.MetaVars {
+			meta[k] = v
+		}
+	} else {
+		for _, col := range read.Columns() {
+			if v, ok := row.MetaVars[col]; ok {
+				meta[col] = v
+			}
+		}
 	}
-	meta["ts"] = FormatTS(row.TsUnixNs)
+	if read.Wants("ts") {
+		meta["ts"] = FormatTS(row.TsUnixNs)
+	}
 	// A one-line event is line 0 of an event with no id. Both are always
 	// set, since awk would otherwise keep the previous record's.
-	meta["event_id"] = row.EventId
-	meta["line_no"] = strconv.Itoa(int(row.LineNo))
+	if read.Wants("event_id") {
+		meta["event_id"] = row.EventId
+	}
+	if read.Wants("line_no") {
+		meta["line_no"] = strconv.Itoa(int(row.LineNo))
+	}
 	return meta
 }
 
@@ -114,23 +152,42 @@ func firstStageIsAwk(stages []string) bool {
 	return len(stages) > 0 && (stages[0] == "awk" || strings.HasPrefix(stages[0], "awk "))
 }
 
-// awkVarsFromMeta expands a row's projected meta-var columns (see
-// planner.MetaVarColumns/AwkMetaVars) into every alias name that maps
-// to a given column (e.g. both "HOST" and "INSTANCE" for the
-// "instance" column) — the shape awk.Interpreter.PerRecordVars (via
-// bash.RunStreamingWithAwkHook) expects. Unlike jq's MergeMetaVars,
-// this doesn't touch the record's own text: a bare reserved name is
-// just an ordinary awk global once bound, no splicing into $0 needed
-// or possible. See docs/known-issues.md's (fixed) awk meta-variable
-// entry.
-func awkVarsFromMeta(meta map[string]string) map[string]string {
+// firstStageIsJq reports whether the job's first stage is jq, the one stage
+// whose input carries the envelope.
+func firstStageIsJq(stages []string) bool {
+	return len(stages) > 0 && strings.HasPrefix(stages[0], "jq ")
+}
+
+// awkBinder expands a row's meta-variable columns into the awk names a stage
+// reads: every alias that maps to a column it wants (both HOST and INSTANCE for
+// the instance column) — the shape awk.Interpreter.PerRecordVars (via
+// bash.RunStreamingWithAwkHook) expects. Unlike jq's envelope, this doesn't touch
+// the record's own text: a bare reserved name is just an ordinary awk global
+// once bound, no splicing into $0 needed or possible. See docs/known-issues.md's
+// (fixed) awk meta-variable entry.
+type awkBinder []awkAlias
+
+type awkAlias struct{ name, col string }
+
+func newAwkBinder(read planner.MetaRead) awkBinder {
+	var b awkBinder
+	for alias, col := range planner.AwkMetaVars {
+		if read.Wants(col) {
+			b = append(b, awkAlias{alias, col})
+		}
+	}
+	return b
+}
+
+// vars is nil for a row with nothing to bind.
+func (b awkBinder) vars(meta map[string]string) map[string]string {
 	if len(meta) == 0 {
 		return nil
 	}
-	vars := make(map[string]string, len(planner.AwkMetaVars))
-	for alias, col := range planner.AwkMetaVars {
-		if val, ok := meta[col]; ok {
-			vars[alias] = val
+	vars := make(map[string]string, len(b))
+	for _, a := range b {
+		if val, ok := meta[a.col]; ok {
+			vars[a.name] = val
 		}
 	}
 	return vars

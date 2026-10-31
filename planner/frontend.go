@@ -99,19 +99,16 @@ func lowerAwk(ls *loweredStage, a at, typed bool) []node {
 	if !ok {
 		// -f: the program isn't on the command line, so assume it reads
 		// meta-variables; projecting them only costs columns.
-		ls.readsMeta = true
+		ls.meta = allMeta
 		ls.fieldsWhy = "-f cannot be optimized"
 		return []node{&opaqueNode{at: a, why: reason{code: reasonFlag, detail: "-f"}}}
 	}
 	prog, err := awk.Parse(src)
 	if err != nil {
-		ls.readsMeta = true
+		ls.meta = allMeta
 		return []node{&opaqueNode{at: a, why: because(reasonParse)}}
 	}
-	ls.readsMeta = astContains(prog, func(n any) bool {
-		id, ok := n.(*awk.IdentExpr)
-		return ok && AwkMetaVars[id.Name] != ""
-	})
+	ls.meta = awkMetaRead(prog)
 	if len(ls.args) != 1 {
 		// The stage runs verbatim in compute, but it can still be cut down to
 		// the fields it reads if its flags leave the split alone.
@@ -230,10 +227,10 @@ func awkProgramArg(args []string) (string, bool) {
 func lowerJq(ls *loweredStage, a at) []node {
 	p, why := analyzeJq(ls.args)
 	if p == nil {
-		ls.readsMeta = true
+		ls.meta = allMeta
 		return []node{&opaqueNode{at: a, why: why}}
 	}
-	ls.readsMeta = readsJqMetaVar(p.expr)
+	ls.meta = jqMetaRead(p.expr)
 	ls.rowwise = p.selectChain()
 	if p.slurp {
 		return []node{&opaqueNode{at: a, why: because(reasonJqSlurp)}}

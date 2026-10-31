@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/warp/pkg/jq"
+	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -136,6 +138,78 @@ func TestRowStages_ReadsMeta(t *testing.T) {
 		}
 		if got := rs.ReadsMeta(); got != want {
 			t.Errorf("%s: ReadsMeta = %v, want %v", stages, got, want)
+		}
+	}
+}
+
+// A stage's meta-variables are built from the columns it reads and no others;
+// a row carries about twenty.
+func TestMetaVars_OnlyWhatTheStageReads(t *testing.T) {
+	row := &pb.ResultRow{
+		TsUnixNs: 1000, EventId: "ev", LineNo: 4, Raw: "x",
+		MetaVars: map[string]string{"level": "ERROR", "instance": "web-1", "pod": "p-1", "deployment": "d-1", "duration_ns": "1500"},
+	}
+	for _, c := range []struct {
+		stage string
+		keys  []string
+	}{
+		{`awk 'LEVEL == "ERROR"'`, []string{"level"}},
+		{`awk '{ print HOST, POD }'`, []string{"instance", "pod"}},
+		{`awk '{ print TS }'`, []string{"ts"}},
+		{`jq -c '[$level, $line_no]'`, []string{"level", "line_no"}},
+		{`awk -f prog.awk`, []string{"level", "instance", "pod", "deployment", "duration_ns", "ts", "event_id", "line_no"}},
+	} {
+		read := planner.StageMetaRead(c.stage)
+		got := rowMetaVars(row, read)
+		if len(got) != len(c.keys) {
+			t.Errorf("%s: built %v, want just %v", c.stage, got, c.keys)
+		}
+		for _, k := range c.keys {
+			if _, ok := got[k]; !ok {
+				t.Errorf("%s: %s missing from %v", c.stage, k, got)
+			}
+		}
+	}
+
+	hostOnly := newAwkBinder(planner.StageMetaRead(`awk '{ print HOST }'`))
+	vars := hostOnly.vars(rowMetaVars(row, planner.StageMetaRead(`awk '{ print HOST }'`)))
+	if len(vars) != 2 || vars["HOST"] != "web-1" || vars["INSTANCE"] != "web-1" {
+		t.Errorf("a stage reading HOST binds %v, want HOST and INSTANCE only", vars)
+	}
+
+	level := NewJqEnvelope(planner.StageMetaRead(`jq -c '$level'`))
+	in, err := jq.ParseValue(level.Wrap(`{"a":1}`, rowMetaVars(row, planner.StageMetaRead(`jq -c '$level'`))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vars := in.ObjGet(jqVarsKey).ObjMap(); len(vars) != 1 || vars["level"].Str != "ERROR" {
+		t.Errorf("the envelope for $level carries %v, want only level", vars)
+	}
+}
+
+// The values a stage reads are the row's own, however many columns it skips.
+func TestJob_MetaVarsReadFromAWideRow(t *testing.T) {
+	for stage, want := range map[string]string{
+		`awk '{ print LEVEL, HOST, $2 }'`:       "ERROR web-1 b",
+		`jq -r '"\($level) \($host) \(.k)"'`:    "ERROR web-1 v",
+		`jq -r '"\($duration_ns) \($line_no)"'`: "1500 4",
+	} {
+		job := (&Engine{}).NewJob([]string{stage}, 1, "ts", 0, false, false)
+		raw := "a b"
+		if strings.HasPrefix(stage, "jq") {
+			raw = `{"k":"v"}`
+		}
+		job.SendRow(&pb.ResultRow{
+			TsUnixNs: 1000, EventId: "ev", LineNo: 4, Raw: raw,
+			MetaVars: map[string]string{"level": "ERROR", "instance": "web-1", "pod": "p", "deployment": "d", "duration_ns": "1500", "region": "r"},
+		}, "a")
+		job.SendSentinel("a")
+		out, err := job.Result()
+		if err != nil {
+			t.Fatalf("%s: %v", stage, err)
+		}
+		if got := strings.TrimSpace(out); got != want {
+			t.Errorf("%s = %q, want %q", stage, got, want)
 		}
 	}
 }

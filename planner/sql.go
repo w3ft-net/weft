@@ -31,12 +31,9 @@ type Query struct {
 	orderBy    string
 	limit      int
 	offset     int
-	// includeMetaVars appends MetaVarColumns to the SELECT list — set by
-	// Plan when a remaining jq compute stage might read a bare
-	// "._"-prefixed meta-variable for output. See planner.go's
-	// includeMetaVars detection and docs/known-issues.md's (fixed) jq
-	// meta-variable entry.
-	includeMetaVars bool
+	// metaCols are the meta-variable columns appended to the SELECT list: the
+	// ones the stages that run in compute read (MetaRead.Columns), set by Plan.
+	metaCols []string
 	// includePayload appends the row's payload as a PayloadColumn
 	// column, for a jq row stage or a stage reading the payload.
 	includePayload bool
@@ -254,11 +251,11 @@ func (q *Query) setLimitOffset(limit, offset int) {
 // and arbitrary.
 func (q *Query) Wrap(orderBy string) *Query {
 	return &Query{
-		rawExpr:         "raw",
-		from:            From{Subquery: q, Alias: "t"},
-		orderBy:         orderBy,
-		includeMetaVars: q.includeMetaVars,
-		includePayload:  q.includePayload,
+		rawExpr:        "raw",
+		from:           From{Subquery: q, Alias: "t"},
+		orderBy:        orderBy,
+		metaCols:       q.metaCols,
+		includePayload: q.includePayload,
 	}
 }
 
@@ -268,11 +265,11 @@ func (q *Query) Wrap(orderBy string) *Query {
 // q must have no limit.
 func (q *Query) Lines(preds []Predicate) *Query {
 	return &Query{
-		rawExpr:         "raw",
-		from:            From{Subquery: q.lineSplit(), Alias: "t"},
-		predicates:      preds,
-		includeMetaVars: q.includeMetaVars,
-		includePayload:  q.includePayload,
+		rawExpr:        "raw",
+		from:           From{Subquery: q.lineSplit(), Alias: "t"},
+		predicates:     preds,
+		metaCols:       q.metaCols,
+		includePayload: q.includePayload,
 	}
 }
 
@@ -298,7 +295,7 @@ func (q *Query) fieldForm(spec *fieldReads) *Query {
 // columns are dropped.
 func (q *Query) Group(render GroupRender, orderBy string, preds []Predicate) *Query {
 	inner := q.lineSplit()
-	inner.includeMetaVars, inner.includePayload = false, false
+	inner.metaCols, inner.includePayload = nil, false
 	return &Query{
 		from:       From{Subquery: inner, Alias: "t"},
 		predicates: preds,
@@ -442,11 +439,9 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 	} else {
 		b.WriteString(", CAST(event_id AS VARCHAR) AS " + EventIDColumn + ", " + LineNoColumn)
 	}
-	if q.includeMetaVars {
-		for _, col := range MetaVarColumns {
-			b.WriteString(", ")
-			b.WriteString(col)
-		}
+	for _, col := range q.metaCols {
+		b.WriteString(", ")
+		b.WriteString(col)
 	}
 	if q.includePayload {
 		if q.from.Subquery != nil {
