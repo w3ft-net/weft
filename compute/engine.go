@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/graybeardcorp/warp/pkg/awk"
 	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/warp/pkg/jq"
 	"github.com/tidwall/gjson"
@@ -485,7 +486,7 @@ func (j *Job) stageInput(row *pb.ResultRow) string {
 // rowAwkVars is a row's meta-variables for awk, for each of the records
 // (lines) awk reads from it.
 type rowAwkVars struct {
-	vars    map[string]string
+	binds   []awk.Binding
 	records int
 }
 
@@ -582,8 +583,12 @@ func (j *Job) consume() {
 	// entirely, since nothing would ever drain it (a full buffer would then
 	// wedge the writer goroutine).
 	var awkVarsCh chan rowAwkVars
+	// awkFree returns a finished row's binding slice to the writer, so a row
+	// allocates none once the queue has filled.
+	var awkFree chan []awk.Binding
 	if firstStageIsAwk(j.stages) && j.meta.Reads() {
 		awkVarsCh = make(chan rowAwkVars, 1024)
+		awkFree = make(chan []awk.Binding, 1024)
 	}
 	// The same for jq: its variables for each input, in the order its inputs
 	// are written.
@@ -623,7 +628,12 @@ func (j *Job) consume() {
 				// Queued before awk can read the row: a record waiting
 				// on its set while the writer waits on awk would
 				// deadlock.
-				v := rowAwkVars{vars: j.binder.vars(rowMetaVars(row, j.meta)), records: strings.Count(in, "\n") + 1}
+				var buf []awk.Binding
+				select {
+				case buf = <-awkFree:
+				default:
+				}
+				v := rowAwkVars{binds: j.binder.bind(row, buf), records: strings.Count(in, "\n") + 1}
 				select {
 				case awkVarsCh <- v:
 				case <-stopped:
@@ -677,12 +687,20 @@ func (j *Job) consume() {
 		}
 		if awkVarsCh != nil {
 			var cur rowAwkVars
-			opts.AwkPerRecordVars = func(string) map[string]string {
+			opts.AwkPerRecordBind = func(string) []awk.Binding {
 				if cur.records == 0 {
+					// The previous row's records have all been bound, and awk
+					// copied the values, so its slice can serve a later row.
+					if cur.binds != nil {
+						select {
+						case awkFree <- cur.binds:
+						default:
+						}
+					}
 					cur = <-awkVarsCh
 				}
 				cur.records--
-				return cur.vars
+				return cur.binds
 			}
 		}
 		exitCode, err = bash.RunStreamingWithOptions(pipeline, stdinR, stdoutW, &stderrBuf, opts)

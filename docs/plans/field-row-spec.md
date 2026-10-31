@@ -292,8 +292,25 @@ columns). Each safeguard was checked by removing it and watching its test fail.
   254 ms reading nothing.
 - **Deploy 3** (keyed sum/max/min in the shard), once there is a reason to prefer it over the
   row spec.
-- **A stage that reads meta-variables** still pays per row for two maps and a channel send
-  (about 0.26 us an awk row); a per-record side channel in warp's awk, as jq now has, would
-  remove the maps.
+- ~~A stage that reads meta-variables pays per row for two maps.~~ Done in warp v0.2.59
+  (local, unpushed): `PerRecordBind` takes a slice the caller reuses, and compute builds it
+  from the row (`awkBinder.bind`) and recycles the slices through a free list. The rest of
+  the cost was `strconv.ParseFloat` allocating an error for every text value tested for being a
+  number (a level, a timestamp, a field compared with a string): `SetVar`, `Number()` and
+  comparisons now reject text without calling it (`parseFloatQuiet`, checked against
+  `ParseFloat` on 200,000 random strings). 200k rows, an awk stage reading `LEVEL`: 127 ms to
+  88 ms, 2.8M allocations to 1.07M, against 52 ms for a stage that reads none. The live
+  filter (`RowStages.Keep`) still uses the map hook; its meta map comes from the coordinator.
+- ~~A race in `planner/difftest` under `-race`.~~ Fixed in warp v0.2.59. The stages of a
+  pipeline run concurrently and share the one stderr the embedder gave (`stderrBuf` in
+  `Job.consume`, a `strings.Builder`), so two stages writing errors raced. It showed on
+  `head -n 50 ... | wc -l | jq 'select(.status == 500)' | cut`, and predates this work
+  (it reproduces with warp v0.2.57). `execPipelineMulti` now gives its stages one locked
+  stderr, so no embedder needs a thread-safe writer. Pinned by
+  `TestJob_ConcurrentStageErrorsDoNotRaceOnStderr` and warp's
+  `TestPipelineStagesShareStderrSafely`, both failing before.
+- **Open: a race in warp's parallel pipeline path.** `TestParallelGrepSort` (`pkg/bash`,
+  `Parallelism` > 0) fails under `-race` in `fork` reading interpreter fields. It predates
+  this work. Nothing in weft sets `Parallelism`, so no weft path reaches it.
 - `bench/fieldtypes/results/after.json` is the pre-rotation run and is still untracked.
 

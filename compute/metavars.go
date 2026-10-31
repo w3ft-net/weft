@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/warp/pkg/awk"
 	"github.com/graybeardcorp/warp/pkg/jq"
 
 	"github.com/graybeardcorp/weft/planner"
@@ -130,6 +131,31 @@ func newAwkBinder(read planner.MetaRead) awkBinder {
 		}
 	}
 	return b
+}
+
+// bind appends a row's bindings for the names this stage reads to dst[:0], for
+// awk.Interpreter.PerRecordBind. It reads the row directly, so a row costs no
+// map; a column the row lacks is left unbound, as vars leaves it.
+func (b awkBinder) bind(row *pb.ResultRow, dst []awk.Binding) []awk.Binding {
+	dst = dst[:0]
+	for _, a := range b {
+		var val string
+		ok := true
+		switch a.col {
+		case "ts":
+			val = FormatTS(row.TsUnixNs)
+		case "event_id":
+			val = row.EventId
+		case "line_no":
+			val = strconv.Itoa(int(row.LineNo))
+		default:
+			val, ok = row.MetaVars[a.col]
+		}
+		if ok {
+			dst = append(dst, awk.Binding{Name: a.name, Value: val})
+		}
+	}
+	return dst
 }
 
 // vars is nil for a row with nothing to bind.

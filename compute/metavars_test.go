@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/graybeardcorp/warp/pkg/awk"
 	"github.com/graybeardcorp/warp/pkg/jq"
 
 	"github.com/graybeardcorp/weft/planner"
@@ -96,5 +97,40 @@ func TestRowMetaVars_EventColumns(t *testing.T) {
 	}
 	if jv := allJq.Vars(many); jv["line_no"].Num != 3 || jv["line_no"].Type != jq.TypeNumber || !strings.HasPrefix(jv["event_id"].Str, "01a13b66") {
 		t.Errorf("jq vars: %v", jv)
+	}
+}
+
+// bind (no map, straight from the row) binds what vars (through rowMetaVars)
+// did: the same names and values, and nothing for a column the row lacks.
+func TestAwkBinder_BindMatchesVars(t *testing.T) {
+	rows := []*pb.ResultRow{
+		{TsUnixNs: 1000, EventId: "ev", LineNo: 4, Raw: "x", MetaVars: map[string]string{"level": "ERROR", "instance": "web-1", "pod": "p-1", "duration_ns": "1500"}},
+		{TsUnixNs: 2000, Raw: "y", MetaVars: map[string]string{"level": "INFO"}},
+		{TsUnixNs: 3000, Raw: "z"},
+	}
+	var buf []awk.Binding
+	for _, stage := range []string{
+		`awk 'LEVEL == "ERROR"'`, `awk '{ print HOST, POD }'`, `awk '{ print TS, EVENT_ID, LINE_NO }'`,
+		`awk '{ print DURATION_NS }'`, `awk -f prog.awk`, `awk '{ print $1 }'`,
+	} {
+		read := planner.StageMetaRead(stage)
+		b := newAwkBinder(read)
+		for i, row := range rows {
+			want := b.vars(rowMetaVars(row, read))
+			buf = b.bind(row, buf)
+			got := map[string]string{}
+			for _, bind := range buf {
+				got[bind.Name] = bind.Value
+			}
+			if len(got) != len(want) {
+				t.Errorf("%s row %d: bind gave %v, vars gave %v", stage, i, got, want)
+				continue
+			}
+			for k, v := range want {
+				if got[k] != v {
+					t.Errorf("%s row %d: %s = %q, vars gave %q", stage, i, k, got[k], v)
+				}
+			}
+		}
 	}
 }
