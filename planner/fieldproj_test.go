@@ -113,3 +113,25 @@ func TestProjectFields_Plan(t *testing.T) {
 		})
 	}
 }
+
+// A flagged awk stage is not cut down to its fields, and explain says why in
+// terms of the flag: -F changes how a line splits, so its fields can't be
+// picked by position; any other flag just isn't analyzed.
+func TestExplain_FieldProjectionNamesTheFlagThatStopsIt(t *testing.T) {
+	for _, c := range []struct{ prog, want string }{
+		{`awk -F, '{ s += $2 } END { print s }'`, "skipped Opaque[1: awk]: -F changes how it splits a line, so the shard can't pick its fields by position"},
+		{`awk -F ',' '{ s += $2 } END { print s }'`, "skipped Opaque[1: awk]: -F changes how it splits a line, so the shard can't pick its fields by position"},
+		{`awk -v k=2 '{ s += $2 * k } END { print s }'`, "skipped Opaque[1: awk]: its flag -v isn't analyzed, so the shard sends whole lines"},
+	} {
+		out := Explain("cat /log/a/b/main.log | " + c.prog)
+		var line string
+		for _, l := range strings.Split(out, "\n") {
+			if strings.Contains(l, "field-projection") {
+				line = l
+			}
+		}
+		if !strings.HasSuffix(strings.TrimSpace(line), c.want) {
+			t.Errorf("%s:\nfield-projection line = %q\nwant it to end with %q", c.prog, line, c.want)
+		}
+	}
+}

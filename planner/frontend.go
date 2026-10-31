@@ -112,7 +112,7 @@ func lowerAwk(ls *loweredStage, a at, typed bool) []node {
 		return ok && AwkMetaVars[id.Name] != ""
 	})
 	if len(ls.args) != 1 {
-		ls.fieldsWhy = "a flag changes how it splits and what it holds: " + ls.args[0]
+		ls.fieldsWhy = awkFlagFieldsWhy(ls.args[0])
 		return []node{&opaqueNode{at: a, why: reason{code: reasonFlag, detail: ls.args[0]}}}
 	}
 	ls.rowwise = awkIsRowFilter(prog)
@@ -166,6 +166,16 @@ func awkRowStage(prog *awk.Program, pd *awkPushdown, why reason, typed bool) row
 	}
 	rs.opaque, rs.why, rs.predWhy = true, why, pd.why
 	return rs
+}
+
+// awkFlagFieldsWhy is why an awk stage with a flag is not cut down to the
+// fields it reads. -F changes how a line splits, so the whitespace-split fields
+// the shard stores are not its fields; any other flag just isn't analyzed.
+func awkFlagFieldsWhy(flag string) string {
+	if strings.HasPrefix(flag, "-F") {
+		return "-F changes how it splits a line, so the shard can't pick its fields by position"
+	}
+	return "its flag " + flag + " isn't analyzed, so the shard sends whole lines"
 }
 
 // awkProgramArg finds the program among awk's arguments, past -F, -v
