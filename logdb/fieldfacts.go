@@ -122,3 +122,21 @@ func (r *ShardRegistry) fieldFactsByShard() (map[string][]store.ShardFieldFact, 
 	}
 	return out, true
 }
+
+// ShardFieldsTyped reports whether the shard has said every locator is all
+// numbers in the one stream (customer, namespace, service, kind, env). False
+// for a shard the registry doesn't hold, and for any locator not known typed:
+// absence is unknown, which plans as it always has.
+func (p *Provisioner) ShardFieldsTyped(shardID string, customerID int64, namespace, service, kind, env string, locators []string) bool {
+	sh := p.registry.Get(shardID)
+	if sh == nil || len(locators) == 0 {
+		return false
+	}
+	for _, loc := range locators {
+		if !sh.FieldTyped(shard.FactKey{CustomerID: customerID, Namespace: namespace, Service: service,
+			Kind: kind, Env: env, Locator: loc}) {
+			return false
+		}
+	}
+	return true
+}

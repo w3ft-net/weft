@@ -1165,6 +1165,9 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	if plan.TraceStats != nil {
 		return c.executeTraceList(ctx, plan, argStrs, descs, tr, tier)
 	}
+	if n := c.applyTypedVariant(plan, argStrs, descs); n > 0 {
+		logQuery(ctx, "query: %d of %d shards run the typed variant (%s)", n, len(descs), strings.Join(plan.Typed.Requires, ","))
+	}
 	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:               directSQL,
 		Args:              argStrs,
@@ -1191,6 +1194,26 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 		return nil, err
 	}
 	return &ExecuteResult{Stream: stream}, nil
+}
+
+// applyTypedVariant gives each shard whose field facts allow it the plan's
+// typed SQL, in place of the request's. A shard is chosen only if it has said
+// every locator the variant needs is all numbers in the one stream the query
+// reads; any other shard keeps the base SQL, so a query over old and new
+// windows is a mix. Returns how many shards got the variant.
+func (c *Coordinator) applyTypedVariant(plan *planner.QueryPlan, args []string, descs []*pb.ShardDescriptor) int {
+	t := plan.Typed
+	if t == nil {
+		return 0
+	}
+	n := 0
+	for _, d := range descs {
+		if c.Provisioner.ShardFieldsTyped(d.ShardId, t.CustomerID, t.Namespace, t.Service, t.Kind, t.Env, t.Requires) {
+			d.Sql, d.Args = t.DirectShardSQL, args
+			n++
+		}
+	}
+	return n
 }
 
 // queryArgStrings renders a plan's args for the compute request.

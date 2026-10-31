@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -19,10 +20,11 @@ type awkPushdown struct {
 	// predicate is a prefilter: true wherever the expression is, so the
 	// stage still runs, verbatim, on the rows the shard returns.
 	exact      bool
-	limit      int    // from NR range, 0 = none
-	offset     int    // from NR range, 0 = none
-	nrSentinel bool   // true if this is an intermediate NR bound, not a final result
-	why        reason // why a predicate that isn't exact isn't
+	limit      int         // from NR range, 0 = none
+	offset     int         // from NR range, 0 = none
+	nrSentinel bool        // true if this is an intermediate NR bound, not a final result
+	why        reason      // why a predicate that isn't exact isn't
+	typed      []typedLeaf // comparisons in predicate with a simpler typed form
 }
 
 // AwkMetaVars maps weft meta-variable names to SQL column names. These
@@ -116,6 +118,7 @@ func tryAwkPushdown(prog *awk.Program) (*awkPushdown, reason) {
 	// of a pattern doesn't lower.
 	var patternWhy reason
 	var preds []string
+	var typed []typedLeaf
 	for _, r := range main {
 		pd := extractAwkPattern(r.Pattern)
 		if pd == nil {
@@ -129,17 +132,18 @@ func tryAwkPushdown(prog *awk.Program) (*awkPushdown, reason) {
 		}
 		exact = exact && pd.exact
 		preds = append(preds, pd.predicate)
+		typed = append(typed, pd.typed...)
 	}
 	if why.code == reasonNone {
 		why = patternWhy
 	}
 	if len(preds) == 1 {
-		return &awkPushdown{predicate: preds[0], exact: exact, why: patternWhy}, why
+		return &awkPushdown{predicate: preds[0], exact: exact, why: patternWhy, typed: typed}, why
 	}
 	for i, p := range preds {
 		preds[i] = parenthesizeIfCompound(p)
 	}
-	return &awkPushdown{predicate: "(" + strings.Join(preds, " OR ") + ")", why: patternWhy}, why
+	return &awkPushdown{predicate: "(" + strings.Join(preds, " OR ") + ")", why: patternWhy, typed: typed}, why
 }
 
 // actionLowers is whether a rule's action is something SQL computes, so a
@@ -341,7 +345,7 @@ func extractAwkLogical(e *awk.BinaryExpr, sqlOp string) *awkPushdown {
 		if left != nil {
 			missing = e.Right
 		}
-		return &awkPushdown{predicate: side.predicate, why: awkPatternReason(missing)}
+		return &awkPushdown{predicate: side.predicate, why: awkPatternReason(missing), typed: side.typed}
 	}
 	if left == nil || right == nil {
 		return nil
@@ -364,12 +368,14 @@ func extractAwkLogical(e *awk.BinaryExpr, sqlOp string) *awkPushdown {
 	if sqlOp == "OR" {
 		lp := parenthesizeIfCompound(left.predicate)
 		rp := parenthesizeIfCompound(right.predicate)
-		return &awkPushdown{predicate: fmt.Sprintf("(%s OR %s)", lp, rp), exact: exact, why: why}
+		return &awkPushdown{predicate: fmt.Sprintf("(%s OR %s)", lp, rp), exact: exact, why: why,
+			typed: append(slices.Clone(left.typed), right.typed...)}
 	}
 	return &awkPushdown{
 		predicate: fmt.Sprintf("%s AND %s", left.predicate, right.predicate),
 		exact:     exact,
 		why:       why,
+		typed:     append(slices.Clone(left.typed), right.typed...),
 	}
 }
 
@@ -456,10 +462,22 @@ func extractAwkComparison(e *awk.BinaryExpr) *awkPushdown {
 	if c.nullable && compareNumbers(0, n, op) {
 		parts = append([]string{c.sql + " IS NULL"}, parts...)
 	}
-	return &awkPushdown{
+	pd := &awkPushdown{
 		predicate: "(" + strings.Join(parts, " OR ") + ")",
 		why:       because(reasonAwkStrnum),
 	}
+	if c.field > 0 {
+		// A field every row holds a number in needs no string comparison and
+		// no missing-field case. The escape for the forms DuckDB doesn't parse
+		// as a number stays, so the typed predicate is still a superset.
+		pd.typed = []typedLeaf{{
+			locator: "$" + strconv.Itoa(c.field),
+			base:    pd.predicate,
+			typed: fmt.Sprintf("(TRY_CAST(%[1]s AS DOUBLE) %[2]s %[3]s OR regexp_matches(%[1]s, '^[+-]?(?i:inf|nan|0x)'))",
+				c.sql, sqlOp, strconv.FormatFloat(n, 'g', -1, 64)),
+		}}
+	}
+	return pd
 }
 
 // awkLiteral is a constant as awk compares it: its text, and its value
@@ -576,6 +594,7 @@ type awkColumn struct {
 	sql      string
 	nullable bool // NULL reaches awk as unset: 0, or ""
 	number   bool // compared as a number (DURATION_NS, LINE_NO)
+	field    int  // N for the awk field $N, else 0
 }
 
 // awkColumnToSQL maps what an awk comparison can read to a shard column:
@@ -613,7 +632,7 @@ func awkColumnToSQL(expr awk.Expr) (awkColumn, bool) {
 		case idx.Value == 0:
 			return awkColumn{sql: "raw"}, true
 		default:
-			return awkColumn{sql: fmt.Sprintf("list_extract(fields, %d)", int(idx.Value)), nullable: true}, true
+			return awkColumn{sql: fmt.Sprintf("list_extract(fields, %d)", int(idx.Value)), nullable: true, field: int(idx.Value)}, true
 		}
 	case *awk.IdentExpr:
 		if e.Name == "length" {

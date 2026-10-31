@@ -145,7 +145,7 @@ func awkRowStage(prog *awk.Program, pd *awkPushdown, why reason) rowStage {
 		}
 		return rowStage{opaque: true, why: why}
 	}
-	rs := rowStage{pred: pd.predicate, predExact: pd.exact}
+	rs := rowStage{pred: pd.predicate, predExact: pd.exact, typed: pd.typed}
 	if pd.exact {
 		return rs
 	}
@@ -203,7 +203,7 @@ func lowerJq(ls *loweredStage, a at) []node {
 func jqRowStage(p *jqProgram) rowStage {
 	pred := strings.Join(p.selects, " AND ")
 	if p.allLower && p.tail == nil && len(p.subject) == 0 {
-		return rowStage{pred: pred, predExact: true}
+		return rowStage{pred: pred, predExact: true, typed: p.typed}
 	}
 	if p.allLower {
 		// The subject is what the program holds. A tail reads its own
@@ -230,7 +230,7 @@ func jqRowStage(p *jqProgram) rowStage {
 	if !p.allLower {
 		why = because(reasonJqSelect)
 	}
-	return rowStage{pred: pred, opaque: true, why: why}
+	return rowStage{pred: pred, opaque: true, why: why, typed: p.typed}
 }
 
 // rowStage is what a row stage (awk, jq) does to each row, in the terms
@@ -238,12 +238,13 @@ func jqRowStage(p *jqProgram) rowStage {
 // becomes IR, so every language folds a filter and a projection the same
 // way.
 type rowStage struct {
-	pred      string // SQL predicate on the row, or "" for none
-	predExact bool   // pred is exactly the stage's filter, not just a prefilter
-	proj      string // SQL for the text the stage prints, or "" if rows pass through
-	opaque    bool   // the stage does more than pred and proj, so it still runs
-	why       reason // why the stage still runs
-	predWhy   reason // why pred is only a prefilter; why if unset
+	pred      string      // SQL predicate on the row, or "" for none
+	predExact bool        // pred is exactly the stage's filter, not just a prefilter
+	proj      string      // SQL for the text the stage prints, or "" if rows pass through
+	opaque    bool        // the stage does more than pred and proj, so it still runs
+	why       reason      // why the stage still runs
+	predWhy   reason      // why pred is only a prefilter; why if unset
+	typed     []typedLeaf // comparisons in pred with a simpler typed form
 }
 
 func (rs rowStage) nodes(a at) []node {
@@ -252,13 +253,13 @@ func (rs rowStage) nodes(a at) []node {
 			return []node{&opaqueNode{at: a, why: rs.why}}
 		}
 		return []node{
-			&filterNode{at: a, pred: rs.pred, why: cmpReason(rs.predWhy, rs.why)},
+			&filterNode{at: a, pred: rs.pred, why: cmpReason(rs.predWhy, rs.why), typed: rs.typed},
 			&opaqueNode{at: a, why: rs.why},
 		}
 	}
 	var nodes []node
 	if rs.pred != "" || rs.proj == "" {
-		nodes = append(nodes, &filterNode{at: a, pred: rs.pred, exact: true})
+		nodes = append(nodes, &filterNode{at: a, pred: rs.pred, exact: true, typed: rs.typed})
 	}
 	if rs.proj != "" {
 		nodes = append(nodes, &projectNode{at: a, expr: rs.proj})

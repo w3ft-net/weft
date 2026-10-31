@@ -15,6 +15,7 @@ import (
 	"github.com/graybeardcorp/weft/coordinator"
 	coordsvc "github.com/graybeardcorp/weft/coordinator/service"
 	"github.com/graybeardcorp/weft/logdb"
+	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	shardsvc "github.com/graybeardcorp/weft/shard/service"
@@ -26,6 +27,7 @@ import (
 type factsRig struct {
 	t       *testing.T
 	db      *store.Store
+	prov    *logdb.Provisioner
 	reg     *logdb.ShardRegistry
 	shard   *shardsvc.Server
 	client  pb.WeftCoordinatorClient
@@ -87,7 +89,7 @@ func newFactsRig(t *testing.T) *factsRig {
 	}
 	t.Cleanup(func() { srv.Shard().Close() })
 
-	return &factsRig{t: t, db: db, reg: reg, shard: srv, client: pb.NewWeftCoordinatorClient(conn), shardID: shardID}
+	return &factsRig{t: t, db: db, prov: prov, reg: reg, shard: srv, client: pb.NewWeftCoordinatorClient(conn), shardID: shardID}
 }
 
 // ingest lands n rows of one source whose $2 and .q are the given values.
@@ -177,6 +179,36 @@ func TestFieldFacts_ShardToCoordinatorToPostgres(t *testing.T) {
 	}
 	if got := r.shard.Shard().FieldFacts(); len(got) != 0 {
 		t.Errorf("shard still resends %+v after the retraction was acknowledged", got)
+	}
+}
+
+// A fact a shard reports is one the planner's variant can ask for: the key a
+// real Plan puts on its TypedPlan is the key the classifier reported, so a
+// query for that stream is routed to the shard's typed SQL, and a retraction
+// takes it away again.
+func TestFieldFacts_ReachTheQueryPlannersKey(t *testing.T) {
+	r := newFactsRig(t)
+	plan, err := planner.Plan(`cat /log/ns/prod/svc/main.log | awk '$2 > 500'`, 1, "", time.Time{}, time.Time{})
+	if err != nil || plan.Typed == nil {
+		t.Fatalf("plan: %v, typed %+v", err, plan.Typed)
+	}
+	tp := plan.Typed
+	typed := func() bool {
+		return r.prov.ShardFieldsTyped(r.shardID, tp.CustomerID, tp.Namespace, tp.Service, tp.Kind, tp.Env, tp.Requires)
+	}
+
+	if typed() {
+		t.Fatal("typed before any fact was reported")
+	}
+	r.ingest(factTypedAfterForTest, "7", "3")
+	r.beat()
+	if !typed() {
+		t.Errorf("the planner's key %+v is not typed after the shard reported it", tp)
+	}
+	r.ingest(1, "7abc", "3")
+	r.beat()
+	if typed() {
+		t.Error("still typed after the retraction")
 	}
 }
 

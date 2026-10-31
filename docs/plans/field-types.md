@@ -195,6 +195,39 @@ Each step also needs a differential test against the real stages on data that
 includes the violating rows, because the window is tolerated but the steady state
 is not.
 
+## Numeric filters: built (2026-10-30)
+
+`QueryPlan.Typed` (`planner/typed.go`) is the shard SQL for a shard whose facts say the
+locators it needs are all numbers, derived from the base plan by swapping each typed
+leaf's predicate text (and only when that text occurs exactly once in the SQL). It
+exists beside the base plan; the awk or jq stage still runs in compute on whatever the
+shard returns, so the variant only has to be a superset of the stage's matches.
+
+- **awk `$N op number`**: the base prefilter ORs a numeric test with a *string* compare
+  and a missing-field case, so it ships every row whose text sorts above "500". The typed
+  form is `TRY_CAST(fields[N] AS DOUBLE) op n` plus the existing escape for the spellings
+  DuckDB doesn't parse (`inf`, `nan`, hex floats), which keeps it a superset. Comparisons
+  joined by `&&`/`||` carry all their leaves, so every locator must be typed.
+- **jq `select(.key op number)`** (top-level key): the base branches on the JSON type and
+  on the key being present, as jq's total order requires; the typed form is the cast
+  alone.
+- **Eligibility is the planner's:** one namespace, one service, one kind, no follow; env
+  from the path or empty. The coordinator (`applyTypedVariant`) then gives a shard the
+  variant (`ShardDescriptor.sql`/`args`) only if its facts say every required locator is
+  typed for that exact stream; other shards keep the base SQL, so a query over old and new
+  windows is a mix. An old compute ignores the descriptor's sql and runs the request's
+  base, which is correct, so there is no deploy ordering for this.
+- **Tests:** planner unit tests (what gets a variant, what must not); a differential test
+  that runs the typed SQL, the base and a mixed typed/untyped request against the
+  reference stage on numeric spellings that include text-greater-than-"500" values, hex
+  floats, `inf`, `nan` and integers past 2^53 (removing the escape clause makes it fail);
+  and the shard-to-coordinator-to-Postgres rig checking that the key a real `Plan` asks for
+  is the key the classifier reported.
+- **Not covered:** crons and dashboards (their persisted `LoweredPlan` carries the base
+  plan only); a negative literal (`$2 > -1`, `.q > -1`) is not lowered by either plan, so
+  it has no variant; nested jq paths; a value awk reads as out of range (`1e999`) is dirty
+  by `LooksNumeric`, so it never types a locator.
+
 ## Keyed sum/min/max: design (2026-10-30, revised)
 
 The keyed aggregate is awk over a row's own fields:

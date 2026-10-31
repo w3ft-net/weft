@@ -38,6 +38,9 @@ type filterNode struct {
 	pred  string
 	exact bool
 	why   reason // why a prefilter isn't exact
+	// typed are the comparisons in pred that have a simpler form on a shard
+	// where their locator is all numbers (see typedLeaf).
+	typed []typedLeaf
 	// follow is the grep pattern live tail applies when an exact grep
 	// filter lands in the shard.
 	follow *GrepPattern

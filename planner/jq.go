@@ -196,6 +196,50 @@ func jqCondToSQL(subject jqPath, cond jq.Expr) string {
 	return ""
 }
 
+// jqTypedLeaf is the simpler form of a select on a top-level key against a
+// number, for a shard where that key is a number in every row. jq's order
+// puts every number below every string and null below both, so the general
+// SQL branches on the value's JSON type and on whether the key is there;
+// where it is always a number none of that matters and the comparison is the
+// cast alone. base is the predicate text jqCondToSQL gave this condition.
+func jqTypedLeaf(subject jqPath, cond jq.Expr, base string) []typedLeaf {
+	if len(subject) != 0 {
+		return nil
+	}
+	var left, right jq.Expr
+	var op string
+	switch e := cond.(type) {
+	case jq.EqExpr:
+		left, right, op = e.Left, e.Right, "="
+	case jq.NeExpr:
+		left, right, op = e.Left, e.Right, "!="
+	case jq.LtExpr:
+		left, right, op = e.Left, e.Right, "<"
+	case jq.GtExpr:
+		left, right, op = e.Left, e.Right, ">"
+	case jq.LeExpr:
+		left, right, op = e.Left, e.Right, "<="
+	case jq.GeExpr:
+		left, right, op = e.Left, e.Right, ">="
+	default:
+		return nil
+	}
+	field, ok := left.(jq.FieldExpr)
+	if !ok {
+		return nil
+	}
+	lit, ok := right.(jq.LiteralExpr)
+	if !ok || lit.Value.Type != jq.TypeNumber {
+		return nil
+	}
+	key := jqPath{"." + field.Name}
+	return []typedLeaf{{
+		locator: "." + field.Name,
+		base:    base,
+		typed:   fmt.Sprintf("TRY_CAST(json_extract(payload, %s) AS DOUBLE) %s %s", key.jsonPath(), op, typedNumber(lit.Value.Num)),
+	}}
+}
+
 // jqComparisonToSQL lowers `field op literal` exactly as jq evaluates
 // it. jq compares values of different types by a total order,
 // null < false < true < numbers < strings < arrays < objects, and a
@@ -393,6 +437,8 @@ type jqProgram struct {
 	// selects is the SQL for each select in the head that lowers,
 	// stopping at the first that doesn't.
 	selects []string
+	// typed are the comparisons in selects with a simpler typed form.
+	typed []typedLeaf
 	// allLower is true when every select in the head lowered.
 	allLower bool
 	// subject is the path the head's steps navigate to; empty when it
@@ -445,6 +491,7 @@ head:
 			if p.allLower {
 				if pred := jqCondToSQL(p.subject, node.Cond); pred != "" {
 					p.selects = append(p.selects, pred)
+					p.typed = append(p.typed, jqTypedLeaf(p.subject, node.Cond, pred)...)
 				} else {
 					p.allLower = false
 				}

@@ -86,6 +86,10 @@ type QueryPlan struct {
 	// then read.
 	Group *GroupSpec
 
+	// Typed, when set, is the shard SQL for a shard whose field facts say
+	// the locators it needs are all numbers; see TypedPlan.
+	Typed *TypedPlan
+
 	// Aggregate is the trace and span queries' shard-side aggregate (one
 	// of the AggregateSpan* / AggregateTrace* constants), which compute
 	// finishes the same way.
@@ -387,7 +391,9 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 		liveStages = stageTexts(liveRest)
 	}
 
+	typed := typedVariant(c, info.source, customerID, shardSQL, directShardSQL)
 	return &QueryPlan{
+		Typed:             typed,
 		ShardSQL:          shardSQL,
 		Args:              shardArgs,
 		ArgSources:        shardArgSources,
