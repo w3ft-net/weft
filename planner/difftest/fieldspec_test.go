@@ -122,7 +122,36 @@ func TestDifferentialFieldProjectionRespectsAwkFlags(t *testing.T) {
 		`awk -F, '{ printf "%s;%d\n", $1, NF }'`,
 		`awk -F, '{ n += NF } END { print n }'`,
 		`awk -v k=2 '{ s += $2 * k } END { print s }'`,
+		`awk -v FS=, '{ s += $2 } END { print s }'`,
+		`awk -v k=1 -v FS=, '{ printf "%s;%d\n", $1, NF }'`,
 	} {
 		t.Run(prog, func(t *testing.T) { h.check(t, "cat /log/spec/api/main.log | "+prog) })
+	}
+}
+
+// -v sets a variable and leaves the split alone, so the stage is still cut down
+// to its fields and gets the field form.
+func TestDifferentialFieldFormOfAStageWithVars(t *testing.T) {
+	h := newHarness(t, fieldLines(), 2)
+	pipeline := `cat /log/spec/api/main.log | awk -v k=2 -v name=x '{ s += $2 * k } END { print name, s }'`
+	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	if err != nil || plan.FieldSQL == "" || plan.FieldSpec == nil {
+		t.Fatalf("no field form: %v\n%s", err, planner.Explain(pipeline))
+	}
+	source, stages := splitSource(t, pipeline)
+	want, wantErr := h.runReference(source, stages, readsMetaVars(stages))
+	if wantErr != nil {
+		t.Fatal(wantErr)
+	}
+	h.fieldQueries.Store(0)
+	got, err := h.runFieldForm(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.fieldQueries.Load() != 2 {
+		t.Errorf("%d shards asked in the field form, want 2", h.fieldQueries.Load())
+	}
+	if got != want {
+		t.Errorf("differs from the reference: %s", firstDiff(got, want))
 	}
 }

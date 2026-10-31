@@ -100,6 +100,7 @@ func lowerAwk(ls *loweredStage, a at, typed bool) []node {
 		// -f: the program isn't on the command line, so assume it reads
 		// meta-variables; projecting them only costs columns.
 		ls.readsMeta = true
+		ls.fieldsWhy = "-f cannot be optimized"
 		return []node{&opaqueNode{at: a, why: reason{code: reasonFlag, detail: "-f"}}}
 	}
 	prog, err := awk.Parse(src)
@@ -112,7 +113,15 @@ func lowerAwk(ls *loweredStage, a at, typed bool) []node {
 		return ok && AwkMetaVars[id.Name] != ""
 	})
 	if len(ls.args) != 1 {
-		ls.fieldsWhy = awkFlagFieldsWhy(ls.args[0])
+		// The stage runs verbatim in compute, but it can still be cut down to
+		// the fields it reads if its flags leave the split alone.
+		if ls.fieldsWhy = awkFlagsWhy(ls.args); ls.fieldsWhy == "" {
+			if reads, why := awkFieldReads(prog); why == "" {
+				ls.fields = &reads
+			} else {
+				ls.fieldsWhy = why
+			}
+		}
 		return []node{&opaqueNode{at: a, why: reason{code: reasonFlag, detail: ls.args[0]}}}
 	}
 	ls.rowwise = awkIsRowFilter(prog)
@@ -168,14 +177,32 @@ func awkRowStage(prog *awk.Program, pd *awkPushdown, why reason, typed bool) row
 	return rs
 }
 
-// awkFlagFieldsWhy is why an awk stage with a flag is not cut down to the
-// fields it reads. -F changes how a line splits, so the whitespace-split fields
-// the shard stores are not its fields; any other flag just isn't analyzed.
-func awkFlagFieldsWhy(flag string) string {
-	if strings.HasPrefix(flag, "-F") {
-		flag = "-F"
+// awkFlagsWhy is why an awk stage's flags keep it from being cut down to the
+// fields it reads, "" if they don't. -F changes how a line splits, and so does
+// -v setting FS, RS or NF, so the whitespace-split fields the shard stores are
+// not its fields. Any other -v just sets a variable. It reads the flags as
+// awkProgramArg does, up to the program.
+func awkFlagsWhy(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case strings.HasPrefix(a, "-F"):
+			return "-F cannot be optimized"
+		case strings.HasPrefix(a, "-v"):
+			assign := strings.TrimPrefix(a, "-v")
+			if assign == "" && i+1 < len(args) {
+				i++
+				assign = args[i]
+			}
+			switch name, _, _ := strings.Cut(assign, "="); name {
+			case "FS", "RS", "NF":
+				return "-v " + name + " cannot be optimized"
+			}
+		case a == "--":
+		default:
+			return "" // the program
+		}
 	}
-	return flag + " cannot be optimized"
+	return ""
 }
 
 // awkProgramArg finds the program among awk's arguments, past -F, -v
