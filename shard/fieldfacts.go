@@ -49,7 +49,9 @@ const (
 
 // FactKey names a locator in a source. Customer is part of the key because
 // shards are shared across customers; env so that a stray row in staging
-// doesn't downgrade production. Locator is "$N" for awk field N.
+// doesn't downgrade production. Locator is "$N" for awk field N, "$N#int"
+// for awk field N holding only integers (see finiteInteger), or ".key" for a
+// top-level payload key.
 type FactKey struct {
 	CustomerID int64
 	Namespace  string
@@ -77,15 +79,16 @@ type locatorState struct {
 	seen     int64 // src.rows+1 of the last row that held this locator
 }
 
-// factSource is what is known about one source's locators. Awk fields and
-// top-level jq keys are tracked separately, up to factMaxLocators of each: a
-// JSON row also has awk fields (the text of its line), which must not crowd
-// out its keys.
+// factSource is what is known about one source's locators. Awk fields, awk
+// fields holding integers and top-level jq keys are tracked separately, up to
+// factMaxLocators of each: a JSON row also has awk fields (the text of its
+// line), which must not crowd out its keys.
 type factSource struct {
-	rows  int64
-	awk   map[int]*locatorState
-	jq    map[string]*locatorState
-	order []*locatorState // every tracked locator, to find the ones a row lacks
+	rows   int64
+	awk    map[int]*locatorState
+	awkInt map[int]*locatorState
+	jq     map[string]*locatorState
+	order  []*locatorState // every tracked locator, to find the ones a row lacks
 }
 
 type sourceKey struct {
@@ -248,7 +251,7 @@ func awkLocator(n int) string {
 func (c *FieldClassifier) classifyRow(sk sourceKey, fields []string, payload []byte) {
 	src := c.sources[sk]
 	if src == nil {
-		src = &factSource{awk: map[int]*locatorState{}, jq: map[string]*locatorState{}}
+		src = newFactSource(0)
 		c.sources[sk] = src
 		c.changed = true
 	}
@@ -265,6 +268,17 @@ func (c *FieldClassifier) classifyRow(sk sourceKey, fields []string, payload []b
 		}
 		ls.seen = mark
 		c.observe(ls, finiteDecimal(f), sk)
+
+		ils := src.awkInt[n]
+		if ils == nil {
+			if ils = src.track(awkLocator(n)+intSuffix, len(src.awkInt)); ils == nil {
+				continue
+			}
+			src.awkInt[n] = ils
+			c.changed = true
+		}
+		ils.seen = mark
+		c.observe(ils, finiteInteger(f), sk)
 	}
 	if root := gjson.ParseBytes(payload); root.IsObject() {
 		root.ForEach(func(k, v gjson.Result) bool {
@@ -291,6 +305,11 @@ func (c *FieldClassifier) classifyRow(sk sourceKey, fields []string, payload []b
 		}
 	}
 	src.rows++
+}
+
+// newFactSource is a source that has seen rows rows.
+func newFactSource(rows int64) *factSource {
+	return &factSource{rows: rows, awk: map[int]*locatorState{}, awkInt: map[int]*locatorState{}, jq: map[string]*locatorState{}}
 }
 
 // track starts following a locator the source has not shown before, or
@@ -447,17 +466,22 @@ func (c *FieldClassifier) Restore(b []byte) error {
 	defer c.mu.Unlock()
 	c.epoch = in.Epoch
 	for _, ss := range in.Sources {
-		src := &factSource{rows: 1, awk: map[int]*locatorState{}, jq: map[string]*locatorState{}}
+		src := newFactSource(1)
 		for _, sl := range ss.Locators {
 			ls := &locatorState{locator: sl.Locator, state: sl.State, wasTyped: sl.WasTyped, epoch: sl.Epoch}
 			src.order = append(src.order, ls)
 			switch {
 			case strings.HasPrefix(sl.Locator, "$"):
-				n, err := strconv.Atoi(sl.Locator[1:])
+				num, ints := strings.CutSuffix(sl.Locator[1:], intSuffix)
+				n, err := strconv.Atoi(num)
 				if err != nil {
 					return fmt.Errorf("saved field facts: locator %q", sl.Locator)
 				}
-				src.awk[n] = ls
+				if ints {
+					src.awkInt[n] = ls
+				} else {
+					src.awk[n] = ls
+				}
 			case strings.HasPrefix(sl.Locator, "."):
 				src.jq[sl.Locator[1:]] = ls
 			default:
@@ -496,4 +520,26 @@ func finiteDecimal(f string) bool {
 		}
 	}
 	return awk.LooksNumeric(f)
+}
+
+// intSuffix marks the locator of an awk field's integer fact: "$3#int".
+const intSuffix = "#int"
+
+// finiteInteger is whether f is a decimal integer of at most 15 digits, with an
+// optional sign, so that it is exactly a float64. A sum over such a field is
+// exact while its partial sums stay below 2^53, which the query checks (see
+// planner.KeyedAggregate); a field of anything else is not an integer here.
+func finiteInteger(f string) bool {
+	if f != "" && (f[0] == '+' || f[0] == '-') {
+		f = f[1:]
+	}
+	if f == "" || len(f) > 15 {
+		return false
+	}
+	for i := 0; i < len(f); i++ {
+		if f[i] < '0' || f[i] > '9' {
+			return false
+		}
+	}
+	return true
 }

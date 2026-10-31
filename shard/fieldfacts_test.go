@@ -28,6 +28,16 @@ func settle(t *testing.T, c *FieldClassifier) {
 	c.inflight.Wait()
 }
 
+// newestEpoch is the highest epoch among facts: acknowledging it acknowledges
+// them all.
+func newestEpoch(facts []FieldFact) uint64 {
+	var max uint64
+	for _, f := range facts {
+		max = slices.Max([]uint64{max, f.Epoch})
+	}
+	return max
+}
+
 func factFor(facts []FieldFact, locator string) (FieldFact, bool) {
 	for _, f := range facts {
 		if f.Locator == locator {
@@ -69,7 +79,7 @@ func TestFieldClassifier_TypedThenViolationReportsDirty(t *testing.T) {
 	c.Observe(numRows(factTypedAfter, "x 7"))
 	settle(t, c)
 	typed, _ := factFor(c.Pending(), "$2")
-	c.Ack(typed.Epoch)
+	c.Ack(newestEpoch(c.Pending()))
 	if got := c.Pending(); len(got) != 0 {
 		t.Fatalf("acked fact still pending: %+v", got)
 	}
@@ -79,6 +89,9 @@ func TestFieldClassifier_TypedThenViolationReportsDirty(t *testing.T) {
 	f, ok := factFor(c.Pending(), "$2")
 	if !ok || f.State != FactDirty || f.Epoch <= typed.Epoch {
 		t.Errorf("want a newer dirty fact to retract the typed one, got %+v (ok=%v)", f, ok)
+	}
+	if f, ok := factFor(c.Pending(), "$2#int"); !ok || f.State != FactDirty {
+		t.Errorf("the integer fact must be retracted too, got %+v (ok=%v)", f, ok)
 	}
 
 	// Dirty is permanent.
@@ -143,8 +156,16 @@ func TestFieldClassifier_TracksAtMostFactMaxLocators(t *testing.T) {
 	}
 	c.Observe(numRows(factTypedAfter, strings.Join(wide, " ")))
 	settle(t, c)
-	if got := len(c.Pending()); got != factMaxLocators {
-		t.Errorf("tracked %d locators, want the cap %d", got, factMaxLocators)
+	var decimals, ints int
+	for _, f := range c.Pending() {
+		if strings.HasSuffix(f.Locator, intSuffix) {
+			ints++
+		} else {
+			decimals++
+		}
+	}
+	if decimals != factMaxLocators || ints != factMaxLocators {
+		t.Errorf("tracked %d field locators and %d integer ones, want the cap %d of each", decimals, ints, factMaxLocators)
 	}
 }
 
@@ -173,7 +194,7 @@ func TestIngest_ClassifiesCommittedRows(t *testing.T) {
 	if f, ok := factFor(ds.FieldFacts(), "$2"); !ok || f.State != FactTyped {
 		t.Errorf("want $2 typed after ingest, got %+v (ok=%v)", f, ok)
 	}
-	ds.AckFieldFacts(f(ds).Epoch)
+	ds.AckFieldFacts(newestEpoch(ds.FieldFacts()))
 	if got := ds.FieldFacts(); len(got) != 0 {
 		t.Errorf("acked facts still pending: %+v", got)
 	}
@@ -582,5 +603,83 @@ func TestScanResultRow_FieldForm(t *testing.T) {
 	}
 	if plain[0].FieldCount != nil || len(plain[0].Fields) != 0 {
 		t.Errorf("a plain row has field form: %v %v", plain[0].Fields, plain[0].FieldCount)
+	}
+}
+
+// A field is integral for the keyed sum when every value is a decimal integer
+// of at most 15 digits: exactly a float64, so partial sums are exact until they
+// pass 2^53. Anything with a point, an exponent or more digits is a number, not
+// an integer, and keeps the field out of the sum.
+func TestFinitelyIntegral(t *testing.T) {
+	for f, want := range map[string]bool{
+		"0": true, "7": true, "-3": true, "+5": true, "007": true, "-0": true,
+		"999999999999999": true, "-999999999999999": true,
+		"1000000000000000": false, "9007199254740993": false,
+		"": false, "+": false, "-": false, "5.0": false, "5.": false, ".5": false,
+		"1e3": false, "0x10": false, "inf": false, "nan": false, "12abc": false, " 5": false, "1_000": false,
+	} {
+		if got := finiteInteger(f); got != want {
+			t.Errorf("finiteInteger(%q) = %v, want %v", f, got, want)
+		}
+	}
+}
+
+func TestFieldClassifier_IntegerFactTypesOnlyIntegerFields(t *testing.T) {
+	c := NewFieldClassifier()
+	defer c.Stop()
+	c.Observe(numRows(factTypedAfter, "GET 200 12.5 -7 1e3"))
+	settle(t, c)
+	facts := c.Pending()
+	for loc, want := range map[string]bool{
+		"$2": true, "$2#int": true, // 200
+		"$3": true, "$3#int": false, // 12.5: a number, not an integer
+		"$4": true, "$4#int": true, // -7
+		"$5": true, "$5#int": false, // 1e3
+		"$1": false, "$1#int": false,
+	} {
+		if f, ok := factFor(facts, loc); ok != want || (ok && f.State != FactTyped) {
+			t.Errorf("%s: reported=%v (%+v), want reported=%v", loc, ok, f, want)
+		}
+	}
+}
+
+// One non-integer row retracts the integer fact and leaves the number fact.
+func TestFieldClassifier_AFloatInAnIntegerFieldRetractsOnlyTheIntegerFact(t *testing.T) {
+	c := NewFieldClassifier()
+	defer c.Stop()
+	c.Observe(numRows(factTypedAfter, "x 7"))
+	settle(t, c)
+	c.Ack(newestEpoch(c.Pending()))
+	c.Observe(numRows(1, "x 7.5"))
+	settle(t, c)
+	facts := c.Pending()
+	if f, ok := factFor(facts, "$2#int"); !ok || f.State != FactDirty {
+		t.Errorf("$2#int = %+v (ok=%v), want dirty", f, ok)
+	}
+	if _, ok := factFor(facts, "$2"); ok {
+		t.Errorf("$2 is still a finite decimal and must not be retracted: %+v", facts)
+	}
+}
+
+func TestFieldFacts_IntegerFactSurvivesARoll(t *testing.T) {
+	c := NewFieldClassifier()
+	defer c.Stop()
+	var saved []byte
+	c.SetPersist(func(b []byte) error { saved = b; return nil }, func() {})
+	c.Observe(numRows(factTypedAfter, "x 7 1.5"))
+	settle(t, c)
+	if saved == nil {
+		t.Fatal("nothing persisted")
+	}
+	next := NewFieldClassifier()
+	defer next.Stop()
+	if err := next.Restore(saved); err != nil {
+		t.Fatal(err)
+	}
+	facts := next.Pending()
+	for loc, want := range map[string]bool{"$2": true, "$2#int": true, "$3": true, "$3#int": false} {
+		if _, ok := factFor(facts, loc); ok != want {
+			t.Errorf("after a roll %s reported=%v, want %v", loc, ok, want)
+		}
 	}
 }
