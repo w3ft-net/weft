@@ -355,11 +355,15 @@ columns). Each safeguard was checked by removing it and watching its test fail.
   runs once for its own status. `TestParallelPipelineStatusMatchesSerial` pins it. Nothing in weft
   sets `Parallelism`, so no weft path reached it.
 - `bench/fieldtypes/results/after.json` is the pre-rotation run and is still untracked.
-- **Open: a race in `explain`'s line count.** `TestShellExec_ExplainSurvivesACountThatFails/too_slow`
+- ~~A race in `explain`'s line count.~~ Fixed. `TestShellExec_ExplainSurvivesACountThatFails/too_slow`
   failed once in CI (it had passed on 20+ earlier runs) and passed on rerun. `countRetrieved`
-  (`api/explain.go`) reports "took longer than 50ms" only if its own context has expired, but the
-  server can cancel the stream a moment before the client's timer fires, giving `RST_STREAM
-  CANCEL` instead. Not touched by this work; not fixed.
+  (`api/explain.go`) reported "took longer than 50ms" only if its own context had expired, but the
+  coordinator enforces the deadline it was sent with a timer of its own, and when that fires first
+  the stream ends with `Canceled` (`RST_STREAM CANCEL`) or `DeadlineExceeded` while the client's
+  context is still alive. `endedByDeadline` now waits up to 100ms for the client's deadline when the
+  stream ends with either code and reports the timeout if it passes; a cancellation with the deadline
+  far off keeps its own message and is not waited on. Two new cases reproduce it deterministically
+  (they failed before the fix) and a third covers a cancellation that is not the deadline.
 - **Open: per-shard plans.** A plan keyed to arrays of shards on the wire (a stage list per group
   of shards) is not built. The keyed aggregates did not need it (a shard without the facts
   cannot join an exact merge, so the whole query takes the base plan). The one candidate is the
