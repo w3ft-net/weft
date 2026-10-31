@@ -477,3 +477,22 @@ func TestFieldFacts_WrittenOnlyWhenAResultChanges(t *testing.T) {
 		t.Error("went dirty but was not written")
 	}
 }
+
+// A classifier that stops (its queue overflowed) misses rows from then on, so
+// what was saved no longer accounts for the shard. The next instance must not
+// restore it.
+func TestFieldFacts_ADisabledClassifierLeavesNothingToRestore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.duckdb")
+	ds := openAt(t, path)
+	ingest(t, ds, mixedRows(factTypedAfter, "7", "3")) // typed and saved
+	ds.facts.Disable("queue full")
+	if err := ds.Ingest(t.Context(), mixedRows(1, "7abc", "3"), nil); err != nil { // lands unclassified
+		t.Fatal(err)
+	}
+	roll(t, ds)
+
+	next := openAt(t, path)
+	if got := next.FieldFacts(); got != nil {
+		t.Errorf("restored facts that missed a row: %+v", got)
+	}
+}

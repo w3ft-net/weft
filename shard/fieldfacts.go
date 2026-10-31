@@ -111,7 +111,10 @@ type FieldClassifier struct {
 	changed bool
 	// persist keeps a snapshot of the results where a roll will find it.
 	// Called on the classifier goroutine, only when changed.
-	persist  func([]byte) error
+	persist func([]byte) error
+	// forget drops what persist kept. A classifier that stops has missed rows,
+	// so the saved results no longer account for the shard.
+	forget   func()
 	disabled bool
 }
 
@@ -172,9 +175,19 @@ func (c *FieldClassifier) disable(reason string) {
 	c.mu.Lock()
 	already := c.disabled
 	c.disabled = true
+	forget := c.forget
 	c.mu.Unlock()
 	if !already {
 		weftsdk.Warnf(context.Background(), "field facts disabled: %s", reason)
+		if forget != nil {
+			// Off the caller's goroutine: Observe, on the ingest path, can be
+			// the one disabling.
+			c.inflight.Add(1) // so Drain, and a roll's flush, wait for it
+			go func() {
+				defer c.inflight.Done()
+				forget()
+			}()
+		}
 	}
 }
 
@@ -457,13 +470,13 @@ func (c *FieldClassifier) Restore(b []byte) error {
 	return nil
 }
 
-// SetPersist installs the function that keeps the results. It must be set
-// before the classifier sees a row.
-func (c *FieldClassifier) SetPersist(f func([]byte) error) {
+// SetPersist installs the function that keeps the results and the one that
+// drops them. They must be set before the classifier sees a row.
+func (c *FieldClassifier) SetPersist(keep func([]byte) error, forget func()) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
-	c.persist = f
+	c.persist, c.forget = keep, forget
 	c.mu.Unlock()
 }

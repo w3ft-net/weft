@@ -133,6 +133,10 @@ type DuckDBShard struct {
 
 	// facts learns which awk fields hold only numbers; see fieldfacts.go.
 	facts *FieldClassifier
+	// factsMu orders saving the facts against dropping them; factsForgotten
+	// is set once the classifier has stopped and nothing more may be saved.
+	factsMu        sync.Mutex
+	factsForgotten bool
 
 	// archiveMu guards the single in-flight archive attempt (see beginArchive).
 	archiveMu      sync.Mutex
@@ -377,7 +381,7 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 		return nil, fmt.Errorf("create field_facts_state: %w", err)
 	}
 	ds.restoreFieldFacts(existing)
-	ds.facts.SetPersist(ds.persistFieldFacts)
+	ds.facts.SetPersist(ds.persistFieldFacts, ds.forgetFieldFacts)
 	ds.openTiming = fmt.Sprintf("open=%s create=%s migrate=%s count=%s",
 		connected.Sub(t0).Round(time.Microsecond), created.Sub(connected).Round(time.Microsecond),
 		cmp.Or(migrate, migrated.Sub(created).Round(time.Microsecond).String()), time.Since(migrated).Round(time.Microsecond))
@@ -545,8 +549,25 @@ const factsStateSQL = `CREATE TABLE IF NOT EXISTS field_facts_state (
 // persistFieldFacts keeps the classifier's results in the database; the
 // classifier calls it only when a result changes.
 func (s *DuckDBShard) persistFieldFacts(b []byte) error {
+	s.factsMu.Lock()
+	defer s.factsMu.Unlock()
+	if s.factsForgotten {
+		return nil // the classifier stopped; what it would save is incomplete
+	}
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO field_facts_state (id, state) VALUES (1, ?)`, string(b))
 	return err
+}
+
+// forgetFieldFacts drops the saved results once the classifier has stopped
+// (it missed rows), and keeps a late save from bringing them back. The next
+// open finds rows and nothing saved, and leaves the facts off.
+func (s *DuckDBShard) forgetFieldFacts() {
+	s.factsMu.Lock()
+	defer s.factsMu.Unlock()
+	s.factsForgotten = true
+	if _, err := s.db.Exec(`DELETE FROM field_facts_state`); err != nil {
+		weftsdk.Warnf(context.Background(), "shard %s: drop saved field facts: %v", s.id, err)
+	}
 }
 
 // FlushFieldFacts waits until every row ingested so far is classified and

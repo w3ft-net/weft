@@ -134,8 +134,17 @@ else the base plan. `ExecuteQueryRequest` carries per-shard variants.
    - **Accepted gap:** if a shard is killed (not rolled) between a row committing and the
      classifier seeing it, that row is never classified, and a violation in it could leave
      a locator typed that shouldn't be. This is the plan's tolerated window made
-     permanent for that shard. Closing it needs a "shut down cleanly" marker restored only
-     when set (costing the facts after every crash), which is not built.
+     permanent for that shard (Paul accepted it, 2026-10-30). Closing it needs a "shut
+     down cleanly" marker restored only when set (costing the facts after every crash).
+     A classifier that stops *knowingly* (its queue overflowed) is not part of the gap: it
+     deletes the saved results and blocks any later save, so the next open finds rows and
+     nothing saved, and leaves the facts off.
+   - **No reset for an existing shard.** A shard with rows and no saved state has facts off
+     for its whole life, through any number of rolls: there is no sound way to start
+     counting from now, because rows already there might violate (the plan has no
+     per-time coverage). It gets facts when its window rotates and a new shard opens.
+     Anything that needs facts on today's data has to use a range inside a window that
+     opened after the first deploy, and record its baseline there.
    - `ShardHeartbeatRequest.field_facts` and `HeartbeatResponse.field_facts_acked`. Only
      typed facts and retractions of typed ones are sent; absence is unknown.
    - `logdb.Shard.FieldTyped(key)`, `ShardRegistry.FoldFieldFacts`, and migration 110
