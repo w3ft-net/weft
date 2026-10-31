@@ -1,8 +1,10 @@
 # Field row spec: sending a compute stage only the fields it reads
 
-Status: 2026-10-31. Everything below is on `origin/main`; the last CI run (`7e6ca66b`) is green and
-its Deploy workflow reported success, but the rollout itself was not confirmed from here (see "Still
-to verify").
+Status: 2026-10-31. Everything below is on `origin/main`. CI is green on the last commit
+(`8cb6355c`) and its Deploy workflow reported success. The deploy of `7e6ca66b` (the first with
+the keyed aggregates) is followed by the bot's migrations-collapse commit (`37aad2da`, "through the
+just-deployed AMI"), which says that AMI was deployed; the instances and their versions were not
+checked (see "Still to verify").
 
 | | State |
 |---|---|
@@ -295,11 +297,12 @@ columns). Each safeguard was checked by removing it and watching its test fail.
 
 ## Still to verify
 
-- **This deploy.** CI is green on `7e6ca66b` and the Deploy workflow reported success, but that
-  workflow only posts a status; the AMI build and rollout are driven elsewhere and were not
-  checked. Until compute has rolled, a count with a `sort`/`head` folded into it errors ("unknown
-  group order") on a coordinator that is already new; nothing else is affected, because no exact
-  plan can be chosen before shards report facts.
+- **This deploy.** The evidence that it rolled out is indirect: CI and Deploy green, and a
+  migrations-collapse commit that names the just-deployed AMI. Nobody has looked at the running
+  coordinator, compute and shards to see which build they run. Until compute has rolled, a count
+  with a `sort`/`head` folded into it errors ("unknown group order") on a coordinator that is
+  already new; nothing else is affected, because no exact plan can be chosen before shards report
+  facts.
 - **Deploy 2's gate** (not checked by me): every non-archived shard, cold shards included, on
   Deploy 1's binary (`binary_sha` in `shard_records`); no stored row with both a newline and a
   JSON payload (the field form reads such a row wrongly); the retention horizon for rows
