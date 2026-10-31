@@ -1177,78 +1177,34 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	} else if n := c.applyTypedVariant(plan, argStrs, descs); n > 0 {
 		logQuery(ctx, "query: %d of %d shards run the typed variant (%s)", n, len(descs), strings.Join(plan.Typed.Requires, ","))
 	}
-	dispatch := func(run *planner.QueryPlan, directSQL string, argStrs []string) (compute.LineStream, error) {
-		return c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
-			Sql:               directSQL,
-			FieldSql:          run.FieldSQL,
-			FieldSpec:         compute.FieldSpecToProto(run.FieldSpec),
-			Args:              argStrs,
-			Shards:            descs,
-			Stages:            run.ComputeStages,
-			RowStages:         run.RowStages,
-			StagesReadPayload: run.StagesReadPayload,
-			MergeKey:          run.ShardOrderBy,
-			Aggregate:         run.Aggregate,
-			Group:             compute.GroupToProto(run.Group),
-			Limit:             int32(run.Limit),
-			// tail-mode: shard SQL wraps to ASC; compute must retain
-			// last-N instead of stopping after first-N emitted.
-			KeepLast: run.TailMode,
-			// Summary line + colored [namespace/service] badges only for a
-			// bare, interactively-typed `trace <id>`: never for a saved
-			// cron/watch/dashboard fire (alertCtx != nil) reached through this
-			// shared path, never once the user has piped into their own stage,
-			// and never for the span aggregates, whose rows are JSON.
-			TraceTag: alertCtx == nil && plan.SourceCmd == "trace" && plan.Aggregate == "" && len(plan.ComputeStages) == 0,
-		})
-	}
-	stream, err := dispatch(run, directSQL, argStrs)
+	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
+		Sql:               directSQL,
+		FieldSql:          run.FieldSQL,
+		FieldSpec:         compute.FieldSpecToProto(run.FieldSpec),
+		Args:              argStrs,
+		Shards:            descs,
+		Stages:            run.ComputeStages,
+		RowStages:         run.RowStages,
+		StagesReadPayload: run.StagesReadPayload,
+		MergeKey:          run.ShardOrderBy,
+		Aggregate:         run.Aggregate,
+		Group:             compute.GroupToProto(run.Group),
+		Limit:             int32(run.Limit),
+		// tail-mode: shard SQL wraps to ASC; compute must retain
+		// last-N instead of stopping after first-N emitted.
+		KeepLast: run.TailMode,
+		// Summary line + colored [namespace/service] badges only for a
+		// bare, interactively-typed `trace <id>`: never for a saved
+		// cron/watch/dashboard fire (alertCtx != nil) reached through this
+		// shared path, never once the user has piped into their own stage,
+		// and never for the span aggregates, whose rows are JSON.
+		TraceTag: alertCtx == nil && plan.SourceCmd == "trace" && plan.Aggregate == "" && len(plan.ComputeStages) == 0,
+	})
 	if err != nil {
 		logQuery(ctx, "query: compute error: %v", err)
 		return nil, err
 	}
-	if run != plan && run.Group != nil && run.Group.Exactness() {
-		// The shards' facts are guesses promoted by evidence: a value they
-		// did not allow, or a sum too large to be exact, leaves the aggregate
-		// unproven. Nothing was printed, so the base plan can answer instead.
-		stream = &inexactFallback{LineStream: stream, rerun: func() (compute.LineStream, error) {
-			logQuery(ctx, "query: the exact plan's aggregate was not exact; running the base plan")
-			return dispatch(plan, plan.DirectShardSQL, queryArgStrings(ctx, plan.Args))
-		}}
-	}
 	return &ExecuteResult{Stream: stream}, nil
-}
-
-// inexactFallback is a stream of the exact plan's keyed aggregate that falls
-// back to the base plan if compute says the aggregate was not exact
-// (compute.InexactAggregateError). It can only do that before a line has been
-// returned; compute prints nothing until it has checked every value, so that
-// is the only place the error arrives, short of a stage after the aggregate
-// that prints without reading.
-type inexactFallback struct {
-	compute.LineStream
-	rerun func() (compute.LineStream, error)
-	// emitted is whether a line has gone out, after which the query can't
-	// start over.
-	emitted bool
-}
-
-func (s *inexactFallback) Next(ctx context.Context) (compute.Line, bool, error) {
-	line, ok, err := s.LineStream.Next(ctx)
-	var inexact *compute.InexactAggregateError
-	if err != nil && !s.emitted && s.rerun != nil && errors.As(err, &inexact) {
-		s.LineStream.Close()
-		next, rerr := s.rerun()
-		if rerr != nil {
-			return compute.Line{}, false, rerr
-		}
-		s.LineStream, s.rerun = next, nil
-		return s.Next(ctx)
-	}
-	if ok {
-		s.emitted = true
-	}
-	return line, ok, err
 }
 
 // exactPlan is the typed plan's exact form if every shard the query reads has

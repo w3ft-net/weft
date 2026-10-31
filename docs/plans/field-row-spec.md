@@ -6,8 +6,8 @@ Status: 2026-10-31.
 |---|---|
 | Deploy 1: add (row spec, `field_sql`, typed exact plan, `-F`/`-v` flag handling) | on `origin/main` (`2c6bd346` through `c8c26e38`) |
 | Deploy 2: remove (text record, regexp, `fieldSelect`; `LoweredPlan` carries the field form) | on `origin/main` (`39d6ac19`), pushed after the migrations collapse. The gate below was **not** checked by this plan's author: see "Still to verify". |
-| Compute performance (buffered pipes, meta-variable narrowing, jq per-input variables) | built, **unpushed**: `1b2f0ba9`, `1ccaa456`, `5c7b0254`, `202e7f8f`. Needs warp v0.2.57 (pushed and tagged). |
-| Deploy 3: shard-side keyed aggregates (sum, max, min) | built on branch `keyed-aggregates`, **unpushed**; see `field-types.md`, "Keyed sum/min/max: built". Gate: compute, then shards, then coordinator. |
+| Compute performance (buffered pipes, meta-variable narrowing, jq per-input variables) | on `origin/main`, pushed 2026-10-31 with the warp changes below. |
+| Deploy 3: shard-side keyed aggregates (sum, max, min), `sort -k` folding | on `origin/main` (`08193a7d`); the run-time exactness check and retry that shipped in it are removed on branch `definitive-aggregates`, see `field-types.md`, "Keyed sum/min/max: built". Rolls coordinator, compute, shards. |
 
 It follows `field-types.md`, whose exact plan (`QueryPlan.Typed.Exact`) already lowers an awk
 filter-and-print over typed fields to SQL alone.
@@ -278,12 +278,10 @@ columns). Each safeguard was checked by removing it and watching its test fail.
   new window with `bench/fieldtypes` and run `after` once the planner work is live. A shard
   created mid-window since the deploy would carry facts under the old classifier grammar
   (`inf`, `nan` and hex floats counted as numbers); none are expected.
-- **The compute commits** are unpushed. Push order is free: they need only warp v0.2.57, which
-  is out.
 
 ## Next
 
-- ~~Single-pass JSON parse in warp's jq.~~ Done in warp v0.2.58 (local, unpushed): jsoniter's
+- ~~Single-pass JSON parse in warp's jq.~~ Done in warp v0.2.58 (pushed): jsoniter's
   iterator builds each `Value` as it scans, behind a wrapper that closes four leniencies
   (number at end of stream, truncated input, number grammar such as `01`, invalid UTF-8). A
   hand-written reader was no faster than jsoniter (1.29 ms against 1.15 ms for 1,000 objects;
@@ -296,7 +294,7 @@ columns). Each safeguard was checked by removing it and watching its test fail.
   existed for (keyed sum and max, which the section above called most of what is left), but only
   where the shards report the facts; elsewhere the row spec still shrinks what compute receives.
 - ~~A stage that reads meta-variables pays per row for two maps.~~ Done in warp v0.2.59
-  (local, unpushed): `PerRecordBind` takes a slice the caller reuses, and compute builds it
+  (pushed): `PerRecordBind` takes a slice the caller reuses, and compute builds it
   from the row (`awkBinder.bind`) and recycles the slices through a free list. The rest of
   the cost was `strconv.ParseFloat` allocating an error for every text value tested for being a
   number (a level, a timestamp, a field compared with a string): `SetVar`, `Number()` and
@@ -312,7 +310,7 @@ columns). Each safeguard was checked by removing it and watching its test fail.
   stderr, so no embedder needs a thread-safe writer. Pinned by
   `TestJob_ConcurrentStageErrorsDoNotRaceOnStderr` and warp's
   `TestPipelineStagesShareStderrSafely`, both failing before.
-- ~~A race in warp's parallel pipeline path.~~ Fixed in warp `a93fdda` (unpushed, untagged).
+- ~~A race in warp's parallel pipeline path.~~ Fixed in warp `a93fdda` (pushed, `v0.2.60`).
   `TestParallelGrepSort` failed under `-race`: the chunks of a parallel segment run at once and
   each wrote the shared interpreter's exit status while another forked from it. Writing it
   concurrently also left the pipeline with no defined status (whichever chunk finished last), and a

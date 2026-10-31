@@ -254,26 +254,31 @@ stage, as for the numeric filters. What changed from the design below, and why:
   structure all the way down: the Query builder renders the value columns and what the group
   reports of them (`valueColumns`, `groupColumns` in `planner/sql.go`), so no pass or frontend
   builds SQL text for it. The key is still the SQL `awkPrintArgToSQL` gave the count form.
-- **All shards or none, for the sum too.** The design had untyped shards run the original stage
-  per shard and add their partial sums to the typed shards'. That needs per-shard stages on the
-  wire; the exact plan already has the all-shards rule (`exactPlan`), so a query over a window
-  with any shard lacking the facts keeps the base plan. Per-shard stages are not built.
-- **A sum needs integers and a bound, not just a number.** Adding floats in a different order
-  gives different last digits, and `%.6g` shows them whenever a sum lands near a rounding boundary
-  (a sum of cents at 123456.75 can print either way). So the sum is exact only for whole numbers,
-  and two things establish that. The shard classifier has a second fact per awk field,
+- **Definitive per shard, all shards or none.** The plan is chosen once, from the facts, and
+  nothing is checked afterwards: no run-time exactness test, no retry, no fallback. If every shard in
+  the query has the facts the aggregate needs, all run the shard `GROUP BY`; if any lacks them, the
+  base plan runs for the whole query (`exactPlan`). A shard that fails fails the query, as for any
+  query. A mixed answer was rejected because there is nothing exact to merge a shard without
+  facts into: if it ran the original stage, its printed partial (`%.6g` for a float sum, a string
+  comparison for a max over text) cannot be combined with the others' without changing the answer, and
+  nothing at plan time says whether its data would have fit. The cost is small: a shard is typed after
+  1,000 conforming rows, so the shortcut is lost only while the live shard is that young, or if it is
+  dirty. (A design that checked each value in compute and reran the base plan on a violation, and one
+  that sent plain lines from shards without facts, were built and removed; see
+  `shard-plan-variants.md`.)
+- **A sum is exact integer arithmetic.** The shard classifier has a second fact per awk field,
   `$N#int` (`shard.finiteInteger`: a decimal integer of at most 15 digits), so a field with a
-  decimal point never lowers. And the query proves its own bound: the shard returns the sum of
-  absolute values (`agg_abs`) and compute fails the query if the total passes 2^52, since only
-  then is every partial sum, in any order, a whole number a float holds. Float sums keep running in
-  compute, as before.
-- **A fact is a guess, so the aggregate checks it.** Each group also returns the count of values
-  the SQL cannot vouch for (`agg_bad`: not a whole number for a sum, not a number for a max or
-  min). Compute prints nothing until it has seen every group, then fails with
-  `compute.InexactAggregateError` (a field of `ExecuteQueryStreamResponse` carries it across gRPC),
-  and the coordinator runs the base plan (`inexactFallback`). The user gets awk's answer, never
-  the error. It can only retry before a line has gone out, and compute prints nothing before the
-  check, short of a stage after the aggregate that prints without reading input.
+  decimal point never lowers. The shard casts each value to a `BIGINT` and adds them (DuckDB
+  accumulates in 128 bits), returns the total as text, and compute adds the shards' totals in
+  arbitrary precision. Nothing can round or overflow, so there is no bound to check. This differs
+  from awk's float sum only beyond 2^53 (about 9 x 10^15), where awk rounds and this does not, and
+  float sums keep running in compute as before (adding floats in another order changes the last
+  digits, and `%.6g` shows them near a rounding boundary).
+- **The facts are trusted.** A fact is a guess promoted by evidence (1,000 conforming rows), and a
+  query that runs in the moment between a stray row landing and the fact flipping is wrong in
+  the way the numeric filters already accept: not detected, not repaired. The stray value does
+  what the SQL does with it: a text or fraction that does not cast to the type adds nothing to a sum or
+  is skipped by a max.
 - **max and min follow warp's awk.** The comparison is against an element nothing has set,
   which is 0, and warp does not create an element by reading it, so a key whose values never
   beat 0 is absent from the output. (POSIX awk prints such a key with an empty value; the
@@ -282,8 +287,8 @@ stage, as for the numeric filters. What changed from the design below, and why:
   holding the best number wins, within a shard (`first(... ORDER BY ...)`) and across shards (the
   winning row's `ts`, `agg_best_ns`; shards in one window never tie on it).
 - **`sort -k` around the aggregate.** A sort *before* a count or a sum is dropped, since
-  neither depends on row order (a sum is proven exact, so addition order is moot), and the aggregate
-  lowers; before a max or min it stays, because the first row of a tie is the one whose spelling
+  neither depends on row order (a sum is exact integer arithmetic, so addition order is moot), and the
+  aggregate lowers; before a max or min it stays, because the first row of a tie is the one whose spelling
   prints. A sort *after* it, `sort -k2 -n` or `-rn`, `-k2,2nr` and the other plain forms, plus a
   `head -n N`, folds into the group as `GroupSpec.Order` and `Limit`, and compute applies it to the
   aggregate's printed lines with warp's own comparison (`compute/value_order.go`: fields split
@@ -297,8 +302,7 @@ stage, as for the numeric filters. What changed from the design below, and why:
 - **Not covered:** crons and dashboards (their `LoweredPlan` carries the base plan, as for the
   numeric filters; a count with its order is in it, since a count needs no facts); a key or value that is not a plain `$N` field (`$NF`, `$(i+1)`, an expression);
   more than 50 awk fields per source, past which a field has no fact; rows ingested before
-  2026-10-14, whose `fields` is the older split, as for every lowering over `$N`; a stage after the
-  aggregate that prints without reading input.
+  2026-10-14, whose `fields` is the older split, as for every lowering over `$N`.
 - **Deploy order.** Every deploy rolls coordinator, then compute, then shards, so this is what
   that order does to it. The exact plan is chosen only when every shard reports the facts, and no
   shard does until a new-window shard has classified 1,000 rows (and `$N#int` only from shards running
@@ -309,10 +313,11 @@ stage, as for the numeric filters. What changed from the design below, and why:
   sends `key_count` as before, which an old compute understands.
 - **Tests:** `planner/keyed_test.go` (recognized shapes, requirements, pinned SQL, `explain`);
   differential tests in `planner/difftest/keyed_test.go` against the real awk over 1, 2, 3 and 5
-  shards, with tie spellings, keys that never beat zero, and the inexact cases; `compute`
-  aggregator and wire tests; `coordinator/keyed_fallback_test.go` (the exact plan runs, the base plan
-  runs when a shard lacks the facts, and the fallback when the facts were wrong); the
-  classifier tests for `$N#int`. Each safeguard was checked by removing it and watching a test fail.
+  shards, with tie spellings and keys that never beat zero, and a sum past 2^53 against an
+  independent big-integer total; `compute` aggregator and wire tests;
+  `coordinator/keyed_aggregate_test.go` (the exact plan runs, the base plan runs when a shard lacks
+  the facts, and a failing shard fails the query); the classifier tests for `$N#int`. Each
+  safeguard was checked by removing it and watching a test fail.
 
 ## Keyed sum/min/max: design (2026-10-30, revised)
 

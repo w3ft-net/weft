@@ -2,7 +2,6 @@ package compute
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"testing"
 
@@ -60,23 +59,38 @@ func runKeyedGroup(t *testing.T, render pb.GroupRender, shards ...*keyedShard) (
 	return got, err
 }
 
-func sumRow(key, sum, abs string) map[string]string {
-	return map[string]string{"raw": key, planner.SumColumn: sum, planner.AbsSumColumn: abs, planner.BadColumn: "0"}
+func sumRow(key, sum string) map[string]string {
+	return map[string]string{"raw": key, planner.SumColumn: sum}
 }
 
 func bestRow(key, best, txt, ns string) map[string]string {
-	return map[string]string{"raw": key, planner.BestColumn: best, planner.BestTxtColumn: txt, planner.BestNsColumn: ns, planner.BadColumn: "0"}
+	return map[string]string{"raw": key, planner.BestColumn: best, planner.BestTxtColumn: txt, planner.BestNsColumn: ns}
 }
 
 func TestKeyedAggregator_SumAddsTheShardsPerKey(t *testing.T) {
-	a := &keyedShard{id: "a", rows: []map[string]string{sumRow("x", "5", "5"), sumRow("y", "-0", "0")}}
-	b := &keyedShard{id: "b", rows: []map[string]string{sumRow("x", "-7", "7"), sumRow("z", "1e3", "1e3")}}
+	a := &keyedShard{id: "a", rows: []map[string]string{sumRow("x", "5"), sumRow("y", "0")}}
+	b := &keyedShard{id: "b", rows: []map[string]string{sumRow("x", "-7"), sumRow("z", "1000")}}
 	got, err := runKeyedGroup(t, pb.GroupRender_GROUP_RENDER_KEY_SUM, a, b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// awk prints a whole number as an integer, and -0 as 0.
 	if want := []string{"x -2", "y 0", "z 1000"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("printed %q, want %q", got, want)
+	}
+}
+
+// A sum is exact however large: the shards add in 128 bits and compute in
+// arbitrary precision, so there is nothing to round and nothing to check. awk's
+// float sum agrees below 2^53 and is the one that rounds above it.
+func TestKeyedAggregator_SumIsExactPastFloatRange(t *testing.T) {
+	const big = "9007199254740993" // 2^53 + 1, not a float64
+	a := &keyedShard{id: "a", rows: []map[string]string{sumRow("x", big), sumRow("y", "99999999999999999999999999")}}
+	b := &keyedShard{id: "b", rows: []map[string]string{sumRow("x", "1"), sumRow("y", "1")}}
+	got, err := runKeyedGroup(t, pb.GroupRender_GROUP_RENDER_KEY_SUM, a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"x 9007199254740994", "y 100000000000000000000000000"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("printed %q, want %q", got, want)
 	}
 }
@@ -112,33 +126,24 @@ func TestKeyedAggregator_AKeyThatNeverBeatsZeroIsAbsent(t *testing.T) {
 	}
 }
 
-// A value the shard could not vouch for, or a sum too large to be exact, fails
-// the query and prints nothing, not even the keys before it.
-func TestKeyedAggregator_InexactPrintsNothingAndSaysSo(t *testing.T) {
-	bad := sumRow("y", "3", "3")
-	bad[planner.BadColumn] = "1"
-	for name, rows := range map[string][]map[string]string{
-		"a bad row":       {sumRow("x", "1", "1"), bad},
-		"a sum past 2^52": {sumRow("x", "1", "1"), sumRow("y", "1", "5e15")},
+// A shard that sends something that isn't a sum is a protocol failure, and the
+// query fails: a missing column is an error, never zero.
+func TestKeyedAggregator_AMissingOrBadColumnIsAnError(t *testing.T) {
+	for name, row := range map[string]map[string]string{
+		"no sum":     {"raw": "x"},
+		"text":       {"raw": "x", planner.SumColumn: "lots"},
+		"a fraction": {"raw": "x", planner.SumColumn: "1.5"},
+		"empty":      {"raw": "x", planner.SumColumn: ""},
 	} {
-		got, err := runKeyedGroup(t, pb.GroupRender_GROUP_RENDER_KEY_SUM, &keyedShard{id: "a", rows: rows})
-		var inexact *InexactAggregateError
-		if !errors.As(err, &inexact) {
-			t.Errorf("%s: error %v, want an InexactAggregateError", name, err)
-		}
-		if len(got) != 0 {
-			t.Errorf("%s: printed %q before failing", name, got)
+		got, err := runKeyedGroup(t, pb.GroupRender_GROUP_RENDER_KEY_SUM, &keyedShard{id: "a", rows: []map[string]string{row}})
+		if err == nil || len(got) != 0 {
+			t.Errorf("%s: printed %q, %v; want a failure and nothing printed", name, got, err)
 		}
 	}
-}
-
-func TestKeyedAggregator_AMissingColumnIsAnErrorNotZero(t *testing.T) {
-	row := sumRow("x", "1", "1")
-	delete(row, planner.AbsSumColumn)
-	_, err := runKeyedGroup(t, pb.GroupRender_GROUP_RENDER_KEY_SUM, &keyedShard{id: "a", rows: []map[string]string{row}})
-	var inexact *InexactAggregateError
-	if err == nil || errors.As(err, &inexact) {
-		t.Errorf("error %v, want a plain failure for a shard that sent no %s", err, planner.AbsSumColumn)
+	row := bestRow("x", "5", "5", "1")
+	delete(row, planner.BestColumn)
+	if _, err := runKeyedGroup(t, pb.GroupRender_GROUP_RENDER_KEY_MAX, &keyedShard{id: "a", rows: []map[string]string{row}}); err == nil {
+		t.Error("a max row without its number was accepted")
 	}
 }
 
@@ -165,7 +170,7 @@ func runKeyedGroupSpec(t *testing.T, spec *pb.GroupSpec, shards ...*keyedShard) 
 // The value order sorts the aggregate's printed lines as warp's sort would, and
 // head keeps the first of them.
 func TestKeyedAggregator_ValueOrderMatchesSort(t *testing.T) {
-	a := &keyedShard{id: "a", rows: []map[string]string{sumRow("a", "5", "5"), sumRow("b", "5", "5"), sumRow("c", "9", "9"), sumRow("d", "-2", "2")}}
+	a := &keyedShard{id: "a", rows: []map[string]string{sumRow("a", "5"), sumRow("b", "5"), sumRow("c", "9"), sumRow("d", "-2")}}
 	for name, c := range map[string]struct {
 		spec *pb.GroupSpec
 		want []string
@@ -179,18 +184,6 @@ func TestKeyedAggregator_ValueOrderMatchesSort(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: printed %q, %v; want %q", name, got, err, c.want)
 		}
-	}
-}
-
-// An inexact aggregate fails the whole query, ordered or not, and prints nothing.
-func TestKeyedAggregator_ValueOrderDoesNotHideInexact(t *testing.T) {
-	bad := sumRow("y", "3", "3")
-	bad[planner.BadColumn] = "1"
-	got, err := runKeyedGroupSpec(t, &pb.GroupSpec{Render: pb.GroupRender_GROUP_RENDER_KEY_SUM, Order: pb.GroupOrder_GROUP_ORDER_VALUE},
-		&keyedShard{id: "a", rows: []map[string]string{sumRow("x", "1", "1"), bad}})
-	var inexact *InexactAggregateError
-	if !errors.As(err, &inexact) || len(got) != 0 {
-		t.Errorf("printed %q, %v; want nothing and an InexactAggregateError", got, err)
 	}
 }
 

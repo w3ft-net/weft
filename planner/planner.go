@@ -185,13 +185,6 @@ type GroupSpec struct {
 	Limit   int  `json:"limit,omitempty"`
 }
 
-// Exactness is whether the group's value depends on shard facts the query
-// can find unmet: an awk sum, max or min. Compute reports it as an
-// InexactAggregateError when it does, and the coordinator runs the base plan.
-func (g *GroupSpec) Exactness() bool {
-	return g.Render == RenderKeySum || g.Render == RenderKeyMax || g.Render == RenderKeyMin
-}
-
 // GrepPattern captures a grep filter for live tail matching.
 type GrepPattern struct {
 	Pattern    string

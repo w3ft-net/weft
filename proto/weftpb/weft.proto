@@ -406,10 +406,10 @@ message ExecuteQueryStreamResponse {
   // missing_shard names the shard whose rows the answer is missing when
   // error is that shard's failure; the query then has no answer.
   string missing_shard = 3;
-  // inexact is set when error is compute.InexactAggregateError: a keyed
-  // aggregate the shards computed could not be shown to equal awk's. Nothing
-  // was printed, and the same query without the field facts has an answer.
-  bool inexact = 4;
+  // 4 was inexact, for an aggregate compute could not show exact. A plan is
+  // now sent only to shards whose facts make it exact, and nothing is retried.
+  reserved 4;
+  reserved "inexact";
 }
 
 // ---------------------------------------------------------------------------

@@ -1,13 +1,12 @@
 package difftest
 
 import (
-	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -170,53 +169,43 @@ func lines(raws ...string) []*pb.LogRow {
 	return rows
 }
 
-// A value the facts said would not be there, or a sum too large to be exact,
-// fails the exact plan with a typed error and leaves the base plan right.
-func TestDifferentialKeyedInexactIsDetected(t *testing.T) {
-	const sum = `{ s[$1] += $2 } END { for (k in s) print k, s[k] }`
-	const max = `{ if ($2 > m[$1]) m[$1] = $2 } END { for (k in m) print k, m[k] }`
-	big := "999999999999999"
-	for _, c := range []struct {
-		name    string
-		program string
-		facts   []string
-		rows    []*pb.LogRow
-		inexact bool
-	}{
-		{"a float in a sum", sum, []string{"$2", "$2#int"}, lines("a 1", "a 2.5", "b 3"), true},
-		{"text in a sum", sum, []string{"$2", "$2#int"}, lines("a 1", "a x", "b 3"), true},
-		{"a missing field in a sum", sum, []string{"$2", "$2#int"}, lines("a 1", "a", "b 3"), true},
-		{"text in a max", max, []string{"$2"}, lines("a 1", "a 12abc", "b 3"), true},
-		{"a missing field in a max", max, []string{"$2"}, lines("a 1", "a", "b 3"), true},
-		{"a sum past 2^52", sum, []string{"$2", "$2#int"}, lines("a "+big, "a "+big, "a "+big, "a "+big, "a "+big), true},
-		{"the same sum across keys is fine", sum, []string{"$2", "$2#int"}, lines("a "+big, "b "+big, "c "+big, "d "+big, "e "+big), false},
-		{"a sum just under 2^52 is exact", sum, []string{"$2", "$2#int"}, lines("a "+big, "a "+big, "a "+big, "a -"+big, "a 7"), false}, // 4 * (1e15-1) + 7, the absolute values, is under 2^52
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			h := newHarness(t, c.rows, 2)
-			plan, exact := keyedPlan(t, c.program, c.facts...)
-			got, err := h.runPlan(exact)
-			if c.inexact {
-				var inexact *compute.InexactAggregateError
-				if !errors.As(err, &inexact) {
-					t.Fatalf("exact plan = %q, %v; want an InexactAggregateError", got, err)
-				}
-				if got != "" {
-					t.Errorf("an inexact aggregate printed %q", got)
-				}
-			} else if err != nil {
-				t.Fatalf("exact plan: %v", err)
-			}
-			source, stages := splitSource(t, "cat /log/keyed/api/main.log | awk '"+c.program+"'")
-			want, wantErr := h.runReference(source, stages, false)
-			base, baseErr := h.runPlan(plan)
-			if wantErr != nil || baseErr != nil || base != want {
-				t.Errorf("base plan = %q, %v; reference = %q, %v", base, baseErr, want, wantErr)
-			}
-			if !c.inexact && got != want {
-				t.Errorf("exact plan differs: %s", firstDiff(got, want))
-			}
-		})
+// A sum is exact however large, which awk's float sum is not: the shards add in 128
+// bits and compute in arbitrary precision. Below 2^53 the two print the same
+// (the tests above); past it, awk rounds, so the expected values here are
+// computed independently, not by awk.
+func TestDifferentialKeyedSumIsExactPastFloatRange(t *testing.T) {
+	const big = "999999999999999" // the most the integer fact allows a value: 15 digits
+	var raws []string
+	want := map[string]*bigInt{}
+	for i := 0; i < 40; i++ {
+		key := []string{"a", "b", "c"}[i%3]
+		v := big
+		if i%5 == 0 {
+			v = "-" + big
+		}
+		raws = append(raws, key+" "+v)
+		if want[key] == nil {
+			want[key] = newBigInt()
+		}
+		want[key].add(v)
+	}
+	plan, err := planner.Plan("cat /log/keyed/api/main.log | awk '"+sumProg+"'", 0, "", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, shards := range []int{1, 2, 3} {
+		h := newHarness(t, lines(raws...), shards)
+		got, err := h.runPlan(plan.Typed.Exact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wantLines []string
+		for _, k := range []string{"a", "b", "c"} {
+			wantLines = append(wantLines, k+" "+want[k].String())
+		}
+		if g := strings.TrimSuffix(got, "\n"); g != strings.Join(wantLines, "\n") {
+			t.Errorf("%d shards: %q, want %q", shards, g, strings.Join(wantLines, "\n"))
+		}
 	}
 }
 
@@ -481,3 +470,16 @@ func TestKeyedSortBeforeThatStays(t *testing.T) {
 		}
 	}
 }
+
+// bigInt is a running total of decimal integers, for expected values that no
+// float can hold.
+type bigInt struct{ n *big.Int }
+
+func newBigInt() *bigInt { return &bigInt{n: new(big.Int)} }
+
+func (b *bigInt) add(v string) {
+	x, _ := new(big.Int).SetString(v, 10)
+	b.n.Add(b.n, x)
+}
+
+func (b *bigInt) String() string { return b.n.String() }

@@ -1741,11 +1741,7 @@ type ExecuteQueryStreamResponse struct {
 	Error string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
 	// missing_shard names the shard whose rows the answer is missing when
 	// error is that shard's failure; the query then has no answer.
-	MissingShard string `protobuf:"bytes,3,opt,name=missing_shard,json=missingShard,proto3" json:"missing_shard,omitempty"`
-	// inexact is set when error is compute.InexactAggregateError: a keyed
-	// aggregate the shards computed could not be shown to equal awk's. Nothing
-	// was printed, and the same query without the field facts has an answer.
-	Inexact       bool `protobuf:"varint,4,opt,name=inexact,proto3" json:"inexact,omitempty"`
+	MissingShard  string `protobuf:"bytes,3,opt,name=missing_shard,json=missingShard,proto3" json:"missing_shard,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1799,13 +1795,6 @@ func (x *ExecuteQueryStreamResponse) GetMissingShard() string {
 		return x.MissingShard
 	}
 	return ""
-}
-
-func (x *ExecuteQueryStreamResponse) GetInexact() bool {
-	if x != nil {
-		return x.Inexact
-	}
-	return false
 }
 
 type AuditFleetRequest struct {
@@ -4569,12 +4558,11 @@ const file_weft_proto_rawDesc = "" +
 	"\x05order\x18\x02 \x01(\x0e2\x10.weft.GroupOrderR\x05order\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x03R\x05limit\x12#\n" +
 	"\rorder_reverse\x18\x04 \x01(\bR\forderReverse\x12*\n" +
-	"\x11order_tie_reverse\x18\x05 \x01(\bR\x0forderTieReverse\"\x87\x01\n" +
+	"\x11order_tie_reverse\x18\x05 \x01(\bR\x0forderTieReverse\"|\n" +
 	"\x1aExecuteQueryStreamResponse\x12\x14\n" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12#\n" +
-	"\rmissing_shard\x18\x03 \x01(\tR\fmissingShard\x12\x18\n" +
-	"\ainexact\x18\x04 \x01(\bR\ainexact\"\x13\n" +
+	"\rmissing_shard\x18\x03 \x01(\tR\fmissingShardJ\x04\b\x04\x10\x05R\ainexact\"\x13\n" +
 	"\x11AuditFleetRequest\"\x9a\x01\n" +
 	"\x0fAuditShardState\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +

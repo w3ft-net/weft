@@ -100,26 +100,24 @@ const CountColumn = "count"
 const BytesColumn = "bytes"
 
 // The columns an awk aggregate's group query adds (see keyedAgg). The inner
-// query selects the value of the field beside each line (ValColumn, as a
-// DOUBLE, and for a max or min TxtColumn, its text); the group returns, per key:
+// query selects the value of the field beside each line (ValColumn: a BIGINT for
+// a sum, a DOUBLE for a max or min, and for those TxtColumn, the field's text);
+// the group returns, per key:
 //
-//   - a sum: SumColumn, AbsSumColumn (the sum of the absolute values: the sum
-//     is exact when this stays within 2^53, since then every partial sum is a
-//     whole number a float holds) and BadColumn, how many values were not
-//     whole numbers;
+//   - a sum: SumColumn, the exact integer total as decimal text (DuckDB adds
+//     BIGINTs in 128 bits, so it cannot round or overflow);
 //   - a max or min: BestColumn (the greatest or least number), BestTxtColumn
 //     (the text of the first row, in merge order, holding it: awk assigns the
-//     field, so it prints as it was written), BestNsColumn (that row's ts, for
-//     ties between shards) and BadColumn, how many values were not numbers.
+//     field, so it prints as it was written) and BestNsColumn (that row's ts, for
+//     ties between shards).
 //
-// A shard that reports bad rows had a value the fact that chose the plan said it
-// would not have; compute then fails the query so the base plan can run.
+// The plan is only sent to shards whose field facts say the values are what
+// the aggregate is exact over, so nothing here checks them: see
+// docs/plans/field-types.md, "Keyed sum/min/max".
 const (
 	ValColumn     = "agg_val"
 	TxtColumn     = "agg_txt"
 	SumColumn     = "agg_sum"
-	AbsSumColumn  = "agg_abs"
-	BadColumn     = "agg_bad"
 	BestColumn    = "agg_best"
 	BestTxtColumn = "agg_best_txt"
 	BestNsColumn  = "agg_best_ns"
@@ -539,22 +537,20 @@ func (q *Query) renderWhere(b *strings.Builder, onArg func(ArgSource)) {
 }
 
 // valueColumns are the columns a keyed aggregate's subquery adds to each line:
-// the field's number, and for a max or min its text. A value that is not a
-// number is NULL, which the group counts as bad.
+// the field's number (a whole number for a sum, exactly), and for a max or min its
+// text.
 func (a *keyedAgg) valueColumns() string {
-	cols := fmt.Sprintf(", TRY_CAST(list_extract(fields, %d) AS DOUBLE) AS %s", a.field, ValColumn)
-	if a.op != aggSum {
-		cols += fmt.Sprintf(", list_extract(fields, %d) AS %s", a.field, TxtColumn)
+	if a.op == aggSum {
+		return fmt.Sprintf(", TRY_CAST(list_extract(fields, %d) AS BIGINT) AS %s", a.field, ValColumn)
 	}
-	return cols
+	return fmt.Sprintf(", TRY_CAST(list_extract(fields, %[1]d) AS DOUBLE) AS %[2]s, list_extract(fields, %[1]d) AS %[3]s", a.field, ValColumn, TxtColumn)
 }
 
 // groupColumns are the columns a keyed aggregate's group returns per key
 // beyond the count.
 func (a *keyedAgg) groupColumns() string {
 	if a.op == aggSum {
-		return fmt.Sprintf(", CAST(sum(%[1]s) AS DOUBLE) AS %[2]s, CAST(sum(abs(%[1]s)) AS DOUBLE) AS %[3]s, count(*) FILTER (WHERE %[1]s IS NULL OR %[1]s <> trunc(%[1]s)) AS %[4]s",
-			ValColumn, SumColumn, AbsSumColumn, BadColumn)
+		return fmt.Sprintf(", COALESCE(CAST(sum(%s) AS VARCHAR), '0') AS %s", ValColumn, SumColumn)
 	}
 	// The first row, in the order awk meets them, holding the best value: awk
 	// replaces only for a strictly better one.
@@ -563,6 +559,6 @@ func (a *keyedAgg) groupColumns() string {
 		dir, best = "ASC", "min"
 	}
 	first := fmt.Sprintf("ORDER BY %s %s, t.ts, t.%s NULLS FIRST, t.%s", ValColumn, dir, EventIDColumn, LineNoColumn)
-	return fmt.Sprintf(", %[1]s(%[2]s) AS %[3]s, first(%[4]s %[5]s) AS %[6]s, CAST(epoch_ns(first(t.ts %[5]s)) AS BIGINT) AS %[7]s, count(*) FILTER (WHERE %[2]s IS NULL) AS %[8]s",
-		best, ValColumn, BestColumn, TxtColumn, first, BestTxtColumn, BestNsColumn, BadColumn)
+	return fmt.Sprintf(", %[1]s(%[2]s) AS %[3]s, first(%[4]s %[5]s) AS %[6]s, CAST(epoch_ns(first(t.ts %[5]s)) AS BIGINT) AS %[7]s",
+		best, ValColumn, BestColumn, TxtColumn, first, BestTxtColumn, BestNsColumn)
 }

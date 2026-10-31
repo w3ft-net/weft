@@ -32,6 +32,15 @@ func (r *requestLog) ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryReque
 // coordinator (nil for a shard that has told it nothing).
 func keyedCoordinator(t *testing.T, values0, values1 []string, facts0, facts1 []string) (*Coordinator, *requestLog) {
 	t.Helper()
+	c, log, _ := keyedCoordinatorShards(t, values0, values1, facts0, facts1)
+	return c, log
+}
+
+// keyedCoordinatorShards is keyedCoordinator that also returns the shards, for a
+// test that breaks one.
+func keyedCoordinatorShards(t *testing.T, values0, values1 []string, facts0, facts1 []string) (*Coordinator, *requestLog, []*shard.DuckDBShard) {
+	t.Helper()
+	var shards []*shard.DuckDBShard
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: testQueryStore(t, "kevlar", "vimgym")})
 	for i, spec := range []struct {
 		values []string
@@ -43,6 +52,7 @@ func keyedCoordinator(t *testing.T, values0, values1 []string, facts0, facts1 []
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { sh.Close() })
+		shards = append(shards, sh)
 		var rows []*pb.LogRow
 		for j, v := range spec.values {
 			rows = append(rows, &pb.LogRow{
@@ -65,7 +75,7 @@ func keyedCoordinator(t *testing.T, values0, values1 []string, facts0, facts1 []
 	}
 	log := &requestLog{inner: c.Compute}
 	c.Compute = log
-	return c, log
+	return c, log, shards
 }
 
 const keyedSumQuery = `cat /log/vimgym/api/main.log | awk '{ s[$1] += $2 } END { for (k in s) print k, s[k] }'`
@@ -95,7 +105,9 @@ func TestKeyedAggregate_RunsOnTheShardsWhenEveryShardHasTheFacts(t *testing.T) {
 	}
 }
 
-// One shard without the facts keeps the stage in compute.
+// One shard without the facts keeps the stage in compute for the whole query: the
+// plan is exact for the shards whose facts say so, and there is no other kind of
+// answer to merge it with.
 func TestKeyedAggregate_BasePlanWhenAShardLacksTheFacts(t *testing.T) {
 	both := []string{"$2", "$2#int"}
 	c, log := keyedCoordinator(t, []string{"1", "2", "3"}, []string{"10", "20", "30"}, both, nil)
@@ -107,31 +119,23 @@ func TestKeyedAggregate_BasePlanWhenAShardLacksTheFacts(t *testing.T) {
 	}
 }
 
-// The facts are a guess: a float in a field they called integer makes the
-// shard's sum unprovable, so the coordinator runs the base plan and the user
-// gets awk's answer, not an error.
-func TestKeyedAggregate_FallsBackWhenTheFactsWereWrong(t *testing.T) {
+// One failing shard fails the whole query: no partial answer from the others, for a
+// plan that runs on the shards and for the one that runs in compute alike.
+func TestKeyedAggregate_AFailingShardFailsTheQuery(t *testing.T) {
 	both := []string{"$2", "$2#int"}
-	c, log := keyedCoordinator(t, []string{"1", "2", "3"}, []string{"10", "2.5", "30"}, both, both)
-	if got, want := runKeyed(t, c, keyedSumQuery), "a 44\nb 4.5\n"; got != want {
-		t.Errorf("output %q, want %q", got, want)
-	}
-	if len(log.reqs) != 2 {
-		t.Fatalf("%d requests, want the exact one and then the base plan", len(log.reqs))
-	}
-	if log.reqs[0].Group == nil || log.reqs[1].Group != nil || len(log.reqs[1].Stages) != 1 {
-		t.Errorf("requests: first group %v, second group %v stages %v", log.reqs[0].Group, log.reqs[1].Group, log.reqs[1].Stages)
-	}
-}
-
-// The same for a max, whose fact is only that the field is a number.
-func TestKeyedAggregate_MaxFallsBackOnText(t *testing.T) {
-	c, log := keyedCoordinator(t, []string{"1", "2", "3"}, []string{"10", "oops", "30"}, []string{"$2"}, []string{"$2"})
-	query := `cat /log/vimgym/api/main.log | awk '{ if ($2 > m[$1]) m[$1] = $2 } END { for (k in m) print k, m[k] }'`
-	// "oops" compares as text against numbers in awk, which is why the plan
-	// needed the fact; the base plan's answer is whatever awk says.
-	got := runKeyed(t, c, query)
-	if len(log.reqs) != 2 {
-		t.Fatalf("%d requests, want the exact one and then the base plan (output %q)", len(log.reqs), got)
+	for name, facts := range map[string][2][]string{"exact plan": {both, both}, "base plan": {both, nil}} {
+		t.Run(name, func(t *testing.T) {
+			c, _, shards := keyedCoordinatorShards(t, []string{"1", "2", "3"}, []string{"10", "20", "30"}, facts[0], facts[1])
+			if err := shards[1].Close(); err != nil {
+				t.Fatal(err)
+			}
+			res, err := c.Execute(context.Background(), keyedSumQuery, fullRange, "kevlar", "")
+			if err == nil {
+				d, derr := res.Drain(context.Background())
+				if derr == nil {
+					t.Fatalf("a query over a failing shard returned %q", d.Text)
+				}
+			}
+		})
 	}
 }
