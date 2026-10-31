@@ -226,3 +226,62 @@ func BenchmarkFieldRowSpec(b *testing.B) {
 		}
 	})
 }
+
+// BenchmarkKeyedAggregate is an awk sum, max and min per key over 200k request
+// lines (about 5,000 distinct paths): the base plan ships every line to compute
+// to run awk on them, the exact plan has the shard group by the path and ships
+// one row per path.
+//
+//	go test -tags test -run xxx -bench KeyedAggregate -benchtime 5x ./planner/difftest
+func BenchmarkKeyedAggregate(b *testing.B) {
+	h := newHarness(b, requestRows(benchRows), 1)
+	sh := h.shards[0]
+	defer func() { h.unchecked = false }()
+	for name, program := range map[string]string{
+		"sum": `{ s[$4] += $3 } END { for (k in s) print k, s[k] }`,
+		"max": `{ if ($3 > m[$4]) m[$4] = $3 } END { for (k in m) print k, m[k] }`,
+	} {
+		pipeline := "cat /log/typed/api/main.log | awk '" + program + "'"
+		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		if err != nil || plan.Typed == nil || plan.Typed.Exact.Group == nil {
+			b.Fatalf("%s: %v, typed %+v", pipeline, err, plan.Typed)
+		}
+		args := toAny(argStrings(plan.Args))
+		for _, v := range []struct{ name, sql string }{{"base", plan.DirectShardSQL}, {"exact", plan.Typed.Exact.DirectShardSQL}} {
+			b.Run(name+"/shard/"+v.name, func(b *testing.B) {
+				var n int
+				for i := 0; i < b.N; i++ {
+					got, err := sh.Query(context.Background(), v.sql, args...)
+					if err != nil {
+						b.Fatal(err)
+					}
+					n = len(got)
+				}
+				b.ReportMetric(float64(n), "rows_shipped")
+			})
+		}
+		want, err := h.runPlan(plan)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if got, err := h.runExact(plan); err != nil || got != want {
+			b.Fatalf("%s: exact plan = %q, %v; base = %q", name, firstDiff(got, want), err, firstDiff(want, got))
+		}
+		h.unchecked = true
+		b.Run(name+"/query/base", func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				if _, err := h.runPlan(plan); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		b.Run(name+"/query/exact", func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				if _, err := h.runExact(plan); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		h.unchecked = false
+	}
+}

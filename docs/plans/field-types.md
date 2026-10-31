@@ -1,6 +1,7 @@
 # Field types: gradual typing of what the shards ingest
 
-> **Status (2026-10-30): design agreed, nothing built.** Decided in conversation
+> **Status (2026-10-31): the exact numeric filters and the keyed sum/max/min are built; see
+> their sections below.** Decided in conversation
 > with Paul; the build order is under "Rollout". Related: `query-limits.md` (the
 > keyed sum/min/max and exact numeric filters wait on this), `planner-ir.md`.
 
@@ -240,6 +241,62 @@ overstated the base). The exact plan's shard SQL costs the same as the handwritt
 - **Field projection** (`planner/fieldproj.go`) feeds awk stages that remain in compute
   and read a few fields; see `field-row-spec.md`. The shard sends those fields' values
   and compute rebuilds the record, so there is no text record built in SQL.
+
+## Keyed sum/min/max: built (2026-10-31)
+
+`awk '{ s[KEY] += $N } ...'`, `if ($N > m[KEY]) m[KEY] = $N` and the `<` form lower to
+a shard `GROUP BY` in `QueryPlan.Typed.Exact`, and so does nothing else: the base plan keeps the
+stage, as for the numeric filters. What changed from the design below, and why:
+
+- **The IR node.** `tallyNode` is now `aggregateNode` (`planner/ir.go`): an operation (count, sum,
+  max, min), the key and the field number, and whether the plan assumes the facts it needs.
+  `awkKeyed` (`planner/keyed.go`) recognizes the shape from the awk tree. The value is
+  structure all the way down: the Query builder renders the value columns and what the group
+  reports of them (`valueColumns`, `groupColumns` in `planner/sql.go`), so no pass or frontend
+  builds SQL text for it. The key is still the SQL `awkPrintArgToSQL` gave the count form.
+- **All shards or none, for the sum too.** The design had untyped shards run the original stage
+  per shard and add their partial sums to the typed shards'. That needs per-shard stages on the
+  wire; the exact plan already has the all-shards rule (`exactPlan`), so a query over a window
+  with any shard lacking the facts keeps the base plan. Per-shard stages are not built.
+- **A sum needs integers and a bound, not just a number.** Adding floats in a different order
+  gives different last digits, and `%.6g` shows them whenever a sum lands near a rounding boundary
+  (a sum of cents at 123456.75 can print either way). So the sum is exact only for whole numbers,
+  and two things establish that. The shard classifier has a second fact per awk field,
+  `$N#int` (`shard.finiteInteger`: a decimal integer of at most 15 digits), so a field with a
+  decimal point never lowers. And the query proves its own bound: the shard returns the sum of
+  absolute values (`agg_abs`) and compute fails the query if the total passes 2^52, since only
+  then is every partial sum, in any order, a whole number a float holds. Float sums keep running in
+  compute, as before.
+- **A fact is a guess, so the aggregate checks it.** Each group also returns the count of values
+  the SQL cannot vouch for (`agg_bad`: not a whole number for a sum, not a number for a max or
+  min). Compute prints nothing until it has seen every group, then fails with
+  `compute.InexactAggregateError` (a field of `ExecuteQueryStreamResponse` carries it across gRPC),
+  and the coordinator runs the base plan (`inexactFallback`). The user gets awk's answer, never
+  the error. It can only retry before a line has gone out, and compute prints nothing before the
+  check, short of a stage after the aggregate that prints without reading input.
+- **max and min follow warp's awk.** The comparison is against an element nothing has set,
+  which is 0, and warp does not create an element by reading it, so a key whose values never
+  beat 0 is absent from the output. (POSIX awk prints such a key with an empty value; the
+  base plan here is warp, so the exact plan matches it.) The value printed is the field's own
+  text, so `5.0` and `5` are different answers; the first row in `(ts, event_id, line_no)` order
+  holding the best number wins, within a shard (`first(... ORDER BY ...)`) and across shards (the
+  winning row's `ts`, `agg_best_ns`; shards in one window never tie on it).
+- **Not covered:** crons and dashboards (their `LoweredPlan` carries the base plan, as for the
+  numeric filters); a key or value that is not a plain `$N` field (`$NF`, `$(i+1)`, an expression);
+  more than 50 awk fields per source, past which a field has no fact; rows ingested before
+  2026-10-14, whose `fields` is the older split, as for every lowering over `$N`; a stage after the
+  aggregate that prints without reading input.
+- **Deploy order:** compute first (it must know the three new `GroupRender` values, and an old
+  one fails the request, as it should), then the shards (they report `$N#int`; an old shard never
+  does, so the coordinator never picks the plan for it), then the coordinator. The coordinator
+  alone sends the exact plan, and only when every shard has the facts, so a half-rolled fleet
+  keeps the base plan.
+- **Tests:** `planner/keyed_test.go` (recognized shapes, requirements, pinned SQL, `explain`);
+  differential tests in `planner/difftest/keyed_test.go` against the real awk over 1, 2, 3 and 5
+  shards, with tie spellings, keys that never beat zero, and the inexact cases; `compute`
+  aggregator and wire tests; `coordinator/keyed_fallback_test.go` (the exact plan runs, the base plan
+  runs when a shard lacks the facts, and the fallback when the facts were wrong); the
+  classifier tests for `$N#int`. Each safeguard was checked by removing it and watching a test fail.
 
 ## Keyed sum/min/max: design (2026-10-30, revised)
 

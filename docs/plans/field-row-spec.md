@@ -7,7 +7,7 @@ Status: 2026-10-31.
 | Deploy 1: add (row spec, `field_sql`, typed exact plan, `-F`/`-v` flag handling) | on `origin/main` (`2c6bd346` through `c8c26e38`) |
 | Deploy 2: remove (text record, regexp, `fieldSelect`; `LoweredPlan` carries the field form) | on `origin/main` (`39d6ac19`), pushed after the migrations collapse. The gate below was **not** checked by this plan's author: see "Still to verify". |
 | Compute performance (buffered pipes, meta-variable narrowing, jq per-input variables) | built, **unpushed**: `1b2f0ba9`, `1ccaa456`, `5c7b0254`, `202e7f8f`. Needs warp v0.2.57 (pushed and tagged). |
-| Deploy 3: shard-side keyed aggregates | not started |
+| Deploy 3: shard-side keyed aggregates (sum, max, min) | built on branch `keyed-aggregates`, **unpushed**; see `field-types.md`, "Keyed sum/min/max: built". Gate: compute, then shards, then coordinator. |
 
 It follows `field-types.md`, whose exact plan (`QueryPlan.Typed.Exact`) already lowers an awk
 filter-and-print over typed fields to SQL alone.
@@ -290,8 +290,11 @@ columns). Each safeguard was checked by removing it and watching its test fail.
   fastjson 1.17 ms, sonic 3.2 ms), so the cost left is the `Value` tree (about 26 allocations
   a row), not the parser. A jq stage in compute: 672 ms to 356 ms reading `$level`, 666 ms to
   254 ms reading nothing.
-- **Deploy 3** (keyed sum/max/min in the shard), once there is a reason to prefer it over the
-  row spec.
+- ~~Deploy 3~~ built (`field-types.md`): 200k lines, about 5,000 keys, in-process
+  (`BenchmarkKeyedAggregate`): a keyed sum 172 ms to 23 ms and a keyed max 156 ms to 33 ms through
+  compute, with 200,000 rows from the shard down to 5,000. It takes over the cases the row spec
+  existed for (keyed sum and max, which the section above called most of what is left), but only
+  where the shards report the facts; elsewhere the row spec still shrinks what compute receives.
 - ~~A stage that reads meta-variables pays per row for two maps.~~ Done in warp v0.2.59
   (local, unpushed): `PerRecordBind` takes a slice the caller reuses, and compute builds it
   from the row (`awkBinder.bind`) and recycles the slices through a free list. The rest of
