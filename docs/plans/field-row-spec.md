@@ -283,9 +283,13 @@ columns). Each safeguard was checked by removing it and watching its test fail.
 
 ## Next
 
-- **Single-pass JSON parse in warp's jq.** It reads each input with `json.Decoder`, copies it
-  to a string and parses it again through a token-based parser: about 3.4 us an input, and
-  every jq stage pays it, meta-variables or not.
+- ~~Single-pass JSON parse in warp's jq.~~ Done in warp v0.2.58 (local, unpushed): jsoniter's
+  iterator builds each `Value` as it scans, behind a wrapper that closes four leniencies
+  (number at end of stream, truncated input, number grammar such as `01`, invalid UTF-8). A
+  hand-written reader was no faster than jsoniter (1.29 ms against 1.15 ms for 1,000 objects;
+  fastjson 1.17 ms, sonic 3.2 ms), so the cost left is the `Value` tree (about 26 allocations
+  a row), not the parser. A jq stage in compute: 672 ms to 356 ms reading `$level`, 666 ms to
+  254 ms reading nothing.
 - **Deploy 3** (keyed sum/max/min in the shard), once there is a reason to prefer it over the
   row spec.
 - **A stage that reads meta-variables** still pays per row for two maps and a channel send
