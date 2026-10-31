@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -260,6 +261,68 @@ func TestDifferentialTypedFilterAndPrintIsAllSQL(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("%s: the exact plan differs from awk: %s", pipeline, firstDiff(got, want))
+		}
+	}
+}
+
+// storedEvents is what the shards hold for these text events: ingest stores each
+// multi-line event as one row per line (ingest.SplitLines), so a row is a line.
+func storedEvents(events ...string) []*pb.LogRow {
+	var rows []*pb.LogRow
+	base := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	for i, raw := range events {
+		rows = append(rows, &pb.LogRow{
+			Raw: raw, TsUnixNs: base.Add(time.Duration(i) * time.Second).UnixNano(),
+			Namespace: "typed", Service: "api", Kind: "main", CustomerId: 1,
+		})
+	}
+	return ingest.SplitLines(rows)
+}
+
+// A text event of several lines (a stack trace, a wrapped message) is stored as
+// one row per line, so lowering $N to fields[N] reads each line's own fields,
+// as awk does. This runs the lowered pipelines over such events, blank lines,
+// a trailing newline and CRLF included.
+func TestDifferentialMultiLineEventsLoweredFields(t *testing.T) {
+	h := newHarness(t, storedEvents(
+		"a 1 x", "b 2\nc 3 y z", "d\n", "e 5\n\nf 6 w", "k 9\r\nl 10", "m 4\n  n 8  ", "",
+	), 2)
+	for _, p := range []string{
+		`cat /log/typed/api/main.log | awk '{ print $2 }'`,
+		`cat /log/typed/api/main.log | awk '{ print $1, $2 }'`,
+		`cat /log/typed/api/main.log | awk '$1 == "c"'`,
+		`cat /log/typed/api/main.log | awk '$2 == "3"'`,
+		`cat /log/typed/api/main.log | awk '$2 == "3" { print $1 }'`,
+		`cat /log/typed/api/main.log | awk '$NF == "z"'`,
+		`cat /log/typed/api/main.log | awk '{ print $NF }'`,
+		`cat /log/typed/api/main.log | awk '{ print $2 }' | sort | uniq -c`,
+	} {
+		t.Run(p, func(t *testing.T) { h.check(t, p) })
+	}
+}
+
+// The same for a typed field and the exact plan.
+func TestDifferentialMultiLineEventsExactPlan(t *testing.T) {
+	h := newHarness(t, storedEvents(
+		"a 1", "b 2\nc 3", "e 5\nf 6", "k 9\r\nl 10", "m 4\nn 8\no 11",
+	), 2)
+	for _, cond := range []string{"$2 > 3", "$2 < 6", "$2 == 3", "$2 != 5"} {
+		pipeline := fmt.Sprintf("cat /log/typed/api/main.log | awk '%s {print $1, $2}'", cond)
+		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		if err != nil || plan.Typed == nil || plan.Typed.Exact == nil {
+			t.Fatalf("%s: %v, typed %+v", pipeline, err, plan.Typed)
+		}
+		source, stages := splitSource(t, pipeline)
+		want, wantErr := h.runReference(source, stages, readsMetaVars(stages))
+		if wantErr != nil {
+			t.Fatalf("%s: reference: %v", pipeline, wantErr)
+		}
+		got, err := h.runExact(plan)
+		if err != nil {
+			t.Fatalf("%s: %v", pipeline, err)
+		}
+		if got, want = sortedLines(got), sortedLines(want); got != want {
+			t.Errorf("%s: the exact plan differs from awk over stored events: %s", pipeline, firstDiff(got, want))
 		}
 	}
 }

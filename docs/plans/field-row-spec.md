@@ -140,30 +140,26 @@ fields on the shard Query request. All are additions, so older receivers skip th
 
 ### 2. Multi-line rows
 
-A row's `raw` may hold several lines (a stack trace), and awk reads each line as its own
-record. The `fields` column is the split of the whole row, newlines included, so for a
-multi-line row `fields[2]` is not the second word of any one line. Today's synthetic
-record gets this right only by unnesting the row into lines first
-(`unnest(string_split(raw, chr(10)))`) and tokenizing each with a regexp.
+Ingest stores a multi-line text event as one row per line (`ingest.SplitLines`, called by
+`ingestBatch` since 2026-10-14; `docs/query-execution.md`, "Rows are lines"). So a stored
+text row is a line, `fields` is that line's split, and `list_extract(fields, N)` is awk's
+`$N` for it. `TestDifferentialMultiLineEventsLoweredFields` and
+`...ExactPlan` pin this: events of several lines, with blank lines, a trailing newline and
+CRLF, go through `SplitLines` into the shards, and the lowered `$N` pipelines and the exact
+plan match awk.
 
-Proposal: do not unnest, and do not tokenize. A row that contains a newline is sent in
-**raw form** (whole, exactly as an unprojected query sends it), and compute's stage reads
-it the way it always has. Only single-line rows use field form:
+The row spec therefore needs no multi-line case. The field form is unconditional, and the
+unnest (`unnest(string_split(raw, chr(10)))`) and `contains(raw, chr(10))` that an earlier
+draft carried are not needed.
 
-    CASE WHEN contains(raw, chr(10)) THEN raw ELSE '' END AS raw,
-    CASE WHEN contains(raw, chr(10)) THEN NULL ELSE len(fields) END AS nf,
-    CASE WHEN contains(raw, chr(10)) THEN NULL ELSE list_extract(fields, 1) END AS field_1,
-    ...
+Rows that can still hold a newline are the residue the docs already name:
 
-A multi-line row has no `nf`, so compute treats it as raw. Compute handles both forms
-per row, which already has to be true for old shards. The unnest, which existed only so a
-per-line view could be tokenized, disappears.
+- rows ingested before 2026-10-14, whose `fields` is also the older schema-dependent split
+  (`awkFields`, `docs/query-execution.md`), and so already disagree with awk on `$N`;
+- a JSON line that is its own payload, which is never split (jq reads the payload once per
+  event), if its `raw` contains a newline.
 
-Cost to measure: `contains(raw, chr(10))` per row, against what the regexp cost.
-`TestDifferentialFieldProjectionLines` already covers multi-line rows for the old form;
-the same corpus must pass for the new one, with rows holding several lines, a blank line,
-a trailing newline and a lone `\r`.
-
-Not changed by this plan: the exact `$N` lowering reads `fields` for the whole row, as
-every exact `$N` filter and print does. Whether that is right for a multi-line row is a
-separate question and gets its own test.
+For these the field form is no worse than the lowered `$N` pipelines are today. It is
+wrong where they are wrong, until the pre-2026-10-14 rows age out of retention. The old
+projection handled them (it unnested), so the removal in Deploy 2 gives that up; check
+the retention horizon before Deploy 2 and say so in its commit.
