@@ -120,14 +120,27 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 	}
 	res.Stats = stats
 
-	// A keyed destination (see IsKeyed) is written keyed: the survivors keep
-	// the key and time directories they came from, which the read of a keyed
-	// source supplies as columns. dstPath is then the glob, and the COPY goes
-	// to its directory.
-	copyTo, partitionBy := dstPath, ""
+	// A keyed destination (see IsKeyed) is written keyed, whatever the source
+	// was: a keyed one, a time-only one, or a single file. dstPath is then the
+	// glob, and the COPY goes to its directory. _part is rebuilt from ts for the
+	// destination's bucket width, replacing the source's own if it has one, so
+	// converting a time-only archive of another width, or a single file with
+	// no _part, comes out the same.
+	copyTo, partitionBy, out := dstPath, "", keep
 	if IsKeyed(dstPath) {
 		copyTo = strings.TrimSuffix(dstPath, "/**/*.parquet")
 		partitionBy = ", PARTITION_BY (customer_id, namespace, service, kind, _part), OVERWRITE_OR_IGNORE"
+		minutes, _ := PartitionMinutes(dstPath)
+		var hasPart int
+		if err := db.QueryRow(fmt.Sprintf(
+			"SELECT count(*) FROM (DESCRIBE SELECT * FROM (%s) k) WHERE column_name = '_part'", keep)).Scan(&hasPart); err != nil {
+			return CompactResult{}, fmt.Errorf("describe source: %w", err)
+		}
+		cols := "k.*"
+		if hasPart > 0 {
+			cols = "k.* EXCLUDE (_part)"
+		}
+		out = fmt.Sprintf("SELECT %s, %s AS _part FROM (%s) k", cols, partitionExpr(minutes, "k.ts"), keep)
 	}
 	if s3cfg == nil && !strings.HasPrefix(dstPath, "s3://") {
 		parent := filepath.Dir(dstPath)
@@ -138,7 +151,7 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 			return CompactResult{}, fmt.Errorf("mkdir for %s: %w", dstPath, err)
 		}
 	}
-	if _, err := db.Exec(fmt.Sprintf("COPY (%s) TO '%s' (FORMAT PARQUET%s)", keep, copyTo, partitionBy)); err != nil {
+	if _, err := db.Exec(fmt.Sprintf("COPY (%s) TO '%s' (FORMAT PARQUET%s)", out, copyTo, partitionBy)); err != nil {
 		return CompactResult{}, fmt.Errorf("copy survivors to %s: %w", dstPath, err)
 	}
 	res.OutputPath = dstPath

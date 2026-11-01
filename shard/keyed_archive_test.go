@@ -289,6 +289,54 @@ func TestRewriteRetention_KeepsAKeyedLayout(t *testing.T) {
 	}
 }
 
+// Converting an archive is a rewrite with no cutoffs whose destination is
+// keyed. The source may be a single file, which has no _part, or a time-only
+// archive of any width, whose _part is rebuilt for the new one.
+func TestRewriteRetention_ConvertsAnythingToKeyed(t *testing.T) {
+	const perKey = 6
+	ds := legacyShardWith(t, keyedFixture, perKey)
+	want := len(keyedFixture) * perKey
+
+	for _, c := range []struct {
+		name    string
+		minutes int // width of the time-only source; 0 is a single file
+	}{{"single file", 0}, {"time-only, 60 minutes", 60}, {"time-only, 1440 minutes", 1440}} {
+		t.Run(c.name, func(t *testing.T) {
+			_, src, _ := exportTo(t, ds, c.minutes, false)
+			if IsKeyed(src) {
+				t.Fatalf("source %q is already keyed", src)
+			}
+			dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
+			dst := dstDir + "/k1440/**/*.parquet"
+			res, err := RewriteRetention(src, dst, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.RowsKept != int64(want) || res.RowsDeleted != 0 {
+				t.Fatalf("kept %d, deleted %d; want %d and 0", res.RowsKept, res.RowsDeleted, want)
+			}
+			if files, _ := filepath.Glob(filepath.Join(dstDir, "k1440", "customer_id=1/namespace=weft/service=api/kind=main", "*", "data_0.parquet")); len(files) == 0 {
+				t.Error("no directory for weft/api/main")
+			}
+
+			db, err := sql.Open("duckdb", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			var n, parts, nulls int
+			q := "SELECT count(*), count(DISTINCT _part), count(*) FILTER (WHERE kind IS NULL) FROM " + ParquetReadExpr(dst)
+			if err := db.QueryRow(q).Scan(&n, &parts, &nulls); err != nil {
+				t.Fatal(err)
+			}
+			// rows are 7 hours apart over 35 hours: three day buckets
+			if n != want || parts != 2 || nulls != perKey {
+				t.Errorf("converted archive: %d rows, %d day buckets, %d with no kind; want %d, 2, %d", n, parts, nulls, want, perKey)
+			}
+		})
+	}
+}
+
 // The cold shard answers a query the same way from either layout.
 func TestColdShard_KeyedAndTimeOnlyArchivesAnswerAlike(t *testing.T) {
 	ds := legacyShardWith(t, keyedFixture, 6)
