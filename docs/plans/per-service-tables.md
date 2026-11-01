@@ -165,8 +165,11 @@ last, because:
 - The parquet export and the archive read the columns. The export must write them, taken
   from `log_tables` per table, so archived data keeps the schema that archive queries
   expect. Parquet archived before the change already has them.
-- `customer_id` and `namespace` are constant per table as well, but were not part of the
-  decision. Leave them until asked.
+- `namespace` is constant per table too, so it drops with the other two.
+- Keep `customer_id`. It is constant per table as well, but it is the tenant boundary: the
+  coordinator's `customer_id` predicate is what stops a wrong table hint from leaking
+  another tenant's rows. DuckDB stores a constant column in a few bytes per row group, so
+  dropping it would save almost nothing and remove the only check behind the hint.
 
 **Tests.** About 306 `FROM logs` statements in 68 test files, nearly all of which go through
 the shard, so a shim that resolves `logs` to the hinted table should cover them. Three raw
