@@ -155,6 +155,12 @@ type DuckDBShard struct {
 
 	// openTiming is where NewDuckDBShard spent its time, for OpenTiming.
 	openTiming string
+
+	// perKey is set when the database keeps a table per key (see layout.go);
+	// tables are the keyed tables that exist, guarded by tablesMu.
+	perKey   bool
+	tablesMu sync.RWMutex
+	tables   map[string]struct{}
 }
 
 // queryStats accumulates per-query execution timings between telemetry samples;
@@ -342,8 +348,13 @@ func schemaIsCurrent(db *sql.DB) bool {
 }
 
 // NewDuckDBShard opens or creates a DuckDB database at path and initializes the
-// logs table. Use "" or ":memory:" for an in-memory database.
-func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
+// logs table. Use "" or ":memory:" for an in-memory database. The database
+// keeps the layout it already has; see Option for how a new one is laid out.
+func NewDuckDBShard(id, path string, opts ...Option) (*DuckDBShard, error) {
+	var cfg openOptions
+	for _, o := range opts {
+		o(&cfg)
+	}
 	t0 := time.Now()
 	db, err := sql.Open("duckdb", path)
 	if err != nil {
@@ -373,13 +384,23 @@ func NewDuckDBShard(id, path string) (*DuckDBShard, error) {
 	}
 	migrated := time.Now()
 	ds := &DuckDBShard{id: id, dbPath: path, db: db}
+	if err := ds.initLayout(cfg.perKey); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("init layout: %w", err)
+	}
+	if ds.perKey {
+		if err := ds.syncTableColumns(); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("sync table columns: %w", err)
+		}
+	}
 	// Seed rowCount from the on-disk table so a shard recovering off a
 	// reattached volume reports its real size in heartbeats. Without this
 	// seed, the in-memory counter starts at zero and only increments on
 	// post-boot Ingest, so the coordinator believes the recovered shard is
 	// empty.
 	var existing int64
-	if err := db.QueryRow("SELECT COUNT(*) FROM logs").Scan(&existing); err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM " + ds.source()).Scan(&existing); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("seed rowCount from logs: %w", err)
 	}
@@ -420,9 +441,15 @@ func (s *DuckDBShard) Checkpoint(ctx context.Context) error {
 // sends a sentinel. If the query fails, the sentinel is still sent so the
 // compute job doesn't hang.
 func (s *DuckDBShard) QueryToSink(ctx context.Context, query string, args []any, sink RowSink) {
+	s.QueryTableToSink(ctx, "", query, args, sink)
+}
+
+// QueryTableToSink is QueryToSink for a query whose table the planner named;
+// see QueryContextTable.
+func (s *DuckDBShard) QueryTableToSink(ctx context.Context, table, query string, args []any, sink RowSink) {
 	defer sink.SendSentinel(s.id)
 
-	rows, err := s.QueryContext(ctx, query, args...)
+	rows, err := s.QueryContextTable(ctx, table, query, args...)
 	if err != nil {
 		weftsdk.Errorf(ctx, "shard %s: QueryToSink error: %v (sql=%s args=%v)", s.id, err, query, args)
 		sink.Fail(s.id, err)
@@ -473,78 +500,12 @@ func (s *DuckDBShard) Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestR
 		return nil
 	}
 
-	// The Appender works against a single driver connection, so borrow one from
-	// the pool for the batch and hand it back on return.
-	conn, err := s.db.Conn(ctx)
-	if err != nil {
-		return wrapIngestError(s.id, fmt.Errorf("acquire conn: %w", err), rec)
+	var err error
+	if s.perKey {
+		err = s.ingestPerKey(ctx, rows)
+	} else {
+		err = s.ingestTable(ctx, "logs", rows)
 	}
-	defer conn.Close()
-
-	err = conn.Raw(func(dc any) error {
-		appender, aerr := duckdb.NewAppenderWithColumns(dc.(driver.Conn), "", "", "logs", logColumns)
-		if aerr != nil {
-			return fmt.Errorf("new appender: %w", aerr)
-		}
-		for _, r := range rows {
-			// payload is a JSON column; setJSON marshals whatever we pass, so a
-			// json.RawMessage round-trips the bytes verbatim (a bare string would
-			// be double-encoded into a quoted JSON string).
-			payload := json.RawMessage("{}")
-			if len(r.PayloadJson) > 0 {
-				payload = json.RawMessage(r.PayloadJson)
-			}
-			kind := r.Kind
-			if kind == "" {
-				kind = "main"
-			}
-			// A one-line event or JSON row carries no event_id: both
-			// columns are NULL, not 0.
-			var eventID, lineNo any
-			if r.EventId != "" {
-				id, perr := uuid.Parse(r.EventId)
-				if perr != nil {
-					appender.Close()
-					return fmt.Errorf("event_id %q: %w", r.EventId, perr)
-				}
-				eventID, lineNo = duckdb.UUID(id), r.LineNo
-			}
-			if rerr := appender.AppendRow(
-				r.Raw,
-				awkFields(r.Raw),
-				time.Unix(0, r.TsUnixNs),
-				r.Level,
-				r.Namespace,
-				r.Service,
-				kind,
-				r.Instance,
-				r.CustomerId,
-				payload,
-				r.Deployment,
-				r.Env,
-				r.Version,
-				r.Region,
-				r.Cluster,
-				r.K8SNamespace,
-				r.Pod,
-				r.Container,
-				r.Node,
-				r.TraceId,
-				r.SpanName,
-				r.SpanId,
-				r.ParentSpanId,
-				r.DurationNs,
-				eventID,
-				lineNo,
-			); rerr != nil {
-				appender.Close()
-				return fmt.Errorf("append row: %w", rerr)
-			}
-		}
-		// Close flushes the buffered chunks to the table and releases the
-		// appender; its error is the batch's commit error.
-		return appender.Close()
-	})
 	if err != nil {
 		return wrapIngestError(s.id, err, rec)
 	}
@@ -554,6 +515,129 @@ func (s *DuckDBShard) Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestR
 		rec.ResetIngestFailures(s.id)
 	}
 	return nil
+}
+
+// ingestTable appends rows to one table on a connection of its own.
+func (s *DuckDBShard) ingestTable(ctx context.Context, table string, rows []*pb.LogRow) error {
+	// The Appender works against a single driver connection, so borrow one from
+	// the pool for the batch and hand it back on return.
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire conn: %w", err)
+	}
+	defer conn.Close()
+	return conn.Raw(func(dc any) error {
+		return appendRows(dc.(driver.Conn), table, rows)
+	})
+}
+
+// ingestPerKey appends each row to the table of its key. The whole batch is
+// one transaction: a caller that retries a failed batch must not find its good
+// rows already stored.
+func (s *DuckDBShard) ingestPerKey(ctx context.Context, rows []*pb.LogRow) error {
+	var order []tableKey
+	groups := map[tableKey][]*pb.LogRow{}
+	for _, r := range rows {
+		k := rowKey(r)
+		if _, seen := groups[k]; !seen {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], r)
+	}
+	if err := s.ensureTables(ctx, order); err != nil {
+		return err
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire conn: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "BEGIN TRANSACTION"); err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	err = conn.Raw(func(dc any) error {
+		for _, k := range order {
+			if err := appendRows(dc.(driver.Conn), k.table(), groups[k]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// appendRows streams rows into table through DuckDB's Appender on dc.
+func appendRows(dc driver.Conn, table string, rows []*pb.LogRow) error {
+	appender, aerr := duckdb.NewAppenderWithColumns(dc, "", "", table, logColumns)
+	if aerr != nil {
+		return fmt.Errorf("new appender: %w", aerr)
+	}
+	for _, r := range rows {
+		// payload is a JSON column; setJSON marshals whatever we pass, so a
+		// json.RawMessage round-trips the bytes verbatim (a bare string would
+		// be double-encoded into a quoted JSON string).
+		payload := json.RawMessage("{}")
+		if len(r.PayloadJson) > 0 {
+			payload = json.RawMessage(r.PayloadJson)
+		}
+		kind := r.Kind
+		if kind == "" {
+			kind = "main"
+		}
+		// A one-line event or JSON row carries no event_id: both
+		// columns are NULL, not 0.
+		var eventID, lineNo any
+		if r.EventId != "" {
+			id, perr := uuid.Parse(r.EventId)
+			if perr != nil {
+				appender.Close()
+				return fmt.Errorf("event_id %q: %w", r.EventId, perr)
+			}
+			eventID, lineNo = duckdb.UUID(id), r.LineNo
+		}
+		if rerr := appender.AppendRow(
+			r.Raw,
+			awkFields(r.Raw),
+			time.Unix(0, r.TsUnixNs),
+			r.Level,
+			r.Namespace,
+			r.Service,
+			kind,
+			r.Instance,
+			r.CustomerId,
+			payload,
+			r.Deployment,
+			r.Env,
+			r.Version,
+			r.Region,
+			r.Cluster,
+			r.K8SNamespace,
+			r.Pod,
+			r.Container,
+			r.Node,
+			r.TraceId,
+			r.SpanName,
+			r.SpanId,
+			r.ParentSpanId,
+			r.DurationNs,
+			eventID,
+			lineNo,
+		); rerr != nil {
+			appender.Close()
+			return fmt.Errorf("append row: %w", rerr)
+		}
+	}
+	// Close flushes the buffered chunks to the table and releases the
+	// appender; its error is the batch's commit error.
+	return appender.Close()
 }
 
 // factsStateSQL keeps the field classifier's results in the shard's own
@@ -797,7 +881,7 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 func (s *DuckDBShard) customerStats(ctx context.Context) ([]CustomerStat, error) {
 	return scanCustomerStats(ctx, s.db, `
 		SELECT COALESCE(customer_id, 0), MIN(ts), MAX(ts), COUNT(*)
-		FROM logs GROUP BY 1`)
+		FROM `+s.source()+` GROUP BY 1`)
 }
 
 // scanCustomerStats runs a (customer, min_ts, max_ts, count) aggregation
@@ -892,7 +976,7 @@ func (s *DuckDBShard) planPartitions(ctx context.Context) (partitionPlan, error)
 	if p.dbBytes == 0 {
 		// Fallback: query row count and estimate ~200 bytes/row in Parquet.
 		var count int64
-		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM logs").Scan(&count); err != nil {
+		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+s.source()).Scan(&count); err != nil {
 			return p, err
 		}
 		p.dbBytes = count * 500 // rough DuckDB row size to approximate
@@ -905,7 +989,7 @@ func (s *DuckDBShard) planPartitions(ctx context.Context) (partitionPlan, error)
 	}
 
 	var tsMin, tsMax time.Time
-	if err := s.db.QueryRowContext(ctx, "SELECT MIN(ts), MAX(ts) FROM logs").Scan(&tsMin, &tsMax); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT MIN(ts), MAX(ts) FROM "+s.source()).Scan(&tsMin, &tsMax); err != nil {
 		return p, err
 	}
 	p.minutes = choosePartitionMinutes(p.estParquetBytes, tsMax.Sub(tsMin))
@@ -920,7 +1004,7 @@ func (s *DuckDBShard) planPartitions(ctx context.Context) (partitionPlan, error)
 func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes int) (string, int64, error) {
 	if minutes == 0 {
 		outPath := path + ".parquet"
-		res, err := s.db.ExecContext(ctx, fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", outPath))
+		res, err := s.db.ExecContext(ctx, fmt.Sprintf("COPY %s TO '%s' (FORMAT PARQUET)", s.source(), outPath))
 		if err != nil {
 			return outPath, 0, err
 		}
@@ -929,8 +1013,8 @@ func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes in
 	}
 	dir := fmt.Sprintf("%s/m%d", path, minutes)
 	sql := fmt.Sprintf(
-		"COPY (SELECT *, %s AS _part FROM logs) TO '%s' (FORMAT PARQUET, PARTITION_BY (_part), OVERWRITE_OR_IGNORE)",
-		partitionExpr(minutes, "ts"), dir,
+		"COPY (SELECT *, %s AS _part FROM %s) TO '%s' (FORMAT PARQUET, PARTITION_BY (_part), OVERWRITE_OR_IGNORE)",
+		partitionExpr(minutes, "ts"), s.source(), dir,
 	)
 	res, err := s.db.ExecContext(ctx, sql)
 	if err != nil {
@@ -942,7 +1026,7 @@ func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes in
 
 // ExportToParquet exports the logs table to a single Parquet file (local path).
 func (s *DuckDBShard) ExportToParquet(path string) error {
-	_, err := s.db.Exec(fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", path))
+	_, err := s.db.Exec(fmt.Sprintf("COPY %s TO '%s' (FORMAT PARQUET)", s.source(), path))
 	return err
 }
 
@@ -951,7 +1035,7 @@ func (s *DuckDBShard) ExportToS3Parquet(s3Path string, cfg *S3Config) error {
 	if err := cfg.ConfigureDuckDB(s.db); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", s3Path))
+	_, err := s.db.Exec(fmt.Sprintf("COPY %s TO '%s' (FORMAT PARQUET)", s.source(), s3Path))
 	return err
 }
 
@@ -968,6 +1052,15 @@ func (s *DuckDBShard) Query(ctx context.Context, query string, args ...any) ([]*
 // pathological long-running queries (the main motivation for the
 // SHARD_QUERY_TIMEOUT_SECONDS runtime config).
 func (s *DuckDBShard) QueryContext(ctx context.Context, query string, args ...any) ([]*pb.ResultRow, error) {
+	return s.QueryContextTable(ctx, "", query, args...)
+}
+
+// QueryContextTable is QueryContext for a query that reads one log source,
+// whose table the planner named (logtable.Name). A shard that keeps a table per
+// key reads only that table; one that does not runs the query as written, so
+// the hint is safe to send to any shard. See resolveSource.
+func (s *DuckDBShard) QueryContextTable(ctx context.Context, table, query string, args ...any) ([]*pb.ResultRow, error) {
+	query = s.resolveSource(query, table)
 	start := time.Now()
 	sqlRows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

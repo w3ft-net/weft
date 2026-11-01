@@ -98,12 +98,19 @@ func OpenForExport(id, path string) (*DuckDBShard, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb %q: %w", path, err)
 	}
+	s := &DuckDBShard{id: id, dbPath: path, db: db}
+	// A database with a table per key must be exported from those tables: its
+	// logs table is an empty template, and exporting that would report success.
+	if err := s.initLayout(false); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("export database %q: %w", path, err)
+	}
 	var n int64
-	if err := db.QueryRow("SELECT COUNT(*) FROM logs").Scan(&n); err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM " + s.source()).Scan(&n); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("export database %q has no readable logs table: %w", path, err)
 	}
-	return &DuckDBShard{id: id, dbPath: path, db: db}, nil
+	return s, nil
 }
 
 // RunExport exports cfg.DBPath to Parquet under cfg.S3Prefix, then writes the
