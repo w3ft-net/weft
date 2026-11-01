@@ -18,6 +18,7 @@ ExecStart=/opt/app/bin/weft-shard export \
     --db=/mnt/export/shard.duckdb \
     --prefix=${EXPORT_PREFIX} \
     --attempt=${EXPORT_ATTEMPT} \
+    --keyed \
     --timeout=150m
 TimeoutStartSec=160min
 Environment=WEFT_LOG_FILE=/opt/app/logs/export.log
