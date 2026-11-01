@@ -24,12 +24,13 @@ func runExportCommand(args []string) int {
 	dbPath := fs.String("db", "", "path to the restored shard.duckdb")
 	prefix := fs.String("prefix", "", "archive prefix (s3://bucket/dir, or a local directory in dev)")
 	attempt := fs.Int("attempt", 0, "coordinator's export attempt number, echoed in the manifest")
+	keyed := fs.Bool("keyed", false, "split a large archive by log key as well as by time (docs/plans/per-service-tables.md)")
 	timeout := fs.Duration("timeout", 2*time.Hour, "hard limit for the whole export")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *shardID == "" || *dbPath == "" || *prefix == "" || *attempt <= 0 {
-		fmt.Fprintln(os.Stderr, "usage: weft-shard export --shard-id ID --db PATH --prefix PREFIX --attempt N [--timeout D]")
+		fmt.Fprintln(os.Stderr, "usage: weft-shard export --shard-id ID --db PATH --prefix PREFIX --attempt N [--keyed] [--timeout D]")
 		return 2
 	}
 
@@ -42,7 +43,7 @@ func runExportCommand(args []string) int {
 		return 1
 	}
 	m, err := shard.RunExport(ctx, shard.ExportConfig{
-		ShardID: *shardID, DBPath: *dbPath, S3Prefix: *prefix, Attempt: *attempt,
+		ShardID: *shardID, DBPath: *dbPath, S3Prefix: *prefix, Attempt: *attempt, Keyed: *keyed,
 	}, store)
 	if err != nil {
 		weftsdk.Errorf(ctx, "export shard=%s attempt=%d failed: %v", *shardID, *attempt, err)

@@ -124,17 +124,28 @@ func (s *ColdShard) Archive(_ context.Context, _ string) (string, []CustomerStat
 	return "", nil, fmt.Errorf("cold shard %s is already archived", s.id)
 }
 
-func (s *ColdShard) readParquetExpr() string { return parquetReadExpr(s.parquetPath) }
+func (s *ColdShard) readParquetExpr() string { return ParquetReadExpr(s.parquetPath) }
 
-// parquetReadExpr builds the DuckDB read_parquet(...) source for a stored
+// keyedHiveTypes pins the columns a keyed archive keeps in its directory names.
+// Left to DuckDB, a column whose values all look like numbers (every service
+// named like a number) is typed as one, and a predicate on a name that isn't a
+// number then fails to bind. The time column _part is left to be typed as a
+// timestamp, which PruneColdPartitions relies on.
+const keyedHiveTypes = "{'customer_id': 'BIGINT', 'namespace': 'VARCHAR', 'service': 'VARCHAR', 'kind': 'VARCHAR'}"
+
+// ParquetReadExpr builds the DuckDB read_parquet(...) source for a stored
 // path. A glob (the hive-partitioned layout from a large shard's archive)
-// enables hive_partitioning so the partition columns are read back; a
-// plain path reads a single file.
-func parquetReadExpr(path string) string {
-	if strings.Contains(path, "*") {
-		return fmt.Sprintf("read_parquet('%s', hive_partitioning=true)", path)
+// enables hive_partitioning so the partition columns are read back, and for a
+// keyed archive types the key columns; a plain path reads a single file. The
+// cold-shard Lambda builds the same expression.
+func ParquetReadExpr(path string) string {
+	if !strings.Contains(path, "*") {
+		return fmt.Sprintf("read_parquet('%s')", path)
 	}
-	return fmt.Sprintf("read_parquet('%s')", path)
+	if IsKeyed(path) {
+		return fmt.Sprintf("read_parquet('%s', hive_partitioning=true, hive_types=%s)", path, keyedHiveTypes)
+	}
+	return fmt.Sprintf("read_parquet('%s', hive_partitioning=true)", path)
 }
 
 // Query executes a SQL query against the archived Parquet data.

@@ -31,6 +31,7 @@ type ExportConfig struct {
 	DBPath   string // the restored shard.duckdb
 	S3Prefix string // archive prefix, same value the in-process Archive receives
 	Attempt  int    // the coordinator's attempt number, echoed in the manifest
+	Keyed    bool   // split a partitioned archive by log key too (see IsKeyed)
 }
 
 // ExportManifest is the completion record an export writes to the archive
@@ -127,7 +128,7 @@ func RunExport(ctx context.Context, cfg ExportConfig, store ManifestStore) (Expo
 	if fi, err := os.Stat(cfg.DBPath); err == nil {
 		m.DBBytes = fi.Size()
 	}
-	path, stats, err := s.archive(ctx, cfg.S3Prefix, ExportOutputSuffix(cfg.Attempt))
+	path, stats, err := s.archive(ctx, cfg.S3Prefix, ExportOutputSuffix(cfg.Attempt), cfg.Keyed)
 	if err != nil {
 		return ExportManifest{}, err
 	}

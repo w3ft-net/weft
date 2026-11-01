@@ -112,7 +112,7 @@ func TestExportedArchive_BoundedReadMatchesAnUnboundedOne(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil { // the local export makes it too
 			t.Fatal(err)
 		}
-		glob, _, err := ds.exportParquet(ctx, dir, minutes)
+		glob, _, err := ds.exportParquet(ctx, dir, minutes, false)
 		if err != nil {
 			t.Fatalf("width %d: export: %v", minutes, err)
 		}
@@ -130,7 +130,7 @@ func TestExportedArchive_BoundedReadMatchesAnUnboundedOne(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			q = replaceFirst(q, "FROM logs", "FROM "+parquetReadExpr(glob))
+			q = replaceFirst(q, "FROM logs", "FROM "+ParquetReadExpr(glob))
 			var n int
 			if err := db.QueryRow(q, toAny(args)...).Scan(&n); err != nil {
 				t.Fatalf("width %d: %v\n%s", minutes, err, q)

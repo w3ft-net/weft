@@ -19,6 +19,14 @@ import (
 // time range falls in. It sits below the attempt directory so the attempt's
 // delete globs (ExportOutputPaths) still cover it. Archives made before the
 // width was recorded have no such segment.
+//
+// A keyed archive also splits by log key, and says so with k in place of m:
+//
+//	<prefix>/<shard>.attempt-N/k<minutes>/customer_id=C/namespace=N/service=S/kind=K/_part=<bucket start>/data_0.parquet
+//
+// so a query that names a key opens only that key's directories. The reader
+// has to know, because it types the key columns (ParquetReadExpr). See
+// docs/plans/per-service-tables.md, "Archive layout".
 
 const (
 	// targetFileBytes is the file size the width is picked for. An archived
@@ -36,7 +44,7 @@ const (
 	parquetToDBRatio = 0.9
 )
 
-var partitionSegment = regexp.MustCompile(`/m([1-9][0-9]*)/\*\*/\*\.parquet$`)
+var partitionSegment = regexp.MustCompile(`/([mk])([1-9][0-9]*)/\*\*/\*\.parquet$`)
 
 // PartitionMinutes reads the bucket width, in minutes, from an archive's glob
 // path. ok is false for an archive that doesn't record it.
@@ -45,8 +53,14 @@ func PartitionMinutes(parquetPath string) (minutes int, ok bool) {
 	if m == nil {
 		return 0, false
 	}
-	n, err := strconv.Atoi(m[1])
+	n, err := strconv.Atoi(m[2])
 	return n, err == nil
+}
+
+// IsKeyed reports whether an archive's glob path names a keyed layout.
+func IsKeyed(parquetPath string) bool {
+	m := partitionSegment.FindStringSubmatch(parquetPath)
+	return m != nil && m[1] == "k"
 }
 
 // partitionExpr is the _part expression for minutes-wide buckets of the

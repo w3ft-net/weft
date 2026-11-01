@@ -843,13 +843,14 @@ func dirSize(root string) int64 {
 // phase with the shard's native memory state so a stuck export is diagnosable
 // from the shard log alone.
 func (s *DuckDBShard) Archive(ctx context.Context, s3Prefix string) (string, []CustomerStat, error) {
-	return s.archive(ctx, s3Prefix, "")
+	return s.archive(ctx, s3Prefix, "", false)
 }
 
 // archive is Archive with a suffix on the output name: "" writes
 // <prefix>/<id>[.parquet], the in-process layout; the ephemeral export passes
-// ExportOutputSuffix(attempt) so each attempt gets a location of its own.
-func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string) (string, []CustomerStat, error) {
+// ExportOutputSuffix(attempt) so each attempt gets a location of its own. keyed
+// splits a partitioned archive by log key too (see exportParquet).
+func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string, keyed bool) (string, []CustomerStat, error) {
 	attempt, end, err := s.beginArchive()
 	if err != nil {
 		return "", nil, err
@@ -878,7 +879,7 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 		attempt, len(stats), time.Since(statsStart).Round(time.Millisecond), s.nativeMemoryDiag(ctx))
 
 	stopSampling = s.sampleArchiveMemory(attempt, "copy", archiveSampleInterval)
-	path, rows, err := s.exportArchive(ctx, attempt, s3Prefix, outputSuffix)
+	path, rows, err := s.exportArchive(ctx, attempt, s3Prefix, outputSuffix, keyed)
 	stopSampling()
 	if err != nil {
 		return fail("export", err)
@@ -923,7 +924,7 @@ func scanCustomerStats(ctx context.Context, db *sql.DB, query string) ([]Custome
 // path. S3 when S3ConfigFromEnv is set, otherwise a local directory.
 // It also returns the number of rows the COPY wrote. attempt tags the phase
 // log lines (see Archive).
-func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix, outputSuffix string) (path string, rows int64, err error) {
+func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix, outputSuffix string, keyed bool) (path string, rows int64, err error) {
 	plan, err := s.planPartitions(ctx)
 	if err != nil {
 		return "", 0, fmt.Errorf("partition sizing: %w", err)
@@ -943,7 +944,7 @@ func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix
 		if err := s3cfg.ConfigureDuckDB(s.db); err != nil {
 			return "", 0, err
 		}
-		return s.exportParquet(ctx, fmt.Sprintf("%s/%s%s", s3Prefix, s.id, outputSuffix), plan.minutes)
+		return s.exportParquet(ctx, fmt.Sprintf("%s/%s%s", s3Prefix, s.id, outputSuffix), plan.minutes, keyed)
 	}
 
 	dir := fmt.Sprintf("%s/%s%s", s3Prefix, s.id, outputSuffix)
@@ -963,7 +964,7 @@ func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", 0, fmt.Errorf("mkdir for %s: %w", dir, err)
 	}
-	return s.exportParquet(ctx, dir, plan.minutes)
+	return s.exportParquet(ctx, dir, plan.minutes, keyed)
 }
 
 // partitionPlan is the archive export's sizing decision: the inputs
@@ -1013,8 +1014,10 @@ func (s *DuckDBShard) planPartitions(ctx context.Context) (partitionPlan, error)
 // and returns it with the number of rows written.
 // If minutes is 0, writes a single file at path+".parquet".
 // Otherwise writes hive-partitioned files, one directory per minutes-wide time
-// bucket, under path/m<minutes>/ (see PartitionMinutes).
-func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes int) (string, int64, error) {
+// bucket, under path/m<minutes>/ (see PartitionMinutes). With keyed, each
+// bucket is also split by (customer, namespace, service, kind) and the files
+// go under path/k<minutes>/ (see IsKeyed). A single file is not split.
+func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes int, keyed bool) (string, int64, error) {
 	if minutes == 0 {
 		outPath := path + ".parquet"
 		res, err := s.db.ExecContext(ctx, fmt.Sprintf("COPY %s TO '%s' (FORMAT PARQUET)", s.source(), outPath))
@@ -1024,10 +1027,14 @@ func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes in
 		n, _ := res.RowsAffected()
 		return outPath, n, nil
 	}
-	dir := fmt.Sprintf("%s/m%d", path, minutes)
+	layout, partitionBy := "m", "_part"
+	if keyed {
+		layout, partitionBy = "k", "customer_id, namespace, service, kind, _part"
+	}
+	dir := fmt.Sprintf("%s/%s%d", path, layout, minutes)
 	sql := fmt.Sprintf(
-		"COPY (SELECT *, %s AS _part FROM %s) TO '%s' (FORMAT PARQUET, PARTITION_BY (_part), OVERWRITE_OR_IGNORE)",
-		partitionExpr(minutes, "ts"), s.source(), dir,
+		"COPY (SELECT *, %s AS _part FROM %s) TO '%s' (FORMAT PARQUET, PARTITION_BY (%s), OVERWRITE_OR_IGNORE)",
+		partitionExpr(minutes, "ts"), s.source(), dir, partitionBy,
 	)
 	res, err := s.db.ExecContext(ctx, sql)
 	if err != nil {

@@ -49,15 +49,11 @@ func runQuery(req QueryRequest, s3cfg *shard.S3Config) (*sql.DB, *sql.Rows, erro
 
 	// Rewrite FROM logs → FROM read_parquet('path').
 	// Glob paths (partitioned archives) enable hive_partitioning for file pruning.
-	var readExpr string
 	sqlText := req.SQL
 	if strings.Contains(req.ParquetPath, "*") {
-		readExpr = fmt.Sprintf("read_parquet('%s', hive_partitioning=true)", req.ParquetPath)
 		sqlText = shard.PruneColdPartitions(sqlText, req.Args, req.ParquetPath)
-	} else {
-		readExpr = fmt.Sprintf("read_parquet('%s')", req.ParquetPath)
 	}
-	query := strings.Replace(sqlText, "FROM logs", "FROM "+readExpr, 1)
+	query := strings.Replace(sqlText, "FROM logs", "FROM "+shard.ParquetReadExpr(req.ParquetPath), 1)
 
 	args := make([]any, len(req.Args))
 	for i, a := range req.Args {

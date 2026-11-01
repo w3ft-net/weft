@@ -302,7 +302,7 @@ func TestPerKey_ExportMatchesColumnsByNameAcrossTables(t *testing.T) {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, n, err := e.exportParquet(context.Background(), out, 0); err != nil || n != 30 {
+	if _, n, err := e.exportParquet(context.Background(), out, 0, false); err != nil || n != 30 {
 		t.Fatalf("export wrote %d rows, err=%v, want 30", n, err)
 	}
 }
@@ -325,7 +325,7 @@ func TestPerKey_ExportSeesEveryRow(t *testing.T) {
 		if err := os.MkdirAll(out, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		_, n, err := e.exportParquet(context.Background(), out, minutes)
+		_, n, err := e.exportParquet(context.Background(), out, minutes, false)
 		if err != nil {
 			t.Fatalf("minutes=%d: %v", minutes, err)
 		}

@@ -31,7 +31,7 @@ func CaptureStats(parquetPath string, s3cfg *S3Config) ([]CustomerStat, error) {
 	}
 	return scanCustomerStats(context.Background(), db, fmt.Sprintf(
 		"SELECT COALESCE(customer_id, 0), MIN(ts), MAX(ts), COUNT(*) FROM %s GROUP BY 1",
-		parquetReadExpr(parquetPath)))
+		ParquetReadExpr(parquetPath)))
 }
 
 // CustomerCutoff is one customer's deletion boundary for a retention
@@ -92,7 +92,7 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 		}
 	}
 
-	src := parquetReadExpr(srcPath)
+	src := ParquetReadExpr(srcPath)
 	// Keep a row when its customer has no cutoff (LEFT JOIN miss → preserve)
 	// or its ts is still within retention. A NULL customer never matches a
 	// cutoff, so it is preserved too.
