@@ -19,11 +19,10 @@ import (
 // In the per-key layout each (customer, namespace, service, kind) has a table
 // of its own, named by logtable.Name, and logs stays as an empty template: it
 // is where migrations land, what new tables are made from, and what a query
-// for a key with no rows reads. log_tables records which keys have a table.
-// A query names its table with a hint (see resolveSource); one with no hint
-// reads every table.
+// for a key with no rows reads. A query names its table with a hint (see
+// resolveSource); one with no hint reads every table.
 //
-// A database picks its layout once. A file that has log_tables is per-key, one
+// A database picks its layout once. A file that has log tables is per-key, one
 // that holds rows in logs is legacy, and only an empty database opened
 // WithPerKeyTables becomes per-key. See docs/plans/per-service-tables.md.
 
@@ -39,9 +38,6 @@ type openOptions struct {
 func WithPerKeyTables() Option {
 	return func(o *openOptions) { o.perKey = true }
 }
-
-const logTablesSQL = `CREATE TABLE IF NOT EXISTS log_tables (
-	table_name TEXT, customer_id BIGINT, namespace TEXT, service TEXT, kind TEXT)`
 
 // tableKey is the key a table holds. kind is already defaulted ("main").
 type tableKey struct {
@@ -69,11 +65,11 @@ func (s *DuckDBShard) PerKey() bool { return s.perKey }
 // initLayout settles which layout db has and loads the tables it knows. It
 // runs once, after the logs template exists and has been migrated.
 func (s *DuckDBShard) initLayout(wantPerKey bool) error {
-	has, err := tableExists(s.db, "log_tables")
+	tables, err := logTables(s.db)
 	if err != nil {
 		return err
 	}
-	if !has {
+	if len(tables) == 0 {
 		if !wantPerKey {
 			return nil
 		}
@@ -84,31 +80,31 @@ func (s *DuckDBShard) initLayout(wantPerKey bool) error {
 		if n > 0 {
 			return nil // rows are in logs; this database stays legacy
 		}
-		if _, err := s.db.Exec(logTablesSQL); err != nil {
-			return fmt.Errorf("create log_tables: %w", err)
-		}
 	}
 	s.perKey = true
-	s.tables = map[string]struct{}{}
-	rows, err := s.db.Query(`SELECT table_name FROM log_tables`)
+	s.tables = tables
+	return nil
+}
+
+// logTables returns the log tables db holds: the tables whose names logtable.Name
+// produces.
+func logTables(db *sql.DB) (map[string]struct{}, error) {
+	rows, err := db.Query(`SELECT table_name FROM duckdb_tables()`)
 	if err != nil {
-		return fmt.Errorf("read log_tables: %w", err)
+		return nil, fmt.Errorf("list tables: %w", err)
 	}
 	defer rows.Close()
+	tables := map[string]struct{}{}
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return err
+			return nil, err
 		}
-		s.tables[name] = struct{}{}
+		if logtable.IsName(name) {
+			tables[name] = struct{}{}
+		}
 	}
-	return rows.Err()
-}
-
-func tableExists(db *sql.DB, name string) (bool, error) {
-	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?`, name).Scan(&n)
-	return n > 0, err
+	return tables, rows.Err()
 }
 
 type columnDef struct{ name, typ string }
@@ -196,23 +192,9 @@ func (s *DuckDBShard) createTable(ctx context.Context, name string, k tableKey) 
 		return nil
 	}
 	// The table is made from createTableSQL, the shape the appender writes, so
-	// column types match exactly. The table and its log_tables row are one
-	// transaction: a table with no row would be unreachable by hint, a row with
-	// no table would break every unhinted query.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("create table for %v: %w", k, err)
-	}
+	// column types match exactly.
 	ddl := strings.Replace(createTableSQL, "IF NOT EXISTS logs", fmt.Sprintf(`IF NOT EXISTS "%s"`, name), 1)
-	if _, err := tx.ExecContext(ctx, ddl); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("create table for %v: %w", k, err)
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO log_tables VALUES (?, ?, ?, ?, ?)`, name, k.customerID, k.namespace, k.service, k.kind); err != nil {
-		tx.Rollback()
-		return fmt.Errorf("record table for %v: %w", k, err)
-	}
-	if err := tx.Commit(); err != nil {
+	if _, err := s.db.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("create table for %v: %w", k, err)
 	}
 	s.tables[name] = struct{}{}

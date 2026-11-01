@@ -104,12 +104,17 @@ rotation turns the current shards read-only, which gives a cleaner comparison: r
 span envs (a 3-segment path reads every env), so an env in the key would turn that path
 into a union over envs the planner cannot list. Customer is in the key because it is the
 row-level-security boundary; the `customer_id` predicate stays on every query as defense in
-depth.
+depth until the final phase drops the column (see Rollout).
 
 **Naming.** A pure function of the key, in a small package the planner and the shard both
-import. Identifiers are customer-supplied and some contain slashes, so the table name is a
-hash (at least 128 bits), always quoted, never interpolated text. Each shard keeps a catalog
-table mapping key to table name for readable diagnostics and for migrations to iterate.
+import. Identifiers are customer-supplied and some contain slashes, and DuckDB compares
+identifiers without regard to case even when quoted (`"Api"` and `"api"` are one table), so
+a name built from the key would join keys. The name is `l_`, a readable form of the key
+(lowercased, non-alphanumerics as `_`, cut to 48 characters), `_`, and 128 bits of a hash of
+the exact key. The readable part is for people looking at a shard; the hash keeps keys apart.
+The shard finds its log tables by that shape (`logtable.IsName`) and keeps no table of them.
+When the key columns are dropped (below), the key moves into a `COMMENT ON TABLE`, created in
+the same statement as the table.
 
 **Planner.** `From{Table: "logs"}` is set in one place, `newSQLBuilder()`
 (`planner/sql.go:197`), before the source is known. The table moves to where the source
@@ -123,7 +128,7 @@ one table. The namespace, service and kind predicates can stay; they become redu
 - Split each ingest batch by key and append to each table (`shard.go:471`).
 - A query naming a table the shard does not have returns zero rows, not an error. Other
   errors still surface.
-- `migrationSteps` assumes one table; loop it over the catalog and over the template.
+- `migrationSteps` assumes one table; loop it over the log tables and over the template.
 - Field facts (`shard.go:800`), the row count and min/max (`shard.go:895`, `shard.go:908`),
   the export (`shard.go:932`, `export.go:102`), the janitor and `weft-admin shardcount`
   work per table.
@@ -161,9 +166,9 @@ last, because:
   caller that relies on that (`weft-admin shardcount`, `service = ? AND raw LIKE ?`) must be
   moved to a hint first.
 - Rows come back from a query with `service` and `kind` set, so the shard must fill them
-  from `log_tables` when it builds the result.
+  from the table's comment when it builds the result.
 - The parquet export and the archive read the columns. The export must write them, taken
-  from `log_tables` per table, so archived data keeps the schema that archive queries
+  from the table comments, so archived data keeps the schema that archive queries
   expect. Parquet archived before the change already has them.
 - `namespace` is constant per table too, so it drops with the other two.
 - `customer_id` drops too (Paul, 2026-11-01). Tenant isolation then rests on the table
@@ -174,7 +179,7 @@ last, because:
   - The unhinted fallback (union of every table) is a cross-tenant read once the column is
     gone. It exists only so un-migrated callers keep working during rollout. In this phase
     an unhinted query on a per-key shard must return an error.
-  - The archive export keeps writing `customer_id` (from `log_tables`), because archive
+  - The archive export keeps writing `customer_id` (from the table comments), because archive
     queries and the hive layout depend on it.
 
 **Tests.** About 306 `FROM logs` statements in 68 test files, nearly all of which go through
