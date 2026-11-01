@@ -186,6 +186,40 @@ last, because:
 the shard, so a shim that resolves `logs` to the hinted table should cover them. Three raw
 `INSERT INTO logs` and four DDL statements need hand edits.
 
+## Cleanup: the migration code goes away
+
+Everything that lets a shard be either layout, and everything that lets the SQL not name
+its table, exists only for the migration. When it is over, the per-key layout is the only
+path. Remove:
+
+- `WithPerKeyTables`, the `--per-key-tables` flag, and the `shardOpts` plumbing through
+  `NewBlankServer`, `NewServerFromIdentity` and `NewSpareServer`. `NewDuckDBShard` always
+  uses the per-key layout.
+- `initLayout`, the `perKey` field and the legacy ingest path (`ingestTable` into `logs`).
+- The hint: `table` on `ExecuteQueryRequest` and `QueryRequest` (mark both numbers
+  `reserved`, never reuse them), `TableQuerier`, `QueryContextTable`. The planner writes
+  `FROM "l_..."` into the SQL.
+- `resolveSource`, the `FROM logs` regex, and the unhinted union fallback. A query that
+  names no table is an error: with `customer_id` dropped it would read every tenant.
+
+Keep `logtable.Name` and `IsName`, per-key ingest, and `logs` as the empty template new
+tables are made from.
+
+Do this only when all three hold:
+
+1. No legacy shard remains. A legacy shard lives until it archives (its window plus the
+   retention period), so this is weeks after the flag goes on, not days. Check the shard
+   registry, not the calendar.
+2. The archive and cold path is settled. Parquet archived from legacy shards keeps the old
+   schema, and the cold shard rewrites `FROM logs` (`cold_shard.go:150`), so a planner that
+   names `"l_..."` needs either different SQL for live and cold shards or an archive split
+   per table. See "Open questions".
+3. Nothing that reads shards directly sends unnamed SQL: `weft-admin shard-count` and the
+   lambda shard (`cmd/lambda-shard/handler.go:60`) must name tables first.
+
+The column drop (see Rollout) goes with this: it needs the same conditions plus the table
+comment holding the key.
+
 ## Expected gain, and what it will not fix
 
 The `stats.log` query would scan its own table, about 20,000 rows, not about 11M. A large
