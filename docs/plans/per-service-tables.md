@@ -186,6 +186,67 @@ last, because:
 the shard, so a shim that resolves `logs` to the hinted table should cover them. Three raw
 `INSERT INTO logs` and four DDL statements need hand edits.
 
+## Archive layout (Paul, 2026-11-01: convert archives first)
+
+Archived shards can be rewritten to a layout that prunes by key, with a switch per archive,
+without touching live shards. It also settles the archive/cold question below.
+
+**Today.** An archive is `<prefix>/<shard>.attempt-N/m<minutes>/_part=<bucket start>/data_0.parquet`,
+or one file for a small shard (`shard/partition.go`). Time is the only partition. Services
+are interleaved inside every file, so the footer statistics can't prune them. Measured on a
+real file (a 20 MiB day bucket of the dogfood archive, 262,209 rows, 3 row groups): the
+statistics say every one of 10 services may be in all 3 row groups, and 9 of 10 really are.
+`shard/stats` is 2.4% of that file's rows, `coordinator/main` 34%, `api/main` 27%, and a
+query for any of them reads the whole file. The prod archive bucket holds 5.2 GiB in
+`40-apps` (two shards, daily files near 500 MiB), small enough to convert in one pass.
+
+**Layout.** Add the key to the hive partitions:
+`PARTITION_BY (customer_id, namespace, service, kind, _part)`, key directories first and
+`_part` last, so `PruneColdPartitions` is unchanged. Probed with DuckDB 1.5.2 on a local
+copy: 32 files, and a query with the planner's bound parameters read 1 of 32
+(`File Filters: service, kind, namespace, customer_id`), with the right rows. So the
+planner's existing predicates prune; the cold path needs no hint, no Lambda request change
+and no compute change.
+
+- Values with `/`, spaces, `'` and `=` are percent-encoded in the directory name
+  (`service=a%2Fb%20c`) and read back whole.
+- The partition columns must be read as `hive_types` (BIGINT, VARCHAR, VARCHAR, VARCHAR). A
+  service named `123` is otherwise typed as a number when every value in the column looks
+  like one. The archive reader is `parquetReadExpr` in `shard/cold_shard.go`, copied in
+  `cmd/lambda-shard/handler.go`; both change, and the Lambda is a separate deploy.
+- A case-insensitive filesystem merges `api` and `Api` into one directory and corrupted a
+  file in the probe. S3 keys are case-sensitive, so prod is unaffected; a dev archive on
+  macOS would not be. If that matters, name the directories with the table name
+  (`logtable.Name`) instead of the raw values.
+- The bucket width is now per archive, but the biggest key sets file size and the rest are
+  small files. 23 keys times a day bucket is about 160 files per weekly shard. Pick the width
+  from the largest key, and settle it with the export code.
+
+**The switch.** A path segment records the layout, as `m<minutes>` records the bucket width.
+An archive without it reads as it does now. Converting is one archive at a time, and rolling
+one back is repointing `parquet_path` at the old object while it is still there.
+
+**Converting.** The janitor already does what is needed: rewrite an archive to a new path,
+record the stats, swap `parquet_path` in Postgres, refresh the registry
+(`RefreshArchivedPath`), and tombstone the old object for GC after `RetentionGCDelay`
+(`logdb/janitor.go`). Conversion is a rewrite with no cutoffs and the new `PARTITION_BY`,
+gated on the layout segment. It must check that the rows written equal the rows read
+(`CompactResult`) and match `shard_archive_stats` before the pointer is swapped.
+
+**The janitor must keep the layout.** `RewriteRetention` writes one file with
+`COPY ... (FORMAT PARQUET)` (`shard/compact.go`). Today that already collapses a partitioned
+archive into a single file on its first pass. It must write the keyed layout, or any
+retention pass undoes the conversion.
+
+**New archives.** A per-key live shard exports each table straight into its key's
+directories (`exportParquet` reads `source()`, the union, today). That avoids building the
+union, which was a memory worry on the 1 GiB shards.
+
+**Risks.** The compactor Lambda has a 15-minute limit and the biggest archive files are
+about 500 MiB each; measure a rewrite of the largest shard before running the fleet. A
+Terraform apply reverts the cold Lambda to a placeholder, so redeploy after (see the cold-
+shard deploy notes). Gain is only for queries that reach into archives, which is unmeasured.
+
 ## Cleanup: the migration code goes away
 
 Everything that lets a shard be either layout, and everything that lets the SQL not name
@@ -213,7 +274,7 @@ Do this only when all three hold:
 2. The archive and cold path is settled. Parquet archived from legacy shards keeps the old
    schema, and the cold shard rewrites `FROM logs` (`cold_shard.go:150`), so a planner that
    names `"l_..."` needs either different SQL for live and cold shards or an archive split
-   per table. See "Open questions".
+   per table. See "Archive layout", which takes the second route.
 3. Nothing that reads shards directly sends unnamed SQL: `weft-admin shard-count` and the
    lambda shard (`cmd/lambda-shard/handler.go:60`) must name tables first.
 
