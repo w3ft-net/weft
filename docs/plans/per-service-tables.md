@@ -166,10 +166,16 @@ last, because:
   from `log_tables` per table, so archived data keeps the schema that archive queries
   expect. Parquet archived before the change already has them.
 - `namespace` is constant per table too, so it drops with the other two.
-- Keep `customer_id`. It is constant per table as well, but it is the tenant boundary: the
-  coordinator's `customer_id` predicate is what stops a wrong table hint from leaking
-  another tenant's rows. DuckDB stores a constant column in a few bytes per row group, so
-  dropping it would save almost nothing and remove the only check behind the hint.
+- `customer_id` drops too (Paul, 2026-11-01). Tenant isolation then rests on the table
+  name, which `logtable.Name` derives from the customer, so the restriction moves to the
+  layer that derives the name. That has consequences:
+  - The coordinator must derive the table only from the authenticated customer, never from
+    user input, and a test must show a query cannot name another tenant's table.
+  - The unhinted fallback (union of every table) is a cross-tenant read once the column is
+    gone. It exists only so un-migrated callers keep working during rollout. In this phase
+    an unhinted query on a per-key shard must return an error.
+  - The archive export keeps writing `customer_id` (from `log_tables`), because archive
+    queries and the hive layout depend on it.
 
 **Tests.** About 306 `FROM logs` statements in 68 test files, nearly all of which go through
 the shard, so a shim that resolves `logs` to the hinted table should cover them. Three raw
