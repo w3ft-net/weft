@@ -241,6 +241,54 @@ func TestKeyedExport_TimePruningStillMatches(t *testing.T) {
 	}
 }
 
+// A retention rewrite of a keyed archive writes a keyed archive. Written as one
+// file it would put every service back in every file and drop the bucket width.
+func TestRewriteRetention_KeepsAKeyedLayout(t *testing.T) {
+	const perKey = 6
+	ds := legacyShardWith(t, keyedFixture, perKey)
+	_, src, _ := exportTo(t, ds, 1440, true)
+
+	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
+	dst := dstDir + "/k1440/**/*.parquet"
+	// Rows are 7 hours apart from 2026-10-14 00:00; customer 1 loses the two
+	// before 14:00 in each of its 5 keys, customer 2 keeps everything.
+	cutoff := time.Date(2026, 10, 14, 14, 0, 0, 0, time.UTC)
+	res, err := RewriteRetention(src, dst, []CustomerCutoff{{CustomerID: 1, Cutoff: cutoff}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RowsKept != 5*4+6 || res.RowsDeleted != 5*2 {
+		t.Fatalf("kept %d, deleted %d; want 26 and 10", res.RowsKept, res.RowsDeleted)
+	}
+	if res.OutputPath != dst || !IsKeyed(res.OutputPath) {
+		t.Fatalf("output path %q is not the keyed destination %q", res.OutputPath, dst)
+	}
+	if minutes, ok := PartitionMinutes(res.OutputPath); !ok || minutes != 1440 {
+		t.Errorf("the bucket width did not survive: %d, %v", minutes, ok)
+	}
+	files, _ := filepath.Glob(filepath.Join(dstDir, "k1440", "customer_id=1/namespace=weft/service=api/kind=main", "*", "data_0.parquet"))
+	if len(files) == 0 {
+		t.Error("the rewrite wrote no directory for weft/api/main")
+	}
+
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n, early int
+	q := "SELECT count(*), count(*) FILTER (WHERE customer_id = 1 AND ts < TIMESTAMP '2026-10-14 14:00:00') FROM " + ParquetReadExpr(dst)
+	if err := db.QueryRow(q).Scan(&n, &early); err != nil {
+		t.Fatal(err)
+	}
+	if n != 26 || early != 0 {
+		t.Errorf("rewritten archive holds %d rows, %d of them expired; want 26 and 0", n, early)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM "+ParquetReadExpr(dst)+" WHERE service = ? AND kind = ? AND customer_id = CAST(? AS BIGINT)", "api", "main", "1").Scan(&n); err != nil || n != 4 {
+		t.Errorf("weft/api/main holds %d rows after the rewrite (err %v), want 4", n, err)
+	}
+}
+
 // The cold shard answers a query the same way from either layout.
 func TestColdShard_KeyedAndTimeOnlyArchivesAnswerAlike(t *testing.T) {
 	ds := legacyShardWith(t, keyedFixture, 6)

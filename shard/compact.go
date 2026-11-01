@@ -120,12 +120,25 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 	}
 	res.Stats = stats
 
+	// A keyed destination (see IsKeyed) is written keyed: the survivors keep
+	// the key and time directories they came from, which the read of a keyed
+	// source supplies as columns. dstPath is then the glob, and the COPY goes
+	// to its directory.
+	copyTo, partitionBy := dstPath, ""
+	if IsKeyed(dstPath) {
+		copyTo = strings.TrimSuffix(dstPath, "/**/*.parquet")
+		partitionBy = ", PARTITION_BY (customer_id, namespace, service, kind, _part), OVERWRITE_OR_IGNORE"
+	}
 	if s3cfg == nil && !strings.HasPrefix(dstPath, "s3://") {
-		if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		parent := filepath.Dir(dstPath)
+		if partitionBy != "" {
+			parent = copyTo
+		}
+		if err := os.MkdirAll(parent, 0755); err != nil {
 			return CompactResult{}, fmt.Errorf("mkdir for %s: %w", dstPath, err)
 		}
 	}
-	if _, err := db.Exec(fmt.Sprintf("COPY (%s) TO '%s' (FORMAT PARQUET)", keep, dstPath)); err != nil {
+	if _, err := db.Exec(fmt.Sprintf("COPY (%s) TO '%s' (FORMAT PARQUET%s)", keep, copyTo, partitionBy)); err != nil {
 		return CompactResult{}, fmt.Errorf("copy survivors to %s: %w", dstPath, err)
 	}
 	res.OutputPath = dstPath

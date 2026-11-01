@@ -390,11 +390,18 @@ func (s ShardStore) shardArchiveStats(shardID string) ([]ShardArchiveStat, error
 	return rows, err
 }
 
-// rewriteDestPath derives a fresh single-file parquet key next to the
-// source, versioned by the rewrite instant so a retry never collides with
-// the object a previous attempt may have written. Handles both the single
-// file (x/s.parquet) and hive glob (x/s/**/*.parquet) source layouts.
+// rewriteDestPath derives a fresh parquet key next to the source, versioned by
+// the rewrite instant so a retry never collides with the object a previous
+// attempt may have written. A keyed archive (x/s.attempt-N/k<minutes>/**/*.parquet)
+// is rewritten as a keyed archive beside it (x/s.attempt-N.r<ns>/k<minutes>/...),
+// because one file would put every service back in every file. Any other
+// layout, the single file (x/s.parquet) or the time-partitioned glob
+// (x/s/**/*.parquet), is rewritten as a single file.
 func rewriteDestPath(old string, now time.Time) string {
+	if minutes, ok := shard.PartitionMinutes(old); ok && shard.IsKeyed(old) {
+		base := strings.TrimSuffix(old, fmt.Sprintf("/k%d/**/*.parquet", minutes))
+		return fmt.Sprintf("%s.r%d/k%d/**/*.parquet", base, now.UnixNano(), minutes)
+	}
 	base := strings.TrimSuffix(old, "/**/*.parquet")
 	base = strings.TrimSuffix(base, ".parquet")
 	return fmt.Sprintf("%s.r%d.parquet", base, now.UnixNano())
