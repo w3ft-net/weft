@@ -168,7 +168,7 @@ func TestPlanRetention_EndToEnd(t *testing.T) {
 	seedArchived("arch-live", live)
 	seedArchived("arch-unmapped", unmapped)
 
-	plan, err := ss.PlanRetention(janitorNow, testGrace)
+	plan, err := ss.PlanRetention(janitorNow, testGrace, false)
 	if err != nil {
 		t.Fatalf("PlanRetention: %v", err)
 	}

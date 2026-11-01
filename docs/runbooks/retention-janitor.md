@@ -5,9 +5,11 @@ job that deletes over-retained customer rows from archived parquet in S3.
 For *why* it works this way (mixed-customer shards → row-level rewrite, not
 object expiry), see [`../plans/retention-janitor.md`](../plans/retention-janitor.md).
 
-> **This permanently deletes customer data.** It is **off by default**
-> (`janitor_enabled = false`). Turn it on per environment only after the
-> compactor Lambda is deployed and validated.
+> **This permanently deletes customer data.** It always runs: there is no
+> on/off setting (the `janitor_enabled` flag was removed once it was live in
+> prod). A new environment needs the compactor Lambda deployed and validated
+> before its coordinator starts, or the janitor falls back to an in-process
+> compactor that is only fit for dev.
 
 ## What it does, at a glance
 
@@ -21,6 +23,8 @@ PlanRetention            classify every ARCHIVED shard from shard_archive_stats
        Delete    all rows expired → tombstone the object, retire the shard (→ GONE)
        Rewrite   mixed → compactor rewrites survivors to a new key, swap
                  parquet_path, refresh stats, tombstone the old key
+       Convert   (only with KEYED_ARCHIVES=1) nothing over-retained but the
+                 archive is not keyed → rewrite it keyed with every row kept
   └─ SweepTombstones      delete S3 objects whose grace (delete_after) elapsed
 ```
 
@@ -63,12 +67,11 @@ and deletion lags the advertised retention by a 7-day grace buffer.
      --cli-binary-format raw-in-base64-out /dev/stdout
    ```
    Expect a JSON body with a `stats` array.
-4. **Flip it on**: set `janitor_enabled = true`, apply, and restart/redeploy
-   the coordinator so `JANITOR_ENABLED=1` reaches it.
+4. **Start it**: deploy the coordinator. It starts the janitor at boot.
 
 ## Verify it's running
 
-- Coordinator log at boot: `coordinator: retention janitor enabled (daily)`
+- Coordinator log at boot: `coordinator: retention janitor started (daily, convert to keyed archives=...)`
   and `janitor: compactor Lambda at <url>`.
 - After a pass: lines like `janitor: purge <shard> (rewrite)` are absent on
   a clean run; errors are logged per-shard without aborting the pass.
@@ -82,7 +85,7 @@ and deletion lags the advertised retention by a 7-day grace buffer.
 
 | Setting | Where | Default | Notes |
 |---|---|---|---|
-| `janitor_enabled` | TF var → `JANITOR_ENABLED` env | `false` | master on/off |
+| `KEYED_ARCHIVES` | env on the coordinator (TF var to add) | unset | `1` makes the pass also convert archives that are not keyed into keyed ones (see below), and write every rewrite keyed |
 | `COMPACTOR_FUNCTION_URL` | SSM blob (TF) | — | unset → in-process compactor (dev) |
 | `RetentionGrace` | `logdb/janitor.go` const | 7d | buffer past advertised retention before deleting |
 | `RetentionGCDelay` | `logdb/janitor.go` const | 1h | tombstone lifetime before GC (covers in-flight reads) |
@@ -115,10 +118,32 @@ and deletion lags the advertised retention by a 7-day grace buffer.
   unexpected `status`/`expires_at`, and the `parquet_tombstones` /
   coordinator logs for what was deleted and when.
 
+## Converting archives to the keyed layout
+
+With `KEYED_ARCHIVES=1` the daily pass rewrites each archive that is not keyed
+into `<shard>.attempt-N.r<ns>/k1440/customer_id=…/namespace=…/service=…/kind=…/_part=…`
+(`docs/plans/per-service-tables.md`, "Archive layout"), so a query for one log
+file opens only that file's directories. Every archive visited by a retention
+rewrite comes out keyed too.
+
+Before turning it on, the **compactor Lambda** and the **cold-shard Lambda**
+must be running this code: an old compactor would collapse a keyed archive back
+into one file, and an old cold shard doesn't pin the key columns' types.
+
+A conversion is swapped in only if the copy holds exactly the rows
+`shard_archive_stats` recorded for the shard and dropped none. If not, the pass
+logs `janitor: purge <shard> (convert): …`, leaves `parquet_path` alone, and
+tombstones what it wrote (`reason = 'convert-failed'`).
+
+To roll one shard back, before its tombstone's `delete_after` passes, point
+`shard_records.parquet_path` at the old object (the tombstone row with
+`reason = 'rewrite'` has the path), delete that tombstone, and restart the
+coordinator. After the grace the old object is gone.
+
 ## Disable / roll back
 
-Set `janitor_enabled = false`, apply, restart the coordinator. The Lambda
-and IAM can stay (idle). Already-deleted data is **not recoverable** — the
+There is no switch to turn the janitor off; stopping it means deploying a
+coordinator without it. Already-deleted data is **not recoverable** — the
 janitor only ever touches S3 parquet, and shard archival no longer keeps
 an EBS snapshot backstop (removed 2026-09-15; parquet in S3 is the sole
 durable copy).
