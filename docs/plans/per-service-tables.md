@@ -103,8 +103,8 @@ rotation turns the current shards read-only, which gives a cleaner comparison: r
 **The key.** (customer_id, namespace, service, kind). `env` stays a column: reader tokens
 span envs (a 3-segment path reads every env), so an env in the key would turn that path
 into a union over envs the planner cannot list. Customer is in the key because it is the
-row-level-security boundary; the `customer_id` predicate stays on every query as defense in
-depth.
+row-level-security boundary. The column goes away in the conversion (see Rollout), so the
+boundary becomes the table name, derived from the authenticated customer.
 
 **Naming.** A pure function of the key, in a small package the planner and the shard both
 import. Identifiers are customer-supplied and some contain slashes, so the table name is a
@@ -139,47 +139,63 @@ been checked.
 
 ## Rollout
 
-Existing shards keep one `logs` table. A shard detects its layout when it opens: an old
-shard keeps `logs`, and a shard created after the change uses per-key tables. Old shards age
-out into archive.
+Decided by Paul, 2026-11-01: take downtime and convert in one step. There is no period with
+two layouts, so the deploy-order rule (old receivers stay correct) does not apply.
 
-The deploy-order rule is that old receivers stay correct. If the planner changed the SQL text
-to name a table, an old shard would fail on it. Instead, add an optional field to the shard
-query carrying the table name. A new shard uses it and rewrites `FROM logs`; an old shard
-ignores it and runs the unchanged SQL. This depends on the shard query proto (not read yet)
-taking an additive field.
+Maintenance window:
 
-**Final phase: drop `service` and `kind` (decided by Paul, 2026-11-01).** Once every live
-shard is per-key, a table's name already says which service and kind it holds, so the two
-columns repeat the same value on every row. Drop them from the keyed tables. This must come
-last, because:
+1. Stop ingest and queries. The coordinator, compute and shards all stop.
+2. Rewrite every shard database that is not yet archived (INGESTING, READ_ONLY, and any in
+   between). For each key in `logs`: create its table, `INSERT ... SELECT` ordered by `ts`,
+   record it in `log_tables`. Then empty `logs` (it stays as the template) and drop
+   `customer_id`, `namespace`, `service` and `kind` from the keyed tables. Ordering by `ts`
+   also clusters each table by time, which the live layout never had.
+3. Deploy the new coordinator, compute and shard together. The planner writes the table into
+   the SQL (`FROM "l_..."`). The shard runs the SQL as written.
+4. Bring everything up and check row counts per key against what step 2 started with.
 
-- Legacy shards still need the columns until they have aged out into archive, and a query
-  sent to one still filters on them. The planner must stop emitting `service`/`kind`
-  predicates only for hinted queries on per-key shards.
-- An unhinted query over the union can no longer tell the services apart. Every remaining
-  caller that relies on that (`weft-admin shardcount`, `service = ? AND raw LIKE ?`) must be
-  moved to a hint first.
-- Rows come back from a query with `service` and `kind` set, so the shard must fill them
-  from `log_tables` when it builds the result.
-- The parquet export and the archive read the columns. The export must write them, taken
-  from `log_tables` per table, so archived data keeps the schema that archive queries
-  expect. Parquet archived before the change already has them.
-- `namespace` is constant per table too, so it drops with the other two.
-- `customer_id` drops too (Paul, 2026-11-01). Tenant isolation then rests on the table
-  name, which `logtable.Name` derives from the customer, so the restriction moves to the
-  layer that derives the name. That has consequences:
-  - The coordinator must derive the table only from the authenticated customer, never from
-    user input, and a test must show a query cannot name another tenant's table.
-  - The unhinted fallback (union of every table) is a cross-tenant read once the column is
-    gone. It exists only so un-migrated callers keep working during rollout. In this phase
-    an unhinted query on a per-key shard must return an error.
-  - The archive export keeps writing `customer_id` (from `log_tables`), because archive
-    queries and the hive layout depend on it.
+**What this removes from the first design:** the `table` wire field, the optional
+`TableQuerier` interface, layout detection (`initLayout`, `WithPerKeyTables`), the unhinted
+union fallback, and the `FROM logs` rewrite (`resolveSource`). The shard has one layout. Kept
+from steps 1 and 2: `logtable.Name`, the per-key ingest, `ensureTables`, `log_tables`, and
+`logs` as the empty template.
 
-**Tests.** About 306 `FROM logs` statements in 68 test files, nearly all of which go through
-the shard, so a shim that resolves `logs` to the hinted table should cover them. Three raw
-`INSERT INTO logs` and four DDL statements need hand edits.
+**Dropped columns.** All four are constant within a table, and the table name carries them.
+Consequences:
+
+- Tenant isolation rests on the table name. The planner must derive it only from the
+  authenticated customer, never from user input, and a test must show a query cannot name
+  another tenant's table.
+- Rows returned by a query still carry `namespace`, `service`, `kind` and `customer_id`; the
+  shard fills them from `log_tables`.
+- The planner stops emitting predicates on the four columns for live shards.
+- `weft-admin shardcount` (`service = ? AND raw LIKE ?`) and the lambda shard
+  (`cmd/lambda-shard/handler.go:60`) are rewritten to name tables.
+
+**Archive.** Archived parquet keeps the old schema, four columns included. The export writes
+them (from `log_tables`, per table) so new archives match. The cold shard rewrites `FROM
+logs` textually (`cold_shard.go:150`), so a planner that names `"l_..."` needs a matching
+rewrite there, and the cold path still needs the service predicates because parquet is not
+split per table. Either the planner emits different SQL for archived shards, or the export
+partitions parquet per table so the cold path can prune by path. This is not settled.
+
+**Risks to check before the window.**
+
+- Shards are `t4g.micro` with 1 GiB RAM. A sorted `INSERT ... SELECT` over a full shard may
+  spill; time it on a restored snapshot first, and take an EBS snapshot of each shard before
+  the rewrite as the rollback.
+- Ingest during the window. Sources must buffer or retry (weftd's journal tailer, Kinesis
+  retention, anything else that posts). Not yet verified.
+- Window length is set by the slowest shard rewrite.
+
+**Missing tables.** The planner cannot see each shard's catalog, so it names tables that a
+shard may not have (a key with no rows yet). The shard must treat that as zero rows and not as
+an error. Leading option: on a "table does not exist" error for a name in the `l_` form, rerun
+against the empty template. Not settled.
+
+**Tests.** About 306 `FROM logs` statements in 68 test files go through the shard and must name
+the table instead (mechanical, with gopatch). Three raw `INSERT INTO logs` and four DDL
+statements need hand edits.
 
 ## Expected gain, and what it will not fix
 
