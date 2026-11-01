@@ -44,6 +44,17 @@ func TestPlanTable_TheCustomerIsPartOfTheName(t *testing.T) {
 	}
 }
 
+// A cron runs the lowered form of a plan, so the table must survive lowering.
+func TestLower_KeepsTheTable(t *testing.T) {
+	lp, err := Lower("cat /log/vimgym/api/main.log | grep error", 2, "bolt", noResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := logtable.Name(2, "vimgym", "api", "main"); lp.Table != want {
+		t.Errorf("LoweredPlan.Table = %q, want %q", lp.Table, want)
+	}
+}
+
 // Anything that does not pin exactly one key leaves the table empty: the shard
 // then has no hint, and the predicates alone pick the rows.
 func TestPlanTable_EmptyUnlessOneKeyIsPinned(t *testing.T) {

@@ -76,6 +76,12 @@ func FanOutToShards(ctx context.Context, req *pb.ExecuteQueryRequest, job shard.
 			for i, a := range strArgs {
 				args[i] = a
 			}
+			// A plan that names the table holding its rows has it passed to a
+			// shard that can use it; the others run sql as written.
+			if tq, ok := sh.(shard.TableQuerier); ok && req.Table != "" {
+				tq.QueryTableToSink(ctx, req.Table, sql, fieldSQL, args, job)
+				return
+			}
 			// A shard that has the field form gets it; one that doesn't (a
 			// cold shard, one from before it) runs sql, whose rows carry the
 			// same fields as a line.

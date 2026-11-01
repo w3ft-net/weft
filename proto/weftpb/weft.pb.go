@@ -725,7 +725,9 @@ type QueryRequest struct {
 	// each row's fields as `field_<N>` columns (and `field_last`, `nf`) in
 	// place of a built-up line; see ResultRow.fields. A shard from before it
 	// ignores the field and runs sql, so sql must stay correct on its own.
-	FieldSql      string `protobuf:"bytes,3,opt,name=field_sql,json=fieldSql,proto3" json:"field_sql,omitempty"`
+	FieldSql string `protobuf:"bytes,3,opt,name=field_sql,json=fieldSql,proto3" json:"field_sql,omitempty"`
+	// table is ExecuteQueryRequest.table, passed through to the shard.
+	Table         string `protobuf:"bytes,4,opt,name=table,proto3" json:"table,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -777,6 +779,13 @@ func (x *QueryRequest) GetArgs() []string {
 func (x *QueryRequest) GetFieldSql() string {
 	if x != nil {
 		return x.FieldSql
+	}
+	return ""
+}
+
+func (x *QueryRequest) GetTable() string {
+	if x != nil {
+		return x.Table
 	}
 	return ""
 }
@@ -1518,8 +1527,14 @@ type ExecuteQueryRequest struct {
 	// rebuilds the record the stage reads. sql stays the plain query for
 	// shards that don't (cold shards, shards from before this), and compute
 	// takes each row in the form it arrives. See docs/plans/field-row-spec.md.
-	FieldSql      string     `protobuf:"bytes,14,opt,name=field_sql,json=fieldSql,proto3" json:"field_sql,omitempty"`
-	FieldSpec     *FieldSpec `protobuf:"bytes,15,opt,name=field_spec,json=fieldSpec,proto3" json:"field_spec,omitempty"`
+	FieldSql  string     `protobuf:"bytes,14,opt,name=field_sql,json=fieldSql,proto3" json:"field_sql,omitempty"`
+	FieldSpec *FieldSpec `protobuf:"bytes,15,opt,name=field_spec,json=fieldSpec,proto3" json:"field_spec,omitempty"`
+	// table, when set, names the table on a shard with a table per log source
+	// that holds every row this query reads (planner.QueryPlan.Table). A shard
+	// from before the layout, or a cold shard, ignores it and runs sql, so sql
+	// must stay correct on its own. Empty = no hint. See
+	// docs/plans/per-service-tables.md.
+	Table         string `protobuf:"bytes,16,opt,name=table,proto3" json:"table,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1650,6 +1665,13 @@ func (x *ExecuteQueryRequest) GetFieldSpec() *FieldSpec {
 		return x.FieldSpec
 	}
 	return nil
+}
+
+func (x *ExecuteQueryRequest) GetTable() string {
+	if x != nil {
+		return x.Table
+	}
+	return ""
 }
 
 // GroupSpec says the shard sql groups each shard's rows (see group).
@@ -4463,11 +4485,12 @@ const file_weft_proto_rawDesc = "" +
 	"\x0emax_ts_unix_ns\x18\x03 \x01(\x03R\vmaxTsUnixNs\x12\x1b\n" +
 	"\trow_count\x18\x04 \x01(\x03R\browCountJ\x04\b\x01\x10\x02R\bcustomer\";\n" +
 	"\x14IngestStreamResponse\x12#\n" +
-	"\rrows_received\x18\x01 \x01(\x03R\frowsReceived\"Q\n" +
+	"\rrows_received\x18\x01 \x01(\x03R\frowsReceived\"g\n" +
 	"\fQueryRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12\x12\n" +
 	"\x04args\x18\x02 \x03(\tR\x04args\x12\x1b\n" +
-	"\tfield_sql\x18\x03 \x01(\tR\bfieldSql\"\xd5\x02\n" +
+	"\tfield_sql\x18\x03 \x01(\tR\bfieldSql\x12\x14\n" +
+	"\x05table\x18\x04 \x01(\tR\x05table\"\xd5\x02\n" +
 	"\tResultRow\x12\x1d\n" +
 	"\bline_num\x18\x01 \x01(\x03B\x02\x18\x01R\alineNum\x12\x10\n" +
 	"\x03raw\x18\x02 \x01(\tR\x03raw\x12\x1c\n" +
@@ -4534,7 +4557,7 @@ const file_weft_proto_rawDesc = "" +
 	"\bservices\x18\x05 \x03(\tR\bservices\x12\x10\n" +
 	"\x03sql\x18\x06 \x01(\tR\x03sql\x12\x12\n" +
 	"\x04args\x18\a \x03(\tR\x04args\x12\x1b\n" +
-	"\tfield_sql\x18\b \x01(\tR\bfieldSql\"\xe4\x03\n" +
+	"\tfield_sql\x18\b \x01(\tR\bfieldSql\"\xfa\x03\n" +
 	"\x13ExecuteQueryRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12-\n" +
 	"\x06shards\x18\x02 \x03(\v2\x15.weft.ShardDescriptorR\x06shards\x12\x16\n" +
@@ -4552,7 +4575,8 @@ const file_weft_proto_rawDesc = "" +
 	"\x05group\x18\r \x01(\v2\x0f.weft.GroupSpecR\x05group\x12\x1b\n" +
 	"\tfield_sql\x18\x0e \x01(\tR\bfieldSql\x12.\n" +
 	"\n" +
-	"field_spec\x18\x0f \x01(\v2\x0f.weft.FieldSpecR\tfieldSpecJ\x04\b\x06\x10\aR\fshard_secret\"\xc5\x01\n" +
+	"field_spec\x18\x0f \x01(\v2\x0f.weft.FieldSpecR\tfieldSpec\x12\x14\n" +
+	"\x05table\x18\x10 \x01(\tR\x05tableJ\x04\b\x06\x10\aR\fshard_secret\"\xc5\x01\n" +
 	"\tGroupSpec\x12)\n" +
 	"\x06render\x18\x01 \x01(\x0e2\x11.weft.GroupRenderR\x06render\x12&\n" +
 	"\x05order\x18\x02 \x01(\x0e2\x10.weft.GroupOrderR\x05order\x12\x14\n" +

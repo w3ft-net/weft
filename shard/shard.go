@@ -41,6 +41,16 @@ type FieldQuerier interface {
 	QueryFieldsToSink(ctx context.Context, sql, fieldSQL string, args []any, sink RowSink)
 }
 
+// TableQuerier is a shard that can be told which table holds every row a query
+// reads (planner.QueryPlan.Table). A shard with a table per log source reads
+// just that table; one without ignores the name and runs the SQL as written.
+// fieldSQL, when set, runs in place of sql as in FieldQuerier. Compute asks a
+// shard that has it when the plan names a table and otherwise queries as
+// before, so sql must be correct on its own.
+type TableQuerier interface {
+	QueryTableToSink(ctx context.Context, table, sql, fieldSQL string, args []any, sink RowSink)
+}
+
 // Shard is the interface the coordinator uses to interact with a shard node.
 // Shards are dumb storage — the coordinator manages time windows and routing.
 //
@@ -441,14 +451,17 @@ func (s *DuckDBShard) Checkpoint(ctx context.Context) error {
 // sends a sentinel. If the query fails, the sentinel is still sent so the
 // compute job doesn't hang.
 func (s *DuckDBShard) QueryToSink(ctx context.Context, query string, args []any, sink RowSink) {
-	s.QueryTableToSink(ctx, "", query, args, sink)
+	s.QueryTableToSink(ctx, "", query, "", args, sink)
 }
 
 // QueryTableToSink is QueryToSink for a query whose table the planner named;
-// see QueryContextTable.
-func (s *DuckDBShard) QueryTableToSink(ctx context.Context, table, query string, args []any, sink RowSink) {
+// see QueryContextTable. fieldSQL, when set, runs in place of query.
+func (s *DuckDBShard) QueryTableToSink(ctx context.Context, table, query, fieldSQL string, args []any, sink RowSink) {
 	defer sink.SendSentinel(s.id)
 
+	if fieldSQL != "" {
+		query = fieldSQL
+	}
 	rows, err := s.QueryContextTable(ctx, table, query, args...)
 	if err != nil {
 		weftsdk.Errorf(ctx, "shard %s: QueryToSink error: %v (sql=%s args=%v)", s.id, err, query, args)

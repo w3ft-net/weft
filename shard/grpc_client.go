@@ -305,21 +305,28 @@ func (s *GRPCShard) queryOnce(ctx context.Context, sql string, args []any) ([]*p
 // reaches the sink, a retry would double-send, so a mid-stream failure
 // fails the shard's part of the query.
 func (s *GRPCShard) QueryToSink(ctx context.Context, sql string, args []any, sink RowSink) {
-	s.queryToSink(ctx, sql, "", args, sink)
+	s.queryToSink(ctx, "", sql, "", args, sink)
 }
 
 // QueryFieldsToSink is QueryToSink with the query's field form for a shard that
 // understands it; a shard from before it runs sql. See FieldQuerier.
 func (s *GRPCShard) QueryFieldsToSink(ctx context.Context, sql, fieldSQL string, args []any, sink RowSink) {
-	s.queryToSink(ctx, sql, fieldSQL, args, sink)
+	s.queryToSink(ctx, "", sql, fieldSQL, args, sink)
 }
 
-func (s *GRPCShard) queryToSink(ctx context.Context, sql, fieldSQL string, args []any, sink RowSink) {
+// QueryTableToSink is QueryToSink with the table the plan says holds the rows,
+// and the field form if there is one. A shard from before the table field
+// ignores it and runs sql. See TableQuerier.
+func (s *GRPCShard) QueryTableToSink(ctx context.Context, table, sql, fieldSQL string, args []any, sink RowSink) {
+	s.queryToSink(ctx, table, sql, fieldSQL, args, sink)
+}
+
+func (s *GRPCShard) queryToSink(ctx context.Context, table, sql, fieldSQL string, args []any, sink RowSink) {
 	defer sink.SendSentinel(s.id)
 
 	rowsSent := 0
 	err := s.call(ctx, "QueryToSink", true, func() (bool, error) {
-		n, err := s.queryToSinkOnce(ctx, sql, fieldSQL, args, sink)
+		n, err := s.queryToSinkOnce(ctx, table, sql, fieldSQL, args, sink)
 		rowsSent += n
 		return n > 0, err
 	})
@@ -338,8 +345,8 @@ func (s *GRPCShard) queryToSink(ctx context.Context, sql, fieldSQL string, args 
 // Returns (rowsSent, err); err==nil means EOF after streaming
 // completed. A non-nil err with rowsSent==0 is safe to retry; with
 // rowsSent>0 it isn't.
-func (s *GRPCShard) queryToSinkOnce(ctx context.Context, sql, fieldSQL string, args []any, sink RowSink) (int, error) {
-	stream, err := s.client.Query(ctx, &pb.QueryRequest{Sql: sql, FieldSql: fieldSQL, Args: anyArgsToStrings(args)})
+func (s *GRPCShard) queryToSinkOnce(ctx context.Context, table, sql, fieldSQL string, args []any, sink RowSink) (int, error) {
+	stream, err := s.client.Query(ctx, &pb.QueryRequest{Sql: sql, FieldSql: fieldSQL, Table: table, Args: anyArgsToStrings(args)})
 	if err != nil {
 		return 0, err
 	}

@@ -752,6 +752,7 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:               lp.DirectShardSQL,
 		FieldSql:          lp.FieldSQL,
+		Table:             lp.Table,
 		FieldSpec:         compute.FieldSpecToProto(lp.FieldSpec),
 		Args:              argStrs,
 		Shards:            descs,
@@ -1180,6 +1181,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
 		Sql:               directSQL,
 		FieldSql:          run.FieldSQL,
+		Table:             plan.Table, // the base plan's: the exact variant reads the same source
 		FieldSpec:         compute.FieldSpecToProto(run.FieldSpec),
 		Args:              argStrs,
 		Shards:            descs,

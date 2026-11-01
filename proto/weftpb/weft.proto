@@ -104,6 +104,8 @@ message QueryRequest {
   // place of a built-up line; see ResultRow.fields. A shard from before it
   // ignores the field and runs sql, so sql must stay correct on its own.
   string field_sql = 3;
+  // table is ExecuteQueryRequest.table, passed through to the shard.
+  string table = 4;
 }
 
 // ResultRow is the query result type — shards return (raw, ts).
@@ -332,6 +334,12 @@ message ExecuteQueryRequest {
   // takes each row in the form it arrives. See docs/plans/field-row-spec.md.
   string field_sql = 14;
   FieldSpec field_spec = 15;
+  // table, when set, names the table on a shard with a table per log source
+  // that holds every row this query reads (planner.QueryPlan.Table). A shard
+  // from before the layout, or a cold shard, ignores it and runs sql, so sql
+  // must stay correct on its own. Empty = no hint. See
+  // docs/plans/per-service-tables.md.
+  string table = 16;
 }
 
 // GroupRender is what compute prints for each group it merged.

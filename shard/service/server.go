@@ -266,7 +266,7 @@ func (s *Server) Query(req *pb.QueryRequest, stream pb.ShardQuery_QueryServer) e
 	if req.FieldSql != "" {
 		sql = req.FieldSql
 	}
-	rows, err := ds.QueryContext(ctx, sql, stringArgsToAny(req.Args)...)
+	rows, err := ds.QueryContextTable(ctx, req.Table, sql, stringArgsToAny(req.Args)...)
 	if err != nil {
 		span.RecordError(err)
 		weftsdk.Errorf(ctx, "shard %s: query error: %v (sql=%s args=%v)", s.id, err, sql, req.Args)
