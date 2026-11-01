@@ -276,6 +276,37 @@ func TestPerKey_ReopenAddsColumnsATableLacks(t *testing.T) {
 	}
 }
 
+// A table that lost a column and got it back on reopen has it last, so the
+// tables of a shard disagree on column order. Reading them together, as the
+// export does, must match columns by name.
+func TestPerKey_ExportMatchesColumnsByNameAcrossTables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.duckdb")
+	s := openPerKey(t, path)
+	ingestAll(t, s)
+	if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE "%s" DROP COLUMN pod`, pkStats.table())); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	r, err := NewDuckDBShard("pk", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+
+	e, err := OpenForExport("pk", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	out := filepath.Join(t.TempDir(), "out")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, n, err := e.exportParquet(context.Background(), out, 0); err != nil || n != 30 {
+		t.Fatalf("export wrote %d rows, err=%v, want 30", n, err)
+	}
+}
+
 // The archive export opens the database without NewDuckDBShard. If it did not
 // see the per-key tables it would export the empty template and report success.
 func TestPerKey_ExportSeesEveryRow(t *testing.T) {

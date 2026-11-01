@@ -39,6 +39,7 @@ func main() {
 	coordAddr := flag.String("coordinator-addr", "", "coordinator gRPC address for heartbeats")
 	hbInterval := flag.Duration("heartbeat-interval", 10*time.Second, "heartbeat interval")
 	volumeHelper := flag.String("volume-helper", defaultVolumeHelper, "root helper (run via sudo) that mounts and unmounts the data volume; absent = no volume management (dev/container)")
+	perKeyTables := flag.Bool("per-key-tables", false, "keep each log source in a table of its own in a new, empty shard database; a database that already holds rows keeps its layout (docs/plans/per-service-tables.md)")
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {
@@ -54,6 +55,11 @@ func main() {
 		vol = hostVolume{helper: *volumeHelper}
 	}
 
+	var shardOpts []shard.Option
+	if *perKeyTables {
+		shardOpts = append(shardOpts, shard.WithPerKeyTables())
+	}
+
 	// Try to start from an existing identity on disk. If shard.json is
 	// missing we start in blank mode and wait for the coordinator to
 	// christen us via Configure.
@@ -66,19 +72,19 @@ func main() {
 			log.Fatalf("spare mode needs the volume helper at %s", *volumeHelper)
 		}
 		weftsdk.Infof(context.Background(), "starting as a warm-pool spare; waiting for a volume")
-		srv = shardsvc.NewSpareServer(*dataDir, dbPath, vol)
+		srv = shardsvc.NewSpareServer(*dataDir, dbPath, vol, shardOpts...)
 		go activateWhenAttached(srv)
 	} else if id, err := shardIdentityHint(*dataDir); err != nil {
 		log.Fatalf("inspect shard.json: %v", err)
 	} else if id != "" {
 		weftsdk.Infof(context.Background(), "found existing identity %s — opening db at %s", id, dbPath)
-		srv, err = shardsvc.NewServerFromIdentity(*dataDir, dbPath)
+		srv, err = shardsvc.NewServerFromIdentity(*dataDir, dbPath, shardOpts...)
 		if err != nil {
 			log.Fatalf("reopen from identity: %v", err)
 		}
 	} else {
 		weftsdk.Infof(context.Background(), "no shard.json in %s — starting blank, awaiting Configure", *dataDir)
-		srv = shardsvc.NewBlankServer(*dataDir, dbPath)
+		srv = shardsvc.NewBlankServer(*dataDir, dbPath, shardOpts...)
 	}
 	if srv.Volume == nil {
 		srv.Volume = vol

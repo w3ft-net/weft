@@ -53,6 +53,7 @@ type Server struct {
 	queries   map[*gatedQuery]struct{} // admitted queries, which Pause may cut
 	spare     bool                     // a warm-pool instance not yet given a volume
 	released  bool                     // the volume is not mounted (a spare, or after Pause)
+	shardOpts []shard.Option           // how every database this server opens is configured
 
 	// CfgPtr holds the live runtime config. Consulted by Query to pick
 	// up the current SHARD_QUERY_TIMEOUT_SECONDS on every request. Nil
@@ -82,14 +83,14 @@ func NewServer(s *shard.DuckDBShard) *Server {
 // yet. Calls to Query/Ingest fail until Configure is invoked. dataDir is
 // where shard.json gets written; dbPath is where the DuckDB file will be
 // created on Configure.
-func NewBlankServer(dataDir, dbPath string) *Server {
-	return &Server{dataDir: dataDir, dbPath: dbPath}
+func NewBlankServer(dataDir, dbPath string, opts ...shard.Option) *Server {
+	return &Server{dataDir: dataDir, dbPath: dbPath, shardOpts: opts}
 }
 
 // NewServerFromIdentity reads shard.json from dataDir, opens the DuckDB
 // at dbPath, and returns a configured Server. Use when the shard restarts
 // against an existing EBS volume.
-func NewServerFromIdentity(dataDir, dbPath string) (*Server, error) {
+func NewServerFromIdentity(dataDir, dbPath string, opts ...shard.Option) (*Server, error) {
 	id, err := shard.LoadIdentity(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("load identity: %w", err)
@@ -97,11 +98,12 @@ func NewServerFromIdentity(dataDir, dbPath string) (*Server, error) {
 	if id == nil {
 		return nil, fmt.Errorf("no shard.json in %s", dataDir)
 	}
-	ds, err := shard.NewDuckDBShard(id.ShardID, dbPath)
+	ds, err := shard.NewDuckDBShard(id.ShardID, dbPath, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb at %s: %w", dbPath, err)
 	}
 	return &Server{
+		shardOpts:      opts,
 		shard:          ds,
 		id:             id.ShardID,
 		apps:           id.Apps,
@@ -166,7 +168,7 @@ func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.C
 
 	if s.dataDir == "" {
 		// In-process test mode: no persistence, in-memory DB.
-		ds, err := shard.NewDuckDBShard(req.ShardId, "")
+		ds, err := shard.NewDuckDBShard(req.ShardId, "", s.shardOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("create shard: %w", err)
 		}
@@ -193,7 +195,7 @@ func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.C
 		return nil, fmt.Errorf("persist identity: %w", err)
 	}
 
-	ds, err := shard.NewDuckDBShard(req.ShardId, s.dbPath)
+	ds, err := shard.NewDuckDBShard(req.ShardId, s.dbPath, s.shardOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb at %s: %w", s.dbPath, err)
 	}
