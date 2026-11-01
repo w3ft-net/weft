@@ -149,6 +149,25 @@ query carrying the table name. A new shard uses it and rewrites `FROM logs`; an 
 ignores it and runs the unchanged SQL. This depends on the shard query proto (not read yet)
 taking an additive field.
 
+**Final phase: drop `service` and `kind` (decided by Paul, 2026-11-01).** Once every live
+shard is per-key, a table's name already says which service and kind it holds, so the two
+columns repeat the same value on every row. Drop them from the keyed tables. This must come
+last, because:
+
+- Legacy shards still need the columns until they have aged out into archive, and a query
+  sent to one still filters on them. The planner must stop emitting `service`/`kind`
+  predicates only for hinted queries on per-key shards.
+- An unhinted query over the union can no longer tell the services apart. Every remaining
+  caller that relies on that (`weft-admin shardcount`, `service = ? AND raw LIKE ?`) must be
+  moved to a hint first.
+- Rows come back from a query with `service` and `kind` set, so the shard must fill them
+  from `log_tables` when it builds the result.
+- The parquet export and the archive read the columns. The export must write them, taken
+  from `log_tables` per table, so archived data keeps the schema that archive queries
+  expect. Parquet archived before the change already has them.
+- `customer_id` and `namespace` are constant per table as well, but were not part of the
+  decision. Leave them until asked.
+
 **Tests.** About 306 `FROM logs` statements in 68 test files, nearly all of which go through
 the shard, so a shim that resolves `logs` to the hinted table should cover them. Three raw
 `INSERT INTO logs` and four DDL statements need hand edits.
