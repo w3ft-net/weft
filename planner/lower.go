@@ -110,6 +110,7 @@ type LoweredPlan struct {
 	SourceNamespace   string        `json:"source_namespace,omitempty"`
 	SourceService     string        `json:"source_service,omitempty"`
 	SourceKind        string        `json:"source_kind,omitempty"`
+	Table             string        `json:"table,omitempty"`
 	AlertArgs         []string      `json:"alert_args,omitempty"`
 	RedirectTarget    string        `json:"redirect_target,omitempty"`
 	RedirectAppend    bool          `json:"redirect_append,omitempty"`
@@ -230,6 +231,7 @@ func Lower(pipeline string, customerID int64, tier string, resolveBin BinResolve
 		SourceNamespace:   plan.SourceNamespace,
 		SourceService:     plan.SourceService,
 		SourceKind:        plan.SourceKind,
+		Table:             plan.Table,
 		AlertArgs:         plan.AlertArgs,
 		RedirectTarget:    plan.RedirectTarget,
 		RedirectAppend:    plan.RedirectAppend,

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
+
+	"github.com/graybeardcorp/weft/logtable"
 )
 
 // QueryPlan is the result of analyzing a weft pipeline. ShardSQL is the
@@ -71,6 +73,11 @@ type QueryPlan struct {
 	SourceService    string   // service column value — routing ("" = all services in the namespace)
 	SourceKind       string   // kind column value — live-tail matching ("" = all kinds)
 	AlertArgs        []string // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
+
+	// Table names the shard table that holds the source's rows, when the source
+	// pins exactly one (customer, namespace, service, kind). "" = no hint: the
+	// predicates alone pick the rows. See sourceTable.
+	Table string
 
 	// Direct-to-compute mode (see docs/plans/direct-to-compute.md §3).
 	// Populated by sort/limit fusion (passes.go) from the compute stages'
@@ -481,6 +488,7 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 		SourceNamespaces:  info.source.namespaces,
 		SourceService:     firstOrEmpty(info.source.services),
 		SourceKind:        firstOrEmpty(info.source.kinds),
+		Table:             sourceTable(customerID, info.source),
 		AlertArgs:         alertArgs,
 		ShardOrderBy:      mergeOrderBy,
 		ShardLimit:        c.shardLimit,
@@ -489,6 +497,23 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 		RedirectTarget:    redirTarget,
 		RedirectAppend:    redirAppend,
 	}, c, nil
+}
+
+// sourceTable names the shard table that holds a cat, head or tail source's
+// rows, or "" when the source does not pin exactly one (customer, namespace,
+// service, kind): several files or a glob, or a trace. The env is a column and
+// stays a predicate, so it is not part of the name. The customer comes from
+// the authenticated query, never from the pipeline.
+func sourceTable(customerID int64, src sourceInfo) string {
+	switch src.cmd {
+	case "cat", "head", "tail":
+	default:
+		return ""
+	}
+	if customerID == 0 || len(src.namespaces) != 1 || len(src.services) != 1 || len(src.kinds) != 1 {
+		return ""
+	}
+	return logtable.Name(customerID, src.namespaces[0], src.services[0], src.kinds[0])
 }
 
 // addSourcePredicates applies the source's filters: each pseudofile
