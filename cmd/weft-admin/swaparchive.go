@@ -13,7 +13,7 @@ import (
 )
 
 // swapArchive points an ARCHIVED shard at a converted copy of its archive, the
-// last step of scripts/convert-archives.py. It reads the shard first and stops
+// last step of scripts/convert_archives.py. It reads the shard first and stops
 // unless it is at oldPath (or already at newPath), and without yes it only says
 // what it would do.
 func swapArchive(ctx context.Context, client pb.WeftAdminClient, shardID, oldPath, newPath string, yes bool, out io.Writer) error {

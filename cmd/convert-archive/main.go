@@ -70,18 +70,20 @@ func convertArchive(m shard.ExportManifest, root, out string, now time.Time) (co
 	return res, nil
 }
 
-// convertArchiveCmd is `weft-admin convert-archive`: the conversion step of
-// scripts/convert-archives.py, run on a machine with the disk and memory for it.
-func convertArchiveCmd(args []string) {
+// convert-archive is the conversion step of scripts/convert_archives.py, run on
+// a machine with the disk and memory for it. It is its own binary, not a
+// weft-admin subcommand: weft-admin is built without cgo for the coordinator
+// AMI, and the conversion needs DuckDB.
+func main() {
 	fs := flag.NewFlagSet("convert-archive", flag.ExitOnError)
 	manifestPath := fs.String("manifest", "", "the shard's export manifest (JSON), downloaded from <prefix>/_manifests/")
 	root := fs.String("root", "", "directory holding the downloaded archive, mirroring the bucket")
 	out := fs.String("out", "", "directory to write the copy to, mirroring the bucket")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
 	if *manifestPath == "" || *root == "" || *out == "" {
-		fmt.Fprintln(os.Stderr, "usage: weft-admin convert-archive --manifest FILE --root DIR --out DIR")
+		fmt.Fprintln(os.Stderr, "usage: convert-archive --manifest FILE --root DIR --out DIR")
 		os.Exit(2)
 	}
 	b, err := os.ReadFile(*manifestPath)

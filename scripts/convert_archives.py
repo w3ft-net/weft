@@ -3,7 +3,7 @@
 
 docs/plans/per-service-tables.md, "Archive layout", explains the layout. This
 reads each shard's export manifest from the cold bucket, and for every archive
-not yet sized: downloads it, converts it with `weft-admin convert-archive`
+not yet sized: downloads it, converts it with `convert-archive`
 (which checks the copy against the original, key by key, and against the
 manifest), uploads the copy beside the original, checks the upload, and swaps
 each coordinator's shard to it with `weft-admin swap-archive`. The old archive
@@ -37,7 +37,8 @@ BUCKET = "weft-cold-220664822695"
 SIZED = re.compile(r"/sized/\*\*/\*\.parquet$")
 LAYOUT_DIR = re.compile(r"/(m[1-9][0-9]*|k[1-9][0-9]*|sized)$")
 STAGES = ("plan", "convert", "apply")
-SWAP_OK = ("swapped to", "already at the new path")
+SPILL_BYTES = 4 << 30
+SWAP_OK =("swapped to", "already at the new path")
 
 
 class Runner:
@@ -145,8 +146,8 @@ def download(r, bucket, m, root):
         r.stream(["kevcons", "aws", "s3", "cp", src, dest, "--only-show-errors"])
 
 
-def convert(r, weft_admin, manifest_file, root, out):
-    stdout = r.run([weft_admin, "convert-archive", "--manifest", manifest_file, "--root", root, "--out", out])
+def convert(r, converter, manifest_file, root, out):
+    stdout = r.run([converter, "--manifest", manifest_file, "--root", root, "--out", out])
     res = json.loads(stdout.strip().splitlines()[-1])
     if res["status"] != "converted":
         raise RuntimeError(f"unexpected conversion result: {res}")
@@ -214,7 +215,8 @@ def process(r, args, state, url, m):
         log(f"{shard_id}: already swapped to {st['result']['new_path']}")
         return
     if not st.get("converted"):
-        need = 2 * args.size_hint(m)
+        # the download, the converted copy, and room for DuckDB to spill
+        need = 2 * args.size_hint(m) + SPILL_BYTES
         free = shutil.disk_usage(args.workdir).free
         if free < need:
             raise RuntimeError(f"{shard_id}: needs about {need >> 20} MiB free, {free >> 20} MiB available in {args.workdir}")
@@ -223,7 +225,7 @@ def process(r, args, state, url, m):
         with open(manifest_file, "w") as f:
             json.dump(m, f)
         log(f"{shard_id}: converting {m['rows']} rows")
-        st["result"] = convert(r, args.weft_admin, manifest_file, root, out)
+        st["result"] = convert(r, args.convert_archive, manifest_file, root, out)
         st["converted"] = True
         state.save()
         res = st["result"]
@@ -253,14 +255,15 @@ def main(argv=None, r=None):
     ap.add_argument("--shard", action="append", default=[], help="only this shard id (repeatable)")
     ap.add_argument("--bucket", default=BUCKET)
     ap.add_argument("--workdir", default=os.path.expanduser("~/weft-archive-conversion"))
-    ap.add_argument("--weft-admin", default=None, help="path to a weft-admin built from this tree (default: build one in the workdir)")
+    ap.add_argument("--convert-archive", default=None, help="path to a convert-archive built from this tree (default: build one in the workdir)")
     ap.add_argument("--keep", action="store_true", help="keep the downloaded and converted files after a swap")
     args = ap.parse_args(argv)
     r = r or Runner()
     os.makedirs(args.workdir, exist_ok=True)
 
     todo = plan(list_manifests(r, args.bucket), set(args.shard))
-    args.size_hint = lambda m: m.get("db_bytes") or m["rows"] * 200  # bytes: the shard database, an upper bound on its archive
+    # bytes: an upper bound on the archive, from the shard database or ~200 bytes a row, whichever is larger
+    args.size_hint = lambda m: max(m.get("db_bytes") or 0, m["rows"] * 200)
     if not todo:
         log("nothing to convert: every archive is already sized")
         return 0
@@ -270,10 +273,10 @@ def main(argv=None, r=None):
         log(f"{len(todo)} archives to convert. Re-run with --stage convert, then --stage apply.")
         return 0
 
-    if not args.weft_admin:
-        args.weft_admin = os.path.join(args.workdir, "weft-admin")
-        log(f"building {args.weft_admin}")
-        r.stream(["go", "build", "-o", args.weft_admin, "./cmd/weft-admin"])
+    if not args.convert_archive:
+        args.convert_archive = os.path.join(args.workdir, "convert-archive")
+        log(f"building {args.convert_archive}")
+        r.stream(["go", "build", "-o", args.convert_archive, "./cmd/convert-archive"])
     state = State(os.path.join(args.workdir, "state.json"))
     failed = []
     for url, m in todo:

@@ -169,7 +169,7 @@ class MainTests(unittest.TestCase):
         r = FakeRunner(self.rules)
         self.assertEqual(ca.main(["--workdir", self.dir], r), 0)
         self.assertFalse(r.saw("sync"))
-        self.assertFalse(r.saw("weft-admin"))
+        self.assertFalse(r.saw("convert-archive"))
         self.assertFalse(os.path.exists(os.path.join(self.dir, "state.json")))
 
     def test_nothing_to_do_when_everything_is_sized(self):
@@ -183,13 +183,13 @@ class MainTests(unittest.TestCase):
             json.dump({"shard-1": {"converted": True, "uploaded": True, "swapped": True,
                                    "result": {"new_path": f"s3://{B}/x.r1/sized/**/*.parquet"}}}, f)
         r = FakeRunner(self.rules)
-        self.assertEqual(ca.main(["--workdir", self.dir, "--stage", "apply", "--weft-admin", "/bin/true"], r), 0)
+        self.assertEqual(ca.main(["--workdir", self.dir, "--stage", "apply", "--convert-archive", "/bin/true"], r), 0)
         self.assertFalse(r.saw("sync"))
         self.assertFalse(r.saw("send-command"))
 
     def test_a_failure_is_reported_and_the_run_exits_nonzero(self):
         r = FakeRunner(self.rules + [("convert-archive", RuntimeError("the download is not the archive the manifest describes"))])
-        code = ca.main(["--workdir", self.dir, "--stage", "convert", "--weft-admin", "/bin/weft-admin"], r)
+        code = ca.main(["--workdir", self.dir, "--stage", "convert", "--convert-archive", "/bin/convert-archive"], r)
         self.assertEqual(code, 1)
         self.assertFalse(r.saw("send-command"))
 

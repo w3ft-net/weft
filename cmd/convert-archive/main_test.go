@@ -14,7 +14,7 @@ import (
 
 // convert-archive turns a downloaded archive into a sized copy and checks the
 // copy against the original and against the export manifest. The download and the
-// upload around it are the script's (scripts/convert-archives.py).
+// upload around it are the script's (scripts/convert_archives.py).
 
 // downloaded writes a small archive under root as the script's download would
 // leave it (root mirrors the bucket) and returns a manifest that describes it.

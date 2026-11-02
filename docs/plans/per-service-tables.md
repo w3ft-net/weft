@@ -275,7 +275,7 @@ workstation (stdlib Python; every AWS call goes through `kevcons aws`):
 
 - `--stage plan` (the default) reads each shard's export manifest from `_manifests/` and
   lists what is not yet sized. Nothing is downloaded.
-- `--stage convert` downloads each archive, converts it with `weft-admin convert-archive`
+- `--stage convert` downloads each archive, converts it with `convert-archive` (`cmd/convert-archive`, its own binary because `weft-admin` is built without cgo)
   and verifies it. The command refuses a download that does not match the manifest (an
   incomplete one), then checks the copy against the original key by key (count, a hash of
   every line, first and last time) and against the manifest's row and customer counts.
