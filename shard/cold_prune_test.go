@@ -35,6 +35,16 @@ func TestPruneColdPartitions(t *testing.T) {
 			args: []string{"2026-10-14 12:05:00.123456"},
 			want: "SELECT raw, ts FROM logs WHERE (ts <= CAST(? AS TIMESTAMP) AND _part <= '2026-10-14 12:05:00.123456')",
 		},
+		{
+			// A sized archive: every key has its own width in _w, so the low bound is
+			// that a row's bucket ends after the bound, whatever the width. The high
+			// bound is the same as in any archive.
+			path: "s3://b/x/shard.attempt-1/sized/**/*.parquet",
+			name: "a sized archive bounds the low side by each key's own bucket width",
+			sql:  planned,
+			args: args,
+			want: "SELECT raw, ts FROM logs WHERE customer_id = CAST(? AS BIGINT) AND (ts >= CAST(? AS TIMESTAMP) AND CAST(_part AS TIMESTAMP) + to_minutes(CAST(_w AS INTEGER)) > TIMESTAMP '2026-10-14 12:00:00') AND (ts <= CAST(? AS TIMESTAMP) AND _part <= '2026-10-14 12:05:00') AND namespace = ?",
+		},
 		{path: legacy, name: "no time bound, unchanged", sql: "SELECT raw, ts FROM logs WHERE namespace = ?", args: []string{"weft"}, want: "SELECT raw, ts FROM logs WHERE namespace = ?"},
 		{path: legacy, name: "a bound that is not a time, unchanged", sql: planned, args: []string{"1", "yesterday", "2026-10-14 12:05:00", "weft"}, want: "SELECT raw, ts FROM logs WHERE customer_id = CAST(? AS BIGINT) AND ts >= CAST(? AS TIMESTAMP) AND (ts <= CAST(? AS TIMESTAMP) AND _part <= '2026-10-14 12:05:00') AND namespace = ?"},
 		{path: legacy, name: "too few args, unchanged", sql: planned, args: []string{"1"}, want: planned},

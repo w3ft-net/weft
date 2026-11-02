@@ -119,11 +119,21 @@ func archiveFormats(t *testing.T, db *sql.DB) map[string]string {
 		copyTo(fmt.Sprintf("SELECT *, %s AS _part FROM logs", bucket(m)), dir, "_part")
 		out[fmt.Sprintf("time-only, m%d", m)] = dir + "/**/*.parquet"
 	}
+	// The first keyed layout, one width for every key: no longer written, still read.
 	for _, m := range []int{60, 360, 1440} {
 		dir := filepath.Join(root, fmt.Sprintf("k%d", m), "shard.attempt-1", fmt.Sprintf("k%d", m))
 		copyTo(fmt.Sprintf("SELECT *, %s AS _part FROM logs", bucket(m)), dir, "customer_id, namespace, service, kind, _part")
 		out[fmt.Sprintf("keyed, k%d", m)] = dir + "/**/*.parquet"
 	}
+
+	// The sized layout: each key's own width in _w, here a different one for most
+	// keys, so a query's time bound has to be right for every width at once.
+	sized := filepath.Join(root, "sized", "shard.attempt-1", "sized")
+	copyTo(`SELECT * EXCLUDE (w), w AS _w, time_bucket(to_minutes(w), ts, TIMESTAMP '1970-01-01') AS _part
+		FROM (SELECT *, CASE WHEN service = 'api' AND kind = 'main' THEN 60
+			WHEN kind = 'stats' THEN 1440 WHEN service = 'web' THEN 360 ELSE 10080 END AS w FROM logs)`,
+		sized, "customer_id, namespace, service, kind, _w, _part")
+	out["sized, a width per key"] = sized + "/**/*.parquet"
 	return out
 }
 

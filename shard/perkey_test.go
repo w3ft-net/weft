@@ -2,6 +2,7 @@ package shard
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -276,6 +277,38 @@ func TestPerKey_ReopenAddsColumnsATableLacks(t *testing.T) {
 	}
 }
 
+// A shard too small to partition is archived as one file by a separate branch
+// of the export (the one used without S3). It must read the per-key tables too,
+// not the empty logs template, or the archive is empty and reports success.
+func TestPerKey_SmallLocalArchiveHoldsEveryRow(t *testing.T) {
+	s := openPerKey(t, filepath.Join(t.TempDir(), "s.duckdb"))
+	ingestAll(t, s)
+
+	path, stats, err := s.Archive(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, c := range stats {
+		total += c.RowCount
+	}
+	if total != 30 {
+		t.Errorf("archive stats count %d rows, want 30", total)
+	}
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int64
+	if err := db.QueryRow("SELECT count(*) FROM " + ParquetReadExpr(path)).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 30 {
+		t.Errorf("archive file %s holds %d rows, want 30", path, n)
+	}
+}
+
 // A table that lost a column and got it back on reopen has it last, so the
 // tables of a shard disagree on column order. Reading them together, as the
 // export does, must match columns by name.
@@ -302,7 +335,7 @@ func TestPerKey_ExportMatchesColumnsByNameAcrossTables(t *testing.T) {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, n, err := e.exportParquet(context.Background(), out, 0, false); err != nil || n != 30 {
+	if _, n, err := e.exportParquet(context.Background(), out, 0); err != nil || n != 30 {
 		t.Fatalf("export wrote %d rows, err=%v, want 30", n, err)
 	}
 }
@@ -325,7 +358,7 @@ func TestPerKey_ExportSeesEveryRow(t *testing.T) {
 		if err := os.MkdirAll(out, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		_, n, err := e.exportParquet(context.Background(), out, minutes, false)
+		_, n, err := e.exportParquet(context.Background(), out, minutes)
 		if err != nil {
 			t.Fatalf("minutes=%d: %v", minutes, err)
 		}

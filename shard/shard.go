@@ -944,7 +944,7 @@ func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix
 		if err := s3cfg.ConfigureDuckDB(s.db); err != nil {
 			return "", 0, err
 		}
-		return s.exportParquet(ctx, fmt.Sprintf("%s/%s%s", s3Prefix, s.id, outputSuffix), plan.minutes, keyed)
+		return s.exportPartitioned(ctx, fmt.Sprintf("%s/%s%s", s3Prefix, s.id, outputSuffix), plan, keyed)
 	}
 
 	dir := fmt.Sprintf("%s/%s%s", s3Prefix, s.id, outputSuffix)
@@ -954,7 +954,7 @@ func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			return "", 0, fmt.Errorf("mkdir for %s: %w", path, err)
 		}
-		res, err := s.db.ExecContext(ctx, fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET)", path))
+		res, err := s.db.ExecContext(ctx, fmt.Sprintf("COPY %s TO '%s' (FORMAT PARQUET)", s.source(), path))
 		if err != nil {
 			return "", 0, err
 		}
@@ -964,7 +964,16 @@ func (s *DuckDBShard) exportArchive(ctx context.Context, attempt int64, s3Prefix
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", 0, fmt.Errorf("mkdir for %s: %w", dir, err)
 	}
-	return s.exportParquet(ctx, dir, plan.minutes, keyed)
+	return s.exportPartitioned(ctx, dir, plan, keyed)
+}
+
+// exportPartitioned writes a shard too big for one file: sized by key when keyed,
+// else in time buckets of the width the plan chose for the shard as a whole.
+func (s *DuckDBShard) exportPartitioned(ctx context.Context, path string, plan partitionPlan, keyed bool) (string, int64, error) {
+	if keyed {
+		return s.exportKeyedParquet(ctx, path, plan.estParquetBytes)
+	}
+	return s.exportParquet(ctx, path, plan.minutes)
 }
 
 // partitionPlan is the archive export's sizing decision: the inputs
@@ -1014,10 +1023,8 @@ func (s *DuckDBShard) planPartitions(ctx context.Context) (partitionPlan, error)
 // and returns it with the number of rows written.
 // If minutes is 0, writes a single file at path+".parquet".
 // Otherwise writes hive-partitioned files, one directory per minutes-wide time
-// bucket, under path/m<minutes>/ (see PartitionMinutes). With keyed, each
-// bucket is also split by (customer, namespace, service, kind) and the files
-// go under path/k<minutes>/ (see IsKeyed). A single file is not split.
-func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes int, keyed bool) (string, int64, error) {
+// bucket, under path/m<minutes>/ (see PartitionMinutes).
+func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes int) (string, int64, error) {
 	if minutes == 0 {
 		outPath := path + ".parquet"
 		res, err := s.db.ExecContext(ctx, fmt.Sprintf("COPY %s TO '%s' (FORMAT PARQUET)", s.source(), outPath))
@@ -1027,24 +1034,46 @@ func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes in
 		n, _ := res.RowsAffected()
 		return outPath, n, nil
 	}
-	layout, partitionBy, order := "m", "_part", ""
-	if keyed {
-		layout, partitionBy = "k", keyedPartitionBy
-		// Sorted, so each partition arrives whole. DuckDB keeps at most 100
-		// partition files open and starts a new file each time it reopens one,
-		// so rows left in stored order (every batch touches every partition)
-		// become many small files per partition: 1,905 files for 308
-		// partitions in a 6M-row trial, 326 sorted. A cold read pays for each
-		// file. The files are not each one time-ordered run (every writer
-		// thread flushes its own), only each run is.
-		order = " ORDER BY " + keyedPartitionBy + ", ts"
-	}
-	dir := fmt.Sprintf("%s/%s%d", path, layout, minutes)
+	dir := fmt.Sprintf("%s/m%d", path, minutes)
 	sql := fmt.Sprintf(
-		"COPY (SELECT *, %s AS _part FROM %s%s) TO '%s' (FORMAT PARQUET, PARTITION_BY (%s), OVERWRITE_OR_IGNORE)",
-		partitionExpr(minutes, "ts"), s.source(), order, dir, partitionBy,
+		"COPY (SELECT *, %s AS _part FROM %s) TO '%s' (FORMAT PARQUET, PARTITION_BY (_part), OVERWRITE_OR_IGNORE)",
+		partitionExpr(minutes, "ts"), s.source(), dir,
 	)
 	res, err := s.db.ExecContext(ctx, sql)
+	if err != nil {
+		return "", 0, err
+	}
+	n, _ := res.RowsAffected()
+	return dir + "/**/*.parquet", n, nil
+}
+
+// exportKeyedParquet writes the shard as a sized archive under path/sized/ (see
+// IsSized): split by (customer, namespace, service, kind), and within each key by
+// time buckets of a width chosen for that key so its files come out near
+// targetFileBytes, given estParquetBytes for the whole shard. Returns the glob
+// and the number of rows written.
+//
+// The rows are written sorted by partition. DuckDB keeps at most 100 partition
+// files open and starts a new file each time it reopens one, so rows left in
+// stored order (every batch touches every partition) become many small files per
+// partition: 1,905 files for 308 partitions in a 6M-row trial, 326 sorted. A cold
+// read pays for each file. The files are not each one time-ordered run (every
+// writer thread flushes its own), only each run is.
+func (s *DuckDBShard) exportKeyedParquet(ctx context.Context, path string, estParquetBytes int64) (string, int64, error) {
+	// The width table is a temp table, which belongs to one connection: size the
+	// keys and write the archive on the same one.
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return "", 0, fmt.Errorf("acquire conn: %w", err)
+	}
+	defer conn.Close()
+	if err := createKeyWidths(ctx, conn, s.source(), estParquetBytes); err != nil {
+		return "", 0, err
+	}
+	dir := path + "/sized"
+	res, err := conn.ExecContext(ctx, fmt.Sprintf(
+		"COPY (%s) TO '%s' (FORMAT PARQUET, PARTITION_BY (%s), OVERWRITE_OR_IGNORE)",
+		sizedSelect(s.source()), dir, keyedPartitionBy))
 	if err != nil {
 		return "", 0, err
 	}

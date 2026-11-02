@@ -20,12 +20,17 @@ import (
 // delete globs (ExportOutputPaths) still cover it. Archives made before the
 // width was recorded have no such segment.
 //
-// A keyed archive also splits by log key, and says so with k in place of m:
+// A sized archive also splits by log key, and each key chooses the width of its
+// own time buckets (pickWidth), so a big key and a small key both come out in
+// files near targetFileBytes:
 //
-//	<prefix>/<shard>.attempt-N/k<minutes>/customer_id=C/namespace=N/service=S/kind=K/_part=<bucket start>/data_0.parquet
+//	<prefix>/<shard>.attempt-N/sized/customer_id=C/namespace=N/service=S/kind=K/_w=<minutes>/_part=<bucket start>/data_0.parquet
 //
-// so a query that names a key opens only that key's directories. The reader
-// has to know, because it types the key columns (ParquetReadExpr). See
+// so a query that names a key opens only that key's directories, and a time
+// bound reaches only its buckets (partBound). The reader has to know the layout,
+// because it types the key columns (ParquetReadExpr) and bounds time by _w. The
+// first keyed layout, k<minutes> in place of m<minutes> with no _w, gave every
+// key one width; it is still read, and no longer written. See
 // docs/plans/per-service-tables.md, "Archive layout".
 
 const (
@@ -44,11 +49,40 @@ const (
 	parquetToDBRatio = 0.9
 )
 
-// keyedPartitionBy is the partition columns of a keyed archive, in directory
+// keyedPartitionBy is the partition columns of a sized archive, in directory
 // order, and the order its rows are written in.
-const keyedPartitionBy = "customer_id, namespace, service, kind, _part"
+const keyedPartitionBy = "customer_id, namespace, service, kind, _w, _part"
+
+// keyedWidths are the time buckets, in minutes, a sized archive gives a key:
+// whole hours, each dividing a week or being whole days, so buckets line up
+// with the calendar. A reader needs no list of them: it reads the width of
+// each key from the _w directory.
+var keyedWidths = []int{60, 120, 360, 720, 1440, 2880, 10080}
+
+// pickWidth is the bucket width for one key whose rows come to estParquetBytes
+// over span, so that its files come out near targetFileBytes: the narrowest
+// width in keyedWidths that is not narrower than span over the files wanted. A
+// key that fills less than one file, or has no span, gets the widest.
+func pickWidth(estParquetBytes int64, span time.Duration) int {
+	widest := keyedWidths[len(keyedWidths)-1]
+	files := float64(estParquetBytes) / targetFileBytes
+	if files <= 1 || span <= 0 {
+		return widest
+	}
+	want := span.Minutes() / files
+	for _, w := range keyedWidths {
+		if float64(w) >= want {
+			return w
+		}
+	}
+	return widest
+}
 
 var partitionSegment = regexp.MustCompile(`/([mk])([1-9][0-9]*)/\*\*/\*\.parquet$`)
+
+// sizedSegment is the directory of a sized archive: split by log key, and by a
+// time bucket whose width each key has chosen for itself (the _w directory).
+var sizedSegment = regexp.MustCompile(`/sized/\*\*/\*\.parquet$`)
 
 // PartitionMinutes reads the bucket width, in minutes, from an archive's glob
 // path. ok is false for an archive that doesn't record it.
@@ -61,11 +95,20 @@ func PartitionMinutes(parquetPath string) (minutes int, ok bool) {
 	return n, err == nil
 }
 
-// IsKeyed reports whether an archive's glob path names a keyed layout.
+// IsKeyed reports whether an archive's glob path names a layout split by log
+// key: the sized one, or the first keyed one (k<minutes>, a single width for
+// every key), which is still read but no longer written.
 func IsKeyed(parquetPath string) bool {
+	if IsSized(parquetPath) {
+		return true
+	}
 	m := partitionSegment.FindStringSubmatch(parquetPath)
 	return m != nil && m[1] == "k"
 }
+
+// IsSized reports whether an archive's glob path names the sized layout, where
+// each key's time buckets have a width of their own.
+func IsSized(parquetPath string) bool { return sizedSegment.MatchString(parquetPath) }
 
 // partitionExpr is the _part expression for minutes-wide buckets of the
 // timestamp expression ts. The epoch origin makes a bucket's start computable

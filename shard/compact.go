@@ -120,41 +120,66 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 	}
 	res.Stats = stats
 
-	// A keyed destination (see IsKeyed) is written keyed, whatever the source
-	// was: a keyed one, a time-only one, or a single file. dstPath is then the
-	// glob, and the COPY goes to its directory. _part is rebuilt from ts for the
-	// destination's bucket width, replacing the source's own if it has one, so
-	// converting a time-only archive of another width, or a single file with
-	// no _part, comes out the same.
-	copyTo, partitionBy, out := dstPath, "", keep
-	if IsKeyed(dstPath) {
-		copyTo = strings.TrimSuffix(dstPath, "/**/*.parquet")
-		partitionBy = ", PARTITION_BY (" + keyedPartitionBy + "), OVERWRITE_OR_IGNORE"
-		minutes, _ := PartitionMinutes(dstPath)
-		var hasPart int
-		if err := db.QueryRow(fmt.Sprintf(
-			"SELECT count(*) FROM (DESCRIBE SELECT * FROM (%s) k) WHERE column_name = '_part'", keep)).Scan(&hasPart); err != nil {
-			return CompactResult{}, fmt.Errorf("describe source: %w", err)
-		}
-		cols := "k.*"
-		if hasPart > 0 {
-			cols = "k.* EXCLUDE (_part)"
-		}
-		// Sorted for the reason exportParquet gives; this can spill to disk.
-		out = fmt.Sprintf("SELECT %s, %s AS _part FROM (%s) k ORDER BY %s, ts", cols, partitionExpr(minutes, "k.ts"), keep, keyedPartitionBy)
+	if IsKeyed(dstPath) && !IsSized(dstPath) {
+		return CompactResult{}, fmt.Errorf("cannot write the %s layout: only sized archives are written", dstPath)
 	}
 	if s3cfg == nil && !strings.HasPrefix(dstPath, "s3://") {
 		parent := filepath.Dir(dstPath)
-		if partitionBy != "" {
-			parent = copyTo
+		if IsSized(dstPath) {
+			parent = strings.TrimSuffix(dstPath, "/**/*.parquet")
 		}
 		if err := os.MkdirAll(parent, 0755); err != nil {
 			return CompactResult{}, fmt.Errorf("mkdir for %s: %w", dstPath, err)
 		}
 	}
-	if _, err := db.Exec(fmt.Sprintf("COPY (%s) TO '%s' (FORMAT PARQUET%s)", out, copyTo, partitionBy)); err != nil {
+	if IsSized(dstPath) {
+		if err := copySized(db, keep, strings.TrimSuffix(dstPath, "/**/*.parquet")); err != nil {
+			return CompactResult{}, fmt.Errorf("copy survivors to %s: %w", dstPath, err)
+		}
+	} else if _, err := db.Exec(fmt.Sprintf("COPY (%s) TO '%s' (FORMAT PARQUET)", keep, dstPath)); err != nil {
 		return CompactResult{}, fmt.Errorf("copy survivors to %s: %w", dstPath, err)
 	}
 	res.OutputPath = dstPath
 	return res, nil
+}
+
+// copySized writes the rows of query to dir as a sized archive (see IsSized),
+// whatever layout they came from: a sized or keyed archive, a time-only one, or
+// a single file. Their own _part and _w are dropped and rebuilt from ts and the
+// widths chosen for the keys in query, so a time-only archive of another width,
+// or a single file with no _part, comes out the same. The COPY sorts, which
+// can spill to disk.
+func copySized(db *sql.DB, query, dir string) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	src := "(" + query + ")"
+	var drop []string
+	rows, err := conn.QueryContext(ctx, fmt.Sprintf(
+		"SELECT column_name FROM (DESCRIBE SELECT * FROM (%s)) WHERE column_name IN ('_part', '_w')", query))
+	if err != nil {
+		return fmt.Errorf("describe source: %w", err)
+	}
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			rows.Close()
+			return err
+		}
+		drop = append(drop, c)
+	}
+	rows.Close()
+	if len(drop) > 0 {
+		src = fmt.Sprintf("(SELECT * EXCLUDE (%s) FROM (%s))", strings.Join(drop, ", "), query)
+	}
+	if err := createKeyWidths(ctx, conn, src, 0); err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, fmt.Sprintf(
+		"COPY (%s) TO '%s' (FORMAT PARQUET, PARTITION_BY (%s), OVERWRITE_OR_IGNORE)", sizedSelect(src), dir, keyedPartitionBy))
+	return err
 }

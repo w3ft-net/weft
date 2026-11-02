@@ -200,7 +200,8 @@ statistics say every one of 10 services may be in all 3 row groups, and 9 of 10 
 query for any of them reads the whole file. The prod archive bucket holds 5.2 GiB in
 `40-apps` (two shards, daily files near 500 MiB), small enough to convert in one pass.
 
-**Layout.** Add the key to the hive partitions:
+**Layout.** Add the key to the hive partitions (the final form, with each key's own bucket
+width in `_w`, is under "Sizing" below; this is the first probe, with one width):
 `PARTITION_BY (customer_id, namespace, service, kind, _part)`, key directories first and
 `_part` last, so `PruneColdPartitions` is unchanged. Probed with DuckDB 1.5.2 on a local
 copy: 32 files, and a query with the planner's bound parameters read 1 of 32
@@ -218,9 +219,36 @@ and no compute change.
   file in the probe. S3 keys are case-sensitive, so prod is unaffected; a dev archive on
   macOS would not be. If that matters, name the directories with the table name
   (`logtable.Name`) instead of the raw values.
-- The bucket width is now per archive, but the biggest key sets file size and the rest are
-  small files. 23 keys times a day bucket is about 160 files per weekly shard. Pick the width
-  from the largest key, and settle it with the export code.
+**Sizing (decided 2026-11-02).** The existing width comes from `choosePartitionMinutes`: the
+shard's whole Parquet size over 16 MiB gives a file count, and the time span over that count
+gives one width. Applied to keys that fits none of them. For a 3 GiB shard over 7 days it is
+59 minutes: about 3,900 partitions, `weft/api/main` (half the bytes) in files of about 9 MiB,
+`shard/stats` (2%) in files of 0.4 MiB, the smallest keys in a few KB. A fixed day bucket
+(the first version's) is the opposite: about 214 MiB for the biggest key. So each key picks
+its own width, in the `sized` layout:
+
+`<shard>.attempt-N/sized/customer_id=…/namespace=…/service=…/kind=…/_w=<minutes>/_part=<bucket>/…`
+
+- **Width.** `pickWidth(estParquetBytes, span)`: the key's share of the shard's Parquet bytes
+  (its share of the text, plus 64 bytes a row) over its own first-to-last span gives a file
+  count at 16 MiB, and the width is the narrowest of 1h, 2h, 6h, 12h, 1d, 2d, 7d that is not
+  narrower than span over files. A key under one file gets the widest. Widths are whole
+  hours dividing a week or whole days, so buckets line up with the calendar.
+- **Reader.** `_w` is a partition column, so the low time bound is `CAST(_part AS TIMESTAMP) +
+  to_minutes(CAST(_w AS INTEGER)) > F`: a row at or after F is in a bucket that ends after F,
+  whatever the key's width. Probed with DuckDB 1.5.2: 3 of 175 files read for a two-hour
+  window on the key with hourly buckets, same rows as the unpruned query. No list of widths
+  is part of the contract, so a later writer may use others without a reader change.
+- **Writers.** The shard export and the janitor's rewrite share `createKeyWidths` (one temp
+  table of widths, joined to the rows) and `sizedSelect`, and sort by the partition columns:
+  see above for why. The compactor does not know the Parquet size of what it rewrites and
+  estimates it from the text (`parquetPerRawByte`, 0.3), which errs towards narrower buckets.
+- **Compatibility.** `k<minutes>` archives (one width for every key; written only between
+  2026-11-01 23:30Z and this change, probably none) are still read and are converted to
+  `sized` by the next janitor pass. Nothing writes `k` any more.
+- **Not done: time-varying density.** A width is one number per key. A key that is quiet for
+  six days and busy for one gets one width. Splitting per key and day is the next step if the
+  archives show it matters.
 
 **The switch.** A path segment records the layout, as `m<minutes>` records the bucket width.
 An archive without it reads as it does now. Converting is one archive at a time, and rolling

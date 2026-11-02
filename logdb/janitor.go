@@ -113,7 +113,7 @@ const (
 	// rewriter must scan the parquet to decide. Never deleted blind.
 	DispositionUnknown
 	// DispositionConvert: nothing is over-retained, but the archive is not
-	// keyed (see shard.IsKeyed) and conversion is on. Rewrite it keyed with
+	// sized (see shard.IsSized) and conversion is on. Rewrite it sized with
 	// every row kept.
 	DispositionConvert
 )
@@ -205,7 +205,7 @@ func (s ShardStore) PlanRetention(now time.Time, grace time.Duration, convert bo
 	var plan []PlannedShard
 	for _, sh := range shards {
 		disp := ClassifyArchivedShard(statsByShard[sh.ID], resolver, now, grace)
-		if disp == DispositionKeep && convert && sh.ParquetPath != "" && !shard.IsKeyed(sh.ParquetPath) {
+		if disp == DispositionKeep && convert && sh.ParquetPath != "" && !shard.IsSized(sh.ParquetPath) {
 			disp = DispositionConvert
 		}
 		if disp == DispositionKeep {
@@ -269,8 +269,8 @@ type PurgeDeps struct {
 	// GCDelay is how long a tombstoned object lingers before GC
 	// (RetentionGCDelay in production).
 	GCDelay time.Duration
-	// ConvertToKeyed makes every rewrite write a keyed archive (see
-	// shard.IsKeyed), not only a conversion.
+	// ConvertToKeyed makes every rewrite write a sized archive (see
+	// shard.IsSized), not only a conversion.
 	ConvertToKeyed bool
 	// Now is the clock (injected for tests).
 	Now func() time.Time
@@ -433,31 +433,22 @@ func (s ShardStore) shardArchiveStats(shardID string) ([]ShardArchiveStat, error
 	return rows, err
 }
 
-// convertedBucketMinutes is the time bucket of an archive made by converting
-// another: a day. Keys already split the data, so a day holds files of a
-// useful size for all but the largest key.
-const convertedBucketMinutes = 1440
-
-// timeWidthSegment is the m<minutes> directory of a time-only archive.
-var timeWidthSegment = regexp.MustCompile(`/m[1-9][0-9]*$`)
+// layoutSegment is the last directory of an archive glob that names its layout:
+// m<minutes> or k<minutes> (time-only, or the first keyed layout) or sized.
+var layoutSegment = regexp.MustCompile(`/([mk][1-9][0-9]*|sized)$`)
 
 // rewriteDestPath derives a fresh parquet key next to the source, versioned by
 // the rewrite instant so a retry never collides with the object a previous
-// attempt may have written. A keyed archive (x/s.attempt-N/k<minutes>/**/*.parquet)
-// is rewritten as a keyed archive beside it (x/s.attempt-N.r<ns>/k<minutes>/...),
-// because one file would put every service back in every file. With toKeyed,
-// any other archive becomes a keyed one of convertedBucketMinutes. Otherwise
-// the single file (x/s.parquet) and the time-partitioned glob
-// (x/s/**/*.parquet) are rewritten as a single file.
+// attempt may have written. A keyed archive, or any archive when toKeyed, is
+// rewritten as a sized one (x/s.attempt-N.r<ns>/sized/**/*.parquet), because one
+// file would put every service back in every file. Otherwise the single file
+// (x/s.parquet) and the time-partitioned glob (x/s/**/*.parquet) are rewritten
+// as a single file.
 func rewriteDestPath(old string, now time.Time, toKeyed bool) string {
-	if minutes, ok := shard.PartitionMinutes(old); ok && shard.IsKeyed(old) {
-		base := strings.TrimSuffix(old, fmt.Sprintf("/k%d/**/*.parquet", minutes))
-		return fmt.Sprintf("%s.r%d/k%d/**/*.parquet", base, now.UnixNano(), minutes)
-	}
-	if toKeyed {
-		base := timeWidthSegment.ReplaceAllString(strings.TrimSuffix(old, "/**/*.parquet"), "")
+	if toKeyed || shard.IsKeyed(old) {
+		base := layoutSegment.ReplaceAllString(strings.TrimSuffix(old, "/**/*.parquet"), "")
 		base = strings.TrimSuffix(base, ".parquet")
-		return fmt.Sprintf("%s.r%d/k%d/**/*.parquet", base, now.UnixNano(), convertedBucketMinutes)
+		return fmt.Sprintf("%s.r%d/sized/**/*.parquet", base, now.UnixNano())
 	}
 	base := strings.TrimSuffix(old, "/**/*.parquet")
 	base = strings.TrimSuffix(base, ".parquet")
@@ -518,8 +509,8 @@ type Janitor struct {
 	Clock   func() time.Time
 	// Interval is the sweep cadence (24h in production).
 	Interval time.Duration
-	// ConvertToKeyed rewrites archives that are not keyed (see shard.IsKeyed)
-	// into keyed ones, and writes keyed archives from every rewrite.
+	// ConvertToKeyed rewrites archives that are not sized (see shard.IsSized)
+	// into sized ones, and writes sized archives from every rewrite.
 	ConvertToKeyed bool
 }
 

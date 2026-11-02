@@ -120,15 +120,22 @@ and deletion lags the advertised retention by a 7-day grace buffer.
 
 ## Converting archives to the keyed layout
 
-With `KEYED_ARCHIVES=1` the daily pass rewrites each archive that is not keyed
-into `<shard>.attempt-N.r<ns>/k1440/customer_id=…/namespace=…/service=…/kind=…/_part=…`
+With `KEYED_ARCHIVES=1` the daily pass rewrites each archive that is not in the
+sized layout (a single file, a time-partitioned archive, or the first keyed
+layout) into
+`<shard>.attempt-N.r<ns>/sized/customer_id=…/namespace=…/service=…/kind=…/_w=<minutes>/_part=…`
 (`docs/plans/per-service-tables.md`, "Archive layout"), so a query for one log
-file opens only that file's directories. Every archive visited by a retention
-rewrite comes out keyed too.
+file opens only that file's directories. Each key gets time buckets (`_w`) wide
+enough for its own files to come out near 16 MiB, so a busy service has narrow
+buckets and a quiet one wide ones. Every archive visited by a retention rewrite
+comes out sized too.
 
 Before turning it on, the **compactor Lambda** and the **cold-shard Lambda**
-must be running this code: an old compactor would collapse a keyed archive back
-into one file, and an old cold shard doesn't pin the key columns' types.
+must be running this code: an old compactor would collapse a sized archive back
+into one file, and an old cold shard doesn't pin the key columns' types or
+bound time by each key's `_w`. The sort the rewrite does can spill to the
+Lambda's disk: if a large archive fails with a disk or memory error, raise
+`compactor_lambda_memory` or its ephemeral storage and the next pass retries.
 
 A conversion is swapped in only if the copy holds exactly the rows
 `shard_archive_stats` recorded for the shard and dropped none. If not, the pass

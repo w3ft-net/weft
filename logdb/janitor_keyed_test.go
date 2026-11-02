@@ -23,18 +23,20 @@ func TestRewriteDestPath_KeepsTheLayout(t *testing.T) {
 		old, want string
 		toKeyed   bool
 	}{
-		{"s3://b/40-apps/shard-1.attempt-1/k1440/**/*.parquet", "s3://b/40-apps/shard-1.attempt-1" + tag + "/k1440/**/*.parquet", false},
-		{"s3://b/40-apps/shard-1.attempt-3/k7/**/*.parquet", "s3://b/40-apps/shard-1.attempt-3" + tag + "/k7/**/*.parquet", false},
-		// a keyed archive stays at its own width even when conversion is on
-		{"s3://b/40-apps/shard-1.attempt-3/k7/**/*.parquet", "s3://b/40-apps/shard-1.attempt-3" + tag + "/k7/**/*.parquet", true},
+		// a sized archive is rewritten as a sized one, with or without conversion on
+		{"s3://b/40-apps/shard-1.attempt-1/sized/**/*.parquet", "s3://b/40-apps/shard-1.attempt-1" + tag + "/sized/**/*.parquet", false},
+		{"s3://b/40-apps/shard-1.attempt-3.r17/sized/**/*.parquet", "s3://b/40-apps/shard-1.attempt-3.r17" + tag + "/sized/**/*.parquet", true},
+		// the first keyed layout (one width for every key) is rewritten as a sized one
+		{"s3://b/40-apps/shard-1.attempt-3/k7/**/*.parquet", "s3://b/40-apps/shard-1.attempt-3" + tag + "/sized/**/*.parquet", false},
+		{"s3://b/40-apps/shard-1.attempt-1/k1440/**/*.parquet", "s3://b/40-apps/shard-1.attempt-1" + tag + "/sized/**/*.parquet", true},
 		// the layouts that were already single-file rewrites are unchanged
 		{"s3://b/40-apps/shard-1.attempt-1/m1440/**/*.parquet", "s3://b/40-apps/shard-1.attempt-1/m1440" + tag + ".parquet", false},
 		{"s3://b/40-apps/shard-1.parquet", "s3://b/40-apps/shard-1" + tag + ".parquet", false},
-		// converting: any other layout becomes a keyed archive of day buckets
-		{"s3://b/40-apps/shard-1.attempt-1/m60/**/*.parquet", "s3://b/40-apps/shard-1.attempt-1" + tag + "/k1440/**/*.parquet", true},
-		{"s3://b/40-apps/shard-1.parquet", "s3://b/40-apps/shard-1" + tag + "/k1440/**/*.parquet", true},
-		{"s3://b/40-apps/shard-1.r1700.parquet", "s3://b/40-apps/shard-1.r1700" + tag + "/k1440/**/*.parquet", true},
-		{"s3://b/40-apps/shard-20261012.attempt-1/**/*.parquet", "s3://b/40-apps/shard-20261012.attempt-1" + tag + "/k1440/**/*.parquet", true},
+		// converting: any other layout becomes a sized archive
+		{"s3://b/40-apps/shard-1.attempt-1/m60/**/*.parquet", "s3://b/40-apps/shard-1.attempt-1" + tag + "/sized/**/*.parquet", true},
+		{"s3://b/40-apps/shard-1.parquet", "s3://b/40-apps/shard-1" + tag + "/sized/**/*.parquet", true},
+		{"s3://b/40-apps/shard-1.r1700.parquet", "s3://b/40-apps/shard-1.r1700" + tag + "/sized/**/*.parquet", true},
+		{"s3://b/40-apps/shard-20261012.attempt-1/**/*.parquet", "s3://b/40-apps/shard-20261012.attempt-1" + tag + "/sized/**/*.parquet", true},
 	} {
 		if got := rewriteDestPath(c.old, now, c.toKeyed); got != c.want {
 			t.Errorf("rewriteDestPath(%q, %v) = %q, want %q", c.old, c.toKeyed, got, c.want)
@@ -86,7 +88,7 @@ func TestExecutePurge_RewriteKeepsAKeyedArchiveKeyed(t *testing.T) {
 	if res.Outcome != OutcomeRewritten {
 		t.Fatalf("outcome = %+v", res)
 	}
-	if !shard.IsKeyed(res.NewPath) {
+	if !shard.IsSized(res.NewPath) {
 		t.Fatalf("the rewrite of a keyed archive is %q, which is not keyed", res.NewPath)
 	}
 	rec, _, _ := ss.GetShard("sh-keyed")
@@ -148,7 +150,8 @@ func TestPlanRetention_ConvertsUnkeyedArchivesWhenAsked(t *testing.T) {
 	}
 	seed("live-single", "s3://b/x/live-single.parquet", 5, 1)
 	seed("live-timed", "s3://b/x/live-timed.attempt-1/m1440/**/*.parquet", 5, 1)
-	seed("live-keyed", "s3://b/x/live-keyed.attempt-1/k1440/**/*.parquet", 5, 1)
+	seed("live-k1440", "s3://b/x/live-k1440.attempt-1/k1440/**/*.parquet", 5, 1) // the first keyed layout
+	seed("live-sized", "s3://b/x/live-sized.attempt-1/sized/**/*.parquet", 5, 1)
 	seed("expired", "s3://b/x/expired.parquet", 60, 50)
 
 	plan := func(convert bool) map[string]ShardDisposition {
@@ -167,8 +170,9 @@ func TestPlanRetention_ConvertsUnkeyedArchivesWhenAsked(t *testing.T) {
 		t.Errorf("with conversion off the plan is %v, want only expired→delete", got)
 	}
 	got := plan(true)
-	if len(got) != 3 || got["live-single"] != DispositionConvert || got["live-timed"] != DispositionConvert || got["expired"] != DispositionDelete {
-		t.Errorf("with conversion on the plan is %v, want live-single and live-timed to convert, expired to delete", got)
+	if len(got) != 4 || got["live-single"] != DispositionConvert || got["live-timed"] != DispositionConvert ||
+		got["live-k1440"] != DispositionConvert || got["expired"] != DispositionDelete {
+		t.Errorf("with conversion on the plan is %v, want live-single, live-timed and live-k1440 to convert, expired to delete, live-sized left alone", got)
 	}
 }
 
@@ -180,7 +184,7 @@ func TestExecutePurge_ConvertMakesAKeyedArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Outcome != OutcomeRewritten || !shard.IsKeyed(res.NewPath) {
+	if res.Outcome != OutcomeRewritten || !shard.IsSized(res.NewPath) {
 		t.Fatalf("outcome %+v: want a rewrite to a keyed path", res)
 	}
 	rec, _, _ := ss.GetShard("sh-conv")
@@ -238,7 +242,7 @@ func TestExecutePurge_RewriteConvertsWhenAsked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !shard.IsKeyed(res.NewPath) {
+	if !shard.IsSized(res.NewPath) {
 		t.Errorf("the rewrite is %q, not a keyed archive", res.NewPath)
 	}
 }

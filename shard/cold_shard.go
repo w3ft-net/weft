@@ -133,6 +133,10 @@ func (s *ColdShard) readParquetExpr() string { return ParquetReadExpr(s.parquetP
 // timestamp, which PruneColdPartitions relies on.
 const keyedHiveTypes = "{'customer_id': 'BIGINT', 'namespace': 'VARCHAR', 'service': 'VARCHAR', 'kind': 'VARCHAR'}"
 
+// sizedHiveTypes adds the key's bucket width, which a sized archive keeps in a
+// directory of its own.
+const sizedHiveTypes = "{'customer_id': 'BIGINT', 'namespace': 'VARCHAR', 'service': 'VARCHAR', 'kind': 'VARCHAR', '_w': 'BIGINT'}"
+
 // ParquetReadExpr builds the DuckDB read_parquet(...) source for a stored
 // path. A glob (the hive-partitioned layout from a large shard's archive)
 // enables hive_partitioning so the partition columns are read back, and for a
@@ -141,6 +145,9 @@ const keyedHiveTypes = "{'customer_id': 'BIGINT', 'namespace': 'VARCHAR', 'servi
 func ParquetReadExpr(path string) string {
 	if !strings.Contains(path, "*") {
 		return fmt.Sprintf("read_parquet('%s')", path)
+	}
+	if IsSized(path) {
+		return fmt.Sprintf("read_parquet('%s', hive_partitioning=true, hive_types=%s)", path, sizedHiveTypes)
 	}
 	if IsKeyed(path) {
 		return fmt.Sprintf("read_parquet('%s', hive_partitioning=true, hive_types=%s)", path, keyedHiveTypes)

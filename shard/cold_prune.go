@@ -34,6 +34,7 @@ const (
 // was.
 func PruneColdPartitions(sql string, args []string, parquetPath string) string {
 	minutes, _ := PartitionMinutes(parquetPath)
+	sized := IsSized(parquetPath)
 	var out strings.Builder
 	rest := sql
 	consumed := 0 // bytes of sql already copied to out
@@ -50,7 +51,7 @@ func PruneColdPartitions(sql string, args []string, parquetPath string) string {
 		out.WriteString(sql[consumed:at])
 		frag := sql[at : at+n]
 		if t, ok := timeArgAt(sql, at, args); ok && !precededByIdentifier(sql, at) {
-			frag = "(" + frag + " AND " + partBound(bound, t, minutes) + ")"
+			frag = "(" + frag + " AND " + partBound(bound, t, minutes, sized) + ")"
 		}
 		out.WriteString(frag)
 		consumed = at + n
@@ -75,10 +76,14 @@ func nextTimeBound(s string) (int, string) {
 
 // partBound is the _part condition implied by a time bound; minutes is the
 // archive's bucket width, 0 when it doesn't record one.
-func partBound(bound string, t time.Time, minutes int) string {
+func partBound(bound string, t time.Time, minutes int, sized bool) string {
 	switch {
 	case bound == tsUpperBound:
 		return "_part <= '" + t.Format(tsArgLayout) + "'"
+	case sized:
+		// Each key has its own bucket width, in _w. A row at or after t is in a
+		// bucket that ends after t, whatever the width: _part + _w > t.
+		return "CAST(_part AS TIMESTAMP) + to_minutes(CAST(_w AS INTEGER)) > TIMESTAMP '" + t.Format(tsArgLayout) + "'"
 	case minutes > 0:
 		return "_part >= '" + BucketStart(t, minutes).Format(tsArgLayout) + "'"
 	default:

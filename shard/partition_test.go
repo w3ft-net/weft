@@ -112,7 +112,7 @@ func TestExportedArchive_BoundedReadMatchesAnUnboundedOne(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil { // the local export makes it too
 			t.Fatal(err)
 		}
-		glob, _, err := ds.exportParquet(ctx, dir, minutes, false)
+		glob, _, err := ds.exportParquet(ctx, dir, minutes)
 		if err != nil {
 			t.Fatalf("width %d: export: %v", minutes, err)
 		}
