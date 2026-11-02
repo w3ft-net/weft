@@ -7,11 +7,13 @@ import (
 	"time"
 )
 
-// parquetPerRawByte estimates the Parquet bytes a row's text takes, for a
-// writer that does not know the size of what it is rewriting (the compactor).
-// It was 0.29 on a synthetic trial, so it errs towards narrower buckets than
-// needed, not wider.
-const parquetPerRawByte = 0.3
+// parquetPerRawByte estimates the Parquet bytes a row takes per byte of its text
+// plus rowOverheadBytes, for a writer that does not know the size of what it is
+// rewriting (the compactor). Measured on a real 18.7M-row archive: 2,370 MiB of
+// Parquet for 3,455 MiB of text, 0.69 (the Parquet also holds the payload and
+// fields columns). A synthetic trial gave 0.29, which made the widths 2.3 times
+// too wide on the real archive, with files of up to 82 MiB against the 16 MiB target.
+const parquetPerRawByte = 0.7
 
 // rowOverheadBytes is what a row costs beyond its text, for the same estimate.
 const rowOverheadBytes = 64
