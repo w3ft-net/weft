@@ -1136,6 +1136,7 @@ var WeftCoordinator_ServiceDesc = grpc.ServiceDesc{
 const (
 	WeftAdmin_RelaunchShard_FullMethodName    = "/weft.WeftAdmin/RelaunchShard"
 	WeftAdmin_ForceRemoveShard_FullMethodName = "/weft.WeftAdmin/ForceRemoveShard"
+	WeftAdmin_SwapShardArchive_FullMethodName = "/weft.WeftAdmin/SwapShardArchive"
 	WeftAdmin_GetShard_FullMethodName         = "/weft.WeftAdmin/GetShard"
 	WeftAdmin_ListShards_FullMethodName       = "/weft.WeftAdmin/ListShards"
 	WeftAdmin_ListBuckets_FullMethodName      = "/weft.WeftAdmin/ListBuckets"
@@ -1172,6 +1173,12 @@ type WeftAdminClient interface {
 	// row. Refused if the shard still owns an instance or volume unless
 	// force is set. S3 data is left untouched.
 	ForceRemoveShard(ctx context.Context, in *ForceRemoveShardRequest, opts ...grpc.CallOption) (*ForceRemoveShardResponse, error)
+	// SwapShardArchive points an ARCHIVED shard at a converted copy of its
+	// archive (docs/plans/per-service-tables.md, "Archive layout"): only if the
+	// shard is still at old_path, with the old objects tombstoned for deletion
+	// after a week. Idempotent: a shard already at new_path succeeds, so it can be
+	// sent to every coordinator. FAILED_PRECONDITION if the shard is elsewhere.
+	SwapShardArchive(ctx context.Context, in *SwapShardArchiveRequest, opts ...grpc.CallOption) (*SwapShardArchiveResponse, error)
 	// GetShard returns one shard's current row (state + last_heartbeat_at)
 	// — what weft-admin's wait-and-verify loop polls after firing a
 	// relaunch.
@@ -1212,6 +1219,16 @@ func (c *weftAdminClient) ForceRemoveShard(ctx context.Context, in *ForceRemoveS
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ForceRemoveShardResponse)
 	err := c.cc.Invoke(ctx, WeftAdmin_ForceRemoveShard_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *weftAdminClient) SwapShardArchive(ctx context.Context, in *SwapShardArchiveRequest, opts ...grpc.CallOption) (*SwapShardArchiveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SwapShardArchiveResponse)
+	err := c.cc.Invoke(ctx, WeftAdmin_SwapShardArchive_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1288,6 +1305,12 @@ type WeftAdminServer interface {
 	// row. Refused if the shard still owns an instance or volume unless
 	// force is set. S3 data is left untouched.
 	ForceRemoveShard(context.Context, *ForceRemoveShardRequest) (*ForceRemoveShardResponse, error)
+	// SwapShardArchive points an ARCHIVED shard at a converted copy of its
+	// archive (docs/plans/per-service-tables.md, "Archive layout"): only if the
+	// shard is still at old_path, with the old objects tombstoned for deletion
+	// after a week. Idempotent: a shard already at new_path succeeds, so it can be
+	// sent to every coordinator. FAILED_PRECONDITION if the shard is elsewhere.
+	SwapShardArchive(context.Context, *SwapShardArchiveRequest) (*SwapShardArchiveResponse, error)
 	// GetShard returns one shard's current row (state + last_heartbeat_at)
 	// — what weft-admin's wait-and-verify loop polls after firing a
 	// relaunch.
@@ -1319,6 +1342,9 @@ func (UnimplementedWeftAdminServer) RelaunchShard(context.Context, *RelaunchShar
 }
 func (UnimplementedWeftAdminServer) ForceRemoveShard(context.Context, *ForceRemoveShardRequest) (*ForceRemoveShardResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ForceRemoveShard not implemented")
+}
+func (UnimplementedWeftAdminServer) SwapShardArchive(context.Context, *SwapShardArchiveRequest) (*SwapShardArchiveResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SwapShardArchive not implemented")
 }
 func (UnimplementedWeftAdminServer) GetShard(context.Context, *GetShardRequest) (*GetShardResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetShard not implemented")
@@ -1385,6 +1411,24 @@ func _WeftAdmin_ForceRemoveShard_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WeftAdminServer).ForceRemoveShard(ctx, req.(*ForceRemoveShardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WeftAdmin_SwapShardArchive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SwapShardArchiveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WeftAdminServer).SwapShardArchive(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WeftAdmin_SwapShardArchive_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WeftAdminServer).SwapShardArchive(ctx, req.(*SwapShardArchiveRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1475,6 +1519,10 @@ var WeftAdmin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ForceRemoveShard",
 			Handler:    _WeftAdmin_ForceRemoveShard_Handler,
+		},
+		{
+			MethodName: "SwapShardArchive",
+			Handler:    _WeftAdmin_SwapShardArchive_Handler,
 		},
 		{
 			MethodName: "GetShard",
