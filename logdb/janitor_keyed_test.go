@@ -119,6 +119,17 @@ func TestExecutePurge_RewriteKeepsAKeyedArchiveKeyed(t *testing.T) {
 	}
 }
 
+// Only the leader coordinator runs a pass. Two coordinators both running one
+// would convert the same archives at once: double the Lambda work, two copies of
+// each, and one copy orphaned by the later swap. A follower must not touch the
+// store, so this janitor has none: reaching it would panic.
+func TestJanitor_RunOnceDoesNothingOnAFollower(t *testing.T) {
+	j := &Janitor{Clock: time.Now, IsLeader: func() bool { return false }}
+	if err := j.RunOnce(t.Context()); err != nil {
+		t.Fatalf("RunOnce on a follower: %v", err)
+	}
+}
+
 // Converting is opt-in: with it off a live archive is left alone, as ever.
 // With it on, an archive that is not keyed and has nothing to delete is
 // planned for conversion; a keyed one and an expired one are not.

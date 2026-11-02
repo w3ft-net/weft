@@ -512,6 +512,10 @@ type Janitor struct {
 	// ConvertToKeyed rewrites archives that are not sized (see shard.IsSized)
 	// into sized ones, and writes sized archives from every rewrite.
 	ConvertToKeyed bool
+	// IsLeader gates the pass to one coordinator: every coordinator runs a
+	// Janitor, and two passes at once would rewrite the same archives twice.
+	// Nil means always run (tests, a single process).
+	IsLeader func() bool
 }
 
 // NewProvisionerJanitor wires a Janitor to a live provisioner. Retire uses
@@ -531,6 +535,7 @@ func NewProvisionerJanitor(prov *Provisioner, compactor shard.Compactor, deleter
 		GCDelay:   RetentionGCDelay,
 		Clock:     time.Now,
 		Interval:  interval,
+		IsLeader:  prov.IsLeader,
 	}
 }
 
@@ -538,6 +543,9 @@ func NewProvisionerJanitor(prov *Provisioner, compactor shard.Compactor, deleter
 // purge the ones that need it, then GC due tombstones. Per-shard errors
 // are logged and don't abort the pass.
 func (j *Janitor) RunOnce(ctx context.Context) error {
+	if j.IsLeader != nil && !j.IsLeader() {
+		return nil
+	}
 	now := j.Clock()
 	tiers, err := j.Store.ActiveCustomerTiers()
 	if err != nil {
