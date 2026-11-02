@@ -30,10 +30,9 @@ in the time range, not because of how they are planned or how much they return. 
 The first speeds up queries that reach archived data. The second is what the hot-shard
 problem below needs, and it is not delivered yet.
 
-**Left to do** (in rough order): answer the open questions; add the table-name function
-and the shard's dual-layout support; ship the additive wire field; teach the planner to
-send the table name; move facts, export and the janitor onto it; measure on the
-2026-11-02 rotation shards. Details under "Design" and "Rollout".
+**Left to do.** See "Next steps (2026-11-02)" for the dated list, and "Cleanup" for the code
+that is deleted once both layouts are settled. Details of the design are under "Design" and
+"Rollout".
 
 ## What we measured
 
@@ -342,6 +341,47 @@ local files, so S3 buffering is unmeasured. A Terraform apply reverts the cold L
 placeholder, so redeploy after (see the cold-shard deploy notes). The gain applies only to
 queries that reach into archives (see "Result" above).
 
+## Next steps (2026-11-02)
+
+Decision (Paul, 2026-11-02): wait a week for the natural rotation. Nothing below needs doing
+before Nov 8. All times are UTC and assume the bucket's `WindowDuration` and retention are 7
+days, which I have not confirmed on the `buckets` row.
+
+**What happens on its own, and what to check**
+
+| When | What | Check |
+|---|---|---|
+| Nov 8 about 23:50 | Rotation: the Nov 2 shards (`68a0efb7`, `58f6c85c`) are within `PrewarmLead` of their `WindowEnd`. The Nov 9 cohort is minted, becomes `INGESTING`, then the Nov 2 shards go `READ_ONLY`. | Both new shards `INGESTING`, the old two `READ_ONLY`, `weft-admin audit` healthy, ingestion_errors still 0. |
+| Nov 9 00:00 and the next bucket tick | Retention sweep archives the two `READ_ONLY` Oct 26 shards (`a70003d3`, `bfed2003`): `now - WindowEnd` passes 7 days. **First production run of the sized exporter**: the export host (`r7g.large`, coordinator image) writes `--keyed`. | A manifest per shard under `s3://weft-cold-220664822695/<prefix>/_manifests/` and a `parquet_path` ending `/sized/**/*.parquet`. `python3 scripts/convert_archives.py --stage plan` must report nothing to convert. Row and customer counts match the manifest (`VerifyAgainstManifest`). A CLI query of one key in their window is fast and returns rows. The shard's instance and volume are reaped. |
+| Nov 9 about 12:36 to 12:42 | Tombstones on the five swapped archives pass 7 days (`ArchiveSwapGCDelay`); the janitor's `SweepTombstones` deletes the old objects. **Rollback by swapping back ends here.** | The old `attempt-1/` objects of the five shards are gone, the new `.r<ns>/sized/` ones remain, and queries still return. I have not seen a tombstone sweep delete anything yet. |
+
+**Decisions and work before Nov 8 23:50 (or wait another week)**
+
+1. **Per-key tables on live shards.** `--per-key-tables` goes in `deploy/weft-shard.service` as
+   its own commit. It takes effect only on a new, empty shard database, so the Nov 9 cohort is
+   the first that can be per-key; if the flag is not in a shard image by Nov 8 23:50, the next
+   chance is Nov 16. First measure ingest and a single-key query on a `t4g.micro` (the prod
+   shard type), since the cost per table there is unmeasured. With the flag on for the Nov 9
+   cohort, the last legacy shard (Nov 2) archives on Nov 16.
+2. **Terraform housekeeping.** The four catalog commits (`88bfe4c`, `c92d97f`, `bf38283`,
+   `39ed47c`) are local and unpushed. The prod config blob still holds `KEYED_ARCHIVES=1`
+   (set by hand on 2026-11-01, unread since the janitor conversion was removed); the next apply
+   of `app_config_blob` drops it. That is an SSM change: read the plan for it before applying.
+   `janitor_enabled` and `JANITOR_ENABLED` are also unread now that the flag is gone from the
+   code, and can be deleted.
+3. **Push** the local doc commit(s) with the implementation PR.
+
+**Why the cascade cannot be started early.** Windows are `now.Truncate(WindowDuration)`, so
+they are calendar-aligned, and the next window's shards cover future time. Scaling the target
+down demotes the youngest shards, not the oldest. Raising `window_duration` mid-flight
+re-aligns the window (14 days puts today's window at Oct 26 to Nov 9, while the live shards
+cover Nov 2 to Nov 9), so the next rotation looks for shards in a window that has none and
+mints into one about to end; it also pushes retention, and so the Oct 26 archive, back a week.
+`POST /api/admin/shards/{id}/archive` does work on a `READ_ONLY` shard, with no retention
+check (that check guards only deleting an archived shard), but it runs the export inline and
+does not start a rotation. A real "rotate now" would need an explicit window anchor and a
+fake-clock test of the bucket FSM (`b.clock()`); it is not designed.
+
 ## Cleanup: the migration code goes away
 
 Everything that lets a shard be either layout, and everything that lets the SQL not name
@@ -375,6 +415,44 @@ Do this only when all three hold:
 
 The column drop (see Rollout) goes with this: it needs the same conditions plus the table
 comment holding the key.
+
+### Archive side: the conversion and old-layout code
+
+Separate from the live-shard list above, and earlier: it depends only on the archives, not
+on the flag. Do it when both hold. Check `shard_records.parquet_path` of every `ARCHIVED`
+shard, not only the manifests: every path ends `/sized/**/*.parquet` (or is a small-shard
+single file), and the five swapped archives' old objects are gone (after Nov 9, see "Next
+steps"). Then remove:
+
+- **Reading the old layouts.** The `m<minutes>` and `k<minutes>` branches of
+  `partitionSegment`, `PartitionMinutes` and `IsKeyed` (`shard/partition.go`), the matching
+  branches of `ParquetReadExpr` and `keyedHiveTypes` (`shard/cold_shard.go`), and the
+  width-less and `m`/`k` handling in `PruneColdPartitions` and `partBound`
+  (`shard/cold_prune.go`, including `coarsestLegacyPartition`). Keep what the sized reader
+  uses; the compiler and the cold-shard tests will say which that is.
+- **Writing the old layouts.** `exportParquet` (the time-only export), the `keyed bool`
+  carried through `archive`, `exportArchive` and `exportPartitioned` (`shard/shard.go`),
+  `ExportConfig.Keyed` and the `--keyed` flag (`cmd/shard/export.go`,
+  `deploy/weft-export.service`): the exporter then always writes the sized layout. The
+  single-file path for a small shard in `exportArchive` runs only when S3 is not configured
+  (local and dev); keep or drop it with that in mind.
+- **The janitor's other branch.** The single-file destination in `rewriteDestPath`
+  (`logdb/janitor.go`) and the plain `COPY ... TO file` in `RewriteRetention`, plus its error
+  for a non-sized keyed destination (`shard/compact.go`).
+- **The one-off conversion.** `cmd/convert-archive`, `scripts/convert_archives.py` and its
+  tests, `CompareArchives`, `LocalPathOf` and `VerifyAgainstManifest` (`shard/archive_compare.go`;
+  keep `VerifyAgainstManifest` only while the first production exports are being checked),
+  and `SizedArchivePath` once `rewriteDestPath` has one branch. The compactor and exporter
+  keep working without any of them.
+- **The swap.** After the 7-day rollback window of the five swapped archives: the
+  `SwapShardArchive` RPC and its messages (mark the field numbers `reserved`),
+  `Provisioner.SwapArchive`, `ShardStore.SwapArchivePath`, `ErrArchivePathChanged`, the
+  `swap` tombstone reason, and `weft-admin swap-archive` (`cmd/weft-admin/swaparchive.go`).
+  Keep `ArchiveSwapGCDelay` and the tombstone sweep only if something else uses them.
+- **Docs.** Shrink "Converting existing archives" to a short history, and update the runbook's
+  "Sized archives" section (`docs/runbooks/retention-janitor.md`).
+
+`weft-admin shard-count` still names no tables; it is on the live-shard list (condition 3).
 
 ## Expected gain, and what it will not fix
 
@@ -416,7 +494,8 @@ that and was not tested. Absolute numbers on a `t4g.micro` with EBS will be wors
 
 1. How does `cat a b` order rows, by timestamp or file by file? It decides sub-queries versus
    `UNION ALL`.
-2. Does the shard query proto take an additive table-name field cleanly?
+2. ~~Does the shard query proto take an additive table-name field cleanly?~~ Yes: `table`
+   (`ExecuteQueryRequest` 16, `QueryRequest` 4) is deployed and old receivers ignore it.
 3. What bound do we put on tables per shard, since services are customer-controlled? The
    ingest numbers above suggest tens, not thousands.
 4. Delete the seven vestigial `log_groups` rows? They add no tables under lazy creation, but
@@ -424,8 +503,13 @@ that and was not tested. Absolute numbers on a `t4g.micro` with EBS will be wors
 5. Confirm the hypothesis first: `parquet_metadata()` on an archived shard's export, or
    `PRAGMA storage_info('logs')` on a restored snapshot. Read-only and does not touch the live
    shards.
-6. Does the per-key table design also fit retention and the cold path as hoped (per-table
-   export partitioned by key), or does it change the archive step?
+6. ~~Does the per-key table design also fit retention and the cold path as hoped, or does it
+   change the archive step?~~ The archive step changed as hoped: archives are partitioned by
+   key with a width per key (see "Archive layout"), live and measured. What is still open is
+   the live-shard side: the exporter reading per-key tables rather than the union
+   (`exportKeyedParquet` reads `source()`, the union, today).
+7. Is the bucket's `WindowDuration` and retention really 7 days? "Next steps" assumes so and
+   it has not been read from the `buckets` row.
 
 ## Known side issue
 
