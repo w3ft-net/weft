@@ -2,7 +2,10 @@ package shard
 
 import (
 	"database/sql"
+	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -142,6 +145,75 @@ func TestSizedExport_EachKeyGetsAWidthForItsOwnSize(t *testing.T) {
 				t.Errorf("%s %v..%v: pruned read counts %d rows, unpruned %d", service, w.lo, w.hi, got, want)
 			}
 		}
+	}
+}
+
+// The compactor sorts what it writes, which can need more than DuckDB's memory
+// limit. In a Lambda DuckDB would believe it has the host's memory, not the
+// function's, and its default spill directory is relative to a working directory
+// that is read-only: the sort would be killed or fail with "Failed to create
+// directory .tmp: Permission denied". So the limit comes from the function's
+// memory and the spill goes to the temp directory.
+func TestSpillSettings(t *testing.T) {
+	spill := "SET temp_directory='" + filepath.Join(os.TempDir(), "duckdb-spill") + "'"
+
+	t.Setenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "2048")
+	got := strings.Join(spillSettings(), "; ")
+	if want := fmt.Sprintf("SET memory_limit='1228MB'; SET threads=%d; %s", min(runtime.NumCPU(), 2), spill); got != want {
+		t.Errorf("in a 2048 MB Lambda: %q, want %q", got, want)
+	}
+
+	t.Setenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "")
+	if got, want := strings.Join(spillSettings(), "; "), spill; got != want {
+		t.Errorf("outside a Lambda: %q, want just %q", got, want)
+	}
+
+	t.Setenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "not a number")
+	if got, want := strings.Join(spillSettings(), "; "), spill; got != want {
+		t.Errorf("with a bad memory size: %q, want just %q", got, want)
+	}
+}
+
+// Under the memory a small Lambda has, from a read-only working directory, a
+// conversion larger than memory completes by spilling.
+func TestRewriteRetention_SpillsInAMemoryLimitedLambda(t *testing.T) {
+	if testing.Short() {
+		t.Skip("writes and sorts a few hundred MB")
+	}
+	ds, err := NewDuckDBShard("spill", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ds.Close() })
+	const rows = 2_400_000
+	if _, err := ds.db.Exec(fmt.Sprintf(`INSERT INTO logs (raw, ts, customer_id, namespace, service, kind)
+		SELECT repeat('x', 180) || i, TIMESTAMP '2026-10-14 00:00:00' + ((i %% 432000) || ' seconds')::INTERVAL,
+		       1, 'weft', 'svc' || (i %% 40), 'main' FROM range(%d) r(i)`, rows)); err != nil {
+		t.Fatal(err)
+	}
+	// Small row groups, so that the readers (one per core: 2 in a Lambda, more on
+	// the machine running this test) do not themselves exhaust the limit; what
+	// has to spill is the sort.
+	src := filepath.Join(t.TempDir(), "src.parquet")
+	if _, err := ds.db.Exec(fmt.Sprintf("COPY logs TO '%s' (FORMAT PARQUET, ROW_GROUP_SIZE 8192)", src)); err != nil {
+		t.Fatal(err)
+	}
+
+	readonly := t.TempDir()
+	if err := os.Chmod(readonly, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(readonly, 0o755) })
+	t.Chdir(readonly)
+	t.Setenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "512") // a 307 MB limit for about 480 MB of rows
+
+	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
+	res, err := RewriteRetention(src, dstDir+"/sized/**/*.parquet", nil, nil)
+	if err != nil {
+		t.Fatalf("a conversion larger than memory failed: %v", err)
+	}
+	if res.RowsKept != rows {
+		t.Errorf("kept %d rows, want %d", res.RowsKept, rows)
 	}
 }
 

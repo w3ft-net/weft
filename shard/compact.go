@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -143,6 +145,26 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 	return res, nil
 }
 
+// lambdaThreads caps DuckDB's threads in a Lambda: the compactor's function has
+// about two cores, and each thread needs its own buffers inside the memory limit.
+const lambdaThreads = 2
+
+// spillSettings let the sort in copySized exceed memory. In a Lambda DuckDB sees
+// the host's memory, not the function's, so the limit is 60% of the function's
+// (AWS_LAMBDA_FUNCTION_MEMORY_SIZE, in MB), leaving room for what DuckDB does not
+// count, shared among at most lambdaThreads threads; elsewhere the defaults
+// stand. Spill files go to the temp directory, because DuckDB's default is
+// relative to a working directory a Lambda cannot write.
+func spillSettings() []string {
+	var stmts []string
+	if mb, err := strconv.Atoi(os.Getenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE")); err == nil && mb > 0 {
+		stmts = append(stmts,
+			fmt.Sprintf("SET memory_limit='%dMB'", mb*60/100),
+			fmt.Sprintf("SET threads=%d", min(runtime.NumCPU(), lambdaThreads)))
+	}
+	return append(stmts, "SET temp_directory='"+filepath.Join(os.TempDir(), "duckdb-spill")+"'")
+}
+
 // copySized writes the rows of query to dir as a sized archive (see IsSized),
 // whatever layout they came from: a sized or keyed archive, a time-only one, or
 // a single file. Their own _part and _w are dropped and rebuilt from ts and the
@@ -156,6 +178,11 @@ func copySized(db *sql.DB, query, dir string) error {
 		return err
 	}
 	defer conn.Close()
+	for _, stmt := range spillSettings() {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("%s: %w", stmt, err)
+		}
+	}
 
 	src := "(" + query + ")"
 	var drop []string
