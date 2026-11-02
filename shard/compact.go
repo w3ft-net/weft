@@ -149,15 +149,29 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 // about two cores, and each thread needs its own buffers inside the memory limit.
 const lambdaThreads = 2
 
-// spillSettings let the sort in copySized exceed memory. In a Lambda DuckDB sees
-// the host's memory, not the function's, so the limit is 60% of the function's
-// (AWS_LAMBDA_FUNCTION_MEMORY_SIZE, in MB), leaving room for what DuckDB does not
-// count, shared among at most lambdaThreads threads; elsewhere the defaults
-// stand. Spill files go to the temp directory, because DuckDB's default is
-// relative to a working directory a Lambda cannot write.
-func spillSettings() []string {
+// lambdaMemoryMB is the memory of the Lambda function this runs in, in MB, or 0
+// when it is not in one.
+func lambdaMemoryMB() int {
+	mb, err := strconv.Atoi(os.Getenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE"))
+	if err != nil || mb <= 0 {
+		return 0
+	}
+	return mb
+}
+
+func inLambda() bool { return lambdaMemoryMB() > 0 }
+
+// lambdaSettings keep DuckDB inside the function it runs in. In a Lambda DuckDB
+// sees the host's memory, not the function's, so the limit is 60% of the
+// function's (AWS_LAMBDA_FUNCTION_MEMORY_SIZE), leaving room for what DuckDB does
+// not count, shared among at most lambdaThreads threads; elsewhere the defaults
+// stand. Anything that does spill goes to the temp directory, because DuckDB's
+// default is relative to a working directory a Lambda cannot write (a larger
+// than memory sort failed there with "Failed to create directory .tmp:
+// Permission denied").
+func lambdaSettings() []string {
 	var stmts []string
-	if mb, err := strconv.Atoi(os.Getenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE")); err == nil && mb > 0 {
+	if mb := lambdaMemoryMB(); mb > 0 {
 		stmts = append(stmts,
 			fmt.Sprintf("SET memory_limit='%dMB'", mb*60/100),
 			fmt.Sprintf("SET threads=%d", min(runtime.NumCPU(), lambdaThreads)))
@@ -169,8 +183,10 @@ func spillSettings() []string {
 // whatever layout they came from: a sized or keyed archive, a time-only one, or
 // a single file. Their own _part and _w are dropped and rebuilt from ts and the
 // widths chosen for the keys in query, so a time-only archive of another width,
-// or a single file with no _part, comes out the same. The COPY sorts, which
-// can spill to disk.
+// or a single file with no _part, comes out the same. The rows are not sorted:
+// a whole archive does not fit in a Lambda's disk to sort (a 2.5 GiB real archive
+// needed more than 6.5 GiB of spill); partitionedWriteSettings keeps it from
+// splitting partitions into many files instead.
 func copySized(db *sql.DB, query, dir string) error {
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
@@ -178,7 +194,7 @@ func copySized(db *sql.DB, query, dir string) error {
 		return err
 	}
 	defer conn.Close()
-	for _, stmt := range spillSettings() {
+	for _, stmt := range append(lambdaSettings(), partitionedWriteSettings()...) {
 		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("%s: %w", stmt, err)
 		}

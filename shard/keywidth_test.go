@@ -154,29 +154,29 @@ func TestSizedExport_EachKeyGetsAWidthForItsOwnSize(t *testing.T) {
 // that is read-only: the sort would be killed or fail with "Failed to create
 // directory .tmp: Permission denied". So the limit comes from the function's
 // memory and the spill goes to the temp directory.
-func TestSpillSettings(t *testing.T) {
+func TestLambdaSettings(t *testing.T) {
 	spill := "SET temp_directory='" + filepath.Join(os.TempDir(), "duckdb-spill") + "'"
 
 	t.Setenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "2048")
-	got := strings.Join(spillSettings(), "; ")
+	got := strings.Join(lambdaSettings(), "; ")
 	if want := fmt.Sprintf("SET memory_limit='1228MB'; SET threads=%d; %s", min(runtime.NumCPU(), 2), spill); got != want {
 		t.Errorf("in a 2048 MB Lambda: %q, want %q", got, want)
 	}
 
 	t.Setenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "")
-	if got, want := strings.Join(spillSettings(), "; "), spill; got != want {
+	if got, want := strings.Join(lambdaSettings(), "; "), spill; got != want {
 		t.Errorf("outside a Lambda: %q, want just %q", got, want)
 	}
 
 	t.Setenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "not a number")
-	if got, want := strings.Join(spillSettings(), "; "), spill; got != want {
+	if got, want := strings.Join(lambdaSettings(), "; "), spill; got != want {
 		t.Errorf("with a bad memory size: %q, want just %q", got, want)
 	}
 }
 
 // Under the memory a small Lambda has, from a read-only working directory, a
 // conversion larger than memory completes by spilling.
-func TestRewriteRetention_SpillsInAMemoryLimitedLambda(t *testing.T) {
+func TestRewriteRetention_ConvertsInAMemoryLimitedLambda(t *testing.T) {
 	if testing.Short() {
 		t.Skip("writes and sorts a few hundred MB")
 	}

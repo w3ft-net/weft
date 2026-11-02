@@ -50,7 +50,7 @@ const (
 )
 
 // keyedPartitionBy is the partition columns of a sized archive, in directory
-// order, and the order its rows are written in.
+// order.
 const keyedPartitionBy = "customer_id, namespace, service, kind, _w, _part"
 
 // keyedWidths are the time buckets, in minutes, a sized archive gives a key:

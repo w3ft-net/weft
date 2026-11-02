@@ -1053,12 +1053,9 @@ func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes in
 // targetFileBytes, given estParquetBytes for the whole shard. Returns the glob
 // and the number of rows written.
 //
-// The rows are written sorted by partition. DuckDB keeps at most 100 partition
-// files open and starts a new file each time it reopens one, so rows left in
-// stored order (every batch touches every partition) become many small files per
-// partition: 1,905 files for 308 partitions in a 6M-row trial, 326 sorted. A cold
-// read pays for each file. The files are not each one time-ordered run (every
-// writer thread flushes its own), only each run is.
+// The rows are not sorted, but the write is told to keep every partition's file
+// open (partitionedWriteSettings), or it splits partitions into many small files
+// that a cold read pays for one by one.
 func (s *DuckDBShard) exportKeyedParquet(ctx context.Context, path string, estParquetBytes int64) (string, int64, error) {
 	// The width table is a temp table, which belongs to one connection: size the
 	// keys and write the archive on the same one.
@@ -1067,6 +1064,11 @@ func (s *DuckDBShard) exportKeyedParquet(ctx context.Context, path string, estPa
 		return "", 0, fmt.Errorf("acquire conn: %w", err)
 	}
 	defer conn.Close()
+	for _, stmt := range partitionedWriteSettings() {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return "", 0, fmt.Errorf("%s: %w", stmt, err)
+		}
+	}
 	if err := createKeyWidths(ctx, conn, s.source(), estParquetBytes); err != nil {
 		return "", 0, err
 	}

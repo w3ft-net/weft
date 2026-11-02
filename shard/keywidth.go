@@ -21,14 +21,33 @@ const rowOverheadBytes = 64
 // that width. It joins the key_widths table that createKeyWidths made on the
 // connection it will run on. The join treats a missing customer, namespace,
 // service or kind as a value, since rows from before they were filled in have
-// none.
+// none. The rows are not sorted: see partitionedWriteSettings.
 func sizedSelect(src string) string {
 	return fmt.Sprintf(`SELECT l.*, k.w AS _w,
 		time_bucket(to_minutes(k.w), l.ts, TIMESTAMP '1970-01-01') AS _part
 		FROM %s l JOIN key_widths k
 		ON l.customer_id IS NOT DISTINCT FROM k.kc AND l.namespace IS NOT DISTINCT FROM k.kn
-		AND l.service IS NOT DISTINCT FROM k.ks AND l.kind IS NOT DISTINCT FROM k.kk
-		ORDER BY %s, ts`, src, keyedPartitionBy)
+		AND l.service IS NOT DISTINCT FROM k.ks AND l.kind IS NOT DISTINCT FROM k.kk`, src)
+}
+
+// Open files a partitioned write may keep: one per partition being written.
+// DuckDB's default is 100, and past it closes a partition's file to open
+// another's and starts a new file each time it comes back: 1,905 files for 308
+// partitions in a 6M-row trial. Raised, the same write made 308 files, with no
+// sort and so no spill. A Lambda allows 1,024 open files in all, so there the cap
+// leaves room for the rest; past it the write still completes, in more files.
+const (
+	partitionedWriteOpenFiles       = 20000
+	partitionedWriteOpenFilesLambda = 900
+)
+
+// partitionedWriteSettings are the DuckDB settings for the sized write.
+func partitionedWriteSettings() []string {
+	n := partitionedWriteOpenFiles
+	if inLambda() {
+		n = partitionedWriteOpenFilesLambda
+	}
+	return []string{fmt.Sprintf("SET partitioned_write_max_open_files=%d", n)}
 }
 
 // createKeyWidths makes the key_widths temp table on conn: for each key in src,
