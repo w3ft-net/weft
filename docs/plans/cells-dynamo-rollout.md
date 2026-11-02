@@ -32,7 +32,7 @@ no return. Three things make that cheap here:
   **N and N-1 always overlap**. There is no runtime version negotiation between
   coordinator, shard and compute, so every stage below needs a **bridge release**
   that works with both worlds.
-- **No hot config reload.** A flag flip needs a restart today (open question 1).
+- **No hot config reload.** A flag flip needs a restart (decision 1).
 - The registry is already behind an interface: `logdb.RegistryStore`
   (`SaveShard`, `ListShards`, `GetShard`, `TouchHeartbeat`,
   `SetShardIngestFailures`, `ListShardServices`, `AddShardService`). A DynamoDB
@@ -94,8 +94,8 @@ no return. Three things make that cheap here:
   job; it serves only login and the org picker. Per-request authorization stays
   in the cell.
 - Per-request session build becomes: identity from DynamoDB (cached) plus
-  membership, permissions and tier from the cell. The cache TTL is the
-  revocation-latency knob (open question 2).
+  membership, permissions and tier from the cell. The cache TTL is 60
+  seconds (decision 2).
 - Reversible: until the Postgres writes stop (point of no return 1).
 
 ### Stage 3: shard fleet registry and the fleet lease (the hard one)
@@ -116,9 +116,8 @@ no return. Three things make that cheap here:
    rollback is flipping reads back. Then flip the leader's FSM writes to
    `TransactWriteItems` with a `ConditionCheck` on the lease item (this is where
    fencing becomes atomic), soak, then stop the Postgres fleet and lease writes.
-6. `shard_services` stays in Postgres in this stage: with one cell, forward and
-   reverse lookups are identical. The reverse-lookup decision must be made before
-   Stage 6.
+6. `shard_services` gets a DynamoDB copy keyed by shard for the reverse lookup
+   (decision 4), dual-written and diffed like the other fleet items.
 - Customer impact: none expected. Ingest and queries use the in-memory registry
   throughout. A seconds-long gap with no FSM leader is harmless: the FSM is
   convergent, there is no separate reconciler.
@@ -163,8 +162,8 @@ lazily per cell and pooled.
 - **Mixed-version windows.** Dual-write bridges exist precisely for this;
   missing one (for example a path that writes only Postgres) shows up as a
   shadow-read mismatch, so the alert is a gate, not a nicety.
-- **A bad flip with no hot reload** costs a restart to undo. Hence open
-  question 1.
+- **A bad flip with no hot reload** costs a restart to undo (decision 1). That
+  is why each flip is its own release and the shadow-read gate precedes it.
 - **DynamoDB throttling or an IAM mistake.** The Postgres fallback on a miss
   covers reads through Stage 2; for the fleet, the in-memory registry carries
   the data plane while a coordinator retries.
@@ -179,21 +178,25 @@ passing contract suite on both implementations. Mismatch and throttle counters
 go through `weftsdk` logging (never stdlib `log`), with an alert on the
 dogfood account, which stays out of git.
 
-## Open questions for Paul
+## Decisions (2026-11-02)
 
-1. **How do we flip?** There is no config hot reload. Options: a restart per
-   flip (slow, but the state lives in version control); a small rollout-state
-   item in DynamoDB read every few seconds, with the committed default in
-   Terraform (fast, auditable by logging, but operational state rather than
-   config); or build config hot reload. I would take the DynamoDB item.
-2. **Revocation latency.** Cache TTL for identity and permissions: 60 seconds,
-   a few minutes, or longer? This also decides what "stale" means during a
-   DynamoDB outage.
-3. **Soak lengths** per stage (days, not minutes, for the identity and fleet
-   cutovers).
-4. **`shard_services` reverse lookup** (fan-out over cells at boot, or a
-   DynamoDB copy keyed by shard) before Stage 6.
-5. **Coordinators shared across cells** (assumed here) or one group per cell.
-6. **Isolation.** This is long-running, multi-release work touching every
-   store call site. It should live in a worktree, with the generated code and
-   the `gopatch` rewrite kept off other in-flight work.
+1. **Flips are a restart.** There is no rollout-state item and no hot reload. Each
+   flip is a committed config change (Terraform) followed by a rolling restart of
+   the coordinators and API; the state of the rollout lives in version control.
+   Consequence: a rollback also costs a restart, so every flip is its own release
+   and the soak lengths below are measured from the restart that completes it.
+2. **Identity and permission cache TTL is 60 seconds.** Revocation takes effect
+   within a minute; during a DynamoDB outage, cached identity is served for at
+   most that long and then fails closed.
+3. **Soak lengths are tiered.** Stage 1 (directory): 2 days per flip. Stages 2 and
+   3 (identity, fleet and lease): 7 days per flip, and each soak must span at least
+   one weekly cycle and one ordinary coordinator deploy.
+4. **`shard_services` gets a DynamoDB copy keyed by shard** for the reverse
+   lookup, written and repaired alongside the other fleet items. This lands in
+   Stage 3 rather than waiting for Stage 6, so Stage 3 item 6 no longer defers it.
+5. **Coordinators are shared across cells.** One fleet, per-cell connection pools
+   dialed lazily; a failing cell's connections must never stall another cell's
+   requests (bounded dial timeouts, per-cell circuit breaker).
+6. **Isolation.** The work lives in its own worktree off `main`, not in
+   `per-service-tables`, with the `gopatch` rewrite and generated code kept off
+   other in-flight work.
