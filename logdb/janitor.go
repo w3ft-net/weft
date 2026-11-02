@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
-	"regexp"
 	"strings"
 	"time"
 
@@ -392,20 +391,15 @@ func (s ShardStore) shardArchiveStats(shardID string) ([]ShardArchiveStat, error
 }
 
 // layoutSegment is the last directory of an archive glob that names its layout:
-// k<minutes> (the first keyed layout) or sized, on a keyed archive's glob.
-var layoutSegment = regexp.MustCompile(`/(k[1-9][0-9]*|sized)$`)
-
 // rewriteDestPath derives a fresh parquet key next to the source, versioned by
 // the rewrite instant so a retry never collides with the object a previous
 // attempt may have written. A keyed archive is rewritten as a sized one
-// (x/s.attempt-N.r<ns>/sized/**/*.parquet), because one file would put every
-// service back in every file. Any other archive, the single file (x/s.parquet)
-// or the time-partitioned glob (x/s/**/*.parquet), is rewritten as a single file.
+// (shard.SizedArchivePath), because one file would put every service back in
+// every file. Any other archive, the single file (x/s.parquet) or the
+// time-partitioned glob (x/s/**/*.parquet), is rewritten as a single file.
 func rewriteDestPath(old string, now time.Time) string {
 	if shard.IsKeyed(old) {
-		base := layoutSegment.ReplaceAllString(strings.TrimSuffix(old, "/**/*.parquet"), "")
-		base = strings.TrimSuffix(base, ".parquet")
-		return fmt.Sprintf("%s.r%d/sized/**/*.parquet", base, now.UnixNano())
+		return shard.SizedArchivePath(old, now)
 	}
 	base := strings.TrimSuffix(old, "/**/*.parquet")
 	base = strings.TrimSuffix(base, ".parquet")
