@@ -309,6 +309,59 @@ func TestPerKey_SmallLocalArchiveHoldsEveryRow(t *testing.T) {
 	}
 }
 
+// The sized export of a per-key database, opened the way the export host opens a
+// restored volume: it must write every key's rows, from the tables, not the
+// empty template. The legacy case is covered in keyed_archive_test.go.
+func TestPerKey_SizedExportWritesEveryKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.duckdb")
+	s := openPerKey(t, path)
+	ingestAll(t, s)
+	s.Close()
+
+	e, err := OpenForExport("pk", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	if !e.PerKey() {
+		t.Fatal("the export host did not see the per-key layout")
+	}
+	dir := filepath.Join(t.TempDir(), "shard.attempt-1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	glob, n, err := e.exportKeyedParquet(context.Background(), dir, smallShardBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 30 || !IsSized(glob) {
+		t.Fatalf("export wrote %d rows to %q, want 30 to a sized archive", n, glob)
+	}
+
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, c := range []struct {
+		k    pkKey
+		want int
+	}{{pkStats, 5}, {pkMain, 10}, {pkOther, 15}} {
+		var got int
+		q := "SELECT count(*) FROM " + ParquetReadExpr(glob) + " WHERE customer_id = CAST(? AS BIGINT) AND namespace = ? AND service = ? AND kind = ?"
+		if err := db.QueryRow(q, fmt.Sprint(c.k.customer), c.k.namespace, c.k.service, c.k.kind).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != c.want {
+			t.Errorf("%v read back %d rows, want %d", c.k, got, c.want)
+		}
+		if dirs, _ := filepath.Glob(filepath.Join(dir, "sized", fmt.Sprintf("customer_id=%d", c.k.customer), "namespace="+c.k.namespace,
+			"service="+c.k.service, "kind="+c.k.kind)); len(dirs) != 1 {
+			t.Errorf("%v has %d directories, want 1", c.k, len(dirs))
+		}
+	}
+}
+
 // A table that lost a column and got it back on reopen has it last, so the
 // tables of a shard disagree on column order. Reading them together, as the
 // export does, must match columns by name.
