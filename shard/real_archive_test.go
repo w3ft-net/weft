@@ -2,7 +2,6 @@ package shard
 
 import (
 	"database/sql"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -80,21 +79,12 @@ func TestRealArchive_Conversion(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Every key holds the same rows: count, a sum of a hash of each line, and the
-	// first and last time, per key, in the original and in the copy.
-	fingerprint := func(from string) string {
-		return `SELECT customer_id, namespace, service, kind, count(*) AS n,
-			sum(CAST(hash(raw) AS HUGEINT)) AS h, min(ts) AS lo, max(ts) AS hi FROM ` + from + ` GROUP BY ALL`
+	// Every key holds the same rows in the copy as in the original.
+	keys, err := CompareArchives(src, dst, nil)
+	if err != nil {
+		t.Errorf("the copy differs from the original: %v", err)
 	}
-	var diff int
-	q := fmt.Sprintf("SELECT count(*) FROM ((%[1]s EXCEPT %[2]s) UNION ALL (%[2]s EXCEPT %[1]s))",
-		fingerprint(ParquetReadExpr(src)), fingerprint(ParquetReadExpr(dst)))
-	if err := db.QueryRow(q).Scan(&diff); err != nil {
-		t.Fatal(err)
-	}
-	if diff != 0 {
-		t.Errorf("%d keys differ between the original and the copy", diff)
-	}
+	t.Logf("%d keys compared", keys)
 
 	// What the copy looks like: widths per key, and the file counts and sizes.
 	rows, err := db.Query(`SELECT service, kind, _w, count(DISTINCT _part), count(*) FROM ` + ParquetReadExpr(dst) +
