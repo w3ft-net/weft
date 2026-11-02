@@ -112,10 +112,6 @@ const (
 	// before stats existed, or by an un-rolled old shard binary). The
 	// rewriter must scan the parquet to decide. Never deleted blind.
 	DispositionUnknown
-	// DispositionConvert: nothing is over-retained, but the archive is not
-	// sized (see shard.IsSized) and conversion is on. Rewrite it sized with
-	// every row kept.
-	DispositionConvert
 )
 
 func (d ShardDisposition) String() string {
@@ -126,8 +122,6 @@ func (d ShardDisposition) String() string {
 		return "delete"
 	case DispositionRewrite:
 		return "rewrite"
-	case DispositionConvert:
-		return "convert"
 	default:
 		return "unknown"
 	}
@@ -184,9 +178,8 @@ type PlannedShard struct {
 // omitted). Postgres-only: it reads shard_records, shard_archive_stats,
 // and the customer→tier map — the actual S3 delete/rewrite is a later
 // step. now and grace are injected for testability; production passes
-// the wall clock and RetentionGrace. With convert, a shard that has nothing to
-// delete but whose archive is not keyed is planned for conversion.
-func (s ShardStore) PlanRetention(now time.Time, grace time.Duration, convert bool) ([]PlannedShard, error) {
+// the wall clock and RetentionGrace.
+func (s ShardStore) PlanRetention(now time.Time, grace time.Duration) ([]PlannedShard, error) {
 	tiers, err := s.ActiveCustomerTiers()
 	if err != nil {
 		return nil, err
@@ -205,9 +198,6 @@ func (s ShardStore) PlanRetention(now time.Time, grace time.Duration, convert bo
 	var plan []PlannedShard
 	for _, sh := range shards {
 		disp := ClassifyArchivedShard(statsByShard[sh.ID], resolver, now, grace)
-		if disp == DispositionKeep && convert && sh.ParquetPath != "" && !shard.IsSized(sh.ParquetPath) {
-			disp = DispositionConvert
-		}
 		if disp == DispositionKeep {
 			continue
 		}
@@ -269,9 +259,6 @@ type PurgeDeps struct {
 	// GCDelay is how long a tombstoned object lingers before GC
 	// (RetentionGCDelay in production).
 	GCDelay time.Duration
-	// ConvertToKeyed makes every rewrite write a sized archive (see
-	// shard.IsSized), not only a conversion.
-	ConvertToKeyed bool
 	// Now is the clock (injected for tests).
 	Now func() time.Time
 	// Retire transitions a fully-expired shard out of service. In the
@@ -333,30 +320,15 @@ func (s ShardStore) ExecutePurge(p PlannedShard, resolver *RetentionResolver, de
 		}
 		return PurgeResult{Outcome: OutcomeRetired}, nil
 
-	case DispositionRewrite, DispositionConvert:
+	case DispositionRewrite:
 		stats, err := s.shardArchiveStats(p.ShardID)
 		if err != nil {
 			return PurgeResult{}, err
 		}
-		convert := p.Disposition == DispositionConvert
-		var cutoffs []shard.CustomerCutoff // a conversion deletes nothing
-		if !convert {
-			cutoffs = resolver.Cutoffs(stats, now, deps.Grace)
-		}
-		dst := rewriteDestPath(p.ParquetPath, now, convert || deps.ConvertToKeyed)
-		res, err := deps.Compactor.Rewrite(p.ParquetPath, dst, cutoffs)
+		dst := rewriteDestPath(p.ParquetPath, now)
+		res, err := deps.Compactor.Rewrite(p.ParquetPath, dst, resolver.Cutoffs(stats, now, deps.Grace))
 		if err != nil {
 			return PurgeResult{}, fmt.Errorf("rewrite %s: %w", p.ShardID, err)
-		}
-		if convert {
-			// The copy must hold exactly the rows the archive recorded. Anything
-			// else is not swapped in; what was written is left for GC.
-			if err := verifyConversion(stats, res); err != nil {
-				if terr := s.recordTombstone(dst, p.ShardID, "convert-failed", now.Add(deps.GCDelay)); terr != nil {
-					return PurgeResult{}, fmt.Errorf("convert %s: %w (and tombstoning %s: %v)", p.ShardID, err, dst, terr)
-				}
-				return PurgeResult{}, fmt.Errorf("convert %s: %w", p.ShardID, err)
-			}
 		}
 		if res.RowsKept == 0 {
 			if err := s.retire(p, deps, now); err != nil {
@@ -372,20 +344,6 @@ func (s ShardStore) ExecutePurge(p PlannedShard, resolver *RetentionResolver, de
 	default:
 		return PurgeResult{}, nil
 	}
-}
-
-// verifyConversion checks that a conversion kept every row and nothing else:
-// no row deleted, and as many written as the archive's recorded stats say it
-// holds.
-func verifyConversion(stats []ShardArchiveStat, res shard.CompactResult) error {
-	var want int64
-	for _, st := range stats {
-		want += st.RowCount
-	}
-	if res.RowsDeleted != 0 || res.RowsKept != want {
-		return fmt.Errorf("copy holds %d rows and dropped %d, the archive recorded %d", res.RowsKept, res.RowsDeleted, want)
-	}
-	return nil
 }
 
 // retire tombstones a fully-expired shard's whole object and fires the
@@ -434,18 +392,17 @@ func (s ShardStore) shardArchiveStats(shardID string) ([]ShardArchiveStat, error
 }
 
 // layoutSegment is the last directory of an archive glob that names its layout:
-// m<minutes> or k<minutes> (time-only, or the first keyed layout) or sized.
-var layoutSegment = regexp.MustCompile(`/([mk][1-9][0-9]*|sized)$`)
+// k<minutes> (the first keyed layout) or sized, on a keyed archive's glob.
+var layoutSegment = regexp.MustCompile(`/(k[1-9][0-9]*|sized)$`)
 
 // rewriteDestPath derives a fresh parquet key next to the source, versioned by
 // the rewrite instant so a retry never collides with the object a previous
-// attempt may have written. A keyed archive, or any archive when toKeyed, is
-// rewritten as a sized one (x/s.attempt-N.r<ns>/sized/**/*.parquet), because one
-// file would put every service back in every file. Otherwise the single file
-// (x/s.parquet) and the time-partitioned glob (x/s/**/*.parquet) are rewritten
-// as a single file.
-func rewriteDestPath(old string, now time.Time, toKeyed bool) string {
-	if toKeyed || shard.IsKeyed(old) {
+// attempt may have written. A keyed archive is rewritten as a sized one
+// (x/s.attempt-N.r<ns>/sized/**/*.parquet), because one file would put every
+// service back in every file. Any other archive, the single file (x/s.parquet)
+// or the time-partitioned glob (x/s/**/*.parquet), is rewritten as a single file.
+func rewriteDestPath(old string, now time.Time) string {
+	if shard.IsKeyed(old) {
 		base := layoutSegment.ReplaceAllString(strings.TrimSuffix(old, "/**/*.parquet"), "")
 		base = strings.TrimSuffix(base, ".parquet")
 		return fmt.Sprintf("%s.r%d/sized/**/*.parquet", base, now.UnixNano())
@@ -509,9 +466,6 @@ type Janitor struct {
 	Clock   func() time.Time
 	// Interval is the sweep cadence (24h in production).
 	Interval time.Duration
-	// ConvertToKeyed rewrites archives that are not sized (see shard.IsSized)
-	// into sized ones, and writes sized archives from every rewrite.
-	ConvertToKeyed bool
 	// IsLeader gates the pass to one coordinator: every coordinator runs a
 	// Janitor, and two passes at once would rewrite the same archives twice.
 	// Nil means always run (tests, a single process).
@@ -552,17 +506,16 @@ func (j *Janitor) RunOnce(ctx context.Context) error {
 		return fmt.Errorf("janitor: load tiers: %w", err)
 	}
 	resolver := NewRetentionResolver(tiers)
-	plan, err := j.Store.PlanRetention(now, j.Grace, j.ConvertToKeyed)
+	plan, err := j.Store.PlanRetention(now, j.Grace)
 	if err != nil {
 		return fmt.Errorf("janitor: plan: %w", err)
 	}
 	deps := PurgeDeps{
-		Compactor:      j.Compactor,
-		Grace:          j.Grace,
-		GCDelay:        j.GCDelay,
-		Now:            j.Clock,
-		Retire:         j.Retire,
-		ConvertToKeyed: j.ConvertToKeyed,
+		Compactor: j.Compactor,
+		Grace:     j.Grace,
+		GCDelay:   j.GCDelay,
+		Now:       j.Clock,
+		Retire:    j.Retire,
 	}
 	for _, p := range plan {
 		if ctx.Err() != nil {

@@ -351,8 +351,7 @@ func startArchiveSweeper(ctx context.Context, prov *Provisioner) {
 
 // startRetentionJanitor wires and starts the daily archive retention
 // janitor. With COMPACTOR_FUNCTION_URL unset it falls back to an in-process
-// compactor (dev). KEYED_ARCHIVES=1 also has it rewrite archives that are not
-// keyed into keyed ones (docs/plans/per-service-tables.md, "Archive layout").
+// compactor (dev).
 func startRetentionJanitor(ctx context.Context, prov *Provisioner, region string) {
 	if prov == nil {
 		return
@@ -377,10 +376,8 @@ func startRetentionJanitor(ctx context.Context, prov *Provisioner, region string
 		deleter = d
 	}
 
-	j := NewProvisionerJanitor(prov, compactor, deleter, 24*time.Hour)
-	j.ConvertToKeyed = os.Getenv("KEYED_ARCHIVES") == "1"
-	j.Start(ctx)
-	weftsdk.Infof(ctx, "coordinator: retention janitor started (daily, convert to keyed archives=%v)", j.ConvertToKeyed)
+	NewProvisionerJanitor(prov, compactor, deleter, 24*time.Hour).Start(ctx)
+	weftsdk.Infof(ctx, "coordinator: retention janitor started (daily)")
 }
 
 // lambdaSigningCreds loads the credential provider used to SigV4-sign

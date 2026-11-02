@@ -239,13 +239,23 @@ its own width, in the `sized` layout:
   whatever the key's width. Probed with DuckDB 1.5.2: 3 of 175 files read for a two-hour
   window on the key with hourly buckets, same rows as the unpruned query. No list of widths
   is part of the contract, so a later writer may use others without a reader change.
-- **Writers.** The shard export and the janitor's rewrite share `createKeyWidths` (one temp
-  table of widths, joined to the rows) and `sizedSelect`, and sort by the partition columns:
-  see above for why. The compactor does not know the Parquet size of what it rewrites and
-  estimates it from the text (`parquetPerRawByte`, 0.3), which errs towards narrower buckets.
+- **Writers.** The shard export and the compactor's rewrite share `createKeyWidths` (one temp
+  table of widths, joined to the rows) and `sizedSelect`. The compactor does not know the
+  Parquet size of what it rewrites and estimates it from the text (`parquetPerRawByte`, 0.3),
+  which errs towards narrower buckets.
+- **Files per partition.** Left alone, a partitioned write splits partitions into many small
+  files: DuckDB keeps at most 100 partition files open and starts a new file each time it
+  reopens one (1,905 files for 308 partitions in a 6M-row trial). Sorting the input fixed
+  that (326 files) but cannot be used on a whole archive: a real 2.5 GiB archive needed more
+  than 6.5 GiB of spill under a 2 GiB function's settings and failed. Raising
+  `partitioned_write_max_open_files` fixes it with no sort: the same trial gave exactly 308
+  files for 308 partitions, in 5.9 s against 10, peak 1.29 GB under a 1,228 MB limit. A
+  Lambda allows 1,024 open files, so there the cap is 900 and partitions past it fall back
+  to extra files, not to a failure. A few extra files remain where DuckDB's writer threads
+  meet, so tests bound the count rather than expect one file per partition.
 - **Compatibility.** `k<minutes>` archives (one width for every key; written only between
-  2026-11-01 23:30Z and this change, probably none) are still read and are converted to
-  `sized` by the next janitor pass. Nothing writes `k` any more.
+  2026-11-01 23:30Z and this change, probably none) are still read. A retention rewrite of one
+  produces a `sized` archive. Nothing writes `k` any more.
 - **Not done: time-varying density.** A width is one number per key. A key that is quiet for
   six days and busy for one gets one width. Splitting per key and day is the next step if the
   archives show it matters.
@@ -254,26 +264,32 @@ its own width, in the `sized` layout:
 An archive without it reads as it does now. Converting is one archive at a time, and rolling
 one back is repointing `parquet_path` at the old object while it is still there.
 
-**Converting.** The janitor already does what is needed: rewrite an archive to a new path,
-record the stats, swap `parquet_path` in Postgres, refresh the registry
-(`RefreshArchivedPath`), and tombstone the old object for GC after `RetentionGCDelay`
-(`logdb/janitor.go`). Conversion is a rewrite with no cutoffs and the new `PARTITION_BY`,
-gated on the layout segment. It must check that the rows written equal the rows read
-(`CompactResult`) and match `shard_archive_stats` before the pointer is swapped.
+**Converting existing archives (decided 2026-11-02: a one-off, not the janitor).** The sized
+layout is what the export writes from now on, so converting the archives that already exist
+is a supervised one-off, run from a machine with the disk and memory for it, not a daily job
+in a Lambda. An early version made it a janitor disposition behind `KEYED_ARCHIVES`; it was
+removed because the Lambda's limits, the leader gate it needed (two coordinators would
+convert the same archive twice), tombstones and a row-count check were all machinery for a
+job that runs once. The one-off: download the archive, convert it with `RewriteRetention`
+(`TestRealArchive_Conversion` in `shard/real_archive_test.go` does this and checks the copy
+against the original, key by key: count, a hash of every line, first and last time), upload
+it beside the old one, and repoint `shard_records.parquet_path` by hand. The coordinators
+read `parquet_path` at boot, so restart them after.
 
-**The janitor must keep the layout.** `RewriteRetention` writes one file with
-`COPY ... (FORMAT PARQUET)` (`shard/compact.go`). Today that already collapses a partitioned
-archive into a single file on its first pass. It must write the keyed layout, or any
-retention pass undoes the conversion.
+**The janitor keeps the layout.** `RewriteRetention` writes a sized archive when its
+destination is one, and `rewriteDestPath` gives a sized or keyed source a sized destination.
+Otherwise a retention pass would collapse the archive into one file. Other archives are
+rewritten as one file, as they always were.
 
 **New archives.** A per-key live shard exports each table straight into its key's
 directories (`exportParquet` reads `source()`, the union, today). That avoids building the
 union, which was a memory worry on the 1 GiB shards.
 
-**Risks.** The compactor Lambda has a 15-minute limit and the biggest archive files are
-about 500 MiB each; measure a rewrite of the largest shard before running the fleet. A
-Terraform apply reverts the cold Lambda to a placeholder, so redeploy after (see the cold-
-shard deploy notes). Gain is only for queries that reach into archives, which is unmeasured.
+**Risks.** A retention rewrite of a sized archive runs in the compactor Lambda (2 GiB, 15
+minutes, 512 MiB of `/tmp` by default); it sets DuckDB's memory limit, threads and spill
+directory from the function's size (`lambdaSettings`). A Terraform apply reverts the cold
+Lambda to a placeholder, so redeploy after (see the cold-shard deploy notes). Gain is only
+for queries that reach into archives, which is unmeasured.
 
 ## Cleanup: the migration code goes away
 

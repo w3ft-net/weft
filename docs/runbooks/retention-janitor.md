@@ -23,8 +23,6 @@ PlanRetention            classify every ARCHIVED shard from shard_archive_stats
        Delete    all rows expired → tombstone the object, retire the shard (→ GONE)
        Rewrite   mixed → compactor rewrites survivors to a new key, swap
                  parquet_path, refresh stats, tombstone the old key
-       Convert   (only with KEYED_ARCHIVES=1) nothing over-retained but the
-                 archive is not keyed → rewrite it keyed with every row kept
   └─ SweepTombstones      delete S3 objects whose grace (delete_after) elapsed
 ```
 
@@ -71,7 +69,7 @@ and deletion lags the advertised retention by a 7-day grace buffer.
 
 ## Verify it's running
 
-- Coordinator log at boot: `coordinator: retention janitor started (daily, convert to keyed archives=...)`
+- Coordinator log at boot: `coordinator: retention janitor started (daily)`
   and `janitor: compactor Lambda at <url>`.
 - After a pass: lines like `janitor: purge <shard> (rewrite)` are absent on
   a clean run; errors are logged per-shard without aborting the pass.
@@ -85,7 +83,6 @@ and deletion lags the advertised retention by a 7-day grace buffer.
 
 | Setting | Where | Default | Notes |
 |---|---|---|---|
-| `KEYED_ARCHIVES` | env on the coordinator (TF var to add) | unset | `1` makes the pass also convert archives that are not keyed into keyed ones (see below), and write every rewrite keyed |
 | `COMPACTOR_FUNCTION_URL` | SSM blob (TF) | — | unset → in-process compactor (dev) |
 | `RetentionGrace` | `logdb/janitor.go` const | 7d | buffer past advertised retention before deleting |
 | `RetentionGCDelay` | `logdb/janitor.go` const | 1h | tombstone lifetime before GC (covers in-flight reads) |
@@ -118,34 +115,25 @@ and deletion lags the advertised retention by a 7-day grace buffer.
   unexpected `status`/`expires_at`, and the `parquet_tombstones` /
   coordinator logs for what was deleted and when.
 
-## Converting archives to the keyed layout
+## Sized archives
 
-With `KEYED_ARCHIVES=1` the daily pass rewrites each archive that is not in the
-sized layout (a single file, a time-partitioned archive, or the first keyed
-layout) into
-`<shard>.attempt-N.r<ns>/sized/customer_id=…/namespace=…/service=…/kind=…/_w=<minutes>/_part=…`
-(`docs/plans/per-service-tables.md`, "Archive layout"), so a query for one log
-file opens only that file's directories. Each key gets time buckets (`_w`) wide
-enough for its own files to come out near 16 MiB, so a busy service has narrow
-buckets and a quiet one wide ones. Every archive visited by a retention rewrite
-comes out sized too.
+New large archives are written by the export in the sized layout: split by log
+key, with each key's time buckets wide enough for its own files to come out near
+16 MiB (`docs/plans/per-service-tables.md`, "Archive layout"):
+`<shard>.attempt-N/sized/customer_id=.../namespace=.../service=.../kind=.../_w=<minutes>/_part=...`.
+The janitor only rewrites them. A retention rewrite of a sized (or the first
+keyed) archive writes a sized archive, so the pass does not undo the layout; any
+other archive is rewritten as a single file, as before. The janitor does not
+convert existing archives to the layout: that is a one-off, run by hand.
 
-Before turning it on, the **compactor Lambda** and the **cold-shard Lambda**
-must be running this code: an old compactor would collapse a sized archive back
-into one file, and an old cold shard doesn't pin the key columns' types or
-bound time by each key's `_w`. The sort the rewrite does can spill to the
-Lambda's disk: if a large archive fails with a disk or memory error, raise
-`compactor_lambda_memory` or its ephemeral storage and the next pass retries.
+The **compactor Lambda** and the **cold-shard Lambda** must be running the
+sized-layout code before a sized archive is rewritten or read: an old compactor
+would collapse it into one file, and an old cold shard bounds time by a day,
+which can drop rows from keys with wider buckets.
 
-A conversion is swapped in only if the copy holds exactly the rows
-`shard_archive_stats` recorded for the shard and dropped none. If not, the pass
-logs `janitor: purge <shard> (convert): …`, leaves `parquet_path` alone, and
-tombstones what it wrote (`reason = 'convert-failed'`).
-
-To roll one shard back, before its tombstone's `delete_after` passes, point
-`shard_records.parquet_path` at the old object (the tombstone row with
-`reason = 'rewrite'` has the path), delete that tombstone, and restart the
-coordinator. After the grace the old object is gone.
+To roll one shard back after a manual conversion, before the old object's
+tombstone `delete_after` passes, point `shard_records.parquet_path` back at the
+old object, delete that tombstone, and restart the coordinators.
 
 ## Disable / roll back
 
