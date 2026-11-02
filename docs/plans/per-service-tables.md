@@ -1,8 +1,10 @@
 # Per-service tables on shards
 
-> **Status (2026-11-01): scoped, not started.** The evidence below was gathered on
-> 2026-11-01 against production. Nothing here is built. The open questions at the end
-> need answers before step 1.
+> **Status (2026-11-02).** Two layouts are in play (next section). The archive layout is
+> live: the exporter writes it, and all five existing archives were converted and swapped on
+> 2026-11-02. The live-shard table layout is built and deployed but off (`--per-key-tables`
+> defaults to false and no unit file sets it), so every shard that still holds DuckDB data is
+> on the single `logs` table. The evidence below was gathered on 2026-11-01 against production.
 
 ## Start here (handoff for a fresh session)
 
@@ -14,6 +16,19 @@ and the planner names the table, so no view and no `UNION ALL` is involved.
 **Why.** Selective queries are slow because the shard reads data for every service
 in the time range, not because of how they are planned or how much they return. See
 "What we measured".
+
+**Two layouts, not one.** "Per-key" names two things that are easy to run together:
+
+- **Per-key archive layout** (Parquet in S3, partitioned by customer, namespace, service, kind,
+  bucket width and time). It is what the exporter writes with `--keyed`, and what the
+  conversion script wrote for the five existing archives. An archived shard has no DuckDB
+  table at all, so this is the only layout it can have. **Live and measured.**
+- **Per-key tables** (one DuckDB table per key on a shard that is still ingesting or waiting
+  to archive). Behind `--per-key-tables`, **off**; today's ingesting and read-only shards all
+  hold the single `logs` table. Not measured on a prod instance type.
+
+The first speeds up queries that reach archived data. The second is what the hot-shard
+problem below needs, and it is not delivered yet.
 
 **Left to do** (in rough order): answer the open questions; add the table-name function
 and the shard's dual-layout support; ship the additive wire field; teach the planner to
@@ -290,6 +305,25 @@ Progress is kept in `<workdir>/state.json` and a rerun resumes. A shard that fai
 reported and the rest continue. To undo a swap before the week is up, swap back with
 `weft-admin swap-archive --old <new> --new <old>`.
 
+**Result (2026-11-02).** All five archives (17.0M to 21.2M rows each, 31 to 46 keys, 155 to
+168 files of about 15 to 32 MiB) were converted, verified key by key, uploaded and swapped
+between 12:36Z and 12:42Z. Each convert took 30 to 40 seconds on a workstation after a 1 to 2
+minute download. Measured through the cold-shard Lambda on `a85dbee1`, the same SQL and a
+one-hour window for one key (the Lambda invoked directly, warm, median of three, not
+through the coordinator):
+
+| Key | Rows in archive | Old layout (Lambda) | Sized layout (Lambda) |
+|---|---|---|---|
+| `loom/api/main` | 10.8M | 3.8 s | 0.77 s |
+| `weft/coordinator/main` | 737k | 3.6 s | 0.70 s |
+| `weft/shard/main` | 84k | 3.9 s | 0.70 s |
+| `weft/compute/runtime` | 8k | 3.7 s | 0.63 s |
+
+The old layout costs the same whatever the key's size, because it prunes only by time. The
+sized layout opens only the key's directories. Through the CLI a full day of one service
+(233,041 rows) and a week (1.5M rows) take 1.0 s and 1.6 s. Not measured: wider windows
+against the old layout, or queries that name several keys.
+
 **The janitor keeps the layout.** `RewriteRetention` writes a sized archive when its
 destination is one, and `rewriteDestPath` gives a sized or keyed source a sized destination.
 Otherwise a retention pass would collapse the archive into one file. Other archives are
@@ -299,11 +333,14 @@ rewritten as one file, as they always were.
 directories (`exportParquet` reads `source()`, the union, today). That avoids building the
 union, which was a memory worry on the 1 GiB shards.
 
-**Risks.** A retention rewrite of a sized archive runs in the compactor Lambda (2 GiB, 15
-minutes, 512 MiB of `/tmp` by default); it sets DuckDB's memory limit, threads and spill
-directory from the function's size (`lambdaSettings`). A Terraform apply reverts the cold
-Lambda to a placeholder, so redeploy after (see the cold-shard deploy notes). Gain is only
-for queries that reach into archives, which is unmeasured.
+**Risks.** A retention rewrite of a sized archive runs in the compactor Lambda (2 GiB, 300
+seconds, 3 GiB of `/tmp` since 2026-11-02); it sets DuckDB's memory limit, threads and spill
+directory from the function's size (`lambdaSettings`). Measured on `a85dbee1` (18.7M rows)
+under those settings: 32 seconds, 1,224 MiB of spill, 1,413 MiB of process memory. The
+Lambda's default 512 MiB of `/tmp` would not have held the spill, and that run read and wrote
+local files, so S3 buffering is unmeasured. A Terraform apply reverts the cold Lambda to a
+placeholder, so redeploy after (see the cold-shard deploy notes). The gain applies only to
+queries that reach into archives (see "Result" above).
 
 ## Cleanup: the migration code goes away
 
