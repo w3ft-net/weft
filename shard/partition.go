@@ -44,6 +44,10 @@ const (
 	parquetToDBRatio = 0.9
 )
 
+// keyedPartitionBy is the partition columns of a keyed archive, in directory
+// order, and the order its rows are written in.
+const keyedPartitionBy = "customer_id, namespace, service, kind, _part"
+
 var partitionSegment = regexp.MustCompile(`/([mk])([1-9][0-9]*)/\*\*/\*\.parquet$`)
 
 // PartitionMinutes reads the bucket width, in minutes, from an archive's glob

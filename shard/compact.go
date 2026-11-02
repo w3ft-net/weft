@@ -129,7 +129,7 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 	copyTo, partitionBy, out := dstPath, "", keep
 	if IsKeyed(dstPath) {
 		copyTo = strings.TrimSuffix(dstPath, "/**/*.parquet")
-		partitionBy = ", PARTITION_BY (customer_id, namespace, service, kind, _part), OVERWRITE_OR_IGNORE"
+		partitionBy = ", PARTITION_BY (" + keyedPartitionBy + "), OVERWRITE_OR_IGNORE"
 		minutes, _ := PartitionMinutes(dstPath)
 		var hasPart int
 		if err := db.QueryRow(fmt.Sprintf(
@@ -140,7 +140,8 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 		if hasPart > 0 {
 			cols = "k.* EXCLUDE (_part)"
 		}
-		out = fmt.Sprintf("SELECT %s, %s AS _part FROM (%s) k", cols, partitionExpr(minutes, "k.ts"), keep)
+		// Sorted for the reason exportParquet gives; this can spill to disk.
+		out = fmt.Sprintf("SELECT %s, %s AS _part FROM (%s) k ORDER BY %s, ts", cols, partitionExpr(minutes, "k.ts"), keep, keyedPartitionBy)
 	}
 	if s3cfg == nil && !strings.HasPrefix(dstPath, "s3://") {
 		parent := filepath.Dir(dstPath)

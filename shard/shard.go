@@ -1027,14 +1027,22 @@ func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes in
 		n, _ := res.RowsAffected()
 		return outPath, n, nil
 	}
-	layout, partitionBy := "m", "_part"
+	layout, partitionBy, order := "m", "_part", ""
 	if keyed {
-		layout, partitionBy = "k", "customer_id, namespace, service, kind, _part"
+		layout, partitionBy = "k", keyedPartitionBy
+		// Sorted, so each partition arrives whole. DuckDB keeps at most 100
+		// partition files open and starts a new file each time it reopens one,
+		// so rows left in stored order (every batch touches every partition)
+		// become many small files per partition: 1,905 files for 308
+		// partitions in a 6M-row trial, 326 sorted. A cold read pays for each
+		// file. The files are not each one time-ordered run (every writer
+		// thread flushes its own), only each run is.
+		order = " ORDER BY " + keyedPartitionBy + ", ts"
 	}
 	dir := fmt.Sprintf("%s/%s%d", path, layout, minutes)
 	sql := fmt.Sprintf(
-		"COPY (SELECT *, %s AS _part FROM %s) TO '%s' (FORMAT PARQUET, PARTITION_BY (%s), OVERWRITE_OR_IGNORE)",
-		partitionExpr(minutes, "ts"), s.source(), dir, partitionBy,
+		"COPY (SELECT *, %s AS _part FROM %s%s) TO '%s' (FORMAT PARQUET, PARTITION_BY (%s), OVERWRITE_OR_IGNORE)",
+		partitionExpr(minutes, "ts"), s.source(), order, dir, partitionBy,
 	)
 	res, err := s.db.ExecContext(ctx, sql)
 	if err != nil {

@@ -241,6 +241,84 @@ func TestKeyedExport_TimePruningStillMatches(t *testing.T) {
 	}
 }
 
+// interleavedShard holds rows of 100 services in strict rotation over five days:
+// 500 partitions, each batch touching all of them. DuckDB keeps at most 100
+// partition files open and starts a new file each time it reopens one, so left
+// in this order the export writes many files per partition (1,905 files for
+// 308 partitions in a 6M-row trial). Sorted, it writes one each.
+func interleavedShard(t *testing.T) *DuckDBShard {
+	t.Helper()
+	ds, err := NewDuckDBShard("interleaved", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ds.Close() })
+	if _, err := ds.db.Exec(`INSERT INTO logs (raw, ts, customer_id, namespace, service, kind)
+		SELECT 'line ' || i, TIMESTAMP '2026-10-14 00:00:00' + ((i % 432000) || ' seconds')::INTERVAL,
+		       1, 'weft', 'svc' || (i % 100), 'main'
+		FROM range(500000) r(i)`); err != nil {
+		t.Fatal(err)
+	}
+	return ds
+}
+
+// filesPerPartition counts the parquet files in each partition directory under dir.
+func filesPerPartition(t *testing.T, dir string) map[string]int {
+	t.Helper()
+	counts := map[string]int{}
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".parquet") {
+			counts[filepath.Dir(p)]++
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return counts
+}
+
+// checkOneFilePerPartition fails unless every partition under dir is one file,
+// so a read of one key opens as few files as the key has days.
+func checkOneFilePerPartition(t *testing.T, dir string, wantPartitions int) {
+	t.Helper()
+	counts := filesPerPartition(t, dir)
+	if len(counts) != wantPartitions {
+		t.Errorf("%d partitions, want %d", len(counts), wantPartitions)
+	}
+	var files int
+	for _, n := range counts {
+		files += n
+	}
+	if files != len(counts) {
+		t.Errorf("%d files in %d partitions, want one each", files, len(counts))
+	}
+}
+
+func TestKeyedExport_ManyPartitionsGetOneFileEach(t *testing.T) {
+	ds := interleavedShard(t)
+	dir, _, rows := exportTo(t, ds, 1440, true)
+	if rows != 500000 {
+		t.Fatalf("export wrote %d rows, want 500000", rows)
+	}
+	checkOneFilePerPartition(t, filepath.Join(dir, "k1440"), 500) // 100 services x 5 days
+}
+
+// Converting a time-only archive makes the same one file per partition.
+func TestRewriteRetention_ConversionGetsOneFilePerPartition(t *testing.T) {
+	ds := interleavedShard(t)
+	_, src, _ := exportTo(t, ds, 1440, false)
+	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
+	res, err := RewriteRetention(src, dstDir+"/k1440/**/*.parquet", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RowsKept != 500000 {
+		t.Fatalf("kept %d rows, want 500000", res.RowsKept)
+	}
+	checkOneFilePerPartition(t, filepath.Join(dstDir, "k1440"), 500)
+}
+
 // A retention rewrite of a keyed archive writes a keyed archive. Written as one
 // file it would put every service back in every file and drop the bucket width.
 func TestRewriteRetention_KeepsAKeyedLayout(t *testing.T) {
