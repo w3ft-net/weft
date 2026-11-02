@@ -33,6 +33,18 @@ func TestSizedArchivePath(t *testing.T) {
 	}
 }
 
+// A downloaded archive mirrors the bucket under a root directory.
+func TestLocalPathOf(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"s3://bkt/40-apps/s.attempt-1/m60/**/*.parquet", "/r/40-apps/s.attempt-1/m60/**/*.parquet"},
+		{"s3://bkt/40-apps/s.parquet", "/r/40-apps/s.parquet"},
+	} {
+		if got := LocalPathOf(c.in, "/r/"); got != c.want {
+			t.Errorf("LocalPathOf(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // VerifyAgainstManifest checks an archive against what its export recorded: the
 // total rows, and the rows of each customer.
 func TestVerifyAgainstManifest(t *testing.T) {

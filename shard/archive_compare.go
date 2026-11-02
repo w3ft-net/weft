@@ -20,6 +20,16 @@ func SizedArchivePath(old string, now time.Time) string {
 	return fmt.Sprintf("%s.r%d/sized/**/*.parquet", base, now.UnixNano())
 }
 
+// LocalPathOf maps an s3://bucket/key archive path to the same key under root,
+// where a download that mirrors the bucket puts it. A glob keeps its glob.
+func LocalPathOf(s3Path, root string) string {
+	rest := strings.TrimPrefix(s3Path, "s3://")
+	if i := strings.Index(rest, "/"); i >= 0 {
+		rest = rest[i+1:]
+	}
+	return strings.TrimRight(root, "/") + "/" + rest
+}
+
 // VerifyAgainstManifest checks an archive against what its export recorded: the
 // total rows, and the rows of each customer (a row with no customer counts under
 // 0, as the export's stats do). An archive missing rows, holding extra ones, or
