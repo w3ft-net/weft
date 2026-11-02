@@ -235,11 +235,11 @@ func TestKeyedExport_TimePruningStillMatches(t *testing.T) {
 	}
 }
 
-// interleavedShard holds rows of 100 services in strict rotation over five days:
+// interleavedShard holds rows of 250 services in strict rotation over five days:
 // 1,250 partitions, each batch touching all of them. DuckDB keeps at most 100
 // partition files open and starts a new file each time it reopens one, so left
 // in this order the export writes many files per partition (1,905 files for
-// 308 partitions in a 6M-row trial). Sorted, it writes one each.
+// 308 partitions in a 6M-row trial). Sorted, it writes about one each.
 func interleavedShard(t *testing.T) *DuckDBShard {
 	t.Helper()
 	ds, err := NewDuckDBShard("interleaved", "")
@@ -272,9 +272,15 @@ func filesPerPartition(t *testing.T, dir string) map[string]int {
 	return counts
 }
 
-// checkOneFilePerPartition fails unless every partition under dir is one file,
-// so a read of one key opens as few files as the key has days.
-func checkOneFilePerPartition(t *testing.T, dir string, wantPartitions int) {
+// checkFewFilesPerPartition fails if the partitions under dir are split into
+// many files. The input is sorted, so each partition arrives whole, but DuckDB
+// splits the sorted stream between its writer threads and a partition that
+// straddles a boundary gets a file from each side: a handful of extra files,
+// varying with the machine's cores and from run to run. What it must not do is
+// what unsorted input does, hundreds of extra files (181 to 286 extra in 500
+// partitions, in this test with the sort removed), so a read of one key opens
+// about as many files as the key has buckets. The bound is 5% and 8 files.
+func checkFewFilesPerPartition(t *testing.T, dir string, wantPartitions int) {
 	t.Helper()
 	counts := filesPerPartition(t, dir)
 	if len(counts) != wantPartitions {
@@ -284,22 +290,22 @@ func checkOneFilePerPartition(t *testing.T, dir string, wantPartitions int) {
 	for _, n := range counts {
 		files += n
 	}
-	if files != len(counts) {
-		t.Errorf("%d files in %d partitions, want one each", files, len(counts))
+	if max := len(counts) + len(counts)/20 + 8; files > max {
+		t.Errorf("%d files in %d partitions, want at most %d", files, len(counts), max)
 	}
 }
 
-func TestKeyedExport_ManyPartitionsGetOneFileEach(t *testing.T) {
+func TestKeyedExport_ManyPartitionsDoNotSplitIntoManyFiles(t *testing.T) {
 	ds := interleavedShard(t)
 	dir, _, rows := exportSizedTo(t, ds, 24<<30) // 98 MiB a key: day buckets
 	if rows != 500000 {
 		t.Fatalf("export wrote %d rows, want 500000", rows)
 	}
-	checkOneFilePerPartition(t, filepath.Join(dir, "sized"), 1250) // 250 services x 5 days
+	checkFewFilesPerPartition(t, filepath.Join(dir, "sized"), 1250) // 250 services x 5 days
 }
 
-// Converting a time-only archive makes the same one file per partition.
-func TestRewriteRetention_ConversionGetsOneFilePerPartition(t *testing.T) {
+// Converting a time-only archive does not split its partitions into many files either.
+func TestRewriteRetention_ConversionDoesNotSplitIntoManyFiles(t *testing.T) {
 	ds := interleavedShard(t)
 	_, src, _ := exportTo(t, ds, 1440)
 	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
@@ -310,7 +316,7 @@ func TestRewriteRetention_ConversionGetsOneFilePerPartition(t *testing.T) {
 	if res.RowsKept != 500000 {
 		t.Fatalf("kept %d rows, want 500000", res.RowsKept)
 	}
-	checkOneFilePerPartition(t, filepath.Join(dstDir, "sized"), 500) // 250 services x 2 weeks
+	checkFewFilesPerPartition(t, filepath.Join(dstDir, "sized"), 500) // 250 services x 2 weeks
 }
 
 // A retention rewrite of a keyed archive writes a keyed archive. Written as one
