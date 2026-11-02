@@ -21,7 +21,9 @@ weftd/weftd
 # IDE
 .idea/
 .vscode/
-lambda-shard
+# The built Lambda binary, not the cmd/lambda-shard source directory.
+/lambda-shard
+/cmd/lambda-shard/lambda-shard
 
 # Stray process logs from shard-local dev runs
 shard.log
