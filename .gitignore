@@ -35,6 +35,7 @@ shard.log
 dev/demo/tokens.env
 dev/demo/weft-demo-seed
 dev/demo/__pycache__/
+scripts/__pycache__/
 dev/demo/.pytest_cache/
 
 # DockerLauncher dev shard volumes (DuckDB + parquet — multi-GB,

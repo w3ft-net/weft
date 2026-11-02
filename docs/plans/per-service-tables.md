@@ -270,11 +270,25 @@ is a supervised one-off, run from a machine with the disk and memory for it, not
 in a Lambda. An early version made it a janitor disposition behind `KEYED_ARCHIVES`; it was
 removed because the Lambda's limits, the leader gate it needed (two coordinators would
 convert the same archive twice), tombstones and a row-count check were all machinery for a
-job that runs once. The one-off: download the archive, convert it with `RewriteRetention`
-(`TestRealArchive_Conversion` in `shard/real_archive_test.go` does this and checks the copy
-against the original, key by key: count, a hash of every line, first and last time), upload
-it beside the old one, and repoint `shard_records.parquet_path` by hand. The coordinators
-read `parquet_path` at boot, so restart them after.
+job that runs once. The one-off is `scripts/convert_archives.py`, run from the repo root on a
+workstation (stdlib Python; every AWS call goes through `kevcons aws`):
+
+- `--stage plan` (the default) reads each shard's export manifest from `_manifests/` and
+  lists what is not yet sized. Nothing is downloaded.
+- `--stage convert` downloads each archive, converts it with `weft-admin convert-archive`
+  and verifies it. The command refuses a download that does not match the manifest (an
+  incomplete one), then checks the copy against the original key by key (count, a hash of
+  every line, first and last time) and against the manifest's row and customer counts.
+- `--stage apply` uploads the copy beside the original (`<archive>.r<ns>/sized/`), checks
+  S3 holds exactly the converted files and bytes, and swaps each coordinator's shard to it
+  with `weft-admin swap-archive`. The swap is the `SwapShardArchive` admin RPC: it succeeds
+  only if the shard is still at the old path, updates the database and the live registry
+  with no restart, and tombstones the old objects for deletion after 7 days
+  (`ArchiveSwapGCDelay`). It is idempotent, so the script sends it to every coordinator.
+
+Progress is kept in `<workdir>/state.json` and a rerun resumes. A shard that fails is
+reported and the rest continue. To undo a swap before the week is up, swap back with
+`weft-admin swap-archive --old <new> --new <old>`.
 
 **The janitor keeps the layout.** `RewriteRetention` writes a sized archive when its
 destination is one, and `rewriteDestPath` gives a sized or keyed source a sized destination.

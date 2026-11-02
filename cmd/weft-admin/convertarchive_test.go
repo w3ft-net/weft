@@ -45,6 +45,16 @@ func downloaded(t *testing.T, root, layout string) shard.ExportManifest {
 			t.Fatal(err)
 		}
 		path = "s3://bkt/40-apps/shard-1.attempt-1/m1440/**/*.parquet"
+	case "k":
+		// the first keyed layout, as the deployed export wrote it
+		if err := os.MkdirAll(base, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(fmt.Sprintf(`COPY (SELECT *, time_bucket(INTERVAL '54 minutes', ts, TIMESTAMP '1970-01-01') AS _part FROM logs)
+			TO '%s/k54' (FORMAT PARQUET, PARTITION_BY (customer_id, namespace, service, kind, _part))`, base)); err != nil {
+			t.Fatal(err)
+		}
+		path = "s3://bkt/40-apps/shard-1.attempt-1/k54/**/*.parquet"
 	case "single":
 		if err := os.MkdirAll(filepath.Dir(base), 0o755); err != nil {
 			t.Fatal(err)
@@ -63,7 +73,7 @@ func downloaded(t *testing.T, root, layout string) shard.ExportManifest {
 }
 
 func TestConvertArchive_ConvertsEachLayout(t *testing.T) {
-	for _, layout := range []string{"m", "single"} {
+	for _, layout := range []string{"m", "k", "single"} {
 		t.Run(layout, func(t *testing.T) {
 			root, out := t.TempDir(), t.TempDir()
 			m := downloaded(t, root, layout)

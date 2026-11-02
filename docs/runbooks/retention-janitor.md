@@ -124,7 +124,12 @@ key, with each key's time buckets wide enough for its own files to come out near
 The janitor only rewrites them. A retention rewrite of a sized (or the first
 keyed) archive writes a sized archive, so the pass does not undo the layout; any
 other archive is rewritten as a single file, as before. The janitor does not
-convert existing archives to the layout: that is a one-off, run by hand.
+convert existing archives to the layout: that is a one-off, run by hand with
+`scripts/convert_archives.py` (see the plan, "Converting existing archives"). Run it
+from the repo root: `python3 scripts/convert_archives.py --stage plan`, then
+`--stage convert`, then `--stage apply`. It needs the `SwapShardArchive` RPC, so the
+coordinators must already be running a build that has it, and it reaches them through
+SSM. Unit tests: `python3 -m unittest scripts/test_convert_archives.py`.
 
 The **compactor Lambda** and the **cold-shard Lambda** must be running the
 sized-layout code before a sized archive is rewritten or read: an old compactor
