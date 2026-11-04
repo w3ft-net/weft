@@ -297,7 +297,13 @@ func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []
 			// incident that originated this feature), so unconditional
 			// logging here doesn't reintroduce the log-spam problem a
 			// hot live-shard path would have.
-			weftsdk.Infof(ctx, "cold shard %s: query completed in %s (%d rows)", s.id, time.Since(start), rowsSeen)
+			// The trailer is optional: a Lambda from before it ends at the
+			// sentinel, and a malformed one costs only this log field.
+			if stats, ok, _ := ReadScanStats(resp.Body); ok {
+				weftsdk.Infof(ctx, "cold shard %s: query completed in %s (%d rows, rows_scanned=%d bytes_read=%d)", s.id, time.Since(start), rowsSeen, stats.RowsScanned, stats.BytesRead)
+			} else {
+				weftsdk.Infof(ctx, "cold shard %s: query completed in %s (%d rows)", s.id, time.Since(start), rowsSeen)
+			}
 			return nil
 		}
 		if err != nil {

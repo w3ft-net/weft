@@ -2,6 +2,7 @@ package shard
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -88,4 +89,58 @@ func ReadAllResultRows(r io.Reader) ([]*pb.ResultRow, error) {
 		}
 		rows = append(rows, row)
 	}
+}
+
+// ScanStats is what a cold-shard query read, sent after the end sentinel.
+// Readers that stop at the sentinel never see it, and a stream from a Lambda
+// that predates it simply ends there.
+type ScanStats struct {
+	// RowsScanned is the rows DuckDB's scans read, which counts the files a
+	// query opened, not just the rows it returned. Partition pruning narrows
+	// it; a bare count(*) or a LIMIT reads none.
+	RowsScanned int64 `json:"rows_scanned"`
+	// BytesRead is DuckDB's own total_bytes_read for the query.
+	BytesRead int64 `json:"bytes_read"`
+}
+
+// maxScanStatsBytes bounds the trailer so a misaligned stream can't make
+// ReadScanStats allocate.
+const maxScanStatsBytes = 64 << 10
+
+// WriteScanStats writes the trailer: [4-byte big-endian length][JSON].
+func WriteScanStats(w io.Writer, s ScanStats) error {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return fmt.Errorf("marshal ScanStats: %w", err)
+	}
+	if err := binary.Write(w, binary.BigEndian, uint32(len(data))); err != nil {
+		return fmt.Errorf("write length: %w", err)
+	}
+	if _, err := w.Write(data); err != nil {
+		return fmt.Errorf("write data: %w", err)
+	}
+	return nil
+}
+
+// ReadScanStats reads the trailer that follows the end sentinel. ok is false
+// with a nil error when the stream ends there, as an older Lambda's does.
+func ReadScanStats(r io.Reader) (s ScanStats, ok bool, err error) {
+	var length uint32
+	if err := binary.Read(r, binary.BigEndian, &length); err != nil {
+		if err == io.EOF {
+			return s, false, nil
+		}
+		return s, false, err
+	}
+	if length == 0 || length > maxScanStatsBytes {
+		return s, false, fmt.Errorf("scan stats frame of %d bytes", length)
+	}
+	data := make([]byte, length)
+	if _, err := io.ReadFull(r, data); err != nil {
+		return s, false, fmt.Errorf("read scan stats: %w", err)
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		return s, false, fmt.Errorf("unmarshal ScanStats: %w", err)
+	}
+	return s, true, nil
 }

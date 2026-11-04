@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -279,5 +281,61 @@ func TestHandleQuery_NoDeadlineRunsToCompletion(t *testing.T) {
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The stream ends with what the query scanned. DuckDB's profile counts a scan
+// once per busy thread; the handler divides that back out, so the answer is the
+// same on a laptop and in the Lambda. The file is big enough to keep every
+// thread busy.
+func TestHandleQuery_ReportsRowsScannedInATrailer(t *testing.T) {
+	const total = 1_000_000
+	path := filepath.Join(t.TempDir(), "big.parquet")
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("COPY (SELECT TIMESTAMP '2026-01-01' + to_seconds(i) AS ts, 'line ' || i AS raw, 'x' AS event_id, 0 AS line_no, 1 AS customer_id FROM range(%d) t(i)) TO '%s' (FORMAT parquet, ROW_GROUP_SIZE 10000)", total, path)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	var buf bytes.Buffer
+	err = HandleQuery(context.Background(), &buf, QueryRequest{
+		SQL:         "SELECT raw, ts FROM logs WHERE customer_id = 1 AND regexp_matches(raw, 'line 99999')",
+		ParquetPath: path,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := shard.ReadAllResultRows(&buf)
+	if err != nil || len(rows) != 11 {
+		t.Fatalf("rows=%d err=%v", len(rows), err)
+	}
+	stats, ok, err := shard.ReadScanStats(&buf)
+	if err != nil || !ok {
+		t.Fatalf("no trailer: ok=%v err=%v", ok, err)
+	}
+	if stats.RowsScanned != total {
+		t.Errorf("RowsScanned = %d, want %d", stats.RowsScanned, total)
+	}
+}
+
+// A scan too small to keep DuckDB's threads busy still reads as scanned.
+func TestHandleQuery_ATinyScanIsNotZero(t *testing.T) {
+	var buf bytes.Buffer
+	if err := HandleQuery(context.Background(), &buf, QueryRequest{
+		SQL:         "SELECT raw, ts FROM logs WHERE customer_id = 1 AND regexp_matches(raw, 'error')",
+		ParquetPath: testParquet(t),
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := shard.ReadAllResultRows(&buf); err != nil {
+		t.Fatal(err)
+	}
+	stats, ok, _ := shard.ReadScanStats(&buf)
+	if !ok || stats.RowsScanned < 1 {
+		t.Errorf("stats = %+v ok=%v, want some rows scanned", stats, ok)
 	}
 }

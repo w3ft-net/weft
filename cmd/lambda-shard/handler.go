@@ -8,6 +8,7 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -45,24 +46,95 @@ func (req QueryRequest) queryContext(ctx context.Context) (context.Context, cont
 	return context.WithDeadline(ctx, time.UnixMilli(req.DeadlineUnixMs))
 }
 
+// coldQuery is one query in flight: the connection it runs on and the rows
+// it is returning. Profiling is on for the connection so the query can say
+// what it scanned.
+type coldQuery struct {
+	db          *sql.DB
+	conn        *sql.Conn
+	rows        *sql.Rows
+	profilePath string
+	threads     int64
+}
+
+// Close releases the query's resources. Close it before reading Stats only
+// if the rows were not drained.
+func (q *coldQuery) Close() {
+	if q.rows != nil {
+		q.rows.Close()
+	}
+	q.conn.Close()
+	q.db.Close()
+	os.Remove(q.profilePath)
+}
+
+// Stats is what the query scanned. Call it once the rows are drained: DuckDB
+// writes the profile as the query finishes.
+func (q *coldQuery) Stats() shard.ScanStats {
+	b, err := os.ReadFile(q.profilePath)
+	if err != nil || len(b) == 0 {
+		// A bare count(*) answers from metadata and leaves no profile.
+		return shard.ScanStats{}
+	}
+	var p struct {
+		RowsScanned int64 `json:"cumulative_rows_scanned"`
+		BytesRead   int64 `json:"total_bytes_read"`
+	}
+	if err := json.Unmarshal(b, &p); err != nil {
+		return shard.ScanStats{}
+	}
+	// The profile counts a scan once per thread that worked on it: N busy
+	// threads report N times the rows read (cmd/lambda-shard/rows_read_test.go).
+	// A scan too small to keep them busy reports less than that, so the
+	// division rounds up and undercounts only scans too small to matter.
+	threads := max(q.threads, 1)
+	return shard.ScanStats{RowsScanned: (p.RowsScanned + threads - 1) / threads, BytesRead: p.BytesRead}
+}
+
 // runQuery opens an in-memory DuckDB, configures S3, and executes the
 // rewritten query. Every failure here is pre-stream — a missing parquet
-// snapshot or bad SQL surfaces from db.Query() before any bytes are
+// snapshot or bad SQL surfaces from the query before any bytes are
 // written — so the caller can still return an honest non-2xx status.
-// On success the caller owns closing both the *sql.DB and *sql.Rows; ctx
-// must stay live until the rows are drained, since cancelling it
-// interrupts DuckDB.
-func runQuery(ctx context.Context, req QueryRequest, s3cfg *shard.S3Config) (*sql.DB, *sql.Rows, error) {
+// On success the caller owns Close; ctx must stay live until the rows are
+// drained, since cancelling it interrupts DuckDB.
+func runQuery(ctx context.Context, req QueryRequest, s3cfg *shard.S3Config) (*coldQuery, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
-		return nil, nil, fmt.Errorf("open duckdb: %w", err)
+		return nil, fmt.Errorf("open duckdb: %w", err)
 	}
 
 	if s3cfg != nil {
 		if err := s3cfg.ConfigureDuckDB(db); err != nil {
 			db.Close()
-			return nil, nil, fmt.Errorf("configure s3: %w", err)
+			return nil, fmt.Errorf("configure s3: %w", err)
 		}
+	}
+
+	// Profiling is per connection, so the query runs on one of its own.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open connection: %w", err)
+	}
+	profile, err := os.CreateTemp("", "profile-*.json")
+	if err != nil {
+		conn.Close()
+		db.Close()
+		return nil, fmt.Errorf("profile file: %w", err)
+	}
+	profile.Close()
+	q := &coldQuery{db: db, conn: conn, profilePath: profile.Name()}
+	fail := func(err error) (*coldQuery, error) {
+		q.Close()
+		return nil, err
+	}
+	for _, stmt := range []string{"PRAGMA enable_profiling='json'", fmt.Sprintf("PRAGMA profiling_output='%s'", q.profilePath)} {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return fail(fmt.Errorf("profiling: %w", err))
+		}
+	}
+	if err := conn.QueryRowContext(ctx, "SELECT current_setting('threads')::BIGINT").Scan(&q.threads); err != nil {
+		return fail(fmt.Errorf("threads: %w", err))
 	}
 
 	// Rewrite FROM logs → FROM read_parquet('path').
@@ -77,12 +149,12 @@ func runQuery(ctx context.Context, req QueryRequest, s3cfg *shard.S3Config) (*sq
 	for i, a := range req.Args {
 		args[i] = a
 	}
-	rows, err := db.QueryContext(ctx, query, args...)
+	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
-		db.Close()
-		return nil, nil, fmt.Errorf("query: %w", err)
+		return fail(fmt.Errorf("query: %w", err))
 	}
-	return db, rows, nil
+	q.rows = rows
+	return q, nil
 }
 
 // streamRows scans rows one at a time and writes each as a
@@ -91,7 +163,8 @@ func runQuery(ctx context.Context, req QueryRequest, s3cfg *shard.S3Config) (*sq
 // the whole result set is materialized. A non-nil error means the
 // stream is truncated (no end sentinel): callers past the HTTP header
 // can only log it — the coordinator's stream-read-error path then
-// surfaces the truncation on its side.
+// surfaces the truncation on its side. On success the caller ends the
+// stream with finishStream.
 func streamRows(w io.Writer, rows *sql.Rows) (int, error) {
 	flush := func() {}
 	if f, ok := w.(http.Flusher); ok {
@@ -119,7 +192,17 @@ func streamRows(w io.Writer, rows *sql.Rows) (int, error) {
 	if err := rows.Err(); err != nil {
 		return count, fmt.Errorf("rows: %w", err)
 	}
-	return count, shard.WriteStreamEnd(w)
+	return count, nil
+}
+
+// finishStream ends the stream with the sentinel, then the scan stats. The
+// rows must be drained: DuckDB writes its profile as the query finishes.
+func finishStream(w io.Writer, q *coldQuery) (shard.ScanStats, error) {
+	if err := shard.WriteStreamEnd(w); err != nil {
+		return shard.ScanStats{}, err
+	}
+	stats := q.Stats()
+	return stats, shard.WriteScanStats(w, stats)
 }
 
 // HandleQuery executes a SQL query against a Parquet file and streams
@@ -128,13 +211,15 @@ func streamRows(w io.Writer, rows *sql.Rows) (int, error) {
 func HandleQuery(ctx context.Context, w io.Writer, req QueryRequest, s3cfg *shard.S3Config) error {
 	ctx, cancel := req.queryContext(ctx)
 	defer cancel()
-	db, rows, err := runQuery(ctx, req, s3cfg)
+	q, err := runQuery(ctx, req, s3cfg)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
-	defer rows.Close()
-	_, err = streamRows(w, rows)
+	defer q.Close()
+	if _, err := streamRows(w, q.rows); err != nil {
+		return err
+	}
+	_, err = finishStream(w, q)
 	return err
 }
 
@@ -175,13 +260,12 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 200 header first and smuggled the error into the body as text
 	// where the coordinator parsed it as a corrupt stream and silently
 	// dropped the shard's rows.
-	db, rows, err := runQuery(ctx, req, s3cfg)
+	q, err := runQuery(ctx, req, s3cfg)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("query failed: %v", err), http.StatusInternalServerError)
 		return
 	}
-	defer db.Close()
-	defer rows.Close()
+	defer q.Close()
 
 	w.Header().Set("Content-Type", "application/x-protobuf-stream")
 	w.WriteHeader(http.StatusOK)
@@ -193,14 +277,19 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// interrupted after the parquet opened) can't change the status.
 	// We stop without the end sentinel; the coordinator's
 	// queryToSinkRemote logs the truncated stream on its side.
-	count, err := streamRows(w, rows)
+	count, err := streamRows(w, q.rows)
 	if err != nil {
 		weftsdk.Infof(logCtx, "lambda-shard: mid-stream failure after header sent: %v", err)
+		return
+	}
+	stats, err := finishStream(w, q)
+	if err != nil {
+		weftsdk.Infof(logCtx, "lambda-shard: ending the stream failed: %v", err)
 		return
 	}
 	// Unconditional completion log, matching the caller-side
 	// (shard.ColdShard.queryToSinkRemote) contract — no shard id is
 	// available on this side of the wire, so parquet path identifies
 	// which archive was read.
-	weftsdk.Infof(logCtx, "lambda-shard: query completed in %s parquet=%s (%d rows)", time.Since(start), req.ParquetPath, count)
+	weftsdk.Infof(logCtx, "lambda-shard: query completed in %s parquet=%s (%d rows, rows_scanned=%d bytes_read=%d)", time.Since(start), req.ParquetPath, count, stats.RowsScanned, stats.BytesRead)
 }
