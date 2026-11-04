@@ -56,6 +56,19 @@ type LambdaQueryRequest struct {
 	// context.Context, so this is the only channel. Keep in sync with
 	// cmd/lambda-shard/handler.go's QueryRequest.
 	TraceId string `json:"trace_id,omitempty"`
+	// DeadlineUnixMs is when the caller stops waiting (zero: no deadline).
+	// The Lambda interrupts the query there rather than billing on after
+	// the coordinator has hung up. Keep in sync with
+	// cmd/lambda-shard/handler.go's QueryRequest.
+	DeadlineUnixMs int64 `json:"deadline_unix_ms,omitempty"`
+}
+
+// deadlineUnixMs is ctx's deadline for the wire, or zero if it has none.
+func deadlineUnixMs(ctx context.Context) int64 {
+	if d, ok := ctx.Deadline(); ok {
+		return d.UnixMilli()
+	}
+	return 0
 }
 
 // anyArgsToStrings narrows planner-supplied []any to []string for the
@@ -177,10 +190,11 @@ func (s *ColdShard) queryLocal(ctx context.Context, query string, args []any) ([
 func (s *ColdShard) queryRemote(ctx context.Context, query string, args []any) ([]*pb.ResultRow, error) {
 	traceID, _ := weftsdk.TraceIDFromContext(ctx)
 	body, err := json.Marshal(LambdaQueryRequest{
-		SQL:         query,
-		ParquetPath: s.parquetPath,
-		Args:        anyArgsToStrings(args),
-		TraceId:     traceID,
+		SQL:            query,
+		ParquetPath:    s.parquetPath,
+		Args:           anyArgsToStrings(args),
+		TraceId:        traceID,
+		DeadlineUnixMs: deadlineUnixMs(ctx),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -237,10 +251,11 @@ func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []
 	traceID, _ := weftsdk.TraceIDFromContext(ctx)
 
 	body, err := json.Marshal(LambdaQueryRequest{
-		SQL:         query,
-		ParquetPath: s.parquetPath,
-		Args:        anyArgsToStrings(args),
-		TraceId:     traceID,
+		SQL:            query,
+		ParquetPath:    s.parquetPath,
+		Args:           anyArgsToStrings(args),
+		TraceId:        traceID,
+		DeadlineUnixMs: deadlineUnixMs(ctx),
 	})
 	if err != nil {
 		weftsdk.Infof(ctx, "cold shard %s: marshal request: %v", s.id, err)

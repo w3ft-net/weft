@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
 	"net/url"
@@ -54,7 +55,7 @@ func TestHandleQuery_PrunesPartitionsAtEveryGranularity(t *testing.T) {
 			corruptPartitionsFrom(t, dir, t0.Add(48*time.Hour))
 
 			var buf bytes.Buffer
-			err := HandleQuery(&buf, QueryRequest{
+			err := HandleQuery(context.Background(), &buf, QueryRequest{
 				SQL:         "SELECT raw, ts FROM logs WHERE customer_id = CAST(? AS BIGINT) AND ts >= CAST(? AS TIMESTAMP) AND ts <= CAST(? AS TIMESTAMP)",
 				Args:        []string{"1", start.Format("2006-01-02 15:04:05"), end.Format("2006-01-02 15:04:05")},
 				ParquetPath: filepath.Join(dir, g.segment) + "/**/*.parquet",

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -27,14 +28,31 @@ type QueryRequest struct {
 	// body — this process can't read a caller's Go context.Context.
 	// Keep in sync with shard.LambdaQueryRequest.
 	TraceId string `json:"trace_id,omitempty"`
+	// DeadlineUnixMs is when the coordinator stops waiting for this query;
+	// zero means no deadline. A Function URL doesn't reliably tell the
+	// function its caller hung up, so without this an abandoned query runs
+	// (and bills) to the Lambda's own timeout. Keep in sync with
+	// shard.LambdaQueryRequest.
+	DeadlineUnixMs int64 `json:"deadline_unix_ms,omitempty"`
+}
+
+// queryContext bounds ctx by the request's deadline. The caller cancels it
+// once the rows are drained.
+func (req QueryRequest) queryContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if req.DeadlineUnixMs == 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, time.UnixMilli(req.DeadlineUnixMs))
 }
 
 // runQuery opens an in-memory DuckDB, configures S3, and executes the
 // rewritten query. Every failure here is pre-stream — a missing parquet
 // snapshot or bad SQL surfaces from db.Query() before any bytes are
 // written — so the caller can still return an honest non-2xx status.
-// On success the caller owns closing both the *sql.DB and *sql.Rows.
-func runQuery(req QueryRequest, s3cfg *shard.S3Config) (*sql.DB, *sql.Rows, error) {
+// On success the caller owns closing both the *sql.DB and *sql.Rows; ctx
+// must stay live until the rows are drained, since cancelling it
+// interrupts DuckDB.
+func runQuery(ctx context.Context, req QueryRequest, s3cfg *shard.S3Config) (*sql.DB, *sql.Rows, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("open duckdb: %w", err)
@@ -59,7 +77,7 @@ func runQuery(req QueryRequest, s3cfg *shard.S3Config) (*sql.DB, *sql.Rows, erro
 	for i, a := range req.Args {
 		args[i] = a
 	}
-	rows, err := db.Query(query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		db.Close()
 		return nil, nil, fmt.Errorf("query: %w", err)
@@ -107,8 +125,10 @@ func streamRows(w io.Writer, rows *sql.Rows) (int, error) {
 // HandleQuery executes a SQL query against a Parquet file and streams
 // length-prefixed protobuf ResultRow messages to the writer, one row at
 // a time. Testable without the Lambda runtime.
-func HandleQuery(w io.Writer, req QueryRequest, s3cfg *shard.S3Config) error {
-	db, rows, err := runQuery(req, s3cfg)
+func HandleQuery(ctx context.Context, w io.Writer, req QueryRequest, s3cfg *shard.S3Config) error {
+	ctx, cancel := req.queryContext(ctx)
+	defer cancel()
+	db, rows, err := runQuery(ctx, req, s3cfg)
 	if err != nil {
 		return err
 	}
@@ -145,6 +165,8 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	s3cfg := shard.S3ConfigFromEnv()
 	start := time.Now()
+	ctx, cancel := req.queryContext(r.Context())
+	defer cancel()
 
 	// Execute before writing the status. A failed query (missing
 	// parquet, bad SQL) surfaces from db.Query() with no bytes written,
@@ -153,7 +175,7 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 200 header first and smuggled the error into the body as text
 	// where the coordinator parsed it as a corrupt stream and silently
 	// dropped the shard's rows.
-	db, rows, err := runQuery(req, s3cfg)
+	db, rows, err := runQuery(ctx, req, s3cfg)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("query failed: %v", err), http.StatusInternalServerError)
 		return

@@ -225,3 +225,51 @@ func BenchmarkColdShard_RemoteQuery(b *testing.B) {
 		cs.Query(context.Background(), "SELECT raw, ts FROM logs WHERE level = 'ERROR' AND customer_id = 1")
 	}
 }
+
+// The Lambda is a separate process that can't see the coordinator's context,
+// and a Function URL doesn't reliably surface a dropped connection, so the
+// query's deadline travels in the body.
+func TestColdShard_RemoteQueryToSink_CarriesDeadline(t *testing.T) {
+	parquetPath := exportToParquet(t, testRows())
+
+	got := make(chan LambdaQueryRequest, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req LambdaQueryRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		got <- req
+		w.Header().Set("Content-Type", "application/x-protobuf-stream")
+		WriteStreamEnd(w)
+	}))
+	defer srv.Close()
+
+	cs, err := NewColdShard("remote-deadline-test", []string{"vimgym"}, parquetPath, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	const q = "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1"
+
+	deadline := time.Now().Add(time.Minute)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	cs.QueryToSink(ctx, q, nil, &testSink{})
+	if req := <-got; req.DeadlineUnixMs != deadline.UnixMilli() {
+		t.Errorf("deadline_unix_ms = %d, want %d", req.DeadlineUnixMs, deadline.UnixMilli())
+	}
+
+	cs.QueryToSink(context.Background(), q, nil, &testSink{})
+	if req := <-got; req.DeadlineUnixMs != 0 {
+		t.Errorf("deadline_unix_ms = %d for a query with no deadline, want 0", req.DeadlineUnixMs)
+	}
+
+	if _, err := cs.Query(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+	if req := <-got; req.DeadlineUnixMs != deadline.UnixMilli() {
+		t.Errorf("Query: deadline_unix_ms = %d, want %d", req.DeadlineUnixMs, deadline.UnixMilli())
+	}
+}

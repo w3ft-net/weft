@@ -42,7 +42,7 @@ func TestLambdaHandler_QueryParquet(t *testing.T) {
 	path := testParquet(t)
 	var buf bytes.Buffer
 
-	err := HandleQuery(&buf, QueryRequest{
+	err := HandleQuery(context.Background(), &buf, QueryRequest{
 		SQL:         "SELECT raw, ts FROM logs WHERE customer_id = 1",
 		ParquetPath: path,
 	}, nil)
@@ -63,7 +63,7 @@ func TestLambdaHandler_FiltersByApp(t *testing.T) {
 	path := testParquet(t)
 	var buf bytes.Buffer
 
-	err := HandleQuery(&buf, QueryRequest{
+	err := HandleQuery(context.Background(), &buf, QueryRequest{
 		SQL:         "SELECT raw, ts FROM logs WHERE namespace = 'vimgym' AND customer_id = 1",
 		ParquetPath: path,
 	}, nil)
@@ -194,7 +194,7 @@ func TestLambdaHandler_EmptyResult(t *testing.T) {
 	path := testParquet(t)
 	var buf bytes.Buffer
 
-	err := HandleQuery(&buf, QueryRequest{
+	err := HandleQuery(context.Background(), &buf, QueryRequest{
 		SQL:         "SELECT raw, ts FROM logs WHERE namespace = 'nonexistent'",
 		ParquetPath: path,
 	}, nil)
@@ -219,7 +219,7 @@ func TestLambdaHandler_ScansExtraColumnsLikeAHotShard(t *testing.T) {
 	path := testParquet(t)
 
 	var counted bytes.Buffer
-	if err := HandleQuery(&counted, QueryRequest{
+	if err := HandleQuery(context.Background(), &counted, QueryRequest{
 		SQL:         "SELECT '' AS raw, min(ts) AS ts, count(*) AS count FROM logs WHERE customer_id = 1 HAVING count(*) > 0",
 		ParquetPath: path,
 	}, nil); err != nil {
@@ -234,7 +234,7 @@ func TestLambdaHandler_ScansExtraColumnsLikeAHotShard(t *testing.T) {
 	}
 
 	var withIDs bytes.Buffer
-	if err := HandleQuery(&withIDs, QueryRequest{
+	if err := HandleQuery(context.Background(), &withIDs, QueryRequest{
 		SQL:         "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE customer_id = 1",
 		ParquetPath: path,
 	}, nil); err != nil {
@@ -246,5 +246,38 @@ func TestLambdaHandler_ScansExtraColumnsLikeAHotShard(t *testing.T) {
 	}
 	if len(rows) != 3 {
 		t.Fatalf("event_id query rows = %v, want 3 rows", rows)
+	}
+}
+
+// A query the coordinator has given up on must stop billing: the request
+// carries the coordinator's deadline and the handler interrupts DuckDB there,
+// instead of running to the Lambda's own timeout.
+func TestHandleQuery_StopsAtTheCoordinatorsDeadline(t *testing.T) {
+	path := testParquet(t)
+	deadline := time.Now().Add(300 * time.Millisecond)
+
+	start := time.Now()
+	err := HandleQuery(context.Background(), &bytes.Buffer{}, QueryRequest{
+		// A cross join this large would run for minutes.
+		SQL:            "SELECT 'x' AS raw, now() AS ts, count(*) AS n FROM logs, range(100000000000)",
+		ParquetPath:    path,
+		DeadlineUnixMs: deadline.UnixMilli(),
+	}, nil)
+	if err == nil {
+		t.Fatal("query ran to completion past its deadline")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("query kept running %s after a deadline %s out", took, time.Until(deadline)+took)
+	}
+}
+
+func TestHandleQuery_NoDeadlineRunsToCompletion(t *testing.T) {
+	var buf bytes.Buffer
+	err := HandleQuery(context.Background(), &buf, QueryRequest{
+		SQL:         "SELECT raw, ts FROM logs WHERE customer_id = 1",
+		ParquetPath: testParquet(t),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -210,7 +211,7 @@ func TestHandleQuery_EveryArchiveFormatAnswersAlike(t *testing.T) {
 			t.Run(name+"/"+q.name, func(t *testing.T) {
 				query, args := planFor(t, q.pipeline, q.customer, q.start, q.end)
 				var buf bytes.Buffer
-				if err := HandleQuery(&buf, QueryRequest{SQL: query, ParquetPath: path, Args: args}, nil); err != nil {
+				if err := HandleQuery(context.Background(), &buf, QueryRequest{SQL: query, ParquetPath: path, Args: args}, nil); err != nil {
 					t.Fatalf("HandleQuery: %v\nsql: %s\nargs: %v", err, query, args)
 				}
 				rows, err := shard.ReadAllResultRows(&buf)
