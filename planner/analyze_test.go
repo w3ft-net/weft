@@ -112,7 +112,6 @@ func TestAnalyze_StageBehindBarrierSaysNothing(t *testing.T) {
 // Advice is specific to the command and flag, not one sentence for all.
 func TestAnalyze_FlagAdviceNamesTheFix(t *testing.T) {
 	tests := []struct{ stage, want string }{
-		{"grep -c boom", "wc -l"},
 		{"awk -F, '{ print $2 }'", "cut -d<sep>"},
 		{`awk '{ n++ } END { print n }'`, "wc -l"},
 		{"sed 's/a/b/'", "Substitution"},

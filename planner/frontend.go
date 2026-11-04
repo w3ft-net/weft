@@ -19,10 +19,20 @@ func lowerStage(s stageInfo, index int, typed bool) *loweredStage {
 		ls.nodes = lowerJq(ls, a)
 	case "grep":
 		ls.rowwise = grepIsRowFilter(s.args)
-		pred, pat, why := grepFilter(s.args)
-		if pred == "" {
+		args, count := grepCount(s.args)
+		pred, pat, why := grepFilter(args)
+		switch {
+		case pred == "":
 			ls.nodes = []node{&opaqueNode{at: a, why: why}}
-		} else {
+		case count:
+			// grep -c counts the lines that match, not the rows that do
+			// (compute's grep is the same: a row of several lines is
+			// split before it reads them), so the shard filters each line.
+			ls.nodes = []node{
+				&filterNode{at: a, pred: pred, exact: true, follow: &pat, lineWise: true, hoisted: true},
+				&countNode{at: a},
+			}
+		default:
 			ls.nodes = []node{&filterNode{at: a, pred: pred, exact: true, follow: &pat, lineWise: true}}
 		}
 	case "sed":

@@ -85,14 +85,13 @@ $ explain cat /log/acme/api/main.log | awk '$3 == "ingest-stream:" { printf "%s\
 
 Barrier: stage 1.
 
-$ explain cat /log/acme/api/main.log | grep -c boom
-  1  grep -c boom  post-retrieval
-       grep optimized with -i, -v, or no flags; not -c.
-       Try: Use `grep PATTERN | wc -l`: both optimized.
+$ explain cat /log/acme/api/main.log | grep -n boom
+  1  grep -n boom  post-retrieval
+       grep optimized with -i, -v, or no flags; not -n.
 
 Barrier: stage 1.
 
-$ explain cat /log/acme/api/main.log | grep ERROR | wc -l
+$ explain cat /log/acme/api/main.log | grep -c ERROR
 Every stage: optimized retrieval.
 ```
 

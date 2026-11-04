@@ -710,12 +710,6 @@ func TestEdge_Grep(t *testing.T) {
 			wantCompute []string
 		}{
 			{
-				name:        "grep -c count mode",
-				pipeline:    `cat vimgym.log | grep -c ERROR`,
-				wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ?`,
-				wantCompute: []string{`grep -c ERROR`},
-			},
-			{
 				name:        "grep -n line numbers",
 				pipeline:    `cat vimgym.log | grep -n ERROR`,
 				wantSQL:     `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ?`,

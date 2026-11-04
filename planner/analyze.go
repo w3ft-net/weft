@@ -260,11 +260,6 @@ func adviceFor(r reason, cmd string) *Advice {
 // retrieval by a flag of its command.
 func flagAdvice(cmd, flag string) *Advice {
 	switch {
-	case cmd == "grep" && strings.Contains(flag, "c"):
-		return &Advice{
-			Because: fmt.Sprintf("grep optimized with -i, -v, or no flags; not %s.", flag),
-			Try:     "Use `grep PATTERN | wc -l`: both optimized.",
-		}
 	case cmd == "grep":
 		return &Advice{Because: fmt.Sprintf("grep optimized with -i, -v, or no flags; not %s.", flag)}
 	case cmd == "awk" && strings.HasPrefix(flag, "-F"):

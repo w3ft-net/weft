@@ -35,7 +35,7 @@ to optimize is to lean on jq or AWK, and wherever possible, to use
 [metavariables](metavars.md). However, the following commands also get special
 treatment:
 
-* `grep`, with `-i`, `-v` and `-E`
+* `grep`, with `-i`, `-v`, `-E` and `-c`
 * `sed -n '/PATTERN/p'`, `sed '/PATTERN/d'`, and their `!` forms (`sed -n '/PATTERN/!p'`, `sed '/PATTERN/!d'`)
 * `head [-n]` and `tail [-n]`
 * `cut -d DELIM -f LIST`, where `LIST` is discrete fields or a trailing open range (i.e. `3-`)

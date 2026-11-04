@@ -83,6 +83,11 @@ func TestDifferentialLineSplits(t *testing.T) {
 		`cat /log/acme/api/main.log | sort -r | uniq`,
 		`cat /log/acme/api/main.log | sort -u`,
 		`cat /log/acme/api/main.log | grep nothing-matches | wc -l`,
+		`cat /log/acme/api/main.log | grep -c nothing-matches`,
+		`cat /log/acme/api/main.log | grep -c b`,
+		`cat /log/acme/api/main.log | grep -vc b`,
+		`cat /log/acme/api/main.log | grep -c '^$'`,
+		`cat /log/acme/api/main.log | grep -ci LINE`,
 		`cat /log/acme/api/main.log | grep nothing-matches | sort | uniq -c`,
 		`cat /log/acme/api/main.log | sort | grep -v b | uniq -c`,
 	} {

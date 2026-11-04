@@ -374,7 +374,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 	var key string
 	var agg *keyedAgg
 	var order *ValueOrder
-	var first node = c.compute[0].nodes[0]
+	var first node = c.aboveShard(c.compute[0])
 	skipped := 0 // sorts ahead of an aggregate that doesn't depend on row order
 	if an, dropped := leadingAggregate(c.compute); an != nil {
 		first, skipped = an, dropped
@@ -437,7 +437,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 	default:
 		return
 	}
-	label := c.label(c.compute[0].nodes[0])
+	label := c.label(c.aboveShard(c.compute[0]))
 	for _, s := range c.compute[1:n] {
 		label += " + " + c.label(s.nodes[0])
 	}
@@ -463,7 +463,11 @@ func (c *compiled) fuseAggregate(limited bool) {
 		return
 	}
 	for _, s := range c.compute[:n] {
-		c.aggregated = append(c.aggregated, s.nodes...)
+		for _, nd := range s.nodes {
+			if slices.Contains(c.nodes[c.shard:], nd) {
+				c.aggregated = append(c.aggregated, nd)
+			}
+		}
 	}
 	c.shard += len(c.aggregated)
 	c.compute = c.compute[n:]
@@ -479,6 +483,18 @@ func (c *compiled) fuseAggregate(limited bool) {
 		c.shardOrderBy = "raw"
 	}
 	c.logf(pass, "%s became the shard's GROUP BY (%s)", label, render)
+}
+
+// aboveShard is a stage's first node that the shard doesn't run. A stage
+// can have nodes on both sides of the boundary: grep -c is a filter that
+// pushed and a count that didn't.
+func (c *compiled) aboveShard(s *loweredStage) node {
+	for _, n := range s.nodes {
+		if slices.Contains(c.nodes[c.shard:], n) {
+			return n
+		}
+	}
+	return s.nodes[0]
 }
 
 // numericEnd is whether a sort -n (or -rn) with no other flag is followed by

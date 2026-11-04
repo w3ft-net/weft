@@ -1,6 +1,25 @@
 package planner
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+// grepCount splits -c off grep's arguments. grep -c prints how many lines
+// the rest of its flags select, so the stage lowers as that filter followed
+// by a line count.
+func grepCount(args []string) (rest []string, count bool) {
+	for _, arg := range args {
+		if len(arg) > 1 && arg[0] == '-' && arg[1] != '-' && strings.ContainsRune(arg[1:], 'c') {
+			count = true
+			if arg = strings.ReplaceAll(arg, "c", ""); arg == "-" {
+				continue
+			}
+		}
+		rest = append(rest, arg)
+	}
+	return rest, count
+}
 
 // grepFilter lowers a grep stage to a SQL predicate, with the pattern
 // live tail applies to the same stage. pred is "" when it doesn't lower,
