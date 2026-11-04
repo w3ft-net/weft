@@ -1,0 +1,31 @@
+# Entitlements as advertised today, plus the dials this model compares.
+# Usage is always 100% of every limit: the safe assumption. Margin is AWS-only
+# gross margin (engineering and support are outside COGS).
+#
+# margin_target steps down with scale: 95% at the small end to 80% at Bolt.
+# Yard's 87.5% is the midpoint, an assumption.
+#
+# Bolt is not a posted tier: it has no public price, only a contact form. It is
+# priced per customer on dedicated instances, so it lives under `dedicated` as a
+# reference configuration (today's Bolt entitlements), not in `tiers`.
+#
+# scan_passes is the cold line scan budget: how many full passes over the
+# tier's cold archive a month it may read. It scales with stored volume by
+# construction. Retention (30/90/180) and the 14-day hot window are fixed plan facts.
+tiers:
+  trial:  {price_usd: 0,   overage_usd_per_gb: 0,    ingest_gb: 1,   retention_days: 1,   hot_days: 1,  scan_passes: 0, crons: 20,  cron_interval_min: 5}
+  swatch: {price_usd: 29,  overage_usd_per_gb: 2.00, ingest_gb: 10,  retention_days: 30,  hot_days: 14, scan_passes: 1, crons: 20,  cron_interval_min: 5,   margin_target: 0.95}
+  yard:   {price_usd: 99,  overage_usd_per_gb: 1.00, ingest_gb: 100, retention_days: 90,  hot_days: 14, scan_passes: 1, crons: 100, cron_interval_min: 1,   margin_target: 0.875}
+
+# Reference configuration for a dedicated (Bolt) quote. Dedicated shards are sized
+# to the customer's hot data, in whole shards, instead of sharing fill with others.
+dedicated:
+  dedicated: true
+  instance_mult: 1                # 1 = t4g.micro, 2 small, 4 medium, 8 large
+  ingest_gb: 500
+  retention_days: 180
+  hot_days: 14
+  scan_passes: 1
+  crons: 500
+  cron_interval_min: 1
+  margin_target: 0.80
