@@ -184,7 +184,7 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 // script carrying on with a short answer (counting it, alerting on it,
 // writing it to a file) would produce a wrong result that looks right.
 func queryFailed(stderr io.Writer, err error, fail func(error)) int {
-	if fail != nil && missingRows(err) {
+	if fail != nil && queryUnanswered(err) {
 		fail(fmt.Errorf("query: %w", err))
 		return 1
 	}
@@ -192,12 +192,14 @@ func queryFailed(stderr io.Writer, err error, fail func(error)) int {
 	return 1
 }
 
-// missingRows reports whether err means some shard holding rows for the
-// query didn't return them: it couldn't be routed to, or failed.
-func missingRows(err error) bool {
+// queryUnanswered reports whether err means the query has no answer to give:
+// some shard holding rows for it couldn't be routed to or failed, or the org's
+// cold scan budget is spent and the query needs cold history. Either way a
+// partial answer would look right and be wrong, so a run fails on it.
+func queryUnanswered(err error) bool {
 	var down *logdb.UnavailableShardsError
 	var failed *compute.MissingRowsError
-	return errors.As(err, &down) || errors.As(err, &failed)
+	return errors.As(err, &down) || errors.As(err, &failed) || errors.Is(err, store.ErrColdScanBudgetExhausted)
 }
 
 // firstBinStage returns the index of the first stage after the source

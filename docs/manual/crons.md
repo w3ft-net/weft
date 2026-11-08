@@ -139,6 +139,28 @@ It will also disable a cron that produces more tags than your plan limit.
 Disabled crons (see [Runtime analysis](crons.md#runtime-analysis)) don't count
 against your plan limit.
 
+### Older data and your history budget
+
+Recent data (the last 14 days) is always available. Reading older data counts
+against a monthly history budget, in lines read:
+
+| Plan | Older data read per month |
+|---|---|
+| Trial | none |
+| Swatch | 34 million lines |
+| Yard | 1.6 billion lines |
+
+`cat /etc/usage` shows how much of it you have used. When it is used up, a query
+that needs older data fails with a message saying so and when the month resets;
+queries over recent data are not affected.
+
+A cron fires over a window as long as its schedule, so a cron that looks back
+nearly 14 days can reach older data. Saving one warns you. If a fire needs older
+data after the budget is used up, it fails, weft disables the cron, and a
+notice goes to your `system` alias. To turn it back on, shorten the schedule or
+wait for the budget to reset, then edit `/cron.d/<name>` and remove the
+`# enabled: false` line.
+
 ### Retention
 
 Raw results are rolled up into progressively coarser summaries as they age.

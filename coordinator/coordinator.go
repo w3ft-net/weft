@@ -159,17 +159,20 @@ func (r *ExecuteResult) Drain(ctx context.Context) (*DrainedResult, error) {
 // registry so c.Provisioner is never nil — drain and query paths
 // read fields fresh on every pass, so the swap is safe.
 type Coordinator struct {
-	Compute      compute.Executor        // required; every query dispatches through it
-	Tail         *TailBroker             // nil = no live-tail subscriptions
-	TailFanout   *TailFanout             // nil exactly when Tail is nil; wraps Tail, with or without Redis configured
-	Ingest       *RingBuffer             // write path: IngestStream → buffer → shards. NewCoordinator always installs one; StartDrain still has to be called explicitly.
-	Provisioner  *logdb.Provisioner      // shard lifecycle + registry. Never nil after NewCoordinator; main.go swaps in the real one once logdb.Start completes.
-	Usage        *CustomerUsageStats     // nil = no per-customer byte metering
-	Store        *store.Store            // nil = no tenant-scoped features (/bin, alert dispatch); test-only
-	SeenServices *SeenServices           // ingest-stream app discovery; constructor always installs
-	DLQ          *DLQ                    // S3 dead-letter queue for failed ingests
-	Errors       *IngestionErrorRecorder // async error persistence
-	Notifier     NotifyDispatcher        // per-customer alert dispatcher (nil = disabled). Interface type so a nil value is true-nil — no typed-nil-via-concrete-pointer trap when callers thread it into AlertContext.
+	Compute     compute.Executor    // required; every query dispatches through it
+	Tail        *TailBroker         // nil = no live-tail subscriptions
+	TailFanout  *TailFanout         // nil exactly when Tail is nil; wraps Tail, with or without Redis configured
+	Ingest      *RingBuffer         // write path: IngestStream → buffer → shards. NewCoordinator always installs one; StartDrain still has to be called explicitly.
+	Provisioner *logdb.Provisioner  // shard lifecycle + registry. Never nil after NewCoordinator; main.go swaps in the real one once logdb.Start completes.
+	Usage       *CustomerUsageStats // nil = no per-customer byte metering
+	ColdScans   *ColdScanLedger     // nil = no cold scan metering (docs/plans/cold-scan-cap.md)
+	// ColdScanEnforce refuses a query that needs cold shards once the org's month of cold scanning is spent. Off = meter only.
+	ColdScanEnforce bool
+	Store           *store.Store            // nil = no tenant-scoped features (/bin, alert dispatch); test-only
+	SeenServices    *SeenServices           // ingest-stream app discovery; constructor always installs
+	DLQ             *DLQ                    // S3 dead-letter queue for failed ingests
+	Errors          *IngestionErrorRecorder // async error persistence
+	Notifier        NotifyDispatcher        // per-customer alert dispatcher (nil = disabled). Interface type so a nil value is true-nil — no typed-nil-via-concrete-pointer trap when callers thread it into AlertContext.
 	// ScriptExecutionTimeout caps how long a single runLocal invocation
 	// may run. Zero = use the package-level default (scriptExecutionTimeout).
 	// Tests override to shorten the wait.
@@ -225,8 +228,10 @@ type CoordinatorConfig struct {
 	Tail     *TailBroker
 	Ingest   *RingBuffer
 	Usage    *CustomerUsageStats
-	DLQ      *DLQ
-	Errors   *IngestionErrorRecorder
+	// ColdScanEnforce turns the cold scan budget from metering into a limit.
+	ColdScanEnforce bool
+	DLQ             *DLQ
+	Errors          *IngestionErrorRecorder
 
 	// RedisAddr/RedisTLS configure TailFanout's cross-coordinator
 	// delivery (docs/plans/coordinator-horizontal-scaling.md item 4).
@@ -361,6 +366,7 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		Tail:                   cfg.Tail,
 		Ingest:                 ingest,
 		Usage:                  cfg.Usage,
+		ColdScanEnforce:        cfg.ColdScanEnforce,
 		Store:                  cfg.Store,
 		SeenServices:           NewSeenServices(),
 		DLQ:                    cfg.DLQ,
@@ -368,6 +374,9 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		Notifier:               cfg.Notifier,
 		ScriptExecutionTimeout: cfg.ScriptExecutionTimeout,
 		ShareURLBase:           cfg.ShareURLBase,
+	}
+	if cfg.Store != nil {
+		c.ColdScans = NewColdScanLedger(cfg.Store)
 	}
 	if cfg.Tail != nil {
 		c.TailFanout = NewTailFanout(cfg.Tail, cfg.RedisAddr, cfg.RedisTLS)
@@ -383,7 +392,7 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 // multiple coordinator instances — see
 // docs/plans/coordinator-horizontal-scaling.md.
 func (c *Coordinator) StartUsageFlush(ctx context.Context, store *store.Store) {
-	if c.Usage == nil {
+	if c.Usage == nil && c.ColdScans == nil {
 		return
 	}
 	go func() {
@@ -394,9 +403,11 @@ func (c *Coordinator) StartUsageFlush(ctx context.Context, store *store.Store) {
 			case <-ctx.Done():
 				// Final flush on shutdown.
 				c.flushUsage(store)
+				c.flushColdScans(store)
 				return
 			case <-ticker.C:
 				c.flushUsage(store)
+				c.flushColdScans(store)
 			}
 		}
 	}()
@@ -409,6 +420,9 @@ func (c *Coordinator) StartUsageFlush(ctx context.Context, store *store.Store) {
 // shared row. Readers (QueryUsage, rollup_usage_daily) already
 // SUM(bytes_ingested) across however many rows land for an hour.
 func (c *Coordinator) flushUsage(store *store.Store) {
+	if c.Usage == nil {
+		return
+	}
 	entries := c.Usage.Drain()
 	for _, e := range entries {
 		if err := store.DB().Exec(`
@@ -749,7 +763,7 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 			argStrs[i] = fmt.Sprintf("%v", a)
 		}
 	}
-	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
+	stream, err := c.executeCompute(ctx, store.OrgID(lp.CustomerID), tier, &pb.ExecuteQueryRequest{
 		Sql:               lp.DirectShardSQL,
 		FieldSql:          lp.FieldSQL,
 		Table:             lp.Table,
@@ -1166,7 +1180,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 
 	argStrs := queryArgStrings(ctx, plan.Args)
 	if plan.TraceStats != nil {
-		return c.executeTraceList(ctx, plan, argStrs, descs, tr, tier)
+		return c.executeTraceList(ctx, plan, argStrs, descs, tr, custID, tier)
 	}
 	// The plan that runs: the typed plan's exact form when every shard has
 	// its facts, else the base plan, with the typed SQL on the shards that do.
@@ -1178,7 +1192,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	} else if n := c.applyTypedVariant(plan, argStrs, descs); n > 0 {
 		logQuery(ctx, "query: %d of %d shards run the typed variant (%s)", n, len(descs), strings.Join(plan.Typed.Requires, ","))
 	}
-	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
+	stream, err := c.executeCompute(ctx, custID, tier, &pb.ExecuteQueryRequest{
 		Sql:               directSQL,
 		FieldSql:          run.FieldSQL,
 		Table:             plan.Table, // the base plan's: the exact variant reads the same source
@@ -1268,8 +1282,8 @@ func queryArgStrings(ctx context.Context, args []any) []string {
 // planner/traces.go): the newest trace IDs from the shards the scope selects,
 // then those traces' summaries from every shard, since a trace's lines sit on
 // whichever shards its services write to and the summary covers all of them.
-func (c *Coordinator) executeTraceList(ctx context.Context, plan *planner.QueryPlan, argStrs []string, descs []*pb.ShardDescriptor, tr TimeRange, tier store.Tier) (*ExecuteResult, error) {
-	idStream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
+func (c *Coordinator) executeTraceList(ctx context.Context, plan *planner.QueryPlan, argStrs []string, descs []*pb.ShardDescriptor, tr TimeRange, custID store.OrgID, tier store.Tier) (*ExecuteResult, error) {
+	idStream, err := c.executeCompute(ctx, custID, tier, &pb.ExecuteQueryRequest{
 		Sql:       plan.DirectShardSQL,
 		Args:      argStrs,
 		Shards:    descs,
@@ -1308,7 +1322,7 @@ func (c *Coordinator) executeTraceList(ctx context.Context, plan *planner.QueryP
 		return nil, err
 	}
 	logQuery(ctx, "query: trace list stats: traces=%d shards=%d sql=%s", len(ids), len(all), plan.TraceStats.SQL)
-	stream, err := c.Compute.ExecuteQuery(ctx, &pb.ExecuteQueryRequest{
+	stream, err := c.executeCompute(ctx, custID, tier, &pb.ExecuteQueryRequest{
 		Sql:       plan.TraceStats.SQL,
 		Args:      queryArgStrings(ctx, plan.TraceStats.WithIDs(ids)),
 		Shards:    all,

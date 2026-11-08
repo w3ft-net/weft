@@ -227,6 +227,18 @@ func (m *EtcMount) buildUsageReport() string {
 	fmt.Fprintf(&b, "ingested:  %s / %s (%.1f%%)\n",
 		humanBytes(bytesIngested), humanBytes(tierLimitBytes), pct)
 
+	// Older data than the recent window is read from archive, and each tier
+	// may read so many lines of it a month.
+	if coldAllowance := store.ColdScanAllowance(m.cfg.Tier); coldAllowance > 0 {
+		coldUsed, err := m.cfg.Store.QueryColdScan(m.cfg.OrgID, periodStart, periodEnd)
+		if err != nil {
+			coldUsed = 0
+		}
+		fmt.Fprintf(&b, "history:   %s / %s lines of older data read (%.1f%%)\n",
+			store.FormatLines(coldUsed), store.FormatLines(coldAllowance),
+			float64(coldUsed)/float64(coldAllowance)*100)
+	}
+
 	forecast, err := m.cfg.Store.ForecastMetricsUsage(m.cfg.OrgID)
 	if err == nil && forecast.AgentsWithMetrics > 0 {
 		fmt.Fprintf(&b, "metrics:   ~%s/mo projected (%d agent%s)\n",

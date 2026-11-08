@@ -117,6 +117,7 @@ func main() {
 	computeAddr := flag.String("compute", "", "compute worker address (host:port)")
 	redisAddr := flag.String("redis-addr", "", "Redis address for cross-coordinator tail -f fan-out (host:port); empty disables cross-coordinator fan-out, tail stays local to this process")
 	redisTLS := flag.Bool("redis-tls", false, "use TLS for the Redis connection (required for ElastiCache in-transit encryption)")
+	coldScanEnforce := flag.Bool("cold-scan-enforce", false, "refuse queries that need cold shards once an org's monthly cold scan budget is spent (docs/plans/cold-scan-cap.md); off = meter only")
 	awsRegion := flag.String("region", "us-east-2", "AWS region for shard EC2 launches + volume management")
 	shareURLBase := flag.String("share-url-base", "https://w3ft.net", "origin `clipboard` short links are built on")
 	customer := flag.String("customer", "", "fallback customer for dev/docker (queries pass customer per-request)")
@@ -209,6 +210,7 @@ func main() {
 		LambdaFunctionURL: os.Getenv("LAMBDA_FUNCTION_URL"),
 		RedisAddr:         *redisAddr,
 		RedisTLS:          *redisTLS,
+		ColdScanEnforce:   *coldScanEnforce,
 		ShareURLBase:      *shareURLBase,
 	})
 

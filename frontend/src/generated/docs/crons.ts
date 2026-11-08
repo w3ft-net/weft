@@ -11,6 +11,7 @@ const crons = {
     { level: 2, id: "cron-result-persistence", text: "Cron result persistence" },
     { level: 3, id: "type-declarations", text: "Type declarations" },
     { level: 3, id: "plan-limits-on-crons", text: "Plan limits on crons" },
+    { level: 3, id: "older-data-and-your-history-budget", text: "Older data and your history budget" },
     { level: 3, id: "retention", text: "Retention" },
     { level: 2, id: "analyzing-cron-data", text: "Analyzing cron data" },
     { level: 3, id: "aggregates", text: "Aggregates" },
@@ -227,6 +228,40 @@ at if you want to extract a string from an object.</p>
 It will also disable a cron that produces more tags than your plan limit.</p>
 <p>Disabled crons (see <a href="/manual/crons#runtime-analysis">Runtime analysis</a>) don't count
 against your plan limit.</p>
+<h3 id="older-data-and-your-history-budget">Older data and your history budget</h3>
+<p>Recent data (the last 14 days) is always available. Reading older data counts
+against a monthly history budget, in lines read:</p>
+<table>
+<thead>
+<tr>
+<th>Plan</th>
+<th>Older data read per month</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Trial</td>
+<td>none</td>
+</tr>
+<tr>
+<td>Swatch</td>
+<td>34 million lines</td>
+</tr>
+<tr>
+<td>Yard</td>
+<td>1.6 billion lines</td>
+</tr>
+</tbody>
+</table>
+<p><code>cat /etc/usage</code> shows how much of it you have used. When it is used up, a query
+that needs older data fails with a message saying so and when the month resets;
+queries over recent data are not affected.</p>
+<p>A cron fires over a window as long as its schedule, so a cron that looks back
+nearly 14 days can reach older data. Saving one warns you. If a fire needs older
+data after the budget is used up, it fails, weft disables the cron, and a
+notice goes to your <code>system</code> alias. To turn it back on, shorten the schedule or
+wait for the budget to reset, then edit <code>/cron.d/&lt;name&gt;</code> and remove the
+<code># enabled: false</code> line.</p>
 <h3 id="retention">Retention</h3>
 <p>Raw results are rolled up into progressively coarser summaries as they age.
 Every summary stores the count, sum, sum of squares, and minimum and maximum

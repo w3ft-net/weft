@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -230,10 +231,14 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 	var stdout, stderr string
 	exitCode := 0
 
+	// budgetErr is set when the run needed cold history after the org's month
+	// of cold scanning was spent; it disables the cron below.
+	var budgetErr *store.ColdScanBudgetError
 	if err != nil {
 		status = "error"
 		stderr = err.Error()
 		exitCode = 1
+		errors.As(err, &budgetErr)
 	} else {
 		// Streaming-eligible pipelines return ExecuteResult with only
 		// Stream populated; drain to materialize Text/Rows/Stderr for
@@ -245,6 +250,7 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 			status = "error"
 			stderr = drainErr.Error()
 			exitCode = 1
+			errors.As(drainErr, &budgetErr)
 		} else {
 			if drained.Text != "" {
 				stdout = drained.Text
@@ -287,7 +293,13 @@ func (ce *CronExecutor) executeWatch(ctx context.Context, watch store.CronWatch,
 	// budget or whose notification target timed out is a strike, any other
 	// tick clears the strikes, and the last strike disables the cron.
 	var disableWhy, disableHint string
-	if typeErr := outcome.typeError.Load(); typeErr != nil {
+	if budgetErr != nil {
+		// A refusal repeats until the month resets, so further fires would
+		// only burn runs: disable at once rather than after strikes.
+		status = "error"
+		disableWhy = budgetErr.Error()
+		disableHint = "Its time range reached cold history. Narrow the range to recent data, or wait for the budget to reset."
+	} else if typeErr := outcome.typeError.Load(); typeErr != nil {
 		status = "error"
 		disableWhy = *typeErr
 		disableHint = "Saving it would have been refused had the cron's name been spelled out."

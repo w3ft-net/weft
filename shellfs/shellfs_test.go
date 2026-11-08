@@ -74,6 +74,10 @@ func TestReadFile_EtcUsage(t *testing.T) {
 	if !strings.Contains(content, "ingested:") {
 		t.Errorf("missing ingestion line, got:\n%s", content)
 	}
+	// And how much of the month's older-data budget is used.
+	if !strings.Contains(content, "history:   0 / 34.4 million lines of older data read (0.0%)") {
+		t.Errorf("missing older-data line, got:\n%s", content)
+	}
 }
 
 func TestReadFile_EtcUsage_WithMetricsForecast(t *testing.T) {

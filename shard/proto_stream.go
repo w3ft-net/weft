@@ -103,6 +103,12 @@ type ScanStats struct {
 	BytesRead int64 `json:"bytes_read"`
 }
 
+// ScanReporter is a RowSink that wants a cold shard's scan stats (the
+// trailer after its stream). A sink without it never sees them.
+type ScanReporter interface {
+	ReportScan(shardID string, s ScanStats)
+}
+
 // maxScanStatsBytes bounds the trailer so a misaligned stream can't make
 // ReadScanStats allocate.
 const maxScanStatsBytes = 64 << 10

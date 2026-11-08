@@ -418,6 +418,10 @@ message ExecuteQueryStreamResponse {
   // now sent only to shards whose facts make it exact, and nothing is retried.
   reserved 4;
   reserved "inexact";
+  // rows_scanned is the lines the query's cold shards scanned (see
+  // docs/plans/cold-scan-cap.md), sent on the stream's last message. Zero when
+  // none were cold or the shard predates the count. An older receiver ignores it.
+  int64 rows_scanned = 5;
 }
 
 // ---------------------------------------------------------------------------

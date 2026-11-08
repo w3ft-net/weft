@@ -108,3 +108,56 @@ func TestQueryToSink_CompletesWithoutATrailer(t *testing.T) {
 		t.Errorf("no completion line: %s", out)
 	}
 }
+
+// reportingSink is a testSink that also wants the scan stats.
+type reportingSink struct {
+	testSink
+	shardID string
+	stats   ScanStats
+	calls   int
+}
+
+func (r *reportingSink) ReportScan(shardID string, s ScanStats) {
+	r.shardID, r.stats = shardID, s
+	r.calls++
+}
+
+// The stats reach a sink that asks for them, once; a sink that doesn't is unaffected.
+func TestQueryToSink_ReportsScanToASinkThatWantsIt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		WriteResultRow(w, &weftpb.ResultRow{Raw: "a"})
+		WriteStreamEnd(w)
+		WriteScanStats(w, ScanStats{RowsScanned: 42_000, BytesRead: 7_000})
+	}))
+	defer srv.Close()
+	cs, err := NewColdShard("rep-1", []string{"vimgym"}, "s3://b/x.parquet", srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	sink := &reportingSink{}
+	cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1", nil, sink)
+	if sink.calls != 1 || sink.shardID != "rep-1" || sink.stats.RowsScanned != 42_000 {
+		t.Errorf("reported %d times: shard=%q stats=%+v", sink.calls, sink.shardID, sink.stats)
+	}
+}
+
+// A Lambda from before the trailer reports nothing, which meters as zero.
+func TestQueryToSink_ReportsNothingWithoutATrailer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		WriteStreamEnd(w)
+	}))
+	defer srv.Close()
+	cs, err := NewColdShard("rep-2", []string{"vimgym"}, "s3://b/x.parquet", srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	sink := &reportingSink{}
+	cs.QueryToSink(context.Background(), "SELECT raw, ts FROM logs WHERE customer_id = 1", nil, sink)
+	if sink.calls != 0 {
+		t.Errorf("reported %d times without a trailer", sink.calls)
+	}
+}

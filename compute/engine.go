@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -255,6 +256,9 @@ type Job struct {
 	groupLimit int
 	feedErr    error
 
+	// rowsScanned sums the lines the job's cold shards scanned (ReportScan).
+	rowsScanned atomic.Int64
+
 	ch        chan ComputeMessage // shards push rows + sentinels here
 	streamCh  chan Line           // consume() pushes output here
 	streamErr error               // set by consume before closing streamCh
@@ -319,8 +323,15 @@ func (j *Job) shardFailure() error {
 // job once Stream has been claimed.
 func (j *Job) Stream() LineStream {
 	j.ensureStarted()
-	return newChannelLineStream(j.streamCh, &j.streamErr)
+	st := newChannelLineStream(j.streamCh, &j.streamErr)
+	st.scans = j.rowsScanned.Load
+	return st
 }
+
+// ReportScan implements shard.ScanReporter: a cold shard says how many lines
+// it scanned. Every shard reports before its sentinel, so the total is
+// complete once the merged stream ends.
+func (j *Job) ReportScan(_ string, s shard.ScanStats) { j.rowsScanned.Add(s.RowsScanned) }
 
 // drain reads streamCh to exhaustion into a cached slice. Used by
 // Result and MergedRows; fires once via sync.Once so multiple batch-

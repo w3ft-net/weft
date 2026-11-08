@@ -300,6 +300,9 @@ func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []
 			// The trailer is optional: a Lambda from before it ends at the
 			// sentinel, and a malformed one costs only this log field.
 			if stats, ok, _ := ReadScanStats(resp.Body); ok {
+				if r, isReporter := sink.(ScanReporter); isReporter {
+					r.ReportScan(s.id, stats)
+				}
 				weftsdk.Infof(ctx, "cold shard %s: query completed in %s (%d rows, rows_scanned=%d bytes_read=%d)", s.id, time.Since(start), rowsSeen, stats.RowsScanned, stats.BytesRead)
 			} else {
 				weftsdk.Infof(ctx, "cold shard %s: query completed in %s (%d rows)", s.id, time.Since(start), rowsSeen)

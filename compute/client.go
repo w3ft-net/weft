@@ -55,7 +55,14 @@ type grpcLineStream struct {
 	stream pb.WeftCompute_ExecuteQueryStreamClient
 	buf    []string
 	idx    int
+	// scanned is the lines the query's cold shards scanned, from the last
+	// message that carried it.
+	scanned int64
 }
+
+// RowsScanned implements ScanCounter. It is complete once Next has reported
+// the end of the stream.
+func (s *grpcLineStream) RowsScanned() int64 { return s.scanned }
 
 func (s *grpcLineStream) Next(_ context.Context) (Line, bool, error) {
 	for s.idx >= len(s.buf) {
@@ -71,6 +78,9 @@ func (s *grpcLineStream) Next(_ context.Context) (Line, bool, error) {
 		}
 		if resp.Error != "" {
 			return Line{}, false, fmt.Errorf("compute error: %s", resp.Error)
+		}
+		if resp.RowsScanned != 0 {
+			s.scanned = resp.RowsScanned
 		}
 		s.buf = resp.Lines
 		s.idx = 0

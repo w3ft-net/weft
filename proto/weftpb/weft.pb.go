@@ -1763,7 +1763,11 @@ type ExecuteQueryStreamResponse struct {
 	Error string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
 	// missing_shard names the shard whose rows the answer is missing when
 	// error is that shard's failure; the query then has no answer.
-	MissingShard  string `protobuf:"bytes,3,opt,name=missing_shard,json=missingShard,proto3" json:"missing_shard,omitempty"`
+	MissingShard string `protobuf:"bytes,3,opt,name=missing_shard,json=missingShard,proto3" json:"missing_shard,omitempty"`
+	// rows_scanned is the lines the query's cold shards scanned (see
+	// docs/plans/cold-scan-cap.md), sent on the stream's last message. Zero when
+	// none were cold or the shard predates the count. An older receiver ignores it.
+	RowsScanned   int64 `protobuf:"varint,5,opt,name=rows_scanned,json=rowsScanned,proto3" json:"rows_scanned,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1817,6 +1821,13 @@ func (x *ExecuteQueryStreamResponse) GetMissingShard() string {
 		return x.MissingShard
 	}
 	return ""
+}
+
+func (x *ExecuteQueryStreamResponse) GetRowsScanned() int64 {
+	if x != nil {
+		return x.RowsScanned
+	}
+	return 0
 }
 
 type AuditFleetRequest struct {
@@ -4680,11 +4691,12 @@ const file_weft_proto_rawDesc = "" +
 	"\x05order\x18\x02 \x01(\x0e2\x10.weft.GroupOrderR\x05order\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x03R\x05limit\x12#\n" +
 	"\rorder_reverse\x18\x04 \x01(\bR\forderReverse\x12*\n" +
-	"\x11order_tie_reverse\x18\x05 \x01(\bR\x0forderTieReverse\"|\n" +
+	"\x11order_tie_reverse\x18\x05 \x01(\bR\x0forderTieReverse\"\x9f\x01\n" +
 	"\x1aExecuteQueryStreamResponse\x12\x14\n" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12#\n" +
-	"\rmissing_shard\x18\x03 \x01(\tR\fmissingShardJ\x04\b\x04\x10\x05R\ainexact\"\x13\n" +
+	"\rmissing_shard\x18\x03 \x01(\tR\fmissingShard\x12!\n" +
+	"\frows_scanned\x18\x05 \x01(\x03R\vrowsScannedJ\x04\b\x04\x10\x05R\ainexact\"\x13\n" +
 	"\x11AuditFleetRequest\"\x9a\x01\n" +
 	"\x0fAuditShardState\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +

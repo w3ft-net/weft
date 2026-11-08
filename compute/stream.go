@@ -31,6 +31,24 @@ type LineStream interface {
 type channelLineStream struct {
 	ch     <-chan Line
 	errPtr *error // populated by producer before closing ch; nil = success
+	// scans, when set, reports the lines the job's cold shards scanned; see
+	// ScanCounter.
+	scans func() int64
+}
+
+// ScanCounter is a LineStream that knows how many lines the query's cold
+// shards scanned (docs/plans/cold-scan-cap.md). The count is complete once the
+// stream has returned its last line. A stream without it scanned nothing.
+type ScanCounter interface {
+	RowsScanned() int64
+}
+
+// RowsScanned implements ScanCounter.
+func (s *channelLineStream) RowsScanned() int64 {
+	if s.scans == nil {
+		return 0
+	}
+	return s.scans()
 }
 
 func newChannelLineStream(ch <-chan Line, errPtr *error) *channelLineStream {

@@ -53,8 +53,15 @@ func (s *Server) ExecuteQueryStream(req *pb.ExecuteQueryRequest, out pb.WeftComp
 			batch = nil
 		}
 	}
-	if len(batch) > 0 {
-		if err := out.Send(&pb.ExecuteQueryStreamResponse{Lines: batch}); err != nil {
+	// The last message carries the cold scan count, which is complete only
+	// now. Lines and the count share it, so an older coordinator, which
+	// ignores the field, reads the lines as before.
+	final := &pb.ExecuteQueryStreamResponse{Lines: batch}
+	if sc, ok := stream.(compute.ScanCounter); ok {
+		final.RowsScanned = sc.RowsScanned()
+	}
+	if len(final.Lines) > 0 || final.RowsScanned != 0 {
+		if err := out.Send(final); err != nil {
 			span.RecordError(err)
 			return err
 		}
