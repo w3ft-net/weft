@@ -29,48 +29,44 @@ your log spelunking speedy, the weft shell will:
 * deliver that plan to the executor, which then sends rows back to your shell
 
 As the name implies, the more of your pipeline that makes it into optimized
-retrieval, the sooner you get your log lines. Depending on whether you have
-structured logs in JSON or good old fashioned unstructured lines, the best way
-to optimize is to lean on jq or AWK, and wherever possible, to use
-[metavariables](metavars.md). However, the following commands also get special
-treatment:
+retrieval, the sooner you get your log lines. The types of optimization can be
+grouped roughly into line selection, field selection and aggregation.
 
-* `grep`, with `-i`, `-v`, `-E` and `-c`
-* `sed -n '/PATTERN/p'`, `sed '/PATTERN/d'`, and their `!` forms (`sed -n '/PATTERN/!p'`, `sed '/PATTERN/!d'`)
+### Optimized line selection
+
+* `grep [-ivE]`
+* `sed -n '/PATTERN/p'`, `sed '/PATTERN/d'`, and their negated forms
 * `head [-n]` and `tail [-n]`
+* Most AWK patterns, like `awk '$4 ~ /foo/'`
+* jq select function calls, i.e. `jq 'select(.bar == "baz")'`
+
+### Optimized field selection
+
+* AWK actions with field variables (`awk '{print $2, $7}'`) -- `$NF` also gets optimized
 * `cut -d DELIM -f LIST`, where `LIST` is discrete fields or a trailing open range (i.e. `3-`)
-* `wc -l` and `wc -c`
-* `sort | uniq [-c]`, `sort -u`, and `sort -u | wc -l` for the number of distinct lines
-* `sort | uniq -c | sort -rn | head -N`, the N most common lines
-* an awk count per key, written exactly as
-  `awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'`
-* `sort | head -N`
-* `sort -n | tail -n 1` and `sort -n | head -n 1` (and the same with `-rn`), the
-  line with the greatest or least leading number
+* jq property remapping like `jq '{status, responseMs}`
 
-In awk, `$NF` (the last field) and `length` (in bytes) are optimized wherever
-`$1` or `$0` would be.
+### Optimized aggregation
 
-A stage that stays post-retrieval is still sent less when weft can tell which
-parts of each line it reads. An awk program that only uses fields (`$4`, `$NF`,
-`NF`) is sent just those fields, and a jq program that only reads top-level keys
-(`.status`, `.user.id`) is sent an object with just those keys. A stage that
-looks at the whole line or object (a bare `print`, `$0`, `/regex/` on its own,
-`keys`, `.`) is sent all of it. Either way the stage runs exactly as written.
+* `grep -c`
+* `wc [-cl]`
+* `sort [-urn]` and `uniq [-c]`
+* the standard AWK bucketed count pattern (`awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'`)
 
-Anything else is going to execute post-retrieval. If your 1-liners are timing
-out, you might want to run `explain` for hints of what could move into
-optimized retrieval.
+Depending on whether you have structured logs in JSON or good old fashioned
+unstructured lines, the best way to optimize is to lean on jq or AWK, and
+wherever possible, to use [metavariables](metavars.md) in your AWK patterns or
+jq `select` calls. 
 
-A 1-liner that runs past the time limit is stopped, and the error says so and
-includes the same report `explain` gives for it, so you can see what to change.
-`tail -f` is not under the limit.
+Other commands, or these in the wrong order, is going to execute
+post-retrieval. If your 1-liners are timing out, you might want to run
+`explain` for hints of what could move into optimized retrieval.
 
 ## explain
 
 `explain` is a builtin function that will show you which stages of your
 pipeline run optimized, partly optimized, or post-retrieval. Sometimes it can
-provide you with helpful hints for rearranging things to speed it up. It doesn't run the 1-liner: when some stages are optimized and others aren't, it runs one count of the lines the optimized stages return, so you can see how much the first post-retrieval stage has to read.
+provide you with helpful hints for rearranging things to speed it up. 
 
 ### Examples
 

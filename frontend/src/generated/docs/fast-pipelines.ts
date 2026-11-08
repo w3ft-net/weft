@@ -7,6 +7,9 @@ const fastPipelines = {
   category: "weft-shell",
   order: 58,
   headings: [
+    { level: 3, id: "optimized-line-selection", text: "Optimized line selection" },
+    { level: 3, id: "optimized-field-selection", text: "Optimized field selection" },
+    { level: 3, id: "optimized-aggregation", text: "Optimized aggregation" },
     { level: 2, id: "explain", text: "explain" },
     { level: 3, id: "examples", text: "Examples" },
   ],
@@ -29,43 +32,40 @@ executed in the interpreter)</li>
 <li>deliver that plan to the executor, which then sends rows back to your shell</li>
 </ul>
 <p>As the name implies, the more of your pipeline that makes it into optimized
-retrieval, the sooner you get your log lines. Depending on whether you have
-structured logs in JSON or good old fashioned unstructured lines, the best way
-to optimize is to lean on jq or AWK, and wherever possible, to use
-<a href="/manual/metavars">metavariables</a>. However, the following commands also get special
-treatment:</p>
+retrieval, the sooner you get your log lines. The types of optimization can be
+grouped roughly into line selection, field selection and aggregation.</p>
+<h3 id="optimized-line-selection">Optimized line selection</h3>
 <ul>
-<li><code>grep</code>, with <code>-i</code>, <code>-v</code>, <code>-E</code> and <code>-c</code></li>
-<li><code>sed -n '/PATTERN/p'</code>, <code>sed '/PATTERN/d'</code>, and their <code>!</code> forms (<code>sed -n '/PATTERN/!p'</code>, <code>sed '/PATTERN/!d'</code>)</li>
+<li><code>grep [-ivE]</code></li>
+<li><code>sed -n '/PATTERN/p'</code>, <code>sed '/PATTERN/d'</code>, and their negated forms</li>
 <li><code>head [-n]</code> and <code>tail [-n]</code></li>
-<li><code>cut -d DELIM -f LIST</code>, where <code>LIST</code> is discrete fields or a trailing open range (i.e. <code>3-</code>)</li>
-<li><code>wc -l</code> and <code>wc -c</code></li>
-<li><code>sort | uniq [-c]</code>, <code>sort -u</code>, and <code>sort -u | wc -l</code> for the number of distinct lines</li>
-<li><code>sort | uniq -c | sort -rn | head -N</code>, the N most common lines</li>
-<li>an awk count per key, written exactly as
-<code>awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'</code></li>
-<li><code>sort | head -N</code></li>
-<li><code>sort -n | tail -n 1</code> and <code>sort -n | head -n 1</code> (and the same with <code>-rn</code>), the
-line with the greatest or least leading number</li>
+<li>Most AWK patterns, like <code>awk '$4 ~ /foo/'</code></li>
+<li>jq select function calls, i.e. <code>jq 'select(.bar == &quot;baz&quot;)'</code></li>
 </ul>
-<p>In awk, <code>$NF</code> (the last field) and <code>length</code> (in bytes) are optimized wherever
-<code>$1</code> or <code>$0</code> would be.</p>
-<p>A stage that stays post-retrieval is still sent less when weft can tell which
-parts of each line it reads. An awk program that only uses fields (<code>$4</code>, <code>$NF</code>,
-<code>NF</code>) is sent just those fields, and a jq program that only reads top-level keys
-(<code>.status</code>, <code>.user.id</code>) is sent an object with just those keys. A stage that
-looks at the whole line or object (a bare <code>print</code>, <code>$0</code>, <code>/regex/</code> on its own,
-<code>keys</code>, <code>.</code>) is sent all of it. Either way the stage runs exactly as written.</p>
-<p>Anything else is going to execute post-retrieval. If your 1-liners are timing
-out, you might want to run <code>explain</code> for hints of what could move into
-optimized retrieval.</p>
-<p>A 1-liner that runs past the time limit is stopped, and the error says so and
-includes the same report <code>explain</code> gives for it, so you can see what to change.
-<code>tail -f</code> is not under the limit.</p>
+<h3 id="optimized-field-selection">Optimized field selection</h3>
+<ul>
+<li>AWK actions with field variables (<code>awk '{print $2, $7}'</code>) -- <code>$NF</code> also gets optimized</li>
+<li><code>cut -d DELIM -f LIST</code>, where <code>LIST</code> is discrete fields or a trailing open range (i.e. <code>3-</code>)</li>
+<li>jq property remapping like <code>jq '{status, responseMs}</code></li>
+</ul>
+<h3 id="optimized-aggregation">Optimized aggregation</h3>
+<ul>
+<li><code>grep -c</code></li>
+<li><code>wc [-cl]</code></li>
+<li><code>sort [-urn]</code> and <code>uniq [-c]</code></li>
+<li>the standard AWK bucketed count pattern (<code>awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'</code>)</li>
+</ul>
+<p>Depending on whether you have structured logs in JSON or good old fashioned
+unstructured lines, the best way to optimize is to lean on jq or AWK, and
+wherever possible, to use <a href="/manual/metavars">metavariables</a> in your AWK patterns or
+jq <code>select</code> calls.</p>
+<p>Other commands, or these in the wrong order, is going to execute
+post-retrieval. If your 1-liners are timing out, you might want to run
+<code>explain</code> for hints of what could move into optimized retrieval.</p>
 <h2 id="explain">explain</h2>
 <p><code>explain</code> is a builtin function that will show you which stages of your
 pipeline run optimized, partly optimized, or post-retrieval. Sometimes it can
-provide you with helpful hints for rearranging things to speed it up. It doesn't run the 1-liner: when some stages are optimized and others aren't, it runs one count of the lines the optimized stages return, so you can see how much the first post-retrieval stage has to read.</p>
+provide you with helpful hints for rearranging things to speed it up.</p>
 <h3 id="examples">Examples</h3>
 <p>This one's going to be very fast, nothing to improve:</p>
 <pre><code>$ explain cat /log/acme/api/main.log | awk 'LEVEL == &quot;ERROR&quot;' | grep timeout | head -20
