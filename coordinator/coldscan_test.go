@@ -95,7 +95,7 @@ func coldDesc() *pb.ShardDescriptor {
 func enforcing(used int64, loadErr error) *Coordinator {
 	clock := &fakeClock{time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)}
 	l, _ := newTestLedger(clock, func(int64) (int64, error) { return used, loadErr })
-	return &Coordinator{ColdScans: l, ColdScanEnforce: true}
+	return &Coordinator{ColdScans: l}
 }
 
 func TestCheckColdScanBudget(t *testing.T) {
@@ -113,8 +113,7 @@ func TestCheckColdScanBudget(t *testing.T) {
 		{"over the budget, hot only", enforcing(yard+1, nil), store.TierYard, []*pb.ShardDescriptor{hotDesc()}, false},
 		{"trial has no cold history", enforcing(0, nil), store.TierTrial, []*pb.ShardDescriptor{coldDesc()}, true},
 		{"unreadable total fails open", enforcing(0, errors.New("db down")), store.TierYard, []*pb.ShardDescriptor{coldDesc()}, false},
-		{"enforcement off meters only", func() *Coordinator { c := enforcing(yard+1, nil); c.ColdScanEnforce = false; return c }(), store.TierYard, []*pb.ShardDescriptor{coldDesc()}, false},
-		{"no ledger", &Coordinator{ColdScanEnforce: true}, store.TierYard, []*pb.ShardDescriptor{coldDesc()}, false},
+		{"no ledger", &Coordinator{}, store.TierYard, []*pb.ShardDescriptor{coldDesc()}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -255,7 +254,6 @@ func TestCron_ColdBudgetRefusalDisablesAndPagesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.ColdScanEnforce = true
 	c.ColdScans = newColdScanLedger(time.Now, func(int64, time.Time, time.Time) (int64, error) { return 1 << 60, nil })
 
 	var pages []string

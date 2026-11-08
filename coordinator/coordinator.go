@@ -159,20 +159,18 @@ func (r *ExecuteResult) Drain(ctx context.Context) (*DrainedResult, error) {
 // registry so c.Provisioner is never nil — drain and query paths
 // read fields fresh on every pass, so the swap is safe.
 type Coordinator struct {
-	Compute     compute.Executor    // required; every query dispatches through it
-	Tail        *TailBroker         // nil = no live-tail subscriptions
-	TailFanout  *TailFanout         // nil exactly when Tail is nil; wraps Tail, with or without Redis configured
-	Ingest      *RingBuffer         // write path: IngestStream → buffer → shards. NewCoordinator always installs one; StartDrain still has to be called explicitly.
-	Provisioner *logdb.Provisioner  // shard lifecycle + registry. Never nil after NewCoordinator; main.go swaps in the real one once logdb.Start completes.
-	Usage       *CustomerUsageStats // nil = no per-customer byte metering
-	ColdScans   *ColdScanLedger     // nil = no cold scan metering (docs/plans/cold-scan-cap.md)
-	// ColdScanEnforce refuses a query that needs cold shards once the org's month of cold scanning is spent. Off = meter only.
-	ColdScanEnforce bool
-	Store           *store.Store            // nil = no tenant-scoped features (/bin, alert dispatch); test-only
-	SeenServices    *SeenServices           // ingest-stream app discovery; constructor always installs
-	DLQ             *DLQ                    // S3 dead-letter queue for failed ingests
-	Errors          *IngestionErrorRecorder // async error persistence
-	Notifier        NotifyDispatcher        // per-customer alert dispatcher (nil = disabled). Interface type so a nil value is true-nil — no typed-nil-via-concrete-pointer trap when callers thread it into AlertContext.
+	Compute      compute.Executor        // required; every query dispatches through it
+	Tail         *TailBroker             // nil = no live-tail subscriptions
+	TailFanout   *TailFanout             // nil exactly when Tail is nil; wraps Tail, with or without Redis configured
+	Ingest       *RingBuffer             // write path: IngestStream → buffer → shards. NewCoordinator always installs one; StartDrain still has to be called explicitly.
+	Provisioner  *logdb.Provisioner      // shard lifecycle + registry. Never nil after NewCoordinator; main.go swaps in the real one once logdb.Start completes.
+	Usage        *CustomerUsageStats     // nil = no per-customer byte metering
+	ColdScans    *ColdScanLedger         // nil = no cold scan metering (docs/plans/cold-scan-cap.md)
+	Store        *store.Store            // nil = no tenant-scoped features (/bin, alert dispatch); test-only
+	SeenServices *SeenServices           // ingest-stream app discovery; constructor always installs
+	DLQ          *DLQ                    // S3 dead-letter queue for failed ingests
+	Errors       *IngestionErrorRecorder // async error persistence
+	Notifier     NotifyDispatcher        // per-customer alert dispatcher (nil = disabled). Interface type so a nil value is true-nil — no typed-nil-via-concrete-pointer trap when callers thread it into AlertContext.
 	// ScriptExecutionTimeout caps how long a single runLocal invocation
 	// may run. Zero = use the package-level default (scriptExecutionTimeout).
 	// Tests override to shorten the wait.
@@ -228,10 +226,8 @@ type CoordinatorConfig struct {
 	Tail     *TailBroker
 	Ingest   *RingBuffer
 	Usage    *CustomerUsageStats
-	// ColdScanEnforce turns the cold scan budget from metering into a limit.
-	ColdScanEnforce bool
-	DLQ             *DLQ
-	Errors          *IngestionErrorRecorder
+	DLQ      *DLQ
+	Errors   *IngestionErrorRecorder
 
 	// RedisAddr/RedisTLS configure TailFanout's cross-coordinator
 	// delivery (docs/plans/coordinator-horizontal-scaling.md item 4).
@@ -366,7 +362,6 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		Tail:                   cfg.Tail,
 		Ingest:                 ingest,
 		Usage:                  cfg.Usage,
-		ColdScanEnforce:        cfg.ColdScanEnforce,
 		Store:                  cfg.Store,
 		SeenServices:           NewSeenServices(),
 		DLQ:                    cfg.DLQ,

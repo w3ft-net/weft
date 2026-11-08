@@ -155,10 +155,10 @@ func hasColdShard(descs []*pb.ShardDescriptor) bool {
 
 // checkColdScanBudget refuses a query that needs a cold shard once the org's
 // month of cold scanning is used up. Queries over hot shards only, and any
-// query when enforcement is off or the total cannot be read, go through: a
-// metering gap costs us a little, a wrong refusal costs a customer a query.
+// query when the total cannot be read, go through: a metering gap costs us a
+// little, a wrong refusal costs a customer a query.
 func (c *Coordinator) checkColdScanBudget(ctx context.Context, org store.OrgID, tier store.Tier, descs []*pb.ShardDescriptor) error {
-	if c.ColdScans == nil || !c.ColdScanEnforce || org == 0 || !hasColdShard(descs) {
+	if c.ColdScans == nil || org == 0 || !hasColdShard(descs) {
 		return nil
 	}
 	allowance := store.ColdScanAllowance(tier)
