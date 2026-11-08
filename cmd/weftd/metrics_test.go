@@ -76,6 +76,18 @@ func TestCPUSection(t *testing.T) {
 	}
 }
 
+// TestCPUSection_CumulativeTime: time_s is the busy CPU time since boot, in
+// seconds, not a delta. Busy is everything but idle and iowait; USER_HZ is 100.
+func TestCPUSection_CumulativeTime(t *testing.T) {
+	prev := &cpuState{user: 100, system: 50, idle: 800, iowait: 50}
+	cur := &cpuState{user: 150, nice: 10, system: 70, idle: 880, iowait: 100, irq: 5, softirq: 15, steal: 20}
+	got := cpuSection(prev, cur)
+	// busy jiffies = 150+10+70+5+15+20 = 270 -> 2.7 s
+	if got["time_s"] != 2.7 {
+		t.Errorf("time_s = %v, want 2.7", got["time_s"])
+	}
+}
+
 // TestNetworkRows: an interface is reported once both samples have it,
 // as bytes per second.
 func TestNetworkRows(t *testing.T) {
@@ -92,6 +104,22 @@ func TestNetworkRows(t *testing.T) {
 	for k, v := range want {
 		if rows[0][k] != v {
 			t.Errorf("%s = %v, want %v", k, rows[0][k], v)
+		}
+	}
+}
+
+// TestNetworkRows_CumulativeTotals: each row also carries the interface's
+// cumulative byte counters from the current sample.
+func TestNetworkRows_CumulativeTotals(t *testing.T) {
+	prev := map[string]netState{"eth0": {rxBytes: 1000, txBytes: 500}}
+	cur := map[string]netState{"eth0": {rxBytes: 3000, txBytes: 1500}}
+	rows := networkRows(prev, cur, 2)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %v", rows)
+	}
+	for k, want := range map[string]int64{"rx_bytes_total": 3000, "tx_bytes_total": 1500} {
+		if rows[0][k] != want {
+			t.Errorf("%s = %v, want %v", k, rows[0][k], want)
 		}
 	}
 }

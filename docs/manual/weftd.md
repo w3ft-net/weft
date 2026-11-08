@@ -247,13 +247,13 @@ on which collectors are enabled, your metrics will end up in:
 |---|---|---|
 | `host.log` | tick | `cpu`, `memory` and `load` objects |
 | `disk.log` | `/dev/*` mount, per tick | `path`, `total_gb`, `used_gb`, `pct` |
-| `network.log` | non-loopback interface, per tick | `iface`, `rx_bytes_sec`, `tx_bytes_sec` |
+| `network.log` | non-loopback interface, per tick | `iface`, `rx_bytes_sec`, `tx_bytes_sec`, `rx_bytes_total`, `tx_bytes_total` |
 
 The objects in `host.log`:
 
 | Object | Fields |
 |---|---|
-| `cpu` | `user`, `system`, `idle`, `iowait` (percent), `cores` |
+| `cpu` | `user`, `system`, `idle`, `iowait` (percent), `cores`, `time_s` (cumulative busy CPU seconds) |
 | `memory` | `total_mb`, `used_mb`, `available_mb`, `swap_used_mb`, `pct` |
 | `load` | `load1`, `load5`, `load15` |
 

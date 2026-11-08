@@ -33,8 +33,8 @@ you can.</p>
 source</a>.</p>
 <h3 id="1-install">1. Install</h3>
 <p>Download weftd from the <strong>Downloads</strong> page. Or just use curl:</p>
-<pre><code>curl -LO https://releases.w3ft.net/weftd/v0.32.0/weftd_0.32.0_amd64.deb
-sudo dpkg -i weftd_0.32.0_amd64.deb
+<pre><code>curl -LO https://releases.w3ft.net/weftd/v0.33.0/weftd_0.33.0_amd64.deb
+sudo dpkg -i weftd_0.33.0_amd64.deb
 </code></pre>
 <p>arm64 packages are also available -- just swap the suffix in the paths above.</p>
 <p>The package installs the systemd unit and enables it on boot, but does not
@@ -373,7 +373,7 @@ on which collectors are enabled, your metrics will end up in:</p>
 <tr>
 <td><code>network.log</code></td>
 <td>non-loopback interface, per tick</td>
-<td><code>iface</code>, <code>rx_bytes_sec</code>, <code>tx_bytes_sec</code></td>
+<td><code>iface</code>, <code>rx_bytes_sec</code>, <code>tx_bytes_sec</code>, <code>rx_bytes_total</code>, <code>tx_bytes_total</code></td>
 </tr>
 </tbody>
 </table>
@@ -388,7 +388,7 @@ on which collectors are enabled, your metrics will end up in:</p>
 <tbody>
 <tr>
 <td><code>cpu</code></td>
-<td><code>user</code>, <code>system</code>, <code>idle</code>, <code>iowait</code> (percent), <code>cores</code></td>
+<td><code>user</code>, <code>system</code>, <code>idle</code>, <code>iowait</code> (percent), <code>cores</code>, <code>time_s</code> (cumulative busy CPU seconds)</td>
 </tr>
 <tr>
 <td><code>memory</code></td>

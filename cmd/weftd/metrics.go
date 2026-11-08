@@ -31,6 +31,14 @@ func (c cpuState) total() int64 {
 	return c.user + c.nice + c.system + c.idle + c.iowait + c.irq + c.softirq + c.steal
 }
 
+// busy is the jiffies spent doing anything but idling or waiting on IO.
+func (c cpuState) busy() int64 {
+	return c.user + c.nice + c.system + c.irq + c.softirq + c.steal
+}
+
+// userHZ is the /proc/stat tick rate. It is 100 on every Linux weftd runs on.
+const userHZ = 100
+
 // netState holds per-interface rx/tx bytes from the previous sample.
 type netState struct {
 	rxBytes, txBytes int64
@@ -225,7 +233,8 @@ func readCPU() (*cpuState, error) {
 }
 
 // cpuSection is the "cpu" object: percentages of the time between two
-// /proc/stat samples.
+// /proc/stat samples, plus time_s, the cumulative busy CPU seconds since boot
+// (a counter, for consumers that compute their own rates).
 func cpuSection(prev, cur *cpuState) map[string]any {
 	dt := float64(cur.total() - prev.total())
 	if dt == 0 {
@@ -236,6 +245,7 @@ func cpuSection(prev, cur *cpuState) map[string]any {
 		"system": round2(float64(cur.system-prev.system) / dt * 100),
 		"idle":   round2(float64(cur.idle-prev.idle) / dt * 100),
 		"iowait": round2(float64(cur.iowait-prev.iowait) / dt * 100),
+		"time_s": float64(cur.busy()) / userHZ,
 		// Logical CPUs, counted from /proc/stat (cpu0, cpu1, ...).
 		"cores": countCPUs(),
 	}
@@ -420,6 +430,9 @@ func networkRows(prev, cur map[string]netState, elapsed float64) []map[string]an
 			"iface":        iface,
 			"rx_bytes_sec": int64(float64(c.rxBytes-p.rxBytes) / elapsed),
 			"tx_bytes_sec": int64(float64(c.txBytes-p.txBytes) / elapsed),
+			// Cumulative counters from the current sample.
+			"rx_bytes_total": c.rxBytes,
+			"tx_bytes_total": c.txBytes,
 		})
 	}
 	return rows
