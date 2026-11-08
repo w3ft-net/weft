@@ -12,6 +12,7 @@ import {
   type PermissionsDoc, type MemberPerms, type AccessLevel, type NamespaceInfo,
 } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
+import { PLANS, DEMO_URL } from '../lib/plans'
 import './Dashboard.css'
 
 const ELEMENTS_APPEARANCE = {
@@ -62,11 +63,6 @@ function Meter({ pct, cls, testId }: { pct: number; cls: string; testId?: string
 
 // ── Plan tiers ─────────────────────────────────────────────────────────────
 
-const PLANS = [
-  { tier: 'swatch', name: 'Swatch', price: 19, volume: '10 GB/mo', retention: '30 days', overage: '$2/GB' },
-  { tier: 'yard', name: 'Yard', price: 79, volume: '100 GB/mo', retention: '90 days', overage: '$1/GB' },
-  { tier: 'bolt', name: 'Bolt', price: 299, volume: '500 GB/mo', retention: '180 days', overage: '$0.75/GB' },
-]
 
 // ── Upgrade confirmation (Stripe Elements) ─────────────────────────────────
 
@@ -262,8 +258,14 @@ function SubscriptionCard({ usage, onRefresh }: { usage: Usage | null; onRefresh
             >
               <div className="plan-tile-name">{plan.name}</div>
               <div className="plan-tile-price">
-                <span className="plan-price-amount">${plan.price}</span>
-                <span className="plan-price-period">/mo</span>
+                {plan.price === null ? (
+                  <span className="plan-price-amount">custom</span>
+                ) : (
+                  <>
+                    <span className="plan-price-amount">${plan.price}</span>
+                    <span className="plan-price-period">/mo</span>
+                  </>
+                )}
               </div>
               <div className="plan-tile-details">
                 <div>{plan.volume}</div>
@@ -272,6 +274,16 @@ function SubscriptionCard({ usage, onRefresh }: { usage: Usage | null; onRefresh
               </div>
               {isCurrent ? (
                 <div className="plan-tile-badge">current plan</div>
+              ) : plan.price === null ? (
+                <a
+                  className="btn-action btn-action-primary plan-tile-btn"
+                  href={DEMO_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-testid={`account-plan-select-${plan.tier}`}
+                >
+                  talk to us
+                </a>
               ) : (
                 <button
                   className="btn-action btn-action-primary plan-tile-btn"

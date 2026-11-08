@@ -8,15 +8,11 @@ import {
   useElements,
 } from '@stripe/react-stripe-js'
 import { createSetupIntent } from '../lib/api'
+import { TIER_LABELS } from '../lib/plans'
 import Pane from '../components/Pane'
 import './Login.css'
 import './Signup.css'
 
-const TIER_LABELS: Record<string, string> = {
-  swatch: 'swatch  $19/mo',
-  yard: 'yard  $79/mo',
-  bolt: 'bolt  $299/mo',
-}
 
 // Stripe renders the Payment Element in its own iframe, so it can't see
 // our CSS variables — these mirror the tokens in index.css by value.
