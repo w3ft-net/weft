@@ -787,10 +787,12 @@ Still to do before opening signup:
   KB). No Bolt equivalent, since Bolt is quoted. The account had no
   subscriptions at all, so no live subscription carries the old items.
 - `infrastructure-live/prod/weft/main.tf` now names the four new IDs. Not yet
-  applied: the plan also carries unrelated changes (cells DynamoDB tables, an S3
-  lifecycle change, launch-template pins, an RDS parameter group), and the SSM
+  applied: the plan also carries unrelated changes (an uncommitted S3 lifecycle
+  change, launch-template pins, an RDS parameter group), and the SSM
   blob also drops the unread `KEYED_ARCHIVES` key. Config is read at instance
-  start, so applying only changes what a newly launched instance uses.
+  start, so applying only changes what a newly launched instance uses. The
+  cells DynamoDB tables were reverted out of the catalog stack the same day
+  (Paul is not sure the design is well scoped), so they are not in the plan.
 - Check in test mode that meter events reported during the trial (the reporter
   sends every ingested KB for any org with a Stripe customer) land on the
   first invoice the way the graduated price expects.
