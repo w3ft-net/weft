@@ -23,28 +23,39 @@ No cost model exists in the repo. The only pricing artifacts are
 `frontend/src/components/PricingTable.tsx`, the tier functions in
 `store/user.go`, and `docs/completed/stripe.md`.
 
-## What the plans promise today
+## What the plans promise (decided 2026-11-08)
 
 There are four tiers in code (`store.Tier`): `trial`, `swatch`, `yard`,
-`bolt`. Public self-serve signup is retired: every account is an operator
-comp (`GrantCompSubscription`, `compTiers` = swatch/yard/bolt, comp is
-behaviourally identical to paid). So today **no tier is billed through a
-live self-serve funnel**, and trial is a legacy tier that only matters if it
-returns. Separately, shards have *instance* tiers (small/medium/large, a
-cost axis, not a plan); medium and large start at 0 in prod.
+`bolt`. Until the relaunch below, public self-serve signup was hidden (the
+landing page sent visitors to a demo booking link) and every account was an
+operator comp (`GrantCompSubscription`, `compTiers` = swatch/yard/bolt, comp is
+behaviourally identical to paid). Separately, shards have *instance* tiers
+(small/medium/large, a cost axis, not a plan); medium and large start at 0 in
+prod.
+
+The posted prices were $19 / $79 / $299. They are now **$29 / $99 / contact
+us**, the numbers in `scripts/costmodel/tiers.yaml`. Bolt has no public price:
+it is quoted per customer on dedicated shards, so the landing page, signup and
+the account page send visitors to the booking link instead of checkout, and
+`POST /api/auth/signup` refuses it. The frontend carries the plans in one
+module (`frontend/src/lib/plans.ts`).
 
 | | Swatch | Yard | Bolt |
 |---|---|---|---|
-| Price | $19/mo | $79/mo | $299/mo |
+| Price | $29/mo | $99/mo | quoted |
 | Ingest included | 10 GB | 100 GB | 500 GB |
-| Overage | $2.00/GB | $1.00/GB | $0.75/GB |
+| Overage | $2.00/GB | $1.00/GB | quoted |
 | Retention | 30 d | 90 d | 180 d |
 | Seats | 5 | 10 | 50 |
 | Crons / min interval | 20 / 5 m | 100 / 1 m | 500 / 1 m |
 | Tags per cron run | 50 | 100 | 250 |
 | /tmp storage | 10 MB | 100 MB | 1 GB |
 
-Trial: 1 GB, 24 h retention, 1 seat, 5 m cron interval.
+Trial: a new signup no longer holds the `trial` tier (1 GB, 24 h retention,
+1 seat, 5 m cron interval). It picks Swatch or Yard, enters a card, and gets
+that plan in full for 14 days, with nothing charged until the trial ends (see
+"Self-serve relaunch"). The `trial` tier remains for accounts created before
+that change.
 
 **Inconsistency to resolve first.** `docs/completed/stripe.md` says Bolt is
 1 TB included at $0.50/GB, and records Stripe price IDs with a
@@ -67,6 +78,11 @@ lists Bolt at 365 days while code and the pricing page say 180; stale doc.
 
 - **Target gross margin: 30 %** per tier, treated as the minimum at typical
   (not best-case) usage. The model reports the price that hits 30 %.
+  *Superseded 2026-11-08:* the targets are now per tier in `tiers.yaml`
+  (95 % / 87.5 % / 80 %), and Paul accepted the modeled margins at the launch
+  prices ($29 and $99: about 92 % and 80 to 82 % at 100 % use, above this 30 %
+  floor but below those targets). The 30 % arithmetic elsewhere in this
+  document is kept as written.
 - **COGS scope:** AWS spend attributable to weft, Stripe fees, Mailgun, any
   paid third party. Excludes engineering time and graybeardcorp overhead.
 - **Shared infrastructure is amortized across all tenants of it** (weft,
@@ -295,7 +311,10 @@ Findings and gaps:
   every weft customer's auth, crons and usage with it, and today there is no
   documented behaviour for it in `docs/failure-modes.md` or
   `az-resilience.md` (those cover shards, not Postgres).
-- No SLA text exists on the pricing page or in the manual, so the credit rate
+- *(Decided 2026-11-08: no SLA and no credits at self-serve launch; see
+  `service-commitments.md`. The expected-credit formula above is therefore zero
+  for now, and the paragraph below is the reasoning that led there.)*
+  No SLA text exists on the pricing page or in the manual, so the credit rate
   and uptime target are not in this plan's inputs yet. Paul's position: undecided;
   it depends on what we can be reasonably certain of providing by end of year,
   so set it after the decided order below has landed, not before.
@@ -428,8 +447,9 @@ architecture" actually cost.
 **Implications for pricing**
 
 - The platform is floor-dominated: ~$200/mo with no paying customers. Break-even
-  at a 30 % margin on the current prices is roughly 17 Swatch, 4 Yard
-  or 2 Bolt customers ($219 / 0.7 = ~$313 revenue) at the floor alone (Phase 3 refines this with per-customer
+  at a 30 % margin is roughly 17 Swatch, 4 Yard or 2 Bolt customers at the
+  old $19 / $79 / $299 prices, and about 11 Swatch or 4 Yard at $29 / $99
+  ($219 / 0.7 = ~$313 revenue) at the floor alone (Phase 3 refines this with per-customer
   variable cost).
 - The real per-GB cost is **shard capacity**, not AWS unit prices: one 100 GB
   gp3 volume + one t4g.micro (plus its spare) per shard. What a shard holds in
@@ -600,7 +620,7 @@ use list prices to cross-check.
 | Retention janitor | per GB rewritten | S3 reads/writes, Lambda/compute time |
 | Crons | per run | compute, `cron_results` rows in Postgres |
 | Egress to users | per GB | results, tail, dashboards |
-| Billing | % + fixed | Stripe fees on $19 are ~8 %; Mailgun |
+| Billing | % + fixed | Stripe's fee on $29 is $1.14 (3.9 %), on $99 it is $3.17 (3.2 %); Mailgun |
 
 Key measurements, taken from our own data:
 
@@ -652,6 +672,133 @@ the plan's full retention. Add:
 Sensitivity: tornado of the five assumptions that move margin most (likely
 compression ratio, hot-window length, cron load, NAT egress, floor).
 
+## Phase 3 results: the cold scan budget (2026-11-08)
+
+The model is built (`scripts/costmodel/`, commit `c9698167`; run with
+`pipenv run python scripts/costmodel/model.py`). It resolves Phase 4's first
+lever, "bound it with a scan allowance", as a **cold line scan budget**: the
+lines a tier may read from cold storage per month, defined as `scan_passes` full
+passes over the tier's cold archive (`tiers.yaml`). Because it is a multiple of
+stored volume, it scales with the plan by construction. Swatch and Yard get
+1 pass; trial gets 0. The implementation plan is `cold-scan-cap.md`.
+
+Inputs (all at 100% of every limit; AWS-only gross margin):
+
+- 155 raw bytes per row; cold Parquet is 0.77 of raw; hot DuckDB is 1.07 of raw.
+- Fixed plan facts: a 14-day hot window, retention 30 / 90 / 180 d. Cold days =
+  retention - 14, so Swatch has 16 cold days and Yard 76.
+- Lambda cost per billion rows scanned: **$0.07 (low) to $0.94 (high)**, from two
+  orgs with two no-match-grep samples each (weft coordinator logs: 3.8 s for
+  1.3 M rows; loom api: 34.8 s for 1.5 M rows). Rows scanned there is
+  approximated by rows in the window. This 13x spread is the weakest input.
+
+| Tier | Price | Cold lines stored | 1-pass budget cost (lo to hi) | COGS (lo to hi) | Margin (lo / hi) | Target |
+|---|---|---|---|---|---|---|
+| Swatch | $29 | 0.03 B | $0.00 to $0.03 | $1.06 to $1.09 | 92.4% / 92.3% | 95% |
+| Yard | $99 | 1.63 B | $0.11 to $1.54 | $14.42 to $15.85 | 82.2% / 80.8% | 87.5% |
+| Bolt (dedicated ref.) | quote | 17.8 B | $1.25 to $16.78 | $119.88 to $135.41 (micro) | quote $703 to $794 | 80% |
+
+What it says:
+
+- **The cap is a safety valve, not a margin lever.** Even fully used, one pass
+  costs at most $1.54 a month on Yard. Hot storage is the dominant cost
+  (Yard: $9.07 of about $15).
+- **Neither posted tier reaches its target at today's prices** (Swatch needs
+  about $65, Yard about $153 to $168 for the targets in `tiers.yaml`). That gap
+  comes from hot storage at 100% shard fill, not from cold scans: Yard's
+  required price is already $152 with 0 passes, and the first pass adds $1
+  (low rate) to $16 (high rate). Four passes would add $5 to $64.
+- **Section 5 of the model reports "affords 0 passes"** for both tiers: with the
+  margin target applied, the advertised price has no headroom left for any scan
+  budget. Read that as a statement about the target, not about the budget.
+- **Why bound it at all:** one tier-sized pass is cheap, but an unbounded
+  customer is not. A script that runs a no-match grep over 180 days on every
+  dashboard load costs real Lambda time, and the high rate is 13x the low one.
+
+**Two passes instead of one** (model run 2026-11-08, margin at the advertised
+price, low / high Lambda rate):
+
+| Tier | 1 pass | 2 passes | Cost of the extra pass |
+|---|---|---|---|
+| Swatch ($29) | 92.42% / 92.31% | 92.41% / 92.20% | 0.01 to 0.11 points |
+| Yard ($99) | 82.23% / 80.79% | 82.11% / 79.24% | 0.12 to 1.55 points |
+| Bolt reference (scan cost a month) | $1.25 / $16.78 | $2.50 / $33.56 | quote rises about $7 to $98 |
+
+Doubling the budget is cheap at the low rate and costs Yard about 1.5 points at
+the high rate, which would take it from 80.8% to 79.2% against an 87.5% target
+it already misses. The high rate rests on one org's two samples, so the real
+answer waits for the metering in `cold-scan-cap.md`.
+
+Unmeasured or assumed (flagged by the model): ingest compute $/GB (0), hot-path
+query compute and S3 requests (not modeled), cell capacity (100 rows/s), shard
+fill (100%, a floor on cost per GB since prod sits near 4%), and Yard's 87.5%
+target (a midpoint). The model's prices ($29 / $99) and margin targets (95% /
+87.5% / 80%) differ from "What the plans promise today" ($19 / $79 / $299) and
+Phase 0's 30%; see the open questions.
+
+## Self-serve relaunch (decided 2026-11-08)
+
+Decisions: the prices above; a 14-day trial of the chosen plan; a card is
+required before anything works; the margins in Phase 3 are accepted.
+
+How the card gate works, now built:
+
+- Following the signup link creates the account and an owner, plus a
+  subscription row in status `pending_payment` carrying the chosen plan. No
+  active subscription means the shell, queries, ingest and the usage page all
+  answer "no active subscription" (the same path a cancelled account takes).
+- `/api/auth/me` reports `pending_payment_tier`; the SPA redirects any page
+  except the payment step to `/signup/payment` while it is set.
+- The payment step creates the Stripe subscription (14-day trial, missing card
+  at trial end cancels it) and attaches its id to the pending row. The webhook
+  activates the row on `customer.subscription.updated` only when the
+  subscription is `active`, or `trialing` with a default payment method. A
+  trialing subscription exists and gets an update before any card is entered,
+  so without that check the plan would activate on the first update.
+- Pinned by `TestSignup_VerifyLeavesAccountAwaitingCard`,
+  `TestSignup_RefusesBolt` and
+  `TestStripeWebhookPromotesPendingSubOnlyOnceCardIsSaved`.
+
+What a trial costs us: the plan in full for 14 days, with no cold data yet
+because nothing is older than the hot window, so about 14/30 of the hot-storage
+and cron lines of the COGS table, at most roughly $7 for a Yard trial that
+uses every limit and never converts.
+
+Still to do before opening signup:
+
+- *(Done 2026-11-08, live mode, account w3ft `acct_1UAThfCuPDquPgxf`)* The two
+  flat prices exist: Swatch $29 `price_1UZbNTCuPDquPgxfCY4sETNA` (product
+  `prod_VBOfEnhLcWj9w1`) and Yard $99 `price_1UZbNUCuPDquPgxf4bubk3vK` (product
+  `prod_VBOf1kHQVpORwx`). Still to do: point `STRIPE_PRICE_SWATCH` and
+  `STRIPE_PRICE_YARD` at them (config in Terraform, not ad-hoc SSM) and run one
+  signup end to end in Stripe test mode. The old $19 / $79 / $299 prices are
+  still active in Stripe; archive them once nothing references them.
+- **The overage prices in that account were not metered (fixed 2026-11-08).**
+  `Weft * Overage` (for example `price_1UB1s3CuPDquPgxfAjamhOjL`) were
+  `usage_type: licensed` with `meter: null`, and the account had no billing
+  meter, so the reporter's events went nowhere and a licensed item added with no
+  quantity billed nothing. Nothing in weft, `infrastructure-live`,
+  `infrastructure-catalog` or `kevcons` creates these Stripe objects. Created in
+  live mode: meter `weft_ingestion_kb` (`mtr_61VizaPKQWPEYZ0LE41CuPDquPgxf9xw`,
+  sum, customer mapped by `stripe_customer_id`, value key `value`), and metered
+  graduated prices attached to it: Swatch `price_1UZbdFCuPDquPgxfBrV7Ju4Y`
+  (10,000,000 KB free, then 0.0002 cents a KB) and Yard
+  `price_1UZbdFCuPDquPgxfCPMXj4LB` (100,000,000 KB free, then 0.0001 cents a
+  KB). No Bolt equivalent, since Bolt is quoted. The account had no
+  subscriptions at all, so no live subscription carries the old items.
+- `infrastructure-live/prod/weft/main.tf` now names the four new IDs. Not yet
+  applied: the plan also carries unrelated changes (cells DynamoDB tables, an S3
+  lifecycle change, launch-template pins, an RDS parameter group), and the SSM
+  blob also drops the unread `KEYED_ARCHIVES` key. Config is read at instance
+  start, so applying only changes what a newly launched instance uses.
+- Check in test mode that meter events reported during the trial (the reporter
+  sends every ingested KB for any org with a Stripe customer) land on the
+  first invoice the way the graduated price expects.
+- Abandoned signups keep their org name reserved in `pending_payment`. There is
+  no sweep for them yet, unlike unverified accounts.
+- A status page, terms of service and a privacy policy; none exist. The
+  decisions and a draft are in `service-commitments.md`.
+
 ## Phase 4: decisions the model should inform
 
 Candidate levers, in rough order of expected impact:
@@ -659,9 +806,9 @@ Candidate levers, in rough order of expected impact:
 1. **Retention as the price lever.** If cold Lambda shards make old data nearly
    free, long retention is cheap to give and marketable; if cold scans are
    expensive for heavy users, bound it with a scan allowance instead.
-2. **Rebase included ingest vs price.** Swatch's $19 for 10 GB, Yard's $79 for
-   100 GB and Bolt's $299 for 500 GB give an effective $1.90 / $0.79 / $0.60 per
-   GB. Check each against measured COGS per GB and against market pricing.
+2. **Rebase included ingest vs price.** Swatch's $29 for 10 GB and Yard's $99
+   for 100 GB give an effective $2.90 / $0.99 per GB (it was $1.90 / $0.79 /
+   $0.60 with Bolt at $299 for 500 GB, before the 2026-11-08 reprice). Check each against measured COGS per GB and against market pricing.
 3. **Cron limits.** Min interval and count are cost controls disguised as
    features; set them from the measured per-run cost.
 4. **Overage rates.** Keep strictly above marginal cost; consider a flat
@@ -684,6 +831,12 @@ retention, query/seat pricing.
 - Stripe: prices are immutable. Create new prices and point
   `StripePrices` at them. With no real paying customers there is no
   grandfathering to design, but confirm that before changing live prices.
+  Only the two flat prices change: Swatch $29 and Yard $99, recurring monthly,
+  on the existing products. The metered overage prices carry the free quota
+  and the per-KB rate ($0.000002 Swatch, $0.000001 Yard), and those rates are
+  unchanged, but the existing overage prices were not metered, so new metered
+  ones replace them (see "Still to do"). The Bolt prices are not used by
+  self-serve any more.
 - `docs/completed/stripe.md` is stale on Bolt; correct or supersede it.
 - `docs/manual` pricing/limits pages, then `make docs` (pre-commit hook does it).
 - Tests that pin tier values (`api/rest_write_permissions_test.go`, `store` tests).
@@ -700,4 +853,12 @@ retention, query/seat pricing.
 - The scale-out topology milestones in Phase 1b are my draft; I will ask you to
   correct them before costing them.
 - Do vimgym or gravitty ingest into weft (and so count as weft tenants)?
-- Is self-serve signup coming back? That decides whether trial gets modeled.
+- (Settled 2026-11-08) Self-serve signup is coming back, with a 14-day free
+  trial and a card up front. See "Self-serve relaunch".
+- (Settled 2026-11-08) The model's numbers are the decided ones: $29 / $99 /
+  contact-us for the third tier, with the margin targets in `tiers.yaml`. The
+  "What the plans promise today" table and Phase 0's 30% floor are stale and
+  need rewriting.
+- Does a scan budget of 1 pass per month suit the way Yard customers use cold
+  data? The measured rate says we could afford more; the question is the
+  product shape. See `cold-scan-cap.md`.
