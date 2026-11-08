@@ -473,7 +473,8 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.StripePrices[store.Tier(req.Tier)]; !ok {
+	// Bolt is quoted per customer, so there is no public checkout for it.
+	if _, ok := s.StripePrices[store.Tier(req.Tier)]; !ok || store.Tier(req.Tier) == store.TierBolt {
 		http.Error(w, "invalid tier", http.StatusBadRequest)
 		return
 	}
@@ -624,7 +625,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 // completeSignup creates what a signup link promised: a verified owner of a
-// brand-new org on a trial. If the address already has an account (say it
+// brand-new org, awaiting a card for the plan they chose. If the address already has an account (say it
 // accepted an invite since signing up) the link only proves the address.
 func completeSignup(tx *store.Store, link *store.MagicLink) (user *store.User, created bool, err error) {
 	user, err = tx.GetUserByEmail(link.Email)
@@ -642,14 +643,16 @@ func completeSignup(tx *store.Store, link *store.MagicLink) (user *store.User, c
 	if user, err = tx.CreateVerifiedUser(link.Email); err != nil {
 		return nil, false, err
 	}
-	trialEnd := time.Now().Add(14 * 24 * time.Hour)
+	// The card comes first. The org gets no active subscription, and so no
+	// ingest, queries or shell, until Stripe holds a payment method for the
+	// plan the visitor chose; the setup-intent step attaches the Stripe
+	// subscription and the webhook activates this row.
 	if err := tx.CreateSubscription(&store.Subscription{
-		ID:        uuid.New().String(),
-		OrgID:     org.ID,
-		Tier:      "trial",
-		Status:    "active",
-		StartsAt:  time.Now(),
-		ExpiresAt: &trialEnd,
+		ID:       uuid.New().String(),
+		OrgID:    org.ID,
+		Tier:     link.Tier,
+		Status:   "pending_payment",
+		StartsAt: time.Now(),
 	}); err != nil {
 		return nil, false, err
 	}
@@ -749,9 +752,12 @@ func (s *Server) userResponse(ctx context.Context, user *store.User, activeOrgID
 	// Tier and customer come from the resolved active org, not from a
 	// user.CustomerName field that no longer exists.
 	tier := store.Tier("none")
+	pendingPaymentTier := ""
 	if activeOrgID != 0 {
 		if sub, _ := s.store.ActiveSubscription(activeOrgID); sub != nil {
 			tier = store.Tier(sub.Tier)
+		} else if pending, _ := s.store.PendingPaymentSubscription(activeOrgID); pending != nil {
+			pendingPaymentTier = pending.Tier
 		}
 	}
 
@@ -779,6 +785,7 @@ func (s *Server) userResponse(ctx context.Context, user *store.User, activeOrgID
 		"email":                user.Email,
 		"name":                 user.Name,
 		"tier":                 tier,
+		"pending_payment_tier": pendingPaymentTier,
 		"customer":             activeCustomerName,
 		"orgs":                 orgs,
 		"email_verified":       user.EmailVerifiedAt != nil,
@@ -888,9 +895,16 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The row this checkout belongs to: the pending one a signup leaves, or
+	// the active legacy trial of an account that predates card-first signup.
+	trial, _ := s.store.PendingPaymentSubscription(session.ActiveOrgID)
+	if trial == nil {
+		trial, _ = s.store.ActiveSubscription(session.ActiveOrgID)
+	}
+
 	// Reuse an existing trialing Stripe subscription if the trial row already
 	// has one attached (handles page refresh / retries idempotently).
-	if trial, _ := s.store.ActiveSubscription(session.ActiveOrgID); trial != nil && trial.StripeSubscriptionID != "" {
+	if trial != nil && trial.StripeSubscriptionID != "" {
 		getParams := &stripe.SubscriptionParams{Params: stripe.Params{Context: r.Context()}}
 		getParams.AddExpand("pending_setup_intent")
 		sub, err := subscription.Get(trial.StripeSubscriptionID, getParams)
@@ -950,8 +964,8 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 
 	// Attach the Stripe subscription ID to our local trial row so refresh
 	// reuses the same subscription and the webhook can promote it on confirm.
-	if trial, _ := s.store.ActiveSubscription(session.ActiveOrgID); trial != nil {
-		// Unscoped, but trial came from the org-scoped ActiveSubscription read above,
+	if trial != nil {
+		// Unscoped, but trial came from the org-scoped reads above,
 		// so this id is already known to belong to the caller's org.
 		_ = s.store.DB().WithContext(store.WithoutTenantScope(r.Context())).Model(&store.Subscription{}).
 			Where("id = ?", trial.ID).
@@ -1152,8 +1166,12 @@ func (s *Server) handleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		tier := sub.Metadata["tier"]
 		// Only promote once the subscription is actually paying (not trialing
-		// without a PM, and not past_due).
-		if tier != "" && (sub.Status == stripe.SubscriptionStatusActive || sub.Status == stripe.SubscriptionStatusTrialing) {
+		// without a PM, and not past_due). A trialing subscription exists, and
+		// gets an update, before any card is entered, so trialing counts only
+		// once the card is saved as its default payment method.
+		paying := sub.Status == stripe.SubscriptionStatusActive ||
+			(sub.Status == stripe.SubscriptionStatusTrialing && sub.DefaultPaymentMethod != nil)
+		if tier != "" && paying {
 			// Unscoped: no session on a webhook. The signature authenticates the call
 			// and the Stripe subscription id selects the row.
 			if err := s.store.DB().WithContext(store.WithoutTenantScope(context.WithoutCancel(r.Context()))).Model(&store.Subscription{}).

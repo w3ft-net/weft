@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"time"
@@ -61,6 +62,22 @@ func (s *Store) ActiveSubscription(orgID OrgID) (*Subscription, error) {
 	}
 	if !sub.IsActive() {
 		return nil, nil // expired
+	}
+	return &sub, nil
+}
+
+// PendingPaymentSubscription returns the org's newest subscription that is
+// waiting on a card: the row a signup leaves behind until Stripe holds a
+// payment method for it. Nil when there is none.
+func (s *Store) PendingPaymentSubscription(orgID OrgID) (*Subscription, error) {
+	var sub Subscription
+	err := s.scoped(orgID).Where("status = 'pending_payment'").
+		Order("created_at DESC").First(&sub).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	return &sub, nil
 }

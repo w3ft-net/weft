@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -526,5 +527,50 @@ func TestAcceptInvite_WithdrawnInviteFailsCleanly(t *testing.T) {
 	}
 	if n := countUsersByEmail(t, s, email); n != 0 {
 		t.Errorf("failed accept left %d user rows behind", n)
+	}
+}
+
+// The card comes first: following the signup link makes the account, but the
+// org has no active subscription until Stripe holds a card for it. A
+// subscription row waits for that, carrying the plan the visitor chose.
+func TestSignup_VerifyLeavesAccountAwaitingCard(t *testing.T) {
+	srv, s := testServer(t)
+	email := fmt.Sprintf("signup-card-%d@example.com", os.Getpid())
+	org := fmt.Sprintf("signup-card-%d", os.Getpid())
+	signupReq(t, srv, email, org)
+	token, _ := s.GetLastMagicLinkToken(email)
+
+	if w := verifyReq(t, srv, token, ""); w.Code != 200 {
+		t.Fatalf("verify: status %d: %s", w.Code, w.Body.String())
+	}
+
+	o, err := s.GetOrgByName(org)
+	if err != nil {
+		t.Fatalf("no org after verify: %v", err)
+	}
+	if sub, _ := s.ActiveSubscription(o.ID); sub != nil {
+		t.Errorf("new account has an active %q subscription before any card: %+v", sub.Tier, sub)
+	}
+	pending, err := s.PendingPaymentSubscription(o.ID)
+	if err != nil || pending == nil {
+		t.Fatalf("no pending-payment subscription: sub=%v err=%v", pending, err)
+	}
+	if pending.Tier != "swatch" {
+		t.Errorf("pending subscription tier = %q, want the chosen plan swatch", pending.Tier)
+	}
+}
+
+// Bolt is quoted, not sold: there is no public price to start it on.
+func TestSignup_RefusesBolt(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.StripePrices[store.TierBolt] = TierPrices{Flat: "price_bolt"}
+	body, _ := json.Marshal(map[string]string{
+		"email": fmt.Sprintf("signup-bolt-%d@example.com", os.Getpid()), "org_name": fmt.Sprintf("signup-bolt-%d", os.Getpid()), "tier": "bolt",
+	})
+	req := httptest.NewRequest("POST", "/api/auth/signup", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("signup on bolt: status %d, want 400: %s", w.Code, w.Body.String())
 	}
 }

@@ -266,3 +266,62 @@ func TestOurPriceFilters(t *testing.T) {
 		t.Error("vimgym-priced invoice should not match")
 	}
 }
+
+func subUpdatedEvent(subID, priceID, tier, status, defaultPM string) []byte {
+	obj := map[string]any{
+		"id":     subID,
+		"object": "subscription",
+		"status": status,
+		"items": map[string]any{
+			"object": "list",
+			"data":   []any{map[string]any{"price": map[string]any{"id": priceID}}},
+		},
+		"metadata": map[string]any{"tier": tier},
+	}
+	if defaultPM != "" {
+		obj["default_payment_method"] = map[string]any{"id": defaultPM, "object": "payment_method"}
+	}
+	b, _ := json.Marshal(map[string]any{
+		"id": "evt_test", "object": "event", "api_version": stripeAPITrain,
+		"type": "customer.subscription.updated",
+		"data": map[string]any{"object": obj},
+	})
+	return b
+}
+
+// A subscription created with a trial is "trialing" from its first moment,
+// before anyone has entered a card, and Stripe sends an update for it right
+// away. Promoting on that update would hand out the plan without the card.
+// The row waits for the update that carries a default payment method.
+func TestStripeWebhookPromotesPendingSubOnlyOnceCardIsSaved(t *testing.T) {
+	srv, s := testServer(t)
+	srv.StripeWebhookSecret = "whsec_test_secret"
+	srv.StripePrices[store.TierSwatch] = TierPrices{Flat: "price_weft_flat"}
+
+	org, err := s.FindOrCreateOrg(fmt.Sprintf("awaiting-card-%d", time.Now().UnixNano()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateSubscription(&store.Subscription{
+		ID: "sub-" + org.Name, OrgID: org.ID, Tier: "swatch", Status: "pending_payment",
+		StartsAt: time.Now(), StripeSubscriptionID: "sub_pending_1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	send := func(body []byte) {
+		t.Helper()
+		if code := postWebhook(t, srv, body, signStripePayload(body, srv.StripeWebhookSecret, time.Now())); code != http.StatusOK {
+			t.Fatalf("webhook: got %d, want 200", code)
+		}
+	}
+
+	send(subUpdatedEvent("sub_pending_1", "price_weft_flat", "swatch", "trialing", ""))
+	if got := subStatus(t, s, "sub_pending_1"); got != "pending_payment" {
+		t.Fatalf("trialing with no card promoted the subscription: status %q", got)
+	}
+
+	send(subUpdatedEvent("sub_pending_1", "price_weft_flat", "swatch", "trialing", "pm_card"))
+	if got := subStatus(t, s, "sub_pending_1"); got != "active" {
+		t.Fatalf("trialing with a saved card should activate the subscription: status %q", got)
+	}
+}

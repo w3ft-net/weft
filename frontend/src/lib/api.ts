@@ -251,6 +251,10 @@ export interface User {
   email: string
   name: string
   tier: string
+  // Plan a signup chose and has not yet put a card behind; empty otherwise.
+  // While set the org has no active subscription, so the app sends the owner
+  // to the payment step instead of the dashboard.
+  pending_payment_tier?: string
   customer: string  // active org's slug — same as the entry in orgs[] where active=true
   orgs: OrgMembership[]
   email_verified?: boolean
