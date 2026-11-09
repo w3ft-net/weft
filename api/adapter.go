@@ -264,6 +264,9 @@ func enrichRows(ctx context.Context, st *store.Store, orgID store.OrgID, namespa
 	}
 	cache := make(map[string]resolved)
 	for _, row := range rows {
+		if prebuilt(row) {
+			continue
+		}
 		r, hit := cache[row.Service]
 		if !hit {
 			p, ok := resolveParser(ctx, st, orgID, namespace, row.Service)
@@ -275,6 +278,13 @@ func enrichRows(ctx context.Context, st *store.Store, orgID store.OrgID, namespa
 		}
 	}
 }
+
+// prebuilt reports whether an adapter built row's payload itself (an OTLP
+// metric, a Heroku l2met line). Schemas are resolved by service, not kind, so
+// applying the service's log schema to such a row would re-parse its Raw as a
+// log line and overwrite the payload, level and timestamp, and sampling it
+// would put metric JSON in the service's log sample.
+func prebuilt(row *pb.LogRow) bool { return len(row.PayloadJson) > 0 }
 
 // accumulatePendingSamples bootstraps schema-detection UX for push sources
 // that have no agent to sample for them. Two kinds qualify:
@@ -301,6 +311,9 @@ func enrichRows(ctx context.Context, st *store.Store, orgID store.OrgID, namespa
 func accumulatePendingSamples(ctx context.Context, st *store.Store, classifier ingest.Classifier, orgID store.OrgID, namespace string, rows []*pb.LogRow) {
 	byService := make(map[string][]string)
 	for _, row := range rows {
+		if prebuilt(row) {
+			continue
+		}
 		byService[row.Service] = append(byService[row.Service], row.Raw)
 	}
 	for service, lines := range byService {

@@ -25,17 +25,20 @@ func (RenderProducer) MapFields(f Frame) (service, kind, instance string, ok boo
 	if appOrMsg == "" {
 		appOrMsg = f.MsgID
 	}
-	kind, instance, ok = splitKindInstance(appOrMsg)
+	kind, instance, ok = SplitKindInstance(appOrMsg)
 	if !ok {
 		return "", "", "", false
 	}
 	return f.Hostname, kind, instance, true
 }
 
-// splitKindInstance splits "web-9nk6q" into ("web", "9nk6q") on the last
+// SplitKindInstance splits "web-9nk6q" into ("web", "9nk6q") on the last
 // "-". ok is false when there's nothing to split (empty or no hyphen) —
-// that shape hasn't been observed and isn't safe to guess at.
-func splitKindInstance(s string) (kind, instance string, ok bool) {
+// that shape hasn't been observed and isn't safe to guess at. Render's
+// metrics stream ids split the same way ("srv-<id>-j9fbv" gives instance
+// "j9fbv"), so the OTLP adapter shares this to keep logs and metrics on one
+// $host.
+func SplitKindInstance(s string) (kind, instance string, ok bool) {
 	i := strings.LastIndexByte(s, '-')
 	if i <= 0 || i == len(s)-1 {
 		return "", "", false

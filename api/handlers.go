@@ -352,6 +352,12 @@ func (s *Server) Handler() http.Handler {
 	// See docs/plans/cloudwatch-kinesis-subscription.md.
 	mux.Handle("POST /api/ingest/cloudwatch", s.IngestHandler(CloudWatchAdapter{}))
 
+	// OTLP/HTTP metrics (JSON), kept to system metrics. Render's Custom
+	// metrics destination is configured with the base URL
+	// https://api.w3ft.net/api/ingest/otlp and a weft token as its API key;
+	// Render appends /v1/metrics itself. See docs/plans/render-metrics.md.
+	mux.Handle("POST /api/ingest/otlp/v1/metrics", s.IngestHandler(OTLPAdapter{}))
+
 	// Admin routes (superadmin only).
 	adminMux := http.NewServeMux()
 	adminMux.HandleFunc("POST /api/admin/customers", s.handleAdminCreateCustomer)
