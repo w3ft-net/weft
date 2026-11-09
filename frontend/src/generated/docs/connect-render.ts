@@ -11,6 +11,11 @@ const connectRender = {
     { level: 3, id: "1-create-a-token", text: "1. Create a token" },
     { level: 3, id: "2-add-the-log-stream-in-render", text: "2. Add the log stream in Render" },
     { level: 2, id: "finding-your-logs", text: "Finding your logs" },
+    { level: 2, id: "render-metrics", text: "Render metrics" },
+    { level: 3, id: "add-the-metrics-stream-in-render", text: "Add the metrics stream in Render" },
+    { level: 3, id: "metrics-land-in-hostlog-networklog-and-disklog", text: "Metrics land in host.log, network.log and disk.log" },
+    { level: 3, id: "cpu-time-and-network-totals-are-running-counters", text: "CPU time and network totals are running counters" },
+    { level: 3, id: "what-weft-keeps", text: "What weft keeps" },
   ],
   html: `<h2 id="connect-a-render-service">Connect a Render service</h2>
 <p>Weft accepts logs directly from Render's built-in <strong>Log Streams</strong> feature using
@@ -57,6 +62,121 @@ schemas are per service, so it covers the web, cron and build files under it.</p
 </table>
 <p>(The presence of the <code>&lt;env&gt;</code> segment depends on how you created your token.
 See <a href="/manual/introduction#paths">Paths</a> for the layout rules.)</p>
+<h2 id="render-metrics">Render metrics</h2>
+<p>Render's <strong>Metrics Streams</strong> feature pushes your services' system metrics to a
+destination you choose. Weft accepts it over OpenTelemetry (OTLP/HTTP with a
+JSON body) and keeps the system metrics: CPU, memory, network and disk. Metrics
+Streams needs a Pro workspace or higher, and Render sends nothing for static
+sites, cron jobs or one-off jobs.</p>
+<h3 id="add-the-metrics-stream-in-render">Add the metrics stream in Render</h3>
+<p>Use a <a href="/manual/namespaces#creating-a-token">token</a>; the one you made for logs works.
+In the Render dashboard, click <strong>Integrations → Observability</strong>, scroll to
+<strong>Metrics Stream</strong>, and click <strong>+ Add destination</strong>. Choose <strong>Custom</strong> and enter:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Endpoint</td>
+<td><code>https://api.w3ft.net/api/ingest/otlp</code></td>
+</tr>
+<tr>
+<td>API key</td>
+<td>your weft token</td>
+</tr>
+</tbody>
+</table>
+<p>Render adds <code>/v1/metrics</code> to the endpoint itself, so leave the path off. Samples
+arrive every 15 seconds per instance.</p>
+<h3 id="metrics-land-in-hostlog-networklog-and-disklog">Metrics land in <code>host.log</code>, <code>network.log</code> and <code>disk.log</code></h3>
+<p>Metrics go under the same service as that service's logs, as the kinds
+<code>host</code>, <code>network</code> and <code>disk</code>. A compute instance has the same <code>$host</code> in its
+metrics as in its logs, and the service's Render project is its <code>$cluster</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Render service</th>
+<th>weft file</th>
+<th>fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>myservice</code>, CPU</td>
+<td><code>/log/&lt;ns&gt;/myservice/host.log</code></td>
+<td><code>cpu.cores</code>, <code>cpu.time_s</code></td>
+</tr>
+<tr>
+<td><code>myservice</code>, memory</td>
+<td><code>/log/&lt;ns&gt;/myservice/host.log</code></td>
+<td><code>memory.used_mb</code>, <code>total_mb</code>, <code>pct</code>, <code>rss_mb</code>, <code>cache_mb</code></td>
+</tr>
+<tr>
+<td><code>myservice</code>, network</td>
+<td><code>/log/&lt;ns&gt;/myservice/network.log</code></td>
+<td><code>rx_bytes_total</code>, <code>tx_bytes_total</code></td>
+</tr>
+<tr>
+<td><code>myservice</code>, persistent disk</td>
+<td><code>/log/&lt;ns&gt;/myservice/disk.log</code></td>
+<td><code>used_gb</code>, <code>total_gb</code></td>
+</tr>
+</tbody>
+</table>
+<p>Render sends each metric on its own schedule, so one sample is spread over
+several rows and a row only holds the fields that arrived together. A field a
+row doesn't have reads as <code>null</code>, so filter for the one you want:</p>
+<pre><code>weft sh
+$ tail /log/myco/myservice/host.log | jq 'select(.memory.pct) | {host: $host, pct: .memory.pct}'
+</code></pre>
+<p><code>cpu.cores</code> is the instance's CPU allowance (0.5 on a 512 MB instance, for
+example). Memory <code>pct</code> is the share of the instance's memory limit. A disk row
+has either <code>used_gb</code> or <code>total_gb</code>, and no mount path: Render reports a disk
+under its own id, which is that row's <code>$host</code>.</p>
+<h3 id="cpu-time-and-network-totals-are-running-counters">CPU time and network totals are running counters</h3>
+<p><code>cpu.time_s</code>, <code>rx_bytes_total</code> and <code>tx_bytes_total</code> are cumulative, counting
+from when the instance started, like Render's own metrics. They are stored as
+Render sends them, so to see CPU use or traffic over time you work out the
+change between samples. A cron can do it per instance. This one reports each
+instance's CPU as a percentage of its allowance, over the cron's window:</p>
+<pre><code># /cron.d/render-cpu
+# schedule: */5 * * * *
+cat /log/myco/myservice/host.log \\
+  | jq -r 'select(.cpu.time_s) | &quot;\\($ts | sub(&quot; &quot;;&quot;T&quot;) + &quot;Z&quot; | fromdate) \\($host) \\(.cpu.time_s) \\(.cpu.cores)&quot;' \\
+  | awk '
+      {
+        t = $1; h = $2; c = $3; cores[h] = $4
+        if (h in prevc) {
+          d = c - prevc[h]
+          if (d &lt; 0) d = c              # the instance restarted
+          used[h] += d
+          span[h] += t - prevt[h]
+        }
+        prevc[h] = c; prevt[h] = t
+      }
+      END {
+        for (h in used)
+          if (span[h] &gt; 0 &amp;&amp; cores[h] &gt; 0)
+            printf &quot;%.2f %s\\n&quot;, used[h] / span[h] / cores[h] * 100, h
+      }' \\
+  | alert above 90 -v 1 -t 2 --notify=ops
+</code></pre>
+<p>Each point is tagged with its instance, so you get one alert per instance, and
+a chart of the cron draws one line per instance. Memory needs none of this,
+since it isn't a counter:</p>
+<pre><code>cat /log/myco/myservice/host.log \\
+  | jq -c 'select(.memory.pct) | {host: $host, pct: .memory.pct}' \\
+  | alert above 90 -v .pct -t .host --notify=ops
+</code></pre>
+<h3 id="what-weft-keeps">What weft keeps</h3>
+<p>Weft keeps CPU, memory, network and disk usage. The rest of what Render's
+stream carries is dropped when it arrives, without an error: HTTP request
+counts and latency, and the Postgres and Key Value internals (connections,
+checkpoints, replication lag and so on).</p>
 `,
 } as const;
 

@@ -164,14 +164,17 @@ the syslog HOSTNAME (verified), so a service's logs and metrics share
 ## Using the data
 
 CPU busy is `delta(cpu.time_s) / (delta(ts) * cores)` per instance. Until the
-shell has a counter-aware function, a cron can compute it (untested; assumes
-`$ts` renders as epoch seconds and rows arrive in time order):
+shell has a counter-aware function, a cron can compute it. The jq and awk were
+run in the shell against weft's own host metrics (using a non-counter field as
+a stand-in) and the awk's reset handling was checked by hand; it has not run
+against real Render rows. `$ts` renders as `2026-11-09 01:14:05.314348`, hence
+the `fromdate`:
 
 ```
 # /cron.d/render-cpu
 # schedule: */5 * * * *
 cat /log/myco/prod/api/host.log \
-  | jq -r '"\($ts) \($host) \(.cpu.time_s) \(.cpu.cores)"' \
+  | jq -r 'select(.cpu.time_s) | "\($ts | sub(" ";"T") + "Z" | fromdate) \($host) \(.cpu.time_s) \(.cpu.cores)"' \
   | awk '
       {
         t = $1; h = $2; c = $3; cores[h] = $4
@@ -225,7 +228,12 @@ separately.
 2. **Wiring.** Route `POST /api/ingest/otlp/v1/metrics` is registered in
    `api/handlers.go`; `api.w3ft.net` already fronts that mux, so there is no
    new listener, cert or Terraform. Auth is any weft agent token as the
-   bearer. Remaining: a per-token rate limit.
+   bearer. Rate limiting needs nothing new: every row goes through
+   `IngestStream`, which already throttles per token
+   (`coordinator/service/server.go`, `IngestTokenBytesPerSec`, 4 MiB/s with a
+   16 MiB burst by default; see docs/ingestion-syslog.md, "Rate limiting"), and
+   the HTTP route forwards with the caller's token. A request body is capped at
+   1 MiB.
 3. **weftd cumulative keys.** Committed in 756d6ee8 (version 0.33.0; the
    release is not cut yet). In `cmd/weftd/metrics.go`, add `cpu.time_s`
    (busy jiffies from `/proc/stat`, user + nice + system + irq + softirq +
