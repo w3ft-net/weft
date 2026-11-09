@@ -2,9 +2,10 @@
 // account page cannot drift apart. Prices and entitlements follow
 // scripts/costmodel/tiers.yaml; the code-side limits live in store/user.go.
 //
-// Bolt has no public price: it is quoted per customer on dedicated shards, so
-// its price is null and the UI sends visitors to the booking link instead of
-// into checkout.
+// Bolt has no public price or posted limits: retention, volume and support are
+// shaped per customer, so its price is null, its card shows a blurb in place of
+// the numbers, and the UI sends visitors to the booking link instead of into
+// checkout.
 
 export const DEMO_URL = 'https://calendar.app.google/6q35MfR67skswfsk7'
 
@@ -12,10 +13,13 @@ export interface Plan {
   tier: 'swatch' | 'yard' | 'bolt'
   name: string
   price: number | null
-  retention: string
-  volume: string
-  overage: string
-  features: string[]
+  // Posted limits; absent on a plan that is quoted per customer.
+  retention?: string
+  volume?: string
+  overage?: string
+  features?: string[]
+  // Shown instead of the limits when there are none to post.
+  blurb?: string
   accent: boolean
 }
 
@@ -44,10 +48,7 @@ export const PLANS: Plan[] = [
     tier: 'bolt',
     name: 'Bolt',
     price: null,
-    retention: '180 days',
-    volume: '500 GB/month',
-    overage: 'quoted',
-    features: ['50 users', 'CLI + browser shell', '500 crons', '1GB tmp storage', 'dedicated shards'],
+    blurb: 'Need higher throughput, custom retention, or technical support? We\'d be happy to help.',
     accent: false,
   },
 ]

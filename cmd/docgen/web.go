@@ -29,22 +29,22 @@ var manualCategories = []manualCategory{
 	{
 		ID:      "getting-started",
 		Label:   "Getting started",
-		Summary: "Carve out namespaces for your environments and mint the tokens that agents and drains use to authenticate.",
+		Summary: "Install the CLI, set up namespaces for your environments, and generate tokens so your sources can authenticate.",
 	},
 	{
 		ID:      "connect-source",
 		Label:   "Connect a source",
-		Summary: "Wire up logs from a host agent (weftd), an AWS CloudWatch log group, a Heroku app, or any custom line format.",
+		Summary: "Integrate with weft using our host agent (weftd), an AWS CloudWatch log group, or a supported provider.",
 	},
 	{
 		ID:      "weft-shell",
 		Label:   "Weft shell",
-		Summary: "A bash-like shell over your logs: the Unix builtins that carry over and where they differ, meta-variables, and the file system (scratch space, scripts, version history).",
+		Summary: "Get familiar with the heart of weft.",
 	},
 	{
 		ID:      "analysis-alerting",
 		Label:   "Analysis & alerting",
-		Summary: "Trace a request across services, run pipelines on a schedule with crons, understand how alerts work, choose a strategy that suits the signal, route notifications, and pin live queries to dashboards.",
+		Summary: "Spin your bash fu into alerts, dashboards, and distributed tracing.",
 	},
 }
 

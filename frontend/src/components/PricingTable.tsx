@@ -22,28 +22,34 @@ export default function PricingTable() {
               </>
             )}
           </div>
-          <div className="pricing-meta">
-            <div className="pricing-meta-item">
-              <span className="pricing-meta-label">retention</span>
-              <span className="pricing-meta-value">{tier.retention}</span>
-            </div>
-            <div className="pricing-meta-item">
-              <span className="pricing-meta-label">volume</span>
-              <span className="pricing-meta-value">{tier.volume}</span>
-            </div>
-            <div className="pricing-meta-item">
-              <span className="pricing-meta-label">overage</span>
-              <span className="pricing-meta-value">{tier.overage}</span>
-            </div>
-          </div>
-          <ul className="pricing-features">
-            {tier.features.map(f => (
-              <li key={f}>
-                <span className="pricing-check">+</span>
-                {f}
-              </li>
-            ))}
-          </ul>
+          {tier.blurb ? (
+            <p className="pricing-blurb">{tier.blurb}</p>
+          ) : (
+            <>
+              <div className="pricing-meta">
+                <div className="pricing-meta-item">
+                  <span className="pricing-meta-label">retention</span>
+                  <span className="pricing-meta-value">{tier.retention}</span>
+                </div>
+                <div className="pricing-meta-item">
+                  <span className="pricing-meta-label">volume</span>
+                  <span className="pricing-meta-value">{tier.volume}</span>
+                </div>
+                <div className="pricing-meta-item">
+                  <span className="pricing-meta-label">overage</span>
+                  <span className="pricing-meta-value">{tier.overage}</span>
+                </div>
+              </div>
+              <ul className="pricing-features">
+                {tier.features?.map(f => (
+                  <li key={f}>
+                    <span className="pricing-check">+</span>
+                    {f}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           {tier.price === null ? (
             <a href={DEMO_URL} target="_blank" rel="noopener noreferrer" className="pricing-cta" data-testid={`pricing-${tier.tier}-button`}>
               talk to us

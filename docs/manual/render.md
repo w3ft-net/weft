@@ -44,31 +44,24 @@ See [Paths](query-logs.md#paths) for the layout rules.)
 
 ## Render metrics
 
-Render's **Metrics Streams** feature pushes your services' system metrics to a
-destination you choose. Weft accepts it over OpenTelemetry (OTLP/HTTP with a
-JSON body) and keeps the system metrics: CPU, memory, network and disk. Metrics
-Streams needs a Pro workspace or higher, and Render sends nothing for static
-sites, cron jobs or one-off jobs.
+If you have a Pro Plan, you can ship system metrics from Render to weft too.
 
 ### Add the metrics stream in Render
 
-Use a [token](namespaces.md#creating-a-token); the one you made for logs works.
-In the Render dashboard, click **Integrations → Observability**, scroll to
-**Metrics Stream**, and click **+ Add destination**. Choose **Custom** and enter:
+Create or recycle a [token](namespaces.md#creating-a-token). Then in the Render
+dashboard, click **Integrations → Observability**, scroll to **Metrics
+Stream**, and click **+ Add destination**. Choose **Custom** and enter:
 
 | Field | Value |
 |---|---|
 | Endpoint | `https://api.w3ft.net/api/ingest/otlp` |
 | API key | your weft token |
 
-Render adds `/v1/metrics` to the endpoint itself, so leave the path off. Samples
-arrive every 15 seconds per instance.
+### Mapping render metrics to log files in weft
 
-### Metrics land in `host.log`, `network.log` and `disk.log`
-
-Metrics go under the same service as that service's logs, as the kinds
-`host`, `network` and `disk`. A compute instance has the same `$host` in its
-metrics as in its logs, and the service's Render project is its `$cluster`.
+Metrics are split into the files `(host|network|disk).log` in the directory for
+the sending Render service according to the rules above. Weft ingests the
+following fields:
 
 | Render service | weft file | fields |
 |---|---|---|
@@ -77,65 +70,5 @@ metrics as in its logs, and the service's Render project is its `$cluster`.
 | `myservice`, network | `/log/<ns>/myservice/network.log` | `rx_bytes_total`, `tx_bytes_total` |
 | `myservice`, persistent disk | `/log/<ns>/myservice/disk.log` | `used_gb`, `total_gb` |
 
-Render sends each metric on its own schedule, so one sample is spread over
-several rows and a row only holds the fields that arrived together. A field a
-row doesn't have reads as `null`, so filter for the one you want:
-
-```
-weft sh
-$ tail /log/myco/myservice/host.log | jq 'select(.memory.pct) | {host: $host, pct: .memory.pct}'
-```
-
-`cpu.cores` is the instance's CPU allowance (0.5 on a 512 MB instance, for
-example). Memory `pct` is the share of the instance's memory limit. A disk row
-has either `used_gb` or `total_gb`, and no mount path: Render reports a disk
-under its own id, which is that row's `$host`.
-
-### CPU time and network totals are running counters
-
-`cpu.time_s`, `rx_bytes_total` and `tx_bytes_total` are cumulative, counting
-from when the instance started, like Render's own metrics. They are stored as
-Render sends them, so to see CPU use or traffic over time you work out the
-change between samples. A cron can do it per instance. This one reports each
-instance's CPU as a percentage of its allowance, over the cron's window:
-
-```
-# /cron.d/render-cpu
-# schedule: */5 * * * *
-cat /log/myco/myservice/host.log \
-  | jq -r 'select(.cpu.time_s) | "\($ts | sub(" ";"T") + "Z" | fromdate) \($host) \(.cpu.time_s) \(.cpu.cores)"' \
-  | awk '
-      {
-        t = $1; h = $2; c = $3; cores[h] = $4
-        if (h in prevc) {
-          d = c - prevc[h]
-          if (d < 0) d = c              # the instance restarted
-          used[h] += d
-          span[h] += t - prevt[h]
-        }
-        prevc[h] = c; prevt[h] = t
-      }
-      END {
-        for (h in used)
-          if (span[h] > 0 && cores[h] > 0)
-            printf "%.2f %s\n", used[h] / span[h] / cores[h] * 100, h
-      }' \
-  | alert above 90 -v 1 -t 2 --notify=ops
-```
-
-Each point is tagged with its instance, so you get one alert per instance, and
-a chart of the cron draws one line per instance. Memory needs none of this,
-since it isn't a counter:
-
-```
-cat /log/myco/myservice/host.log \
-  | jq -c 'select(.memory.pct) | {host: $host, pct: .memory.pct}' \
-  | alert above 90 -v .pct -t .host --notify=ops
-```
-
-### What weft keeps
-
-Weft keeps CPU, memory, network and disk usage. The rest of what Render's
-stream carries is dropped when it arrives, without an error: HTTP request
-counts and latency, and the Postgres and Key Value internals (connections,
-checkpoints, replication lag and so on).
+Other metrics that don't map to values collected by weftd (HTTP request
+counts and latency, Postgres and Key Value internals) are discarded.

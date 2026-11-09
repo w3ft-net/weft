@@ -26,9 +26,6 @@ export default function ManualIndex() {
           <div className="manual-body" data-testid="manual-index-main">
             <ManHeader center="weft manual" />
             <h1 className="manual-page-title">manual</h1>
-            <p className="manual-intro">
-              Pick a topic. Everything here is also in the list on the left.
-            </p>
             <div className="manual-cards">
               {manualCategories.map(cat => {
                 const topics = manualSections.filter(s => s.category === cat.id)
@@ -152,7 +149,7 @@ export function ManualTopic() {
         <div className="manual-layout">
           <ManualSidebar />
           <article className="manual-body manual-topic" data-testid={`manual-topic-${topic.section}`}>
-            <ManHeader left={`${topic.section}(1)`} center={category ? category.label.toLowerCase() : 'weft manual'} />
+            <ManHeader left={`${topic.section}`} center={category ? category.label.toLowerCase() : 'weft manual'} />
 
             <nav className="manual-breadcrumb" aria-label="Breadcrumb">
               <span className="manual-breadcrumb-sep">~/</span>

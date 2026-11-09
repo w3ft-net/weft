@@ -268,9 +268,13 @@ function SubscriptionCard({ usage, onRefresh }: { usage: Usage | null; onRefresh
                 )}
               </div>
               <div className="plan-tile-details">
-                <div>{plan.volume}</div>
-                <div>{plan.retention} retention</div>
-                <div>{plan.overage} overage</div>
+                {plan.blurb ?? (
+                  <>
+                    <div>{plan.volume}</div>
+                    <div>{plan.retention} retention</div>
+                    <div>{plan.overage} overage</div>
+                  </>
+                )}
               </div>
               {isCurrent ? (
                 <div className="plan-tile-badge">current plan</div>

@@ -16,6 +16,13 @@
   }
 }
 
+/* A quoted plan: blurb in place of the meta rows and feature list. */
+.pricing-blurb {
+  flex: 1;
+  color: var(--text-secondary);
+  margin: 0 0 18px;
+}
+
 .pricing-card {
   position: relative;
   background: var(--bg-surface);

@@ -41,10 +41,10 @@ export type ManualCategory = {
 };
 
 export const manualCategories: readonly ManualCategory[] = [
-  { id: "getting-started", label: "Getting started", summary: `Carve out namespaces for your environments and mint the tokens that agents and drains use to authenticate.` },
-  { id: "connect-source", label: "Connect a source", summary: `Wire up logs from a host agent (weftd), an AWS CloudWatch log group, a Heroku app, or any custom line format.` },
-  { id: "weft-shell", label: "Weft shell", summary: `A bash-like shell over your logs: the Unix builtins that carry over and where they differ, meta-variables, and the file system (scratch space, scripts, version history).` },
-  { id: "analysis-alerting", label: "Analysis & alerting", summary: `Trace a request across services, run pipelines on a schedule with crons, understand how alerts work, choose a strategy that suits the signal, route notifications, and pin live queries to dashboards.` },
+  { id: "getting-started", label: "Getting started", summary: `Install the CLI, set up namespaces for your environments, and generate tokens so your sources can authenticate.` },
+  { id: "connect-source", label: "Connect a source", summary: `Integrate with weft using our host agent (weftd), an AWS CloudWatch log group, or a supported provider.` },
+  { id: "weft-shell", label: "Weft shell", summary: "Get familiar with the heart of weft." },
+  { id: "analysis-alerting", label: "Analysis & alerting", summary: "Spin your bash fu into alerts, dashboards, and distributed tracing." },
 ];
 
 export const manualSections: readonly ManualSection[] = [
