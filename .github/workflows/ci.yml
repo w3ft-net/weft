@@ -384,6 +384,10 @@ jobs:
           path: coverage-*-report.xml
           reporter: java-junit
           working-directory: weft
+      - name: Dump container logs on failure
+        if: failure()
+        working-directory: weft
+        run: docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml logs --tail=300
       - name: Stop stack (SIGTERM so Go counters flush)
         if: always()
         working-directory: weft
