@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import SidebarNav from '../components/SidebarNav'
 import { Sparkline, SparkLegend, groupResultsByTag } from '../components/Sparkline'
 import {
-  getWatches, getWatchResults, getFunctions, getIngestionStatus,
+  getWatches, getWatchResults, cronUrl, getFunctions, getIngestionStatus,
   dismissWelcome as apiDismissWelcome,
   type CronWatch, type CronResult, type ShellFunction,
 } from '../lib/api'
@@ -93,21 +93,21 @@ function WatchesCard({ watches, watchCount, watchLimit, minInterval }: {
 
           return (
             <div
-              key={watch.Name}
+              key={watch.path}
               role="link"
               tabIndex={0}
               className={`watch-tile watch-tile-clickable${hasError ? ' watch-tile-errored' : ''}`}
-              data-testid={`dashboard-watch-card-${watch.Name}`}
-              onClick={() => navigate(`/cron/${encodeURIComponent(watch.Name)}`)}
+              data-testid={`dashboard-watch-card-${watch.path}`}
+              onClick={() => navigate(`/cron/${cronUrl(watch.path)}`)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
-                  navigate(`/cron/${encodeURIComponent(watch.Name)}`)
+                  navigate(`/cron/${cronUrl(watch.path)}`)
                 }
               }}
             >
               <div className="watch-tile-header">
-                <span className="watch-tile-name">{watch.Name}</span>
+                <span className="watch-tile-name">{watch.path}</span>
                 <span className="watch-tile-schedule">{watch.Schedule}</span>
               </div>
 
@@ -389,7 +389,7 @@ export default function Dashboard() {
         setWatchMeta({ count: resp.count, limit: resp.limit, min_interval: resp.min_interval })
         const withResults = await Promise.all(
           (resp.crons || []).map(async (w) => {
-            const results = await getWatchResults(w.Name).catch(() => [] as CronResult[])
+            const results = await getWatchResults(w.path).catch(() => [] as CronResult[])
             return { watch: w, results: results || [] }
           })
         )

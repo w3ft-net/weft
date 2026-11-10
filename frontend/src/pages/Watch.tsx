@@ -217,7 +217,8 @@ function WatchChart({ series, hidden, threshold, condition, rangeStartMs, rangeE
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function Watch() {
-  const { name = '' } = useParams()
+  const { ns, name: bare = '' } = useParams()
+  const name = ns ? `${ns}/${bare}` : bare
   const [searchParams, setSearchParams] = useSearchParams()
   const { user } = useAuth()
 

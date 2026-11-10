@@ -669,7 +669,7 @@ export function TeamCard({ team, onRefresh, currentEmail }: { team: TeamResponse
 // /etc) and per-namespace read / token-mint access. It's the browser
 // twin of the shell's adduser/deluser; both write the same /api/
 // permissions document. The namespace cell expands into per-namespace
-// read + tokens toggles.
+// read + write toggles.
 function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse | null; isOwner: boolean; currentEmail: string }) {
   const [doc, setDoc] = useState<PermissionsDoc | null>(null)
   const [namespaces, setNamespaces] = useState<NamespaceInfo[]>([])
@@ -688,10 +688,10 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
   if (nonOwners.length === 0) return null
 
   function permsFor(email: string): MemberPerms {
-    return doc?.[email] ?? { bin: 'read-only', cron: 'read-only', etc: 'read-only' }
+    return doc?.[email] ?? { etc: 'read-only' }
   }
 
-  function flip(email: string, key: 'bin' | 'cron' | 'etc') {
+  function flip(email: string, key: 'etc') {
     if (!doc) return
     const cur = permsFor(email)
     const next: MemberPerms = { ...cur, [key]: cur[key] === 'edit' ? 'read-only' : 'edit' }
@@ -699,17 +699,16 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
     setDirty(true)
   }
 
-  // flipNs toggles one facet (read or create_tokens) of a member's
-  // namespace grant. Read and tokens are independent — matching the
-  // shell's `<ns>` vs `<ns>+tokens` groups. A namespace with neither
-  // facet set is dropped so it doesn't linger as an empty grant.
-  function flipNs(email: string, ns: string, facet: 'read' | 'create_tokens') {
+  // flipNs toggles one facet (read or write) of a member's namespace grant,
+  // matching the shell's `<ns>-r` and `<ns>-w` groups. A namespace with
+  // neither facet set is dropped so it doesn't linger as an empty grant.
+  function flipNs(email: string, ns: string, facet: 'read' | 'write') {
     if (!doc) return
     const cur = permsFor(email)
     const nsMap = { ...(cur.namespaces ?? {}) }
     const acl = { ...(nsMap[ns] ?? { read: false }) }
     acl[facet] = !acl[facet]
-    if (!acl.read && !acl.create_tokens) delete nsMap[ns]
+    if (!acl.read && !acl.write) delete nsMap[ns]
     else nsMap[ns] = acl
     setDoc({ ...doc, [email]: { ...cur, namespaces: nsMap } })
     setDirty(true)
@@ -746,7 +745,7 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
       </div>
       {!isOwner && (
         <div className="dash-empty">
-          Read-only view. Owners can edit write access to <code>/bin</code>, <code>/cron.d</code>, <code>/etc</code> and per-namespace access.
+          Read-only view. Owners can edit access to <code>/etc</code> and per-namespace read and write access.
         </div>
       )}
       {saveError && <div className="form-error">{saveError}</div>}
@@ -755,8 +754,6 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
           <thead>
             <tr>
               <th>email</th>
-              <th>/bin</th>
-              <th>/cron.d</th>
               <th>/etc</th>
               <th>namespaces</th>
             </tr>
@@ -770,8 +767,6 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
                 <Fragment key={m.id}>
                   <tr data-testid={`account-permissions-row-${m.id}`}>
                     <td className="token-label">{m.email}{m.email === currentEmail && ' (you)'}</td>
-                    <PermCheckCell isOwner={isOwner} level={p.bin} testIdBase={`account-permissions-${m.id}-bin`} onFlip={() => flip(m.email, 'bin')} />
-                    <PermCheckCell isOwner={isOwner} level={p.cron} testIdBase={`account-permissions-${m.id}-cron`} onFlip={() => flip(m.email, 'cron')} />
                     <PermCheckCell isOwner={isOwner} level={p.etc} testIdBase={`account-permissions-${m.id}-etc`} onFlip={() => flip(m.email, 'etc')} />
                     <td>
                       <button
@@ -786,7 +781,7 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
                   </tr>
                   {isExpanded && (
                     <tr className="dash-table-subrow" data-testid={`account-permissions-${m.id}-ns-panel`}>
-                      <td colSpan={5}>
+                      <td colSpan={3}>
                         <NamespaceGrants
                           memberId={m.id}
                           isOwner={isOwner}
@@ -804,20 +799,20 @@ function PermissionsCard({ team, isOwner, currentEmail }: { team: TeamResponse |
         </table>
       </div>
       <div className="dash-empty dash-hint">
-        The same grants are available in the shell: <code>adduser &lt;email&gt; &lt;namespace&gt;</code> / <code>&lt;namespace&gt;+tokens</code>. See <code>man passwd</code>.
+        The same grants are available in the shell: <code>usermod -aG &lt;namespace&gt;-r|-w &lt;email&gt;</code>. See <code>man passwd</code>.
       </div>
     </div>
   )
 }
 
 // NamespaceGrants is the expanded per-member panel: one row per
-// namespace with independent read and token-mint checkboxes.
+// namespace with independent read and write checkboxes.
 function NamespaceGrants({ memberId, isOwner, namespaces, perms, onFlip }: {
   memberId: string
   isOwner: boolean
   namespaces: NamespaceInfo[]
   perms: MemberPerms
-  onFlip: (ns: string, facet: 'read' | 'create_tokens') => void
+  onFlip: (ns: string, facet: 'read' | 'write') => void
 }) {
   if (namespaces.length === 0) {
     return <div className="dash-empty">No namespaces yet.</div>
@@ -826,7 +821,7 @@ function NamespaceGrants({ memberId, isOwner, namespaces, perms, onFlip }: {
     <div className="ns-grants">
       <div className="ns-grants-head">namespace</div>
       <div className="ns-grants-head">read</div>
-      <div className="ns-grants-head">+tokens</div>
+      <div className="ns-grants-head">write</div>
       {namespaces.map(ns => {
         const acl = perms.namespaces?.[ns.name] ?? { read: false }
         return (
@@ -842,11 +837,11 @@ function NamespaceGrants({ memberId, isOwner, namespaces, perms, onFlip }: {
             />
             <input
               type="checkbox"
-              checked={!!acl.create_tokens}
+              checked={!!acl.write}
               disabled={!isOwner}
-              onChange={() => onFlip(ns.name, 'create_tokens')}
-              data-testid={`account-permissions-${memberId}-ns-${ns.name}-tokens-checkbox`}
-              aria-label={`${ns.name} create tokens`}
+              onChange={() => onFlip(ns.name, 'write')}
+              data-testid={`account-permissions-${memberId}-ns-${ns.name}-write-checkbox`}
+              aria-label={`${ns.name} write`}
             />
           </Fragment>
         )
@@ -872,9 +867,9 @@ function PermCheckCell({ isOwner, level, testIdBase, onFlip }: { isOwner: boolea
 }
 
 function summarizeNs(p: MemberPerms): { short: string; title: string } {
-  const granted = Object.entries(p.namespaces ?? {}).filter(([, acl]) => acl.read || acl.create_tokens)
+  const granted = Object.entries(p.namespaces ?? {}).filter(([, acl]) => acl.read || acl.write)
   if (granted.length === 0) return { short: 'none', title: 'No namespace access' }
-  const labels = granted.map(([n, acl]) => acl.create_tokens ? `${n} (+tokens)` : n)
+  const labels = granted.map(([n, acl]) => acl.write ? `${n} (write)` : n)
   return { short: `${granted.length} ns`, title: labels.join(', ') }
 }
 

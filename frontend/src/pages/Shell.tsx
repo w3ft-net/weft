@@ -178,7 +178,7 @@ export default function Shell() {
 
   async function handleWatchDelete(name: string) {
     await deleteWatch(name)
-    setWatches(prev => prev.filter(w => w.Name !== name))
+    setWatches(prev => prev.filter(w => w.path !== name))
   }
 
   function toggleSidebar(tab: 'functions' | 'watches' | 'tmp' | 'etc') {
@@ -305,17 +305,17 @@ export default function Shell() {
             ) : (
               <ul className="shell-query-list">
                 {watches.map(w => (
-                  <li key={w.Name} className="shell-query-item" data-testid={`shell-watch-item-${w.Name}`}>
-                    <button className="shell-query-name" onClick={() => handleWatchSelect(w.Name)}
-                      data-testid={`shell-watch-select-${w.Name}`}>{w.Name}</button>
+                  <li key={w.path} className="shell-query-item" data-testid={`shell-watch-item-${w.path}`}>
+                    <button className="shell-query-name" onClick={() => handleWatchSelect(w.path)}
+                      data-testid={`shell-watch-select-${w.path}`}>{w.path}</button>
                     <div className="shell-query-pipeline">
                       <span className="shell-query-schedule">{w.Schedule}</span>{' '}
                       <span className={`tui-tag${CRON_STATUS_TAG[w.LastStatus] ?? ''}`}>
                         {w.LastStatus || 'pending'}
                       </span>
                     </div>
-                    <button className="shell-query-delete" onClick={() => handleWatchDelete(w.Name)}
-                      data-testid={`shell-watch-delete-${w.Name}`} aria-label={`delete ${w.Name}`}>rm</button>
+                    <button className="shell-query-delete" onClick={() => handleWatchDelete(w.path)}
+                      data-testid={`shell-watch-delete-${w.path}`} aria-label={`delete ${w.path}`}>rm</button>
                   </li>
                 ))}
               </ul>

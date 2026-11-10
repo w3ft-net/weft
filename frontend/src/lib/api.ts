@@ -175,22 +175,28 @@ export interface SaveWatchResult {
 }
 
 export function saveWatch(name: string, schedule: string, pipeline: string): Promise<SaveWatchResult> {
-  return apiFetch(`/api/crons/${encodeURIComponent(name)}`, {
+  return apiFetch(`/api/crons/${cronUrl(name)}`, {
     method: 'PUT',
     body: JSON.stringify({ schedule, pipeline }),
   })
 }
 
+// cronUrl turns a cron path into URL segments, keeping the slash between
+// namespace and name.
+export function cronUrl(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
+
 export function deleteWatch(name: string): Promise<void> {
-  return apiFetch(`/api/crons/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  return apiFetch(`/api/crons/${cronUrl(name)}`, { method: 'DELETE' })
 }
 
 export function getWatch(name: string): Promise<CronWatch> {
-  return apiFetch(`/api/crons/${encodeURIComponent(name)}`)
+  return apiFetch(`/api/crons/${cronUrl(name)}`)
 }
 
 export function getWatchResults(name: string): Promise<CronResult[]> {
-  return apiFetch(`/api/crons/${encodeURIComponent(name)}/results`)
+  return apiFetch(`/api/crons/${cronUrl(name)}/results`)
 }
 
 export type ChartRange = '1h' | '6h' | '24h' | '7d' | '30d' | '90d' | '1y'
@@ -227,7 +233,7 @@ export interface ChartResponse {
 }
 
 export function getWatchChart(name: string, range: ChartRange): Promise<ChartResponse> {
-  return apiFetch(`/api/crons/${encodeURIComponent(name)}/chart?range=${range}`)
+  return apiFetch(`/api/crons/${cronUrl(name)}/chart?range=${range}`)
 }
 
 // resendVerification re-sends the signup verification email to the
@@ -366,6 +372,9 @@ export interface ShellFunction {
 export interface CronWatch {
   ID: number
   Name: string
+  // <namespace>/<name>, or the bare name for a transitional org-level cron.
+  // Every reference to a cron uses this, not Name.
+  path: string
   Schedule: string
   Pipeline: string
   Enabled: boolean
@@ -437,12 +446,10 @@ export type AccessLevel = 'edit' | 'read-only'
 
 export interface NamespaceAcl {
   read: boolean
-  create_tokens?: boolean
+  write?: boolean
 }
 
 export interface MemberPerms {
-  bin: AccessLevel
-  cron: AccessLevel
   etc: AccessLevel
   namespaces?: Record<string, NamespaceAcl>
 }
@@ -546,7 +553,7 @@ export function createNamespace(name: string): Promise<NamespaceInfo> {
 
 export interface NamespacePermission {
   can_read: boolean
-  can_create_tokens: boolean
+  can_write: boolean
 }
 
 export function setNamespacePermission(
@@ -857,6 +864,8 @@ export interface DashboardTileDisplay {
 export interface DashboardTile {
   kind: DashboardTileKind
   cron: string
+  // The viewer can't read the cron's namespace: only the title comes back.
+  restricted?: boolean
   title?: string
   aggregate?: string
   bucket?: string

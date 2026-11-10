@@ -158,13 +158,13 @@ describe('ShellChartModal tour report', () => {
     }
     const view = render(
       <MemoryRouter>
-        <ShellChartModal spec={{ cron: 'hosts', plot: tagged, pipeline: 'chart hosts' }} onClose={() => {}} />
+        <ShellChartModal spec={{ cron: 'ops/hosts', plot: tagged, pipeline: 'chart ops/hosts' }} onClose={() => {}} />
       </MemoryRouter>,
     )
     expect(screen.getByTestId('spark-stub').textContent).toBe('2,2')
-    expect(screen.getByTestId('shell-chart-modal-watch-link').getAttribute('href')).toBe('/cron/hosts')
+    expect(screen.getByTestId('shell-chart-modal-watch-link').getAttribute('href')).toBe('/cron/ops/hosts')
     view.unmount()
     await new Promise(r => setTimeout(r, 20))
-    expect(reportModalClosed).toHaveBeenCalledWith('chart hosts')
+    expect(reportModalClosed).toHaveBeenCalledWith('chart ops/hosts')
   })
 })

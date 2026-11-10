@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
+import { cronUrl } from '../lib/api'
 import { useReportModalClosed } from '../lib/useReportModalClosed'
 import { Sparkline, SparkLegend, formatSparkValue } from './Sparkline'
 import { plotToSpark, plotXDomain, type ChartPlot } from '../lib/chartPlot'
@@ -62,7 +63,7 @@ export default function ShellChartModal({ spec, onClose }: Props) {
           <h2 className="shell-chart-modal-title">{title}</h2>
           {spec.cron && (
             <Link
-              to={`/cron/${encodeURIComponent(spec.cron)}`}
+              to={`/cron/${cronUrl(spec.cron)}`}
               className="shell-chart-modal-link"
               data-testid="shell-chart-modal-watch-link"
             >

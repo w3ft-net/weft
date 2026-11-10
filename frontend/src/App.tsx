@@ -59,6 +59,9 @@ export default function App() {
       <Route path="/cron/:name" element={
         <ProtectedRoute><Watch /></ProtectedRoute>
       } />
+      <Route path="/cron/:ns/:name" element={
+        <ProtectedRoute><Watch /></ProtectedRoute>
+      } />
       <Route path="/dashboards" element={
         <ProtectedRoute><Dashboards /></ProtectedRoute>
       } />

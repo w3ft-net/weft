@@ -5,7 +5,7 @@ import { Sparkline, SparkLegend } from '../components/Sparkline'
 import { PlotBars } from '../components/ShellChartModal'
 import { plotToSpark, plotXDomain } from '../lib/chartPlot'
 import {
-  listDashboards, getDashboard,
+  listDashboards, getDashboard, cronUrl,
   type DashboardListItem, type DashboardResponse,
   type DashboardTile, type DashboardWatchPayload,
 } from '../lib/api'
@@ -202,6 +202,18 @@ export function Tile({ tile, payload }: {
 }) {
   const size = tile.size ?? 'md'
   const className = `tui-pane dashboards-tile dashboards-tile-${size}`
+  if (tile.restricted) {
+    return (
+      <div className={className} data-testid={`dashboards-tile-restricted-${tile.title ?? ''}`}>
+        <div className="tui-pane-head">
+          <span className="tui-pane-title dashboards-tile-header">
+            <span className="dashboards-tile-watch">{tile.title ?? 'restricted'}</span>
+          </span>
+        </div>
+        <div className="dashboards-tile-body"><div className="dashboards-tile-nodata">restricted</div></div>
+      </div>
+    )
+  }
   const lastRun = payload?.cron.LastRunAt
   const failed = !!payload?.cron.LastStatus && payload.cron.LastStatus !== 'ok'
   return (
@@ -211,7 +223,7 @@ export function Tile({ tile, payload }: {
     >
       <div className="tui-pane-head">
         <Link
-          to={`/cron/${encodeURIComponent(tile.cron)}`}
+          to={`/cron/${cronUrl(tile.cron)}`}
           className="tui-pane-title dashboards-tile-header"
           data-testid={`dashboards-tile-${tile.cron}-link`}
         >
