@@ -20,7 +20,7 @@ type Actor struct {
 	User string
 }
 
-func (a Actor) Partition() store.OrgID { return a.Org }
+func (a Actor) Partition() int64 { return int64(a.Org) }
 
 type Scoper struct{ Store *store.Store }
 

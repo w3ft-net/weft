@@ -878,7 +878,7 @@ func (s *Server) ensureStripeCustomer(ctx context.Context, u *store.User, custom
 // that client_secret and calls stripe.confirmSetup() to collect card details.
 func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if s.authorize(r.Context(), session, tenancy.ActionManageBilling, tenancy.Resource{}) != nil {
+	if s.authorize(r.Context(), session, hosted.ActionManageBilling, tenancy.Resource{}) != nil {
 		http.Error(w, "only the owner can change the plan", http.StatusForbidden)
 		return
 	}
@@ -1003,7 +1003,7 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 // latest invoice's PaymentIntent so the frontend can confirm inline.
 func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if s.authorize(r.Context(), session, tenancy.ActionManageBilling, tenancy.Resource{}) != nil {
+	if s.authorize(r.Context(), session, hosted.ActionManageBilling, tenancy.Resource{}) != nil {
 		http.Error(w, "only the owner can change the plan", http.StatusForbidden)
 		return
 	}
@@ -2315,7 +2315,7 @@ func (s *Server) handleDeleteNamespace(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSetNamespacePermission(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if s.authorize(r.Context(), session, tenancy.ActionManageTeam, tenancy.Resource{}) != nil {
+	if s.authorize(r.Context(), session, hosted.ActionManageTeam, tenancy.Resource{}) != nil {
 		http.Error(w, "forbidden: owner only", http.StatusForbidden)
 		return
 	}
@@ -2376,7 +2376,7 @@ func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 // come back as 400 with a readable message so the UI can surface them.
 func (s *Server) handleSetPermissions(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if s.authorize(r.Context(), session, tenancy.ActionManageTeam, tenancy.Resource{}) != nil {
+	if s.authorize(r.Context(), session, hosted.ActionManageTeam, tenancy.Resource{}) != nil {
 		http.Error(w, "forbidden: owner only", http.StatusForbidden)
 		return
 	}

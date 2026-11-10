@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/graybeardcorp/weft/tenancy"
 	"net/http"
 	"strings"
 	"time"
@@ -15,6 +14,8 @@ import (
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/internal/clientwire"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 type contextKey string
@@ -119,7 +120,7 @@ func RequireEmailVerified(next http.Handler) http.Handler {
 func (s *Server) requireSuperadmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		session := auth.SessionFromContext(r.Context())
-		if session == nil || s.authorize(r.Context(), session, tenancy.ActionSuperadmin, tenancy.Resource{}) != nil {
+		if session == nil || s.authorize(r.Context(), session, hosted.ActionSuperadmin, tenancy.Resource{}) != nil {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

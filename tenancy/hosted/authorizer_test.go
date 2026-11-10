@@ -48,10 +48,10 @@ func TestAuthorize(t *testing.T) {
 		res  tenancy.Resource
 		want bool
 	}{
-		{"owner manages team", owner, tenancy.ActionManageTeam, tenancy.Resource{}, true},
-		{"member cannot manage team", plain, tenancy.ActionManageTeam, tenancy.Resource{}, false},
-		{"owner changes plan", owner, tenancy.ActionManageBilling, tenancy.Resource{}, true},
-		{"member cannot change plan", maker, tenancy.ActionManageBilling, tenancy.Resource{}, false},
+		{"owner manages team", owner, ActionManageTeam, tenancy.Resource{}, true},
+		{"member cannot manage team", plain, ActionManageTeam, tenancy.Resource{}, false},
+		{"owner changes plan", owner, ActionManageBilling, tenancy.Resource{}, true},
+		{"member cannot change plan", maker, ActionManageBilling, tenancy.Resource{}, false},
 		{"owner deletes namespace", owner, tenancy.ActionDeleteNamespace, tenancy.Resource{}, true},
 		{"member cannot delete namespace", plain, tenancy.ActionDeleteNamespace, tenancy.Resource{}, false},
 		{"granted member creates namespace", maker, tenancy.ActionCreateNamespace, tenancy.Resource{}, true},
@@ -74,10 +74,10 @@ func TestAuthorize(t *testing.T) {
 	}
 
 	// Superadmin needs no org.
-	if err := z.Authorize(context.Background(), Actor{User: super.ID}, tenancy.ActionSuperadmin, tenancy.Resource{}); err != nil {
+	if err := z.Authorize(context.Background(), Actor{User: super.ID}, ActionSuperadmin, tenancy.Resource{}); err != nil {
 		t.Errorf("superadmin: %v", err)
 	}
-	if err := z.Authorize(context.Background(), Actor{Org: org.ID, User: owner}, tenancy.ActionSuperadmin, tenancy.Resource{}); err == nil {
+	if err := z.Authorize(context.Background(), Actor{Org: org.ID, User: owner}, ActionSuperadmin, tenancy.Resource{}); err == nil {
 		t.Error("an org owner is not a superadmin")
 	}
 }

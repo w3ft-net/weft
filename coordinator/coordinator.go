@@ -1064,7 +1064,10 @@ func (c *Coordinator) readScope(ctx context.Context, custID store.OrgID, userID 
 	if err != nil {
 		return nil, err
 	}
-	names, all := set.Namespaces(int64(custID))
+	names, all, err := set.Namespaces(int64(custID))
+	if err != nil {
+		return nil, err
+	}
 	if all {
 		return nil, nil
 	}
@@ -1096,7 +1099,10 @@ func (c *Coordinator) authorizeSources(ctx context.Context, custID store.OrgID, 
 		return fmt.Errorf("validate source: %w", err)
 	}
 	// A wildcard resolves against the namespaces that exist.
-	readable, all := set.Namespaces(int64(custID))
+	readable, all, err := set.Namespaces(int64(custID))
+	if err != nil {
+		return fmt.Errorf("validate source: %w", err)
+	}
 	if all {
 		readable = existing
 	}

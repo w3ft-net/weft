@@ -7,14 +7,14 @@ import (
 	"errors"
 
 	"github.com/graybeardcorp/weft/shape"
-	"github.com/graybeardcorp/weft/store"
 )
 
 // Actor is a user acting within a partition. The Scoper that issued it is the
 // only code that looks inside.
 type Actor interface {
-	// Partition is the org whose data the actor is working in.
-	Partition() store.OrgID
+	// Partition is the tenant whose data the actor is working in. It is the
+	// value of the required customer column in every shape.Coord.
+	Partition() int64
 }
 
 // Scoper decides data visibility.
@@ -25,17 +25,17 @@ type Scoper interface {
 	ReadScope(ctx context.Context, a Actor) (shape.Set, error)
 }
 
-// Action is something a principal can ask to change. The set is closed: an
-// Authorizer denies any action it does not know.
+// Action is something a principal can ask to change. The contract's set is
+// closed and covers what the core does to data; an Authorizer denies any
+// action it does not know, so a deployment without a product surface (teams,
+// billing, a platform operator) is denied it by default. Adapters may define
+// actions of their own for their own surfaces, as hosted does.
 type Action string
 
 const (
-	ActionManageTeam            Action = "manage-team"             // invite, remove, set member permissions
-	ActionManageBilling         Action = "manage-billing"          // plan, payment method
-	ActionCreateNamespace       Action = "create-namespace"        //
-	ActionDeleteNamespace       Action = "delete-namespace"        //
+	ActionCreateNamespace       Action = "create-namespace"
+	ActionDeleteNamespace       Action = "delete-namespace"
 	ActionManageNamespaceTokens Action = "manage-namespace-tokens" // tokens and sources of Resource.Namespace
-	ActionSuperadmin            Action = "superadmin"              // platform operator surface
 )
 
 // Resource is what an action is aimed at, for the actions that have a target.

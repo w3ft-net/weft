@@ -10,6 +10,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// Actions of the hosted product, outside the tenancy contract: another
+// adapter denies them as unknown.
+const (
+	ActionManageTeam    tenancy.Action = "hosted/manage-team"    // invite, remove, set member permissions
+	ActionManageBilling tenancy.Action = "hosted/manage-billing" // plan, payment method
+	ActionSuperadmin    tenancy.Action = "hosted/superadmin"     // platform operator surface
+)
+
 // Authorizer decides actions from the owner role, org_permissions,
 // namespace_permissions and the superadmin flag. It reads the store on every
 // call, so a revoked grant takes effect on the next request.
@@ -23,7 +31,7 @@ func (z Authorizer) Authorize(_ context.Context, a tenancy.Actor, act tenancy.Ac
 	if actor.User == "" {
 		return tenancy.Denied("no user")
 	}
-	if act == tenancy.ActionSuperadmin {
+	if act == ActionSuperadmin {
 		u, err := z.Store.GetUserByID(actor.User)
 		if err != nil || !u.IsSuperadmin {
 			return tenancy.Denied("forbidden")
@@ -39,7 +47,7 @@ func (z Authorizer) Authorize(_ context.Context, a tenancy.Actor, act tenancy.Ac
 	}
 
 	switch act {
-	case tenancy.ActionManageTeam, tenancy.ActionManageBilling, tenancy.ActionDeleteNamespace:
+	case ActionManageTeam, ActionManageBilling, tenancy.ActionDeleteNamespace:
 		if owner {
 			return nil
 		}

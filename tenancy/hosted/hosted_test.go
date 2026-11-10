@@ -49,7 +49,11 @@ func TestReadScope(t *testing.T) {
 		if err := set.Validate(); err != nil {
 			t.Fatal(err)
 		}
-		return set.Namespaces(int64(org.ID))
+		names, all, err := set.Namespaces(int64(org.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return names, all
 	}
 
 	if _, all := scope(owner); !all {

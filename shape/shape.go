@@ -62,13 +62,22 @@ func (s Set) Validate() error {
 	return nil
 }
 
+// ErrFinerThanNamespace is returned when a tuple narrows below the namespace.
+// Callers that can only enforce namespaces must refuse such a set: dropping
+// the narrowing would widen the grant.
+var ErrFinerThanNamespace = errors.New("shape: scope narrower than a namespace is not supported here")
+
 // Namespaces reports the namespaces the set grants within one customer: all
 // is true when some tuple leaves the namespace unconstrained, otherwise names
-// is the sorted, distinct set of named namespaces.
-func (s Set) Namespaces(customer int64) (names []string, all bool) {
+// is the sorted, distinct set of named namespaces. A tuple that also
+// constrains env, service or kind is ErrFinerThanNamespace.
+func (s Set) Namespaces(customer int64) (names []string, all bool, err error) {
 	for _, c := range s {
 		if c.Customer != customer {
 			continue
+		}
+		if !c.Env.IsAny() || !c.Service.IsAny() || !c.Kind.IsAny() {
+			return nil, false, ErrFinerThanNamespace
 		}
 		switch {
 		case c.Namespace.IsAny():
@@ -78,5 +87,5 @@ func (s Set) Namespaces(customer int64) (names []string, all bool) {
 		}
 	}
 	slices.Sort(names)
-	return slices.Compact(names), all
+	return slices.Compact(names), all, nil
 }
