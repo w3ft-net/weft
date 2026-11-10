@@ -52,6 +52,9 @@ const (
 	ActionCreateNamespace       Action = "create-namespace"
 	ActionDeleteNamespace       Action = "delete-namespace"
 	ActionManageNamespaceTokens Action = "manage-namespace-tokens" // tokens and sources of Resource.Namespace
+	ActionManageBin             Action = "manage-bin"              // write /bin
+	ActionManageEtc             Action = "manage-etc"              // write /etc
+	ActionManageCron            Action = "manage-cron"             // write /cron.d
 )
 
 // Resource is what an action is aimed at, for the actions that have a target.
@@ -74,4 +77,23 @@ func Denied(msg string) error { return denied(msg) }
 // the action is not allowed.
 type Authorizer interface {
 	Authorize(ctx context.Context, a Actor, act Action, r Resource) error
+}
+
+// Readable is the namespaces the actor may read, and whether that is every
+// namespace in their tenant. existing lists the tenant's namespaces and is
+// only called when the scope leaves the namespace unconstrained, so a name
+// the scope does not mention is never granted. A scope narrower than a
+// namespace is shape.ErrFinerThanNamespace: callers that can only enforce
+// namespaces must refuse it rather than widen it.
+func Readable(ctx context.Context, sc Scoper, a Actor, existing func() ([]string, error)) (names []string, all bool, err error) {
+	set, err := sc.ReadScope(ctx, a)
+	if err != nil {
+		return nil, false, err
+	}
+	names, all, err = set.Namespaces(a.Partition())
+	if err != nil || !all {
+		return names, false, err
+	}
+	names, err = existing()
+	return names, true, err
 }

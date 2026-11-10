@@ -8,6 +8,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/planner"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
 )
 
 type CronMount struct{ cfg Config }
@@ -22,7 +23,7 @@ func (m *CronMount) Caps() shellcore.MountCaps {
 // operation: every member can read /cron.d, only the cronmgr group can
 // change it.
 func (m *CronMount) Authorize(rel string, want shellcore.Perm) error {
-	if want&shellcore.PermWrite != 0 && !m.cfg.CanManageWatches {
+	if want&shellcore.PermWrite != 0 && !m.cfg.allowed(tenancy.ActionManageCron) {
 		return denyWrite("/cron.d", "cronmgr")
 	}
 	return nil
@@ -149,7 +150,7 @@ func (m *CronMount) Remove(rel string) error {
 // AmendVersionMessage allows recording a commit message for cron entries. It
 // is not a MountFS operation, so it checks write access itself.
 func (m *CronMount) AmendVersionMessage(rel, message string) error {
-	if !m.cfg.CanManageWatches {
+	if !m.cfg.allowed(tenancy.ActionManageCron) {
 		return denyWrite("/cron.d", "cronmgr")
 	}
 	return m.cfg.Store.AmendCronWatchMessage(m.cfg.OrgID, m.cfg.UserID, rel, message)

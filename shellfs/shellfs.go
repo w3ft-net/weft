@@ -14,6 +14,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // Compile-time interface checks.
@@ -42,6 +43,9 @@ func New(s *store.Store, orgID store.OrgID, logServices []string, opts ...Option
 		OrgID:       orgID,
 		Tier:        store.TierTrial,
 		LogServices: logServices,
+		Actor:       hosted.Actor{Org: orgID},
+		Authz:       hosted.Authorizer{Store: s},
+		Scope:       hosted.Scoper{Store: s},
 	}
 	for _, o := range opts {
 		o(&cfg)
@@ -69,19 +73,14 @@ func WithTier(tier store.Tier) Option {
 	return func(c *mounts.Config) { c.Tier = tier }
 }
 
-// WithUser sets the user ID and org-scoped permission flags for
-// permission checks. The flags reflect the member's OrgPermission row
-// and are authoritative for every caller including owners, defaulting
-// to all false (read-only) when there is no row. IsOwner rides along
-// for namespace read visibility, not for these flags.
-func WithUser(userID string, perms mounts.OrgPerms) Option {
+// WithUser makes the mounts act as a member of the org. What they may read
+// and write is the hosted adapter's answer for that member on each operation.
+// Without it they act as the system identity, which reads everything and
+// writes nothing.
+func WithUser(userID string) Option {
 	return func(c *mounts.Config) {
 		c.UserID = userID
-		c.IsOwner = perms.IsOwner
-		c.CanManageFunctions = perms.CanManageFunctions
-		c.CanManageWatches = perms.CanManageWatches
-		c.CanManageEtc = perms.CanManageEtc
-		c.CanCreateNamespaces = perms.CanCreateNamespaces
+		c.Actor = hosted.Actor{Org: c.OrgID, User: userID}
 	}
 }
 

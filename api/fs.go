@@ -3,12 +3,13 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	iofs "io/fs"
 	"net/http"
 	"path"
 	"strings"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/mounts"
@@ -17,25 +18,13 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
-// sessionPerms projects a Session's role + org-permission flags into
-// the shape shellfs.WithUser expects. One helper, four call sites.
-func sessionPerms(s *auth.Session) mounts.OrgPerms {
-	return mounts.OrgPerms{
-		IsOwner:             s.IsOwner,
-		CanManageFunctions:  s.CanManageFunctions,
-		CanManageWatches:    s.CanManageWatches,
-		CanManageEtc:        s.CanManageEtc,
-		CanCreateNamespaces: s.CanCreateNamespaces,
-	}
-}
-
 // shellFS is the filesystem the shell writes through, bound to this request's
 // session: the same mounts, the same group checks, the same plan limits. Every
 // route that changes /bin, /cron.d or /etc goes through it instead of calling
 // the store, so there is one implementation of who may write what.
 func (s *Server) shellFS(r *http.Request, session *auth.Session, logServices []string) *shellfs.ShellFS {
 	return shellfs.New(s.store, session.ActiveOrgID, logServices,
-		shellfs.WithUser(session.UserID, sessionPerms(session)),
+		shellfs.WithUser(session.UserID),
 		shellfs.WithTier(session.Tier),
 		shellfs.WithContext(r.Context()))
 }

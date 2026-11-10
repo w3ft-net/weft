@@ -8,6 +8,7 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
 )
 
 type BinMount struct{ cfg Config }
@@ -22,7 +23,7 @@ func (m *BinMount) Caps() shellcore.MountCaps {
 // operation: every member can read and run /bin, only the binmgr group can
 // change it.
 func (m *BinMount) Authorize(rel string, want shellcore.Perm) error {
-	if want&shellcore.PermWrite != 0 && !m.cfg.CanManageFunctions {
+	if want&shellcore.PermWrite != 0 && !m.cfg.allowed(tenancy.ActionManageBin) {
 		return denyWrite("/bin", "binmgr")
 	}
 	return nil
@@ -105,7 +106,7 @@ func (m *BinMount) FileLanguage(rel string) string {
 // AmendVersionMessage allows the vim popup to record a commit message. It is
 // not a MountFS operation, so it checks write access itself.
 func (m *BinMount) AmendVersionMessage(rel, message string) error {
-	if !m.cfg.CanManageFunctions {
+	if !m.cfg.allowed(tenancy.ActionManageBin) {
 		return denyWrite("/bin", "binmgr")
 	}
 	return m.cfg.Store.AmendShellFunctionMessage(m.cfg.OrgID, m.cfg.UserID, rel, message)

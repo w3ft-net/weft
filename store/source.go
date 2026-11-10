@@ -381,16 +381,12 @@ func AwaitingSchema(q *gorm.DB) *gorm.DB {
 		[]LogGroupStatus{StatusSampling, StatusPending}, StatusConfigured)
 }
 
-// CountPendingLogGroups counts an org's sources awaiting a schema — the same
-// set the pending list returns, without loading the rows (and their
+// CountPendingLogGroups counts the sources awaiting a schema in the readable
+// namespaces of an org — the same set the pending list returns, without loading the rows (and their
 // sample/detection blobs).
-func (s *Store) CountPendingLogGroups(orgID OrgID, userID string, owner bool) (int, error) {
-	readable, err := s.ReadableNamespaces(orgID, userID, owner)
-	if err != nil {
-		return 0, err
-	}
+func (s *Store) CountPendingLogGroups(orgID OrgID, readable []string) (int, error) {
 	var n int64
-	err = s.db.
+	err := s.db.
 		Table("log_groups").
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
 		Where("namespaces.org_id = ? AND namespaces.name IN ?", orgID, readable).

@@ -12,6 +12,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
 )
 
 // Crons run as the system identity, which reads every namespace, so the limit
@@ -69,11 +70,10 @@ func newReadsFixture(t *testing.T) *readsFixture {
 }
 
 // fs returns the shell filesystem as user sees it.
-func (f *readsFixture) fs(user string, owner bool) *shellcore.MountFS {
-	return New(Config{
-		Store: f.db, OrgID: f.org.ID, Tier: store.TierYard, UserID: user, IsOwner: owner,
-		CanManageFunctions: true, CanManageWatches: true, CanManageEtc: true,
-	})
+func (f *readsFixture) fs(user string) *shellcore.MountFS {
+	cfg := asHosted(Config{Store: f.db, OrgID: f.org.ID, Tier: store.TierYard}, user)
+	cfg.Authz = grants{tenancy.ActionManageBin: true, tenancy.ActionManageCron: true, tenancy.ActionManageEtc: true}
+	return New(cfg)
 }
 
 func cronFile(pipeline string) []byte { return []byte("# schedule: */5 * * * *\n" + pipeline + "\n") }
@@ -97,7 +97,6 @@ func TestCronSave_SaverMustBeAbleToReadWhatItReads(t *testing.T) {
 	cases := []struct {
 		name, pipeline string
 		user           string
-		owner          bool
 		wantPerm       bool   // refused as a permission problem
 		wantRefuse     string // refused as unresolvable, mentioning this
 	}{
@@ -112,13 +111,13 @@ func TestCronSave_SaverMustBeAbleToReadWhatItReads(t *testing.T) {
 		{name: "reader, a computed path", pipeline: `cat "$FILE"`, user: f.reader, wantRefuse: "FILE"},
 		{name: "reader, eval", pipeline: `eval "ls"`, user: f.reader, wantRefuse: "eval"},
 		{name: "reader, no logs at all", pipeline: "echo hello", user: f.reader},
-		{name: "owner, any namespace", pipeline: "cat /log/beta/api/main.log", user: f.owner, owner: true},
-		{name: "owner, a computed path", pipeline: `cat "$FILE"`, user: f.owner, owner: true},
+		{name: "owner, any namespace", pipeline: "cat /log/beta/api/main.log", user: f.owner},
+		{name: "owner, a computed path", pipeline: `cat "$FILE"`, user: f.owner},
 		{name: "system identity, any namespace", pipeline: "cat /log/beta/api/main.log", user: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := f.fs(tc.user, tc.owner).WriteFile("/cron.d/c", cronFile(tc.pipeline))
+			err := f.fs(tc.user).WriteFile("/cron.d/c", cronFile(tc.pipeline))
 			switch {
 			case tc.wantPerm:
 				if !errors.Is(err, fs.ErrPermission) {
@@ -142,7 +141,7 @@ func TestCronSave_SaverMustBeAbleToReadWhatItReads(t *testing.T) {
 func TestCronSave_RefusalDoesNotNameUnreadableNamespaces(t *testing.T) {
 	f := newReadsFixture(t)
 
-	err := f.fs(f.reader, false).WriteFile("/cron.d/c", cronFile("ls /log"))
+	err := f.fs(f.reader).WriteFile("/cron.d/c", cronFile("ls /log"))
 
 	if err == nil || strings.Contains(err.Error(), "beta") {
 		t.Errorf("err = %v, want a refusal that does not name beta", err)
@@ -155,7 +154,7 @@ func TestBinSave_CannotWidenWhatAnExistingCronReads(t *testing.T) {
 
 	// There is no `report` yet. Creating one that reads beta would make the
 	// existing cron read it.
-	err := f.fs(f.reader, false).WriteFile("/bin/report", []byte("cat /log/beta/api/main.log"))
+	err := f.fs(f.reader).WriteFile("/bin/report", []byte("cat /log/beta/api/main.log"))
 	if !errors.Is(err, fs.ErrPermission) {
 		t.Errorf("a script reading an unreadable namespace, run by a cron: err = %v, want a permission refusal", err)
 	}
@@ -164,15 +163,15 @@ func TestBinSave_CannotWidenWhatAnExistingCronReads(t *testing.T) {
 	}
 
 	// One that reads only what the editor can read is fine.
-	if err := f.fs(f.reader, false).WriteFile("/bin/report", []byte("cat /log/alpha/api/main.log")); err != nil {
+	if err := f.fs(f.reader).WriteFile("/bin/report", []byte("cat /log/alpha/api/main.log")); err != nil {
 		t.Errorf("a script reading a readable namespace: %v", err)
 	}
 	// Narrowing it, or leaving what it reads alone, is fine.
-	if err := f.fs(f.reader, false).WriteFile("/bin/report", []byte("cat /log/alpha/api/main.log | head -n 5")); err != nil {
+	if err := f.fs(f.reader).WriteFile("/bin/report", []byte("cat /log/alpha/api/main.log | head -n 5")); err != nil {
 		t.Errorf("editing without widening: %v", err)
 	}
 	// Making it unresolvable is not: the cron could no longer be vouched for.
-	err = f.fs(f.reader, false).WriteFile("/bin/report", []byte(`cat "$FILE"`))
+	err = f.fs(f.reader).WriteFile("/bin/report", []byte(`cat "$FILE"`))
 	if err == nil || errors.Is(err, fs.ErrPermission) || !strings.Contains(err.Error(), "FILE") {
 		t.Errorf("a script that became unresolvable under a cron: err = %v, want an unresolvable refusal", err)
 	}
@@ -184,7 +183,7 @@ func TestBinSave_UnreferencedScriptIsUnrestricted(t *testing.T) {
 
 	// No cron runs it, and anyone who runs it interactively is held to their
 	// own read access when it executes.
-	if err := f.fs(f.reader, false).WriteFile("/bin/adhoc", []byte("cat /log/beta/api/main.log")); err != nil {
+	if err := f.fs(f.reader).WriteFile("/bin/adhoc", []byte("cat /log/beta/api/main.log")); err != nil {
 		t.Errorf("a script no cron runs: %v", err)
 	}
 }
@@ -194,7 +193,7 @@ func TestBinSave_ReachesCronsThroughOtherScripts(t *testing.T) {
 	f.seedBin(t, "outer", "inner")
 	f.seedCron(t, "c", "outer")
 
-	err := f.fs(f.reader, false).WriteFile("/bin/inner", []byte("cat /log/beta/api/main.log"))
+	err := f.fs(f.reader).WriteFile("/bin/inner", []byte("cat /log/beta/api/main.log"))
 
 	if !errors.Is(err, fs.ErrPermission) {
 		t.Errorf("a script run by a cron through another script: err = %v, want a permission refusal", err)
@@ -205,11 +204,11 @@ func TestBinSave_OwnersAndLuaAreUnrestricted(t *testing.T) {
 	f := newReadsFixture(t)
 	f.seedCron(t, "report", "report | wc -l")
 
-	if err := f.fs(f.owner, true).WriteFile("/bin/report", []byte("cat /log/beta/api/main.log")); err != nil {
+	if err := f.fs(f.owner).WriteFile("/bin/report", []byte("cat /log/beta/api/main.log")); err != nil {
 		t.Errorf("owner: %v", err)
 	}
 	// A Lua script reads only its input, so it can't widen anything.
-	if err := f.fs(f.reader, false).WriteFile("/bin/report.lua", []byte("print('x')")); err != nil {
+	if err := f.fs(f.reader).WriteFile("/bin/report.lua", []byte("print('x')")); err != nil {
 		t.Errorf("Lua script: %v", err)
 	}
 }

@@ -129,11 +129,9 @@ func TestTeamAddUser_GroupGrantInvitesAndReportsPending(t *testing.T) {
 // removed — the team is mutated through these commands instead, so the
 // gate moved to the api layer.
 //
-// The nuance carried over from the old /etc/team.yaml test: a non-owner
-// is denied even with CanManageEtc set. CanManageEtc gates /etc *file*
-// writes (notify.yaml, dashboards), never team membership — that's
-// strictly the owner's. The owner check is the first statement in each
-// handler, so a denial needs no store.
+// Holding the /etc write bit never confers team management: the hosted
+// Authorizer's manage-team rule is owner-only (tenancy/hosted tests). The
+// check is the first statement in each handler, so a denial needs no store.
 func TestTeamCommands_NonOwnerDenied(t *testing.T) {
 	s := &Server{authz: denyAll{}}
 
@@ -142,7 +140,6 @@ func TestTeamCommands_NonOwnerDenied(t *testing.T) {
 		session *auth.Session
 	}{
 		{"member-no-flags", &auth.Session{Email: "m@x.test", IsOwner: false}},
-		{"member-with-can-manage-etc", &auth.Session{Email: "m@x.test", IsOwner: false, CanManageEtc: true}},
 	}
 	for _, sc := range nonOwners {
 		for _, cmd := range []string{"adduser bob@x.test", "deluser bob@x.test"} {

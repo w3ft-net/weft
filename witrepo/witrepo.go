@@ -27,6 +27,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // Config is the request-scoped state a Repo needs.
@@ -353,24 +354,19 @@ func (r *Repo) amendMessage(kind, name, authorID, message string) error {
 	}
 }
 
-// mountFS builds the mounts the acting user's writes go through, with the
-// permission bits from their org_permissions row (no row = read-only).
+// mountFS builds the mounts the acting user's writes go through, under the
+// hosted adapter's answer for that user (no org_permissions row = read-only).
 func (r *Repo) mountFS() *shellcore.MountFS {
-	cfg := mounts.Config{
-		Store:  r.cfg.Store,
+	st := r.cfg.Store
+	return mounts.New(mounts.Config{
+		Store:  st,
 		OrgID:  r.cfg.OrgID,
-		Tier:   r.cfg.Store.TierForOrg(r.cfg.OrgID),
+		Tier:   st.TierForOrg(r.cfg.OrgID),
 		UserID: r.cfg.UserID,
-	}
-	// An owner reads every namespace, which the cron and script save checks
-	// need to know.
-	cfg.IsOwner, _ = r.cfg.Store.IsOwner(r.cfg.OrgID, r.cfg.UserID)
-	if perm, err := r.cfg.Store.GetOrgPermission(r.cfg.OrgID, r.cfg.UserID); err == nil {
-		cfg.CanManageFunctions = perm.CanManageFunctions
-		cfg.CanManageWatches = perm.CanManageWatches
-		cfg.CanManageEtc = perm.CanManageEtc
-	}
-	return mounts.New(cfg)
+		Actor:  hosted.Actor{Org: r.cfg.OrgID, User: r.cfg.UserID},
+		Authz:  hosted.Authorizer{Store: st},
+		Scope:  hosted.Scoper{Store: st},
+	})
 }
 
 // latestFor returns the ID of the newest non-tombstone (or tombstone) commit

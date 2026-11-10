@@ -8,6 +8,7 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
 )
 
 type EtcMount struct{ cfg Config }
@@ -29,7 +30,7 @@ func (m *EtcMount) Authorize(rel string, want shellcore.Perm) error {
 	if rel == "passwd" {
 		return fmt.Errorf("/etc/passwd is read-only — manage the team with adduser/deluser")
 	}
-	if !m.cfg.CanManageEtc {
+	if !m.cfg.allowed(tenancy.ActionManageEtc) {
 		return denyWrite("/etc", "configmgr")
 	}
 	return nil

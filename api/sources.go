@@ -7,14 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/graybeardcorp/weft/tenancy"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/graybeardcorp/weft/tenancy"
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	"gorm.io/gorm"
 
@@ -153,7 +154,12 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 func (s *Server) handlePendingSourcesCount(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
-	n, err := s.store.CountPendingLogGroups(session.ActiveOrgID, session.UserID, session.IsOwner)
+	readable, err := s.readable(r.Context(), session)
+	if err != nil {
+		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	n, err := s.store.CountPendingLogGroups(session.ActiveOrgID, readable)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -167,7 +173,7 @@ func (s *Server) handlePendingSourcesCount(w http.ResponseWriter, r *http.Reques
 func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
-	readable, err := s.store.ReadableNamespaces(session.ActiveOrgID, session.UserID, session.IsOwner)
+	readable, err := s.readable(r.Context(), session)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -471,7 +477,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	readable, err := s.store.ReadableNamespaces(session.ActiveOrgID, session.UserID, session.IsOwner)
+	readable, err := s.readable(r.Context(), session)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -691,7 +697,7 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	readable, err := s.store.ReadableNamespaces(session.ActiveOrgID, session.UserID, session.IsOwner)
+	readable, err := s.readable(r.Context(), session)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return

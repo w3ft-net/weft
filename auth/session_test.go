@@ -39,58 +39,22 @@ func addMember(t *testing.T, db *store.Store, custID store.OrgID, role string) *
 	return user
 }
 
-// TestBuildSession_OwnerGetsAllFlags: an owner has every flag. They are true
-// because becoming an active admin materializes an all-bits-true
-// org_permissions row, not because BuildSession bypasses the row for owners.
-func TestBuildSession_OwnerGetsAllFlags(t *testing.T) {
+// A session says whether the member owns the org; what they may write is the
+// Authorizer's answer, from their org_permissions row.
+func TestBuildSession_IsOwnerFollowsRole(t *testing.T) {
 	db := testStore(t)
-	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-owner-%d", os.Getpid()))
-	user := addMember(t, db, cust.ID, "owner")
+	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-role-%d", os.Getpid()))
+	owner := addMember(t, db, cust.ID, "owner")
+	member := addMember(t, db, cust.ID, "member")
 
-	sess, err := BuildSession(db, user.ID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !sess.IsOwner {
-		t.Error("expected IsOwner=true")
-	}
-	if !sess.CanManageFunctions || !sess.CanManageWatches || !sess.CanManageEtc || !sess.CanCreateNamespaces {
-		t.Errorf("owner should hold all four bits; got bin=%v cron=%v etc=%v ns=%v",
-			sess.CanManageFunctions, sess.CanManageWatches, sess.CanManageEtc, sess.CanCreateNamespaces)
-	}
-}
-
-// TestBuildSession_OwnerReadsBitsFromRow: role is no longer a permission
-// authority. An owner whose org_permissions row has been cleared reads
-// as having none of the four bits — proof that BuildSession consults the
-// row and nothing else.
-//
-// This is what "org_permissions is authoritative" means in practice.
-func TestBuildSession_OwnerReadsBitsFromRow(t *testing.T) {
-	db := testStore(t)
-	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-owner-cleared-%d", os.Getpid()))
-	user := addMember(t, db, cust.ID, "owner")
-
-	err := db.ExecForTest(
-		`UPDATE org_permissions
-		    SET can_manage_functions = false, can_manage_watches = false,
-		        can_manage_etc = false, can_create_namespaces = false
-		  WHERE org_id = ? AND user_id = ?`,
-		cust.ID, user.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	sess, err := BuildSession(db, user.ID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !sess.IsOwner {
-		t.Error("role is unchanged, so IsOwner should still be true")
-	}
-	if sess.CanManageFunctions || sess.CanManageWatches || sess.CanManageEtc || sess.CanCreateNamespaces {
-		t.Errorf("cleared row should read as no bits; got bin=%v cron=%v etc=%v ns=%v",
-			sess.CanManageFunctions, sess.CanManageWatches, sess.CanManageEtc, sess.CanCreateNamespaces)
+	for user, want := range map[string]bool{owner.ID: true, member.ID: false} {
+		sess, err := BuildSession(db, user, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sess.IsOwner != want {
+			t.Errorf("IsOwner = %v, want %v", sess.IsOwner, want)
+		}
 	}
 }
 
@@ -108,51 +72,6 @@ func TestBuildSession_AdminMembershipMaterializesRow(t *testing.T) {
 	}
 	if !perm.CanManageFunctions || !perm.CanManageWatches || !perm.CanManageEtc || !perm.CanCreateNamespaces {
 		t.Errorf("materialized row should hold all four bits; got %+v", perm)
-	}
-}
-
-func TestBuildSession_MemberWithoutPermissionRowIsReadOnly(t *testing.T) {
-	db := testStore(t)
-	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-member-%d", os.Getpid()))
-	user := addMember(t, db, cust.ID, "member")
-
-	sess, err := BuildSession(db, user.ID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sess.IsOwner {
-		t.Error("expected IsOwner=false for member")
-	}
-	if sess.CanManageFunctions || sess.CanManageWatches || sess.CanManageEtc {
-		t.Errorf("member with no perm row should be all-false; got bin=%v cron=%v etc=%v",
-			sess.CanManageFunctions, sess.CanManageWatches, sess.CanManageEtc)
-	}
-}
-
-func TestBuildSession_MemberWithFlagsHasThem(t *testing.T) {
-	db := testStore(t)
-	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("sess-flags-%d", os.Getpid()))
-	user := addMember(t, db, cust.ID, "member")
-
-	err := db.ExecForTest(
-		`INSERT INTO org_permissions (org_id, user_id, can_manage_functions, can_manage_watches, can_manage_etc) VALUES (?, ?, true, false, true)`,
-		cust.ID, user.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	sess, err := BuildSession(db, user.ID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sess.IsOwner {
-		t.Error("expected IsOwner=false")
-	}
-	if !sess.CanManageFunctions || !sess.CanManageEtc {
-		t.Error("expected the upserted flags to round-trip")
-	}
-	if sess.CanManageWatches {
-		t.Error("expected CanManageWatches to remain false")
 	}
 }
 

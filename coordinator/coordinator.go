@@ -23,7 +23,6 @@ import (
 	luapkg "github.com/graybeardcorp/warp/pkg/lua"
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
-	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/notices"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -32,7 +31,6 @@ import (
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/theme"
 	"github.com/graybeardcorp/weft/witrepo"
-	"gorm.io/gorm"
 )
 
 // TimeRange aliases logdb.TimeRange so callers inside the coordinator
@@ -1111,34 +1109,22 @@ func (c *Coordinator) actorScope(ctx context.Context) (shape.Set, error) {
 	return c.Scoper.ReadScope(ctx, a)
 }
 
-// userIsOwner reports whether userID owns the org. The empty user (the system
-// identity) is not a member of anything, but reads as an owner.
-func (c *Coordinator) userIsOwner(custID store.OrgID, userID string) (bool, error) {
-	if userID == "" {
-		return true, nil
-	}
-	return c.Store.IsOwner(custID, userID)
-}
-
 // authorizeSources refuses a log query that reads a namespace the actor's
 // scope does not cover. The empty user is the system identity, whose scope is
 // every namespace.
 func (c *Coordinator) authorizeSources(ctx context.Context, custID store.OrgID, plan *planner.QueryPlan) error {
-	set, err := c.actorScope(ctx)
-	if err != nil {
-		return fmt.Errorf("validate source: %w", err)
+	a, ok := tenancy.ActorFrom(ctx)
+	if !ok {
+		return errors.New("validate source: request has no actor")
 	}
 	existing, err := c.Store.NamespaceNames(custID, "", true)
 	if err != nil {
 		return fmt.Errorf("validate source: %w", err)
 	}
 	// A wildcard resolves against the namespaces that exist.
-	readable, all, err := set.Namespaces(int64(custID))
+	readable, _, err := tenancy.Readable(ctx, c.Scoper, a, func() ([]string, error) { return existing, nil })
 	if err != nil {
 		return fmt.Errorf("validate source: %w", err)
-	}
-	if all {
-		readable = existing
 	}
 	if len(plan.SourceNamespaces) == 0 {
 		if len(readable) < len(existing) {
@@ -1469,33 +1455,10 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 			shellfs.WithNoticeQueue(noticeQueue),
 			shellfs.WithContext(context.WithoutCancel(ctx)),
 		}
-		if userID != "" {
-			// A redirect like `... > /cron.d/x` writes with the member's
-			// org_permissions row, the same authority vi's /api/fs/write
-			// save has; no row is default-deny. The system identity crons
-			// run as (empty userID) gets no WithUser and never writes
-			// /bin, /cron.d or /etc.
-			var perms mounts.OrgPerms
-			owner, oerr := c.userIsOwner(custID, userID)
-			if oerr != nil {
-				weftsdk.Warnf(ctx, "runLocal: load role for %s: %v (reads limited to granted namespaces)", userID, oerr)
-			}
-			perms.IsOwner = owner
-			perm, err := c.Store.GetOrgPermission(custID, userID)
-			switch {
-			case err == nil:
-				perms = mounts.OrgPerms{
-					IsOwner:             owner,
-					CanManageFunctions:  perm.CanManageFunctions,
-					CanManageWatches:    perm.CanManageWatches,
-					CanManageEtc:        perm.CanManageEtc,
-					CanCreateNamespaces: perm.CanCreateNamespaces,
-				}
-			case !errors.Is(err, gorm.ErrRecordNotFound):
-				weftsdk.Warnf(ctx, "runLocal: load org perms for %s: %v (writes denied)", userID, err)
-			}
-			opts = append(opts, shellfs.WithUser(userID, perms))
-		}
+		// A redirect like `... > /cron.d/x` writes as the member, under the
+		// same authority vi's /api/fs/write save has. The system identity
+		// crons run as (empty userID) never writes /bin, /cron.d or /etc.
+		opts = append(opts, shellfs.WithUser(userID))
 		// LogServices feeds LogMount's directory listing. Source it from
 		// the same per-customer ingest discovery the /api/fs path uses
 		// (SeenServices, ferried out via ListServices), so `ls`/`tree`

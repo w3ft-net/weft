@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -227,7 +226,7 @@ func TestReadFile_LogNamespace_UnreadableIsHidden(t *testing.T) {
 
 	fs := New(db, cust.ID, []string{"secret/app"},
 		WithTier("swatch"),
-		WithUser(user.ID, mounts.OrgPerms{}))
+		WithUser(user.ID))
 
 	// An unreadable namespace is indistinguishable from a missing one.
 	_, err = fs.ReadFile("/log/secret/app.log")
@@ -261,7 +260,7 @@ func TestReadDir_Log_FiltersNamespaces(t *testing.T) {
 
 	fs := New(db, cust.ID, []string{"allowed/web", "blocked/api"},
 		WithTier("swatch"),
-		WithUser(user.ID, mounts.OrgPerms{}))
+		WithUser(user.ID))
 
 	entries, err := fs.ReadDir("/log")
 	if err != nil {
@@ -286,15 +285,11 @@ func TestReadFile_LogNamespace_OwnerBypass(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.FindOrCreateNamespace(cust.ID, "private")
-	user, err := db.CreateUser(fmt.Sprintf("owner-%d@example.com", os.Getpid()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// No NamespacePermission row — but user is owner.
+	// No NamespacePermission row — but the user is owner.
 
 	fs := New(db, cust.ID, []string{"private/app"},
 		WithTier("swatch"),
-		WithUser(user.ID, ownerPerms()))
+		WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 
 	// Owner should have access despite no permission row.
 	_, err = fs.ReadFile("/log/private/app.log")

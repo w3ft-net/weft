@@ -38,10 +38,6 @@ func (c Config) readsEnv(override map[string]string) (logreads.Env, error) {
 	}, nil
 }
 
-// exempt reports whether the caller reads everything, so there is nothing to
-// check.
-func (c Config) exempt() bool { return c.UserID == "" || c.IsOwner }
-
 // denyReads is the refusal for a script that reads what the caller can't. It
 // does not say which namespaces: a glob or a listing would name ones the
 // caller may not see.
@@ -51,8 +47,9 @@ func denyReads(dir string) error {
 
 // authorizeCronReads refuses a cron whose reads the saver can't be vouched for.
 func (c Config) authorizeCronReads(pipeline string) error {
-	if c.exempt() {
-		return nil
+	_, all, err := c.scope()
+	if err != nil || all { // a caller who reads everything has nothing to check
+		return err
 	}
 	env, err := c.readsEnv(nil)
 	if err != nil {
@@ -70,7 +67,7 @@ func (c Config) authorizeCronReads(pipeline string) error {
 }
 
 func (c Config) mustRead(namespaces []string, dir string) error {
-	readable, err := c.Store.ReadableNamespaces(c.OrgID, c.UserID, false)
+	readable, _, err := c.scope()
 	if err != nil {
 		return err
 	}
@@ -87,8 +84,12 @@ func (c Config) mustRead(namespaces []string, dir string) error {
 // A script no cron runs is unrestricted: whoever runs it is held to their own
 // read access as it executes.
 func (c Config) authorizeBinEdit(name, source, lang string) error {
-	if c.exempt() || lang == "lua" { // a Lua script reads only its input
+	if lang == "lua" { // a Lua script reads only its input
 		return nil
+	}
+	_, all, err := c.scope()
+	if err != nil || all {
+		return err
 	}
 	crons, err := c.Store.ListCronWatches(c.OrgID)
 	if err != nil || len(crons) == 0 {

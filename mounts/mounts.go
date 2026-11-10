@@ -5,11 +5,13 @@ package mounts
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
 )
 
 // denyWrite is the error mounts return when a caller without the
@@ -42,18 +44,14 @@ type Config struct {
 	OrgID  store.OrgID
 	Tier   store.Tier
 	UserID string
-	// IsOwner gates namespace *read* visibility in LogMount. It is not
-	// an authority over the four org-scoped bits below — those come from
-	// the member's org_permissions row and nowhere else (migration 072),
-	// and an owner holds them because their promotion materialized them.
-	IsOwner            bool
-	CanManageFunctions bool // gates writes to /bin
-	CanManageWatches   bool // gates writes to /cron.d
-	CanManageEtc       bool // gates writes to /etc (/etc/passwd is read-only — managed via adduser/deluser)
-	// CanCreateNamespaces gates namespace creation in the active org.
-	CanCreateNamespaces bool
-	LogServices         []string
-	NoticeQueue         NoticeSink
+	// Actor is who the mounts act as; Authz decides their writes and Scope
+	// what they read. Each is asked on every operation. A Config missing any
+	// of them denies everything.
+	Actor       tenancy.Actor
+	Authz       tenancy.Authorizer
+	Scope       tenancy.Scoper
+	LogServices []string
+	NoticeQueue NoticeSink
 	// Ctx is the request context the mounts run under. warp's Mount
 	// interface is ctx-less, so the per-request Config carries it
 	// (detached from cancellation by the embedder) to keep the trace
@@ -70,15 +68,24 @@ func (c Config) ctx() context.Context {
 	return c.Ctx
 }
 
-// OrgPerms is the org-scoped permission bundle a session carries. The
-// values mirror auth.Session's CanManage* flags but the type lives
-// here so embedders can build a Config without an auth dependency.
-type OrgPerms struct {
-	IsOwner             bool
-	CanManageFunctions  bool
-	CanManageWatches    bool
-	CanManageEtc        bool
-	CanCreateNamespaces bool
+// allowed reports whether the actor may take act. Any failure denies.
+func (c Config) allowed(act tenancy.Action) bool {
+	if c.Authz == nil || c.Actor == nil {
+		return false
+	}
+	return c.Authz.Authorize(c.ctx(), c.Actor, act, tenancy.Resource{}) == nil
+}
+
+// scope is the namespaces the actor may read, and whether that is every
+// namespace in the org. A scope narrower than a namespace is refused: the
+// mounts can only enforce namespaces.
+func (c Config) scope() (readable []string, all bool, err error) {
+	if c.Scope == nil || c.Actor == nil {
+		return nil, false, errors.New("mounts: no read scope")
+	}
+	return tenancy.Readable(c.ctx(), c.Scope, c.Actor, func() ([]string, error) {
+		return c.Store.NamespaceNames(c.OrgID, "", true)
+	})
 }
 
 // Every mount gates access through Authorize. MountFS probes for it at

@@ -1,12 +1,15 @@
 package mounts
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // ownerCfgSeq makes each ownerCfg org slug unique: a test may call it more
@@ -41,5 +44,38 @@ func ownerCfg(t testing.TB, services []string) Config {
 			t.Fatal(err)
 		}
 	}
-	return Config{Store: tx, OrgID: org.ID, IsOwner: true, LogServices: services}
+	// The system identity reads every namespace and writes nothing.
+	return asHosted(Config{Store: tx, OrgID: org.ID, LogServices: services}, "")
 }
+
+// asHosted gives cfg the hosted adapter over its store, acting as user. The
+// empty user is the system identity.
+func asHosted(cfg Config, user string) Config {
+	cfg.UserID = user
+	cfg.Actor = hosted.Actor{Org: cfg.OrgID, User: user}
+	cfg.Authz = hosted.Authorizer{Store: cfg.Store}
+	cfg.Scope = hosted.Scoper{Store: cfg.Store}
+	return cfg
+}
+
+// grants is an Authorizer with a fixed set of allowed actions.
+type grants map[tenancy.Action]bool
+
+func (g grants) Authorize(_ context.Context, _ tenancy.Actor, act tenancy.Action, _ tenancy.Resource) error {
+	if g[act] {
+		return nil
+	}
+	return tenancy.Denied("not granted")
+}
+
+// nobody is an Actor with no identity of its own.
+type nobody struct{}
+
+func (nobody) Partition() int64 { return 1 }
+func (nobody) Subject() string  { return "" }
+
+// tenantActor is an Actor with no identity of its own, in the given org.
+type tenantActor int64
+
+func (t tenantActor) Partition() int64 { return int64(t) }
+func (tenantActor) Subject() string    { return "" }

@@ -281,13 +281,20 @@ func TestSourceSchema_PreviewForwardsTraceID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	owner, err := s.CreateVerifiedUser("prevget-owner@x.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddTeamMemberWithEmail(cust.ID, owner.ID, owner.Email, store.RoleOwner); err != nil {
+		t.Fatal(err)
+	}
 	// Call the handler directly: the access middleware mints its own trace
 	// ID, so going through the router would hide the one under test.
 	req := httptest.NewRequest("GET", "/api/sources/ns1/worker/schema", nil)
 	req.SetPathValue("namespace", "ns1")
 	req.SetPathValue("app", "worker")
 	ctx := weftsdk.ContextWithTraceID(context.Background(), "preview-trace-1")
-	ctx = auth.WithSession(ctx, &auth.Session{UserID: "u1", ActiveOrgID: cust.ID, IsOwner: true})
+	ctx = auth.WithSession(ctx, &auth.Session{UserID: owner.ID, ActiveOrgID: cust.ID, IsOwner: true})
 	w := httptest.NewRecorder()
 	srv.handleSourceSchema(w, req.WithContext(ctx))
 	if w.Code != 200 {

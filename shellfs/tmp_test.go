@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
-
-	"github.com/graybeardcorp/weft/mounts"
 )
 
 // runShell executes a bash script against a ShellFS-backed interpreter
@@ -226,7 +224,7 @@ func TestTmp_CpCrossMountWrites(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-xns")
 	fs := New(db, cust.ID, nil, WithTier("swatch"),
-		WithUser("test-owner", ownerPerms()))
+		WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 
 	runShell(t, fs, `echo notascript > /tmp/x`)
 	_, errOut := runShell(t, fs, `cp /tmp/x /bin/y`)
@@ -355,7 +353,7 @@ func TestTmp_WriteRecordsCreatorViaShell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fs := New(db, cust.ID, nil, WithTier("swatch"), WithUser(user.ID, mounts.OrgPerms{}))
+	fs := New(db, cust.ID, nil, WithTier("swatch"), WithUser(user.ID))
 
 	runShell(t, fs, `echo hi > /tmp/note`)
 
@@ -395,7 +393,7 @@ func TestTmp_FirstFileSignalsTmpExpiryNotice(t *testing.T) {
 
 	sink := &stubNoticeSink{}
 	fs := New(db, cust.ID, nil, WithTier("swatch"),
-		WithUser(user.ID, mounts.OrgPerms{}), WithNoticeQueue(sink))
+		WithUser(user.ID), WithNoticeQueue(sink))
 	runShell(t, fs, `echo hello > /tmp/x`)
 
 	if len(sink.signaled) != 1 || sink.signaled[0] != NoticeKeyTmpExpiry {
@@ -420,7 +418,7 @@ func TestTmp_NoSignalWhenWriteFails(t *testing.T) {
 
 	sink := &stubNoticeSink{}
 	fs := New(db, cust.ID, nil, WithTier("trial"),
-		WithUser(user.ID, mounts.OrgPerms{}), WithNoticeQueue(sink))
+		WithUser(user.ID), WithNoticeQueue(sink))
 
 	// Trial cap is 500 KB. Writing 600 KB fails.
 	huge := strings.Repeat("z", 600*1024)
@@ -440,7 +438,7 @@ func TestTmp_MkdirDoesNotSignal(t *testing.T) {
 
 	sink := &stubNoticeSink{}
 	fs := New(db, cust.ID, nil, WithTier("swatch"),
-		WithUser(user.ID, mounts.OrgPerms{}), WithNoticeQueue(sink))
+		WithUser(user.ID), WithNoticeQueue(sink))
 	runShell(t, fs, `mkdir /tmp/scratch`)
 	if len(sink.signaled) != 0 {
 		t.Errorf("mkdir: signaled %v, want []", sink.signaled)
@@ -469,8 +467,8 @@ func TestTmp_LsLongShowsOwner(t *testing.T) {
 	bob, _ := db.CreateUser("bob-lsl@example.test")
 	// Bob has no Name set — should render as the email local-part.
 
-	fsAlice := New(db, cust.ID, nil, WithTier("swatch"), WithUser(alice.ID, mounts.OrgPerms{}))
-	fsBob := New(db, cust.ID, nil, WithTier("swatch"), WithUser(bob.ID, mounts.OrgPerms{}))
+	fsAlice := New(db, cust.ID, nil, WithTier("swatch"), WithUser(alice.ID))
+	fsBob := New(db, cust.ID, nil, WithTier("swatch"), WithUser(bob.ID))
 	// System write — no userID — should render as "-".
 	fsSystem := New(db, cust.ID, nil, WithTier("swatch"))
 

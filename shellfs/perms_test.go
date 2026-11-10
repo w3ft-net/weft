@@ -7,7 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/graybeardcorp/weft/mounts"
+	"github.com/graybeardcorp/saaskit/orgs"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // orgPermCase drives the three identically-shaped gating tests for
@@ -23,7 +24,7 @@ import (
 // takes their access away.
 type orgPermCase struct {
 	name     string
-	perms    mounts.OrgPerms
+	perms    orgPerms
 	wantDeny bool
 }
 
@@ -31,19 +32,42 @@ func cronYAML() string {
 	return "# schedule: every 1h\necho ok\n"
 }
 
-// ownerPerms is the permission bundle BuildSession hands an owner: the
-// role flag plus the four org bits, which migration 072 materializes on
-// promotion. Fixtures that just want "a user who can write everything"
-// use this rather than OrgPerms{IsOwner: true} — since the owner bypass
-// was removed, that literal denies every write.
-func ownerPerms() mounts.OrgPerms {
-	return mounts.OrgPerms{
-		IsOwner:             true,
-		CanManageFunctions:  true,
-		CanManageWatches:    true,
-		CanManageEtc:        true,
-		CanCreateNamespaces: true,
+// orgPerms is a member's role and the four org bits on their org_permissions row.
+type orgPerms struct {
+	Owner, Functions, Watches, Etc, CreateNS bool
+}
+
+// ownerPerms is what promotion to owner materializes: every bit. Fixtures that
+// just want "a user who can write everything" use this rather than
+// orgPerms{Owner: true}, which is an owner holding no bits and so writes nothing.
+func ownerPerms() orgPerms {
+	return orgPerms{Owner: true, Functions: true, Watches: true, Etc: true, CreateNS: true}
+}
+
+// addMember adds a user to org with exactly the given role and org bits and
+// returns their ID.
+func addMember(t *testing.T, db *store.Store, org store.OrgID, name string, p orgPerms) string {
+	t.Helper()
+	u, err := db.CreateVerifiedUser(fmt.Sprintf("%s-%d@perms.test", name, os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
 	}
+	role := orgs.RoleMember
+	if p.Owner {
+		role = store.RoleOwner
+	}
+	if err := db.AddTeamMemberWithEmail(org, u.ID, u.Email, role); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB().Exec(`INSERT INTO org_permissions (org_id, user_id, can_manage_functions, can_manage_watches, can_manage_etc, can_create_namespaces)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (org_id, user_id) DO UPDATE SET can_manage_functions = EXCLUDED.can_manage_functions,
+		can_manage_watches = EXCLUDED.can_manage_watches, can_manage_etc = EXCLUDED.can_manage_etc,
+		can_create_namespaces = EXCLUDED.can_create_namespaces`,
+		org, u.ID, p.Functions, p.Watches, p.Etc, p.CreateNS).Error; err != nil {
+		t.Fatal(err)
+	}
+	return u.ID
 }
 
 func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
@@ -51,15 +75,15 @@ func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("perm-bin-%d", os.Getpid()))
 
 	cases := []orgPermCase{
-		{"member-no-flag", mounts.OrgPerms{}, true},
-		{"member-with-flag", mounts.OrgPerms{CanManageFunctions: true}, false},
-		{"owner-no-flag", mounts.OrgPerms{IsOwner: true}, true},
-		{"member-other-flag", mounts.OrgPerms{CanManageWatches: true, CanManageEtc: true}, true},
+		{"member-no-flag", orgPerms{}, true},
+		{"member-with-flag", orgPerms{Functions: true}, false},
+		{"owner-no-flag", orgPerms{Owner: true}, true},
+		{"member-other-flag", orgPerms{Watches: true, Etc: true}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := New(db, cust.ID, nil, WithTier("swatch"),
-				WithUser(fmt.Sprintf("u-%s", tc.name), tc.perms))
+				WithUser(addMember(t, db, cust.ID, tc.name, tc.perms)))
 			err := fs.WriteFile("/bin/probe", []byte("echo probe\n"))
 			assertGate(t, err, tc.wantDeny)
 		})
@@ -71,15 +95,15 @@ func TestOrgPerms_CronMount_WriteFile(t *testing.T) {
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("perm-cron-%d", os.Getpid()))
 
 	cases := []orgPermCase{
-		{"member-no-flag", mounts.OrgPerms{}, true},
-		{"member-with-flag", mounts.OrgPerms{CanManageWatches: true}, false},
-		{"owner-no-flag", mounts.OrgPerms{IsOwner: true}, true},
-		{"member-other-flag", mounts.OrgPerms{CanManageFunctions: true, CanManageEtc: true}, true},
+		{"member-no-flag", orgPerms{}, true},
+		{"member-with-flag", orgPerms{Watches: true}, false},
+		{"owner-no-flag", orgPerms{Owner: true}, true},
+		{"member-other-flag", orgPerms{Functions: true, Etc: true}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := New(db, cust.ID, nil, WithTier("swatch"),
-				WithUser(fmt.Sprintf("u-%s", tc.name), tc.perms))
+				WithUser(addMember(t, db, cust.ID, tc.name, tc.perms)))
 			err := fs.WriteFile("/cron.d/probe", []byte(cronYAML()))
 			assertGate(t, err, tc.wantDeny)
 		})
@@ -91,15 +115,15 @@ func TestOrgPerms_EtcMount_WriteFile(t *testing.T) {
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("perm-etc-%d", os.Getpid()))
 
 	cases := []orgPermCase{
-		{"member-no-flag", mounts.OrgPerms{}, true},
-		{"member-with-flag", mounts.OrgPerms{CanManageEtc: true}, false},
-		{"owner-no-flag", mounts.OrgPerms{IsOwner: true}, true},
-		{"member-other-flag", mounts.OrgPerms{CanManageFunctions: true, CanManageWatches: true}, true},
+		{"member-no-flag", orgPerms{}, true},
+		{"member-with-flag", orgPerms{Etc: true}, false},
+		{"owner-no-flag", orgPerms{Owner: true}, true},
+		{"member-other-flag", orgPerms{Functions: true, Watches: true}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := New(db, cust.ID, nil, WithTier("swatch"),
-				WithUser(fmt.Sprintf("u-%s", tc.name), tc.perms))
+				WithUser(addMember(t, db, cust.ID, tc.name, tc.perms)))
 			err := fs.WriteFile("/etc/notify.yaml", []byte("system:\n  email:\n    - \"owner@perms.test\"\n"))
 			assertGate(t, err, tc.wantDeny)
 		})

@@ -2,7 +2,6 @@ package shellfs
 
 import (
 	"fmt"
-	"github.com/graybeardcorp/weft/mounts"
 	"os"
 	"strings"
 	"testing"
@@ -16,7 +15,7 @@ func tmpOpsFS(t *testing.T, name string) *ShellFS {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(db, cust.ID, nil, WithTier("swatch"), WithUser("u-"+name, ownerPerms()))
+	return New(db, cust.ID, nil, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, name, ownerPerms())))
 }
 
 // cp and mv work across mounts, and the destination's own save checks still
@@ -76,7 +75,7 @@ func TestCopyAndMove_RespectGroupPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fs := New(db, cust.ID, nil, WithTier("swatch"), WithUser("u-member", mounts.OrgPerms{}))
+	fs := New(db, cust.ID, nil, WithTier("swatch"), WithUser("u-member"))
 	if err := fs.WriteFile("/tmp/a", []byte("echo hi\n")); err != nil {
 		t.Fatal(err)
 	}

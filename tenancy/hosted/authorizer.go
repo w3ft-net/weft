@@ -53,16 +53,13 @@ func (z Authorizer) Authorize(_ context.Context, a tenancy.Actor, act tenancy.Ac
 		}
 		return tenancy.Denied("owner only")
 	case tenancy.ActionCreateNamespace:
-		// An owner's right comes from the same org_permissions row as anyone
-		// else's: promotion materializes it.
-		perm, err := z.Store.GetOrgPermission(actor.Org, actor.User)
-		if errors.Is(err, gorm.ErrRecordNotFound) || (err == nil && !perm.CanCreateNamespaces) {
-			return tenancy.Denied("cannot create namespaces")
-		}
-		if err != nil {
-			return fmt.Errorf("hosted authorizer: %w", err)
-		}
-		return nil
+		return z.orgBit(actor, "cannot create namespaces", func(p *store.OrgPermission) bool { return p.CanCreateNamespaces })
+	case tenancy.ActionManageBin:
+		return z.orgBit(actor, "writing /bin needs the binmgr group", func(p *store.OrgPermission) bool { return p.CanManageFunctions })
+	case tenancy.ActionManageEtc:
+		return z.orgBit(actor, "writing /etc needs the configmgr group", func(p *store.OrgPermission) bool { return p.CanManageEtc })
+	case tenancy.ActionManageCron:
+		return z.orgBit(actor, "writing /cron.d needs the cronmgr group", func(p *store.OrgPermission) bool { return p.CanManageWatches })
 	case tenancy.ActionManageNamespaceTokens:
 		if owner {
 			return nil
@@ -83,3 +80,17 @@ func (z Authorizer) Authorize(_ context.Context, a tenancy.Actor, act tenancy.Ac
 }
 
 var errNamespaceForbidden = tenancy.Denied("no permission to manage tokens and sources in this namespace")
+
+// orgBit allows an action held as one bit of the actor's org_permissions row.
+// An owner's right comes from the same row as anyone else's: promotion
+// materializes it. No row is read-only.
+func (z Authorizer) orgBit(actor Actor, msg string, bit func(*store.OrgPermission) bool) error {
+	perm, err := z.Store.GetOrgPermission(actor.Org, actor.User)
+	if errors.Is(err, gorm.ErrRecordNotFound) || (err == nil && !bit(perm)) {
+		return tenancy.Denied(msg)
+	}
+	if err != nil {
+		return fmt.Errorf("hosted authorizer: %w", err)
+	}
+	return nil
+}

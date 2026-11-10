@@ -22,14 +22,8 @@ import (
 // per request via the X-Active-Org header (or a CLI flag), defaulting
 // to the user's last-active and finally to their oldest membership.
 //
-// CanManageFunctions/Watches/Etc gate writes to /bin, /cron.d, /etc, and
-// CanCreateNamespaces gates namespace creation in the active org. All
-// four come from the member's OrgPermission row and nowhere else; no row
-// means all-false (read-only). An admin is not a special case — becoming
-// one materializes a row with all four set.
-//
-// IsOwner is about member management (inviting, granting, removing), not
-// about these four bits.
+// A session says who the caller is, not what they may do: writes are decided
+// by the Authorizer, from the member's OrgPermission row, on each request.
 type Session struct {
 	UserID             string
 	Email              string
@@ -37,15 +31,11 @@ type Session struct {
 	ActiveCustomerName string
 	// LastActiveOrgID is what users.last_active_org_id held when the session
 	// was built, so callers can tell whether pinning ActiveOrgID is a change.
-	LastActiveOrgID     *store.OrgID
-	Tier                store.Tier
-	EmailVerified       bool
-	IsOwner             bool
-	IsSuperadmin        bool
-	CanManageFunctions  bool
-	CanManageWatches    bool
-	CanManageEtc        bool
-	CanCreateNamespaces bool
+	LastActiveOrgID *store.OrgID
+	Tier            store.Tier
+	EmailVerified   bool
+	IsOwner         bool
+	IsSuperadmin    bool
 }
 
 type sessionContextKey struct{}
@@ -138,35 +128,16 @@ func BuildSession(st *store.Store, userID string, orgSelector string) (*Session,
 		return nil, fmt.Errorf("resolve org role: %w", err)
 	}
 
-	// One read, no role test. org_permissions is authoritative for every
-	// member including admins — an admin's bits are explicit grants that
-	// their promotion materialized (migration 072), not something
-	// recomputed from the role here. Absence of a row is default-deny.
-	var canFunctions, canWatches, canEtc, canNS bool
-	perm, err := st.GetOrgPermission(activeID, user.ID)
-	if err == nil && perm != nil {
-		canFunctions = perm.CanManageFunctions
-		canWatches = perm.CanManageWatches
-		canEtc = perm.CanManageEtc
-		canNS = perm.CanCreateNamespaces
-	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, fmt.Errorf("load org perms: %w", err)
-	}
-
 	return &Session{
-		UserID:              user.ID,
-		Email:               user.Email,
-		ActiveOrgID:         activeID,
-		ActiveCustomerName:  active.Name,
-		LastActiveOrgID:     user.LastActiveOrgID,
-		Tier:                tier,
-		EmailVerified:       user.EmailVerifiedAt != nil,
-		IsOwner:             isOwner,
-		IsSuperadmin:        user.IsSuperadmin,
-		CanManageFunctions:  canFunctions,
-		CanManageWatches:    canWatches,
-		CanManageEtc:        canEtc,
-		CanCreateNamespaces: canNS,
+		UserID:             user.ID,
+		Email:              user.Email,
+		ActiveOrgID:        activeID,
+		ActiveCustomerName: active.Name,
+		LastActiveOrgID:    user.LastActiveOrgID,
+		Tier:               tier,
+		EmailVerified:      user.EmailVerifiedAt != nil,
+		IsOwner:            isOwner,
+		IsSuperadmin:       user.IsSuperadmin,
 	}, nil
 }
 

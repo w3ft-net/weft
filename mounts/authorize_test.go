@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/tenancy"
 )
 
 // /bin, /cron.d and /etc are readable by every member; writing needs the
@@ -26,8 +27,8 @@ func TestAuthorize_WriteNeedsGroup(t *testing.T) {
 		{"/etc", func(c Config) shellcore.AuthMount { return &EtcMount{cfg: c} }, "notify.yaml"},
 	}
 	for _, tc := range cases {
-		member := tc.mount(Config{})
-		manager := tc.mount(Config{CanManageFunctions: true, CanManageWatches: true, CanManageEtc: true})
+		member := tc.mount(Config{Actor: nobody{}, Authz: grants{}})
+		manager := tc.mount(Config{Actor: nobody{}, Authz: grants{tenancy.ActionManageBin: true, tenancy.ActionManageCron: true, tenancy.ActionManageEtc: true}})
 		for _, want := range []shellcore.Perm{r, x, r | x} {
 			if err := member.Authorize(tc.rel, want); err != nil {
 				t.Errorf("%s: member denied %03b: %v", tc.name, want, err)
@@ -44,7 +45,7 @@ func TestAuthorize_WriteNeedsGroup(t *testing.T) {
 		}
 	}
 
-	etc := &EtcMount{cfg: Config{CanManageEtc: true}}
+	etc := &EtcMount{cfg: Config{Actor: nobody{}, Authz: grants{tenancy.ActionManageEtc: true}}}
 	if err := etc.Authorize("passwd", r); err != nil {
 		t.Errorf("/etc/passwd read: %v", err)
 	}

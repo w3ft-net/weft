@@ -31,7 +31,7 @@ func TestDashboards_WriteReadStat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser("test-owner", ownerPerms()))
+	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 
 	seedDashboardWatch(t, sfs, "error-rate-hourly")
 
@@ -70,7 +70,7 @@ func TestDashboards_ReadDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser("test-owner", ownerPerms()))
+	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 
 	seedDashboardWatch(t, sfs, "watch-a")
 	seedDashboardWatch(t, sfs, "watch-b")
@@ -107,7 +107,7 @@ func TestDashboards_WriteRejectsBadYAML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser("test-owner", ownerPerms()))
+	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 
 	err = sfs.WriteFile("/etc/dashboards/broken.yaml", []byte("tiles:\n  - kind: pizza\n    cron: nope\n"))
 	if err == nil {
@@ -124,7 +124,7 @@ func TestDashboards_WriteRejectsMissingWatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser("test-owner", ownerPerms()))
+	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 
 	err = sfs.WriteFile("/etc/dashboards/orphan.yaml", []byte("tiles:\n  - kind: counter\n    cron: does-not-exist\n"))
 	if err == nil {
@@ -141,7 +141,7 @@ func TestDashboards_Remove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser("test-owner", ownerPerms()))
+	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 	seedDashboardWatch(t, sfs, "w")
 
 	if err := sfs.WriteFile("/etc/dashboards/x.yaml", []byte("tiles:\n  - {kind: counter, cron: w}\n")); err != nil {
@@ -180,7 +180,7 @@ func TestEtc_AmendVersionMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser("test-owner", ownerPerms()))
+	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 	seedDashboardWatch(t, sfs, "error-rate-hourly")
 	if err := sfs.WriteFile("/etc/dashboards/prod.yaml", []byte(sampleDashboardYAML)); err != nil {
 		t.Fatal(err)

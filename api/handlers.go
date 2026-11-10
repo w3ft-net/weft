@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/graybeardcorp/weft/tenancy"
-	"github.com/graybeardcorp/weft/tenancy/hosted"
 	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/graybeardcorp/weft/tenancy"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 
 	"github.com/graybeardcorp/weft/chart"
 	"github.com/graybeardcorp/weft/config"
@@ -47,6 +48,7 @@ const unverifiedSweepInterval = 1 * time.Hour
 type Server struct {
 	store     *store.Store
 	authz     tenancy.Authorizer // decides every action gate; the hosted one over store by default
+	scoper    tenancy.Scoper     // decides what a session may read; the hosted one over store by default
 	jwtSecret string
 	coordAddr string       // coordinator gRPC address
 	baseURL   string       // e.g., https://w3ft.net
@@ -136,6 +138,7 @@ func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
 	return &Server{
 		store:        s,
 		authz:        hosted.Authorizer{Store: s},
+		scoper:       hosted.Scoper{Store: s},
 		jwtSecret:    jwtSecret,
 		coordAddr:    coordAddr,
 		baseURL:      baseURL,
@@ -148,6 +151,14 @@ func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
 
 // authorize asks the Authorizer whether the session's user may take act. Any
 // error is a refusal.
+// readable is the namespaces the session may read.
+func (s *Server) readable(ctx context.Context, session *auth.Session) ([]string, error) {
+	names, _, err := tenancy.Readable(ctx, s.scoper, hosted.Actor{Org: session.ActiveOrgID, User: session.UserID}, func() ([]string, error) {
+		return s.store.NamespaceNames(session.ActiveOrgID, "", true)
+	})
+	return names, err
+}
+
 func (s *Server) authorize(ctx context.Context, session *auth.Session, act tenancy.Action, res tenancy.Resource) error {
 	return s.authz.Authorize(ctx, hosted.Actor{Org: session.ActiveOrgID, User: session.UserID}, act, res)
 }

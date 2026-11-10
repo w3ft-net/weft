@@ -294,7 +294,7 @@ func TestAwaitingSchemaListsResampledConfiguredSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	count := func() int {
-		n, err := db.CountPendingLogGroups(custID, "", true)
+		n, err := db.CountPendingLogGroups(custID, allNamespaces(db, custID))
 		if err != nil {
 			t.Fatal(err)
 		}
