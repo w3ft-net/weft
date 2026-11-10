@@ -76,3 +76,35 @@ func TestReadScope_FailsClosed(t *testing.T) {
 		t.Error("actor with no org: want an error, not a scope")
 	}
 }
+
+// A cron reads its home namespace and nothing else, whoever saved it; an
+// org-level cron keeps the system identity's reach.
+func TestReadScope_Cron(t *testing.T) {
+	db := newStore(t)
+	org, _ := db.FindOrCreateOrg("hosted-cron-scope")
+	alpha, _ := db.FindOrCreateNamespace(org.ID, "alpha")
+	db.FindOrCreateNamespace(org.ID, "beta")
+	sc := Scoper{Store: db}
+
+	set, err := sc.ReadScope(context.Background(), CronActor{Org: org.ID, Home: alpha.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, all, err := set.Namespaces(int64(org.ID))
+	if err != nil || all || !slices.Equal(names, []string{"alpha"}) {
+		t.Errorf("namespaced cron: names=%v all=%v err=%v, want [alpha]", names, all, err)
+	}
+
+	set, err = sc.ReadScope(context.Background(), CronActor{Org: org.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, all, _ := set.Namespaces(int64(org.ID)); !all {
+		t.Error("org-level cron: want every namespace")
+	}
+
+	// A home that no longer exists reads nothing rather than everything.
+	if _, err := sc.ReadScope(context.Background(), CronActor{Org: org.ID, Home: 999999}); err == nil {
+		t.Error("a cron whose namespace is gone must not get a scope")
+	}
+}

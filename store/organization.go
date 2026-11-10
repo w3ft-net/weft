@@ -199,6 +199,15 @@ func (s *Store) GetNamespace(orgID OrgID, name string) (*Namespace, error) {
 	return &ns, nil
 }
 
+// NamespaceName is the name of the namespace with this id.
+func (s *Store) NamespaceName(orgID OrgID, id uint) (string, error) {
+	var ns Namespace
+	if err := s.scoped(orgID).Where("id = ?", id).First(&ns).Error; err != nil {
+		return "", err
+	}
+	return ns.Name, nil
+}
+
 // NamespaceContents is what stands between a namespace and its removal.
 type NamespaceContents struct {
 	Sources []string // service names, sorted

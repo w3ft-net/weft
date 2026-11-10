@@ -14,6 +14,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
 	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
@@ -82,6 +83,12 @@ func WithUser(userID string) Option {
 		c.UserID = userID
 		c.Actor = hosted.Actor{Org: c.OrgID, User: userID}
 	}
+}
+
+// WithActor makes the mounts act as a principal that is not a member, such as
+// a cron firing.
+func WithActor(a tenancy.Actor) Option {
+	return func(c *mounts.Config) { c.Actor = a }
 }
 
 // WithNoticeQueue wires a notice sink the FS signals on /tmp writes.

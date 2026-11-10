@@ -653,7 +653,8 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 // Same dispatch surface as Execute; the only difference is the
 // AlertContext binding.
 func (c *Coordinator) ExecuteForWatch(ctx context.Context, pipeline string, tr TimeRange, watch *store.CronWatch) (*ExecuteResult, error) {
-	ctx = tenancy.WithActor(ctx, hosted.Actor{Org: watch.OrgID})
+	// A cron fires with the authority of its home namespace, not a person's.
+	ctx = tenancy.WithActor(ctx, hosted.CronActor{Org: watch.OrgID, Home: watch.Home()})
 	// c.Notifier is the NotifyDispatcher interface, so a nil-Notifier
 	// coordinator threads true-nil into AlertContext (no typed-nil-
 	// via-concrete-pointer trap).
@@ -701,6 +702,19 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 	lp, ok := c.loadLoweredPlan(ctx, watch)
 	if !ok {
 		return nil, false
+	}
+	// A lowered plan skips Plan, and with it the source check. A cron homed in
+	// a namespace is held to it here; one the scope refuses re-plans, and the
+	// slow path reports the refusal. (An org-level cron reads the org, as the
+	// system identity does, so it needs no check.)
+	if watch.NamespaceID != nil {
+		var sources []string
+		if lp.SourceNamespace != "" {
+			sources = []string{lp.SourceNamespace}
+		}
+		if err := c.authorizeNamespaces(ctx, watch.OrgID, sources); err != nil {
+			return nil, false
+		}
 	}
 	if lp.PlannerVersion != planner.PlannerVersion {
 		weftsdk.Infof(ctx, "watch %d: lowered_plan stamped at version %d, planner is at %d — recompiling",
@@ -1113,6 +1127,12 @@ func (c *Coordinator) actorScope(ctx context.Context) (shape.Set, error) {
 // scope does not cover. The empty user is the system identity, whose scope is
 // every namespace.
 func (c *Coordinator) authorizeSources(ctx context.Context, custID store.OrgID, plan *planner.QueryPlan) error {
+	return c.authorizeNamespaces(ctx, custID, plan.SourceNamespaces)
+}
+
+// authorizeNamespaces is authorizeSources for the namespaces a query names; none
+// means it reads them all.
+func (c *Coordinator) authorizeNamespaces(ctx context.Context, custID store.OrgID, sources []string) error {
 	a, ok := tenancy.ActorFrom(ctx)
 	if !ok {
 		return errors.New("validate source: request has no actor")
@@ -1126,13 +1146,13 @@ func (c *Coordinator) authorizeSources(ctx context.Context, custID store.OrgID, 
 	if err != nil {
 		return fmt.Errorf("validate source: %w", err)
 	}
-	if len(plan.SourceNamespaces) == 0 {
+	if len(sources) == 0 {
 		if len(readable) < len(existing) {
 			return fmt.Errorf("this script reads from all namespaces, and you can read only %s", strings.Join(readable, ", "))
 		}
 		return nil
 	}
-	for _, ns := range plan.SourceNamespaces {
+	for _, ns := range sources {
 		if !slices.Contains(readable, ns) {
 			return errors.New("unknown source: " + ns)
 		}
@@ -1459,6 +1479,13 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		// same authority vi's /api/fs/write save has. The system identity
 		// crons run as (empty userID) never writes /bin, /cron.d or /etc.
 		opts = append(opts, shellfs.WithUser(userID))
+		// A cron has no user; the mounts act as the cron, so `ls /log` in one
+		// lists its home namespace and nothing else.
+		if a, ok := tenancy.ActorFrom(ctx); ok {
+			if cron, ok := a.(hosted.CronActor); ok {
+				opts = append(opts, shellfs.WithActor(cron))
+			}
+		}
 		// LogServices feeds LogMount's directory listing. Source it from
 		// the same per-customer ingest discovery the /api/fs path uses
 		// (SeenServices, ferried out via ListServices), so `ls`/`tree`
