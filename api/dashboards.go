@@ -124,7 +124,7 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 			if _, seen := watches[tile.Watch]; seen {
 				continue
 			}
-			cw, err := s.store.GetCronWatch(custID, tile.Watch)
+			cw, err := s.store.GetCronWatch(custID, 0, tile.Watch)
 			if err != nil {
 				// Tile references a watch that no longer exists — emit
 				// an empty payload so the client can render a placeholder

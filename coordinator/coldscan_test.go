@@ -267,15 +267,15 @@ func TestCron_ColdBudgetRefusalDisablesAndPagesOnce(t *testing.T) {
 		}}
 	run := func(name string) store.CronWatch {
 		t.Helper()
-		w, err := db.GetCronWatch(org.ID, name)
+		w, err := db.GetCronWatch(org.ID, 0, name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ce.executeWatch(context.Background(), *w, fullRange)
-		w, _ = db.GetCronWatch(org.ID, name)
+		w, _ = db.GetCronWatch(org.ID, 0, name)
 		return *w
 	}
-	if err := db.SaveCronWatch(org.ID, "", "hotcount", "every 5m", "cat vimgym.log | wc -l", true, nil); err != nil {
+	if err := db.SaveCronWatch(org.ID, 0, "", "hotcount", "every 5m", "cat vimgym.log | wc -l", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Hot shards only: the spent budget is irrelevant.

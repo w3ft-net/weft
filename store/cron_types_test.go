@@ -56,7 +56,7 @@ func TestSaveCronWatch_TextTypeChecks(t *testing.T) {
 	db := testOpen(t)
 	org, _ := db.FindOrCreateOrg("cron-types")
 	save := func(name, pipeline string) error {
-		return db.SaveCronWatch(org.ID, "", name, "every 5m", pipeline, true, nil)
+		return db.SaveCronWatch(org.ID, 0, "", name, "every 5m", pipeline, true, nil)
 	}
 	if err := save("holders", "# type: text\necho i-0abc"); err != nil {
 		t.Fatal(err)
@@ -102,10 +102,10 @@ func TestSaveCronWatch_TextTypeChecks(t *testing.T) {
 func TestLatestCronRun_TableOrder(t *testing.T) {
 	db := testOpen(t)
 	org, _ := db.FindOrCreateOrg("cron-latest")
-	if err := db.SaveCronWatch(org.ID, "", "disk", "every 5m", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(org.ID, 0, "", "disk", "every 5m", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, _ := db.GetCronWatch(org.ID, "disk")
+	w, _ := db.GetCronWatch(org.ID, 0, "disk")
 	v := func(f float64) *float64 { return &f }
 	now := time.Now().Truncate(time.Second)
 	if err := db.SaveCronResults([]CronResult{

@@ -331,7 +331,12 @@ func splitTracked(p string) (kind, name string, err error) {
 		return "etc", "notify.yaml", nil
 	}
 	for _, k := range []string{"bin", "cron.d", "etc/dashboards"} {
-		if rest, ok := strings.CutPrefix(p, k+"/"); ok && rest != "" && !strings.Contains(rest, "/") {
+		// A cron's name may lead with its home namespace: cron.d/<ns>/<name>.
+		depth := 0
+		if k == "cron.d" {
+			depth = 1
+		}
+		if rest, ok := strings.CutPrefix(p, k+"/"); ok && rest != "" && strings.Count(rest, "/") <= depth && !strings.HasSuffix(rest, "/") && !strings.HasPrefix(rest, "/") {
 			return k, rest, nil
 		}
 	}
@@ -346,7 +351,11 @@ func (r *Repo) amendMessage(kind, name, authorID, message string) error {
 	case "bin":
 		return st.AmendShellFunctionMessage(org, authorID, name, message)
 	case "cron.d":
-		return st.AmendCronWatchMessage(org, authorID, name, message)
+		ns, bare, err := st.ResolveCronPath(org, name)
+		if err != nil {
+			return err
+		}
+		return st.AmendCronWatchMessage(org, ns, authorID, bare, message)
 	case "etc/dashboards":
 		return st.AmendDashboardMessage(org, authorID, strings.TrimSuffix(name, ".yaml"), message)
 	default:

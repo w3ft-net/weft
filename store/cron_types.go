@@ -22,20 +22,29 @@ func readsNumbers(t DashboardTile) bool {
 // checkValueTypes refuses a save that would put a text cron behind a
 // numeric reader: this pipeline reading a text cron with a numeric weft::
 // function, or this cron turning text while numeric readers name it.
-func (s *Store) checkValueTypes(orgID OrgID, name string, compiled CompiledWatch) error {
+func (s *Store) checkValueTypes(orgID OrgID, ns uint, name string, compiled CompiledWatch) error {
+	// Numeric references name org-level crons, so a namespaced cron of the
+	// same name is not the one being read.
+	self := name
+	if ns != 0 {
+		self = ""
+	}
 	for _, ref := range compiled.NumericRefs {
-		if ref == name && compiled.ValueType == ValueText {
+		if self != "" && ref == self && compiled.ValueType == ValueText {
 			return fmt.Errorf("this cron stores text (# type: text), so it can't read itself with a numeric weft:: function")
 		}
 	}
-	if err := s.refuseTextRefs(orgID, compiled.NumericRefs, name); err != nil {
+	if err := s.refuseTextRefs(orgID, compiled.NumericRefs, self); err != nil {
 		return err
 	}
 	if compiled.ValueType != ValueText {
 		return nil
 	}
-	if existing, err := s.GetCronWatch(orgID, name); err == nil && existing.ValueType == ValueText {
+	if existing, err := s.GetCronWatch(orgID, ns, name); err == nil && existing.ValueType == ValueText {
 		return nil // already text: its readers were checked when they were saved
+	}
+	if ns != 0 {
+		return nil // references name org-level crons only, so nothing reads this one yet
 	}
 	readers, err := s.numericReaders(orgID, name)
 	if err != nil {
@@ -55,7 +64,7 @@ func (s *Store) refuseTextRefs(orgID OrgID, refs []string, skip string) error {
 		if ref == skip {
 			continue
 		}
-		target, err := s.GetCronWatch(orgID, ref)
+		target, err := s.GetCronWatch(orgID, 0, ref)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			continue
 		}
@@ -167,7 +176,7 @@ func (s *Store) checkDashboardTypes(orgID OrgID, yamlBody string) error {
 			if !readsNumbers(t) {
 				continue
 			}
-			w, err := s.GetCronWatch(orgID, t.Watch)
+			w, err := s.GetCronWatch(orgID, 0, t.Watch)
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				continue
 			}

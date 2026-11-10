@@ -375,7 +375,7 @@ func (s *Store) ValidateDashboardWatchRefs(orgID OrgID, spec *DashboardSpec) err
 				continue
 			}
 			seen[tile.Watch] = true
-			if _, err := s.GetCronWatch(orgID, tile.Watch); err != nil {
+			if _, err := s.GetCronWatch(orgID, 0, tile.Watch); err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					return fmt.Errorf("cron %q does not exist", tile.Watch)
 				}

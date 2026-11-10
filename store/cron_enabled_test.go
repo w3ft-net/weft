@@ -10,13 +10,13 @@ func TestSaveCronWatch_EnabledFlag(t *testing.T) {
 	org, _ := db.FindOrCreateOrg("cron-enabled")
 	save := func(enabled bool) {
 		t.Helper()
-		if err := db.SaveCronWatch(org.ID, "", "w", "every 5m", "true", enabled, nil); err != nil {
+		if err := db.SaveCronWatch(org.ID, 0, "", "w", "every 5m", "true", enabled, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 	state := func() (enabled bool, count int) {
 		t.Helper()
-		w, err := db.GetCronWatch(org.ID, "w")
+		w, err := db.GetCronWatch(org.ID, 0, "w")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -45,10 +45,10 @@ func TestSaveCronWatch_EnabledFlag(t *testing.T) {
 func TestRecordCronStrike_BenchesAtThreshold(t *testing.T) {
 	db := testOpen(t)
 	org, _ := db.FindOrCreateOrg("cron-bench")
-	if err := db.SaveCronWatch(org.ID, "", "slow", "every 5m", "true", true, nil); err != nil {
+	if err := db.SaveCronWatch(org.ID, 0, "", "slow", "every 5m", "true", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, _ := db.GetCronWatch(org.ID, "slow")
+	w, _ := db.GetCronWatch(org.ID, 0, "slow")
 
 	for i := 1; i <= 3; i++ {
 		benched, err := db.RecordCronStrike(context.Background(), w.ID, 3)
@@ -59,16 +59,16 @@ func TestRecordCronStrike_BenchesAtThreshold(t *testing.T) {
 			t.Fatalf("strike %d: benched=%v", i, benched)
 		}
 	}
-	got, _ := db.GetCronWatch(org.ID, "slow")
+	got, _ := db.GetCronWatch(org.ID, 0, "slow")
 	if got.Enabled {
 		t.Fatal("cron still enabled after three strikes")
 	}
 
 	// Re-enabling through a save wipes the slate.
-	if err := db.SaveCronWatch(org.ID, "", "slow", "every 5m", "true", true, nil); err != nil {
+	if err := db.SaveCronWatch(org.ID, 0, "", "slow", "every 5m", "true", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	got, _ = db.GetCronWatch(org.ID, "slow")
+	got, _ = db.GetCronWatch(org.ID, 0, "slow")
 	if !got.Enabled || got.ConsecutiveStrikes != 0 {
 		t.Fatalf("after re-enable: enabled=%v strikes=%d, want true/0", got.Enabled, got.ConsecutiveStrikes)
 	}

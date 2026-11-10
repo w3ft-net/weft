@@ -54,7 +54,8 @@ const (
 	ActionManageNamespaceTokens Action = "manage-namespace-tokens" // tokens and sources of Resource.Namespace
 	ActionManageBin             Action = "manage-bin"              // write /bin
 	ActionManageEtc             Action = "manage-etc"              // write /etc
-	ActionManageCron            Action = "manage-cron"             // write /cron.d
+	ActionManageCron            Action = "manage-cron"             // write a cron homed in Resource.Namespace
+	ActionPublishOrgWide        Action = "publish-org-wide"        // write an org-level cron, whose output every member reads
 )
 
 // Resource is what an action is aimed at, for the actions that have a target.

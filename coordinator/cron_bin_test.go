@@ -25,18 +25,18 @@ func TestCronShareScriptAcrossWatches(t *testing.T) {
 		t.Fatalf("save script: %v", err)
 	}
 
-	if err := db.SaveCronWatch(custID, "", "disk-check", "every 1m", "announce disk.log", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "disk-check", "every 1m", "announce disk.log", true, nil); err != nil {
 		t.Fatalf("save disk watch: %v", err)
 	}
-	if err := db.SaveCronWatch(custID, "", "cpu-check", "every 1m", "announce cpu.log", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "cpu-check", "every 1m", "announce cpu.log", true, nil); err != nil {
 		t.Fatalf("save cpu watch: %v", err)
 	}
 
-	diskW, err := db.GetCronWatch(custID, "disk-check")
+	diskW, err := db.GetCronWatch(custID, 0, "disk-check")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cpuW, err := db.GetCronWatch(custID, "cpu-check")
+	cpuW, err := db.GetCronWatch(custID, 0, "cpu-check")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,10 +72,10 @@ func TestCronBareNameStillWorks(t *testing.T) {
 	if err := db.SaveShellFunction(custID, "", "hello", `echo hello`, "bash"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(custID, "", "greeter", "every 1m", "hello", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "greeter", "every 1m", "hello", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := db.GetCronWatch(custID, "greeter")
+	w, err := db.GetCronWatch(custID, 0, "greeter")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,10 +102,10 @@ func TestCronBenchedAfterRepeatedTimeouts(t *testing.T) {
 	if err := db.SaveShellFunction(custID, "", "quick", `echo 1`, "bash"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(custID, "", "slow", "every 5m", "slowpoke", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "slow", "every 5m", "slowpoke", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(custID, "", "fast", "every 5m", "quick", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "fast", "every 5m", "quick", true, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -122,12 +122,12 @@ func TestCronBenchedAfterRepeatedTimeouts(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	run := func(name string) store.CronWatch {
 		t.Helper()
-		w, err := db.GetCronWatch(custID, name)
+		w, err := db.GetCronWatch(custID, 0, name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ce.executeWatch(context.Background(), *w, tr)
-		w, _ = db.GetCronWatch(custID, name)
+		w, _ = db.GetCronWatch(custID, 0, name)
 		return *w
 	}
 
@@ -181,7 +181,7 @@ func TestCronBenchedAfterRepeatedDeliveryTimeouts(t *testing.T) {
 		}
 	}
 	setHook(dead.URL)
-	if err := db.SaveCronWatch(custID, "", "deaf-hook", "every 5m", "echo 1 | alert above 0 --notify=hook", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "deaf-hook", "every 5m", "echo 1 | alert above 0 --notify=hook", true, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -194,12 +194,12 @@ func TestCronBenchedAfterRepeatedDeliveryTimeouts(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	run := func() store.CronWatch {
 		t.Helper()
-		w, err := db.GetCronWatch(custID, "deaf-hook")
+		w, err := db.GetCronWatch(custID, 0, "deaf-hook")
 		if err != nil {
 			t.Fatal(err)
 		}
 		ce.executeWatch(context.Background(), *w, tr)
-		w, _ = db.GetCronWatch(custID, "deaf-hook")
+		w, _ = db.GetCronWatch(custID, 0, "deaf-hook")
 		return *w
 	}
 
@@ -248,7 +248,7 @@ func TestCronRunUsesOrgBudget(t *testing.T) {
 	if err := db.SaveShellFunction(custID, "", "spin", `while true; do :; done`, "bash"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(custID, "", "spinner", "every 5m", "spin", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "spinner", "every 5m", "spin", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SetCronRunTimeout(custID, 150*time.Millisecond); err != nil {
@@ -257,13 +257,13 @@ func TestCronRunUsesOrgBudget(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	ce := &CronExecutor{Store: db, Coord: c} // no RunTimeout: the default would be 2s
-	w, _ := db.GetCronWatch(custID, "spinner")
+	w, _ := db.GetCronWatch(custID, 0, "spinner")
 	start := time.Now()
 	ce.executeWatch(context.Background(), *w, TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)})
 	if took := time.Since(start); took > time.Second {
 		t.Fatalf("run took %s; the org's 150ms budget was ignored", took)
 	}
-	if w, _ = db.GetCronWatch(custID, "spinner"); w.LastStatus != "timeout" {
+	if w, _ = db.GetCronWatch(custID, 0, "spinner"); w.LastStatus != "timeout" {
 		t.Fatalf("last_status = %q, want timeout", w.LastStatus)
 	}
 }

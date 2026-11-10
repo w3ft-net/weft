@@ -25,10 +25,10 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 	dashTeamMember(s, cust, user, "cc")
 	jwt, _ := auth.Generate(user, "test-secret")
 
-	if err := s.SaveCronWatch(cust.ID, user.ID, "hosts", "every 5m", "echo 1 a", true, nil); err != nil {
+	if err := s.SaveCronWatch(cust.ID, 0, user.ID, "hosts", "every 5m", "echo 1 a", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.GetCronWatch(cust.ID, "hosts")
+	w, err := s.GetCronWatch(cust.ID, 0, "hosts")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,10 +198,10 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 
 	// A text cron has nothing to chart, and its latest run comes back as
 	// text points, on /latest and in a dashboard's table tile.
-	if err := s.SaveCronWatch(cust.ID, user.ID, "holders", "every 5m", "# type: text\necho i-0abc lease", true, nil); err != nil {
+	if err := s.SaveCronWatch(cust.ID, 0, user.ID, "holders", "every 5m", "# type: text\necho i-0abc lease", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	hw, _ := s.GetCronWatch(cust.ID, "holders")
+	hw, _ := s.GetCronWatch(cust.ID, 0, "holders")
 	holder := "i-0abc"
 	if err := s.SaveCronResults([]store.CronResult{{CronWatchID: hw.ID, RanAt: now, TextValue: &holder, Tag: "lease"}}); err != nil {
 		t.Fatal(err)

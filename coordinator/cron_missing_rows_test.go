@@ -37,16 +37,16 @@ func TestCron_MissingShardFailsTheRun(t *testing.T) {
 		"script": "cat vimgym.log | wc -l\necho 5",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := db.SaveCronWatch(org.ID, "", name, "every 5m", pipeline, true, nil); err != nil {
+			if err := db.SaveCronWatch(org.ID, 0, "", name, "every 5m", pipeline, true, nil); err != nil {
 				t.Fatal(err)
 			}
-			w, err := db.GetCronWatch(org.ID, name)
+			w, err := db.GetCronWatch(org.ID, 0, name)
 			if err != nil {
 				t.Fatal(err)
 			}
 			ce.executeWatch(context.Background(), *w, fullRange)
 
-			w, _ = db.GetCronWatch(org.ID, name)
+			w, _ = db.GetCronWatch(org.ID, 0, name)
 			if w.LastStatus != "error" {
 				t.Fatalf("status = %q, want error", w.LastStatus)
 			}

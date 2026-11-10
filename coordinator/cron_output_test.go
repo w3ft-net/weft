@@ -117,7 +117,7 @@ func TestCronOutputDisables(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"wide", "many", "hosts"} {
-		if err := db.SaveCronWatch(custID, "", name, "every 5m", name, true, nil); err != nil {
+		if err := db.SaveCronWatch(custID, 0, "", name, "every 5m", name, true, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -132,12 +132,12 @@ func TestCronOutputDisables(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	run := func(name string) store.CronWatch {
 		t.Helper()
-		w, err := db.GetCronWatch(custID, name)
+		w, err := db.GetCronWatch(custID, 0, name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ce.executeWatch(context.Background(), *w, tr)
-		w, _ = db.GetCronWatch(custID, name)
+		w, _ = db.GetCronWatch(custID, 0, name)
 		return *w
 	}
 
@@ -153,7 +153,7 @@ func TestCronOutputDisables(t *testing.T) {
 			t.Fatalf("%s: pages = %q, want one naming %q", c.name, pages, c.check)
 		}
 	}
-	w, _ := db.GetCronWatch(custID, "wide")
+	w, _ := db.GetCronWatch(custID, 0, "wide")
 	rows, err := db.ListCronResults(w.ID, 10, "")
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestCronOutputDisables(t *testing.T) {
 	if w := run("hosts"); w.LastStatus != "ok" || w.ConsecutiveStrikes != 0 {
 		t.Fatalf("hosts: status=%q strikes=%d", w.LastStatus, w.ConsecutiveStrikes)
 	}
-	hw, _ := db.GetCronWatch(custID, "hosts")
+	hw, _ := db.GetCronWatch(custID, 0, "hosts")
 	for tag, want := range map[string]float64{"api-1": 3, "api-2": 4} {
 		rows, err := db.ListCronResults(hw.ID, 1, tag)
 		if err != nil || len(rows) != 1 || rows[0].Value == nil || *rows[0].Value != want {
@@ -176,14 +176,13 @@ func TestCronOutputDisables(t *testing.T) {
 	}
 
 	// Schema headers ride along in the pipeline as comments and still run.
-	if err := db.SaveCronWatch(custID, "", "json", "every 5m",
-		"# value: .pct\n# tag: .host\necho '{\"host\":\"db-1\",\"pct\":12.5}'", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "json", "every 5m", "# value: .pct\n# tag: .host\necho '{\"host\":\"db-1\",\"pct\":12.5}'", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if w := run("json"); w.LastStatus != "ok" {
 		t.Fatalf("json: status=%q", w.LastStatus)
 	}
-	jw, _ := db.GetCronWatch(custID, "json")
+	jw, _ := db.GetCronWatch(custID, 0, "json")
 	if rows, err := db.ListCronResults(jw.ID, 1, "db-1"); err != nil || len(rows) != 1 || *rows[0].Value != 12.5 {
 		t.Fatalf("json rows=%+v err=%v, want db-1 = 12.5", rows, err)
 	}

@@ -17,10 +17,10 @@ func TestWeftFuncs_IsAbsent_OneRuleForEveryForm(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "fresh", []string{"1"}, time.Minute)
 	seedWatch(t, db, custID, "stale", []string{"1"}, time.Minute)
-	if err := db.SaveCronWatch(custID, "", "never-ran", "every 1m", "echo test", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "never-ran", "every 1m", "echo test", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := db.GetCronWatch(custID, "stale")
+	w, err := db.GetCronWatch(custID, 0, "stale")
 	if err != nil {
 		t.Fatal(err)
 	}

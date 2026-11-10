@@ -16,11 +16,11 @@ func TestGetCronWatch_JSONPathAlertSelectors(t *testing.T) {
 	user, _ := db.CreateUser("alice-jp@example.test")
 
 	pipeline := `tail -n 12 /log/x/y_metrics.log | jq 'select(.type == "memory")' | alert above 70 -v .pct -t .host`
-	if err := db.SaveCronWatch(cust.ID, user.ID, "mem-pressure", "*/1 * * * *", pipeline, true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, user.ID, "mem-pressure", "*/1 * * * *", pipeline, true, nil); err != nil {
 		t.Fatalf("SaveCronWatch: %v", err)
 	}
 
-	w, err := db.GetCronWatch(cust.ID, "mem-pressure")
+	w, err := db.GetCronWatch(cust.ID, 0, "mem-pressure")
 	if err != nil {
 		t.Fatalf("GetCronWatch: %v (want round-trip to succeed)", err)
 	}

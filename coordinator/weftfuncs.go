@@ -194,7 +194,7 @@ func writeRunsJSONL(out io.Writer, runs []RunRecord) error {
 // changed/rising/falling predicates for prev-tick semantics.
 // Returns "" with no error when fewer than 2 results exist.
 func (w *WeftFuncs) Previous(watchName string) (string, error) {
-	cw, err := w.Store.GetCronWatch(w.OrgID, watchName)
+	cw, err := w.Store.GetCronWatch(w.OrgID, 0, watchName)
 	if err != nil {
 		return "", fmt.Errorf("weft::previous: cron %q: %w", watchName, err)
 	}

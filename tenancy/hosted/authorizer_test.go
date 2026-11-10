@@ -30,10 +30,17 @@ func TestAuthorize(t *testing.T) {
 	maker := mk("m@authz.test", orgs.RoleMember)
 	binmgr := mk("b@authz.test", orgs.RoleMember)
 	tokener := mk("t@authz.test", orgs.RoleMember)
+	cronmgr := mk("c@authz.test", orgs.RoleMember)
 	if err := db.DB().Exec(`INSERT INTO org_permissions (org_id, user_id, can_create_namespaces) VALUES (?, ?, true)`, org.ID, maker).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.DB().Exec(`INSERT INTO org_permissions (org_id, user_id, can_manage_functions) VALUES (?, ?, true)`, org.ID, binmgr).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB().Exec(`INSERT INTO org_permissions (org_id, user_id, can_manage_watches) VALUES (?, ?, true)`, org.ID, cronmgr).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertNamespacePermission(&store.NamespacePermission{UserID: cronmgr, NamespaceID: ns.ID, CanRead: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertNamespacePermission(&store.NamespacePermission{UserID: tokener, NamespaceID: ns.ID, CanRead: true, CanCreateTokens: true}); err != nil {
@@ -67,7 +74,13 @@ func TestAuthorize(t *testing.T) {
 		{"member without grant cannot", plain, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: "alpha"}, false},
 		{"binmgr writes /bin", binmgr, tenancy.ActionManageBin, tenancy.Resource{}, true},
 		{"binmgr cannot write /etc", binmgr, tenancy.ActionManageEtc, tenancy.Resource{}, false},
-		{"binmgr cannot write /cron.d", binmgr, tenancy.ActionManageCron, tenancy.Resource{}, false},
+		{"binmgr cannot write /cron.d", binmgr, tenancy.ActionManageCron, tenancy.Resource{Namespace: "alpha"}, false},
+		{"cronmgr manages a cron in a namespace they read", cronmgr, tenancy.ActionManageCron, tenancy.Resource{Namespace: "alpha"}, true},
+		{"cronmgr cannot manage one in a namespace they cannot read", cronmgr, tenancy.ActionManageCron, tenancy.Resource{Namespace: "beta"}, false},
+		{"a cron needs a namespace", cronmgr, tenancy.ActionManageCron, tenancy.Resource{}, false},
+		{"owner manages a cron anywhere", owner, tenancy.ActionManageCron, tenancy.Resource{Namespace: "beta"}, true},
+		{"owner publishes org-wide", owner, tenancy.ActionPublishOrgWide, tenancy.Resource{}, true},
+		{"cronmgr cannot publish org-wide", cronmgr, tenancy.ActionPublishOrgWide, tenancy.Resource{}, false},
 		{"unknown action is denied", owner, tenancy.Action("bogus"), tenancy.Resource{}, false},
 	}
 	for _, c := range cases {

@@ -17,6 +17,7 @@ type fixture struct {
 	org   store.OrgID
 	alice *store.User
 	bob   *store.User
+	nsA   uint // namespace "a"
 }
 
 // newFixture builds an org on a swatch plan (crons allowed) with two users,
@@ -55,6 +56,18 @@ func newFixture(t *testing.T) *fixture {
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
+	// Namespace "a" is readable by both, so a write to its crons is refused
+	// for the lack of the cronmgr group and nothing else.
+	a, err := tx.FindOrCreateNamespace(org.ID, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.nsA = a.ID
+	for _, u := range []*store.User{f.alice, f.bob} {
+		if err := tx.UpsertNamespacePermission(&store.NamespacePermission{UserID: u.ID, NamespaceID: a.ID, CanRead: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return f
 }
 
@@ -71,7 +84,15 @@ func (f *fixture) saveBin(t *testing.T, u *store.User, name, src string) {
 
 func (f *fixture) saveCron(t *testing.T, u *store.User, name, pipeline string) {
 	t.Helper()
-	if err := f.db.SaveCronWatch(f.org, u.ID, name, "*/10 * * * *", pipeline, true, nil); err != nil {
+	if err := f.db.SaveCronWatch(f.org, 0, u.ID, name, "*/10 * * * *", pipeline, true, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// saveNSCron saves a cron homed in namespace "a".
+func (f *fixture) saveNSCron(t *testing.T, u *store.User, name, pipeline string) {
+	t.Helper()
+	if err := f.db.SaveCronWatch(f.org, f.nsA, u.ID, name, "*/10 * * * *", pipeline, true, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -367,7 +388,7 @@ func TestWrites_RestoredCronIsRelowered(t *testing.T) {
 
 	git(t, r, "restore", "--source=HEAD~1", "errs")
 
-	w, _ := f.db.GetCronWatch(f.org, "errs")
+	w, _ := f.db.GetCronWatch(f.org, 0, "errs")
 	if !strings.Contains(w.Pipeline, "ERROR") {
 		t.Fatalf("pipeline after restore = %q", w.Pipeline)
 	}
@@ -378,7 +399,7 @@ func TestWrites_RestoredCronIsRelowered(t *testing.T) {
 
 func lowered(t *testing.T, f *fixture, name string) string {
 	t.Helper()
-	w, err := f.db.GetCronWatch(f.org, name)
+	w, err := f.db.GetCronWatch(f.org, 0, name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +460,7 @@ func TestHistory_DeletingTwiceLogsBothDeletions(t *testing.T) {
 func TestHistory_CronDeletionSurvivesReSavingTheName(t *testing.T) {
 	f := newFixture(t)
 	f.saveCron(t, f.alice, "errs", "tail /log/app/web/app.log | grep ERROR")
-	if err := f.db.DeleteCronWatch(f.org, "errs"); err != nil {
+	if err := f.db.DeleteCronWatch(f.org, 0, "errs"); err != nil {
 		t.Fatal(err)
 	}
 	f.saveCron(t, f.alice, "errs", "tail /log/app/web/app.log | grep WARN")

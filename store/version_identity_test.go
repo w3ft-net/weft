@@ -68,13 +68,13 @@ func TestVersionIdentity_BinTravelsIntoHistory(t *testing.T) {
 func TestVersionIdentity_CronTravelsIntoHistory(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateOrg("vid-cron")
-	if err := db.SaveCronWatch(cust.ID, "", "t", "*/10 * * * *", "echo a", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, "", "t", "*/10 * * * *", "echo a", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	var v1 versionRow
 	q := `SELECT version_id, authored_at FROM cron_watches WHERE org_id = ? AND name = 't'`
 	db.db.Raw(q, cust.ID).Scan(&v1)
-	if err := db.SaveCronWatch(cust.ID, "", "t", "*/10 * * * *", "echo b", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, "", "t", "*/10 * * * *", "echo b", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	var v2, h versionRow

@@ -48,16 +48,16 @@ func TestShellFunction_SameContentAfterDeleteResurrects(t *testing.T) {
 func TestCronWatch_SaveAfterDeleteResurrects(t *testing.T) {
 	db := testOpen(t)
 	cust, _ := db.FindOrCreateOrg("resurrect-cron")
-	if err := db.SaveCronWatch(cust.ID, "", "t", "*/10 * * * *", "echo a", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, "", "t", "*/10 * * * *", "echo a", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DeleteCronWatch(cust.ID, "t"); err != nil {
+	if err := db.DeleteCronWatch(cust.ID, 0, "t"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "", "t", "*/10 * * * *", "echo b", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, "", "t", "*/10 * * * *", "echo b", true, nil); err != nil {
 		t.Fatalf("re-create after delete: %v", err)
 	}
-	w, err := db.GetCronWatch(cust.ID, "t")
+	w, err := db.GetCronWatch(cust.ID, 0, "t")
 	if err != nil || w.Pipeline != "echo b" || !w.Enabled {
 		t.Fatalf("get = %+v, %v", w, err)
 	}

@@ -20,10 +20,10 @@ func longWindowCron(t *testing.T) (*WeftFuncs, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "", "lw", "every 1m", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, "", "lw", "every 1m", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := db.GetCronWatch(cust.ID, "lw")
+	w, err := db.GetCronWatch(cust.ID, 0, "lw")
 	if err != nil {
 		t.Fatal(err)
 	}

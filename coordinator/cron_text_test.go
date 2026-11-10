@@ -18,8 +18,7 @@ import (
 func TestCron_InlineLuaReadsCronHistory(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "errors", []string{"2", "4", "6"}, time.Minute)
-	if err := db.SaveCronWatch(custID, "", "error-avg", "every 5m",
-		`lua 'print(weft.avg("errors", "1h"))' | alert above 5`, true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "error-avg", "every 5m", `lua 'print(weft.avg("errors", "1h"))' | alert above 5`, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
@@ -31,12 +30,12 @@ func TestCron_InlineLuaReadsCronHistory(t *testing.T) {
 		}}
 	run := func(name string) store.CronWatch {
 		t.Helper()
-		w, err := db.GetCronWatch(custID, name)
+		w, err := db.GetCronWatch(custID, 0, name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ce.executeWatch(context.Background(), *w, TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)})
-		w, _ = db.GetCronWatch(custID, name)
+		w, _ = db.GetCronWatch(custID, 0, name)
 		return *w
 	}
 	w := run("error-avg")
@@ -48,15 +47,13 @@ func TestCron_InlineLuaReadsCronHistory(t *testing.T) {
 		t.Fatalf("latest = %+v err=%v, want avg 4", rows, err)
 	}
 
-	if err := db.SaveCronWatch(custID, "", "holders", "every 5m", "# type: text\necho i-0abc", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "holders", "every 5m", "# type: text\necho i-0abc", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(custID, "", "holder-avg", "every 5m",
-		`lua 'print(weft.avg("holders", "1h"))'`, true, nil); err == nil || !strings.Contains(err.Error(), `cron "holders" stores text`) {
+	if err := db.SaveCronWatch(custID, 0, "", "holder-avg", "every 5m", `lua 'print(weft.avg("holders", "1h"))'`, true, nil); err == nil || !strings.Contains(err.Error(), `cron "holders" stores text`) {
 		t.Fatalf("inline Lua reading a text cron saved: %v", err)
 	}
-	if err := db.SaveCronWatch(custID, "", "holder-avg", "every 5m",
-		`lua 'print(weft.avg("hol" .. "ders", "1h"))'`, true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "holder-avg", "every 5m", `lua 'print(weft.avg("hol" .. "ders", "1h"))'`, true, nil); err != nil {
 		t.Fatalf("a name built at run time can't be checked at save: %v", err)
 	}
 	// The run-time check fails it the way a save would have, so one run
@@ -67,12 +64,12 @@ func TestCron_InlineLuaReadsCronHistory(t *testing.T) {
 	if len(pages) != 1 || !strings.Contains(pages[0], `cron "holders" stores text`) || !strings.Contains(pages[0], "# enabled: false") {
 		t.Fatalf("pages = %q, want one naming the text cron and how to re-enable", pages)
 	}
-	hw, _ := db.GetCronWatch(custID, "holder-avg")
+	hw, _ := db.GetCronWatch(custID, 0, "holder-avg")
 	if res, _ := db.ListCronResults(hw.ID, 1, ""); len(res) != 1 || !strings.Contains(res[0].Stderr, "stores text") {
 		t.Fatalf("holder-avg stored %+v, want the stores-text error", res)
 	}
 	// Bash gets there the same way.
-	if err := db.SaveCronWatch(custID, "", "holder-avg-bash", "every 5m", `n=holders; weft::avg "$n" 1h`, true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "holder-avg-bash", "every 5m", `n=holders; weft::avg "$n" 1h`, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if w := run("holder-avg-bash"); w.Enabled || len(pages) != 2 {
@@ -112,15 +109,15 @@ func TestTextCron_StoresTextAndRefusesNumericReads(t *testing.T) {
 	if err := db.SaveShellFunction(custID, "", "holders", `printf 'i-0abc lease-a\ni-0def lease-b\n'`, "bash"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(custID, "", "holders", "every 5m", "# type: text\nholders", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "holders", "every 5m", "# type: text\nholders", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	ce := &CronExecutor{Store: db, Coord: c, RunTimeout: 5 * time.Second}
-	w, _ := db.GetCronWatch(custID, "holders")
+	w, _ := db.GetCronWatch(custID, 0, "holders")
 	ce.executeWatch(context.Background(), *w, TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)})
 
-	w, _ = db.GetCronWatch(custID, "holders")
+	w, _ = db.GetCronWatch(custID, 0, "holders")
 	if w.LastStatus != "ok" {
 		t.Fatalf("status = %q", w.LastStatus)
 	}

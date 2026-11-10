@@ -758,7 +758,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 	// error-rate 1h` window and a chartable sparkline; yard tier (the
 	// demo subscription) allows it.
 	const errorRateSchedule = "*/1 * * * *"
-	if existing, _ := s.GetCronWatch(custID, "error-rate"); existing == nil || existing.Pipeline != rateV3 {
+	if existing, _ := s.GetCronWatch(custID, 0, "error-rate"); existing == nil || existing.Pipeline != rateV3 {
 		versions := []struct {
 			userID, pipeline, message string
 		}{
@@ -767,10 +767,10 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 			{user3.ID, rateV3, "switch to awk for shard pushdown"},
 		}
 		for i, v := range versions {
-			if err := s.SaveCronWatch(custID, v.userID, "error-rate", errorRateSchedule, v.pipeline, true, nil); err != nil {
+			if err := s.SaveCronWatch(custID, 0, v.userID, "error-rate", errorRateSchedule, v.pipeline, true, nil); err != nil {
 				return fmt.Errorf("error-rate v%d: %w", i+1, err)
 			}
-			if err := s.AmendCronWatchMessage(custID, "", "error-rate", v.message); err != nil {
+			if err := s.AmendCronWatchMessage(custID, 0, "", "error-rate", v.message); err != nil {
 				return fmt.Errorf("error-rate v%d message: %w", i+1, err)
 			}
 		}
@@ -802,7 +802,7 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 		"tail -n 12 %s | jq -c '{host: $host, pct: .memory.pct}' "+
 			"| alert above 70 -v .pct -t .host",
 		hostLog)
-	if existing, _ := s.GetCronWatch(custID, "mem-pressure"); existing == nil || existing.Pipeline != memPressureV2 {
+	if existing, _ := s.GetCronWatch(custID, 0, "mem-pressure"); existing == nil || existing.Pipeline != memPressureV2 {
 		versions := []struct {
 			userID, pipeline, message string
 		}{
@@ -810,10 +810,10 @@ for _, k in ipairs(keys) do print(k, counts[k]) end
 			{user2.ID, memPressureV2, "lower to 70, add per-host tag so alerts identify the box"},
 		}
 		for i, v := range versions {
-			if err := s.SaveCronWatch(custID, v.userID, "mem-pressure", "*/1 * * * *", v.pipeline, true, nil); err != nil {
+			if err := s.SaveCronWatch(custID, 0, v.userID, "mem-pressure", "*/1 * * * *", v.pipeline, true, nil); err != nil {
 				return fmt.Errorf("mem-pressure v%d: %w", i+1, err)
 			}
-			if err := s.AmendCronWatchMessage(custID, "", "mem-pressure", v.message); err != nil {
+			if err := s.AmendCronWatchMessage(custID, 0, "", "mem-pressure", v.message); err != nil {
 				return fmt.Errorf("mem-pressure v%d message: %w", i+1, err)
 			}
 		}
@@ -889,7 +889,7 @@ oncall:
 // never want re-runs of the seed to stack a second synthetic hour on
 // top of real ticks.
 func preseedLoomErrorRateHistory(s *store.Store, custID store.OrgID) error {
-	watch, err := s.GetCronWatch(custID, "error-rate")
+	watch, err := s.GetCronWatch(custID, 0, "error-rate")
 	if err != nil {
 		return fmt.Errorf("lookup: %w", err)
 	}

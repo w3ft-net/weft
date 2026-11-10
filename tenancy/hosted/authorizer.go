@@ -47,7 +47,7 @@ func (z Authorizer) Authorize(_ context.Context, a tenancy.Actor, act tenancy.Ac
 	}
 
 	switch act {
-	case ActionManageTeam, ActionManageBilling, tenancy.ActionDeleteNamespace:
+	case ActionManageTeam, ActionManageBilling, tenancy.ActionDeleteNamespace, tenancy.ActionPublishOrgWide:
 		if owner {
 			return nil
 		}
@@ -59,7 +59,25 @@ func (z Authorizer) Authorize(_ context.Context, a tenancy.Actor, act tenancy.Ac
 	case tenancy.ActionManageEtc:
 		return z.orgBit(actor, "writing /etc needs the configmgr group", func(p *store.OrgPermission) bool { return p.CanManageEtc })
 	case tenancy.ActionManageCron:
-		return z.orgBit(actor, "writing /cron.d needs the cronmgr group", func(p *store.OrgPermission) bool { return p.CanManageWatches })
+		// A cron's authority is its home namespace, so the manager must be
+		// able to read it. Unreadable and nonexistent look the same.
+		if r.Namespace == "" {
+			return tenancy.Denied("a cron belongs to a namespace")
+		}
+		if err := z.orgBit(actor, "writing /cron.d needs the cronmgr group", func(p *store.OrgPermission) bool { return p.CanManageWatches }); err != nil {
+			return err
+		}
+		if owner {
+			return nil
+		}
+		ns, err := z.Store.GetNamespace(actor.Org, r.Namespace)
+		if err != nil {
+			return errCronNamespace
+		}
+		if perm, err := z.Store.GetNamespacePermission(actor.User, ns.ID); err != nil || !perm.CanRead {
+			return errCronNamespace
+		}
+		return nil
 	case tenancy.ActionManageNamespaceTokens:
 		if owner {
 			return nil
@@ -78,6 +96,8 @@ func (z Authorizer) Authorize(_ context.Context, a tenancy.Actor, act tenancy.Ac
 	}
 	return tenancy.Denied("unknown action")
 }
+
+var errCronNamespace = tenancy.Denied("no permission to manage crons in this namespace")
 
 var errNamespaceForbidden = tenancy.Denied("no permission to manage tokens and sources in this namespace")
 

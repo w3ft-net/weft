@@ -573,10 +573,13 @@ func (s *Store) DeleteShellFunction(orgID OrgID, name string) error {
 // (".foo.bar"); see shellcore.FieldSpec.
 type CronWatch struct {
 	gorm.Model
-	OrgID    OrgID  `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
-	Name     string `gorm:"not null;uniqueIndex:idx_cron_customer_name"`
-	Schedule string `gorm:"not null"` // "*/5 * * * *" or "every 1m"
-	Pipeline string `gorm:"type:text;not null"`
+	OrgID OrgID  `gorm:"not null"`
+	Name  string `gorm:"not null"`
+	// NamespaceID is the cron's home namespace; nil is an org-level cron.
+	// A name is unique within its home (migration 112).
+	NamespaceID *uint  `gorm:"column:namespace_id"`
+	Schedule    string `gorm:"not null"` // "*/5 * * * *" or "every 1m"
+	Pipeline    string `gorm:"type:text;not null"`
 	// Enabled has no gorm default: with one, gorm swaps an explicit false
 	// for true on create. The column's own default (schema.sql) covers raw SQL.
 	Enabled bool `gorm:"not null"`
@@ -658,7 +661,7 @@ func computeCronWatchHash(schedule, pipeline string) string {
 // show the user. Today the only producer is the truncation lint
 // below, but this is a generic channel: any future save-time check
 // that wants to warn without blocking uses the same mechanism.
-func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline string, enabled bool, loweredPlan []byte) error {
+func (s *Store) SaveCronWatch(orgID OrgID, ns uint, userID, name, schedule, pipeline string, enabled bool, loweredPlan []byte) error {
 	if _, err := ValidateSchedule(schedule); err != nil {
 		return err
 	}
@@ -666,7 +669,7 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 	if err != nil {
 		return err
 	}
-	if err := s.checkValueTypes(orgID, name, compiled); err != nil {
+	if err := s.checkValueTypes(orgID, ns, name, compiled); err != nil {
 		return err
 	}
 	hash := computeCronWatchHash(schedule, pipeline)
@@ -678,11 +681,12 @@ func (s *Store) SaveCronWatch(orgID OrgID, userID, name, schedule, pipeline stri
 		}
 		// Unscoped: see SaveShellFunction — saving a deleted name revives it.
 		var w CronWatch
-		result := tx.Unscoped().Where("name = ?", name).First(&w)
+		result := inCronHome(tx.Unscoped(), ns).Where("name = ?", name).First(&w)
 		if result.Error == gorm.ErrRecordNotFound {
 			row := &CronWatch{
 				OrgID:          orgID,
 				Name:           name,
+				NamespaceID:    cronHome(ns),
 				Schedule:       schedule,
 				Pipeline:       pipeline,
 				Enabled:        enabled,
@@ -994,9 +998,35 @@ func ValidateWatchPipeline(pipeline string) error {
 	return err
 }
 
-func (s *Store) GetCronWatch(orgID OrgID, name string) (*CronWatch, error) {
+// Home is the cron's home namespace id, 0 at the org level.
+func (w *CronWatch) Home() uint {
+	if w.NamespaceID == nil {
+		return 0
+	}
+	return *w.NamespaceID
+}
+
+// cronHome is the namespace_id for a home: 0 is the org level.
+func cronHome(ns uint) *uint {
+	if ns == 0 {
+		return nil
+	}
+	return &ns
+}
+
+// inCronHome limits a cron query to one home namespace, or to the org level
+// when ns is 0.
+func inCronHome(q *gorm.DB, ns uint) *gorm.DB {
+	if ns == 0 {
+		return q.Where("namespace_id IS NULL")
+	}
+	return q.Where("namespace_id = ?", ns)
+}
+
+// GetCronWatch finds a cron by its home (ns, 0 for the org level) and name.
+func (s *Store) GetCronWatch(orgID OrgID, ns uint, name string) (*CronWatch, error) {
 	var w CronWatch
-	err := s.scoped(orgID).Where("name = ?", name).First(&w).Error
+	err := inCronHome(s.scoped(orgID), ns).Where("name = ?", name).First(&w).Error
 	if err != nil {
 		return nil, err
 	}
@@ -1009,8 +1039,8 @@ func (s *Store) ListCronWatches(orgID OrgID) ([]CronWatch, error) {
 	return watches, err
 }
 
-func (s *Store) DeleteCronWatch(orgID OrgID, name string) error {
-	return s.scoped(orgID).Where("name = ?", name).Delete(&CronWatch{}).Error
+func (s *Store) DeleteCronWatch(orgID OrgID, ns uint, name string) error {
+	return inCronHome(s.scoped(orgID), ns).Where("name = ?", name).Delete(&CronWatch{}).Error
 }
 
 // CountCronWatches returns the number of enabled cron watches for a customer:

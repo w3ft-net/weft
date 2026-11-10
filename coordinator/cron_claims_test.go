@@ -55,6 +55,13 @@ type claimEnv struct {
 // from the database) with a fake claim backend.
 func newClaimEnv(t *testing.T, name string) *claimEnv {
 	t.Helper()
+	return newClaimEnvIn(t, name, "")
+}
+
+// newClaimEnvIn is newClaimEnv with the cron homed in the named namespace
+// ("" is the org level).
+func newClaimEnvIn(t *testing.T, name, namespace string) *claimEnv {
+	t.Helper()
 	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
 		t.Skipf("postgres unavailable: %v", err)
@@ -65,6 +72,14 @@ func newClaimEnv(t *testing.T, name string) *claimEnv {
 		t.Fatal(err)
 	}
 	w := store.CronWatch{OrgID: org.ID, Name: name, Schedule: "every 5m", Pipeline: "true", Enabled: true}
+	if namespace != "" {
+		ns, err := db.FindOrCreateNamespace(org.ID, namespace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.NamespaceID = &ns.ID
+		t.Cleanup(func() { adb.Unscoped().Delete(ns) })
+	}
 	if err := adb.Create(&w).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +168,21 @@ func TestClaimTicksRunEachSlotOnceAcrossCoordinators(t *testing.T) {
 		if want := prev.End.Add(time.Microsecond); !cur.Start.Equal(want) {
 			t.Fatalf("run %d window starts %v, want %v (duplicate or gap after %v)", i, cur.Start, want, prev.End)
 		}
+	}
+}
+
+// A cron homed in a namespace fires like any other: its tick reloads the same
+// row, not an org-level cron of the same name.
+func TestClaimTickFiresNamespacedCron(t *testing.T) {
+	env := newClaimEnvIn(t, "errors", "alpha")
+	ce := env.executor("a")
+	st := &cronClaimState{watch: env.watch}
+
+	for at := time.Duration(0); at < 10*time.Minute; at += time.Second {
+		ce.claimTick(context.Background(), st, time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC).Add(at))
+	}
+	if len(env.runs()) == 0 {
+		t.Fatal("a namespaced cron never fired")
 	}
 }
 

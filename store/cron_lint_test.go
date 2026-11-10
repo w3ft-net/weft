@@ -28,7 +28,7 @@ func TestSaveCronWatch_TruncationWarning(t *testing.T) {
 		t.Fatal("LowerForStorage returned nil — fixture pipeline should lower cleanly")
 	}
 
-	err := db.SaveCronWatch(cust.ID, user.ID, "truncation-risk", "*/5 * * * *", pipeline, true, lowered)
+	err := db.SaveCronWatch(cust.ID, 0, user.ID, "truncation-risk", "*/5 * * * *", pipeline, true, lowered)
 
 	blocking, warnings := Split(err)
 	if len(blocking) != 0 {
@@ -40,7 +40,7 @@ func TestSaveCronWatch_TruncationWarning(t *testing.T) {
 	}
 
 	// The save actually happened despite the non-nil error.
-	w, getErr := db.GetCronWatch(cust.ID, "truncation-risk")
+	w, getErr := db.GetCronWatch(cust.ID, 0, "truncation-risk")
 	if getErr != nil {
 		t.Fatalf("GetCronWatch: %v (want the watch to have saved)", getErr)
 	}
@@ -60,7 +60,7 @@ func TestSaveCronWatch_NoWarningForSafePipeline(t *testing.T) {
 	pipeline := `cat /log/x/y/main.log | grep ERROR`
 	lowered := planner.LowerForStorage(context.Background(), pipeline, int64(cust.ID), "bolt", noBinResolver{})
 
-	err := db.SaveCronWatch(cust.ID, user.ID, "safe-cron", "*/5 * * * *", pipeline, true, lowered)
+	err := db.SaveCronWatch(cust.ID, 0, user.ID, "safe-cron", "*/5 * * * *", pipeline, true, lowered)
 	blocking, warnings := Split(err)
 	if len(blocking) != 0 {
 		t.Fatalf("SaveCronWatch: got blocking error %v, want success", blocking)
@@ -79,7 +79,7 @@ func TestSaveCronWatch_SyntaxErrorStillBlocks(t *testing.T) {
 	cust, _ := db.FindOrCreateOrg("cron-lint-bad-syntax")
 	user, _ := db.CreateUser("carol-lint@example.test")
 
-	err := db.SaveCronWatch(cust.ID, user.ID, "bad-cron", "*/5 * * * *", `cat /log/x/y/main.log |`, true, nil)
+	err := db.SaveCronWatch(cust.ID, 0, user.ID, "bad-cron", "*/5 * * * *", `cat /log/x/y/main.log |`, true, nil)
 	blocking, _ := Split(err)
 	if len(blocking) == 0 {
 		t.Fatal("want a blocking error for an unparseable pipeline, got none")
@@ -96,7 +96,7 @@ func TestSaveCronWatch_ExplainsStagePostRetrieval(t *testing.T) {
 	pipeline := `cat /log/x/y/main.log | awk '{ printf "%s\n", $0 }' | alert above 5`
 	lowered := planner.LowerForStorage(context.Background(), pipeline, int64(cust.ID), "bolt", noBinResolver{})
 
-	err := db.SaveCronWatch(cust.ID, user.ID, "explain-cron", "*/5 * * * *", pipeline, true, lowered)
+	err := db.SaveCronWatch(cust.ID, 0, user.ID, "explain-cron", "*/5 * * * *", pipeline, true, lowered)
 	blocking, warnings := Split(err)
 	if len(blocking) != 0 {
 		t.Fatalf("SaveCronWatch: got blocking error %v, want success", blocking)
@@ -120,7 +120,7 @@ func TestSaveCronWatch_NoExplanationForBinScript(t *testing.T) {
 	user, _ := db.CreateUser("erin-lint@example.test")
 
 	pipeline := `cat /log/x/y/main.log | /bin/errs | alert above 5`
-	err := db.SaveCronWatch(cust.ID, user.ID, "bin-cron", "*/5 * * * *", pipeline, true, nil)
+	err := db.SaveCronWatch(cust.ID, 0, user.ID, "bin-cron", "*/5 * * * *", pipeline, true, nil)
 	if blocking, warnings := Split(err); len(blocking) != 0 || len(warnings) != 0 {
 		t.Fatalf("got blocking %v, warnings %q; want neither", blocking, warnings)
 	}

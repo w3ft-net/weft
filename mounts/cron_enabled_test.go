@@ -57,7 +57,7 @@ func TestCronMount_DisabledRoundTrip(t *testing.T) {
 	if err := m.WriteFile("paused", data); err != nil {
 		t.Fatal(err)
 	}
-	w, err := cfg.Store.GetCronWatch(cfg.OrgID, "paused")
+	w, err := cfg.Store.GetCronWatch(cfg.OrgID, 0, "paused")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestCronMount_DisabledRoundTrip(t *testing.T) {
 	if err := m.WriteFile("paused", []byte("# schedule: every 5m\ntrue\n")); err != nil {
 		t.Fatal(err)
 	}
-	if w, _ = cfg.Store.GetCronWatch(cfg.OrgID, "paused"); !w.Enabled {
+	if w, _ = cfg.Store.GetCronWatch(cfg.OrgID, 0, "paused"); !w.Enabled {
 		t.Error("saving without the comment did not re-enable the cron")
 	}
 }

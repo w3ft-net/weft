@@ -66,6 +66,30 @@ func (c Config) authorizeCronReads(pipeline string) error {
 	return c.mustRead(reads.Namespaces, "/cron.d")
 }
 
+// authorizeHomedCronReads refuses a cron homed in a namespace that reads any
+// other. Its authority is the namespace (plus grants, which don't exist yet),
+// not whoever saves it, so even an owner is held to it.
+func (c Config) authorizeHomedCronReads(home, pipeline string) error {
+	env, err := c.readsEnv(nil)
+	if err != nil {
+		return err
+	}
+	reads, err := logreads.Analyze(pipeline, env)
+	var unresolvable *logreads.UnresolvableError
+	if errors.As(err, &unresolvable) {
+		return fmt.Errorf("this cron can't be saved: %w (a cron in a namespace must name what it reads; an owner can publish it org-wide instead)", unresolvable)
+	}
+	if err != nil {
+		return nil // doesn't parse: the save reports that
+	}
+	for _, ns := range reads.Namespaces {
+		if ns != home {
+			return fmt.Errorf("/cron.d/%s: %w (a cron reads only its own namespace; an owner can publish one org-wide to read across namespaces)", home, fs.ErrPermission)
+		}
+	}
+	return nil
+}
+
 func (c Config) mustRead(namespaces []string, dir string) error {
 	readable, _, err := c.scope()
 	if err != nil {

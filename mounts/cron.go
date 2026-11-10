@@ -3,6 +3,8 @@ package mounts
 import (
 	"fmt"
 	"io/fs"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
@@ -19,49 +21,156 @@ func (m *CronMount) Caps() shellcore.MountCaps {
 	return shellcore.MountCaps{Writable: true}
 }
 
+// cronPath is a /cron.d path resolved: the root, a namespace directory, or a
+// cron. A cron is homed in a namespace (ns set) or at the org level.
+type cronPath struct {
+	root bool
+	dir  bool   // a namespace directory
+	ns   string // the home namespace's name; "" for an org-level cron
+	name string // the cron's name; "" for the root and namespace directories
+}
+
+// resolve reads rel against the org's namespaces. A first segment that names a
+// namespace is that namespace's directory; otherwise it is an org-level cron
+// (a cron and a namespace never share a name).
+func (m *CronMount) resolve(rel string) (cronPath, error) {
+	if rel == "" {
+		return cronPath{root: true}, nil
+	}
+	first, rest, more := strings.Cut(rel, "/")
+	_, err := m.cfg.Store.GetNamespace(m.cfg.OrgID, first)
+	isNS := err == nil
+	switch {
+	case !more && isNS:
+		return cronPath{dir: true, ns: first}, nil
+	case !more:
+		return cronPath{name: first}, nil
+	case isNS && rest != "" && !strings.Contains(rest, "/"):
+		return cronPath{ns: first, name: rest}, nil
+	}
+	return cronPath{}, fs.ErrNotExist
+}
+
 // Authorize is the mount's one access check, called by MountFS before every
-// operation: every member can read /cron.d, only the cronmgr group can
-// change it.
+// operation. A namespace's crons are visible to whoever can read the
+// namespace, and writable by whoever may manage crons in it. Org-level crons
+// are visible to every member and published by PublishOrgWide.
 func (m *CronMount) Authorize(rel string, want shellcore.Perm) error {
-	if want&shellcore.PermWrite != 0 && !m.cfg.allowed(tenancy.ActionManageCron) {
-		return denyWrite("/cron.d", "cronmgr")
+	p, err := m.resolve(rel)
+	if err != nil {
+		return err
+	}
+	if p.ns != "" {
+		readable, _, err := m.cfg.scope()
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(readable, p.ns) {
+			return fs.ErrNotExist
+		}
+	}
+	if want&shellcore.PermWrite == 0 {
+		return nil
+	}
+	switch {
+	case p.root || p.dir:
+		return fmt.Errorf("/cron.d/%s: %w (namespace directories come with the namespace; write a cron at /cron.d/<namespace>/<name>)", rel, fs.ErrPermission)
+	case p.ns != "":
+		if !m.cfg.allowedIn(tenancy.ActionManageCron, p.ns) {
+			return denyWrite("/cron.d/"+p.ns, "cronmgr")
+		}
+	case !m.cfg.allowed(tenancy.ActionPublishOrgWide):
+		return fmt.Errorf("/cron.d: %w (an org-level cron is readable by every member, so only an owner publishes one; put it in a namespace: /cron.d/<namespace>/%s)", fs.ErrPermission, p.name)
 	}
 	return nil
 }
 
+// home is the namespace id of a cron's home, 0 at the org level.
+func (m *CronMount) home(p cronPath) (uint, error) {
+	if p.ns == "" {
+		return 0, nil
+	}
+	ns, err := m.cfg.Store.GetNamespace(m.cfg.OrgID, p.ns)
+	if err != nil {
+		return 0, err
+	}
+	return ns.ID, nil
+}
+
 func (m *CronMount) ReadDir(rel string) ([]fs.DirEntry, error) {
-	if rel != "" {
+	p, err := m.resolve(rel)
+	if err != nil {
+		return nil, err
+	}
+	if !p.root && !p.dir {
 		return nil, fs.ErrNotExist
 	}
 	watches, err := m.cfg.Store.ListCronWatches(m.cfg.OrgID)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(watches))
+	var entries []fs.DirEntry
+	if p.root {
+		readable, _, err := m.cfg.scope()
+		if err != nil {
+			return nil, err
+		}
+		for _, ns := range readable {
+			entries = append(entries, &vfsDirEntry{name: ns, dir: true})
+		}
+	}
+	home, err := m.home(p)
+	if err != nil {
+		return nil, err
+	}
+	var here []store.CronWatch
 	for _, w := range watches {
+		if (w.NamespaceID == nil && home == 0) || (w.NamespaceID != nil && *w.NamespaceID == home) {
+			here = append(here, w)
+		}
+	}
+	ids := make([]string, 0, len(here))
+	for _, w := range here {
 		if w.CreatedByUserID != nil {
 			ids = append(ids, *w.CreatedByUserID)
 		}
 	}
 	owners := resolveOwners(m.cfg.Store, ids)
-	entries := make([]fs.DirEntry, len(watches))
-	for i, w := range watches {
+	for _, w := range here {
 		owner := ""
 		if w.CreatedByUserID != nil {
 			owner = owners[*w.CreatedByUserID]
 		}
-		entries[i] = &vfsDirEntry{
+		entries = append(entries, &vfsDirEntry{
 			name:  w.Name,
 			size:  int64(len(SerializeCron(&w))),
 			mtime: w.UpdatedAt,
 			owner: owner,
-		}
+		})
 	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	return entries, nil
 }
 
+// get finds the cron at rel.
+func (m *CronMount) get(rel string) (*store.CronWatch, error) {
+	p, err := m.resolve(rel)
+	if err != nil || p.name == "" {
+		return nil, fs.ErrNotExist
+	}
+	home, err := m.home(p)
+	if err != nil {
+		return nil, fs.ErrNotExist
+	}
+	w, err := m.cfg.Store.GetCronWatch(m.cfg.OrgID, home, p.name)
+	if err != nil {
+		return nil, fs.ErrNotExist
+	}
+	return w, nil
+}
+
 func (m *CronMount) ReadFile(rel string) ([]byte, error) {
-	w, err := m.cfg.Store.GetCronWatch(m.cfg.OrgID, rel)
+	w, err := m.get(rel)
 	if err != nil {
 		return nil, fmt.Errorf("/cron.d/%s: no such file", rel)
 	}
@@ -69,17 +178,36 @@ func (m *CronMount) ReadFile(rel string) ([]byte, error) {
 }
 
 func (m *CronMount) Stat(rel string) (fs.FileInfo, error) {
-	if rel == "" {
-		return &vfsFileInfo{name: "cron.d", dir: true}, nil
+	p, err := m.resolve(rel)
+	if err != nil {
+		return nil, err
 	}
-	w, err := m.cfg.Store.GetCronWatch(m.cfg.OrgID, rel)
+	if p.root || p.dir {
+		name := "cron.d"
+		if p.dir {
+			name = p.ns
+		}
+		return &vfsFileInfo{name: name, dir: true}, nil
+	}
+	w, err := m.get(rel)
 	if err != nil {
 		return nil, fs.ErrNotExist
 	}
-	return &vfsFileInfo{name: rel, size: int64(len(SerializeCron(w))), mtime: w.UpdatedAt}, nil
+	return &vfsFileInfo{name: p.name, size: int64(len(SerializeCron(w))), mtime: w.UpdatedAt}, nil
 }
 
 func (m *CronMount) WriteFile(rel string, data []byte) error {
+	p, err := m.resolve(rel)
+	if err != nil {
+		return err
+	}
+	if p.root || p.dir {
+		return fmt.Errorf("/cron.d/%s: is a directory", rel)
+	}
+	home, err := m.home(p)
+	if err != nil {
+		return err
+	}
 	schedule, pipeline, enabled, err := ParseCron(string(data))
 	if err != nil {
 		return fmt.Errorf("/cron.d/%s: %w", rel, err)
@@ -92,7 +220,7 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 
 	// A cron that is new, or being turned back on, takes a slot; disabled
 	// crons are free.
-	if existing, err := m.cfg.Store.GetCronWatch(m.cfg.OrgID, rel); enabled && (err != nil || !existing.Enabled) {
+	if existing, err := m.cfg.Store.GetCronWatch(m.cfg.OrgID, home, p.name); enabled && (err != nil || !existing.Enabled) {
 		count, err := m.cfg.Store.CountCronWatches(m.cfg.OrgID)
 		if err != nil {
 			return fmt.Errorf("failed to check cron count: %w", err)
@@ -111,7 +239,13 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 		return &PlanLimitError{fmt.Sprintf("minimum schedule interval for %s plan is %s", m.cfg.Tier, minInterval)}
 	}
 
-	if err := m.cfg.authorizeCronReads(pipeline); err != nil {
+	if p.ns != "" {
+		// A namespace's cron has that namespace's authority and no more.
+		err = m.cfg.authorizeHomedCronReads(p.ns, pipeline)
+	} else {
+		err = m.cfg.authorizeCronReads(pipeline)
+	}
+	if err != nil {
 		return err
 	}
 
@@ -122,7 +256,7 @@ func (m *CronMount) WriteFile(rel string, data []byte) error {
 	resolver := cronBinResolver{store: m.cfg.Store, orgID: m.cfg.OrgID}
 	loweredJSON := planner.LowerForStorage(m.cfg.ctx(), pipeline, int64(m.cfg.OrgID), string(m.cfg.Tier), resolver)
 
-	return m.cfg.Store.SaveCronWatch(m.cfg.OrgID, m.cfg.UserID, rel, schedule, pipeline, enabled, loweredJSON)
+	return m.cfg.Store.SaveCronWatch(m.cfg.OrgID, home, m.cfg.UserID, p.name, schedule, pipeline, enabled, loweredJSON)
 }
 
 // cronBinResolver adapts the shell mount's store + customer scope to
@@ -144,16 +278,35 @@ func (r cronBinResolver) Source(name string) (string, string, bool) {
 }
 
 func (m *CronMount) Remove(rel string) error {
-	return m.cfg.Store.DeleteCronWatch(m.cfg.OrgID, rel)
+	p, err := m.resolve(rel)
+	if err != nil {
+		return err
+	}
+	if p.name == "" {
+		return fmt.Errorf("/cron.d/%s: is a directory; it goes away with its namespace", rel)
+	}
+	home, err := m.home(p)
+	if err != nil {
+		return err
+	}
+	return m.cfg.Store.DeleteCronWatch(m.cfg.OrgID, home, p.name)
 }
 
 // AmendVersionMessage allows recording a commit message for cron entries. It
 // is not a MountFS operation, so it checks write access itself.
 func (m *CronMount) AmendVersionMessage(rel, message string) error {
-	if !m.cfg.allowed(tenancy.ActionManageCron) {
-		return denyWrite("/cron.d", "cronmgr")
+	if err := m.Authorize(rel, shellcore.PermWrite); err != nil {
+		return err
 	}
-	return m.cfg.Store.AmendCronWatchMessage(m.cfg.OrgID, m.cfg.UserID, rel, message)
+	p, err := m.resolve(rel)
+	if err != nil || p.name == "" {
+		return fs.ErrNotExist
+	}
+	home, err := m.home(p)
+	if err != nil {
+		return err
+	}
+	return m.cfg.Store.AmendCronWatchMessage(m.cfg.OrgID, home, m.cfg.UserID, p.name, message)
 }
 
 // --- Cron serialization (canonical, single source of truth) ---

@@ -72,7 +72,7 @@ func newReadsFixture(t *testing.T) *readsFixture {
 // fs returns the shell filesystem as user sees it.
 func (f *readsFixture) fs(user string) *shellcore.MountFS {
 	cfg := asHosted(Config{Store: f.db, OrgID: f.org.ID, Tier: store.TierYard}, user)
-	cfg.Authz = grants{tenancy.ActionManageBin: true, tenancy.ActionManageCron: true, tenancy.ActionManageEtc: true}
+	cfg.Authz = grants{tenancy.ActionManageBin: true, tenancy.ActionManageCron: true, tenancy.ActionPublishOrgWide: true, tenancy.ActionManageEtc: true}
 	return New(cfg)
 }
 
@@ -80,7 +80,7 @@ func cronFile(pipeline string) []byte { return []byte("# schedule: */5 * * * *\n
 
 func (f *readsFixture) seedCron(t *testing.T, name, pipeline string) {
 	t.Helper()
-	if err := f.db.SaveCronWatch(f.org.ID, f.owner, name, "*/5 * * * *", pipeline, true, nil); err != nil {
+	if err := f.db.SaveCronWatch(f.org.ID, 0, f.owner, name, "*/5 * * * *", pipeline, true, nil); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -46,15 +46,16 @@ func (s *Store) ListObjectVersions(orgID OrgID) ([]ObjectVersion, error) {
 		       f.authored_at, f.authored_by_user_id, true, f.deleted_at, false
 		  FROM shell_functions f WHERE f.org_id = @org
 		UNION ALL
-		SELECT 'cron.d', h.watch_id, h.name, h.version_id, '', '', h.schedule, h.pipeline, h.message,
+		SELECT 'cron.d', h.watch_id, COALESCE(n.name || '/', '') || h.name, h.version_id, '', '', h.schedule, h.pipeline, h.message,
 		       h.authored_at, h.authored_by_user_id, false, h.deleted_at,
 		       (h.predecessor_id IS NULL AND w.origin_version_id IS DISTINCT FROM h.version_id)
 		  FROM cron_watch_history h JOIN cron_watches w ON w.id = h.watch_id
+		  LEFT JOIN namespaces n ON n.id = w.namespace_id
 		 WHERE h.org_id = @org
 		UNION ALL
-		SELECT 'cron.d', w.id, w.name, w.version_id, '', '', w.schedule, w.pipeline, w.message,
+		SELECT 'cron.d', w.id, COALESCE(n.name || '/', '') || w.name, w.version_id, '', '', w.schedule, w.pipeline, w.message,
 		       w.authored_at, w.authored_by_user_id, true, w.deleted_at, false
-		  FROM cron_watches w WHERE w.org_id = @org
+		  FROM cron_watches w LEFT JOIN namespaces n ON n.id = w.namespace_id WHERE w.org_id = @org
 		UNION ALL
 		SELECT 'etc/dashboards', h.dashboard_id, h.name || '.yaml', h.version_id, h.yaml_body, '', '', '', h.message,
 		       h.authored_at, h.authored_by_user_id, false, NULL::timestamptz,

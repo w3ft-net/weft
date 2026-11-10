@@ -8,25 +8,27 @@ import (
 )
 
 // Restoring or reverting a cron is a cron save, so it is held to the same rule
-// as saving one: the user must be able to read what the cron reads. Owners read
-// everything.
+// as saving one: a cron reads only its home namespace, and an org-level cron
+// only what its owner reads.
 
-func TestRestore_CronMustReadOnlyWhatTheUserMayRead(t *testing.T) {
+func TestRestore_CronMustReadOnlyItsHomeNamespace(t *testing.T) {
 	f := newFixture(t)
-	f.saveCron(t, f.alice, "errs", "tail /log/alpha/api/main.log | grep ERROR")
-	f.saveCron(t, f.alice, "errs", "echo nothing")
+	f.saveNSCron(t, f.alice, "errs", "tail /log/a/api/main.log | grep ERROR")
+	f.saveNSCron(t, f.alice, "errs", "tail /log/alpha/api/main.log | grep ERROR")
+	f.saveNSCron(t, f.alice, "errs", "echo nothing")
 
-	// alice may write /cron.d but holds no read permission on alpha.
-	msg := gitErr(t, f.repo(f.alice, "/"), "restore", "--source=HEAD~1", "/cron.d/errs")
+	// A cron in namespace a can't be restored to a version that reads alpha.
+	msg := gitErr(t, f.repo(f.alice, "/"), "restore", "--source=HEAD~1", "/cron.d/a/errs")
 
-	if !strings.Contains(msg, "aren't allowed to read") {
-		t.Errorf("err = %q, want a refusal naming the read restriction", msg)
+	if !strings.Contains(msg, "reads only its own namespace") {
+		t.Errorf("err = %q, want a refusal naming the home restriction", msg)
 	}
-	if w, _ := f.db.GetCronWatch(f.org, "errs"); w.Pipeline != "echo nothing" {
+	if w, _ := f.db.GetCronWatch(f.org, f.nsA, "errs"); w.Pipeline != "echo nothing" {
 		t.Errorf("a refused restore wrote %q", w.Pipeline)
 	}
 }
 
+// An org-level cron is published by an owner and reads what the owner reads.
 func TestRestore_OwnerRestoresAnyCron(t *testing.T) {
 	f := newFixture(t)
 	if err := f.db.AddTeamMemberWithEmail(f.org, f.alice.ID, f.alice.Email, store.RoleOwner); err != nil {
@@ -37,7 +39,7 @@ func TestRestore_OwnerRestoresAnyCron(t *testing.T) {
 
 	git(t, f.repo(f.alice, "/"), "restore", "--source=HEAD~1", "/cron.d/errs")
 
-	if w, _ := f.db.GetCronWatch(f.org, "errs"); !strings.Contains(w.Pipeline, "/log/alpha/") {
+	if w, _ := f.db.GetCronWatch(f.org, 0, "errs"); !strings.Contains(w.Pipeline, "/log/alpha/") {
 		t.Errorf("the owner's restore did not write: %q", w.Pipeline)
 	}
 }

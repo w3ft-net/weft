@@ -20,7 +20,7 @@ func TestRollupHourly_AggregatesRawCorrectly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.SaveCronWatch(cust.ID, "", "rollup-w", "*/1 * * * *", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, "", "rollup-w", "*/1 * * * *", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	var watchID uint
@@ -125,7 +125,7 @@ func TestRollup_4hCombinesHourly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	var watchID uint
@@ -191,7 +191,7 @@ func TestRollup_4hKeepsBucketThatStraddlesWindowStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	var watchID uint
@@ -299,7 +299,7 @@ func TestCronAggregate_PicksTierByWindow(t *testing.T) {
 		VALUES (?, ?, 'bolt', 'active', now(), now(), now())`, "sub-"+cust.Name, cust.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	var watchID uint
@@ -372,7 +372,7 @@ func TestQueryCronSeries_PicksTierAndReturnsBuckets(t *testing.T) {
 		"sub-"+cust.Name, cust.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	var watchID uint
@@ -449,7 +449,7 @@ func TestCronAggregate_ClampsToPlanRetention(t *testing.T) {
 		VALUES (?, ?, 'swatch', 'active', now(), now(), now())`, "sub-"+cust.Name, cust.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, 0, "", "w", "*/1 * * * *", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	var watchID uint

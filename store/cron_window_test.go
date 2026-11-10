@@ -77,10 +77,10 @@ func TestCronWindowStats_StitchesTiers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tx.SaveCronWatch(org.ID, "", "w", "every 1m", "echo 1", true, nil); err != nil {
+	if err := tx.SaveCronWatch(org.ID, 0, "", "w", "every 1m", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := tx.GetCronWatch(org.ID, "w")
+	w, err := tx.GetCronWatch(org.ID, 0, "w")
 	if err != nil {
 		t.Fatal(err)
 	}

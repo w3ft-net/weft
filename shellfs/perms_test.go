@@ -90,21 +90,32 @@ func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
 	}
 }
 
+// A namespace's crons are written by a member holding the cronmgr bit who can
+// read the namespace; an org-level cron is published by an owner alone.
 func TestOrgPerms_CronMount_WriteFile(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("perm-cron-%d", os.Getpid()))
+	ns, _ := db.FindOrCreateNamespace(cust.ID, "ops")
 
-	cases := []orgPermCase{
-		{"member-no-flag", orgPerms{}, true},
-		{"member-with-flag", orgPerms{Watches: true}, false},
-		{"owner-no-flag", orgPerms{Owner: true}, true},
-		{"member-other-flag", orgPerms{Functions: true, Etc: true}, true},
+	cases := []struct {
+		orgPermCase
+		path string
+	}{
+		{orgPermCase{"member-no-flag", orgPerms{}, true}, "/cron.d/ops/probe"},
+		{orgPermCase{"member-with-flag", orgPerms{Watches: true}, false}, "/cron.d/ops/probe"},
+		{orgPermCase{"owner-no-flag", orgPerms{Owner: true}, true}, "/cron.d/ops/probe"},
+		{orgPermCase{"member-other-flag", orgPerms{Functions: true, Etc: true}, true}, "/cron.d/ops/probe"},
+		{orgPermCase{"member-publishing-org-wide", orgPerms{Watches: true}, true}, "/cron.d/probe"},
+		{orgPermCase{"owner-publishing-org-wide", orgPerms{Owner: true, Watches: true}, false}, "/cron.d/probe"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fs := New(db, cust.ID, nil, WithTier("swatch"),
-				WithUser(addMember(t, db, cust.ID, tc.name, tc.perms)))
-			err := fs.WriteFile("/cron.d/probe", []byte(cronYAML()))
+			user := addMember(t, db, cust.ID, tc.name, tc.perms)
+			if err := db.UpsertNamespacePermission(&store.NamespacePermission{UserID: user, NamespaceID: ns.ID, CanRead: true}); err != nil {
+				t.Fatal(err)
+			}
+			fs := New(db, cust.ID, nil, WithTier("swatch"), WithUser(user))
+			err := fs.WriteFile(tc.path, []byte(cronYAML()))
 			assertGate(t, err, tc.wantDeny)
 		})
 	}

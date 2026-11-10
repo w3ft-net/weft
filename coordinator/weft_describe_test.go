@@ -16,10 +16,10 @@ import (
 // duration, stderr), not just what they printed.
 func TestWeftFuncs_Describe(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	if err := db.SaveCronWatch(custID, "", "canary", "every 1m", "echo test", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, 0, "", "canary", "every 1m", "echo test", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := db.GetCronWatch(custID, "canary")
+	w, err := db.GetCronWatch(custID, 0, "canary")
 	if err != nil {
 		t.Fatal(err)
 	}

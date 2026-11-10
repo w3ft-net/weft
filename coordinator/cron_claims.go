@@ -97,7 +97,7 @@ func (ce *CronExecutor) claimTick(ctx context.Context, st *cronClaimState, now t
 	// Pick up pipeline/schedule edits before claiming. A schedule change
 	// changes the slot grid, so re-evaluate on the next tick rather than
 	// claim a slot from the old one.
-	updated, err := ce.Store.GetCronWatch(w.OrgID, w.Name)
+	updated, err := ce.Store.GetCronWatch(w.OrgID, w.Home(), w.Name)
 	if err != nil {
 		weftsdk.Errorf(ctx, "cron[%s]: failed to reload, skipping tick: %v", w.Name, err)
 		return

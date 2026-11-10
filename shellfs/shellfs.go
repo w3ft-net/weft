@@ -166,7 +166,11 @@ func (f *ShellFS) AmendVersionMessage(path, message string) error {
 	case "bin":
 		return f.store.AmendShellFunctionMessage(f.custID, f.cfg.UserID, name, message)
 	case "cron.d":
-		return f.store.AmendCronWatchMessage(f.custID, f.cfg.UserID, name, message)
+		ns, bare, err := f.store.ResolveCronPath(f.custID, name)
+		if err != nil {
+			return err
+		}
+		return f.store.AmendCronWatchMessage(f.custID, ns, f.cfg.UserID, bare, message)
 	case "etc":
 		if name == "notify.yaml" {
 			return f.store.AmendNotifyAliasesMessage(f.custID, f.cfg.UserID, message)

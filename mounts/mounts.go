@@ -70,10 +70,15 @@ func (c Config) ctx() context.Context {
 
 // allowed reports whether the actor may take act. Any failure denies.
 func (c Config) allowed(act tenancy.Action) bool {
+	return c.allowedIn(act, "")
+}
+
+// allowedIn is allowed for an action on one namespace's resources.
+func (c Config) allowedIn(act tenancy.Action, namespace string) bool {
 	if c.Authz == nil || c.Actor == nil {
 		return false
 	}
-	return c.Authz.Authorize(c.ctx(), c.Actor, act, tenancy.Resource{}) == nil
+	return c.Authz.Authorize(c.ctx(), c.Actor, act, tenancy.Resource{Namespace: namespace}) == nil
 }
 
 // scope is the namespaces the actor may read, and whether that is every

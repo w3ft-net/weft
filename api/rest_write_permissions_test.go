@@ -25,6 +25,7 @@ type groupedOrg struct {
 	org *store.Organization
 
 	owner, plain, bin, cron, etc string // JWTs: the org owner / no groups / exactly one group each
+	ops                          uint   // namespace "ops", readable by every seat
 }
 
 func newGroupedOrg(t *testing.T, tier store.Tier) *groupedOrg {
@@ -42,10 +43,16 @@ func newGroupedOrg(t *testing.T, tier store.Tier) *groupedOrg {
 	}
 	_, ownerJWT := permsSeed(t, s, org, store.RoleOwner, "restperm-owner")
 
-	g := &groupedOrg{srv: srv, s: s, org: org, owner: ownerJWT}
+	ops, err := s.FindOrCreateNamespace(org.ID, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := &groupedOrg{srv: srv, s: s, org: org, owner: ownerJWT, ops: ops.ID}
 	grant := map[string]store.TeamPermsDoc{}
 	seat := func(suffix string, p store.MemberPerms) string {
 		u, jwt := permsSeed(t, s, org, orgs.RoleMember, "restperm-"+suffix)
+		// Every seat reads ops, so only a missing group can refuse a write there.
+		p.Namespaces = map[string]store.NamespaceAcl{"ops": {Read: true}}
 		grant[suffix] = store.TeamPermsDoc{u.Email: p}
 		return jwt
 	}
@@ -113,14 +120,14 @@ func restWrites() []restWrite {
 			exists: func(g *groupedOrg) bool { _, err := g.s.GetShellFunction(g.org.ID, "permfn"); return err == nil },
 		},
 		{
-			name: "save cron", method: "PUT", path: "/api/crons/permcron", body: `{"schedule":"*/5 * * * *","pipeline":"echo 1"}`,
+			name: "save cron", method: "PUT", path: "/api/crons/ops/permcron", body: `{"schedule":"*/5 * * * *","pipeline":"echo 1"}`,
 			group:  func(g *groupedOrg) string { return g.cron },
-			exists: func(g *groupedOrg) bool { _, err := g.s.GetCronWatch(g.org.ID, "permcron"); return err == nil },
+			exists: func(g *groupedOrg) bool { _, err := g.s.GetCronWatch(g.org.ID, g.ops, "permcron"); return err == nil },
 		},
 		{
 			name: "save dashboard", method: "PUT", path: "/api/dashboards/permdash", body: `{"yaml_body":` + jsonString(permDashboard) + `}`,
 			seed: func(g *groupedOrg) {
-				g.s.SaveCronWatch(g.org.ID, "", "permcron", "*/5 * * * *", "echo 1", true, nil)
+				g.s.SaveCronWatch(g.org.ID, 0, "", "permcron", "*/5 * * * *", "echo 1", true, nil)
 			},
 			group:  func(g *groupedOrg) string { return g.etc },
 			exists: func(g *groupedOrg) bool { _, err := g.s.GetDashboard(g.org.ID, "permdash"); return err == nil },
@@ -184,15 +191,17 @@ func TestRESTDeletes_RequireTheGroupTheShellRequires(t *testing.T) {
 			group: func(g *groupedOrg) string { return g.bin },
 		},
 		{
-			name: "delete cron", path: "/api/crons/permcron",
-			seed:  func(g *groupedOrg) { g.s.SaveCronWatch(g.org.ID, "", "permcron", "*/5 * * * *", "echo 1", true, nil) },
-			gone:  func(g *groupedOrg) bool { _, err := g.s.GetCronWatch(g.org.ID, "permcron"); return err != nil },
+			name: "delete cron", path: "/api/crons/ops/permcron",
+			seed: func(g *groupedOrg) {
+				g.s.SaveCronWatch(g.org.ID, g.ops, "", "permcron", "*/5 * * * *", "echo 1", true, nil)
+			},
+			gone:  func(g *groupedOrg) bool { _, err := g.s.GetCronWatch(g.org.ID, g.ops, "permcron"); return err != nil },
 			group: func(g *groupedOrg) string { return g.cron },
 		},
 		{
 			name: "delete dashboard", path: "/api/dashboards/permdash",
 			seed: func(g *groupedOrg) {
-				g.s.SaveCronWatch(g.org.ID, "", "permcron", "*/5 * * * *", "echo 1", true, nil)
+				g.s.SaveCronWatch(g.org.ID, 0, "", "permcron", "*/5 * * * *", "echo 1", true, nil)
 				g.s.SaveDashboard(g.org.ID, "", "permdash", permDashboard)
 			},
 			gone:  func(g *groupedOrg) bool { _, err := g.s.GetDashboard(g.org.ID, "permdash"); return err != nil },
@@ -236,7 +245,7 @@ func TestRESTDeletes_RequireTheGroupTheShellRequires(t *testing.T) {
 func TestRESTCronSave_HonorsPlanLimitsLikeTheShell(t *testing.T) {
 	g := newGroupedOrg(t, store.TierTrial)
 	save := func(name string) *httptest.ResponseRecorder {
-		return g.do(g.cron, "PUT", "/api/crons/"+name, []byte(`{"schedule":"*/5 * * * *","pipeline":"echo 1"}`))
+		return g.do(g.cron, "PUT", "/api/crons/ops/"+name, []byte(`{"schedule":"*/5 * * * *","pipeline":"echo 1"}`))
 	}
 
 	if w := save("first"); w.Code >= 300 {
@@ -247,7 +256,7 @@ func TestRESTCronSave_HonorsPlanLimitsLikeTheShell(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Errorf("second cron on the trial plan: status %d, want 403: %s", w.Code, w.Body.String())
 	}
-	if _, err := g.s.GetCronWatch(g.org.ID, "second"); err == nil {
+	if _, err := g.s.GetCronWatch(g.org.ID, g.ops, "second"); err == nil {
 		t.Error("cron saved past the trial plan's limit")
 	}
 }
@@ -256,12 +265,12 @@ func TestRESTCronSave_HonorsPlanLimitsLikeTheShell(t *testing.T) {
 func TestRESTCronSave_HonorsMinimumIntervalLikeTheShell(t *testing.T) {
 	g := newGroupedOrg(t, store.TierTrial)
 
-	w := g.do(g.cron, "PUT", "/api/crons/fast", []byte(`{"schedule":"* * * * *","pipeline":"echo 1"}`))
+	w := g.do(g.cron, "PUT", "/api/crons/ops/fast", []byte(`{"schedule":"* * * * *","pipeline":"echo 1"}`))
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status %d, want 403 for an interval below the plan minimum: %s", w.Code, w.Body.String())
 	}
-	if _, err := g.s.GetCronWatch(g.org.ID, "fast"); err == nil {
+	if _, err := g.s.GetCronWatch(g.org.ID, g.ops, "fast"); err == nil {
 		t.Error("cron saved below the plan's minimum interval")
 	}
 }

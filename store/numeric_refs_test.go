@@ -49,10 +49,10 @@ func TestCompileWatchPipeline_InlineLua(t *testing.T) {
 func TestSaveShellFunction_TextTypeChecks(t *testing.T) {
 	db := testOpen(t)
 	org, _ := db.FindOrCreateOrg("bin-types")
-	if err := db.SaveCronWatch(org.ID, "", "holders", "every 5m", "# type: text\necho i-0abc", true, nil); err != nil {
+	if err := db.SaveCronWatch(org.ID, 0, "", "holders", "every 5m", "# type: text\necho i-0abc", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(org.ID, "", "errors", "every 5m", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(org.ID, 0, "", "errors", "every 5m", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -75,7 +75,7 @@ func TestSaveShellFunction_TextTypeChecks(t *testing.T) {
 	if err := db.SaveShellFunction(org.ID, "", "error-avg", `print(weft.avg("errors", "1h"))`, "lua"); err != nil {
 		t.Fatal(err)
 	}
-	err := db.SaveCronWatch(org.ID, "", "errors", "every 5m", "# type: text\necho busy", true, nil)
+	err := db.SaveCronWatch(org.ID, 0, "", "errors", "every 5m", "# type: text\necho busy", true, nil)
 	if err == nil || !strings.Contains(err.Error(), "/bin/error-avg") {
 		t.Fatalf("turning a cron read by /bin text: %v", err)
 	}

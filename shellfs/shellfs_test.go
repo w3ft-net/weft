@@ -128,7 +128,7 @@ func TestReadDir_CronD_ShowsSavedWatches(t *testing.T) {
 	}
 
 	// Save a watch via the store.
-	err = db.SaveCronWatch(cust.ID, "", "disk-alert", "every 5m", "cat /log/api.log | grep ERROR | wc -l | alert above 0", true, nil)
+	err = db.SaveCronWatch(cust.ID, 0, "", "disk-alert", "every 5m", "cat /log/api.log | grep ERROR | wc -l | alert above 0", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

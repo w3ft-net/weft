@@ -16,7 +16,7 @@ func TestSaveCronWatch_WarnsWhenTheWindowReachesOlderData(t *testing.T) {
 
 	save := func(name, schedule string) []string {
 		t.Helper()
-		err := db.SaveCronWatch(org, "", name, schedule, "cat vimgym.log | wc -l", true, nil)
+		err := db.SaveCronWatch(org, 0, "", name, schedule, "cat vimgym.log | wc -l", true, nil)
 		blocking, warnings := Split(err)
 		if len(blocking) > 0 {
 			t.Fatalf("%s: save rejected: %v", schedule, errors.Join(blocking...))

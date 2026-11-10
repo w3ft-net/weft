@@ -306,10 +306,8 @@ func TestSaveWatch_TruncationWarning(t *testing.T) {
 		t.Errorf("warning text should name the cap, got: %q", resp.Warnings[0])
 	}
 
-	saved, err := s.GetCronWatch(func() store.OrgID {
-		cust, _ := s.FindOrCreateOrg("truncation-warn-watch")
-		return cust.ID
-	}(), "risky")
+	saved, err := s.GetCronWatch(func() store.OrgID { cust, _ := s.FindOrCreateOrg("truncation-warn-watch"); return cust.ID }(), 0, "risky")
+
 	if err != nil {
 		t.Fatalf("GetCronWatch: %v (want the watch to have actually saved)", err)
 	}
@@ -342,7 +340,7 @@ func TestWriteFS_CronPathWithWarning_StillSucceeds(t *testing.T) {
 	}
 
 	cust, _ := s.FindOrCreateOrg("writefs-cron-warn")
-	saved, err := s.GetCronWatch(cust.ID, "risky")
+	saved, err := s.GetCronWatch(cust.ID, 0, "risky")
 	if err != nil {
 		t.Fatalf("GetCronWatch: %v (want the watch to have actually saved)", err)
 	}

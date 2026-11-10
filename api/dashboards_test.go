@@ -30,7 +30,7 @@ func TestDashboards_ListAndGet(t *testing.T) {
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	// Seed a watch and a dashboard that references it.
-	if err := s.SaveCronWatch(cust.ID, user.ID, "error-rate-hourly", "every 5m", "echo 1", true, nil); err != nil {
+	if err := s.SaveCronWatch(cust.ID, 0, user.ID, "error-rate-hourly", "every 5m", "echo 1", true, nil); err != nil {
 		t.Fatalf("seed watch: %v", err)
 	}
 	dashYAML := `title: Production
@@ -153,13 +153,13 @@ func TestDashboards_Get_TileDisplay(t *testing.T) {
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	seed := func(name string, v *float64) {
-		if err := s.SaveCronWatch(cust.ID, user.ID, name, "every 5m", "echo 1", true, nil); err != nil {
+		if err := s.SaveCronWatch(cust.ID, 0, user.ID, name, "every 5m", "echo 1", true, nil); err != nil {
 			t.Fatalf("seed %s: %v", name, err)
 		}
 		if v == nil {
 			return
 		}
-		cw, err := s.GetCronWatch(cust.ID, name)
+		cw, err := s.GetCronWatch(cust.ID, 0, name)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -175,10 +175,10 @@ func TestDashboards_Get_TileDisplay(t *testing.T) {
 	// A cron's alert cutoff is the only threshold: a tile on it is critical
 	// exactly when the value it shows breaches that cutoff.
 	for name, v := range map[string]float64{"hot": 95, "cool": 50} {
-		if err := s.SaveCronWatch(cust.ID, user.ID, name, "every 5m", "echo 1 | alert above 90", true, nil); err != nil {
+		if err := s.SaveCronWatch(cust.ID, 0, user.ID, name, "every 5m", "echo 1 | alert above 90", true, nil); err != nil {
 			t.Fatalf("seed %s: %v", name, err)
 		}
-		cw, _ := s.GetCronWatch(cust.ID, name)
+		cw, _ := s.GetCronWatch(cust.ID, 0, name)
 		if err := s.SaveCronResults([]store.CronResult{{CronWatchID: cw.ID, RanAt: time.Now(), Value: f(v)}}); err != nil {
 			t.Fatal(err)
 		}

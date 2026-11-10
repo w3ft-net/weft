@@ -135,7 +135,7 @@ func TestEtc_RestoreStillValidates(t *testing.T) {
 	f.saveCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
 	f.saveDash(t, "prod", dash("v1"))
 	f.saveDash(t, "prod", dash("v2"))
-	if err := f.db.DeleteCronWatch(f.org, "errs"); err != nil {
+	if err := f.db.DeleteCronWatch(f.org, 0, "errs"); err != nil {
 		t.Fatal(err)
 	}
 	out := gitErr(t, f.repo(f.alice, "/"), "restore", "--source=HEAD~2", "/etc/dashboards/prod.yaml")

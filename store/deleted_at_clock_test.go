@@ -18,7 +18,7 @@ func TestDeletionsUseTheDatabaseClock(t *testing.T) {
 	cfg.NowFunc = func() time.Time { return time.Now().Add(-time.Hour) }
 	t.Cleanup(func() { cfg.NowFunc = appNow })
 
-	if err := db.SaveCronWatch(org.ID, "", "errs", "every 5m", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(org.ID, 0, "", "errs", "every 5m", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveShellFunction(org.ID, "", "count", "echo 1", "bash"); err != nil {
@@ -34,7 +34,7 @@ func TestDeletionsUseTheDatabaseClock(t *testing.T) {
 	for _, del := range []func() error{
 		func() error { return db.DeleteDashboard(org.ID, "prod") },
 		func() error { return db.DeleteShellFunction(org.ID, "count") },
-		func() error { return db.DeleteCronWatch(org.ID, "errs") },
+		func() error { return db.DeleteCronWatch(org.ID, 0, "errs") },
 	} {
 		if err := del(); err != nil {
 			t.Fatal(err)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -306,12 +307,16 @@ func (s *Server) Handler() http.Handler {
 	auth.Handle("PUT /api/functions/{name}", BodyCap(cfg.FunctionBodyMax, protected(s.handleSaveFunction)))
 	auth.Handle("DELETE /api/functions/{name}", protected(s.handleDeleteFunction))
 	auth.HandleFunc("GET /api/crons", s.handleListWatches)
-	auth.HandleFunc("GET /api/crons/{name}", s.handleGetWatch)
-	auth.Handle("PUT /api/crons/{name}", BodyCap(cfg.WatchBodyMax, protected(s.handleSaveWatch)))
-	auth.Handle("DELETE /api/crons/{name}", protected(s.handleDeleteWatch))
-	auth.HandleFunc("GET /api/crons/{name}/results", s.handleWatchResults)
-	auth.HandleFunc("GET /api/crons/{name}/latest", s.handleWatchLatest)
-	auth.HandleFunc("GET /api/crons/{name}/chart", s.handleWatchChart)
+	// A cron is /api/crons/{name} at the org level, or /api/crons/{ns}/{name}
+	// in a namespace; cronPath joins the two.
+	for _, base := range []string{"/api/crons/{name}", "/api/crons/{ns}/{name}"} {
+		auth.HandleFunc("GET "+base, s.handleGetWatch)
+		auth.Handle("PUT "+base, BodyCap(cfg.WatchBodyMax, protected(s.handleSaveWatch)))
+		auth.Handle("DELETE "+base, protected(s.handleDeleteWatch))
+		auth.HandleFunc("GET "+base+"/results", s.handleWatchResults)
+		auth.HandleFunc("GET "+base+"/latest", s.handleWatchLatest)
+		auth.HandleFunc("GET "+base+"/chart", s.handleWatchChart)
+	}
 	auth.HandleFunc("GET /api/shared-links/{slug}", s.handleGetSharedLink)
 	auth.HandleFunc("GET /api/dashboards", s.handleListDashboards)
 	auth.HandleFunc("GET /api/dashboards/{name}", s.handleGetDashboard)
@@ -1596,13 +1601,67 @@ func (s *Server) handleDeleteFunction(w http.ResponseWriter, r *http.Request) {
 
 // --- Cron watches (/cron.d/) ---
 
+// cronPath is the cron a request names: {name} at the org level, {ns}/{name}
+// in a namespace.
+func cronPath(r *http.Request) string {
+	if ns := r.PathValue("ns"); ns != "" {
+		return ns + "/" + r.PathValue("name")
+	}
+	return r.PathValue("name")
+}
+
+// cronAt finds the cron at a /cron.d path, or reports it missing when it is
+// homed in a namespace the caller can't read: the same answer as no such cron.
+func (s *Server) cronAt(ctx context.Context, session *auth.Session, p string) (*store.CronWatch, error) {
+	ns, name, err := s.store.ResolveCronPath(session.ActiveOrgID, p)
+	if err != nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if ns != 0 {
+		readable, err := s.readable(ctx, session)
+		if err != nil {
+			return nil, err
+		}
+		if home, _, _ := strings.Cut(p, "/"); !slices.Contains(readable, home) {
+			return nil, gorm.ErrRecordNotFound
+		}
+	}
+	return s.store.GetCronWatch(session.ActiveOrgID, ns, name)
+}
+
+// readableCrons lists the org-level crons and those homed in a namespace the
+// caller can read.
+func (s *Server) readableCrons(ctx context.Context, session *auth.Session) ([]store.CronWatch, error) {
+	all, err := s.store.ListCronWatches(session.ActiveOrgID)
+	if err != nil {
+		return nil, err
+	}
+	readable, err := s.readable(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	var ids []uint
+	for _, n := range readable {
+		if ns, err := s.store.GetNamespace(session.ActiveOrgID, n); err == nil {
+			ids = append(ids, ns.ID)
+		}
+	}
+	out := all[:0:0]
+	for _, w := range all {
+		if w.NamespaceID == nil || slices.Contains(ids, *w.NamespaceID) {
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+
 func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 	custID, ok := activeOrg(w, session)
 	if !ok {
 		return
 	}
-	watches, err := s.store.ListCronWatches(custID)
+	watches, err := s.readableCrons(r.Context(), session)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -1622,26 +1681,26 @@ func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetWatch(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	name := r.PathValue("name")
+	name := cronPath(r)
 	if name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, ok := activeOrg(w, session)
+	_, ok := activeOrg(w, session)
 	if !ok {
 		return
 	}
-	w_, err := s.store.GetCronWatch(custID, name)
+	cw, err := s.cronAt(r.Context(), session, name)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	json.NewEncoder(w).Encode(w_)
+	json.NewEncoder(w).Encode(cw)
 }
 
 func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	name := r.PathValue("name")
+	name := cronPath(r)
 	if name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
@@ -1703,7 +1762,7 @@ func (r storeBinResolver) Source(name string) (string, string, bool) {
 
 func (s *Server) handleDeleteWatch(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	name := r.PathValue("name")
+	name := cronPath(r)
 	if name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
@@ -1725,16 +1784,16 @@ func (s *Server) handleDeleteWatch(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWatchResults(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	name := r.PathValue("name")
+	name := cronPath(r)
 	if name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	custID, ok := activeOrg(w, session)
+	_, ok := activeOrg(w, session)
 	if !ok {
 		return
 	}
-	watch, err := s.store.GetCronWatch(custID, name)
+	watch, err := s.cronAt(r.Context(), session, name)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -1752,11 +1811,11 @@ func (s *Server) handleWatchResults(w http.ResponseWriter, r *http.Request) {
 // dashboard's table and counter tiles.
 func (s *Server) handleWatchLatest(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	custID, ok := activeOrg(w, session)
+	_, ok := activeOrg(w, session)
 	if !ok {
 		return
 	}
-	watch, err := s.store.GetCronWatch(custID, r.PathValue("name"))
+	watch, err := s.cronAt(r.Context(), session, cronPath(r))
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -1803,7 +1862,7 @@ var rangeDurations = map[string]time.Duration{
 // the average line.
 func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	name := r.PathValue("name")
+	name := cronPath(r)
 	if name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
@@ -1836,7 +1895,7 @@ func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	watch, err := s.store.GetCronWatch(custID, name)
+	watch, err := s.cronAt(r.Context(), session, name)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
