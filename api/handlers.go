@@ -2025,9 +2025,7 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Verify caller is owner.
-	callerMember, err := s.store.GetTeamMemberByEmail(session.ActiveOrgID, session.Email)
-	if err != nil || callerMember.Role != store.RoleOwner {
+	if s.authorize(r.Context(), session, hosted.ActionManageTeam, tenancy.Resource{}) != nil {
 		http.Error(w, "only the owner can remove members", http.StatusForbidden)
 		return
 	}
@@ -2063,8 +2061,7 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleUpdateTeamName(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
-	// Only the owner can rename.
-	if callerMember, err := s.store.GetTeamMemberByEmail(session.ActiveOrgID, session.Email); err != nil || callerMember.Role != store.RoleOwner {
+	if s.authorize(r.Context(), session, hosted.ActionManageTeam, tenancy.Resource{}) != nil {
 		http.Error(w, "only the owner can rename the team", http.StatusForbidden)
 		return
 	}
