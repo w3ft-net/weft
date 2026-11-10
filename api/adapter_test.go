@@ -189,7 +189,7 @@ func TestIngestHandler_Heroku_SamplesSchemalessService(t *testing.T) {
 	if lg.ResampleRequestedAt != nil {
 		t.Error("resample flag still set after a full sample")
 	}
-	if n, _ := s.CountPendingLogGroups(ns.OrgID); n != 1 {
+	if n, _ := s.CountPendingLogGroups(ns.OrgID, "", true); n != 1 {
 		t.Errorf("pending count = %d, want 1 — a full schemaless sample awaits review", n)
 	}
 }

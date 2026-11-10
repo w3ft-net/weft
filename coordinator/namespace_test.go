@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"github.com/graybeardcorp/weft/store"
 	"strings"
 	"testing"
 	"time"
@@ -113,7 +114,7 @@ var nsRange = TimeRange{
 func TestNamespaceQuery_All(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Execute(context.Background(), "cat /log/weft.log", nsRange, "graybeard", "")
+	result, err := c.Execute(context.Background(), "cat /log/weft.log", nsRange, store.TestOrgID("graybeard"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -156,7 +157,7 @@ func TestNamespaceQuery_All(t *testing.T) {
 func TestNamespaceQuery_SubApp(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Execute(context.Background(), "cat /log/weft/coordinator/main.log", nsRange, "graybeard", "")
+	result, err := c.Execute(context.Background(), "cat /log/weft/coordinator/main.log", nsRange, store.TestOrgID("graybeard"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -177,7 +178,7 @@ func TestNamespaceQuery_SubApp(t *testing.T) {
 func TestNamespaceQuery_Metrics(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Execute(context.Background(), "cat /log/weft/coordinator/metrics.log", nsRange, "graybeard", "")
+	result, err := c.Execute(context.Background(), "cat /log/weft/coordinator/metrics.log", nsRange, store.TestOrgID("graybeard"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -197,7 +198,7 @@ func TestNamespaceQuery_Metrics(t *testing.T) {
 func TestNamespaceQuery_HeadTail(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
-	result, err := c.Execute(context.Background(), "head -3 /log/weft.log", nsRange, "graybeard", "")
+	result, err := c.Execute(context.Background(), "head -3 /log/weft.log", nsRange, store.TestOrgID("graybeard"), "")
 	if err != nil {
 		t.Fatalf("head query: %v", err)
 	}
@@ -206,7 +207,7 @@ func TestNamespaceQuery_HeadTail(t *testing.T) {
 		t.Errorf("expected 3 rows for head -3, got %d", len(resultD.Rows))
 	}
 
-	result, err = c.Execute(context.Background(), "tail -3 /log/weft.log", nsRange, "graybeard", "")
+	result, err = c.Execute(context.Background(), "tail -3 /log/weft.log", nsRange, store.TestOrgID("graybeard"), "")
 	if err != nil {
 		t.Fatalf("tail query: %v", err)
 	}
@@ -222,7 +223,7 @@ func TestNamespaceQuery_FilterAcrossSubApps(t *testing.T) {
 	c := setupNamespaceCoordinator(t)
 
 	// grep for "coordinator" — should only match weft/coordinator rows
-	result, err := c.Execute(context.Background(), `cat /log/weft.log | grep coordinator`, nsRange, "graybeard", "")
+	result, err := c.Execute(context.Background(), `cat /log/weft.log | grep coordinator`, nsRange, store.TestOrgID("graybeard"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -232,7 +233,7 @@ func TestNamespaceQuery_FilterAcrossSubApps(t *testing.T) {
 	}
 
 	// awk filter on instance — should match only shard rows
-	result, err = c.Execute(context.Background(), `cat /log/weft.log | awk 'INSTANCE == "i-shard-001"'`, nsRange, "graybeard", "")
+	result, err = c.Execute(context.Background(), `cat /log/weft.log | awk 'INSTANCE == "i-shard-001"'`, nsRange, store.TestOrgID("graybeard"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

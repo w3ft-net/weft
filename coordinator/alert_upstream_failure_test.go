@@ -24,7 +24,7 @@ func TestAlert_UpstreamFailureIsNotEvaluated(t *testing.T) {
 
 	for _, cond := range []string{"absent", "below 5", "changed", "any"} {
 		t.Run(cond, func(t *testing.T) {
-			res, err := c.Execute(context.Background(), `cat /log/ghost/prod/api/main.log | alert `+cond, tr, cust.Name, "")
+			res, err := c.Execute(context.Background(), `cat /log/ghost/prod/api/main.log | alert `+cond, tr, cust.ID, "")
 			var text string
 			if err == nil {
 				d := drainExec(t, res)
@@ -52,7 +52,7 @@ func TestAlert_AbsentStillFiresOnEmptySuccess(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db, Notifier: NewNotifier(db, nil)})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
-	res, err := c.Execute(context.Background(), `echo hello | grep nomatch | alert absent`, tr, cust.Name, "")
+	res, err := c.Execute(context.Background(), `echo hello | grep nomatch | alert absent`, tr, cust.ID, "")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}

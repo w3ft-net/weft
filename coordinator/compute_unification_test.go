@@ -38,7 +38,7 @@ func TestQuery_NoStages_RoutesThroughCompute(t *testing.T) {
 	pool := &spyCompute{inner: c.Compute}
 	c.Compute = pool
 
-	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestExecute_TraceIDReachesComputeCall(t *testing.T) {
 	c.Compute = spy
 
 	ctx := weftsdk.ContextWithTraceID(context.Background(), "trace-coord-1")
-	res, err := c.Execute(ctx, `cat vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(ctx, `cat vimgym.log`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

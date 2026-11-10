@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"github.com/graybeardcorp/weft/store"
 	"testing"
 	"time"
 
@@ -143,7 +144,7 @@ func TestExecute_SendsTheFieldFormToCompute(t *testing.T) {
 	spy := &spyCompute{inner: c.Compute}
 	c.Compute = spy
 
-	res, err := c.Execute(context.Background(), `cat vimgym.log | awk '{ n += $2 } END { print n }'`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk '{ n += $2 } END { print n }'`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}

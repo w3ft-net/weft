@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	"github.com/graybeardcorp/weft/store"
 	"sync"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ const keyedSumQuery = `cat /log/vimgym/api/main.log | awk '{ s[$1] += $2 } END {
 
 func runKeyed(t *testing.T, c *Coordinator, query string) string {
 	t.Helper()
-	res, err := c.Execute(context.Background(), query, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), query, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestKeyedAggregate_AFailingShardFailsTheQuery(t *testing.T) {
 			if err := shards[1].Close(); err != nil {
 				t.Fatal(err)
 			}
-			res, err := c.Execute(context.Background(), keyedSumQuery, fullRange, "kevlar", "")
+			res, err := c.Execute(context.Background(), keyedSumQuery, fullRange, store.TestOrgID("kevlar"), "")
 			if err == nil {
 				d, derr := res.Drain(context.Background())
 				if derr == nil {

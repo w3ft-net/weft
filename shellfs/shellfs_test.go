@@ -54,7 +54,7 @@ func TestReadFile_EtcUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithCustomerName("usage-fs-test"))
+	fs := New(db, cust.ID, []string{"api"}, WithTier("swatch"))
 
 	data, err := fs.ReadFile("/etc/usage")
 	if err != nil {
@@ -99,7 +99,7 @@ func TestReadFile_EtcUsage_WithMetricsForecast(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithCustomerName("usage-forecast-fs-test"))
+	fs := New(db, cust.ID, []string{"api"}, WithTier("swatch"))
 
 	data, err := fs.ReadFile("/etc/usage")
 	if err != nil {
@@ -134,7 +134,7 @@ func TestReadDir_CronD_ShowsSavedWatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithCustomerName("crond-test"))
+	fs := New(db, cust.ID, []string{"api"}, WithTier("swatch"))
 
 	// ls /cron.d/ should show the watch.
 	entries, err := fs.ReadDir("/cron.d")
@@ -227,7 +227,6 @@ func TestReadFile_LogNamespace_UnreadableIsHidden(t *testing.T) {
 
 	fs := New(db, cust.ID, []string{"secret/app"},
 		WithTier("swatch"),
-		WithCustomerName("nsperm-test"),
 		WithUser(user.ID, mounts.OrgPerms{}))
 
 	// An unreadable namespace is indistinguishable from a missing one.
@@ -262,7 +261,6 @@ func TestReadDir_Log_FiltersNamespaces(t *testing.T) {
 
 	fs := New(db, cust.ID, []string{"allowed/web", "blocked/api"},
 		WithTier("swatch"),
-		WithCustomerName("nsfilter-test"),
 		WithUser(user.ID, mounts.OrgPerms{}))
 
 	entries, err := fs.ReadDir("/log")
@@ -296,7 +294,6 @@ func TestReadFile_LogNamespace_OwnerBypass(t *testing.T) {
 
 	fs := New(db, cust.ID, []string{"private/app"},
 		WithTier("swatch"),
-		WithCustomerName("nsowner-test"),
 		WithUser(user.ID, ownerPerms()))
 
 	// Owner should have access despite no permission row.

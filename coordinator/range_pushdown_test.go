@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"github.com/graybeardcorp/weft/store"
 	"path/filepath"
 	"testing"
 	"time"
@@ -67,7 +68,7 @@ func TestCoordinator_PlannerInjectsTimeRange(t *testing.T) {
 	}, "vimgym")
 
 	// Query spanning both windows.
-	result, err := c.Execute(context.Background(), "cat vimgym.log", TimeRange{Start: t0, End: t2}, "kevlar", "")
+	result, err := c.Execute(context.Background(), "cat vimgym.log", TimeRange{Start: t0, End: t2}, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}

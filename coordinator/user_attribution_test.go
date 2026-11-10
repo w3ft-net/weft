@@ -32,7 +32,7 @@ func TestCoordinatorQuery_RecordsCreatorOnTmpWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := c.Execute(context.Background(), `echo coord-test > /tmp/note`, tr, cust.Name, user.ID)
+	res, err := c.Execute(context.Background(), `echo coord-test > /tmp/note`, tr, cust.ID, user.ID)
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestCoordinatorQuery_EmptyUserStoresNullCreator(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
 	cust, _ := db.GetOrgByID(custID)
-	res, err := c.Execute(context.Background(), `echo system > /tmp/auto`, tr, cust.Name, "")
+	res, err := c.Execute(context.Background(), `echo system > /tmp/auto`, tr, cust.ID, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	cust, _ := db.GetOrgByID(custID)
 
 	// Alice's first /tmp write — should get the notice.
-	r1, err := c.Execute(context.Background(), `echo first > /tmp/a`, tr, cust.Name, alice.ID)
+	r1, err := c.Execute(context.Background(), `echo first > /tmp/a`, tr, cust.ID, alice.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	}
 
 	// Alice's second write — should NOT get the notice.
-	r2, err := c.Execute(context.Background(), `echo second >> /tmp/a`, tr, cust.Name, alice.ID)
+	r2, err := c.Execute(context.Background(), `echo second >> /tmp/a`, tr, cust.ID, alice.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestCoordinatorQuery_AttachesTmpExpiryNoticeOnFirstWrite(t *testing.T) {
 	}
 
 	// Bob's first write — should get HIS first notice (independent of alice).
-	r3, err := c.Execute(context.Background(), `echo bobs > /tmp/b`, tr, cust.Name, bob.ID)
+	r3, err := c.Execute(context.Background(), `echo bobs > /tmp/b`, tr, cust.ID, bob.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestCoordinatorExecute_RedirectUsesMemberGroups(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := db.GetOrgByID(custID)
 	write := func(userID, name string) string {
-		res, err := c.Execute(context.Background(), "echo 'echo hi' > /bin/"+name, tr, cust.Name, userID)
+		res, err := c.Execute(context.Background(), "echo 'echo hi' > /bin/"+name, tr, cust.ID, userID)
 		if err != nil {
 			t.Fatalf("Execute as %q: %v", userID, err)
 		}

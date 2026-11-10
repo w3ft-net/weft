@@ -465,19 +465,9 @@ func (c *Coordinator) ingestNamespaceID(customerID int64, namespace string) uint
 	return id
 }
 
-// resolveCustomerID maps a customer name to its org id. The empty name is the
-// no-customer test shape and resolves to 0 (the planner then emits no customer
-// predicate); any other name must exist.
-func (c *Coordinator) resolveCustomerID(customer string) (store.OrgID, error) {
-	if customer == "" {
-		return 0, nil
-	}
-	cust, err := c.Store.GetOrgByName(customer)
-	if err != nil {
-		return 0, fmt.Errorf("resolve customer %q: %w", customer, err)
-	}
-	return cust.ID, nil
-}
+// errNoOrg is returned for a request with no org identity. Zero used to mean
+// "no customer predicate"; it is now refused before planning.
+var errNoOrg = errors.New("request has no org identity")
 
 // resolveNamespaceID maps a (customer id, namespace-name) to namespaces.id
 // for service-level shard routing. Returns 0 — the "no namespace
@@ -542,8 +532,8 @@ func (c *Coordinator) clampTimeRange(tr TimeRange, custID store.OrgID) TimeRange
 // Callers that don't pump bytes themselves (tests, alert post-
 // processors) drain the stream into a buffered DrainedResult via
 // res.Drain(ctx).
-func (c *Coordinator) Execute(ctx context.Context, pipeline string, tr TimeRange, customer, userID string) (*ExecuteResult, error) {
-	return c.execute(ctx, pipeline, tr, customer, userID, nil, nil)
+func (c *Coordinator) Execute(ctx context.Context, pipeline string, tr TimeRange, org store.OrgID, userID string) (*ExecuteResult, error) {
+	return c.execute(ctx, pipeline, tr, org, userID, nil, nil)
 }
 
 // ExecuteWithDir is Execute plus the dirstack courier: dirStack (index
@@ -552,8 +542,8 @@ func (c *Coordinator) Execute(ctx context.Context, pipeline string, tr TimeRange
 // caller's current directory. The post-run dirstack is returned on the
 // result's FinalDirStack (read after the stream exhausts) for the caller
 // to cache. dirStack nil/empty behaves exactly like Execute (cwd "/").
-func (c *Coordinator) ExecuteWithDir(ctx context.Context, pipeline string, tr TimeRange, customer, userID string, dirStack []string) (*ExecuteResult, error) {
-	return c.execute(ctx, pipeline, tr, customer, userID, nil, dirStack)
+func (c *Coordinator) ExecuteWithDir(ctx context.Context, pipeline string, tr TimeRange, org store.OrgID, userID string, dirStack []string) (*ExecuteResult, error) {
+	return c.execute(ctx, pipeline, tr, org, userID, nil, dirStack)
 }
 
 // ExecuteFollow runs pipeline with live-tail semantics. The returned
@@ -569,7 +559,7 @@ func (c *Coordinator) ExecuteWithDir(ctx context.Context, pipeline string, tr Ti
 // notice trigger (/tmp writes) doesn't fire on follow's read-only
 // historical pass; if that changes, plumb Notices through the concat
 // transition.
-func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr TimeRange, customer, userID string, dirStack []string) (*ExecuteResult, error) {
+func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr TimeRange, org store.OrgID, userID string, dirStack []string) (*ExecuteResult, error) {
 	if c.TailFanout == nil {
 		return nil, fmt.Errorf("ExecuteFollow: coordinator has no tail broker")
 	}
@@ -586,16 +576,15 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 	if len(dirStack) > 0 {
 		cwd = dirStack[0]
 	}
-	followCust, err := c.resolveCustomerID(customer)
-	if err != nil {
-		return nil, err
+	if org == 0 {
+		return nil, errNoOrg
 	}
-	plan, err := planner.Plan(pipeline, int64(followCust), cwd, time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, int64(org), cwd, time.Time{}, time.Time{})
 	if err != nil {
 		return nil, err
 	}
 
-	historical, err := c.execute(ctx, pipeline, tr, customer, userID, nil, dirStack)
+	historical, err := c.execute(ctx, pipeline, tr, org, userID, nil, dirStack)
 	if err != nil {
 		return nil, err
 	}
@@ -657,10 +646,6 @@ func (c *Coordinator) ExecuteForWatch(ctx context.Context, pipeline string, tr T
 	// Fall-through: lowered form is missing, stale (version bump or
 	// /bin invalidation), or unrenderable. Run the original path and
 	// opportunistically re-lower + write back so the next fire is hot.
-	cust, err := c.Store.GetOrgByID(watch.OrgID)
-	if err != nil {
-		return nil, fmt.Errorf("cron %d: resolve org %s: %w", watch.ID, watch.OrgID, err)
-	}
 	// Refresh runs synchronously rather than via a goroutine. Two
 	// reasons: (1) it shares the same DB connection as the rest of
 	// the fire, and an async goroutine over a BeginTest-wrapped
@@ -669,7 +654,7 @@ func (c *Coordinator) ExecuteForWatch(ctx context.Context, pipeline string, tr T
 	// write doesn't move user-perceived latency. The next fire
 	// takes the hot path either way.
 	c.refreshLoweredSync(ctx, watch)
-	return c.execute(ctx, pipeline, tr, cust.Name, "", alertCtx, nil)
+	return c.execute(ctx, pipeline, tr, watch.OrgID, "", alertCtx, nil)
 }
 
 // executeLowered tries the hot-path dispatch using watch.LoweredPlan.
@@ -891,15 +876,15 @@ func (r watchBinResolver) Source(name string) (string, string, bool) {
 // terminal-aggregate, the whole body is needed before the alert can
 // fire), runAlertStage post-processes, and a buffered ExecuteResult
 // is returned.
-func (c *Coordinator) execute(ctx context.Context, pipeline string, tr TimeRange, customer, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
-	custID, expanded, err := c.preflight(pipeline, customer)
+func (c *Coordinator) execute(ctx context.Context, pipeline string, tr TimeRange, org store.OrgID, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
+	custID, expanded, err := c.preflight(pipeline, org)
 	if err != nil {
 		return nil, err
 	}
 
 	queryPart, alertArgs := planner.SplitAlertStage(expanded)
 
-	res, err := c.runLocal(ctx, queryPart, tr, customer, custID, userID, alertCtx, dirStack)
+	res, err := c.runLocal(ctx, queryPart, tr, custID, userID, alertCtx, dirStack)
 	if err != nil {
 		return nil, err
 	}
@@ -956,7 +941,7 @@ func (c *Coordinator) execute(ctx context.Context, pipeline string, tr TimeRange
 // here — the rewriter strips redirects from the snapshot before
 // re-rendering, lifting them onto the CallbackCommand so warp's
 // own redirect machinery handles the FS write.
-func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr TimeRange, customer string, custID store.OrgID, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr TimeRange, custID store.OrgID, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	// Clamp tr to the customer's tier retention BEFORE planning so the
 	// SQL's ts predicates and the shard-selection in MatchingEntries
 	// agree on the same start. Without the clamp here, a boundary-
@@ -997,7 +982,7 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 
-	execResult, err := c.executeQuery(ctx, plan, tr, customer, custID, userID, alertCtx)
+	execResult, err := c.executeQuery(ctx, plan, tr, custID, userID, alertCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -1024,17 +1009,15 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 	return queryResultToExecuteResult(qr), nil
 }
 
-// preflight resolves the customer name to an ID and pre-expands /bin
+// preflight refuses a zero org and pre-expands /bin
 // bash invocations so the planner can see their body. Source-arg globs
 // are expanded later, per query pipeline, in runQuery: this sees only
 // the line's first command, which for `cd X && tail *.log` is the cd.
-func (c *Coordinator) preflight(pipeline, customer string) (store.OrgID, string, error) {
-	custID, err := c.resolveCustomerID(customer)
-	if err != nil {
-		return 0, "", err
+func (c *Coordinator) preflight(pipeline string, custID store.OrgID) (store.OrgID, string, error) {
+	if custID == 0 {
+		return 0, "", errNoOrg
 	}
-
-	if custID != 0 {
+	{
 		fs := shellfs.New(c.Store, custID, nil)
 		// Reject `tail -f ... | <bin-script>` before inlining. Bash
 		// bodies get spliced by expandBinPipeline below, so if we
@@ -1125,7 +1108,7 @@ func (c *Coordinator) authorizeSources(custID store.OrgID, userID string, plan *
 	return nil
 }
 
-func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan, tr TimeRange, customer string, custID store.OrgID, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
+func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan, tr TimeRange, custID store.OrgID, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	if plan.ShardSQL == "" {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
@@ -1163,7 +1146,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 		return nil, err
 	}
 	if len(descs) == 0 {
-		logQuery(ctx, "query: no matching shards (namespace=%s, service=%s, customer=%s)", plan.SourceNamespace, plan.SourceService, customer)
+		logQuery(ctx, "query: no matching shards (namespace=%s, service=%s, org=%d)", plan.SourceNamespace, plan.SourceService, custID)
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
 	shardIDs := make([]string, len(descs))
@@ -1393,7 +1376,7 @@ const scriptExecutionTimeout = 30 * time.Second
 // Notices are populated on the returned ExecuteResult AFTER warp
 // finishes, BEFORE the pipe writers close — so consumers reading
 // Notices past stream EOF see the populated value.
-func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRange, customer string, custID store.OrgID, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
+func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRange, custID store.OrgID, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
 	ast, err := bash.Parse(pipeline)
 	if err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
@@ -1437,7 +1420,6 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		tier := c.Store.TierForOrg(custID)
 		opts := []shellfs.Option{
 			shellfs.WithTier(tier),
-			shellfs.WithCustomerName(customer),
 			shellfs.WithNoticeQueue(noticeQueue),
 			shellfs.WithContext(context.WithoutCancel(ctx)),
 		}
@@ -1505,9 +1487,9 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 
 		RegisterClipboardCommand(interp, c.Store, custID, userID, c.ShareURLBase, tr.Start, tr.End)
 
-		rewriteQueryPipelines(ctx, ast, c, tr, customer, custID, userID, alertCtx, failRun)
+		rewriteQueryPipelines(ctx, ast, c, tr, custID, userID, alertCtx, failRun)
 		interp.BinScriptTransform = func(_ string, script *bash.Script) {
-			rewriteQueryPipelines(ctx, script, c, tr, customer, custID, userID, alertCtx, failRun)
+			rewriteQueryPipelines(ctx, script, c, tr, custID, userID, alertCtx, failRun)
 		}
 	}
 	res := &ExecuteResult{Stream: stream}

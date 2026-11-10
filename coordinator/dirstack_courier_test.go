@@ -27,10 +27,10 @@ import (
 // pipeline — `pwd` prints it and FinalDirStack echoes it back unchanged
 // when the pipeline doesn't move.
 func TestCourier_SeedReadback(t *testing.T) {
-	db, _ := testStoreAndCustomer(t)
+	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.ExecuteWithDir(context.Background(), "pwd", TimeRange{}, "", "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "pwd", TimeRange{}, custID, "", []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -46,10 +46,10 @@ func TestCourier_SeedReadback(t *testing.T) {
 // TestCourier_CdMovesCwd: a `cd` in the shipped line moves the cwd, and
 // the new cwd comes back on FinalDirStack — the server owns cd semantics.
 func TestCourier_CdMovesCwd(t *testing.T) {
-	db, _ := testStoreAndCustomer(t)
+	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.ExecuteWithDir(context.Background(), "cd /bin && pwd", TimeRange{}, "", "", []string{"/tmp"})
+	res, err := c.ExecuteWithDir(context.Background(), "cd /bin && pwd", TimeRange{}, custID, "", []string{"/tmp"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -66,10 +66,10 @@ func TestCourier_CdMovesCwd(t *testing.T) {
 // against the seeded cwd — the whole point of ferrying the dirstack
 // (without it the server would resolve against "/").
 func TestCourier_RelativeCdResolvesAgainstSeed(t *testing.T) {
-	db, _ := testStoreAndCustomer(t)
+	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.ExecuteWithDir(context.Background(), "cd sub && pwd", TimeRange{}, "", "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "cd sub && pwd", TimeRange{}, custID, "", []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -85,10 +85,10 @@ func TestCourier_RelativeCdResolvesAgainstSeed(t *testing.T) {
 // TestCourier_PushdReturnsFullStack: pushd grows the stack and the whole
 // stack (index 0 == cwd) comes back, so the client caches more than cwd.
 func TestCourier_PushdReturnsFullStack(t *testing.T) {
-	db, _ := testStoreAndCustomer(t)
+	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.ExecuteWithDir(context.Background(), "pushd /bin", TimeRange{}, "", "", []string{"/tmp"})
+	res, err := c.ExecuteWithDir(context.Background(), "pushd /bin", TimeRange{}, custID, "", []string{"/tmp"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -102,10 +102,10 @@ func TestCourier_PushdReturnsFullStack(t *testing.T) {
 // nil dirstack) is unchanged — cwd "/" and a single-entry stack back.
 // Guards backwards-compat for every existing Execute caller.
 func TestCourier_NilSeedDefaultsToRoot(t *testing.T) {
-	db, _ := testStoreAndCustomer(t)
+	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.Execute(context.Background(), "pwd", TimeRange{}, "", "")
+	res, err := c.Execute(context.Background(), "pwd", TimeRange{}, custID, "")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

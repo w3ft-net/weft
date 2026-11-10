@@ -274,7 +274,7 @@ func otherCustomerRows() []*pb.LogRow {
 
 func TestQuery_AwkLevelFilter(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestQuery_AwkLevelFilter(t *testing.T) {
 
 func TestQuery_GrepTimeout(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat warp.log | grep timeout`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat warp.log | grep timeout`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestQuery_GrepTimeout(t *testing.T) {
 
 func TestQuery_JqSelectStatus500(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat vimgym.log | jq 'select(.status == 500)'`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | jq 'select(.status == 500)'`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestQuery_JqSelectStatus500(t *testing.T) {
 
 func TestQuery_HeadLimit(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Execute(context.Background(), `head -3 vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `head -3 vimgym.log`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestQuery_HeadLimit(t *testing.T) {
 
 func TestQuery_TailLimit(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Execute(context.Background(), `tail -3 vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `tail -3 vimgym.log`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestQuery_TailLimit(t *testing.T) {
 func TestQuery_TimeRangeScoping_Shard0Only(t *testing.T) {
 	c := setupTestCoordinator(t)
 	tr := TimeRange{Start: t0, End: t1} // only shard 0
-	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, tr, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, tr, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestQuery_TimeRangeScoping_Shard0Only(t *testing.T) {
 func TestQuery_TimeRangeScoping_Shard1Only(t *testing.T) {
 	c := setupTestCoordinator(t)
 	tr := TimeRange{Start: t1, End: t2} // only shard 1
-	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, tr, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, tr, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +418,7 @@ func TestQuery_TimeRangeScoping_Shard1Only(t *testing.T) {
 
 func TestQuery_CustomerIsolation(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +435,7 @@ func TestQuery_CustomerIsolation(t *testing.T) {
 
 func TestQuery_WarpLogAppFilter(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat warp.log | awk 'NAMESPACE == "callbox"'`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat warp.log | awk 'NAMESPACE == "callbox"'`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +458,7 @@ func TestQuery_WarpLogAppFilter(t *testing.T) {
 
 func TestQuery_ResultsOrderedByTimestamp(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat warp.log`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat warp.log`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +487,7 @@ func TestQuery_ResultsOrderedByTimestamp(t *testing.T) {
 
 func TestQuery_MergesAcrossShards(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat warp.log | grep timeout`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat warp.log | grep timeout`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +524,7 @@ func setupTestCoordinatorWithCompute(t *testing.T) *Coordinator {
 
 func TestCompute_Sort(t *testing.T) {
 	c := setupTestCoordinatorWithCompute(t)
-	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"' | sort`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"' | sort`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +550,7 @@ func TestCompute_Sort(t *testing.T) {
 
 func TestCompute_WcCount(t *testing.T) {
 	c := setupTestCoordinatorWithCompute(t)
-	res, err := c.Execute(context.Background(), `cat warp.log | grep timeout | wc -l`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat warp.log | grep timeout | wc -l`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -569,7 +569,7 @@ func TestCompute_WcCount(t *testing.T) {
 func TestCompute_SortUniqCount(t *testing.T) {
 	c := setupTestCoordinatorWithCompute(t)
 	// Get ERROR lines from all apps, sort them, count unique lines.
-	res, err := c.Execute(context.Background(), `cat warp.log | awk 'LEVEL == "ERROR"' | sort | uniq -c`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat warp.log | awk 'LEVEL == "ERROR"' | sort | uniq -c`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,7 +595,7 @@ func TestCompute_AwkFieldExtract(t *testing.T) {
 	c := setupTestCoordinatorWithCompute(t)
 	// Grep for ERROR, then print just the third field (app name).
 	// Simple $N print is fully pushed down as a projection — no compute stage.
-	res, err := c.Execute(context.Background(), `cat warp.log | grep ERROR | awk '{ print $3 }'`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `cat warp.log | grep ERROR | awk '{ print $3 }'`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -656,7 +656,7 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 		DirectShardSQL: "SELECT raw, ts FROM logs WHERE customer_id = 1 ORDER BY ts",
 	}
 
-	_, err = c.executeQuery(context.Background(), plan, tr, "kevlar", 0, "", nil)
+	_, err = c.executeQuery(context.Background(), plan, tr, 0, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

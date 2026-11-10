@@ -47,7 +47,7 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 		Notifier: NewNotifier(db, nil)})
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.Execute(context.Background(), `echo 40 | alert above 30 --notify=foo`, tr, cust.Name, "")
+	result, err := c.Execute(context.Background(), `echo 40 | alert above 30 --notify=foo`, tr, cust.ID, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 		Notifier: NewNotifier(db, nil)}) // OrgID intentionally zero.
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.Execute(context.Background(), `echo_first disk`, tr, cust.Name, "")
+	result, err := c.Execute(context.Background(), `echo_first disk`, tr, cust.ID, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

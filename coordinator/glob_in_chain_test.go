@@ -16,7 +16,6 @@ import (
 // literal kind '*' and the query silently returned nothing.
 func TestGlobInChainedSource_NoMatchIsAnError(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	const customer = "weftfuncs-test"
 	if _, err := db.FindOrCreateNamespace(custID, "acme"); err != nil {
 		t.Fatalf("FindOrCreateNamespace: %v", err)
 	}
@@ -28,7 +27,7 @@ func TestGlobInChainedSource_NoMatchIsAnError(t *testing.T) {
 		`cd /log/acme/prod/api; tail -n 1 *.nomatch`,
 		`tail -n 1 /log/acme/prod/api/*.nomatch`,
 	} {
-		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, customer, "", nil)
+		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, custID, "", nil)
 		if err == nil {
 			d := drainExec(t, res)
 			if !strings.Contains(d.Stderr, "no pseudofiles match") {
@@ -46,7 +45,6 @@ func TestGlobInChainedSource_NoMatchIsAnError(t *testing.T) {
 // refused with an explicit error wherever it sits in the line.
 func TestGlobInChainedSource_CrossSourceIsDisallowed(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	const customer = "weftfuncs-test"
 	if _, err := db.FindOrCreateNamespace(custID, "acme"); err != nil {
 		t.Fatalf("FindOrCreateNamespace: %v", err)
 	}
@@ -59,7 +57,7 @@ func TestGlobInChainedSource_CrossSourceIsDisallowed(t *testing.T) {
 		`cd /log/acme/prod; tail -n 1 *.log`,
 		`cat /log/acme/prod/*.log`,
 	} {
-		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, customer, "", nil)
+		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, custID, "", nil)
 		got := ""
 		if err != nil {
 			got = err.Error()
@@ -79,7 +77,6 @@ func TestGlobInChainedSource_CrossSourceIsDisallowed(t *testing.T) {
 // truncated file behind, with exit 0.
 func TestFollowWithStdoutRedirect_IsRefused(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	const customer = "weftfuncs-test"
 	if _, err := db.FindOrCreateNamespace(custID, "acme"); err != nil {
 		t.Fatalf("FindOrCreateNamespace: %v", err)
 	}
@@ -89,7 +86,7 @@ func TestFollowWithStdoutRedirect_IsRefused(t *testing.T) {
 		`tail -f /log/acme/prod/api/main.log > /tmp/stream`,
 		`tail -f /log/acme/prod/api/main.log | grep ERROR >> /tmp/stream`,
 	} {
-		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, customer, "", nil)
+		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, custID, "", nil)
 		got := ""
 		if err != nil {
 			got = err.Error()

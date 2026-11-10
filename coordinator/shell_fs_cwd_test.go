@@ -53,10 +53,9 @@ func seedAcmeServices(t *testing.T, db *store.Store, c *Coordinator, customerID 
 func TestShellLs_ResolvesCwdAndListsNamespace(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
-	const customer = "weftfuncs-test"
 	seedAcmeServices(t, db, c, custID)
 
-	res, err := c.ExecuteWithDir(context.Background(), "ls", TimeRange{}, customer, "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "ls", TimeRange{}, custID, "", []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -85,13 +84,12 @@ func TestShellLs_ResolvesCwdAndListsNamespace(t *testing.T) {
 // owns) and runs cleanly — no shards here, so the result is just empty.
 func TestShellTail_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	const customer = "weftfuncs-test"
 	if _, err := db.FindOrCreateNamespace(custID, "vimgym"); err != nil {
 		t.Fatalf("FindOrCreateNamespace: %v", err)
 	}
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.ExecuteWithDir(context.Background(), "tail gamestate.log", TimeRange{}, customer, "", []string{"/log/vimgym/api"})
+	res, err := c.ExecuteWithDir(context.Background(), "tail gamestate.log", TimeRange{}, custID, "", []string{"/log/vimgym/api"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -109,10 +107,9 @@ func TestShellTail_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 func TestShellTree_ListsNamespaceFromSeededCwd(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
-	const customer = "weftfuncs-test"
 	seedAcmeServices(t, db, c, custID)
 
-	res, err := c.ExecuteWithDir(context.Background(), "tree", TimeRange{}, customer, "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "tree", TimeRange{}, custID, "", []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}

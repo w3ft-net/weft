@@ -287,7 +287,7 @@ func TestSourceSchema_PreviewForwardsTraceID(t *testing.T) {
 	req.SetPathValue("namespace", "ns1")
 	req.SetPathValue("app", "worker")
 	ctx := weftsdk.ContextWithTraceID(context.Background(), "preview-trace-1")
-	ctx = auth.WithSession(ctx, &auth.Session{UserID: "u1", ActiveOrgID: cust.ID})
+	ctx = auth.WithSession(ctx, &auth.Session{UserID: "u1", ActiveOrgID: cust.ID, IsOwner: true})
 	w := httptest.NewRecorder()
 	srv.handleSourceSchema(w, req.WithContext(ctx))
 	if w.Code != 200 {

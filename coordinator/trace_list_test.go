@@ -78,7 +78,7 @@ func TestExecuteQuery_TraceListIsExactAcrossShards(t *testing.T) {
 	spy := &spyCompute{inner: c.Compute}
 	c.Compute = spy
 
-	res, err := c.Execute(context.Background(), "trace", fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), "trace", fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestExecuteQuery_TraceListIsExactAcrossShards(t *testing.T) {
 
 func TestExecuteQuery_TraceListPipesIntoStages(t *testing.T) {
 	c := setupTraceListCoordinator(t)
-	res, err := c.Execute(context.Background(), `trace | jq -r '.trace_id' | head -n 3`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `trace | jq -r '.trace_id' | head -n 3`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestExecuteQuery_TraceListPipesIntoStages(t *testing.T) {
 
 func TestExecuteQuery_TraceListScopedToANamespace(t *testing.T) {
 	c := setupTraceListCoordinator(t)
-	res, err := c.Execute(context.Background(), "trace vimgym/worker", fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), "trace vimgym/worker", fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestExecuteQuery_TraceListEmptyRunsOneStep(t *testing.T) {
 	c := setupTestCoordinator(t) // its rows carry no trace IDs
 	spy := &spyCompute{inner: c.Compute}
 	c.Compute = spy
-	res, err := c.Execute(context.Background(), "trace", fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), "trace", fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestExecuteQuery_TraceListEmptyRunsOneStep(t *testing.T) {
 // The old form `trace <id>` reads as a namespace, and no namespace has that name.
 func TestExecuteQuery_OldTraceFormIsAnUnknownNamespace(t *testing.T) {
 	c := setupTestCoordinator(t)
-	res, err := c.Execute(context.Background(), "trace 4bf92f3577b34da6a3ce929d0e0e4736", fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), "trace 4bf92f3577b34da6a3ce929d0e0e4736", fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatal(err)
 	}

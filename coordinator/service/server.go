@@ -50,22 +50,22 @@ func convertNotices(in []notices.Notice) []*pb.Notice {
 	return out
 }
 
-// callerCustomer returns the home customer name of the authenticated
+// callerOrg returns the home customer name of the authenticated
 // caller, derived from the Session the auth interceptor materialized.
 // Any non-empty `Customer` field on the request proto is IGNORED —
 // clients don't get to declare which tenant they are; the verified
 // principal is authoritative. Returns an Unauthenticated error when
 // called without an interceptor-populated context (shouldn't happen in
 // production because the interceptor gates every JWT-protected RPC).
-func callerCustomer(ctx context.Context) (string, error) {
+func callerOrg(ctx context.Context) (store.OrgID, error) {
 	s := auth.SessionFromContext(ctx)
 	if s == nil {
-		return "", status.Errorf(codes.Unauthenticated, "no authenticated caller")
+		return 0, status.Errorf(codes.Unauthenticated, "no authenticated caller")
 	}
-	if s.ActiveCustomerName == "" {
-		return "", status.Errorf(codes.PermissionDenied, "authenticated user has no customer")
+	if s.ActiveOrgID == 0 {
+		return 0, status.Errorf(codes.PermissionDenied, "authenticated user has no customer")
 	}
-	return s.ActiveCustomerName, nil
+	return s.ActiveOrgID, nil
 }
 
 // callerUserID returns the authenticated user's ID, or "" when no
@@ -151,7 +151,7 @@ func (s *Server) runtimeCfg() *weftcfg.Runtime {
 
 func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordinator_ExecuteServer) error {
 	start := time.Now()
-	customer, err := callerCustomer(stream.Context())
+	org, err := callerOrg(stream.Context())
 	if err != nil {
 		return err
 	}
@@ -216,16 +216,16 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	var lineCount int
 	var result *coordinator.ExecuteResult
 	if req.Follow && s.Coord.Tail != nil {
-		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, customer, userID, dirStack)
+		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, org, userID, dirStack)
 	} else {
-		result, err = s.Coord.ExecuteWithDir(ctx, req.Pipeline, tr, customer, userID, dirStack)
+		result, err = s.Coord.ExecuteWithDir(ctx, req.Pipeline, tr, org, userID, dirStack)
 	}
 	if err != nil {
 		span.RecordError(err)
 		if expired() {
-			return s.queryDeadlineError(ctx, parent, customer, req.Pipeline, dirStack, limit)
+			return s.queryDeadlineError(ctx, parent, org, req.Pipeline, dirStack, limit)
 		}
-		weftsdk.Errorf(ctx, "query rpc: error for customer=%s pipeline=%q: %v", customer, req.Pipeline, err)
+		weftsdk.Errorf(ctx, "query rpc: error for org=%d pipeline=%q: %v", org, req.Pipeline, err)
 		return err
 	}
 
@@ -296,7 +296,7 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 			}
 			span.RecordError(err)
 			if expired() {
-				return s.queryDeadlineError(ctx, parent, customer, req.Pipeline, dirStack, limit)
+				return s.queryDeadlineError(ctx, parent, org, req.Pipeline, dirStack, limit)
 			}
 			return err
 		}
@@ -340,7 +340,7 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 		return err
 	}
 	if traced {
-		weftsdk.Infof(ctx, "query rpc: done customer=%s pipeline=%q lines=%d duration=%s", customer, req.Pipeline, lineCount, time.Since(start))
+		weftsdk.Infof(ctx, "query rpc: done org=%d pipeline=%q lines=%d duration=%s", org, req.Pipeline, lineCount, time.Since(start))
 	}
 	return nil
 }
@@ -350,8 +350,8 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 // one, and what to change. Nothing in it names our internals; the code is
 // DeadlineExceeded so the API can tell it from a failure. Lines already sent
 // stay sent, and the error says the query didn't finish.
-func (s *Server) queryDeadlineError(ctx, parent context.Context, customer, pipeline string, dirStack []string, limit time.Duration) error {
-	weftsdk.Warnf(ctx, "query rpc: deadline customer=%s pipeline=%q limit=%s", customer, pipeline, limit)
+func (s *Server) queryDeadlineError(ctx, parent context.Context, org store.OrgID, pipeline string, dirStack []string, limit time.Duration) error {
+	weftsdk.Warnf(ctx, "query rpc: deadline org=%d pipeline=%q limit=%s", org, pipeline, limit)
 	unit := "seconds"
 	if limit == time.Second {
 		unit = "second"
@@ -361,7 +361,7 @@ func (s *Server) queryDeadlineError(ctx, parent context.Context, customer, pipel
 	if len(dirStack) > 0 {
 		cwd = dirStack[0]
 	}
-	if orgID, err := s.resolveCallerOrgID(parent); err == nil {
+	if orgID, err := callerOrg(parent); err == nil {
 		if summary := s.Coord.ExplainSummary(pipeline, cwd, orgID); summary != "" {
 			msg += "\n" + summary
 		}
@@ -371,7 +371,7 @@ func (s *Server) queryDeadlineError(ctx, parent context.Context, customer, pipel
 }
 
 func (s *Server) ListServices(ctx context.Context, _ *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {
-	orgID, err := s.resolveCallerOrgID(ctx)
+	orgID, err := callerOrg(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -403,19 +403,15 @@ func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.A
 		return nil, status.Errorf(codes.InvalidArgument, "log_group required")
 	}
 
-	callerCust, err := callerCustomer(ctx)
+	org, err := callerOrg(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.authorizeNamespace(ctx, req.Namespace); err != nil {
 		return nil, err
 	}
-	customer, err := s.Store.GetOrgByName(callerCust)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
-	}
 
-	ns, err := s.Store.GetNamespace(customer.ID, req.Namespace)
+	ns, err := s.Store.GetNamespace(org, req.Namespace)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.Namespace)
 	}
@@ -447,18 +443,14 @@ func (s *Server) RemoveSource(ctx context.Context, req *pb.RemoveSourceRequest) 
 	if req.Namespace == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
 	}
-	callerCust, err := callerCustomer(ctx)
+	org, err := callerOrg(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.authorizeNamespace(ctx, req.Namespace); err != nil {
 		return nil, err
 	}
-	customer, err := s.Store.GetOrgByName(callerCust)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
-	}
-	ns, err := s.Store.GetNamespace(customer.ID, req.Namespace)
+	ns, err := s.Store.GetNamespace(org, req.Namespace)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "namespace %q not found", req.Namespace)
 	}
@@ -505,22 +497,18 @@ func (s *Server) Authenticate(ctx context.Context, req *pb.AuthenticateRequest) 
 }
 
 func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
-	callerCust, err := callerCustomer(ctx)
+	org, err := callerOrg(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.authorizeNamespace(ctx, req.Namespace); err != nil {
 		return nil, err
 	}
-	customer, err := s.Store.GetOrgByName(callerCust)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "customer %q not found", callerCust)
-	}
-	ns, err := s.Store.GetNamespace(customer.ID, req.Namespace)
+	ns, err := s.Store.GetNamespace(org, req.Namespace)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.Namespace)
 	}
-	raw, _, err := s.Store.CreateAgentToken(customer.ID, ns.ID, req.Label, req.Env)
+	raw, _, err := s.Store.CreateAgentToken(org, ns.ID, req.Label, req.Env)
 	if err != nil {
 		return nil, fmt.Errorf("create token: %w", err)
 	}
@@ -845,7 +833,7 @@ func (s *Server) ingestBatch(ctx context.Context, rows []*pb.LogRow) {
 // nothing enforcement-critical reads this path (see
 // docs/plans/coordinator-horizontal-scaling.md).
 func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.GetUsageResponse, error) {
-	orgID, err := s.resolveCallerOrgID(ctx)
+	orgID, err := callerOrg(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -883,22 +871,6 @@ func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.Get
 }
 
 // ── Shell functions (/bin/) ─────────────────────────────────
-
-// resolveCallerOrgID returns the DB id of the customer the
-// authenticated caller belongs to. Ignores any customer field on the
-// request — the verified principal from the JWT interceptor is the sole
-// source of truth for identity.
-func (s *Server) resolveCallerOrgID(ctx context.Context) (store.OrgID, error) {
-	name, err := callerCustomer(ctx)
-	if err != nil {
-		return 0, err
-	}
-	c, err := s.Store.GetOrgByName(name)
-	if err != nil {
-		return 0, status.Errorf(codes.NotFound, "customer %q not found", name)
-	}
-	return c.ID, nil
-}
 
 // ── Cron watches (/cron.d/) ─────────────────────────────────
 

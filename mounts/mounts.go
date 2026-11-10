@@ -38,11 +38,10 @@ type NoticeSink interface {
 
 // Config holds the shared state that mount implementations need.
 type Config struct {
-	Store        *store.Store
-	OrgID        store.OrgID
-	CustomerName string
-	Tier         store.Tier
-	UserID       string
+	Store  *store.Store
+	OrgID  store.OrgID
+	Tier   store.Tier
+	UserID string
 	// IsOwner gates namespace *read* visibility in LogMount. It is not
 	// an authority over the four org-scoped bits below — those come from
 	// the member's org_permissions row and nowhere else (migration 072),

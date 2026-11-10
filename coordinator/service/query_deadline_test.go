@@ -88,7 +88,7 @@ func TestExecute_DeadlineEndsASlowQuery(t *testing.T) {
 // query, and without anything to say about it, nothing.
 func TestQueryDeadlineError_CarriesTheExplain(t *testing.T) {
 	f := newDeadlineFixture(t, 60)
-	err := f.srv.queryDeadlineError(f.ctx, f.ctx, "query-deadline",
+	err := f.srv.queryDeadlineError(f.ctx, f.ctx, 1,
 		`cat /log/x/y/main.log | grep ERROR | awk '{ printf "%s\n", $0 }'`, nil, 60*time.Second)
 	msg := status.Convert(err).Message()
 	for _, want := range []string{"(60 seconds)", "grep ERROR", "optimized retrieval", "post-retrieval", "Barrier: stage 2"} {
@@ -100,7 +100,7 @@ func TestQueryDeadlineError_CarriesTheExplain(t *testing.T) {
 		t.Errorf("message carries terminal colors:\n%q", msg)
 	}
 
-	msg = status.Convert(f.srv.queryDeadlineError(f.ctx, f.ctx, "query-deadline", spin, nil, 60*time.Second)).Message()
+	msg = status.Convert(f.srv.queryDeadlineError(f.ctx, f.ctx, 1, spin, nil, 60*time.Second)).Message()
 	if strings.Contains(msg, "Barrier") || strings.Contains(msg, "optimized") {
 		t.Errorf("a pipeline explain can't analyze got an explain:\n%s", msg)
 	}

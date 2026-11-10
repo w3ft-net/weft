@@ -37,7 +37,7 @@ import (
 // fail, when non-nil, is called with a query's error when its answer is
 // missing rows (missingRows); the run then has no result. Nil (tests)
 // reports those like any other query error.
-func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordinator, tr TimeRange, customer string, custID store.OrgID, userID string, alertCtx *AlertContext, fail func(error)) {
+func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordinator, tr TimeRange, custID store.OrgID, userID string, alertCtx *AlertContext, fail func(error)) {
 	if script == nil {
 		return
 	}
@@ -144,7 +144,7 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 					// against the live cwd — read here, not at rewrite time,
 					// so an in-line `cd /log/x && tail y.log` sees the post-cd
 					// directory. The dirstack was seeded from the courier.
-					result, err := c.runQuery(ctx, src, interp.DirStack().Cwd(), tr, customer, custID, userID, alertCtx)
+					result, err := c.runQuery(ctx, src, interp.DirStack().Cwd(), tr, custID, userID, alertCtx)
 					if err != nil {
 						return queryFailed(stderr, err, fail)
 					}

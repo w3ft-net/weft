@@ -167,21 +167,21 @@ func TestCountPendingLogGroups_SchemalessDirect(t *testing.T) {
 	if err := db.EnsureServiceLogGroup(ns.ID, "myapp"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := db.CountPendingLogGroups(cust.ID); err != nil || n != 0 {
+	if n, err := db.CountPendingLogGroups(cust.ID, "", true); err != nil || n != 0 {
 		t.Fatalf("before any sample: count = %d, err = %v, want 0", n, err)
 	}
 
 	if err := db.UpsertPendingLogGroup(ns.ID, "myapp", "", "", `["a","b"]`, `{}`, 2, true); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := db.CountPendingLogGroups(cust.ID); n != 1 {
+	if n, _ := db.CountPendingLogGroups(cust.ID, "", true); n != 1 {
 		t.Errorf("with a partial sample: count = %d, want 1", n)
 	}
 
 	if err := db.ConfigureLogGroup(context.Background(), ns.ID, "myapp", "app: myapp\nformat: text\n"); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := db.CountPendingLogGroups(cust.ID); n != 0 {
+	if n, _ := db.CountPendingLogGroups(cust.ID, "", true); n != 0 {
 		t.Errorf("after configure: count = %d, want 0", n)
 	}
 }
@@ -209,7 +209,7 @@ func TestCountPendingLogGroups_ResampledDirectStaysListedAtZero(t *testing.T) {
 	if err := db.RequestResample(ns.ID, "myapp", 0); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := db.CountPendingLogGroups(cust.ID); n != 1 {
+	if n, _ := db.CountPendingLogGroups(cust.ID, "", true); n != 1 {
 		t.Errorf("after resample (0 lines collected): count = %d, want 1", n)
 	}
 }

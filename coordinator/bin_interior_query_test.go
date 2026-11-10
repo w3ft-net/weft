@@ -25,7 +25,7 @@ import (
 // The shard has:
 //   - 2 ERROR rows for app=api, 1 INFO row for app=api
 //   - 1 ERROR row for app=web, 1 WARN row for app=web
-func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, store.OrgID) {
+func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, store.OrgID) {
 	t.Helper()
 	db, custID := testStoreAndCustomer(t)
 	return newInteriorQueryFixtureOn(t, db, custID)
@@ -36,7 +36,7 @@ func newInteriorQueryFixture(t *testing.T) (*Coordinator, *store.Store, string, 
 // once (the stages of a pipeline run concurrently) need a pooled store: a
 // transaction-scoped one is a single connection and fails with "driver: bad
 // connection" under concurrent use.
-func newInteriorQueryFixtureOn(t *testing.T, db *store.Store, custID store.OrgID) (*Coordinator, *store.Store, string, store.OrgID) {
+func newInteriorQueryFixtureOn(t *testing.T, db *store.Store, custID store.OrgID) (*Coordinator, *store.Store, store.OrgID) {
 	t.Helper()
 	cust, err := db.GetOrgByID(custID)
 	if err != nil {
@@ -79,7 +79,7 @@ func newInteriorQueryFixtureOn(t *testing.T, db *store.Store, custID store.OrgID
 		CreatedAt: time.Now(),
 	}, "api", "web")
 
-	return c, db, cust.Name, custID
+	return c, db, custID
 }
 
 func logRow(app, level string, customerID int64, ts time.Time) *pb.LogRow {
@@ -108,7 +108,7 @@ func lastHourRange() TimeRange {
 // the interceptor, the query reaches the shard and returns the real
 // count.
 func TestInteriorQuery_EchoBeforeAndAfter(t *testing.T) {
-	c, db, custName, custID := newInteriorQueryFixture(t)
+	c, db, custID := newInteriorQueryFixture(t)
 
 	body := `echo starting
 cat /log/api.log | grep ERROR | wc -l
@@ -117,7 +117,7 @@ echo finished`
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Execute(context.Background(), "scan", lastHourRange(), custName, "")
+	result, err := c.Execute(context.Background(), "scan", lastHourRange(), custID, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -141,7 +141,7 @@ echo finished`
 // Positional arguments must bind per invocation. The interceptor sees
 // the fully-expanded pipeline (cat /log/api.log, not cat /log/$1).
 func TestInteriorQuery_PositionalArg(t *testing.T) {
-	c, db, custName, custID := newInteriorQueryFixture(t)
+	c, db, custID := newInteriorQueryFixture(t)
 
 	body := `echo starting
 cat /log/$1.log | grep ERROR | wc -l`
@@ -159,7 +159,7 @@ cat /log/$1.log | grep ERROR | wc -l`
 	}
 	for _, tc := range cases {
 		t.Run(tc.arg, func(t *testing.T) {
-			result, err := c.Execute(context.Background(), "scan "+tc.arg, lastHourRange(), custName, "")
+			result, err := c.Execute(context.Background(), "scan "+tc.arg, lastHourRange(), custID, "")
 			if err != nil {
 				t.Fatalf("Query: %v", err)
 			}
@@ -180,7 +180,7 @@ cat /log/$1.log | grep ERROR | wc -l`
 // is runtime. The interceptor must see one dispatch per iteration
 // with each iteration's value substituted.
 func TestInteriorQuery_InsideForLoop(t *testing.T) {
-	c, db, custName, custID := newInteriorQueryFixture(t)
+	c, db, custID := newInteriorQueryFixture(t)
 
 	body := `for app in api web; do
   cat /log/$app.log | grep ERROR | wc -l
@@ -189,7 +189,7 @@ done`
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Execute(context.Background(), "loop", lastHourRange(), custName, "")
+	result, err := c.Execute(context.Background(), "loop", lastHourRange(), custID, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -215,7 +215,7 @@ done`
 // CallbackCommand — the callback's stdout would flow through to the
 // outer pipe and the FS write never happened.
 func TestInteriorQuery_RedirectInBinBody(t *testing.T) {
-	c, db, custName, custID := newInteriorQueryFixture(t)
+	c, db, custID := newInteriorQueryFixture(t)
 
 	const snapPath = "/tmp/snapshot"
 	body := `cat /log/api.log > ` + snapPath + `
@@ -224,7 +224,7 @@ echo finished`
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Execute(context.Background(), "snapshot", lastHourRange(), custName, "")
+	result, err := c.Execute(context.Background(), "snapshot", lastHourRange(), custID, "")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -261,7 +261,7 @@ echo finished`
 // through the interceptor, and its stdout lands in the variable
 // assignment. The outer echo then produces the stitched line.
 func TestInteriorQuery_CommandSubstitution(t *testing.T) {
-	c, db, custName, custID := newInteriorQueryFixture(t)
+	c, db, custID := newInteriorQueryFixture(t)
 
 	body := `count=$(cat /log/api.log | grep ERROR | wc -l)
 echo "found $count"`
@@ -269,7 +269,7 @@ echo "found $count"`
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Execute(context.Background(), "count_errs", lastHourRange(), custName, "")
+	result, err := c.Execute(context.Background(), "count_errs", lastHourRange(), custID, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -287,14 +287,14 @@ echo "found $count"`
 // trailing echo in the second — the splicer bails (multi-list body),
 // the interceptor handles the query, warp handles the &&.
 func TestInteriorQuery_AndShortCircuit(t *testing.T) {
-	c, db, custName, custID := newInteriorQueryFixture(t)
+	c, db, custID := newInteriorQueryFixture(t)
 
 	body := `cat /log/api.log | grep ERROR | wc -l && echo ok`
 	if err := db.SaveShellFunction(custID, "", "and_ok", body, "bash"); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Execute(context.Background(), "and_ok", lastHourRange(), custName, "")
+	result, err := c.Execute(context.Background(), "and_ok", lastHourRange(), custID, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestInteriorQuery_AndShortCircuit(t *testing.T) {
 // into execPipeline for each interior pipeline, which fires the hook
 // as usual.
 func TestInteriorQuery_FunctionWithConditionalReturn(t *testing.T) {
-	c, db, custName, custID := newInteriorQueryFixture(t)
+	c, db, custID := newInteriorQueryFixture(t)
 
 	// api has 2 ERROR rows (above the threshold of 1 → returns non-zero
 	// with "high" branch). web has 1 ERROR row (at threshold → returns
@@ -342,7 +342,7 @@ error_check web`
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Execute(context.Background(), "check_all", lastHourRange(), custName, "")
+	result, err := c.Execute(context.Background(), "check_all", lastHourRange(), custID, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -376,7 +376,7 @@ error_check web`
 // files without ceremony — but worth pinning with a test so a
 // future scoping change here can't silently land.
 func TestInteriorQuery_FunctionDefinedInSeparateBinScript(t *testing.T) {
-	c, db, custName, custID := newInteriorQueryFixture(t)
+	c, db, custID := newInteriorQueryFixture(t)
 
 	// /bin/lib: defines error_count but doesn't call it.
 	lib := `error_count() {
@@ -398,7 +398,7 @@ echo web: $(error_count web)`
 		t.Fatalf("save report: %v", err)
 	}
 
-	result, err := c.Execute(context.Background(), "report", lastHourRange(), custName, "")
+	result, err := c.Execute(context.Background(), "report", lastHourRange(), custID, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -420,14 +420,14 @@ echo web: $(error_count web)`
 // work end-to-end. This guards against regressions in the splicer
 // from the interceptor work.
 func TestInteriorQuery_SinglePipelineStillSplices(t *testing.T) {
-	c, db, custName, custID := newInteriorQueryFixture(t)
+	c, db, custID := newInteriorQueryFixture(t)
 
 	body := `cat /log/api.log | grep ERROR | wc -l`
 	if err := db.SaveShellFunction(custID, "", "errs", body, "bash"); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
 
-	result, err := c.Execute(context.Background(), "errs api", lastHourRange(), custName, "")
+	result, err := c.Execute(context.Background(), "errs api", lastHourRange(), custID, "")
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

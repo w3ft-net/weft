@@ -36,3 +36,13 @@ func TestOrg(t testing.TB, db *Store, name string) *Organization {
 	}
 	return org
 }
+
+// TestOrgID returns the fixed id of a well-known test customer without
+// touching the database, for tests that pass an org identity to code under test.
+func TestOrgID(name string) OrgID {
+	id, ok := testOrgIDs[name]
+	if !ok {
+		panic("TestOrgID: " + name + " has no fixed test id; add it to testOrgIDs")
+	}
+	return id
+}

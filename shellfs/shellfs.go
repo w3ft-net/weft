@@ -69,11 +69,6 @@ func WithTier(tier store.Tier) Option {
 	return func(c *mounts.Config) { c.Tier = tier }
 }
 
-// WithCustomerName sets the customer name for usage queries.
-func WithCustomerName(name string) Option {
-	return func(c *mounts.Config) { c.CustomerName = name }
-}
-
 // WithUser sets the user ID and org-scoped permission flags for
 // permission checks. The flags reflect the member's OrgPermission row
 // and are authoritative for every caller including owners, defaulting

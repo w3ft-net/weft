@@ -16,7 +16,7 @@ func gitRun(t *testing.T, c *Coordinator, org store.OrgID, userID, line string) 
 	t.Helper()
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := c.Store.GetOrgByID(org)
-	res, err := c.Execute(context.Background(), line, tr, cust.Name, userID)
+	res, err := c.Execute(context.Background(), line, tr, cust.ID, userID)
 	if err != nil {
 		t.Fatalf("%s: %v", line, err)
 	}

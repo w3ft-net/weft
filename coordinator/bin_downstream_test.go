@@ -10,7 +10,7 @@ import (
 
 // committedInteriorFixture is the interior-query fixture over a pooled,
 // committed store (see newInteriorQueryFixtureOn), cleaned up afterwards.
-func committedInteriorFixture(t *testing.T) (*Coordinator, *store.Store, string, store.OrgID) {
+func committedInteriorFixture(t *testing.T) (*Coordinator, *store.Store, store.OrgID) {
 	t.Helper()
 	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
@@ -39,7 +39,7 @@ func committedInteriorFixture(t *testing.T) (*Coordinator, *store.Store, string,
 // shipped there and failed with "compute exit 127: <name>: command not
 // found". The pipeline is split at the first stage that names a script.
 func TestBinScriptAfterLogRead(t *testing.T) {
-	c, db, custName, custID := committedInteriorFixture(t)
+	c, db, custID := committedInteriorFixture(t)
 
 	// api has 3 rows, 2 of them ERROR.
 	if err := db.SaveShellFunction(custID, "", "count", "wc -l", "bash"); err != nil {
@@ -58,7 +58,7 @@ func TestBinScriptAfterLogRead(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := c.Execute(context.Background(), tc.line, lastHourRange(), custName, "")
+			res, err := c.Execute(context.Background(), tc.line, lastHourRange(), custID, "")
 			if err != nil {
 				t.Fatalf("Execute: %v", err)
 			}
@@ -74,18 +74,18 @@ func TestBinScriptAfterLogRead(t *testing.T) {
 // split off from the query, the redirect must stay on the script's output,
 // not be lifted onto the query callback.
 func TestBinScriptAfterLogRead_RedirectStaysOnLastStage(t *testing.T) {
-	c, db, custName, custID := committedInteriorFixture(t)
+	c, db, custID := committedInteriorFixture(t)
 	if err := db.SaveShellFunction(custID, "", "count", "wc -l", "bash"); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
-	res, err := c.Execute(context.Background(), `cat /log/api.log | grep ERROR | count > /tmp/n`, lastHourRange(), custName, "")
+	res, err := c.Execute(context.Background(), `cat /log/api.log | grep ERROR | count > /tmp/n`, lastHourRange(), custID, "")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if d := drainExec(t, res); strings.TrimSpace(d.Text) != "" || d.Stderr != "" {
 		t.Fatalf("redirected output leaked: text %q stderr %q", d.Text, d.Stderr)
 	}
-	res, err = c.Execute(context.Background(), `cat /tmp/n`, lastHourRange(), custName, "")
+	res, err = c.Execute(context.Background(), `cat /tmp/n`, lastHourRange(), custID, "")
 	if err != nil {
 		t.Fatalf("Execute cat: %v", err)
 	}

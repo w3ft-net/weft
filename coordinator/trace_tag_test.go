@@ -16,7 +16,7 @@ func TestExecuteQuery_TraceTagsInteractiveOutput(t *testing.T) {
 	pool := &spyCompute{inner: c.Compute}
 	c.Compute = pool
 
-	res, err := c.Execute(context.Background(), `trace --id abc-123`, fullRange, "kevlar", "")
+	res, err := c.Execute(context.Background(), `trace --id abc-123`, fullRange, store.TestOrgID("kevlar"), "")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestExecuteQuery_SpanQueriesAreAggregatesNotTagged(t *testing.T) {
 			pool := &spyCompute{inner: c.Compute}
 			c.Compute = pool
 
-			res, err := c.Execute(context.Background(), pipeline, fullRange, "kevlar", "")
+			res, err := c.Execute(context.Background(), pipeline, fullRange, store.TestOrgID("kevlar"), "")
 			if err != nil {
 				t.Fatalf("query: %v", err)
 			}

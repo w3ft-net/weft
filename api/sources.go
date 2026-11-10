@@ -10,6 +10,7 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -151,7 +152,7 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 func (s *Server) handlePendingSourcesCount(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
-	n, err := s.store.CountPendingLogGroups(session.ActiveOrgID)
+	n, err := s.store.CountPendingLogGroups(session.ActiveOrgID, session.UserID, session.IsOwner)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -165,6 +166,11 @@ func (s *Server) handlePendingSourcesCount(w http.ResponseWriter, r *http.Reques
 func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
+	readable, err := s.store.ReadableNamespaces(session.ActiveOrgID, session.UserID, session.IsOwner)
+	if err != nil {
+		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	namespace := r.URL.Query().Get("namespace")
 	var sources []store.LogGroupJoined
 	q := s.store.DB().
@@ -174,12 +180,12 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 		        namespaces.name as namespace_name`).
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
 		Joins("JOIN organizations ON namespaces.org_id = organizations.id").
-		Where("organizations.id = ?", session.ActiveOrgID).
+		Where("organizations.id = ? AND namespaces.name IN ?", session.ActiveOrgID, readable).
 		Scopes(store.AwaitingSchema)
 	if namespace != "" {
 		q = q.Where("namespaces.name = ?", namespace)
 	}
-	err := q.Order("namespaces.name, log_groups.app").Find(&sources).Error
+	err = q.Order("namespaces.name, log_groups.app").Find(&sources).Error
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -464,6 +470,11 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	readable, err := s.store.ReadableNamespaces(session.ActiveOrgID, session.UserID, session.IsOwner)
+	if err != nil {
+		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	all, err := s.store.AllLogGroupsAnyStatus()
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
@@ -493,7 +504,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	var shown []store.LogGroupJoined
 	var weftdIDs []uint
 	for _, lg := range all {
-		if lg.CustomerName != customer.Name {
+		if lg.CustomerName != customer.Name || !slices.Contains(readable, lg.NamespaceName) {
 			continue
 		}
 		if nsFilter != "" && lg.NamespaceName != nsFilter {
@@ -679,13 +690,19 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	readable, err := s.store.ReadableNamespaces(session.ActiveOrgID, session.UserID, session.IsOwner)
+	if err != nil {
+		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	lg, err := s.store.FindLogGroup(session.ActiveOrgID, namespace, app)
 	if err != nil {
 		weftsdk.Infof(r.Context(), "source schema %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if lg == nil {
+	// An unreadable namespace answers exactly like a missing source.
+	if lg == nil || !slices.Contains(readable, namespace) {
 		http.Error(w, "no source found", http.StatusNotFound)
 		return
 	}

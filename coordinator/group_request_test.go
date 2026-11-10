@@ -30,7 +30,7 @@ func TestExecuteQuery_GroupedPipelineSendsAGroupSpec(t *testing.T) {
 			pool := &spyCompute{inner: c.Compute}
 			c.Compute = pool
 
-			res, err := c.Execute(context.Background(), tc.pipeline, fullRange, "kevlar", "")
+			res, err := c.Execute(context.Background(), tc.pipeline, fullRange, store.TestOrgID("kevlar"), "")
 			if err != nil {
 				t.Fatalf("query: %v", err)
 			}

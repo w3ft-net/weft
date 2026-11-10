@@ -20,7 +20,7 @@ func TestRunLocal_BinBashScriptResolution(t *testing.T) {
 	}
 
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
-	result, err := c.runLocal(context.Background(), "who alice", TimeRange{}, "", custID, "", nil, nil)
+	result, err := c.runLocal(context.Background(), "who alice", TimeRange{}, custID, "", nil, nil)
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestRunLocal_BinLuaScriptResolution(t *testing.T) {
 	}
 
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
-	result, err := c.runLocal(context.Background(), "greet world", TimeRange{}, "", custID, "", nil, nil)
+	result, err := c.runLocal(context.Background(), "greet world", TimeRange{}, custID, "", nil, nil)
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestRunLocal_BinBashPositionalRebinds(t *testing.T) {
 	}
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	alice, err := c.runLocal(context.Background(), "greet alice", TimeRange{}, "", custID, "", nil, nil)
+	alice, err := c.runLocal(context.Background(), "greet alice", TimeRange{}, custID, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestRunLocal_BinBashPositionalRebinds(t *testing.T) {
 		t.Errorf("greet alice = %q, want `hello alice`", got)
 	}
 
-	bob, err := c.runLocal(context.Background(), "greet bob", TimeRange{}, "", custID, "", nil, nil)
+	bob, err := c.runLocal(context.Background(), "greet bob", TimeRange{}, custID, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

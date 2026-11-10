@@ -18,10 +18,6 @@ import (
 func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	cust, err := db.GetOrgByID(custID)
-	if err != nil {
-		t.Fatalf("get customer: %v", err)
-	}
 
 	// A while loop that never terminates. Warp's `true` builtin keeps
 	// returning 0, so the loop iterates forever — until we cancel it.
@@ -37,7 +33,7 @@ func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 		ScriptExecutionTimeout: 200 * time.Millisecond})
 
 	start := time.Now()
-	res, err := c.runLocal(context.Background(), "runaway", TimeRange{}, cust.Name, custID, "", nil, nil)
+	res, err := c.runLocal(context.Background(), "runaway", TimeRange{}, custID, "", nil, nil)
 	if err != nil {
 		t.Fatalf("runLocal returned synchronous error before stream drain: %v", err)
 	}
@@ -66,10 +62,6 @@ func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 func TestRunLocal_QuickScriptCompletesNormally(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-	cust, err := db.GetOrgByID(custID)
-	if err != nil {
-		t.Fatalf("get customer: %v", err)
-	}
 
 	if err := db.SaveShellFunction(custID, "", "quick", `echo ok`, "bash"); err != nil {
 		t.Fatalf("save script: %v", err)
@@ -79,7 +71,7 @@ func TestRunLocal_QuickScriptCompletesNormally(t *testing.T) {
 		Store:                  db,
 		ScriptExecutionTimeout: 5 * time.Second})
 
-	result, err := c.runLocal(context.Background(), "quick", TimeRange{}, cust.Name, custID, "", nil, nil)
+	result, err := c.runLocal(context.Background(), "quick", TimeRange{}, custID, "", nil, nil)
 	if err != nil {
 		t.Fatalf("runLocal: %v", err)
 	}

@@ -21,7 +21,7 @@ import (
 
 type readFixture struct {
 	c    *Coordinator
-	cust string
+	org store.OrgID
 
 	owner, reader, none string // user ids: org owner / reads alpha only / reads nothing
 }
@@ -29,7 +29,6 @@ type readFixture struct {
 func newReadFixture(t *testing.T) *readFixture {
 	t.Helper()
 	db, custID := testStoreAndCustomer(t)
-	cust, _ := db.GetOrgByID(custID)
 	alpha, err := db.FindOrCreateNamespace(custID, "alpha")
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +48,7 @@ func newReadFixture(t *testing.T) *readFixture {
 	}
 	f := &readFixture{
 		c:      NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db}),
-		cust:   cust.Name,
+		org:    custID,
 		owner:  mk("owner", store.RoleOwner),
 		reader: mk("reader", orgs.RoleMember),
 		none:   mk("none", orgs.RoleMember),
@@ -66,7 +65,7 @@ func newReadFixture(t *testing.T) *readFixture {
 func (f *readFixture) run(t *testing.T, user, pipeline string) error {
 	t.Helper()
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	res, err := f.c.Execute(context.Background(), pipeline, tr, f.cust, user)
+	res, err := f.c.Execute(context.Background(), pipeline, tr, f.org, user)
 	if err != nil {
 		return err
 	}
@@ -148,14 +147,13 @@ func TestAuthorizeSources_FailsClosedOnAPlanWithNoNamespace(t *testing.T) {
 	f := newReadFixture(t)
 	plan := &planner.QueryPlan{ShardSQL: "SELECT 1", SourceCmd: "cat"}
 
-	cust, _ := f.c.Store.GetOrgByName(f.cust)
-	if err := f.c.authorizeSources(cust.ID, f.reader, plan); !refused(err) {
+	if err := f.c.authorizeSources(f.org, f.reader, plan); !refused(err) {
 		t.Errorf("reader: err = %v, want a refusal", err)
 	}
-	if err := f.c.authorizeSources(cust.ID, f.owner, plan); err != nil {
+	if err := f.c.authorizeSources(f.org, f.owner, plan); err != nil {
 		t.Errorf("owner: err = %v, want it allowed", err)
 	}
-	if err := f.c.authorizeSources(cust.ID, "", plan); err != nil {
+	if err := f.c.authorizeSources(f.org, "", plan); err != nil {
 		t.Errorf("system identity: err = %v, want it allowed", err)
 	}
 }

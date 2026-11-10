@@ -26,7 +26,7 @@ func TestRewriteQueryPipelines_PreservesStdoutRedirect(t *testing.T) {
 	// log-shaped pipelines with CallbackCommands. Pass nil for the
 	// coordinator-bound parameters — we only inspect the resulting AST
 	// shape here, the callback's body is irrelevant to this test.
-	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, "kevlar", 0, "", nil, nil)
+	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, 0, "", nil, nil)
 
 	cb := singleCallbackInScript(t, script)
 	if got := len(cb.Redirects); got != 1 {
@@ -50,7 +50,7 @@ func TestRewriteQueryPipelines_PreservesAppendRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, "kevlar", 0, "", nil, nil)
+	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, 0, "", nil, nil)
 
 	cb := singleCallbackInScript(t, script)
 	if got := len(cb.Redirects); got != 1 {
@@ -72,7 +72,7 @@ func TestRewriteQueryPipelines_RedirectOnLastStage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, "kevlar", 0, "", nil, nil)
+	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, 0, "", nil, nil)
 
 	cb := singleCallbackInScript(t, script)
 	if got := len(cb.Redirects); got != 1 {
@@ -94,7 +94,7 @@ func TestRewriteQueryPipelines_NoRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, "kevlar", 0, "", nil, nil)
+	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, 0, "", nil, nil)
 
 	cb := singleCallbackInScript(t, script)
 	if len(cb.Redirects) != 0 {
@@ -117,7 +117,7 @@ func TestRewriteQueryPipelines_LeadingNonSourceCommandWithLogPath(t *testing.T) 
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, "kevlar", 0, "", nil, nil)
+	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, 0, "", nil, nil)
 
 	// singleCallbackInScript fatals if the rewrite didn't substitute a
 	// callback at all — exactly the pre-fix behavior for this shape.
@@ -133,7 +133,7 @@ func TestRewriteQueryPipelines_TraceRecognized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, "kevlar", 0, "", nil, nil)
+	rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, 0, "", nil, nil)
 
 	singleCallbackInScript(t, script)
 }
@@ -174,7 +174,7 @@ func TestRewriteQueryPipelines_FilesystemCommandWithLogPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %q: %v", src, err)
 		}
-		rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, "kevlar", 0, "", nil, nil)
+		rewriteQueryPipelines(context.Background(), script, nil, TimeRange{}, 0, "", nil, nil)
 		n := 0
 		bash.Walk(script, func(node bash.Node) bool {
 			if _, ok := node.(*bash.CallbackCommand); ok {
