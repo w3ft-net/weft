@@ -16,15 +16,17 @@ const teams = {
 well as in the weft shell in <code>/etc/passwd</code>:</p>
 <pre><code>$ cat /etc/passwd
 USER             ROLE     STATUS    GROUPS
-alice@acme.com   admin    active    binmgr  cronmgr  configmgr  nsmgr  payments  payments+tokens
-bob@acme.com     member   active    binmgr  cronmgr  payments  payments+tokens
+alice@acme.com   admin    active    configmgr  nsmgr  payments-r  payments-w
+bob@acme.com     member   active    payments-r  payments-w
 carol@acme.com   member   invited   —
+payments-cron    cron     system    payments-r
 </code></pre>
 <p>Users are added or removed in the shell <code>adduser|deluser &lt;email address&gt;</code>, or
 in the browser, <strong>account</strong> -&gt; <strong>team</strong>. In either case, an invite will be
-emailed. You must have the <code>admin</code> role to add or remove users.</p>
+emailed. You must have the <code>admin</code> role to add or remove users. Groups are
+granted separately, with <code>usermod</code> (see below).</p>
 <h2 id="groups">Groups</h2>
-<p>There are two main types of group:</p>
+<p>There are two kinds of group, plus a system user for each namespace.</p>
 <p><strong>Manager groups</strong> gate org-wide directories and namespace management:</p>
 <table>
 <thead>
@@ -35,14 +37,6 @@ emailed. You must have the <code>admin</code> role to add or remove users.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>binmgr</code></td>
-<td>edit <code>/bin</code> (functions)</td>
-</tr>
-<tr>
-<td><code>cronmgr</code></td>
-<td>edit <code>/cron.d</code> (crons)</td>
-</tr>
-<tr>
 <td><code>configmgr</code></td>
 <td>edit <code>/etc</code> (notify.yaml, dashboards/*.yaml)</td>
 </tr>
@@ -52,7 +46,7 @@ emailed. You must have the <code>admin</code> role to add or remove users.</p>
 </tr>
 </tbody>
 </table>
-<p><strong>Namespace groups</strong> control log access and token creation:</p>
+<p><strong>Namespace groups</strong> come in a pair for every namespace:</p>
 <table>
 <thead>
 <tr>
@@ -62,29 +56,39 @@ emailed. You must have the <code>admin</code> role to add or remove users.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>&lt;namespace&gt;</code></td>
-<td>read <code>/log/&lt;namespace&gt;</code></td>
+<td><code>&lt;namespace&gt;-r</code></td>
+<td>read <code>/log/&lt;namespace&gt;</code>, and the definitions, output and history of its crons</td>
 </tr>
 <tr>
-<td><code>&lt;namespace&gt;+tokens</code></td>
-<td>create producer tokens for that namespace</td>
+<td><code>&lt;namespace&gt;-w</code></td>
+<td>manage the namespace's crons, tokens and sources</td>
 </tr>
 </tbody>
 </table>
-<p>A member can have either or both.</p>
-<p>Admins hold groups as other members do, and the roster lists the groups they have.</p>
+<p><strong>Cron users.</strong> Every namespace has a system user, <code>&lt;namespace&gt;-cron</code>, created
+with the namespace, for the purposes of executing the cron with correctly
+scoped access. If you need a cron to read logs or other cron results from other
+namespaces, you can grant read access to one namespace to a system user for
+another namespace (see below).</p>
 <h2 id="granting-and-revoking">Granting and revoking</h2>
-<p>Once someone is a member, add or drop their groups:</p>
-<pre><code>adduser dana@acme.com payments         # read payments logs
-adduser dana@acme.com payments+tokens  # ...and mint producer tokens
-adduser dana@acme.com cronmgr          # ...and edit /cron.d
-deluser dana@acme.com payments         # revoke read
+<p>Once someone is a member, add or drop their groups with <code>usermod</code>:</p>
+<pre><code>usermod -aG payments-r dana@acme.com   # read payments logs
+usermod -aG payments-w dana@acme.com   # ...and manage its crons, tokens and sources
+usermod -aG configmgr dana@acme.com    # ...and edit /etc
+usermod -rG payments-r dana@acme.com   # revoke read
 </code></pre>
-<p>There is no clicky version of this -- you must use the shell. Same for getting the deets on what groups a user belongs to:</p>
+<p>You manage read rights for a system user the same way. For example:</p>
+<pre><code>usermod -aG beta-r alpha-cron          # alpha's crons can now read beta
+usermod -rG beta-r alpha-cron          # and take it back
+</code></pre>
+<p>You must hold <code>beta-r</code> and <code>alpha-w</code> to run the commands above.</p>
+<p>The <strong>account</strong> page's Permissions grid edits members' groups too. For
+inspecting what a user can do, use the shell:</p>
 <pre><code>groups dana@acme.com                   # what dana can do
 id dana@acme.com                       # role + groups
+groups alpha-cron                      # alpha-cron: alpha-r beta-r
+id alpha-cron                          # uid=alpha-cron role=cron groups=alpha-r,beta-r
 </code></pre>
-<p>(<code>groups</code> and <code>id</code> with no argument describe you.)</p>
 `,
 } as const;
 

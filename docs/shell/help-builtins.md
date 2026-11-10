@@ -26,7 +26,7 @@ Only the options listed here are supported. Any other option is rejected with
 an error (`grep: unknown option -o`, exit status 2). The exception is `less`,
 which accepts options and ignores them.
 
-Where a command can write depends on the directory. `/log` is read-only. `/tmp` is open to every member. `/bin` needs the `binmgr` group, `/cron.d` needs `cronmgr`, and `/etc/dashboards` and `/etc/notify.yaml` need `configmgr` (`/etc/passwd` and `/etc/usage` are read-only for everyone). Expiry, size limits and how files cross into `/bin` are in [File system](../manual/filesystem.md#limitations).
+Where a command can write depends on the directory. `/log` is read-only. `/tmp` is open to every member. `/bin` is open to any member, unless a cron runs the script, in which case it needs the `-w` group of that cron's namespace. `/cron.d/<namespace>` needs `<namespace>-w`, and `/etc/dashboards` and `/etc/notify.yaml` need `configmgr` (`/etc/passwd` and `/etc/usage` are read-only for everyone). Expiry, size limits and how files cross into `/bin` are in [File system](../manual/filesystem.md#limitations).
 
 | Command | Supported | Unsupported | Differences |
 |---|---|---|---|
@@ -88,7 +88,7 @@ See `man less` for paging.
 
 | Command | What it does | Reference |
 |---|---|---|
-| `adduser`, `deluser`, `groups`, `id` | Manage org members and groups, not operating-system accounts. `adduser <email>` sends an invite. `/etc/passwd` is a read-only team roster. | `man passwd`, `man teams` |
+| `adduser`, `deluser`, `usermod`, `groups`, `id` | Manage users and groups. `adduser <email>` sends an invite; `usermod -aG\|-rG <group> <user>` changes groups. `/etc/passwd` is a read-only team roster. | `man passwd`, `man teams` |
 
 ## Finding help
 

@@ -28,6 +28,6 @@ shell:
 - `man explain` — how much of a pipeline is optimized, and what would speed it up
 - `man range` — show or set the query time window
 - `man less` — the in-shell pager
-- `man passwd` — team roster, groups, and adduser/deluser
+- `man passwd` — team roster, groups, and adduser/deluser/usermod
 
 > Tip: long output is paged automatically — press q to return.

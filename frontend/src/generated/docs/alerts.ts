@@ -137,25 +137,25 @@ interval: a <code>*/5</code> cron sees the last five minutes. However, you can l
 the stored results of other crons using the <code>weft::*</code> predicates.</p>
 <p>The simplest layer reads another cron's history with an aggregate and pipes
 the number to <code>alert</code>:</p>
-<pre><code># /cron.d/error-rate-hourly
+<pre><code># /cron.d/myco/error-rate-hourly
 # schedule: every 5m
-weft::avg error-rate 1h | alert above 50 --notify=ops
+weft::avg myco/error-rate 1h | alert above 50 --notify=ops
 </code></pre>
 <p>If you want to use boolean logic to add multiple such predicates, just add one
 more condition and echo if nothing's failed yet:</p>
-<pre><code># /cron.d/deploy-danger
+<pre><code># /cron.d/myco/deploy-danger
 # schedule: every 1m
-(weft::is_above error-rate 50 &amp;&amp; weft::is_absent canary-ping &amp;&amp; echo 1) | alert --notify=critical
+(weft::is_above myco/error-rate 50 &amp;&amp; weft::is_absent myco/canary-ping &amp;&amp; echo 1) | alert --notify=critical
 </code></pre>
 <p>If your love of bash is less than it should be, you may want to stuff a Lua
 script in <code>/bin</code> and pipe that to <code>alert</code>.</p>
 <pre><code class="language-lua">#!/usr/bin/env lua
 local rate = 0
-if not weft.is_absent(&quot;error-rate&quot;) then
-  rate = tonumber(weft.latest(&quot;error-rate&quot;)) or 0
+if not weft.is_absent(&quot;myco/error-rate&quot;) then
+  rate = tonumber(weft.latest(&quot;myco/error-rate&quot;)) or 0
 end
-local canary_dead = weft.is_absent(&quot;canary-ping&quot;)
-local in_maintenance = not weft.is_absent(&quot;maintenance-flag&quot;)
+local canary_dead = weft.is_absent(&quot;myco/canary-ping&quot;)
+local in_maintenance = not weft.is_absent(&quot;myco/maintenance-flag&quot;)
 
 if rate &gt; 50 and canary_dead and not in_maintenance then
   io.stderr:write(string.format(&quot;composite fire: rate=%.1f canary_dead=%s\\n&quot;,
@@ -168,7 +168,7 @@ end
 <p>We'll write that script to <code>/bin/deploy_danger</code>, and then we can write this for
 our alerting cron:</p>
 <pre><code># schedule: every 1m
-deploy_danger | alert above 0 --notify=critical
+/bin/deploy_danger | alert above 0 --notify=critical
 </code></pre>
 <h2 id="static-analysis">Static analysis</h2>
 <p>In addition to the checks <a href="/manual/crons#static-analysis">run for every cron</a>, there are some specific checks run related to crons that contain <code>alert</code> invocations:</p>

@@ -26,8 +26,8 @@ The shell exposes four mount points, detailed below.
 |---|---|---|---|
 | `/log` | Your logs, with a directory/file layout depdented on your [sources](connect-source.md) | nobody | no |
 | [`/tmp`](#tmp) | Scratch space for your investigations staging results | whole org | no |
-| [`/bin`](#custom-scripts-in-bin) | Reusable scripts in bash or Lua | `binmgr` | yes |
-| `/cron.d` | [Crons](crons.md): pipelines that run on a schedule. | `cronmgr` | yes |
+| [`/bin`](#custom-scripts-in-bin) | Reusable scripts in bash or Lua | any member, or `<namespace>-w` for each cron that runs the script | yes |
+| [`/cron.d`](#crons-in-crond) | [Crons](crons.md): pipelines that run on a schedule. | `<namespace>-w`, per namespace | yes |
 | `/etc` | [Dashboard](dashboards.md) and [Notification](alerts.md#notifications) configuration | `configmgr` | yes |
 | `/etc/passwd` | [teams](team.md) roster | nobody | no |
 | `/etc/usage` | plan usage and metering | nobody | no |
@@ -61,8 +61,13 @@ application is spewing.
 ## Custom scripts in /bin
 
 Anything you can type at the shell prompt can be saved as a named script under
-`/bin/`. `/bin` is automatically on your path for shell sessions and crons.
-Create scripts with `vi` or with `cat - > myscript`.
+`/bin/`. `/bin` is automatically on your path for shell sessions; a cron calls
+a script by its path, `/bin/myscript`. Create scripts with `vi` or with
+`cat - > myscript`.
+
+If a script gets invoked by a cron, directly or indirectly, it can only be
+changed by a user in the write group of every such cron's namespace, and can't
+be deleted until no cron invokes it.
 
 ### Language support
 
@@ -72,7 +77,7 @@ Scripts default to bash. If you're slinging Lua, add a .lua or a shebang
 ```
 #!/usr/bin/env lua
 -- /bin/report
-local name = arg[1]
+local name = arg[1]   -- a cron, as "<namespace>/<name>"
 local avg = weft.avg(name, "1h")
 print(string.format("%s averaged %.2f over the last hour", name, avg))
 ```
@@ -96,7 +101,7 @@ On top of the standard library, weft adds:
 
 ## Version history
 
-Every save to a script in `/bin`, a cron in `/cron.d`, a dashboard in
+Every save to a script in `/bin`, a cron in `/cron.d/*`, a dashboard in
 `/etc/dashboards`, or `/etc/notify.yaml` is captured in a short, browseable
 history. You access that history and manipulate it with the `git` command.
 

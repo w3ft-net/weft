@@ -16,6 +16,7 @@ const dashboards = {
     { level: 3, id: "dashboard-synopsis", text: "dashboard synopsis" },
     { level: 2, id: "dashboard-yaml", text: "Dashboard YAML" },
     { level: 3, id: "tile-kinds", text: "Tile kinds" },
+    { level: 3, id: "permissions", text: "Permissions" },
     { level: 3, id: "rendering-alerts", text: "Rendering alerts" },
     { level: 2, id: "layout", text: "Layout" },
     { level: 2, id: "building-dashboards-with-robots", text: "Building dashboards with robots" },
@@ -105,7 +106,7 @@ command. A brief example:</p>
 title: Production
 tiles:
   - kind: sparkline
-    cron: error-rate
+    cron: myco/error-rate
     title: Errors per 5 minutes
 </code></pre>
 <p>You can open it in the terminal with the <code>dashboard</code> command. It will also
@@ -149,19 +150,19 @@ sections:
   - title: Errors
     tiles:
       - kind: sparkline
-        cron: error-rate
+        cron: myco/error-rate
         size: md
   - title: Capacity
     tiles:
       - kind: counter
-        cron: pending-jobs
+        cron: myco/pending-jobs
         format: &quot;%d jobs&quot;
         size: sm
 </code></pre>
 <h3 id="tile-kinds">Tile kinds</h3>
-<p>Dashboard tiles are built on the same foundation as the <code>chart</code> command, so you can easily convert a 1-liner to to the appropriate YAML. For example,<code>chart error-rate --kind bar -a max --bucket 1h --title &quot;Worst hour&quot;</code> becomes:</p>
+<p>Dashboard tiles are built on the same foundation as the <code>chart</code> command, so you can easily convert a 1-liner to to the appropriate YAML. For example,<code>chart myco/error-rate --kind bar -a max --bucket 1h --title &quot;Worst hour&quot;</code> becomes:</p>
 <pre><code class="language-yaml">- kind: bar
-  cron: error-rate
+  cron: myco/error-rate
   aggregate: max
   bucket: 1h
   title: Worst hour
@@ -195,6 +196,9 @@ terminal, normal output works just fine:</p>
 </tr>
 </tbody>
 </table>
+<h3 id="permissions">Permissions</h3>
+<p>All dashboards are team-wide, but tile content applies standard read privileges rules. When someone opens a dashboard
+if a tile relies on a cron they don't have read rights for, its content will be blank.</p>
 <h3 id="rendering-alerts">Rendering alerts</h3>
 <p>If a tile targets a cron that uses <code>alert</code>, weft  will render that alert level
 automatically as a part of the tile wherever possible:</p>

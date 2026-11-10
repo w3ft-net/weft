@@ -141,18 +141,18 @@ The simplest layer reads another cron's history with an aggregate and pipes
 the number to `alert`:
 
 ```
-# /cron.d/error-rate-hourly
+# /cron.d/myco/error-rate-hourly
 # schedule: every 5m
-weft::avg error-rate 1h | alert above 50 --notify=ops
+weft::avg myco/error-rate 1h | alert above 50 --notify=ops
 ```
 
 If you want to use boolean logic to add multiple such predicates, just add one
 more condition and echo if nothing's failed yet:
 
 ```
-# /cron.d/deploy-danger
+# /cron.d/myco/deploy-danger
 # schedule: every 1m
-(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo 1) | alert --notify=critical
+(weft::is_above myco/error-rate 50 && weft::is_absent myco/canary-ping && echo 1) | alert --notify=critical
 ```
 
 If your love of bash is less than it should be, you may want to stuff a Lua
@@ -161,11 +161,11 @@ script in `/bin` and pipe that to `alert`.
 ```lua
 #!/usr/bin/env lua
 local rate = 0
-if not weft.is_absent("error-rate") then
-  rate = tonumber(weft.latest("error-rate")) or 0
+if not weft.is_absent("myco/error-rate") then
+  rate = tonumber(weft.latest("myco/error-rate")) or 0
 end
-local canary_dead = weft.is_absent("canary-ping")
-local in_maintenance = not weft.is_absent("maintenance-flag")
+local canary_dead = weft.is_absent("myco/canary-ping")
+local in_maintenance = not weft.is_absent("myco/maintenance-flag")
 
 if rate > 50 and canary_dead and not in_maintenance then
   io.stderr:write(string.format("composite fire: rate=%.1f canary_dead=%s\n",
@@ -181,7 +181,7 @@ our alerting cron:
 
 ```
 # schedule: every 1m
-deploy_danger | alert above 0 --notify=critical
+/bin/deploy_danger | alert above 0 --notify=critical
 ```
 
 ## Static analysis

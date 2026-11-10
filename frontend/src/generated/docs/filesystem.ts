@@ -46,13 +46,13 @@ things. Given that it's not exactly real, an overrview is warranted.</p>
 <tr>
 <td><a href="#custom-scripts-in-bin"><code>/bin</code></a></td>
 <td>Reusable scripts in bash or Lua</td>
-<td><code>binmgr</code></td>
+<td>any member, or <code>&lt;namespace&gt;-w</code> for each cron that runs the script</td>
 <td>yes</td>
 </tr>
 <tr>
-<td><code>/cron.d</code></td>
+<td><a href="#crons-in-crond"><code>/cron.d</code></a></td>
 <td><a href="/manual/crons">Crons</a>: pipelines that run on a schedule.</td>
-<td><code>cronmgr</code></td>
+<td><code>&lt;namespace&gt;-w</code>, per namespace</td>
 <td>yes</td>
 </tr>
 <tr>
@@ -97,14 +97,18 @@ results, use <a href="/manual/crons">crons</a> instead.</li>
 </ul>
 <h2 id="custom-scripts-in-bin">Custom scripts in /bin</h2>
 <p>Anything you can type at the shell prompt can be saved as a named script under
-<code>/bin/</code>. <code>/bin</code> is automatically on your path for shell sessions and crons.
-Create scripts with <code>vi</code> or with <code>cat - &gt; myscript</code>.</p>
+<code>/bin/</code>. <code>/bin</code> is automatically on your path for shell sessions; a cron calls
+a script by its path, <code>/bin/myscript</code>. Create scripts with <code>vi</code> or with
+<code>cat - &gt; myscript</code>.</p>
+<p>If a script gets invoked by a cron, directly or indirectly, it can only be
+changed by a user in the write group of every such cron's namespace, and can't
+be deleted until no cron invokes it.</p>
 <h3 id="language-support">Language support</h3>
 <p>The weft shell supports a subset of <strong>bash</strong> and <strong>Lua</strong>.
 Scripts default to bash. If you're slinging Lua, add a .lua or a shebang</p>
 <pre><code>#!/usr/bin/env lua
 -- /bin/report
-local name = arg[1]
+local name = arg[1]   -- a cron, as &quot;&lt;namespace&gt;/&lt;name&gt;&quot;
 local avg = weft.avg(name, &quot;1h&quot;)
 print(string.format(&quot;%s averaged %.2f over the last hour&quot;, name, avg))
 </code></pre>
@@ -155,7 +159,7 @@ print(string.format(&quot;%s averaged %.2f over the last hour&quot;, name, avg))
 </tbody>
 </table>
 <h2 id="version-history">Version history</h2>
-<p>Every save to a script in <code>/bin</code>, a cron in <code>/cron.d</code>, a dashboard in
+<p>Every save to a script in <code>/bin</code>, a cron in <code>/cron.d/*</code>, a dashboard in
 <code>/etc/dashboards</code>, or <code>/etc/notify.yaml</code> is captured in a short, browseable
 history. You access that history and manipulate it with the <code>git</code> command.</p>
 <p>Weft <code>git</code> is a very limited subset of true git behavior and is thus named

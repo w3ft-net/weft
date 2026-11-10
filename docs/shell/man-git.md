@@ -34,7 +34,7 @@ git commit --amend -m <message>
 | Path                  | Tracked? |
 |-----------------------|----------|
 | `/bin/<name>`         | ✓ — saves to scripts produce commits |
-| `/cron.d/<name>`      | ✓ — saves to crons produce commits |
+| `/cron.d/<namespace>/<name>` | ✓ — saves to crons produce commits |
 | `/etc/dashboards/<name>.yaml` | ✓ — saves to dashboards produce commits |
 | `/etc/notify.yaml`    | ✓ — saves to the alert aliases produce commits |
 | `/etc/passwd`, `/etc/usage` | ✗ — generated |
@@ -42,7 +42,7 @@ git commit --amend -m <message>
 | `/tmp/...`            | ✗ |
 
 The repository root is `/`, and tracked paths are `bin/<name>`,
-`cron.d/<name>`, `etc/dashboards/<name>.yaml` and `etc/notify.yaml`.
+`cron.d/<namespace>/<name>`, `etc/dashboards/<name>.yaml` and `etc/notify.yaml`.
 Write a path any way git accepts it: `/bin/scan`,
 `bin/scan`, or `scan` after `cd /bin` (after `<rev>:` use the
 repo-relative form, `bin/scan`). A path outside the tracked set is refused: `fatal: '/tmp/x' is outside the
@@ -77,7 +77,7 @@ lines with `^`, and revisions older than that don't resolve
 weft> git log --oneline
 a4fb0c2 (HEAD -> main) fix the awk filter
 3d2e91f tighten error pattern
-c01b745 Update cron.d/errors
+c01b745 Update cron.d/myco/errors
 1e8a02c initial pass
 ```
 
@@ -208,13 +208,14 @@ save.
 ## Permissions
 
 `git log`, `show`, `diff`, `status`, `blame` and `rev-parse` are
-read-only — the same access as `cat /bin/foo` or `cat /cron.d/foo`.
+read-only — the same access as `cat /bin/foo` or `cat /cron.d/myco/foo`.
 
 `git restore`, `checkout -- <path>`, `revert` and `commit --amend`
 are writes. They need the same group as editing the file does:
-`binmgr` for `/bin`, `cronmgr` for `/cron.d`, `configmgr` for `/etc`.
+`<namespace>-w` for a cron in `/cron.d/<namespace>`, `configmgr` for `/etc`.
 Restoring an old dashboard still validates it: if it refers to a cron
-that has since been deleted, the restore is refused.
+that has since been deleted, or one in a namespace you can't read, the
+restore is refused.
 
 ## Unsupported commands
 
@@ -225,7 +226,7 @@ that has since been deleted, the restore is refused.
 - **Remotes.** `clone`, `fetch`, `pull`, `push` are refused.
 - **`/tmp`, `/etc/passwd` and `/etc/usage`.** These keep no history.
   `/tmp` is ephemeral; the other two are generated from group
-  membership and metering. Change the team with `adduser` / `deluser`.
+  membership and metering. Change the team with `adduser` / `deluser`, and groups with `usermod`.
 - **Slack setup.** Only the alias file `/etc/notify.yaml` is versioned;
   connecting Slack creates no commit.
 - **Patterns are RE2.** `--author` and `--grep` use Go

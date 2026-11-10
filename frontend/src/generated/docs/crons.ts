@@ -22,12 +22,16 @@ const crons = {
   ],
   html: `<p>In weft, crons have two primary purposes: generating summary timeseries data
 based on logs and metrics, and alerting on such data. Creating such a cron is
-as simple as adding a bash script to <code>/cron.d</code>. Those scripts need a leading
-comment indicating the schedule on which the cron will fire.</p>
-<p>Let's take the following script as an example:</p>
+as simple as adding a bash script to <code>/cron.d/&lt;namespace&gt;/&lt;name&gt;</code>. Those
+scripts need a leading comment indicating the schedule on which the cron will
+fire.</p>
+<p>Let's take the following script as an example, saved as
+<code>/cron.d/myco/api-errors</code>:</p>
 <pre><code># schedule: */5 * * * *
 cat /log/myco/prod/api/main.log | grep ERROR | wc -l
 </code></pre>
+<p>Whenever you create a namespace, <code>/cron.d</code> will get a corresponding subdirectory.
+What that means for read/write access is covered in <a href="/manual/teams">Teams &amp; permissions</a>.</p>
 <h2 id="scheduling">Scheduling</h2>
 <p>There are two options for cron schedule syntax: OG crontab syntax, and an
 interval syntax. Crons fire on fixed intervals at round UTC times. Below are
@@ -70,7 +74,7 @@ the accepted values for each:</p>
 </tr>
 </tbody>
 </table>
-<p>Weft will refuse to save a file in <code>/cron.d</code> if the schedule line is missing or
+<p>Weft will refuse to save a file in <code>/cron.d/*</code> if the schedule line is missing or
 fails to conform to the scheduling options above.</p>
 <p>Weft sets the <code>range</code> for each run automatically based on the cron's schedule
 interval: a <code>*/5</code> cron sees the last five minutes, a daily cron sees the UTC
@@ -80,10 +84,10 @@ on your lines might resulting in undercounting or other missed line problems.</p
 <h2 id="cron-result-persistence">Cron result persistence</h2>
 <p>Since your cron monitors are just bash/Lua scripts against your logs, it's very
 easy to test them out since you have a shell that executes in the exact same
-way. But once you are done tweaking and get them saved to <code>/cron.d</code>, every cron
+way. But once you are done tweaking and get them saved to <code>/cron.d/*</code>, every cron
 run gets persisted. After they've been running for a bit, you'll have a
 portrait of what the runs look like over time.</p>
-<pre><code>weft::describe error-rate | jq -r 'select(.exit_code != 0) | .ran_at + &quot; &quot; + .stderr'
+<pre><code>weft::describe payments/error-rate | jq -r 'select(.exit_code != 0) | .ran_at + &quot; &quot; + .stderr'
 </code></pre>
 <p>The output of this function is NDJSON with the following values:</p>
 <table>
@@ -257,11 +261,10 @@ against a monthly history budget, in lines read:</p>
 that needs older data fails with a message saying so and when the month resets;
 queries over recent data are not affected.</p>
 <p>A cron fires over a window as long as its schedule, so a cron that looks back
-nearly 14 days can reach older data. Saving one warns you. If a fire needs older
-data after the budget is used up, it fails, weft disables the cron, and a
+nearly 14 days can reach older data. Saving one warns you. If a fire needs
+older data after the budget is used up, it fails, weft disables the cron, and a
 notice goes to your <code>system</code> alias. To turn it back on, shorten the schedule or
-wait for the budget to reset, then edit <code>/cron.d/&lt;name&gt;</code> and remove the
-<code># enabled: false</code> line.</p>
+wait for the budget to reset, then edit the file and remove the <code># enabled: false</code> line.</p>
 <h3 id="retention">Retention</h3>
 <p>Raw results are rolled up into progressively coarser summaries as they age.
 Every summary stores the count, sum, sum of squares, and minimum and maximum
@@ -552,7 +555,7 @@ provide a couple convenience functions that can handle numbers with dots in them
 </tbody>
 </table>
 <p>Thus, instead of the previous example, you can do:</p>
-<pre><code>weft::avg error-rate 5m | weft::is_gt 50
+<pre><code>weft::avg payments/error-rate 5m | weft::is_gt 50
 </code></pre>
 <p>Both comparators treat empty or non-numeric input as false.</p>
 <h2 id="static-analysis">Static analysis</h2>
@@ -572,6 +575,9 @@ schedule</li>
 <li><strong>Output schema</strong> -- <code># tag:</code> cannot be set without <code># value:</code></li>
 <li><strong>Types</strong> -- weft will enforce correct typing of cron arguments to aggregate
 and predicate functions</li>
+<li><strong>Reads</strong> -- the system user for the cron's namespace must have read privileges for logs it touches
+determined, such as a computed path or <code>eval</code>, is refused.</li>
+<li><strong>Script calls</strong> -- script names from <code>/bin</code> cannot be invoked dynamically (i.e. <code>$cmd</code>)</li>
 </ul>
 <p>If you run afoul of any of these rules, weft will refuse to write the contents
 to <code>/cron.d</code> (or <code>/bin</code>).</p>
@@ -588,7 +594,7 @@ is recorded with the status <code>invalid</code> and the reason in its <code>std
 disabled.</p>
 <p>A type mismatch between aggregate or predicate functions and their cron
 argument is normally checked statically, but in cases where the mismatch is
-known only at runtime by passing a variable, the  cron will be disabled then.</p>
+known only at runtime by passing a variable, the cron will be disabled then.</p>
 <p>As described above, type declarations are verified and enforced, including JSON
 extraction. Empty output is treated as conformant.</p>
 <p>Type/parsing related runtime failures result in the cron being disabled

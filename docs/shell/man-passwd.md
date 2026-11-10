@@ -19,10 +19,11 @@ passwd — the org team roster and its group-based permissions
 
 ```
 cat /etc/passwd
-adduser <email> [<group>]
-deluser <email> [<group>]
-groups [<email>]
-id [<email>]
+adduser <email>
+deluser <email>
+usermod -aG|-rG <group> <user>
+groups [<user>]
+id [<user>]
 ```
 
 ## DESCRIPTION
@@ -33,81 +34,42 @@ member with their role, status, and groups:
 
 ```
 USER             ROLE     STATUS    GROUPS
-alice@acme.com   admin    active    binmgr  cronmgr  configmgr  nsmgr  payments  payments+tokens
-bob@acme.com     member   active    binmgr  cronmgr  payments  payments+tokens
+alice@acme.com   admin    active    configmgr  nsmgr  payments-r  payments-w
+bob@acme.com     member   active    payments-r  payments-w
 carol@acme.com   member   invited   —
+payments-cron    cron     system    payments-r
 ```
 
-Change the team with `adduser` and `deluser` (admin-only), or from
-the dashboard's Members tab. An admin (sometimes
-called the org owner) holds groups like any other member and is listed
-with them.
+Change team membership with `adduser` and `deluser` (admin-only), or from
+the dashboard's Members tab. Change a member's groups with `usermod`.
+
+As shown above, each namespace automatically has a system user,
+`<namespace>-cron`, listed with role `cron` and status `system`.
 
 ## GROUPS
 
 A group is one of these:
 
-- **`binmgr` / `cronmgr` / `configmgr`** — edit access to `/bin`,
-  `/cron.d`, and `/etc` respectively.
+- **`configmgr`** — edit access to `/etc`.
 - **`nsmgr`** — create and manage namespaces.
-- **`<namespace>`** — read (query) the logs under `/log/<namespace>`.
-- **`<namespace>+tokens`** — mint producer tokens for that namespace.
+- **`<namespace>-r`** — read (query) the logs under `/log/<namespace>`,
+  and the definitions, output and history of its crons.
+- **`<namespace>-w`** — manage the namespace's crons, tokens and sources.
   Independent of read: a member can have one, the other, or both.
 
-The `+tokens` facet uses `+` because `+` is illegal in a namespace
-name, so it can never collide with a real namespace.
+Every namespace has both groups. There is no bare `<namespace>` group.
 
 ## COMMANDS
 
-- **`adduser <email>`** — invite someone to the org. Sends an invite
-  email; they join when they accept (or next sign in).
-- **`adduser <email> <group>`** — add a member to a group. If the email
-  isn't on the team yet, they're invited now (the email goes out) and
-  the grant applies after they accept, so re-run the command once
-  they've joined. If they were invited but haven't accepted, the
-  command returns an error.
-- **`deluser <email> <group>`** — revoke a group membership.
-- **`deluser <email>`** — remove a member from the org entirely.
-- **`groups [<email>]`** — list a member's groups (yours if omitted).
-  Prints `<email>: group group ...`; an email not on the team gives
-  `no such member: <email>`.
-- **`id [<email>]`** — show a member's role and groups, as
-  `uid=<email> role=<role> groups=a,b`.
+- **`adduser <email>`** — invite someone to the org via email
+- **`deluser <email>`** — remove a member from the org entirely
+- **`usermod -aG <group> <user>`** — add a user to a group
+  **`usermod -rG <group> <user>`** removes them
+- **`groups [<user>]`** — list a user's groups (yours if omitted)
+- **`id [<user>]`** — show a user's role and groups (yours if omitted)
 
-Every command takes `--help` (prints usage, changes nothing). An unknown
-flag, a first argument that isn't an email address, or extra arguments
-is a usage error.
-
-`adduser`/`deluser` are admin-only. Group grants apply once the
-member has accepted their invite.
-
-## NOT SUPPORTED
-
-These manage org members, not operating-system accounts.
-
-- Passwords, login shells, home directories and the usual `adduser` /
-  `useradd` options (`-G`, `-u`, `-s`, `--disabled-password`).
-- Several emails or several groups in one call. `adduser` and `deluser`
-  take one email and at most one group.
-- Creating a group of your own. Groups are the fixed set above plus one
-  per namespace.
-- Editing `/etc/passwd`; it is a read-only roster.
-- Looking up anyone by name, uid or anything other than an email address.
-
-Other options are rejected with `<command>: unknown option <flag>` and the
-command's usage line.
-
-## EXAMPLES
-
-```
-adduser dana@acme.com                  # invite
-adduser dana@acme.com payments         # let dana read payments logs
-adduser dana@acme.com payments+tokens  # ...and mint producer tokens
-adduser dana@acme.com cronmgr          # ...and edit /cron.d
-deluser dana@acme.com payments         # revoke read
-deluser dana@acme.com                  # remove from the org
-groups dana@acme.com
-```
+`adduser`/`deluser` are admin-only.  `usermod -aG beta-r alpha-cron` requires
+both  `beta-r` and `alpha-w`.
 
 ## SEE ALSO
 

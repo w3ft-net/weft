@@ -16,7 +16,9 @@ const namespaces = {
 <p>Namespaces group related log sources. We usually think if namespaces as buckets
 for a single application, but it's your bucket, so do what you want. Namespaces
 are as granular as permission grants get, so keep that in mind when laying out
-your log sources.</p>
+your log sources. A namespace also owns its <a href="/manual/crons">crons</a>, and
+every one comes with a read group, <code>&lt;namespace&gt;-r</code>, and a write group,
+<code>&lt;namespace&gt;-w</code> (see <a href="/manual/teams">Teams &amp; permissions</a>).</p>
 <h2 id="creating-a-namespace">Creating a namespace</h2>
 <p>To create a new namespace in your browser, go to <strong>Namespaces</strong> in the sidebar
 and click <strong>new</strong>. Choose something easy to type for the name — it'll be in
@@ -36,7 +38,8 @@ encourage it! You can optionally tag your tokens with an environment name,
 allowing you to keep a staging, sandbox, and prod environment under the same
 namespace but keep their logs separate.</p>
 <p>You can always view your amassed sea of tokens under each namespace in the
-browser, or in your terminal with <code>weft token list</code>.</p>
+browser, or in your terminal with <code>weft token list</code>. Creating a token needs the
+namespace's write group.</p>
 <h2 id="creating-a-token">Creating a token</h2>
 <p>To create a token in the browser, go to <strong>Namespaces</strong>, select the namespace
 you want the token to be in, and click <strong>new token</strong>. You can optionally bind a

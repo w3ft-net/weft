@@ -107,7 +107,7 @@ command. A brief example:
 title: Production
 tiles:
   - kind: sparkline
-    cron: error-rate
+    cron: myco/error-rate
     title: Errors per 5 minutes
 ```
 
@@ -140,23 +140,23 @@ sections:
   - title: Errors
     tiles:
       - kind: sparkline
-        cron: error-rate
+        cron: myco/error-rate
         size: md
   - title: Capacity
     tiles:
       - kind: counter
-        cron: pending-jobs
+        cron: myco/pending-jobs
         format: "%d jobs"
         size: sm
 ```
 
 ### Tile kinds
 
-Dashboard tiles are built on the same foundation as the `chart` command, so you can easily convert a 1-liner to to the appropriate YAML. For example,`chart error-rate --kind bar -a max --bucket 1h --title "Worst hour"` becomes:
+Dashboard tiles are built on the same foundation as the `chart` command, so you can easily convert a 1-liner to to the appropriate YAML. For example,`chart myco/error-rate --kind bar -a max --bucket 1h --title "Worst hour"` becomes:
 
 ```yaml
 - kind: bar
-  cron: error-rate
+  cron: myco/error-rate
   aggregate: max
   bucket: 1h
   title: Worst hour
@@ -171,6 +171,11 @@ terminal, normal output works just fine:
 | `counter`   | latest value (on a tagged cron, the highest)        | `format` -- strftime e.g. `"%d ms"`, `"%.1f%%" |
 | `gauge`     | latest value as a bar from 0 to `max` (default 100) | `max` |
 | `table`     | latest run, row per tag                             | - |
+
+### Permissions
+
+All dashboards are team-wide, but tile content applies standard read privileges rules. When someone opens a dashboard
+if a tile relies on a cron they don't have read rights for, its content will be blank.
 
 ### Rendering alerts
 

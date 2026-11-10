@@ -9,15 +9,20 @@ web:
 
 In weft, crons have two primary purposes: generating summary timeseries data
 based on logs and metrics, and alerting on such data. Creating such a cron is
-as simple as adding a bash script to `/cron.d`. Those scripts need a leading
-comment indicating the schedule on which the cron will fire.
+as simple as adding a bash script to `/cron.d/<namespace>/<name>`. Those
+scripts need a leading comment indicating the schedule on which the cron will
+fire.
 
-Let's take the following script as an example:
+Let's take the following script as an example, saved as
+`/cron.d/myco/api-errors`:
 
 ```
 # schedule: */5 * * * *
 cat /log/myco/prod/api/main.log | grep ERROR | wc -l
 ```
+
+Whenever you create a namespace, `/cron.d` will get a corresponding subdirectory. 
+What that means for read/write access is covered in [Teams & permissions](team.md).
 
 ## Scheduling
 
@@ -35,7 +40,7 @@ the accepted values for each:
   | `0 0 */N * *` | every N days |
   | `0 0 * * 1` | every week, on Monday at 00:00 UTC |
 
-Weft will refuse to save a file in `/cron.d` if the schedule line is missing or
+Weft will refuse to save a file in `/cron.d/*` if the schedule line is missing or
 fails to conform to the scheduling options above.
 
 Weft sets the `range` for each run automatically based on the cron's schedule
@@ -48,12 +53,12 @@ on your lines might resulting in undercounting or other missed line problems.
 
 Since your cron monitors are just bash/Lua scripts against your logs, it's very
 easy to test them out since you have a shell that executes in the exact same
-way. But once you are done tweaking and get them saved to `/cron.d`, every cron
+way. But once you are done tweaking and get them saved to `/cron.d/*`, every cron
 run gets persisted. After they've been running for a bit, you'll have a
 portrait of what the runs look like over time. 
 
 ```
-weft::describe error-rate | jq -r 'select(.exit_code != 0) | .ran_at + " " + .stderr'
+weft::describe payments/error-rate | jq -r 'select(.exit_code != 0) | .ran_at + " " + .stderr'
 ```
 
 The output of this function is NDJSON with the following values:
@@ -155,11 +160,11 @@ that needs older data fails with a message saying so and when the month resets;
 queries over recent data are not affected.
 
 A cron fires over a window as long as its schedule, so a cron that looks back
-nearly 14 days can reach older data. Saving one warns you. If a fire needs older
-data after the budget is used up, it fails, weft disables the cron, and a
+nearly 14 days can reach older data. Saving one warns you. If a fire needs
+older data after the budget is used up, it fails, weft disables the cron, and a
 notice goes to your `system` alias. To turn it back on, shorten the schedule or
-wait for the budget to reset, then edit `/cron.d/<name>` and remove the
-`# enabled: false` line.
+wait for the budget to reset, then edit the file and remove the `# enabled:
+false` line.
 
 ### Retention
 
@@ -292,7 +297,7 @@ provide a couple convenience functions that can handle numbers with dots in them
 Thus, instead of the previous example, you can do:
 
 ```
-weft::avg error-rate 5m | weft::is_gt 50
+weft::avg payments/error-rate 5m | weft::is_gt 50
 ```
 
 Both comparators treat empty or non-numeric input as false.
@@ -315,6 +320,9 @@ Whenever you write a cron, weft analyzes its contents for a few types of correct
 * **Output schema** -- `# tag:` cannot be set without `# value:`
 * **Types** -- weft will enforce correct typing of cron arguments to aggregate
   and predicate functions
+* **Reads** -- the system user for the cron's namespace must have read privileges for logs it touches
+  determined, such as a computed path or `eval`, is refused. 
+* **Script calls** -- script names from `/bin` cannot be invoked dynamically (i.e. `$cmd`)
 
 If you run afoul of any of these rules, weft will refuse to write the contents
 to `/cron.d` (or `/bin`).
@@ -336,7 +344,7 @@ disabled.
 
 A type mismatch between aggregate or predicate functions and their cron
 argument is normally checked statically, but in cases where the mismatch is
-known only at runtime by passing a variable, the  cron will be disabled then. 
+known only at runtime by passing a variable, the cron will be disabled then. 
 
 As described above, type declarations are verified and enforced, including JSON
 extraction. Empty output is treated as conformant.

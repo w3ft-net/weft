@@ -12,7 +12,9 @@ web:
 Namespaces group related log sources. We usually think if namespaces as buckets
 for a single application, but it's your bucket, so do what you want. Namespaces
 are as granular as permission grants get, so keep that in mind when laying out
-your log sources.
+your log sources. A namespace also owns its [crons](crons.md), and
+every one comes with a read group, `<namespace>-r`, and a write group,
+`<namespace>-w` (see [Teams & permissions](team.md)).
 
 ## Creating a namespace
 
@@ -41,7 +43,8 @@ allowing you to keep a staging, sandbox, and prod environment under the same
 namespace but keep their logs separate.
 
 You can always view your amassed sea of tokens under each namespace in the
-browser, or in your terminal with `weft token list`.
+browser, or in your terminal with `weft token list`. Creating a token needs the
+namespace's write group.
 
 ## Creating a token
 

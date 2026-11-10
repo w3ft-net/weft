@@ -25,7 +25,7 @@ them are below.</p>
 <p>Only the options listed here are supported. Any other option is rejected with
 an error (<code>grep: unknown option -o</code>, exit status 2). The exception is <code>less</code>,
 which accepts options and ignores them.</p>
-<p>Where a command can write depends on the directory. <code>/log</code> is read-only. <code>/tmp</code> is open to every member. <code>/bin</code> needs the <code>binmgr</code> group, <code>/cron.d</code> needs <code>cronmgr</code>, and <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code> need <code>configmgr</code> (<code>/etc/passwd</code> and <code>/etc/usage</code> are read-only for everyone). Expiry, size limits and how files cross into <code>/bin</code> are in <a href="/manual/filesystem#limitations">File system</a>.</p>
+<p>Where a command can write depends on the directory. <code>/log</code> is read-only. <code>/tmp</code> is open to every member. <code>/bin</code> is open to any member, unless a cron runs the script, in which case it needs the <code>-w</code> group of that cron's namespace. <code>/cron.d/&lt;namespace&gt;</code> needs <code>&lt;namespace&gt;-w</code>, and <code>/etc/dashboards</code> and <code>/etc/notify.yaml</code> need <code>configmgr</code> (<code>/etc/passwd</code> and <code>/etc/usage</code> are read-only for everyone). Expiry, size limits and how files cross into <code>/bin</code> are in <a href="/manual/filesystem#limitations">File system</a>.</p>
 <table>
 <thead>
 <tr>
@@ -300,8 +300,8 @@ which accepts options and ignores them.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>adduser</code>, <code>deluser</code>, <code>groups</code>, <code>id</code></td>
-<td>Manage org members and groups, not operating-system accounts. <code>adduser &lt;email&gt;</code> sends an invite. <code>/etc/passwd</code> is a read-only team roster.</td>
+<td><code>adduser</code>, <code>deluser</code>, <code>usermod</code>, <code>groups</code>, <code>id</code></td>
+<td>Manage users and groups. <code>adduser &lt;email&gt;</code> sends an invite; <code>usermod -aG|-rG &lt;group&gt; &lt;user&gt;</code> changes groups. <code>/etc/passwd</code> is a read-only team roster.</td>
 <td><code>man passwd</code>, <code>man teams</code></td>
 </tr>
 </tbody>

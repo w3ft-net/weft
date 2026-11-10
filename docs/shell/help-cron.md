@@ -16,11 +16,14 @@ do three runs in a row that time out. Writes to stderr are
 treated as alert firings (if the cron has a `| alert` stage — see
 `help alerts`).
 
-- `vi /cron.d/<name>` — create or edit a cron
-- `cat /cron.d/<name>` — view a cron definition
-- `ls /cron.d` — list existing crons; `ls -l /cron.d/` adds a sparkline column
-- `chart <name>` — chart its results over the current range (`man chart`)
-- `rm /cron.d/<name>` — delete a cron (stops the schedule)
+- `vi /cron.d/<namespace>/<name>` — create or edit a cron
+- `cat /cron.d/<namespace>/<name>` — view a cron definition
+- `ls /cron.d` — list a directory for each namespace you can read;
+  `ls -l /cron.d/<namespace>/` lists its crons
+- `chart <namespace>/<name>` — chart its results over the current range (`man chart`)
+- `mv /cron.d/<name> /cron.d/<namespace>/<name>` — move a cron into a
+  namespace, keeping its history
+- `rm /cron.d/<namespace>/<name>` — delete a cron (stops the schedule)
 
 ## Cron file format
 
@@ -45,16 +48,17 @@ than numbers. Full rules: `man crons`.
 
 `weft::latest`, `weft::avg`, `weft::max`, `weft::min`, `weft::sum`,
 `weft::stddev`, and the rest of the `weft::*` family read a cron's
-history; pass the cron's name, e.g. `weft::latest error-rate`. Windows
+history; pass the cron as `<namespace>/<name>`, e.g.
+`weft::latest myco/error-rate` (a bare name is an error). Windows
 are durations like `30m`, `1h` or `1d` (aggregates reach back 24 hours).
 The predicates (`weft::is_above`, `weft::is_outlier`, etc.) return
 exit codes for composing alerts. Full reference: `man crons`.
 
 ```
-echo $(weft::avg error-rate 1h) | alert above 50 --notify=ops
+echo $(weft::avg myco/error-rate 1h) | alert above 50 --notify=ops
 ```
 
-(Here `error-rate` is the name of one of your own crons.)
+(Here `myco/error-rate` is one of your own crons.)
 
 ## Tier limits
 
