@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/graybeardcorp/weft/tenancy"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 	"io"
 	"slices"
 	"sort"
@@ -166,6 +168,7 @@ type Coordinator struct {
 	Provisioner  *logdb.Provisioner      // shard lifecycle + registry. Never nil after NewCoordinator; main.go swaps in the real one once logdb.Start completes.
 	Usage        *CustomerUsageStats     // nil = no per-customer byte metering
 	ColdScans    *ColdScanLedger         // nil = no cold scan metering (docs/plans/cold-scan-cap.md)
+	Scoper       tenancy.Scoper          // decides what an actor may read; NewCoordinator defaults it to the hosted org/team Scoper over Store
 	Store        *store.Store            // nil = no tenant-scoped features (/bin, alert dispatch); test-only
 	SeenServices *SeenServices           // ingest-stream app discovery; constructor always installs
 	DLQ          *DLQ                    // S3 dead-letter queue for failed ingests
@@ -221,7 +224,9 @@ type loweredCacheEntry struct {
 type CoordinatorConfig struct {
 	Compute compute.Executor
 
-	Store    *store.Store
+	Store *store.Store
+	// Scoper overrides the hosted default (a Scoper over Store).
+	Scoper   tenancy.Scoper
 	Notifier NotifyDispatcher
 	Tail     *TailBroker
 	Ingest   *RingBuffer
@@ -363,12 +368,16 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		Ingest:                 ingest,
 		Usage:                  cfg.Usage,
 		Store:                  cfg.Store,
+		Scoper:                 cfg.Scoper,
 		SeenServices:           NewSeenServices(),
 		DLQ:                    cfg.DLQ,
 		Errors:                 cfg.Errors,
 		Notifier:               cfg.Notifier,
 		ScriptExecutionTimeout: cfg.ScriptExecutionTimeout,
 		ShareURLBase:           cfg.ShareURLBase,
+	}
+	if c.Scoper == nil {
+		c.Scoper = hosted.Scoper{Store: cfg.Store}
 	}
 	if cfg.Store != nil {
 		c.ColdScans = NewColdScanLedger(cfg.Store)
@@ -968,7 +977,7 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 		}
 	}
 
-	readable, err := c.readScope(custID, userID)
+	readable, err := c.readScope(ctx, custID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
 	}
@@ -1045,24 +1054,24 @@ func (c *Coordinator) preflight(pipeline string, custID store.OrgID) (store.OrgI
 // to runLocal so interior queries dispatched by the interceptor inherit
 // the caller's alert identity; may be nil.
 // readScope is the namespaces a trace is restricted to for userID: nil when
-// the user may read everything (an owner, or the system identity), otherwise
+// the actor may read everything (an owner, or the system identity), otherwise
 // the namespaces they may read, which may be none.
-func (c *Coordinator) readScope(custID store.OrgID, userID string) ([]string, error) {
-	if userID == "" || c.Store == nil || custID == 0 {
+func (c *Coordinator) readScope(ctx context.Context, custID store.OrgID, userID string) ([]string, error) {
+	if c.Store == nil {
 		return nil, nil
 	}
-	owner, err := c.userIsOwner(custID, userID)
-	if err != nil || owner {
-		return nil, err
-	}
-	readable, err := c.Store.ReadableNamespaces(custID, userID, false)
+	set, err := c.Scoper.ReadScope(ctx, hosted.Actor{Org: custID, User: userID})
 	if err != nil {
 		return nil, err
 	}
-	if readable == nil {
-		readable = []string{}
+	names, all := set.Namespaces(int64(custID))
+	if all {
+		return nil, nil
 	}
-	return readable, nil
+	if names == nil {
+		names = []string{}
+	}
+	return names, nil
 }
 
 // userIsOwner reports whether userID owns the org. The empty user (the system
@@ -1074,35 +1083,32 @@ func (c *Coordinator) userIsOwner(custID store.OrgID, userID string) (bool, erro
 	return c.Store.IsOwner(custID, userID)
 }
 
-// authorizeSources refuses a log query that reads a namespace userID may not.
-// The empty user is the system identity and may read everything.
-func (c *Coordinator) authorizeSources(custID store.OrgID, userID string, plan *planner.QueryPlan) error {
-	// The system identity reading "every namespace" has nothing to check.
-	if len(plan.SourceNamespaces) == 0 && userID == "" {
-		return nil
-	}
-	owner, err := c.userIsOwner(custID, userID)
+// authorizeSources refuses a log query that reads a namespace the actor's
+// scope does not cover. The empty user is the system identity, whose scope is
+// every namespace.
+func (c *Coordinator) authorizeSources(ctx context.Context, custID store.OrgID, userID string, plan *planner.QueryPlan) error {
+	set, err := c.Scoper.ReadScope(ctx, hosted.Actor{Org: custID, User: userID})
 	if err != nil {
 		return fmt.Errorf("validate source: %w", err)
 	}
-	readable, err := c.Store.ReadableNamespaces(custID, userID, owner)
+	existing, err := c.Store.NamespaceNames(custID, "", true)
 	if err != nil {
 		return fmt.Errorf("validate source: %w", err)
+	}
+	// A wildcard resolves against the namespaces that exist.
+	readable, all := set.Namespaces(int64(custID))
+	if all {
+		readable = existing
 	}
 	if len(plan.SourceNamespaces) == 0 {
-		all, err := c.Store.NamespaceNames(custID, "", true)
-		if err != nil {
-			return fmt.Errorf("validate source: %w", err)
-		}
-		if len(readable) < len(all) {
+		if len(readable) < len(existing) {
 			return fmt.Errorf("this script reads from all namespaces, and you can read only %s", strings.Join(readable, ", "))
 		}
 		return nil
 	}
 	for _, ns := range plan.SourceNamespaces {
 		if !slices.Contains(readable, ns) {
-			msg := "unknown source: " + ns
-			return errors.New(msg)
+			return errors.New("unknown source: " + ns)
 		}
 	}
 	return nil
@@ -1118,7 +1124,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	// namespace reads all of them. This also serves as the allowlist before a
 	// name reaches SQL interpolation: only namespaces that exist can pass. A
 	// namespace that is missing and one that is unreadable read the same.
-	if err := c.authorizeSources(custID, userID, plan); err != nil {
+	if err := c.authorizeSources(ctx, custID, userID, plan); err != nil {
 		return nil, err
 	}
 

@@ -18,7 +18,6 @@ import (
 func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
-
 	// A while loop that never terminates. Warp's `true` builtin keeps
 	// returning 0, so the loop iterates forever — until we cancel it.
 	// No internal I/O, just pure loop iterations going through
@@ -61,7 +60,6 @@ func TestRunLocal_InfiniteLoopHitsTimeout(t *testing.T) {
 // no timeout error.
 func TestRunLocal_QuickScriptCompletesNormally(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-
 
 	if err := db.SaveShellFunction(custID, "", "quick", `echo ok`, "bash"); err != nil {
 		t.Fatalf("save script: %v", err)

@@ -20,7 +20,7 @@ import (
 // system identity (crons, internal callers) and reads everything.
 
 type readFixture struct {
-	c    *Coordinator
+	c   *Coordinator
 	org store.OrgID
 
 	owner, reader, none string // user ids: org owner / reads alpha only / reads nothing
@@ -147,13 +147,13 @@ func TestAuthorizeSources_FailsClosedOnAPlanWithNoNamespace(t *testing.T) {
 	f := newReadFixture(t)
 	plan := &planner.QueryPlan{ShardSQL: "SELECT 1", SourceCmd: "cat"}
 
-	if err := f.c.authorizeSources(f.org, f.reader, plan); !refused(err) {
+	if err := f.c.authorizeSources(context.Background(), f.org, f.reader, plan); !refused(err) {
 		t.Errorf("reader: err = %v, want a refusal", err)
 	}
-	if err := f.c.authorizeSources(f.org, f.owner, plan); err != nil {
+	if err := f.c.authorizeSources(context.Background(), f.org, f.owner, plan); err != nil {
 		t.Errorf("owner: err = %v, want it allowed", err)
 	}
-	if err := f.c.authorizeSources(f.org, "", plan); err != nil {
+	if err := f.c.authorizeSources(context.Background(), f.org, "", plan); err != nil {
 		t.Errorf("system identity: err = %v, want it allowed", err)
 	}
 }

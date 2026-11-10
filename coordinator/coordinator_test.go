@@ -630,7 +630,8 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 	apps := []string{"vimgym", "callbox"}
 
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
-		LambdaFunctionURL: "https://lambda.example.com/cold-query"})
+		LambdaFunctionURL: "https://lambda.example.com/cold-query",
+		Store:             testQueryStore(t, "kevlar", "vimgym", "callbox")})
 	// Register in-process resolvers on the compute.Engine
 	// BEFORE wrapping in spyCompute, because addInProcessShard reaches
 	// for the underlying *compute.Engine through c.Compute.
@@ -656,7 +657,7 @@ func TestExecuteQuery_DescriptorFields(t *testing.T) {
 		DirectShardSQL: "SELECT raw, ts FROM logs WHERE customer_id = 1 ORDER BY ts",
 	}
 
-	_, err = c.executeQuery(context.Background(), plan, tr, 0, "", nil)
+	_, err = c.executeQuery(context.Background(), plan, tr, store.TestOrgID("kevlar"), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
