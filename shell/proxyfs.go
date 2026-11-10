@@ -143,16 +143,23 @@ func (p *ProxyFS) ListDashboards() ([]string, error) {
 
 // Prefetch pre-warms the server-side caches by calling ReadDir on
 // key paths. This triggers the server to fetch data that will be
-// needed for tab completion.
+// needed for tab completion. Crons live one level down, in a directory per
+// namespace, so /cron.d is warmed with one walk request that covers every
+// namespace directory instead of a listing for each.
 func (p *ProxyFS) Prefetch() {
 	var wg sync.WaitGroup
-	paths := []string{"/bin", "/cron.d", "/etc/dashboards"}
-	wg.Add(len(paths))
+	paths := []string{"/bin", "/etc/dashboards"}
+	wg.Add(len(paths) + 1)
 	for _, path := range paths {
 		go func(path string) {
 			defer wg.Done()
 			p.MountFS.ReadDir(path)
 		}(path)
 	}
+	go func() {
+		defer wg.Done()
+		cron := &ProxyMount{prefix: "/cron.d", client: p.client, baseURL: p.baseURL, token: p.token, org: p.org}
+		cron.Walk("")
+	}()
 	wg.Wait()
 }
