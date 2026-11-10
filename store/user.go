@@ -478,7 +478,7 @@ func (s *Store) VerifyUserEmail(user *User) error {
 // passes org_id explicitly, which is what orgs' API requires anyway; there is
 // no unscoped form to reach for by accident.
 //
-// What stays weft's: OrgPermission (the binmgr/cronmgr/configmgr bits) and
+// What stays weft's: OrgPermission (the configmgr and nsmgr bits) and
 // NamespacePermission. orgs decides whether you are a member; weft decides
 // what a member may touch.
 

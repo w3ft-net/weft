@@ -95,14 +95,14 @@ func TestToolDescriptions_ExamplesPassThePolicy(t *testing.T) {
 		}
 	}
 
-	const composite = "(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical"
+	const composite = "(weft::is_above myco/error-rate 50 && weft::is_absent myco/canary-ping && echo fire) | alert --notify=critical"
 	if !strings.Contains(cronProposeDescription, composite) {
 		t.Fatal("weft.cron_propose no longer shows the composite example this test checks")
 	}
 	if _, vs := policy.Validate(composite, policy.DefaultCronPolicy()); len(vs) != 0 {
 		t.Errorf("composite example is refused: %+v", vs)
 	}
-	const number = "weft::avg error-rate 5m | alert above 50 --notify=ops"
+	const number = "weft::avg myco/error-rate 5m | alert above 50 --notify=ops"
 	if !strings.Contains(cronProposeDescription, number) {
 		t.Fatal("weft.cron_propose no longer shows the number example this test checks")
 	}

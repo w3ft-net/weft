@@ -168,12 +168,12 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-cron",
-		Action: "ls -l /cron.d/",
-		Prompt: "When you want to monitor the output of a one-liner, you just stick a file in /cron.d/. Loom has a couple examples for you.",
+		Action: "ls -l /cron.d/loom/",
+		Prompt: "When you want to monitor the output of a one-liner, you just stick a file in /cron.d/<namespace>/. Loom has a couple examples for you.",
 	},
 	{
 		Step:   "shell-schedule",
-		Action: "cat /cron.d/error-rate",
+		Action: "cat /cron.d/loom/error-rate",
 		Prompt: "Crons are just scripts (usually bash) with a leading comment that contains a schedule either in OG cron format or 'every n<interval>'. This one just runs every minute, looking for >10% bursts of error log lines.",
 	},
 	{
@@ -205,12 +205,12 @@ var lessons = []*Lesson{
 	},
 	{
 		Step:   "shell-weftfunc",
-		Action: "weft::avg error-rate 1h",
-		Prompt: "Sooooo you have some scripts running in cron.d. Weft has some convenience functions for aggregation, namespaced under `weft::<fn>` in bash (or `weft.<fn>(...)` in lua). Most take a duration. There's also a parallel family of predicates like `weft::is_above` and `weft::is_outlier`. These compose naturally into alerts, e.g. `weft::avg error-rate 1m | alert above 100`. Full reference: `man weft`.",
+		Action: "weft::avg loom/error-rate 1h",
+		Prompt: "Sooooo you have some scripts running in cron.d. Weft has some convenience functions for aggregation, namespaced under `weft::<fn>` in bash (or `weft.<fn>(...)` in lua). Most take a duration. There's also a parallel family of predicates like `weft::is_above` and `weft::is_outlier`. These compose naturally into alerts, e.g. `weft::avg loom/error-rate 1m | alert above 100`. Full reference: `man weft`.",
 	},
 	{
 		Step:            "shell-chart",
-		Action:          "chart error-rate",
+		Action:          "chart loom/error-rate",
 		Prompt:          "`chart` is another weft-specific builtin. It'll open a modal in the browser. The CLI will render right in the terminal, though not quite as pretty. Close the chart when you're done to keep on the tour.",
 		ClosesWithModal: true,
 	},
@@ -235,7 +235,7 @@ var lessons = []*Lesson{
 		// read-only /etc/passwd roster + group model that replaced it.
 		Step:   "shell-team-yaml",
 		Action: "cat /etc/passwd",
-		Prompt: "`/etc/passwd` is a read-only roster for whatever org you have active. /bin, /cron.d, and /etc all have corresponding org-level edit perms (`binmgr`/`cronmgr`/`configmgr`). Read perms for logs -- see how you have `loom` perms? -- and ability to mint tokens like `loom+tokens` are by namespace. Org owners manage privs either with the weft CLI or the Members page of the web dashboard.",
+		Prompt: "`/etc/passwd` is a read-only roster for whatever org you have active. `/etc` needs the `configmgr` group. Each namespace has a read group and a write group -- see how you have `loom-r`? -- and the write group (`loom-w`) covers its crons and tokens. Org owners manage privs either with the weft CLI or the Members page of the web dashboard.",
 	},
 	{
 		Step:   "shell-usage",

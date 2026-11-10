@@ -24,7 +24,7 @@ type ScriptProposeArgs struct {
 }
 
 type CronProposeArgs struct {
-	Name      string `json:"name" jsonschema:"name of the cron entry (lands at cron.d/<name>)"`
+	Name      string `json:"name" jsonschema:"namespace and name of the cron, e.g. myco/error-rate (lands at cron.d/<namespace>/<name>)"`
 	Schedule  string `json:"schedule" jsonschema:"a crontab such as '*/5 * * * *', '0 * * * *', '0 0 * * *' (daily) or '0 0 * * 1' (weekly, Monday), or an interval such as 'every 5m' or 'every 1d'; crons fire at UTC-aligned intervals, not at a chosen time of day"`
 	Pipeline  string `json:"pipeline" jsonschema:"the pipeline to run; same allowlist as weft.run"`
 	Rationale string `json:"rationale,omitempty"`
@@ -56,15 +56,15 @@ Each run reads only the logs from its own interval (a '*/5' cron sees the last f
 
 To make it an alert, end the pipeline with '| alert <condition>', where the condition is any, above N, below N, eq N, neq N, changed, absent, rising N%, falling N% or matches '<regex>' (matches only on a cron marked '# type: text'). Rules, all enforced when the cron is saved: the alert is the final stage and the only one; it takes at most one --notify=<alias>, an alias defined in /etc/notify.yaml; --duration takes s, m or h. For one line per host or service, '-v <field>' names the field holding the number and '-t <field>' the field that names the line, so each tag alerts separately; give both as column numbers or both as .json.paths.
 
-To alert on the state of other crons, use weft:: functions. For a number: 'weft::avg error-rate 5m | alert above 50 --notify=ops'. To combine conditions: '(weft::is_above error-rate 50 && weft::is_absent canary-ping && echo fire) | alert --notify=critical', where && || and ! join predicates and the subshell ends in echo; this is the only subshell form allowed. weft:: functions ignore piped input, except weft::is_gt and weft::is_lt.
+To alert on the state of other crons, use weft:: functions. For a number: 'weft::avg myco/error-rate 5m | alert above 50 --notify=ops'. To combine conditions: '(weft::is_above myco/error-rate 50 && weft::is_absent myco/canary-ping && echo fire) | alert --notify=critical', where && || and ! join predicates and the subshell ends in echo; this is the only subshell form allowed. weft:: functions ignore piped input, except weft::is_gt and weft::is_lt.
 
 Pipelines pass the same allowlist as weft.run plus the alert stage and the composite form above. Returns proposal id + unified diff.`
 
 	dashboardProposeDescription = `Stage a new (or updated) dashboard for human review.
 
-The body is the dashboard YAML — top-level title plus a list of sections (each with a heading and tiles), or a flat top-level tiles: shorthand. Tiles have a kind (line | bar | sparkline | counter | gauge | table), a cron: key naming the cron whose results they show, an optional title and size hint (sm | md | lg), and kind-specific fields: aggregate and range (as in chart -a and the shell's range command; default 24h..) on any tile but a table of a text cron — on a counter, gauge or table they make it show that aggregate over the range instead of the latest run — bucket (as in chart --bucket) on line, bar and sparkline tiles, format on counters, and max (full scale) on gauges. Tiles have no threshold of their own: a tile turns critical when the value it shows breaches its cron's alert (alert above/below/eq/neq), so put the cutoff on the cron.
+The body is the dashboard YAML — top-level title plus a list of sections (each with a heading and tiles), or a flat top-level tiles: shorthand. Tiles have a kind (line | bar | sparkline | counter | gauge | table), a cron: key naming the cron whose results they show, as <namespace>/<name>, an optional title and size hint (sm | md | lg), and kind-specific fields: aggregate and range (as in chart -a and the shell's range command; default 24h..) on any tile but a table of a text cron — on a counter, gauge or table they make it show that aggregate over the range instead of the latest run — bucket (as in chart --bucket) on line, bar and sparkline tiles, format on counters, and max (full scale) on gauges. Tiles have no threshold of their own: a tile turns critical when the value it shows breaches its cron's alert (alert above/below/eq/neq), so put the cutoff on the cron.
 
-The body is parsed against weft's dashboard YAML grammar and every tile's cron: reference is checked against the existing crons. Returns proposal id + unified diff.`
+The body is parsed against weft's dashboard YAML grammar and every tile's cron: reference is checked against the existing crons you can read. Returns proposal id + unified diff.`
 
 	proposalDeleteDescription = `Stage the deletion of an existing script, cron, or dashboard.
 

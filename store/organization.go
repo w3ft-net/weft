@@ -158,7 +158,7 @@ func (s *Store) UpdateOrgDisplayName(name, displayName string) error {
 
 // ValidateNamespaceName reports whether name can be a single namespace.
 // A namespace is one path segment (/log/<ns>/...), a token scope, and the
-// stem of the "<ns>+tokens" permission group, so a name that holds a list
+// stem of the "<ns>-r" and "<ns>-w" permission groups, so a name that holds a list
 // separator (comma), whitespace, a path slash, the "+" facet marker, a glob
 // character, a control character, or that starts like a flag could never
 // round-trip through those and is refused up front.

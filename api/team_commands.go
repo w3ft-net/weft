@@ -23,8 +23,8 @@ import (
 // limits, and the owner session. The coordinator is a separate gRPC
 // service for log queries and has none of that.
 //
-// Groups are the permission model: binmgr/cronmgr/configmgr (the
-// org-dir managers) and, per namespace, "<ns>-r" (read) and "<ns>-w" (manage
+// Groups are the permission model: configmgr (the
+// /etc manager) and, per namespace, "<ns>-r" (read) and "<ns>-w" (manage
 // its crons, tokens and sources). A namespace's crons fire as its cron user,
 // "<ns>-cron", whose reach is the read groups it has been added to. adduser and
 // deluser change who is on the team; usermod changes the groups they or a cron
