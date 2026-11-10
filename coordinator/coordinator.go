@@ -193,7 +193,7 @@ type Coordinator struct {
 	// nsIDCache memoizes (customer, namespace) → namespaces.id for the
 	// ingest drain's hot path, so resolving a row's routing namespace_id
 	// doesn't hit the DB per batch. Keyed by "customer\x00namespace".
-	nsIDCache sync.Map // map[string]uint
+	nsIDCache sync.Map // map[string]nsIDEntry
 
 	// senders is the drain's per-shard send path (drain.go), keyed by shard
 	// id; sendersMu guards the map.
@@ -465,14 +465,26 @@ type drainKey struct {
 func (c *Coordinator) ingestNamespaceID(customerID int64, namespace string) uint {
 	key := strconv.FormatInt(customerID, 10) + "\x00" + namespace
 	if v, ok := c.nsIDCache.Load(key); ok {
-		return v.(uint)
+		if e := v.(nsIDEntry); time.Now().Before(e.expires) {
+			return e.id
+		}
 	}
 	id := c.resolveNamespaceID(store.OrgID(customerID), namespace)
 	if id != 0 {
-		c.nsIDCache.Store(key, id)
+		c.nsIDCache.Store(key, nsIDEntry{id: id, expires: time.Now().Add(nsIDTTL)})
 	}
 	return id
 }
+
+type nsIDEntry struct {
+	id      uint
+	expires time.Time
+}
+
+// nsIDTTL bounds how long ingestNamespaceID trusts a cached id. A namespace
+// deleted and re-created gets a new id, and the delete may have run on another
+// coordinator, so entries expire instead of being invalidated.
+var nsIDTTL = time.Minute
 
 // errNoOrg is returned for a request with no org identity. Zero used to mean
 // "no customer predicate"; it is now refused before planning.

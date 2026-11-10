@@ -568,7 +568,7 @@ are no interim fixes.
 | 6 un-enrolled tables | 2, alongside `Actor.Partition()` |
 | 7 legacy mixed archives | not fixed by this plan |
 | 8 multi-source product | 3 (tuple sets) |
-| 9, 10 cleanup | 2 (9 done: `mounts.Config.CustomerName` is gone; 10 open: `nsIDCache` is never invalidated) |
+| 9, 10 cleanup | 2 (9 done: `mounts.Config.CustomerName` is gone; 10 done: `nsIDCache` entries expire after a minute) |
 
 1. ✅ **Zero means "everything" in the query path.** `resolveCustomerID("")`
    → 0 → no SQL predicate; `ShardDescriptorsFor(nsID=0)` → every shard.
@@ -617,8 +617,8 @@ are no interim fixes.
    with the SQL in the other direction.
 9. `mounts.Config.CustomerName` is set (`shellfs.WithCustomerName`) and
    never read. Delete it.
-10. `nsIDCache` (`coordinator.go:193`) is never invalidated; a deleted and
-   re-created namespace keeps the old ID for ingest routing.
+10. ✅ `nsIDCache` entries now expire (`nsIDTTL`, one minute), so a deleted and
+   re-created namespace stops routing ingest to the old ID.
 
 Related, tracked elsewhere: the coordinator log leaking cross-tenant query
 content (`compliance/cross-tenant-coordinator-log.md`). Under this design,
