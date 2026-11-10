@@ -103,7 +103,7 @@ var registry = map[string]template{
 			}
 			return title, fmt.Sprintf(
 				"In %s, %s is no longer an admin, but the grants their promotion created are still in place: %s. "+
-					"Demotion never revokes — take them back explicitly with `deluser %s <group>`.",
+					"Demotion never revokes — take them back explicitly with `usermod -rG <group> %s`.",
 				org, member, strings.Join(groups, ", "), member)
 		},
 	},

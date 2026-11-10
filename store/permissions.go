@@ -66,11 +66,17 @@ func (s *Store) UpsertNamespacePermission(p *NamespacePermission) error {
 		"can_read":     p.CanRead,
 		"can_write":    p.CanWrite,
 	}
-	result := s.db.Where("user_id = ? AND namespace_id = ?", p.UserID, p.NamespaceID).First(&existing)
+	// Unscoped: a revoked grant is a soft-deleted row that still holds the
+	// (user, namespace) key, so granting again revives it.
+	result := s.db.Unscoped().Where("user_id = ? AND namespace_id = ?", p.UserID, p.NamespaceID).First(&existing)
 	if result.Error == gorm.ErrRecordNotFound {
 		return s.db.Model(&NamespacePermission{}).Create(vals).Error
 	}
-	return s.db.Model(&existing).Updates(vals).Error
+	if result.Error != nil {
+		return result.Error
+	}
+	vals["deleted_at"] = nil
+	return s.db.Unscoped().Model(&existing).Updates(vals).Error
 }
 
 // GrantFullNamespaceAccess gives a user the maximum namespace-scoped

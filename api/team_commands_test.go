@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/graybeardcorp/saaskit/orgs"
 
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/store"
@@ -37,7 +38,8 @@ func TestMaybeHandleTeamCommand_Routing(t *testing.T) {
 		// A non-owner trying to mutate is claimed and rejected here,
 		// before any store access.
 		{"adduser bob@x.test", true, "only the owner"},
-		{"deluser bob@x.test payments-r", true, "only the owner"},
+		{"usermod -rG payments-r bob@x.test", true, "only the owner"},
+		{"deluser bob@x.test", true, "only the owner"},
 	}
 	for _, c := range cases {
 		handled, _, err := s.maybeHandleTeamCommand(context.Background(), member, c.pipeline)
@@ -80,45 +82,86 @@ func ownerSession(t *testing.T, s *store.Store, orgName string) (*auth.Session, 
 	}, cust
 }
 
-// TestTeamAddUser_GroupGrantInvitesAndReportsPending covers the
-// no-staging policy: granting a group to a non-member invites them
-// (email goes out), re-running before they accept errors clearly, and a
-// bad group invites nobody.
-func TestTeamAddUser_GroupGrantInvitesAndReportsPending(t *testing.T) {
+// usermod needs an active member: granting a group to a stranger or to someone
+// who hasn't accepted says what to do first, and a bad group changes nothing.
+func TestTeamUsermod_MemberGroups(t *testing.T) {
 	srv, s := testServer(t)
 	sess, cust := ownerSession(t, s, fmt.Sprintf("tc-%d", os.Getpid()))
 	if _, err := s.FindOrCreateNamespace(cust.ID, "payments"); err != nil {
 		t.Fatal(err)
 	}
+	ctx := context.Background()
 	newbie := fmt.Sprintf("newbie-%d@x.test", os.Getpid())
 
-	// Granting to a non-member invites them; the grant is pending.
-	out, err := srv.teamAddUser(context.Background(), sess, []string{newbie, "payments-r"})
+	if _, err := srv.teamUsermod(ctx, sess, []string{"-aG", "payments-r", newbie}); err == nil || !strings.Contains(err.Error(), "invite them first") {
+		t.Fatalf("a stranger: err = %v, want a pointer to adduser", err)
+	}
+	if _, err := srv.teamAddUser(ctx, sess, []string{newbie}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.teamUsermod(ctx, sess, []string{"-aG", "payments-r", newbie}); err == nil || !strings.Contains(err.Error(), "hasn't accepted") {
+		t.Fatalf("an invitee: err = %v, want hasn't-accepted", err)
+	}
+	if _, err := srv.teamUsermod(ctx, sess, []string{"-aG", "payments", sess.Email}); err == nil || !strings.Contains(err.Error(), "no such group") {
+		t.Fatalf("a bare namespace name is not a group: err = %v", err)
+	}
+	if out, err := srv.teamUsermod(ctx, sess, []string{"-aG", "payments-w", sess.Email}); err != nil || !strings.Contains(out, "Added") {
+		t.Fatalf("owner adds payments-w: %q, %v", out, err)
+	}
+	if out, err := srv.teamUsermod(ctx, sess, []string{"-rG", "payments-w", sess.Email}); err != nil || !strings.Contains(out, "Removed") {
+		t.Fatalf("owner removes payments-w: %q, %v", out, err)
+	}
+}
+
+// A namespace's crons read another namespace only once its cron user is added
+// to that namespace's read group, and you can only make that grant if you hold
+// write on the first namespace and read on the second.
+func TestTeamUsermod_CronUser(t *testing.T) {
+	srv, s := testServer(t)
+	owner, cust := ownerSession(t, s, fmt.Sprintf("tc-cron-%d", os.Getpid()))
+	alpha, _ := s.FindOrCreateNamespace(cust.ID, "alpha")
+	beta, _ := s.FindOrCreateNamespace(cust.ID, "beta")
+	ctx := context.Background()
+
+	u, err := s.CreateVerifiedUser(fmt.Sprintf("ops-%d@x.test", os.Getpid()))
 	if err != nil {
-		t.Fatalf("adduser newbie payments: %v", err)
+		t.Fatal(err)
 	}
-	if !strings.Contains(out, "invite") || !strings.Contains(out, "accept") {
-		t.Errorf("expected invite+accept message, got %q", out)
+	if err := s.AddTeamMemberWithEmail(cust.ID, u.ID, u.Email, orgs.RoleMember); err != nil {
+		t.Fatal(err)
 	}
-	m, err := s.GetTeamMemberByEmail(cust.ID, newbie)
-	if err != nil || m == nil || m.UserID != "" || m.Status != "pending" {
-		t.Fatalf("expected pending member, got %+v err=%v", m, err)
+	member := &auth.Session{UserID: u.ID, Email: u.Email, ActiveOrgID: cust.ID, ActiveCustomerName: cust.Name}
+
+	// Writes alpha, reads alpha only.
+	if err := s.UpsertNamespacePermission(&store.NamespacePermission{UserID: u.ID, NamespaceID: alpha.ID, CanRead: true, CanWrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.teamUsermod(ctx, member, []string{"-aG", "beta-r", "alpha-cron"}); err == nil || !strings.Contains(err.Error(), "you need alpha-w and beta-r") {
+		t.Fatalf("without read on beta: err = %v", err)
 	}
 
-	// Re-running before they accept errors clearly.
-	if _, err := srv.teamAddUser(context.Background(), sess, []string{newbie, "payments-r"}); err == nil ||
-		!strings.Contains(err.Error(), "hasn't accepted") {
-		t.Fatalf("expected hasn't-accepted error, got %v", err)
+	// Reads beta too: now they hold what they hand out.
+	if err := s.UpsertNamespacePermission(&store.NamespacePermission{UserID: u.ID, NamespaceID: beta.ID, CanRead: true}); err != nil {
+		t.Fatal(err)
 	}
-
-	// A typo'd group is rejected with no side effect — nobody invited.
-	other := fmt.Sprintf("other-%d@x.test", os.Getpid())
-	if _, err := srv.teamAddUser(context.Background(), sess, []string{other, "nope"}); err == nil ||
-		!strings.Contains(err.Error(), "no such group") {
-		t.Fatalf("expected bad-group error, got %v", err)
+	if out, err := srv.teamUsermod(ctx, member, []string{"-aG", "beta-r", "alpha-cron"}); err != nil || !strings.Contains(out, "Added") {
+		t.Fatalf("with both: %q, %v", out, err)
 	}
-	if mm, _ := s.GetTeamMemberByEmail(cust.ID, other); mm != nil {
-		t.Errorf("typo'd group should not have invited %s", other)
+	out, err := srv.teamGroupsCmd(owner, []string{"alpha-cron"})
+	if err != nil || !strings.Contains(out, "alpha-r") || !strings.Contains(out, "beta-r") {
+		t.Errorf("groups alpha-cron = %q, %v", out, err)
+	}
+	if _, err := srv.teamUsermod(ctx, member, []string{"-aG", "beta-w", "alpha-cron"}); err == nil || !strings.Contains(err.Error(), "read group") {
+		t.Errorf("a write group for a cron user: err = %v", err)
+	}
+	if _, err := srv.teamUsermod(ctx, member, []string{"-aG", "alpha-r", "beta-cron"}); err == nil {
+		t.Error("writing alpha doesn't let you change beta's cron user")
+	}
+	if out, err := srv.teamUsermod(ctx, member, []string{"-rG", "beta-r", "alpha-cron"}); err != nil || !strings.Contains(out, "Removed") {
+		t.Fatalf("removing: %q, %v", out, err)
+	}
+	if _, err := srv.teamUsermod(ctx, owner, []string{"-aG", "beta-r", "nope-cron"}); err == nil || !strings.Contains(err.Error(), "no such user") {
+		t.Errorf("a namespace that doesn't exist: err = %v", err)
 	}
 }
 
@@ -189,12 +232,12 @@ func TestTeamCommands_ArgumentChecks(t *testing.T) {
 		wantOut  string // substring of output (help)
 		wantErr  string // substring of error
 	}{
-		{"adduser --help", owner, "adduser --help", "usage: adduser <email> [<group>]", ""},
+		{"adduser --help", owner, "adduser --help", "usage: adduser <email>", ""},
 		{"adduser -h", owner, "adduser -h", "usage: adduser", ""},
 		{"help is not privileged", member, "adduser --help", "usage: adduser", ""},
-		{"deluser --help", owner, "deluser --help", "usage: deluser <email> [<group>]", ""},
-		{"groups --help", owner, "groups --help", "usage: groups [<email>]", ""},
-		{"id --help", member, "id --help", "usage: id [<email>]", ""},
+		{"deluser --help", owner, "deluser --help", "usage: deluser <email>", ""},
+		{"groups --help", owner, "groups --help", "usage: groups [<user>]", ""},
+		{"id --help", member, "id --help", "usage: id [<user>]", ""},
 		{"help after an email", owner, "adduser a@x.test --help", "usage: adduser", ""},
 		{"unknown option", owner, "adduser -x", "", "unknown option -x"},
 		{"unknown long option", owner, "deluser --force a@x.test", "", "unknown option --force"},
@@ -202,7 +245,11 @@ func TestTeamCommands_ArgumentChecks(t *testing.T) {
 		{"not an email, deluser", owner, "deluser bob", "", `"bob" is not an email address`},
 		{"not an email, id", member, "id bob", "", `"bob" is not an email address`},
 		{"address list", owner, "adduser b@x.test,c@x.test", "", "is not an email address"},
-		{"too many args, adduser", owner, "adduser a@x.test g extra", "", "usage: adduser"},
+		{"too many args, adduser", owner, "adduser a@x.test g", "", "usage: adduser"},
+		{"usermod --help", owner, "usermod --help", "usermod -aG <group> <user>", ""},
+		{"usermod needs a flag", owner, "usermod payments-r a@x.test", "", "usage: usermod"},
+		{"usermod bad flag", owner, "usermod -x payments-r a@x.test", "", "unknown option -x"},
+		{"usermod user must be an email or a cron user", owner, "usermod -aG payments-r bob", "", `"bob" is not an email address`},
 		{"too many args, id", member, "id a@x.test b@x.test", "", "usage: id"},
 	}
 	for _, c := range cases {

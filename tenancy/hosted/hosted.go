@@ -23,25 +23,11 @@ type Actor struct {
 func (a Actor) Partition() int64 { return int64(a.Org) }
 func (a Actor) Subject() string  { return a.User }
 
-// CronActor is a cron firing. It has no person behind it: its authority is its
-// home namespace (0 for an org-level cron, which reads the org like the system
-// identity). It writes nothing; the Authorizer denies it every action.
-type CronActor struct {
-	Org  store.OrgID
-	Home uint
-}
-
-func (a CronActor) Partition() int64 { return int64(a.Org) }
-func (a CronActor) Subject() string  { return fmt.Sprintf("cron:%d", a.Home) }
-
 type Scoper struct{ Store *store.Store }
 
 // ReadScope grants an owner and the system identity every namespace, and
 // anyone else the namespaces they hold read permission on.
 func (s Scoper) ReadScope(_ context.Context, a tenancy.Actor) (shape.Set, error) {
-	if c, ok := a.(CronActor); ok {
-		return s.cronScope(c)
-	}
 	act, ok := a.(Actor)
 	if !ok {
 		return nil, fmt.Errorf("hosted scoper: unsupported actor %T", a)
@@ -68,20 +54,4 @@ func (s Scoper) ReadScope(_ context.Context, a tenancy.Actor) (shape.Set, error)
 		set = append(set, shape.Coord{Customer: int64(act.Org), Namespace: shape.Value(n)})
 	}
 	return set, nil
-}
-
-// cronScope is the home namespace and nothing else; a cron whose namespace is
-// gone has no scope, and fails its fire.
-func (s Scoper) cronScope(c CronActor) (shape.Set, error) {
-	if c.Org == 0 {
-		return nil, errors.New("hosted scoper: cron has no org")
-	}
-	if c.Home == 0 {
-		return shape.Set{{Customer: int64(c.Org)}}, nil
-	}
-	name, err := s.Store.NamespaceName(c.Org, c.Home)
-	if err != nil {
-		return nil, fmt.Errorf("hosted scoper: the cron's namespace: %w", err)
-	}
-	return shape.Set{{Customer: int64(c.Org), Namespace: shape.Value(name)}}, nil
 }

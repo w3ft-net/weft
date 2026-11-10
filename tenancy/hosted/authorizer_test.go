@@ -15,6 +15,7 @@ func TestAuthorize(t *testing.T) {
 	org, _ := db.FindOrCreateOrg("hosted-authz")
 	ns, _ := db.FindOrCreateNamespace(org.ID, "alpha")
 	db.FindOrCreateNamespace(org.ID, "beta")
+	gamma, _ := db.FindOrCreateNamespace(org.ID, "gamma")
 	mk := func(email string, role orgs.Role) string {
 		u, err := db.CreateVerifiedUser(email)
 		if err != nil {
@@ -38,6 +39,9 @@ func TestAuthorize(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := db.UpsertNamespacePermission(&store.NamespacePermission{UserID: writer, NamespaceID: ns.ID, CanRead: true, CanWrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertNamespacePermission(&store.NamespacePermission{UserID: writer, NamespaceID: gamma.ID, CanRead: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertNamespacePermission(&store.NamespacePermission{UserID: tokener, NamespaceID: ns.ID, CanRead: true, CanWrite: true}); err != nil {
@@ -75,6 +79,10 @@ func TestAuthorize(t *testing.T) {
 		{"writer manages a cron in their namespace", writer, tenancy.ActionManageCron, tenancy.Resource{Namespace: "alpha"}, true},
 		{"writer cannot manage one in another namespace", writer, tenancy.ActionManageCron, tenancy.Resource{Namespace: "beta"}, false},
 		{"a cron needs a namespace", writer, tenancy.ActionManageCron, tenancy.Resource{}, false},
+		{"writer of alpha opens gamma, which they read, to alpha's crons", writer, tenancy.ActionGrantNamespaceRead, tenancy.Resource{Namespace: "alpha", Target: "gamma"}, true},
+		{"writer of alpha cannot open beta, which they cannot read", writer, tenancy.ActionGrantNamespaceRead, tenancy.Resource{Namespace: "alpha", Target: "beta"}, false},
+		{"reader of gamma cannot open alpha to gamma's crons", writer, tenancy.ActionGrantNamespaceRead, tenancy.Resource{Namespace: "gamma", Target: "alpha"}, false},
+		{"owner opens any namespace to any", owner, tenancy.ActionGrantNamespaceRead, tenancy.Resource{Namespace: "alpha", Target: "beta"}, true},
 		{"owner publishes org-wide", owner, tenancy.ActionPublishOrgWide, tenancy.Resource{}, true},
 		{"writer cannot publish org-wide", writer, tenancy.ActionPublishOrgWide, tenancy.Resource{}, false},
 		{"owner manages a cron anywhere", owner, tenancy.ActionManageCron, tenancy.Resource{Namespace: "beta"}, true},

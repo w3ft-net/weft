@@ -653,8 +653,14 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 // Same dispatch surface as Execute; the only difference is the
 // AlertContext binding.
 func (c *Coordinator) ExecuteForWatch(ctx context.Context, pipeline string, tr TimeRange, watch *store.CronWatch) (*ExecuteResult, error) {
-	// A cron fires with the authority of its home namespace, not a person's.
-	ctx = tenancy.WithActor(ctx, hosted.CronActor{Org: watch.OrgID, Home: watch.Home()})
+	// A cron fires as its namespace's cron user, whose groups decide what it
+	// reads. An org-level cron has no such user and still reads as the system
+	// identity until it is moved into a namespace.
+	cronUser := ""
+	if watch.NamespaceID != nil {
+		cronUser = store.CronUserID(*watch.NamespaceID)
+	}
+	ctx = tenancy.WithActor(ctx, hosted.Actor{Org: watch.OrgID, User: cronUser})
 	// c.Notifier is the NotifyDispatcher interface, so a nil-Notifier
 	// coordinator threads true-nil into AlertContext (no typed-nil-
 	// via-concrete-pointer trap).
@@ -1479,12 +1485,10 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		// same authority vi's /api/fs/write save has. The system identity
 		// crons run as (empty userID) never writes /bin, /cron.d or /etc.
 		opts = append(opts, shellfs.WithUser(userID))
-		// A cron has no user; the mounts act as the cron, so `ls /log` in one
-		// lists its home namespace and nothing else.
+		// The mounts act as the request's actor, so `ls /log` in a cron lists
+		// what its cron user may read and nothing else.
 		if a, ok := tenancy.ActorFrom(ctx); ok {
-			if cron, ok := a.(hosted.CronActor); ok {
-				opts = append(opts, shellfs.WithActor(cron))
-			}
+			opts = append(opts, shellfs.WithActor(a))
 		}
 		// LogServices feeds LogMount's directory listing. Source it from
 		// the same per-customer ingest discovery the /api/fs path uses

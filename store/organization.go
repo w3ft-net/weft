@@ -182,9 +182,18 @@ func ValidateNamespaceName(name string) error {
 
 // FindOrCreateNamespace returns the namespace, creating if needed.
 func (s *Store) FindOrCreateNamespace(orgID OrgID, name string) (*Namespace, error) {
+	if ns, err := s.GetNamespace(orgID, name); err == nil {
+		return ns, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
 	var ns Namespace
-	result := s.scoped(orgID).Where("name = ?", name).FirstOrCreate(&ns, Namespace{OrgID: orgID, Name: name})
-	return &ns, result.Error
+	if err := s.scoped(orgID).Where("name = ?", name).FirstOrCreate(&ns, Namespace{OrgID: orgID, Name: name}).Error; err != nil {
+		return &ns, err
+	}
+	// A new namespace's cron user starts in its read group. Only creation seeds
+	// it, so a revoked membership stays revoked.
+	return &ns, s.seedCronUser(&ns)
 }
 
 // GetNamespace looks up a namespace by (org_id, name) without creating
@@ -249,6 +258,10 @@ func (s *Store) DeleteNamespace(ctx context.Context, orgID OrgID, name string) e
 			if err := tx.Unscoped().Where("namespace_id = ?", ns.ID).Delete(m).Error; err != nil {
 				return err
 			}
+		}
+		// The namespace's cron user goes too, with what it was granted elsewhere.
+		if err := tx.Unscoped().Where("user_id = ?", CronUserID(ns.ID)).Delete(&NamespacePermission{}).Error; err != nil {
+			return err
 		}
 		return tx.Unscoped().Delete(ns).Error
 	})

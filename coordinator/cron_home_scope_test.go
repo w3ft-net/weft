@@ -89,3 +89,45 @@ func TestExecuteForWatch_LoweredPlanOutsideTheHomeIsRefused(t *testing.T) {
 		t.Fatalf("err = %v, want the stored plan refused for reading beta", err)
 	}
 }
+
+// Adding the namespace's cron user to another namespace's read group opens that
+// namespace to its crons, and removing it closes it again.
+func TestExecuteForWatch_CronUserGroupsDecideWhatItReads(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	alpha, _ := db.FindOrCreateNamespace(custID, "alpha")
+	db.FindOrCreateNamespace(custID, "beta")
+	pipeline := "cat /log/beta/api/main.log"
+	w := &store.CronWatch{OrgID: custID, NamespaceID: &alpha.ID, Name: "cross", Schedule: "every 1m", Pipeline: pipeline, Enabled: true}
+
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
+	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
+	fire := func() error {
+		res, err := c.ExecuteForWatch(context.Background(), pipeline, tr, w)
+		if err == nil && res != nil {
+			d, derr := res.Drain(context.Background())
+			if derr != nil {
+				err = derr
+			} else if d.Stderr != "" {
+				err = errors.New(d.Stderr)
+			}
+		}
+		return err
+	}
+	refused := func(err error) bool { return err != nil && strings.Contains(err.Error(), "unknown source: beta") }
+
+	if err := fire(); !refused(err) {
+		t.Fatalf("before the grant: err = %v, want beta refused", err)
+	}
+	if err := db.SetCronUserGroup(custID, "alpha-cron", "beta-r", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := fire(); refused(err) {
+		t.Errorf("after usermod -aG beta-r alpha-cron: %v", err)
+	}
+	if err := db.SetCronUserGroup(custID, "alpha-cron", "beta-r", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := fire(); !refused(err) {
+		t.Errorf("after removing it: err = %v, want beta refused again", err)
+	}
+}

@@ -21,7 +21,7 @@ import (
 // the user at the wrong remedy.
 // Wrapping fs.ErrPermission lets callers test with errors.Is.
 func denyWrite(dir, group string) error {
-	return fmt.Errorf("%s: %w (need the %s group — ask an owner for `adduser <you> %s`)",
+	return fmt.Errorf("%s: %w (need the %s group — ask an owner for `usermod -aG %s <you>`)",
 		dir, fs.ErrPermission, group, group)
 }
 

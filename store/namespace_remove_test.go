@@ -105,8 +105,12 @@ func TestDeleteNamespaceIsHardAndFreesTheName(t *testing.T) {
 		if n := count(table, ns.ID); n != 0 {
 			t.Errorf("%s still has %d rows for the deleted namespace", table, n)
 		}
-		if n := count(table, keep.ID); n != 1 {
-			t.Errorf("%s has %d rows for the other namespace, want 1 untouched", table, n)
+		want := int64(1)
+		if table == "namespace_permissions" {
+			want = 2 // u1, and the other namespace's cron user in its own read group
+		}
+		if n := count(table, keep.ID); n != want {
+			t.Errorf("%s has %d rows for the other namespace, want %d untouched", table, n, want)
 		}
 	}
 

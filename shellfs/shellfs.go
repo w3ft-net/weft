@@ -85,8 +85,8 @@ func WithUser(userID string) Option {
 	}
 }
 
-// WithActor makes the mounts act as a principal that is not a member, such as
-// a cron firing.
+// WithActor makes the mounts act as the given principal, such as the cron user
+// a cron fires as.
 func WithActor(a tenancy.Actor) Option {
 	return func(c *mounts.Config) { c.Actor = a }
 }

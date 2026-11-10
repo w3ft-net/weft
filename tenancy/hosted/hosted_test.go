@@ -77,34 +77,32 @@ func TestReadScope_FailsClosed(t *testing.T) {
 	}
 }
 
-// A cron reads its home namespace and nothing else, whoever saved it; an
-// org-level cron keeps the system identity's reach.
-func TestReadScope_Cron(t *testing.T) {
+// A namespace's cron user reads its home and whatever read groups it has been
+// added to; the scoper treats it like any other subject.
+func TestReadScope_CronUser(t *testing.T) {
 	db := newStore(t)
 	org, _ := db.FindOrCreateOrg("hosted-cron-scope")
 	alpha, _ := db.FindOrCreateNamespace(org.ID, "alpha")
 	db.FindOrCreateNamespace(org.ID, "beta")
 	sc := Scoper{Store: db}
-
-	set, err := sc.ReadScope(context.Background(), CronActor{Org: org.ID, Home: alpha.ID})
-	if err != nil {
+	names := func() []string {
+		set, err := sc.ReadScope(context.Background(), Actor{Org: org.ID, User: store.CronUserID(alpha.ID)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, all, err := set.Namespaces(int64(org.ID))
+		if err != nil || all {
+			t.Fatalf("names=%v all=%v err=%v", n, all, err)
+		}
+		return n
+	}
+	if got := names(); !slices.Equal(got, []string{"alpha"}) {
+		t.Errorf("cron user reads %v, want [alpha]", got)
+	}
+	if err := db.SetCronUserGroup(org.ID, "alpha-cron", "beta-r", true); err != nil {
 		t.Fatal(err)
 	}
-	names, all, err := set.Namespaces(int64(org.ID))
-	if err != nil || all || !slices.Equal(names, []string{"alpha"}) {
-		t.Errorf("namespaced cron: names=%v all=%v err=%v, want [alpha]", names, all, err)
-	}
-
-	set, err = sc.ReadScope(context.Background(), CronActor{Org: org.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, all, _ := set.Namespaces(int64(org.ID)); !all {
-		t.Error("org-level cron: want every namespace")
-	}
-
-	// A home that no longer exists reads nothing rather than everything.
-	if _, err := sc.ReadScope(context.Background(), CronActor{Org: org.ID, Home: 999999}); err == nil {
-		t.Error("a cron whose namespace is gone must not get a scope")
+	if got := names(); !slices.Equal(got, []string{"alpha", "beta"}) {
+		t.Errorf("after beta-r: %v", got)
 	}
 }

@@ -39,10 +39,10 @@ const (
 	writeSuffix = "-w"
 )
 
-// splitNamespaceGroup parses "<ns>-r" and "<ns>-w". A name that ends either
+// SplitNamespaceGroup parses "<ns>-r" and "<ns>-w". A name that ends either
 // way always parses as that namespace's group, so "a-w" is a's write group and
 // a namespace called "a-w" has "a-w-r" and "a-w-w".
-func splitNamespaceGroup(group string) (ns string, write, ok bool) {
+func SplitNamespaceGroup(group string) (ns string, write, ok bool) {
 	if ns, ok = strings.CutSuffix(group, readSuffix); ok && ns != "" {
 		return ns, false, true
 	}
@@ -74,7 +74,7 @@ func (s *Store) setGroupMembership(orgID OrgID, email, group string, grant bool)
 		return s.setOrgBit(orgID, uid, col, grant)
 	}
 
-	nsName, write, ok := splitNamespaceGroup(group)
+	nsName, write, ok := SplitNamespaceGroup(group)
 	if !ok {
 		return fmt.Errorf("no such group or namespace: %s (a namespace's groups are %s-r and %s-w)", group, group, group)
 	}
@@ -116,7 +116,7 @@ func (s *Store) ValidateGroup(orgID OrgID, group string) error {
 	if _, ok := managerGroupColumn[group]; ok {
 		return nil
 	}
-	nsName, _, ok := splitNamespaceGroup(group)
+	nsName, _, ok := SplitNamespaceGroup(group)
 	if !ok {
 		return fmt.Errorf("no such group or namespace: %s (a namespace's groups are %s-r and %s-w)", group, group, group)
 	}
@@ -385,6 +385,24 @@ func (s *Store) RenderPasswd(orgID OrgID) (string, error) {
 			userW = len(m.Email)
 		}
 	}
+
+	// Each namespace's cron user, the identity its crons fire as.
+	for _, ns := range nsByID {
+		user := ns + cronUserSuffix
+		groups, err := s.CronUserGroups(orgID, user)
+		if err != nil {
+			return "", err
+		}
+		groupsCol := "—"
+		if len(groups) > 0 {
+			groupsCol = strings.Join(groups, "  ")
+		}
+		rows = append(rows, row{user, "cron", "system", groupsCol})
+		if len(user) > userW {
+			userW = len(user)
+		}
+	}
+	sort.SliceStable(rows[len(members):], func(i, j int) bool { return rows[len(members)+i].user < rows[len(members)+j].user })
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%-*s  %-7s  %-8s  %s\n", userW, "USER", "ROLE", "STATUS", "GROUPS")

@@ -24,14 +24,18 @@ import (
 // service for log queries and has none of that.
 //
 // Groups are the permission model: binmgr/cronmgr/configmgr (the
-// org-dir managers), a namespace name (read), or "<ns>+tokens" (mint
-// producer tokens). See store/team_groups.go.
+// org-dir managers) and, per namespace, "<ns>-r" (read) and "<ns>-w" (manage
+// its crons, tokens and sources). A namespace's crons fire as its cron user,
+// "<ns>-cron", whose reach is the read groups it has been added to. adduser and
+// deluser change who is on the team; usermod changes the groups they or a cron
+// user are in. See store/team_groups.go and store/cron_user.go.
 
 // teamCommands is the set of standalone commands intercepted before the
 // pipeline reaches the coordinator.
 var teamCommands = map[string]bool{
 	"adduser": true,
 	"deluser": true,
+	"usermod": true,
 	"groups":  true,
 	"id":      true,
 }
@@ -65,6 +69,8 @@ func (s *Server) maybeHandleTeamCommand(ctx context.Context, session *auth.Sessi
 		out, err = s.teamAddUser(ctx, session, args)
 	case "deluser":
 		out, err = s.teamDelUser(ctx, session, args)
+	case "usermod":
+		out, err = s.teamUsermod(ctx, session, args)
 	}
 	return true, out, err
 }
@@ -72,16 +78,18 @@ func (s *Server) maybeHandleTeamCommand(ctx context.Context, session *auth.Sessi
 // teamUsage is each team command's usage line, shown by --help and by
 // argument errors.
 var teamUsage = map[string]string{
-	"adduser": "usage: adduser <email> [<group>]\n  invite <email> to the org, or add an existing member to <group>\n",
-	"deluser": "usage: deluser <email> [<group>]\n  remove <email> from the org, or from <group>\n",
-	"groups":  "usage: groups [<email>]\n  show a member's groups (yours when no email is given)\n",
-	"id":      "usage: id [<email>]\n  show a member's role and groups (yours when no email is given)\n",
+	"adduser": "usage: adduser <email>\n  invite <email> to the org\n",
+	"deluser": "usage: deluser <email>\n  remove <email> from the org\n",
+	"usermod": "usage: usermod -aG <group> <user>\n       usermod -rG <group> <user>\n  add <user> to <group>, or remove it. <user> is a member's email or a\n  namespace's cron user (<namespace>-cron); a namespace has the groups\n  <namespace>-r (read) and <namespace>-w (manage its crons, tokens and sources).\n  A cron user can only join read groups: usermod -aG logs-r app-cron lets the\n  crons in app read logs. You need logs-r and app-w to do that.\n",
+	"groups":  "usage: groups [<user>]\n  show a member's or cron user's groups (yours when no user is given)\n",
+	"id":      "usage: id [<user>]\n  show a member's role and groups (yours when no user is given)\n",
 }
 
 // teamArgLimits is the (min, max) argument count per command.
 var teamArgLimits = map[string][2]int{
-	"adduser": {1, 2},
-	"deluser": {1, 2},
+	"adduser": {1, 1},
+	"deluser": {1, 1},
+	"usermod": {3, 3},
 	"groups":  {0, 1},
 	"id":      {0, 1},
 }
@@ -99,7 +107,10 @@ func checkTeamArgs(cmd string, args []string) (done bool, out string, err error)
 			return true, usage, nil
 		}
 	}
-	for _, a := range args {
+	for i, a := range args {
+		if cmd == "usermod" && i == 0 && (a == "-aG" || a == "-rG") {
+			continue
+		}
 		if strings.HasPrefix(a, "-") {
 			return true, "", fmt.Errorf("%s: unknown option %s\n%s", cmd, a, strings.TrimRight(usage, "\n"))
 		}
@@ -108,10 +119,24 @@ func checkTeamArgs(cmd string, args []string) (done bool, out string, err error)
 	if len(args) < limits[0] || len(args) > limits[1] {
 		return true, "", errors.New(strings.TrimRight(usage, "\n"))
 	}
-	if len(args) > 0 {
-		// The first argument is always an email address.
-		if addr, perr := mail.ParseAddress(args[0]); perr != nil || addr.Address != args[0] {
-			return true, "", fmt.Errorf("%s: %q is not an email address\n%s", cmd, args[0], strings.TrimRight(usage, "\n"))
+	if cmd == "usermod" && args[0] != "-aG" && args[0] != "-rG" {
+		return true, "", errors.New(strings.TrimRight(usage, "\n"))
+	}
+	// The user is an email address, or for the commands that show or change
+	// groups, a namespace's cron user.
+	who := ""
+	switch cmd {
+	case "usermod":
+		who = args[2]
+	default:
+		if len(args) > 0 {
+			who = args[0]
+		}
+	}
+	if who != "" {
+		isCron := cmd != "adduser" && cmd != "deluser" && strings.HasSuffix(who, "-cron") && !strings.Contains(who, "@")
+		if addr, perr := mail.ParseAddress(who); !isCron && (perr != nil || addr.Address != who) {
+			return true, "", fmt.Errorf("%s: %q is not an email address\n%s", cmd, who, strings.TrimRight(usage, "\n"))
 		}
 	}
 	return false, "", nil
@@ -124,7 +149,7 @@ func (s *Server) teamID(session *auth.Session, args []string) (string, error) {
 	if len(args) > 0 {
 		email = args[0]
 	}
-	role, _, groups, err := s.store.MemberGroups(session.ActiveOrgID, email)
+	role, groups, err := s.groupsOf(session, email)
 	if err != nil {
 		return "", err
 	}
@@ -137,11 +162,21 @@ func (s *Server) teamGroupsCmd(session *auth.Session, args []string) (string, er
 	if len(args) > 0 {
 		email = args[0]
 	}
-	role, _, groups, err := s.store.MemberGroups(session.ActiveOrgID, email)
+	role, groups, err := s.groupsOf(session, email)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%s: %s\n", email, groupsLabel(role, groups, " ")), nil
+}
+
+// groupsOf is a member's role and groups, or those of a namespace's cron user.
+func (s *Server) groupsOf(session *auth.Session, user string) (role string, groups []string, err error) {
+	if s.store.IsCronUser(session.ActiveOrgID, user) {
+		groups, err = s.store.CronUserGroups(session.ActiveOrgID, user)
+		return "cron", groups, err
+	}
+	role, _, groups, err = s.store.MemberGroups(session.ActiveOrgID, user)
+	return role, groups, err
 }
 
 // groupsLabel renders a member's group list, collapsing owners to the
@@ -156,80 +191,98 @@ func groupsLabel(role string, groups []string, sep string) string {
 	return strings.Join(groups, sep)
 }
 
-// teamAddUser implements `adduser <email> [<group>]`. With no group it
-// invites the email to the org (sending an invite email); with a group
-// it grants the membership. Owner-only.
+// teamAddUser implements `adduser <email>`: invite the email to the org,
+// sending an invite email. Owner-only. Groups are usermod's.
 func (s *Server) teamAddUser(ctx context.Context, session *auth.Session, args []string) (string, error) {
 	if s.authorize(ctx, session, hosted.ActionManageTeam, tenancy.Resource{}) != nil {
 		return "", fmt.Errorf("only the owner can manage the team")
 	}
-	if len(args) == 0 {
-		return "", fmt.Errorf("usage: adduser <email> [<group>]")
+	if len(args) != 1 {
+		return "", fmt.Errorf("usage: adduser <email>")
 	}
 	email := args[0]
-	custID := session.ActiveOrgID
-	if len(args) == 1 {
-		if _, err := s.inviteMember(ctx, session, email); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("Invited %s — an invite email is on its way. They'll join %s when they accept.\n",
-			email, session.ActiveCustomerName), nil
-	}
-
-	group := args[1]
-	// Reject a bad group up front, before any side effect — otherwise a
-	// typo'd group would invite someone we didn't mean to.
-	if err := s.store.ValidateGroup(custID, group); err != nil {
+	if _, err := s.inviteMember(ctx, session, email); err != nil {
 		return "", err
 	}
-
-	// We don't stage grants against unaccepted invites. Instead, make the
-	// state explicit: a brand-new email gets invited now (the email goes
-	// out) and the owner re-runs once they've joined; an already-invited
-	// member who hasn't accepted gets a clear error rather than silence.
-	member, _ := s.store.GetTeamMemberByEmail(custID, email)
-	switch {
-	case member == nil:
-		if _, err := s.inviteMember(ctx, session, email); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("Invited %s — an invite email is on its way. They must accept before joining %s; re-run `adduser %s %s` once they have.\n",
-			email, group, email, group), nil
-	case member.Pending():
-		return "", fmt.Errorf("%s has been invited but hasn't accepted yet — re-run `adduser %s %s` after they accept", email, email, group)
-	}
-
-	if err := s.store.AddUserToGroup(custID, email, group); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("Added %s to %s.\n", email, group), nil
+	return fmt.Sprintf("Invited %s — an invite email is on its way. They'll join %s when they accept; then give them groups with `usermod -aG <group> %s`.\n",
+		email, session.ActiveCustomerName, email), nil
 }
 
-// teamDelUser implements `deluser <email> [<group>]`. With no group it
-// removes the member from the org; with a group it revokes that
-// membership. Owner-only.
+// teamDelUser implements `deluser <email>`: remove the member from the org.
+// Owner-only.
 func (s *Server) teamDelUser(ctx context.Context, session *auth.Session, args []string) (string, error) {
 	if s.authorize(ctx, session, hosted.ActionManageTeam, tenancy.Resource{}) != nil {
 		return "", fmt.Errorf("only the owner can manage the team")
 	}
-	if len(args) == 0 {
-		return "", fmt.Errorf("usage: deluser <email> [<group>]")
+	if len(args) != 1 {
+		return "", fmt.Errorf("usage: deluser <email>")
 	}
 	email := args[0]
-	if len(args) == 1 {
-		if email == session.Email {
-			return "", fmt.Errorf("you can't remove yourself")
-		}
-		if err := s.store.RemoveMember(session.ActiveOrgID, email); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("Removed %s from %s.\n", email, session.ActiveCustomerName), nil
+	if email == session.Email {
+		return "", fmt.Errorf("you can't remove yourself")
 	}
-	group := args[1]
-	if err := s.store.RemoveUserFromGroup(session.ActiveOrgID, email, group); err != nil {
+	if err := s.store.RemoveMember(session.ActiveOrgID, email); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Removed %s from %s.\n", email, group), nil
+	return fmt.Sprintf("Removed %s from %s.\n", email, session.ActiveCustomerName), nil
+}
+
+// teamUsermod implements `usermod -aG|-rG <group> <user>`. For a member it is
+// owner-only. For a namespace's cron user, adding it to a read group is the
+// grant that lets that namespace's crons read the other namespace, and you may
+// do it only if you hold what you hand out: write on the cron user's namespace
+// and read on the group's. Removing needs write on the cron user's namespace.
+func (s *Server) teamUsermod(ctx context.Context, session *auth.Session, args []string) (string, error) {
+	if len(args) != 3 {
+		return "", errors.New(strings.TrimRight(teamUsage["usermod"], "\n"))
+	}
+	add, group, user := args[0] == "-aG", args[1], args[2]
+	org := session.ActiveOrgID
+
+	if !strings.Contains(user, "@") {
+		home, ok := s.store.CronUserHome(org, user)
+		if !ok {
+			return "", fmt.Errorf("no such user: %s", user)
+		}
+		target, _, valid := store.SplitNamespaceGroup(group)
+		if !valid {
+			return "", fmt.Errorf("%s can only be added to a read group (<namespace>-r)", user)
+		}
+		act, res := tenancy.ActionManageCron, tenancy.Resource{Namespace: home}
+		if add {
+			act, res = tenancy.ActionGrantNamespaceRead, tenancy.Resource{Namespace: home, Target: target}
+		}
+		if err := s.authorize(ctx, session, act, res); err != nil {
+			if add {
+				return "", fmt.Errorf("to add %s to %s you need %s-w and %s-r", user, group, home, target)
+			}
+			return "", fmt.Errorf("to change %s you need %s-w", user, home)
+		}
+		if err := s.store.SetCronUserGroup(org, user, group, add); err != nil {
+			return "", err
+		}
+		if add {
+			return fmt.Sprintf("Added %s to %s.\n", user, group), nil
+		}
+		return fmt.Sprintf("Removed %s from %s.\n", user, group), nil
+	}
+
+	if s.authorize(ctx, session, hosted.ActionManageTeam, tenancy.Resource{}) != nil {
+		return "", fmt.Errorf("only the owner can manage the team")
+	}
+	if err := s.store.ValidateGroup(org, group); err != nil {
+		return "", err
+	}
+	if add {
+		if err := s.store.AddUserToGroup(org, user, group); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Added %s to %s.\n", user, group), nil
+	}
+	if err := s.store.RemoveUserFromGroup(org, user, group); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Removed %s from %s.\n", user, group), nil
 }
 
 // inviteErr carries an HTTP status so the JSON invite handler can keep
