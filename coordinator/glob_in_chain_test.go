@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // A glob in a source command that isn't the first command of the line
@@ -27,7 +28,7 @@ func TestGlobInChainedSource_NoMatchIsAnError(t *testing.T) {
 		`cd /log/acme/prod/api; tail -n 1 *.nomatch`,
 		`tail -n 1 /log/acme/prod/api/*.nomatch`,
 	} {
-		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, custID, "", nil)
+		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, hosted.Actor{Org: custID, User: ""}, nil)
 		if err == nil {
 			d := drainExec(t, res)
 			if !strings.Contains(d.Stderr, "no pseudofiles match") {
@@ -57,7 +58,7 @@ func TestGlobInChainedSource_CrossSourceIsDisallowed(t *testing.T) {
 		`cd /log/acme/prod; tail -n 1 *.log`,
 		`cat /log/acme/prod/*.log`,
 	} {
-		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, custID, "", nil)
+		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, hosted.Actor{Org: custID, User: ""}, nil)
 		got := ""
 		if err != nil {
 			got = err.Error()
@@ -86,7 +87,7 @@ func TestFollowWithStdoutRedirect_IsRefused(t *testing.T) {
 		`tail -f /log/acme/prod/api/main.log > /tmp/stream`,
 		`tail -f /log/acme/prod/api/main.log | grep ERROR >> /tmp/stream`,
 	} {
-		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, custID, "", nil)
+		res, err := c.ExecuteWithDir(context.Background(), line, TimeRange{}, hosted.Actor{Org: custID, User: ""}, nil)
 		got := ""
 		if err != nil {
 			got = err.Error()

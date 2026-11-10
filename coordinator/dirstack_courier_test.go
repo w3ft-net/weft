@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // The dirstack courier lets a delegated client ship its cached cwd/pushd
@@ -30,7 +31,7 @@ func TestCourier_SeedReadback(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.ExecuteWithDir(context.Background(), "pwd", TimeRange{}, custID, "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "pwd", TimeRange{}, hosted.Actor{Org: custID, User: ""}, []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -49,7 +50,7 @@ func TestCourier_CdMovesCwd(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.ExecuteWithDir(context.Background(), "cd /bin && pwd", TimeRange{}, custID, "", []string{"/tmp"})
+	res, err := c.ExecuteWithDir(context.Background(), "cd /bin && pwd", TimeRange{}, hosted.Actor{Org: custID, User: ""}, []string{"/tmp"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -69,7 +70,7 @@ func TestCourier_RelativeCdResolvesAgainstSeed(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.ExecuteWithDir(context.Background(), "cd sub && pwd", TimeRange{}, custID, "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "cd sub && pwd", TimeRange{}, hosted.Actor{Org: custID, User: ""}, []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestCourier_PushdReturnsFullStack(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.ExecuteWithDir(context.Background(), "pushd /bin", TimeRange{}, custID, "", []string{"/tmp"})
+	res, err := c.ExecuteWithDir(context.Background(), "pushd /bin", TimeRange{}, hosted.Actor{Org: custID, User: ""}, []string{"/tmp"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -105,7 +106,7 @@ func TestCourier_NilSeedDefaultsToRoot(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.Execute(context.Background(), "pwd", TimeRange{}, custID, "")
+	res, err := c.Execute(context.Background(), "pwd", TimeRange{}, hosted.Actor{Org: custID, User: ""})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

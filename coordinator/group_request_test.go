@@ -10,6 +10,7 @@ import (
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // A grouped pipeline reaches compute as a GroupSpec, never as the legacy
@@ -30,7 +31,7 @@ func TestExecuteQuery_GroupedPipelineSendsAGroupSpec(t *testing.T) {
 			pool := &spyCompute{inner: c.Compute}
 			c.Compute = pool
 
-			res, err := c.Execute(context.Background(), tc.pipeline, fullRange, store.TestOrgID("kevlar"), "")
+			res, err := c.Execute(context.Background(), tc.pipeline, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 			if err != nil {
 				t.Fatalf("query: %v", err)
 			}

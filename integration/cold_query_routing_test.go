@@ -24,6 +24,7 @@ import (
 	"github.com/graybeardcorp/weft/shard"
 	shardservice "github.com/graybeardcorp/weft/shard/service"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 func TestColdShardQueryRouting(t *testing.T) {
@@ -271,7 +272,7 @@ func startColdShardHTTP(t *testing.T, s3cfg *shard.S3Config) *httptest.Server {
 
 func drainQuery(t *testing.T, c *coordinator.Coordinator, pipeline string, tr logdb.TimeRange) []*pb.ResultRow {
 	t.Helper()
-	res, err := c.Execute(context.Background(), pipeline, tr, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), pipeline, tr, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatalf("Execute %q: %v", pipeline, err)
 	}

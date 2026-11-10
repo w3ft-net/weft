@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/graybeardcorp/weft/tenancy"
-	"github.com/graybeardcorp/weft/tenancy/hosted"
 	"io"
 	"slices"
 	"sort"
@@ -14,6 +12,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape"
+	"github.com/graybeardcorp/weft/tenancy"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
@@ -541,8 +543,21 @@ func (c *Coordinator) clampTimeRange(tr TimeRange, custID store.OrgID) TimeRange
 // Callers that don't pump bytes themselves (tests, alert post-
 // processors) drain the stream into a buffered DrainedResult via
 // res.Drain(ctx).
-func (c *Coordinator) Execute(ctx context.Context, pipeline string, tr TimeRange, org store.OrgID, userID string) (*ExecuteResult, error) {
+func (c *Coordinator) Execute(ctx context.Context, pipeline string, tr TimeRange, a tenancy.Actor) (*ExecuteResult, error) {
+	ctx, org, userID, err := enter(ctx, a)
+	if err != nil {
+		return nil, err
+	}
 	return c.execute(ctx, pipeline, tr, org, userID, nil, nil)
+}
+
+// enter binds the actor to ctx, where the Scoper is asked about it, and
+// returns the org and user the rest of the query path works in.
+func enter(ctx context.Context, a tenancy.Actor) (context.Context, store.OrgID, string, error) {
+	if a == nil {
+		return ctx, 0, "", errNoOrg
+	}
+	return tenancy.WithActor(ctx, a), store.OrgID(a.Partition()), a.Subject(), nil
 }
 
 // ExecuteWithDir is Execute plus the dirstack courier: dirStack (index
@@ -551,7 +566,11 @@ func (c *Coordinator) Execute(ctx context.Context, pipeline string, tr TimeRange
 // caller's current directory. The post-run dirstack is returned on the
 // result's FinalDirStack (read after the stream exhausts) for the caller
 // to cache. dirStack nil/empty behaves exactly like Execute (cwd "/").
-func (c *Coordinator) ExecuteWithDir(ctx context.Context, pipeline string, tr TimeRange, org store.OrgID, userID string, dirStack []string) (*ExecuteResult, error) {
+func (c *Coordinator) ExecuteWithDir(ctx context.Context, pipeline string, tr TimeRange, a tenancy.Actor, dirStack []string) (*ExecuteResult, error) {
+	ctx, org, userID, err := enter(ctx, a)
+	if err != nil {
+		return nil, err
+	}
 	return c.execute(ctx, pipeline, tr, org, userID, nil, dirStack)
 }
 
@@ -568,9 +587,13 @@ func (c *Coordinator) ExecuteWithDir(ctx context.Context, pipeline string, tr Ti
 // notice trigger (/tmp writes) doesn't fire on follow's read-only
 // historical pass; if that changes, plumb Notices through the concat
 // transition.
-func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr TimeRange, org store.OrgID, userID string, dirStack []string) (*ExecuteResult, error) {
+func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr TimeRange, a tenancy.Actor, dirStack []string) (*ExecuteResult, error) {
 	if c.TailFanout == nil {
 		return nil, fmt.Errorf("ExecuteFollow: coordinator has no tail broker")
+	}
+	ctx, org, userID, err := enter(ctx, a)
+	if err != nil {
+		return nil, err
 	}
 	// Plan again here just to extract the live-filter args
 	// (FollowApp/FollowPatterns/LiveStages). The historical batch
@@ -632,6 +655,7 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 // Same dispatch surface as Execute; the only difference is the
 // AlertContext binding.
 func (c *Coordinator) ExecuteForWatch(ctx context.Context, pipeline string, tr TimeRange, watch *store.CronWatch) (*ExecuteResult, error) {
+	ctx = tenancy.WithActor(ctx, hosted.Actor{Org: watch.OrgID})
 	// c.Notifier is the NotifyDispatcher interface, so a nil-Notifier
 	// coordinator threads true-nil into AlertContext (no typed-nil-
 	// via-concrete-pointer trap).
@@ -977,7 +1001,7 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 		}
 	}
 
-	readable, err := c.readScope(ctx, custID, userID)
+	readable, err := c.readScope(ctx, custID)
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
 	}
@@ -1056,11 +1080,11 @@ func (c *Coordinator) preflight(pipeline string, custID store.OrgID) (store.OrgI
 // readScope is the namespaces a trace is restricted to for userID: nil when
 // the actor may read everything (an owner, or the system identity), otherwise
 // the namespaces they may read, which may be none.
-func (c *Coordinator) readScope(ctx context.Context, custID store.OrgID, userID string) ([]string, error) {
+func (c *Coordinator) readScope(ctx context.Context, custID store.OrgID) ([]string, error) {
 	if c.Store == nil {
 		return nil, nil
 	}
-	set, err := c.Scoper.ReadScope(ctx, hosted.Actor{Org: custID, User: userID})
+	set, err := c.actorScope(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1077,6 +1101,16 @@ func (c *Coordinator) readScope(ctx context.Context, custID store.OrgID, userID 
 	return names, nil
 }
 
+// actorScope is what the request's actor may read. A request that reached
+// here without an actor has no scope.
+func (c *Coordinator) actorScope(ctx context.Context) (shape.Set, error) {
+	a, ok := tenancy.ActorFrom(ctx)
+	if !ok {
+		return nil, errors.New("request has no actor")
+	}
+	return c.Scoper.ReadScope(ctx, a)
+}
+
 // userIsOwner reports whether userID owns the org. The empty user (the system
 // identity) is not a member of anything, but reads as an owner.
 func (c *Coordinator) userIsOwner(custID store.OrgID, userID string) (bool, error) {
@@ -1089,8 +1123,8 @@ func (c *Coordinator) userIsOwner(custID store.OrgID, userID string) (bool, erro
 // authorizeSources refuses a log query that reads a namespace the actor's
 // scope does not cover. The empty user is the system identity, whose scope is
 // every namespace.
-func (c *Coordinator) authorizeSources(ctx context.Context, custID store.OrgID, userID string, plan *planner.QueryPlan) error {
-	set, err := c.Scoper.ReadScope(ctx, hosted.Actor{Org: custID, User: userID})
+func (c *Coordinator) authorizeSources(ctx context.Context, custID store.OrgID, plan *planner.QueryPlan) error {
+	set, err := c.actorScope(ctx)
 	if err != nil {
 		return fmt.Errorf("validate source: %w", err)
 	}
@@ -1130,7 +1164,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	// namespace reads all of them. This also serves as the allowlist before a
 	// name reaches SQL interpolation: only namespaces that exist can pass. A
 	// namespace that is missing and one that is unreadable read the same.
-	if err := c.authorizeSources(ctx, custID, userID, plan); err != nil {
+	if err := c.authorizeSources(ctx, custID, plan); err != nil {
 		return nil, err
 	}
 

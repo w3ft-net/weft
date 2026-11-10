@@ -3,9 +3,11 @@ package coordinator
 import (
 	"context"
 	"errors"
-	"github.com/graybeardcorp/weft/store"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/planner"
@@ -27,7 +29,7 @@ func TestExecuteFollow_HistoricalThenBroker(t *testing.T) {
 	// `tail vimgym.log` (no -f in the pipeline — ExecuteFollow's own
 	// follow flag drives live tailing) to keep the historical batch
 	// small and predictable.
-	res, err := c.ExecuteFollow(ctx, "tail vimgym.log", fullRange, store.TestOrgID("kevlar"), "", nil)
+	res, err := c.ExecuteFollow(ctx, "tail vimgym.log", fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""}, nil)
 	if err != nil {
 		t.Fatalf("ExecuteFollow: %v", err)
 	}
@@ -79,7 +81,7 @@ func TestExecuteFollow_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	res, err := c.ExecuteFollow(ctx, "tail gamestate.log", fullRange, store.TestOrgID("kevlar"), "", []string{"/log/vimgym/api"})
+	res, err := c.ExecuteFollow(ctx, "tail gamestate.log", fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""}, []string{"/log/vimgym/api"})
 	if err != nil {
 		t.Fatalf("ExecuteFollow: %v", err)
 	}
@@ -129,7 +131,7 @@ func TestExecuteFollow_DoesNotLeakOtherTenants(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			res, err := c.ExecuteFollow(ctx, tc.pipeline, fullRange, store.TestOrgID("kevlar"), "", nil)
+			res, err := c.ExecuteFollow(ctx, tc.pipeline, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""}, nil)
 			if err != nil {
 				t.Fatalf("ExecuteFollow: %v", err)
 			}
@@ -162,7 +164,7 @@ func TestExecuteFollow_NoBroker_Errors(t *testing.T) {
 	c.Tail = nil
 	c.TailFanout = nil
 
-	_, err := c.ExecuteFollow(context.Background(), "tail vimgym.log", fullRange, store.TestOrgID("kevlar"), "", nil)
+	_, err := c.ExecuteFollow(context.Background(), "tail vimgym.log", fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""}, nil)
 	if err == nil {
 		t.Fatal("expected error when Tail is nil")
 	}
@@ -178,7 +180,7 @@ func TestExecuteFollow_NonLogPipeline_Rejected(t *testing.T) {
 	c.Tail = NewTailBroker()
 	c.TailFanout = NewTailFanout(c.Tail, "", false)
 
-	_, err := c.ExecuteFollow(context.Background(), "echo hi", fullRange, store.TestOrgID("kevlar"), "", nil)
+	_, err := c.ExecuteFollow(context.Background(), "echo hi", fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""}, nil)
 	if !errors.Is(err, planner.ErrNotPlannable) {
 		t.Fatalf("err = %v, want ErrNotPlannable", err)
 	}

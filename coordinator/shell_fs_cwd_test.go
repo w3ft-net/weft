@@ -7,6 +7,7 @@ import (
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // These tests pin the server-side execution of FS-navigation builtins
@@ -55,7 +56,7 @@ func TestShellLs_ResolvesCwdAndListsNamespace(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	seedAcmeServices(t, db, c, custID)
 
-	res, err := c.ExecuteWithDir(context.Background(), "ls", TimeRange{}, custID, "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "ls", TimeRange{}, hosted.Actor{Org: custID, User: ""}, []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestShellTail_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 	}
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 
-	res, err := c.ExecuteWithDir(context.Background(), "tail gamestate.log", TimeRange{}, custID, "", []string{"/log/vimgym/api"})
+	res, err := c.ExecuteWithDir(context.Background(), "tail gamestate.log", TimeRange{}, hosted.Actor{Org: custID, User: ""}, []string{"/log/vimgym/api"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestShellTree_ListsNamespaceFromSeededCwd(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	seedAcmeServices(t, db, c, custID)
 
-	res, err := c.ExecuteWithDir(context.Background(), "tree", TimeRange{}, custID, "", []string{"/log/acme"})
+	res, err := c.ExecuteWithDir(context.Background(), "tree", TimeRange{}, hosted.Actor{Org: custID, User: ""}, []string{"/log/acme"})
 	if err != nil {
 		t.Fatalf("ExecuteWithDir: %v", err)
 	}

@@ -2,9 +2,11 @@ package coordinator
 
 import (
 	"context"
-	"github.com/graybeardcorp/weft/store"
 	"strings"
 	"testing"
+
+	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // setupProjectCoordinator creates a coordinator with compute pool for
@@ -21,7 +23,7 @@ func setupProjectCoordinator(t *testing.T) *Coordinator {
 func TestProjectCoord_CutSingleField(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// cut -d' ' -f3 should return only the 3rd field of each line (the app name).
-	res, err := c.Execute(context.Background(), `cat vimgym.log | cut -d' ' -f3`, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | cut -d' ' -f3`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +45,7 @@ func TestProjectCoord_CutSingleField(t *testing.T) {
 func TestProjectCoord_CutMultipleFields(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// cut -d' ' -f1,2 should return timestamp and level.
-	res, err := c.Execute(context.Background(), `cat vimgym.log | grep ERROR | cut -d' ' -f1,2`, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | grep ERROR | cut -d' ' -f1,2`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +70,7 @@ func TestProjectCoord_CutMultipleFields(t *testing.T) {
 func TestProjectCoord_CutOpenEnded(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// cut -d' ' -f5- should return everything from field 5 onward (the message).
-	res, err := c.Execute(context.Background(), `cat vimgym.log | grep ERROR | cut -d' ' -f5-`, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | grep ERROR | cut -d' ' -f5-`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ func TestProjectCoord_CutOpenEnded(t *testing.T) {
 func TestProjectCoord_CutThenSort(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// cut then sort — projection narrows, sort runs in compute on narrowed data.
-	res, err := c.Execute(context.Background(), `cat vimgym.log | cut -d' ' -f2 | sort | uniq -c`, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | cut -d' ' -f2 | sort | uniq -c`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +117,7 @@ func TestProjectCoord_CutThenSort(t *testing.T) {
 func TestProjectCoord_AwkPrintField(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// awk print $3 — projection on field 3, compute still runs awk for formatting.
-	res, err := c.Execute(context.Background(), `cat vimgym.log | awk '{ print $3 }'`, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk '{ print $3 }'`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +138,7 @@ func TestProjectCoord_AwkPrintField(t *testing.T) {
 func TestProjectCoord_JqObjectConstruction(t *testing.T) {
 	c := setupProjectCoordinator(t)
 	// jq object construction should work and only needs specific JSON keys.
-	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"' | jq '{action: .action}'`, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"' | jq '{action: .action}'`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +163,7 @@ func TestProjectCoord_NoProjectionRegression(t *testing.T) {
 	c := setupProjectCoordinator(t)
 
 	// Pure filter — no projection.
-	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +173,7 @@ func TestProjectCoord_NoProjectionRegression(t *testing.T) {
 	}
 
 	// grep + wc — compute only, no projection.
-	res2, err := c.Execute(context.Background(), `cat warp.log | grep timeout | wc -l`, fullRange, store.TestOrgID("kevlar"), "")
+	res2, err := c.Execute(context.Background(), `cat warp.log | grep timeout | wc -l`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,11 +2,13 @@ package coordinator
 
 import (
 	"context"
-	"github.com/graybeardcorp/weft/store"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
@@ -22,7 +24,7 @@ import (
 func TestExecute_LogQueryFlowsThroughRewriter(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -47,7 +49,7 @@ func TestExecute_LogQueryFlowsThroughRewriter(t *testing.T) {
 func TestExecute_StreamsLiveThroughRunLocal(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -86,7 +88,7 @@ func TestExecute_StreamsLiveThroughRunLocal(t *testing.T) {
 func TestExecute_AlertPathPostProcesses(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	res, err := c.Execute(context.Background(), `cat vimgym.log | alert above 100`, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | alert above 100`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -102,7 +104,7 @@ func TestExecute_AlertPathPostProcesses(t *testing.T) {
 func TestExecute_StagedPipelinePopulatesText(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	res, err := c.Execute(context.Background(), `cat vimgym.log | sort | wc -l`, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | sort | wc -l`, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -163,7 +165,7 @@ func TestExecute_UnavailableShardFailsTheQuery(t *testing.T) {
 // the query errors with a message naming shardID.
 func requireQueryFails(t *testing.T, c *Coordinator, pipeline, shardID string) {
 	t.Helper()
-	res, err := c.Execute(context.Background(), pipeline, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), pipeline, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err == nil {
 		d, drainErr := res.Drain(context.Background())
 		if drainErr == nil {

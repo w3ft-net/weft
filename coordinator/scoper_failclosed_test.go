@@ -10,6 +10,7 @@ import (
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/tenancy"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 type failingScoper struct{}
@@ -24,7 +25,7 @@ func TestQuery_ScoperErrorDenies(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db, Scoper: failingScoper{}})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
-	res, err := c.Execute(context.Background(), "cat /log/alpha/api/main.log", tr, custID, "")
+	res, err := c.Execute(context.Background(), "cat /log/alpha/api/main.log", tr, hosted.Actor{Org: custID, User: ""})
 	if err == nil && res != nil {
 		d, derr := res.Drain(context.Background())
 		if derr != nil {
@@ -57,7 +58,7 @@ func TestQuery_ScopeFinerThanNamespaceDenies(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db, Scoper: staticScoper{set}})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
-	res, err := c.Execute(context.Background(), "cat /log/alpha/staging/api/main.log", tr, custID, "")
+	res, err := c.Execute(context.Background(), "cat /log/alpha/staging/api/main.log", tr, hosted.Actor{Org: custID, User: ""})
 	if err == nil && res != nil {
 		d, derr := res.Drain(context.Background())
 		if derr != nil {
@@ -68,5 +69,40 @@ func TestQuery_ScopeFinerThanNamespaceDenies(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("err = %v, want a refusal of the unenforceable scope", err)
+	}
+}
+
+// otherActor is an identity the hosted adapter has never heard of.
+type otherActor struct{ tenant int64 }
+
+func (a otherActor) Partition() int64 { return a.tenant }
+func (otherActor) Subject() string    { return "svc-account" }
+
+type recordingScoper struct{ got []tenancy.Actor }
+
+func (r *recordingScoper) ReadScope(_ context.Context, a tenancy.Actor) (shape.Set, error) {
+	r.got = append(r.got, a)
+	return shape.Set{{Customer: a.Partition()}}, nil
+}
+
+// The Scoper sees the actor the caller authenticated as, whatever its type.
+func TestQuery_ScoperReceivesTheCallersActor(t *testing.T) {
+	db, custID := testStoreAndCustomer(t)
+	rec := &recordingScoper{}
+	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db, Scoper: rec})
+	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
+
+	actor := otherActor{tenant: int64(custID)}
+	res, err := c.Execute(context.Background(), "cat /log/alpha/api/main.log", tr, actor)
+	if err == nil && res != nil {
+		res.Drain(context.Background())
+	}
+	if len(rec.got) == 0 {
+		t.Fatalf("Scoper never consulted (err=%v)", err)
+	}
+	for _, g := range rec.got {
+		if g != tenancy.Actor(actor) {
+			t.Errorf("Scoper saw %#v, want %#v", g, actor)
+		}
 	}
 }

@@ -3,10 +3,12 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"github.com/graybeardcorp/weft/store"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
@@ -83,7 +85,7 @@ const keyedSumQuery = `cat /log/vimgym/api/main.log | awk '{ s[$1] += $2 } END {
 
 func runKeyed(t *testing.T, c *Coordinator, query string) string {
 	t.Helper()
-	res, err := c.Execute(context.Background(), query, fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), query, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +132,7 @@ func TestKeyedAggregate_AFailingShardFailsTheQuery(t *testing.T) {
 			if err := shards[1].Close(); err != nil {
 				t.Fatal(err)
 			}
-			res, err := c.Execute(context.Background(), keyedSumQuery, fullRange, store.TestOrgID("kevlar"), "")
+			res, err := c.Execute(context.Background(), keyedSumQuery, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 			if err == nil {
 				d, derr := res.Drain(context.Background())
 				if derr == nil {

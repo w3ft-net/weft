@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // An empty customer identity must be refused before it reaches the planner.
@@ -16,7 +17,7 @@ func TestExecute_EmptyCustomerIsRefused(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
-	res, err := c.Execute(context.Background(), "cat vimgym.log", tr, 0, "")
+	res, err := c.Execute(context.Background(), "cat vimgym.log", tr, hosted.Actor{Org: 0, User: ""})
 	if err == nil {
 		if res != nil {
 			if d, derr := res.Drain(context.Background()); derr != nil {

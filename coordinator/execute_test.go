@@ -3,9 +3,11 @@ package coordinator
 import (
 	"context"
 	"errors"
-	"github.com/graybeardcorp/weft/store"
 	"strings"
 	"testing"
+
+	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 
 	"time"
 
@@ -41,7 +43,7 @@ func TestPlan_StrictRejectsNonLogPipeline(t *testing.T) {
 func TestExecute_PlainBashPipelineRunsLocally(t *testing.T) {
 	c := setupTestCoordinator(t)
 
-	res, err := c.Execute(context.Background(), "echo 42", fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), "echo 42", fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

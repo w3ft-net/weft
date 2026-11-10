@@ -228,9 +228,9 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	var lineCount int
 	var result *coordinator.ExecuteResult
 	if req.Follow && s.Coord.Tail != nil {
-		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, org, userID, dirStack)
+		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, hosted.Actor{Org: org, User: userID}, dirStack)
 	} else {
-		result, err = s.Coord.ExecuteWithDir(ctx, req.Pipeline, tr, org, userID, dirStack)
+		result, err = s.Coord.ExecuteWithDir(ctx, req.Pipeline, tr, hosted.Actor{Org: org, User: userID}, dirStack)
 	}
 	if err != nil {
 		span.RecordError(err)

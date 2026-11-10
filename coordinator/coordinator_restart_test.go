@@ -2,9 +2,11 @@ package coordinator
 
 import (
 	"context"
-	"github.com/graybeardcorp/weft/store"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
@@ -43,7 +45,7 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 
 	// Verify queryable.
 	tr := TimeRange{Start: DevT0, End: DevT1}
-	result, err := coord.Execute(context.Background(), "cat /log/myapp.log", tr, store.TestOrgID("testcust"), "")
+	result, err := coord.Execute(context.Background(), "cat /log/myapp.log", tr, hosted.Actor{Org: store.TestOrgID("testcust"), User: ""})
 	if err != nil {
 		t.Fatalf("query before: %v", err)
 	}
@@ -65,7 +67,7 @@ func TestCoordinator_RediscoveryDoesNotLoseData(t *testing.T) {
 	// remote side but the coordinator's registry forgets the metadata.
 
 	// After rediscovery, the shard should still have data.
-	result2, err := coord.Execute(context.Background(), "cat /log/myapp.log", tr, store.TestOrgID("testcust"), "")
+	result2, err := coord.Execute(context.Background(), "cat /log/myapp.log", tr, hosted.Actor{Org: store.TestOrgID("testcust"), User: ""})
 	if err != nil {
 		t.Fatalf("query after: %v", err)
 	}

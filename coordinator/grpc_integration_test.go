@@ -3,10 +3,12 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"github.com/graybeardcorp/weft/store"
 	"net"
 	"strings"
 	"testing"
+
+	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -126,7 +128,7 @@ var grpcFullRange = TimeRange{Start: DevT0, End: DevT2}
 
 func TestGRPC_AwkLevelFilter(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, grpcFullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, grpcFullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +149,7 @@ func TestGRPC_AwkLevelFilter(t *testing.T) {
 
 func TestGRPC_GrepTimeout(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat warp.log | grep timeout`, grpcFullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat warp.log | grep timeout`, grpcFullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +161,7 @@ func TestGRPC_GrepTimeout(t *testing.T) {
 
 func TestGRPC_JqSelect(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat vimgym.log | jq 'select(.status == 500)'`, grpcFullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | jq 'select(.status == 500)'`, grpcFullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +178,7 @@ func TestGRPC_JqSelect(t *testing.T) {
 
 func TestGRPC_HeadLimit(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Execute(context.Background(), `head -3 vimgym.log`, grpcFullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `head -3 vimgym.log`, grpcFullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +190,7 @@ func TestGRPC_HeadLimit(t *testing.T) {
 
 func TestGRPC_CustomerIsolation(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat vimgym.log`, grpcFullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log`, grpcFullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +204,7 @@ func TestGRPC_CustomerIsolation(t *testing.T) {
 
 func TestGRPC_ComputeSort(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"' | sort`, grpcFullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"' | sort`, grpcFullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +225,7 @@ func TestGRPC_ComputeSort(t *testing.T) {
 
 func TestGRPC_ComputeWcCount(t *testing.T) {
 	c := setupGRPCCoordinator(t)
-	res, err := c.Execute(context.Background(), `cat warp.log | grep timeout | wc -l`, grpcFullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat warp.log | grep timeout | wc -l`, grpcFullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +238,7 @@ func TestGRPC_ComputeWcCount(t *testing.T) {
 func TestGRPC_TimeRangeScoping(t *testing.T) {
 	c := setupGRPCCoordinator(t)
 	tr := TimeRange{Start: DevT0, End: DevT1}
-	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, tr, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat vimgym.log | awk 'LEVEL == "ERROR"'`, tr, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}

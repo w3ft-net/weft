@@ -15,6 +15,22 @@ type Actor interface {
 	// Partition is the tenant whose data the actor is working in. It is the
 	// value of the required customer column in every shape.Coord.
 	Partition() int64
+	// Subject names who is acting, for attribution. Empty is the system
+	// identity: crons and internal callers.
+	Subject() string
+}
+
+type actorKey struct{}
+
+// WithActor returns ctx carrying the actor a request runs as.
+func WithActor(ctx context.Context, a Actor) context.Context {
+	return context.WithValue(ctx, actorKey{}, a)
+}
+
+// ActorFrom is the actor WithActor bound to ctx.
+func ActorFrom(ctx context.Context) (Actor, bool) {
+	a, ok := ctx.Value(actorKey{}).(Actor)
+	return a, ok && a != nil
 }
 
 // Scoper decides data visibility.

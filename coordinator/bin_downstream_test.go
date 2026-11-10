@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // committedInteriorFixture is the interior-query fixture over a pooled,
@@ -58,7 +59,7 @@ func TestBinScriptAfterLogRead(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := c.Execute(context.Background(), tc.line, lastHourRange(), custID, "")
+			res, err := c.Execute(context.Background(), tc.line, lastHourRange(), hosted.Actor{Org: custID, User: ""})
 			if err != nil {
 				t.Fatalf("Execute: %v", err)
 			}
@@ -78,14 +79,14 @@ func TestBinScriptAfterLogRead_RedirectStaysOnLastStage(t *testing.T) {
 	if err := db.SaveShellFunction(custID, "", "count", "wc -l", "bash"); err != nil {
 		t.Fatalf("save script: %v", err)
 	}
-	res, err := c.Execute(context.Background(), `cat /log/api.log | grep ERROR | count > /tmp/n`, lastHourRange(), custID, "")
+	res, err := c.Execute(context.Background(), `cat /log/api.log | grep ERROR | count > /tmp/n`, lastHourRange(), hosted.Actor{Org: custID, User: ""})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if d := drainExec(t, res); strings.TrimSpace(d.Text) != "" || d.Stderr != "" {
 		t.Fatalf("redirected output leaked: text %q stderr %q", d.Text, d.Stderr)
 	}
-	res, err = c.Execute(context.Background(), `cat /tmp/n`, lastHourRange(), custID, "")
+	res, err = c.Execute(context.Background(), `cat /tmp/n`, lastHourRange(), hosted.Actor{Org: custID, User: ""})
 	if err != nil {
 		t.Fatalf("Execute cat: %v", err)
 	}

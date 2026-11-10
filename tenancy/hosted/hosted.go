@@ -21,6 +21,7 @@ type Actor struct {
 }
 
 func (a Actor) Partition() int64 { return int64(a.Org) }
+func (a Actor) Subject() string  { return a.User }
 
 type Scoper struct{ Store *store.Store }
 

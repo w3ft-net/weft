@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // TestQuery_InteractiveAlertUsesCoordinatorNotifier — regression guard for
@@ -36,7 +37,7 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 	// meaning Coordinator.Notifier propagated into the interactive
 	// AlertContext.
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.Execute(context.Background(), `echo 40 | alert above 30 --notify=foo`, tr, cust.ID, "")
+	result, err := c.Execute(context.Background(), `echo 40 | alert above 30 --notify=foo`, tr, hosted.Actor{Org: cust.ID, User: ""})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -65,7 +66,7 @@ func TestQuery_InteractiveAlertFallbackWhenNoNotifier(t *testing.T) {
 		Store: db}) // Notifier: nil
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	result, err := c.Execute(context.Background(), `echo 40 | alert above 30 --notify=foo`, tr, cust.ID, "")
+	result, err := c.Execute(context.Background(), `echo 40 | alert above 30 --notify=foo`, tr, hosted.Actor{Org: cust.ID, User: ""})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}

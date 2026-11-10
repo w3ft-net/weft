@@ -8,6 +8,7 @@ import (
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // readTmpFile reconstructs the byte contents of a tmp file via the
@@ -63,8 +64,8 @@ func TestCoordinatorQuery_LogQueryRedirectToTmp(t *testing.T) {
 	c := setupTestCoordinator(t)
 	const tmpPath = "/tmp/errs"
 
-	res, err := c.Execute(context.Background(), `cat /log/vimgym.log | awk 'LEVEL == "ERROR"' > `+tmpPath,
-		fullRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), `cat /log/vimgym.log | awk 'LEVEL == "ERROR"' > `+tmpPath, fullRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
+
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -125,7 +126,7 @@ func TestCoordinatorQuery_CatRedirectFromEtcToTmp(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := db.GetOrgByID(custID)
 
-	res, err := c.Execute(context.Background(), `cat /etc/notify.yaml > /tmp/notify.yaml`, tr, cust.ID, "")
+	res, err := c.Execute(context.Background(), `cat /etc/notify.yaml > /tmp/notify.yaml`, tr, hosted.Actor{Org: cust.ID, User: ""})
 	if err != nil {
 		t.Fatalf("cat-redirect Query: %v", err)
 	}
@@ -163,7 +164,7 @@ func TestCoordinatorQuery_CatTmpReturnsContent(t *testing.T) {
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := db.GetOrgByID(custID)
 
-	res, err := c.Execute(context.Background(), `cat /tmp/note`, tr, cust.ID, "")
+	res, err := c.Execute(context.Background(), `cat /tmp/note`, tr, hosted.Actor{Org: cust.ID, User: ""})
 	if err != nil {
 		t.Fatalf("cat /tmp/note: %v", err)
 	}

@@ -12,6 +12,8 @@ import (
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/planner"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // A log query must be held to the same per-namespace read permission the
@@ -65,7 +67,7 @@ func newReadFixture(t *testing.T) *readFixture {
 func (f *readFixture) run(t *testing.T, user, pipeline string) error {
 	t.Helper()
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
-	res, err := f.c.Execute(context.Background(), pipeline, tr, f.org, user)
+	res, err := f.c.Execute(context.Background(), pipeline, tr, hosted.Actor{Org: f.org, User: user})
 	if err != nil {
 		return err
 	}
@@ -147,13 +149,18 @@ func TestAuthorizeSources_FailsClosedOnAPlanWithNoNamespace(t *testing.T) {
 	f := newReadFixture(t)
 	plan := &planner.QueryPlan{ShardSQL: "SELECT 1", SourceCmd: "cat"}
 
-	if err := f.c.authorizeSources(context.Background(), f.org, f.reader, plan); !refused(err) {
+	if err := f.c.authorizeSources(as(f.org, f.reader), f.org, plan); !refused(err) {
 		t.Errorf("reader: err = %v, want a refusal", err)
 	}
-	if err := f.c.authorizeSources(context.Background(), f.org, f.owner, plan); err != nil {
+	if err := f.c.authorizeSources(as(f.org, f.owner), f.org, plan); err != nil {
 		t.Errorf("owner: err = %v, want it allowed", err)
 	}
-	if err := f.c.authorizeSources(context.Background(), f.org, "", plan); err != nil {
+	if err := f.c.authorizeSources(as(f.org, ""), f.org, plan); err != nil {
 		t.Errorf("system identity: err = %v, want it allowed", err)
 	}
+}
+
+// as is a request context for a hosted actor.
+func as(org store.OrgID, user string) context.Context {
+	return tenancy.WithActor(context.Background(), hosted.Actor{Org: org, User: user})
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // gitRun runs one shell line as the user through the real coordinator
@@ -16,7 +17,7 @@ func gitRun(t *testing.T, c *Coordinator, org store.OrgID, userID, line string) 
 	t.Helper()
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	cust, _ := c.Store.GetOrgByID(org)
-	res, err := c.Execute(context.Background(), line, tr, cust.ID, userID)
+	res, err := c.Execute(context.Background(), line, tr, hosted.Actor{Org: cust.ID, User: userID})
 	if err != nil {
 		t.Fatalf("%s: %v", line, err)
 	}

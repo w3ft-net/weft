@@ -2,10 +2,12 @@ package coordinator
 
 import (
 	"context"
-	"github.com/graybeardcorp/weft/store"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
@@ -28,7 +30,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 	// when no shard instances are InService yet.
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: testQueryStore(t, "kevlar", "vimgym", "callbox")})
 
-	res, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatalf("query with no shards should not error, got: %v", err)
 	}
@@ -54,7 +56,7 @@ func TestFailover_EmptyThenRecover(t *testing.T) {
 		CreatedAt: time.Now(),
 	}, "vimgym", "callbox")
 
-	res, err = c.Execute(context.Background(), "cat vimgym.log", failoverRange, store.TestOrgID("kevlar"), "")
+	res, err = c.Execute(context.Background(), "cat vimgym.log", failoverRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatalf("query after adding shard: %v", err)
 	}
@@ -86,7 +88,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 		CreatedAt: time.Now(),
 	}, apps...)
 
-	res, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, store.TestOrgID("kevlar"), "")
+	res, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +115,7 @@ func TestFailover_ShardReplacement(t *testing.T) {
 	}, apps...)
 
 	// Querying the wider range must now hit both shards.
-	res2, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, store.TestOrgID("kevlar"), "")
+	res2, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +175,7 @@ func TestFailover_ConcurrentQueryDuringSwap(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
-				res, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, store.TestOrgID("kevlar"), "")
+				res, err := c.Execute(context.Background(), "cat vimgym.log", failoverRange, hosted.Actor{Org: store.TestOrgID("kevlar"), User: ""})
 				if err != nil {
 					errors <- err
 					continue

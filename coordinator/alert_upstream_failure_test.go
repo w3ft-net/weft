@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/compute"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // `alert absent` fires on empty input. Empty input from a query that
@@ -24,7 +25,7 @@ func TestAlert_UpstreamFailureIsNotEvaluated(t *testing.T) {
 
 	for _, cond := range []string{"absent", "below 5", "changed", "any"} {
 		t.Run(cond, func(t *testing.T) {
-			res, err := c.Execute(context.Background(), `cat /log/ghost/prod/api/main.log | alert `+cond, tr, cust.ID, "")
+			res, err := c.Execute(context.Background(), `cat /log/ghost/prod/api/main.log | alert `+cond, tr, hosted.Actor{Org: cust.ID, User: ""})
 			var text string
 			if err == nil {
 				d := drainExec(t, res)
@@ -52,7 +53,7 @@ func TestAlert_AbsentStillFiresOnEmptySuccess(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db, Notifier: NewNotifier(db, nil)})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
-	res, err := c.Execute(context.Background(), `echo hello | grep nomatch | alert absent`, tr, cust.ID, "")
+	res, err := c.Execute(context.Background(), `echo hello | grep nomatch | alert absent`, tr, hosted.Actor{Org: cust.ID, User: ""})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
