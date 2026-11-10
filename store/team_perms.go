@@ -44,8 +44,8 @@ func (a AccessLevel) CanManage() bool { return a == AccessEdit }
 // NamespaceAcl is the per-namespace permission row. Both fields are
 // boolean; missing == false.
 type NamespaceAcl struct {
-	Read         bool `json:"read"`
-	CreateTokens bool `json:"create_tokens,omitempty"`
+	Read  bool `json:"read"`
+	Write bool `json:"write,omitempty"`
 }
 
 // BuildTeamPerms synthesizes the doc from store state — for every
@@ -112,8 +112,8 @@ func (s *Store) BuildTeamPerms(orgID OrgID) (TeamPermsDoc, error) {
 					continue
 				}
 				mp.Namespaces[name] = NamespaceAcl{
-					Read:         np.CanRead,
-					CreateTokens: np.CanCreateTokens,
+					Read:  np.CanRead,
+					Write: np.CanWrite,
 				}
 			}
 		}
@@ -234,10 +234,10 @@ func reconcileNsPerms(s *Store, userID string, want map[string]NamespaceAcl, nsB
 	}
 	for nsID, acl := range wantByNsID {
 		err := s.UpsertNamespacePermission(&NamespacePermission{
-			UserID:          userID,
-			NamespaceID:     nsID,
-			CanRead:         acl.Read,
-			CanCreateTokens: acl.CreateTokens,
+			UserID:      userID,
+			NamespaceID: nsID,
+			CanRead:     acl.Read,
+			CanWrite:    acl.Write,
 		})
 		if err != nil {
 			return err

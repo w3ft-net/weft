@@ -11,10 +11,10 @@ import "gorm.io/gorm"
 // org-wide, not per-namespace.
 type NamespacePermission struct {
 	gorm.Model
-	UserID          string `gorm:"not null;uniqueIndex:idx_nsperm_user_ns"`
-	NamespaceID     uint   `gorm:"not null;uniqueIndex:idx_nsperm_user_ns"`
-	CanRead         bool   `gorm:"not null;default:true"`
-	CanCreateTokens bool   `gorm:"not null;default:false"`
+	UserID      string `gorm:"not null;uniqueIndex:idx_nsperm_user_ns"`
+	NamespaceID uint   `gorm:"not null;uniqueIndex:idx_nsperm_user_ns"`
+	CanRead     bool   `gorm:"not null;default:true"`
+	CanWrite    bool   `gorm:"not null;default:false"`
 }
 
 // GetNamespacePermission returns the permission record for a user + namespace.
@@ -61,10 +61,10 @@ func (s *Store) ReadableNamespaces(orgID OrgID, userID string, owner bool) ([]st
 func (s *Store) UpsertNamespacePermission(p *NamespacePermission) error {
 	var existing NamespacePermission
 	vals := map[string]any{
-		"user_id":           p.UserID,
-		"namespace_id":      p.NamespaceID,
-		"can_read":          p.CanRead,
-		"can_create_tokens": p.CanCreateTokens,
+		"user_id":      p.UserID,
+		"namespace_id": p.NamespaceID,
+		"can_read":     p.CanRead,
+		"can_write":    p.CanWrite,
 	}
 	result := s.db.Where("user_id = ? AND namespace_id = ?", p.UserID, p.NamespaceID).First(&existing)
 	if result.Error == gorm.ErrRecordNotFound {
@@ -78,10 +78,10 @@ func (s *Store) UpsertNamespacePermission(p *NamespacePermission) error {
 // to themselves before they switch on the org role.
 func (s *Store) GrantFullNamespaceAccess(userID string, namespaceID uint) error {
 	return s.UpsertNamespacePermission(&NamespacePermission{
-		UserID:          userID,
-		NamespaceID:     namespaceID,
-		CanRead:         true,
-		CanCreateTokens: true,
+		UserID:      userID,
+		NamespaceID: namespaceID,
+		CanRead:     true,
+		CanWrite:    true,
 	})
 }
 

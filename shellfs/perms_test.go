@@ -90,28 +90,29 @@ func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
 	}
 }
 
-// A namespace's crons are written by a member holding the cronmgr bit who can
-// read the namespace; an org-level cron is published by an owner alone.
+// A namespace's crons are written by a member of its write group, or an owner;
+// an org-level cron is published by an owner alone.
 func TestOrgPerms_CronMount_WriteFile(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("perm-cron-%d", os.Getpid()))
 	ns, _ := db.FindOrCreateNamespace(cust.ID, "ops")
 
 	cases := []struct {
-		orgPermCase
-		path string
+		name         string
+		owner, write bool
+		path         string
+		wantDeny     bool
 	}{
-		{orgPermCase{"member-no-flag", orgPerms{}, true}, "/cron.d/ops/probe"},
-		{orgPermCase{"member-with-flag", orgPerms{Watches: true}, false}, "/cron.d/ops/probe"},
-		{orgPermCase{"owner-no-flag", orgPerms{Owner: true}, true}, "/cron.d/ops/probe"},
-		{orgPermCase{"member-other-flag", orgPerms{Functions: true, Etc: true}, true}, "/cron.d/ops/probe"},
-		{orgPermCase{"member-publishing-org-wide", orgPerms{Watches: true}, true}, "/cron.d/probe"},
-		{orgPermCase{"owner-publishing-org-wide", orgPerms{Owner: true, Watches: true}, false}, "/cron.d/probe"},
+		{"member-without-write", false, false, "/cron.d/ops/probe", true},
+		{"member-with-write", false, true, "/cron.d/ops/probe", false},
+		{"owner", true, false, "/cron.d/ops/probe", false},
+		{"member-with-write-publishing-org-wide", false, true, "/cron.d/probe", true},
+		{"owner-publishing-org-wide", true, false, "/cron.d/probe", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			user := addMember(t, db, cust.ID, tc.name, tc.perms)
-			if err := db.UpsertNamespacePermission(&store.NamespacePermission{UserID: user, NamespaceID: ns.ID, CanRead: true}); err != nil {
+			user := addMember(t, db, cust.ID, tc.name, orgPerms{Owner: tc.owner})
+			if err := db.UpsertNamespacePermission(&store.NamespacePermission{UserID: user, NamespaceID: ns.ID, CanRead: true, CanWrite: tc.write}); err != nil {
 				t.Fatal(err)
 			}
 			fs := New(db, cust.ID, nil, WithTier("swatch"), WithUser(user))

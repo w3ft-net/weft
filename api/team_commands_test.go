@@ -33,11 +33,11 @@ func TestMaybeHandleTeamCommand_Routing(t *testing.T) {
 		// Team commands inside shell plumbing fall through to the
 		// normal pipeline path rather than being claimed.
 		{"id | wc -l", false, ""},
-		{"adduser alice@x.test payments && echo hi", false, ""},
+		{"adduser alice@x.test payments-r && echo hi", false, ""},
 		// A non-owner trying to mutate is claimed and rejected here,
 		// before any store access.
 		{"adduser bob@x.test", true, "only the owner"},
-		{"deluser bob@x.test payments", true, "only the owner"},
+		{"deluser bob@x.test payments-r", true, "only the owner"},
 	}
 	for _, c := range cases {
 		handled, _, err := s.maybeHandleTeamCommand(context.Background(), member, c.pipeline)
@@ -93,7 +93,7 @@ func TestTeamAddUser_GroupGrantInvitesAndReportsPending(t *testing.T) {
 	newbie := fmt.Sprintf("newbie-%d@x.test", os.Getpid())
 
 	// Granting to a non-member invites them; the grant is pending.
-	out, err := srv.teamAddUser(context.Background(), sess, []string{newbie, "payments"})
+	out, err := srv.teamAddUser(context.Background(), sess, []string{newbie, "payments-r"})
 	if err != nil {
 		t.Fatalf("adduser newbie payments: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestTeamAddUser_GroupGrantInvitesAndReportsPending(t *testing.T) {
 	}
 
 	// Re-running before they accept errors clearly.
-	if _, err := srv.teamAddUser(context.Background(), sess, []string{newbie, "payments"}); err == nil ||
+	if _, err := srv.teamAddUser(context.Background(), sess, []string{newbie, "payments-r"}); err == nil ||
 		!strings.Contains(err.Error(), "hasn't accepted") {
 		t.Fatalf("expected hasn't-accepted error, got %v", err)
 	}

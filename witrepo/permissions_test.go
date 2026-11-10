@@ -30,7 +30,7 @@ func seededFiles() []seeded {
 			older: "echo 1", newer: "echo 2",
 		},
 		{
-			name: "cron", path: "/cron.d/a/errs", group: "cronmgr",
+			name: "cron", path: "/cron.d/a/errs", group: "a-w",
 			seed: func(t *testing.T, f *fixture) {
 				f.saveNSCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
 				f.saveNSCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep WARN")
@@ -105,7 +105,7 @@ func TestWrites_RewordNeedsTheMountsGroup(t *testing.T) {
 		write       func(*testing.T, *fixture)
 	}{
 		{"bin", "binmgr", func(t *testing.T, f *fixture) { f.saveBin(t, f.bob, "scan", "echo 1") }},
-		{"cron", "cronmgr", func(t *testing.T, f *fixture) { f.saveNSCron(t, f.bob, "errs", "tail /log/a/b/c.log | grep ERROR") }},
+		{"cron", "a-w", func(t *testing.T, f *fixture) { f.saveNSCron(t, f.bob, "errs", "tail /log/a/b/c.log | grep ERROR") }},
 		{"dashboard", "configmgr", func(t *testing.T, f *fixture) {
 			f.saveCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
 			if err := f.db.SaveDashboard(f.org, f.bob.ID, "prod", dash("v1")); err != nil {

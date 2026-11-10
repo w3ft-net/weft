@@ -25,6 +25,12 @@ func denyWrite(dir, group string) error {
 		dir, fs.ErrPermission, group, group)
 }
 
+// denyNamespaceWrite is the refusal for a write to a namespace's crons.
+func denyNamespaceWrite(dir, ns string) error {
+	return fmt.Errorf("%s: %w (need the %s-w group — ask an owner for `usermod -aG %s-w <you>`)",
+		dir, fs.ErrPermission, ns, ns)
+}
+
 // PlanLimitError is a write refused because the org's plan does not allow it
 // (too many crons, a schedule shorter than the plan's minimum). It is not a
 // permission problem — the caller may write here, the plan may not — so

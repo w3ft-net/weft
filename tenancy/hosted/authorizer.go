@@ -58,38 +58,22 @@ func (z Authorizer) Authorize(_ context.Context, a tenancy.Actor, act tenancy.Ac
 		return z.orgBit(actor, "writing /bin needs the binmgr group", func(p *store.OrgPermission) bool { return p.CanManageFunctions })
 	case tenancy.ActionManageEtc:
 		return z.orgBit(actor, "writing /etc needs the configmgr group", func(p *store.OrgPermission) bool { return p.CanManageEtc })
-	case tenancy.ActionManageCron:
-		// A cron's authority is its home namespace, so the manager must be
-		// able to read it. Unreadable and nonexistent look the same.
-		if r.Namespace == "" {
+	case tenancy.ActionManageCron, tenancy.ActionManageNamespaceTokens:
+		// A namespace's write group manages its crons, tokens and sources. A
+		// namespace the caller can't write reads the same as one that doesn't
+		// exist, so the answer never says which.
+		if act == tenancy.ActionManageCron && r.Namespace == "" {
 			return tenancy.Denied("a cron belongs to a namespace")
 		}
-		if err := z.orgBit(actor, "writing /cron.d needs the cronmgr group", func(p *store.OrgPermission) bool { return p.CanManageWatches }); err != nil {
-			return err
-		}
 		if owner {
 			return nil
 		}
-		ns, err := z.Store.GetNamespace(actor.Org, r.Namespace)
-		if err != nil {
-			return errCronNamespace
-		}
-		if perm, err := z.Store.GetNamespacePermission(actor.User, ns.ID); err != nil || !perm.CanRead {
-			return errCronNamespace
-		}
-		return nil
-	case tenancy.ActionManageNamespaceTokens:
-		if owner {
-			return nil
-		}
-		// A namespace the caller can't see reads the same as one they may
-		// not touch, so the answer never says which exists.
 		ns, err := z.Store.GetNamespace(actor.Org, r.Namespace)
 		if err != nil {
 			return errNamespaceForbidden
 		}
 		perm, err := z.Store.GetNamespacePermission(actor.User, ns.ID)
-		if err != nil || !perm.CanCreateTokens {
+		if err != nil || !perm.CanWrite {
 			return errNamespaceForbidden
 		}
 		return nil
@@ -97,9 +81,7 @@ func (z Authorizer) Authorize(_ context.Context, a tenancy.Actor, act tenancy.Ac
 	return tenancy.Denied("unknown action")
 }
 
-var errCronNamespace = tenancy.Denied("no permission to manage crons in this namespace")
-
-var errNamespaceForbidden = tenancy.Denied("no permission to manage tokens and sources in this namespace")
+var errNamespaceForbidden = tenancy.Denied("you need this namespace's write group (<namespace>-w) to manage its crons, tokens and sources")
 
 // orgBit allows an action held as one bit of the actor's org_permissions row.
 // An owner's right comes from the same row as anyone else's: promotion

@@ -38,10 +38,7 @@ func TestCronMount_NamespaceOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	alpha, _ := tx.GetNamespace(sys.OrgID, "alpha")
-	if err := tx.UpsertNamespacePermission(&store.NamespacePermission{UserID: user.ID, NamespaceID: alpha.ID, CanRead: true}); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.DB().Exec(`INSERT INTO org_permissions (org_id, user_id, can_manage_watches) VALUES (?, ?, true)`, sys.OrgID, user.ID).Error; err != nil {
+	if err := tx.UpsertNamespacePermission(&store.NamespacePermission{UserID: user.ID, NamespaceID: alpha.ID, CanRead: true, CanWrite: true}); err != nil {
 		t.Fatal(err)
 	}
 	owner, err := tx.CreateVerifiedUser("cron-ns-owner@example.com")

@@ -37,32 +37,32 @@ func TestTeamGroups_GrantRevoke(t *testing.T) {
 		t.Fatalf("add cronmgr: %v", err)
 	}
 	// Namespace read + tokens are independent facets of one ns group.
-	if err := db.AddUserToGroup(cust.ID, alice, "payments"); err != nil {
+	if err := db.AddUserToGroup(cust.ID, alice, "payments-r"); err != nil {
 		t.Fatalf("add payments: %v", err)
 	}
-	if err := db.AddUserToGroup(cust.ID, alice, "payments+tokens"); err != nil {
-		t.Fatalf("add payments+tokens: %v", err)
+	if err := db.AddUserToGroup(cust.ID, alice, "payments-w"); err != nil {
+		t.Fatalf("add payments-w: %v", err)
 	}
 
 	got := groupsFor(t, db, cust.ID, alice)
-	want := []string{"cronmgr", "payments", "payments+tokens"}
+	want := []string{"cronmgr", "payments-r", "payments-w"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("groups after grant: got %v want %v", got, want)
 	}
 
 	// Revoking the read facet leaves the tokens facet intact.
-	if err := db.RemoveUserFromGroup(cust.ID, alice, "payments"); err != nil {
+	if err := db.RemoveUserFromGroup(cust.ID, alice, "payments-r"); err != nil {
 		t.Fatalf("remove payments: %v", err)
 	}
 	got = groupsFor(t, db, cust.ID, alice)
-	want = []string{"cronmgr", "payments+tokens"}
+	want = []string{"cronmgr", "payments-w"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("groups after revoke read: got %v want %v", got, want)
 	}
 
 	// Revoking the last namespace facet drops the row entirely.
-	if err := db.RemoveUserFromGroup(cust.ID, alice, "payments+tokens"); err != nil {
-		t.Fatalf("remove payments+tokens: %v", err)
+	if err := db.RemoveUserFromGroup(cust.ID, alice, "payments-w"); err != nil {
+		t.Fatalf("remove payments-w: %v", err)
 	}
 	if perms, _ := db.ListUserNamespacePermissions(mustMember(t, db, cust.ID, alice).UserID); len(perms) != 0 {
 		t.Fatalf("expected no namespace perm rows, got %d", len(perms))
@@ -149,7 +149,7 @@ func TestTeamGroups_RenderPasswd(t *testing.T) {
 	if _, err := db.FindOrCreateNamespace(cust.ID, "payments"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AddUserToGroup(cust.ID, alice, "payments"); err != nil {
+	if err := db.AddUserToGroup(cust.ID, alice, "payments-r"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -228,7 +228,7 @@ func TestRemoveMember_KeepsPermissionsInOtherOrgs(t *testing.T) {
 		if _, err := db.FindOrCreateNamespace(org.ID, "payments"); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.AddUserToGroup(org.ID, email, "payments"); err != nil {
+		if err := db.AddUserToGroup(org.ID, email, "payments-r"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -237,7 +237,7 @@ func TestRemoveMember_KeepsPermissionsInOtherOrgs(t *testing.T) {
 		t.Fatalf("remove: %v", err)
 	}
 
-	if got := groupsFor(t, db, orgB.ID, email); !slices.Contains(got, "payments") {
+	if got := groupsFor(t, db, orgB.ID, email); !slices.Contains(got, "payments-r") {
 		t.Errorf("removal from org A wiped the member's grants in org B; groups = %v", got)
 	}
 	nsB, _ := db.FindOrCreateNamespace(orgB.ID, "payments")
@@ -261,7 +261,7 @@ func TestRemoveMember_PendingInvitee(t *testing.T) {
 	if _, err := db.FindOrCreateNamespace(cust.ID, "payments"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AddUserToGroup(cust.ID, alice.Email, "payments"); err != nil {
+	if err := db.AddUserToGroup(cust.ID, alice.Email, "payments-r"); err != nil {
 		t.Fatal(err)
 	}
 	invitee := fmt.Sprintf("invitee-%d@x.test", pid)
@@ -276,7 +276,7 @@ func TestRemoveMember_PendingInvitee(t *testing.T) {
 	if _, err := db.GetTeamMemberByEmail(cust.ID, invitee); err == nil {
 		t.Error("withdrawn invite should not be found")
 	}
-	if got := groupsFor(t, db, cust.ID, alice.Email); !slices.Contains(got, "payments") {
+	if got := groupsFor(t, db, cust.ID, alice.Email); !slices.Contains(got, "payments-r") {
 		t.Errorf("withdrawing an invite changed another member's grants; groups = %v", got)
 	}
 }

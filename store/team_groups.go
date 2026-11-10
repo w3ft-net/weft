@@ -15,10 +15,10 @@ import (
 //   - a manager group (binmgr / cronmgr / configmgr / nsmgr) — edit access
 //     to /bin, /cron.d, /etc and the right to create namespaces, backed by
 //     the OrgPermission bits.
-//   - a namespace name — read access to /log/<ns>, backed by
-//     NamespacePermission.CanRead.
-//   - "<ns>+tokens" — permission to mint producer tokens for <ns>,
-//     backed by NamespacePermission.CanCreateTokens.
+//   - "<ns>-r" — read access to <ns>: its logs and its crons,
+//     backed by NamespacePermission.CanRead.
+//   - "<ns>-w" — manage <ns>: its crons, tokens and sources,
+//     backed by NamespacePermission.CanWrite.
 //
 // adduser/deluser mutate one membership at a time; /etc/passwd renders
 // the whole roster read-only. Owners are never represented in groups —
@@ -33,14 +33,27 @@ var managerGroupColumn = map[string]string{
 	"nsmgr":     "can_create_namespaces",
 }
 
-// tokensSuffix marks the produce/token facet of a namespace group. It
-// uses "+" rather than ":" so the token survives the colon-delimited
-// /etc renders and can never collide with a real namespace name ("+"
-// is illegal in namespaces).
-const tokensSuffix = "+tokens"
+// The two groups of a namespace.
+const (
+	readSuffix  = "-r"
+	writeSuffix = "-w"
+)
+
+// splitNamespaceGroup parses "<ns>-r" and "<ns>-w". A name that ends either
+// way always parses as that namespace's group, so "a-w" is a's write group and
+// a namespace called "a-w" has "a-w-r" and "a-w-w".
+func splitNamespaceGroup(group string) (ns string, write, ok bool) {
+	if ns, ok = strings.CutSuffix(group, readSuffix); ok && ns != "" {
+		return ns, false, true
+	}
+	if ns, ok = strings.CutSuffix(group, writeSuffix); ok && ns != "" {
+		return ns, true, true
+	}
+	return "", false, false
+}
 
 // AddUserToGroup grants (email, group) membership. group is a manager
-// group, a namespace, or "<ns>+tokens". Owner-only; the api layer gates
+// group, "<ns>-r" or "<ns>-w". Owner-only; the api layer gates
 // the caller before reaching here.
 func (s *Store) AddUserToGroup(orgID OrgID, email, group string) error {
 	return s.setGroupMembership(orgID, email, group, true)
@@ -61,13 +74,15 @@ func (s *Store) setGroupMembership(orgID OrgID, email, group string, grant bool)
 		return s.setOrgBit(orgID, uid, col, grant)
 	}
 
-	tokens := strings.HasSuffix(group, tokensSuffix)
-	nsName := strings.TrimSuffix(group, tokensSuffix)
+	nsName, write, ok := splitNamespaceGroup(group)
+	if !ok {
+		return fmt.Errorf("no such group or namespace: %s (a namespace's groups are %s-r and %s-w)", group, group, group)
+	}
 	ns, err := s.findNamespace(orgID, nsName)
 	if err != nil {
 		return err
 	}
-	return s.setNamespaceBit(uid, ns.ID, tokens, grant)
+	return s.setNamespaceBit(uid, ns.ID, write, grant)
 }
 
 // resolveGrantableMember validates that email names an active member
@@ -94,14 +109,17 @@ func (s *Store) resolveGrantableMember(orgID OrgID, email string) (string, error
 }
 
 // ValidateGroup reports whether group names a real manager group or an
-// existing namespace (with optional +tokens facet). It touches no
+// existing namespace's read or write group. It touches no
 // member, so callers can reject a bad group before any side effect —
 // e.g. before inviting someone on what turns out to be a typo.
 func (s *Store) ValidateGroup(orgID OrgID, group string) error {
 	if _, ok := managerGroupColumn[group]; ok {
 		return nil
 	}
-	nsName := strings.TrimSuffix(group, tokensSuffix)
+	nsName, _, ok := splitNamespaceGroup(group)
+	if !ok {
+		return fmt.Errorf("no such group or namespace: %s (a namespace's groups are %s-r and %s-w)", group, group, group)
+	}
 	_, err := s.findNamespace(orgID, nsName)
 	return err
 }
@@ -160,18 +178,18 @@ func (s *Store) setOrgBit(orgID OrgID, userID, column string, val bool) error {
 	return s.scoped(orgID).Model(&existing).Update(column, val).Error
 }
 
-// setNamespaceBit sets one facet (read or create-tokens) of a user's
+// setNamespaceBit sets one facet (read or write) of a user's
 // namespace permission, preserving the other. When both facets end up
 // false the row is deleted so an empty grant leaves no trace.
-func (s *Store) setNamespaceBit(userID string, nsID uint, tokens bool, val bool) error {
+func (s *Store) setNamespaceBit(userID string, nsID uint, write bool, val bool) error {
 	read, create := false, false
 	existing, err := s.GetNamespacePermission(userID, nsID)
 	if err == nil {
-		read, create = existing.CanRead, existing.CanCreateTokens
+		read, create = existing.CanRead, existing.CanWrite
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	if tokens {
+	if write {
 		create = val
 	} else {
 		read = val
@@ -181,10 +199,10 @@ func (s *Store) setNamespaceBit(userID string, nsID uint, tokens bool, val bool)
 			Delete(&NamespacePermission{}).Error
 	}
 	return s.UpsertNamespacePermission(&NamespacePermission{
-		UserID:          userID,
-		NamespaceID:     nsID,
-		CanRead:         read,
-		CanCreateTokens: create,
+		UserID:      userID,
+		NamespaceID: nsID,
+		CanRead:     read,
+		CanWrite:    create,
 	})
 }
 
@@ -244,7 +262,7 @@ func (s *Store) RemoveMember(orgID OrgID, email string) error {
 
 // memberGroups returns the sorted group tokens a member belongs to:
 // manager groups first (binmgr/cronmgr/configmgr/nsmgr in that order),
-// then namespace groups alphabetically with "+tokens" following its
+// then namespace groups alphabetically with its write group following its
 // base. Pending invitees return nil — they hold no grants yet.
 //
 // Owners go through the same path as everyone else. Their groups are
@@ -280,8 +298,8 @@ func (s *Store) memberGroups(orgID OrgID, m TeamMember, nsByID map[uint]string) 
 		return nil, err
 	}
 	type nsGroup struct {
-		name   string
-		tokens bool
+		name  string
+		write bool
 	}
 	var nsGroups []nsGroup
 	for _, np := range nsPerms {
@@ -292,7 +310,7 @@ func (s *Store) memberGroups(orgID OrgID, m TeamMember, nsByID map[uint]string) 
 		if np.CanRead {
 			nsGroups = append(nsGroups, nsGroup{name, false})
 		}
-		if np.CanCreateTokens {
+		if np.CanWrite {
 			nsGroups = append(nsGroups, nsGroup{name, true})
 		}
 	}
@@ -300,13 +318,13 @@ func (s *Store) memberGroups(orgID OrgID, m TeamMember, nsByID map[uint]string) 
 		if nsGroups[i].name != nsGroups[j].name {
 			return nsGroups[i].name < nsGroups[j].name
 		}
-		return !nsGroups[i].tokens // base before +tokens
+		return !nsGroups[i].write // read before write
 	})
 	for _, g := range nsGroups {
-		if g.tokens {
-			groups = append(groups, g.name+tokensSuffix)
+		if g.write {
+			groups = append(groups, g.name+writeSuffix)
 		} else {
-			groups = append(groups, g.name)
+			groups = append(groups, g.name+readSuffix)
 		}
 	}
 	return groups, nil

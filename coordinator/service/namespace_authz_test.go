@@ -51,7 +51,7 @@ func (f *nsFixture) ctx(t *testing.T, owner, tokenPerm bool) context.Context {
 		t.Fatal(err)
 	}
 	if tokenPerm {
-		if err := f.st.UpsertNamespacePermission(&store.NamespacePermission{UserID: u.ID, NamespaceID: f.ns.ID, CanRead: true, CanCreateTokens: true}); err != nil {
+		if err := f.st.UpsertNamespacePermission(&store.NamespacePermission{UserID: u.ID, NamespaceID: f.ns.ID, CanRead: true, CanWrite: true}); err != nil {
 			t.Fatal(err)
 		}
 	}

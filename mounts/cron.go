@@ -77,7 +77,7 @@ func (m *CronMount) Authorize(rel string, want shellcore.Perm) error {
 		return fmt.Errorf("/cron.d/%s: %w (namespace directories come with the namespace; write a cron at /cron.d/<namespace>/<name>)", rel, fs.ErrPermission)
 	case p.ns != "":
 		if !m.cfg.allowedIn(tenancy.ActionManageCron, p.ns) {
-			return denyWrite("/cron.d/"+p.ns, "cronmgr")
+			return denyNamespaceWrite("/cron.d/"+p.ns, p.ns)
 		}
 	case !m.cfg.allowed(tenancy.ActionPublishOrgWide):
 		return fmt.Errorf("/cron.d: %w (an org-level cron is readable by every member, so only an owner publishes one; put it in a namespace: /cron.d/<namespace>/%s)", fs.ErrPermission, p.name)

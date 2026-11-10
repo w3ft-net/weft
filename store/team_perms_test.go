@@ -53,7 +53,7 @@ func TestTeamPerms_BuildAndApply_RoundTrip(t *testing.T) {
 		alice.Email: {
 			Bin: AccessEdit, Cron: AccessReadOnly, Etc: AccessReadOnly,
 			Namespaces: map[string]NamespaceAcl{
-				"api": {Read: true, CreateTokens: true},
+				"api": {Read: true, Write: true},
 				"web": {Read: true},
 			},
 		},

@@ -56,15 +56,15 @@ func newFixture(t *testing.T) *fixture {
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	// Namespace "a" is readable by both, so a write to its crons is refused
-	// for the lack of the cronmgr group and nothing else.
+	// Namespace "a" is readable by both and writable by alice, so a write to its
+	// crons is refused for bob by the lack of a-w and nothing else.
 	a, err := tx.FindOrCreateNamespace(org.ID, "a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.nsA = a.ID
 	for _, u := range []*store.User{f.alice, f.bob} {
-		if err := tx.UpsertNamespacePermission(&store.NamespacePermission{UserID: u.ID, NamespaceID: a.ID, CanRead: true}); err != nil {
+		if err := tx.UpsertNamespacePermission(&store.NamespacePermission{UserID: u.ID, NamespaceID: a.ID, CanRead: true, CanWrite: u == f.alice}); err != nil {
 			t.Fatal(err)
 		}
 	}

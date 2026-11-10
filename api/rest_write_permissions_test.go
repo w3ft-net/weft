@@ -52,13 +52,13 @@ func newGroupedOrg(t *testing.T, tier store.Tier) *groupedOrg {
 	seat := func(suffix string, p store.MemberPerms) string {
 		u, jwt := permsSeed(t, s, org, orgs.RoleMember, "restperm-"+suffix)
 		// Every seat reads ops, so only a missing group can refuse a write there.
-		p.Namespaces = map[string]store.NamespaceAcl{"ops": {Read: true}}
+		p.Namespaces = map[string]store.NamespaceAcl{"ops": {Read: true, Write: suffix == "cron"}}
 		grant[suffix] = store.TeamPermsDoc{u.Email: p}
 		return jwt
 	}
 	g.plain = seat("plain", store.MemberPerms{})
 	g.bin = seat("bin", store.MemberPerms{Bin: store.AccessEdit})
-	g.cron = seat("cron", store.MemberPerms{Cron: store.AccessEdit})
+	g.cron = seat("cron", store.MemberPerms{})
 	g.etc = seat("etc", store.MemberPerms{Etc: store.AccessEdit})
 
 	all := store.TeamPermsDoc{}
