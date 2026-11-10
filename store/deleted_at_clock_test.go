@@ -18,23 +18,23 @@ func TestDeletionsUseTheDatabaseClock(t *testing.T) {
 	cfg.NowFunc = func() time.Time { return time.Now().Add(-time.Hour) }
 	t.Cleanup(func() { cfg.NowFunc = appNow })
 
-	if err := db.SaveCronWatch(org.ID, 0, "", "errs", "every 5m", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(org.ID, opsNS(t, db, org.ID), "", "errs", "every 5m", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveShellFunction(org.ID, "", "count", "echo 1", "bash"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveDashboard(org.ID, "", "prod", "tiles:\n  - kind: counter\n    cron: errs\n"); err != nil {
+	if err := db.SaveDashboard(org.ID, "", "prod", "tiles:\n  - kind: counter\n    cron: ops/errs\n"); err != nil {
 		t.Fatal(err)
 	}
 	// Saved after the others, so the deletions below must sort after it.
-	if err := db.SaveDashboard(org.ID, "", "later", "tiles:\n  - kind: table\n    cron: errs\n"); err != nil {
+	if err := db.SaveDashboard(org.ID, "", "later", "tiles:\n  - kind: table\n    cron: ops/errs\n"); err != nil {
 		t.Fatal(err)
 	}
 	for _, del := range []func() error{
 		func() error { return db.DeleteDashboard(org.ID, "prod") },
 		func() error { return db.DeleteShellFunction(org.ID, "count") },
-		func() error { return db.DeleteCronWatch(org.ID, 0, "errs") },
+		func() error { return db.DeleteCronWatch(org.ID, opsNS(t, db, org.ID), "errs") },
 	} {
 		if err := del(); err != nil {
 			t.Fatal(err)

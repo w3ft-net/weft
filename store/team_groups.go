@@ -12,7 +12,7 @@ import (
 // Team management is modeled as Unix-style group membership. A group is
 // one of three things:
 //
-//   - a manager group (binmgr / cronmgr / configmgr / nsmgr) — edit access
+//   - a manager group (binmgr / configmgr / nsmgr) — edit access
 //     to /bin, /cron.d, /etc and the right to create namespaces, backed by
 //     the OrgPermission bits.
 //   - "<ns>-r" — read access to <ns>: its logs and its crons,
@@ -28,7 +28,6 @@ import (
 // column it toggles.
 var managerGroupColumn = map[string]string{
 	"binmgr":    "can_manage_functions",
-	"cronmgr":   "can_manage_watches",
 	"configmgr": "can_manage_etc",
 	"nsmgr":     "can_create_namespaces",
 }
@@ -168,7 +167,6 @@ func (s *Store) setOrgBit(orgID OrgID, userID, column string, val bool) error {
 	if existing.DeletedAt.Valid {
 		return s.scoped(orgID).Unscoped().Model(&existing).Updates(map[string]any{
 			"can_manage_functions":  false,
-			"can_manage_watches":    false,
 			"can_manage_etc":        false,
 			"can_create_namespaces": false,
 			column:                  val,
@@ -261,7 +259,7 @@ func (s *Store) RemoveMember(orgID OrgID, email string) error {
 }
 
 // memberGroups returns the sorted group tokens a member belongs to:
-// manager groups first (binmgr/cronmgr/configmgr/nsmgr in that order),
+// manager groups first (binmgr/configmgr/nsmgr in that order),
 // then namespace groups alphabetically with its write group following its
 // base. Pending invitees return nil — they hold no grants yet.
 //
@@ -279,9 +277,6 @@ func (s *Store) memberGroups(orgID OrgID, m TeamMember, nsByID map[uint]string) 
 	if err == nil && op != nil {
 		if op.CanManageFunctions {
 			groups = append(groups, "binmgr")
-		}
-		if op.CanManageWatches {
-			groups = append(groups, "cronmgr")
 		}
 		if op.CanManageEtc {
 			groups = append(groups, "configmgr")

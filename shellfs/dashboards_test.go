@@ -11,7 +11,7 @@ sections:
   - title: Errors
     tiles:
       - kind: sparkline
-        cron: error-rate-hourly
+        cron: ops/error-rate-hourly
         size: md
 `
 
@@ -20,7 +20,10 @@ sections:
 func seedDashboardWatch(t *testing.T, fs *ShellFS, name string) {
 	t.Helper()
 	body := "# schedule: every 5m\necho 1\n"
-	if err := fs.WriteFile("/cron.d/"+name, []byte(body)); err != nil {
+	if _, err := fs.store.FindOrCreateNamespace(fs.custID, "ops"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.WriteFile("/cron.d/ops/"+name, []byte(body)); err != nil {
 		t.Fatalf("seed cron watch %q: %v", name, err)
 	}
 }
@@ -75,10 +78,10 @@ func TestDashboards_ReadDir(t *testing.T) {
 	seedDashboardWatch(t, sfs, "watch-a")
 	seedDashboardWatch(t, sfs, "watch-b")
 
-	if err := sfs.WriteFile("/etc/dashboards/alpha.yaml", []byte("tiles:\n  - {kind: counter, cron: watch-a}\n")); err != nil {
+	if err := sfs.WriteFile("/etc/dashboards/alpha.yaml", []byte("tiles:\n  - {kind: counter, cron: ops/watch-a}\n")); err != nil {
 		t.Fatalf("write alpha: %v", err)
 	}
-	if err := sfs.WriteFile("/etc/dashboards/beta.yaml", []byte("tiles:\n  - {kind: counter, cron: watch-b}\n")); err != nil {
+	if err := sfs.WriteFile("/etc/dashboards/beta.yaml", []byte("tiles:\n  - {kind: counter, cron: ops/watch-b}\n")); err != nil {
 		t.Fatalf("write beta: %v", err)
 	}
 
@@ -109,7 +112,7 @@ func TestDashboards_WriteRejectsBadYAML(t *testing.T) {
 	}
 	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 
-	err = sfs.WriteFile("/etc/dashboards/broken.yaml", []byte("tiles:\n  - kind: pizza\n    cron: nope\n"))
+	err = sfs.WriteFile("/etc/dashboards/broken.yaml", []byte("tiles:\n  - kind: pizza\n    cron: ops/nope\n"))
 	if err == nil {
 		t.Fatal("expected error for unknown kind")
 	}
@@ -126,7 +129,7 @@ func TestDashboards_WriteRejectsMissingWatch(t *testing.T) {
 	}
 	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 
-	err = sfs.WriteFile("/etc/dashboards/orphan.yaml", []byte("tiles:\n  - kind: counter\n    cron: does-not-exist\n"))
+	err = sfs.WriteFile("/etc/dashboards/orphan.yaml", []byte("tiles:\n  - kind: counter\n    cron: ops/does-not-exist\n"))
 	if err == nil {
 		t.Fatal("expected error for missing watch")
 	}
@@ -144,7 +147,7 @@ func TestDashboards_Remove(t *testing.T) {
 	sfs := New(db, cust.ID, []string{"api"}, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 	seedDashboardWatch(t, sfs, "w")
 
-	if err := sfs.WriteFile("/etc/dashboards/x.yaml", []byte("tiles:\n  - {kind: counter, cron: w}\n")); err != nil {
+	if err := sfs.WriteFile("/etc/dashboards/x.yaml", []byte("tiles:\n  - {kind: counter, cron: ops/w}\n")); err != nil {
 		t.Fatal(err)
 	}
 	if err := sfs.Remove("/etc/dashboards/x.yaml"); err != nil {

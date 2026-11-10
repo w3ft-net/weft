@@ -20,11 +20,11 @@ import (
 type TeamPermsDoc map[string]MemberPerms
 
 // MemberPerms is one member's record — per-directory access for
-// /bin /cron.d /etc plus per-namespace permissions. Each *Access is
+// /bin and /etc plus per-namespace permissions (a namespace's write group
+// manages its crons). Each *Access is
 // "edit" or "read-only"; the namespaces map is omitted when empty.
 type MemberPerms struct {
 	Bin        AccessLevel             `json:"bin"`
-	Cron       AccessLevel             `json:"cron"`
 	Etc        AccessLevel             `json:"etc"`
 	Namespaces map[string]NamespaceAcl `json:"namespaces,omitempty"`
 }
@@ -79,16 +79,12 @@ func (s *Store) BuildTeamPerms(orgID OrgID) (TeamPermsDoc, error) {
 		}
 		uid := m.UserID
 		mp := MemberPerms{
-			Bin:  AccessReadOnly,
-			Cron: AccessReadOnly,
-			Etc:  AccessReadOnly,
+			Bin: AccessReadOnly,
+			Etc: AccessReadOnly,
 		}
 		if op, err := s.GetOrgPermission(orgID, uid); err == nil && op != nil {
 			if op.CanManageFunctions {
 				mp.Bin = AccessEdit
-			}
-			if op.CanManageWatches {
-				mp.Cron = AccessEdit
 			}
 			if op.CanManageEtc {
 				mp.Etc = AccessEdit
@@ -175,7 +171,6 @@ func (s *Store) ApplyTeamPerms(orgID OrgID, doc TeamPermsDoc) error {
 				"org_id":               orgID,
 				"user_id":              uid,
 				"can_manage_functions": mp.Bin.CanManage(),
-				"can_manage_watches":   mp.Cron.CanManage(),
 				"can_manage_etc":       mp.Etc.CanManage(),
 			}
 			var err error

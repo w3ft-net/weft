@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // saveCronResult persists a cron result via the exported store
@@ -119,13 +120,37 @@ func deleteOrgData(db *store.Store, customer string) {
 	_ = db.ExecForTest("DELETE FROM organizations WHERE name = ?", customer)
 }
 
-func seedWatch(t *testing.T, db *store.Store, custID store.OrgID, name string, values []string, interval time.Duration) {
+// opsNS is the id of namespace "ops", where the weft:: function tests keep
+// their crons.
+func opsNS(t *testing.T, db *store.Store, org store.OrgID) uint {
 	t.Helper()
-	err := db.SaveCronWatch(custID, 0, "", name, "every 1m", "echo test", true, nil)
+	ns, err := db.FindOrCreateNamespace(org, "ops")
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := db.GetCronWatch(custID, 0, name)
+	return ns.ID
+}
+
+// testWF is a WeftFuncs for a test: it reads as the system identity, which may
+// read every namespace.
+func testWF(t *testing.T, db *store.Store, custID store.OrgID) *WeftFuncs {
+	t.Helper()
+	return &WeftFuncs{Store: db, OrgID: custID, Scoper: hosted.Scoper{Store: db}, Ctx: as(custID, "")}
+}
+
+// seedWatch saves a cron named name in namespace "ops" and gives it one result
+// per value, a minute apart ending now; weft:: functions name it "ops/<name>".
+func seedWatch(t *testing.T, db *store.Store, custID store.OrgID, name string, values []string, interval time.Duration) {
+	t.Helper()
+	ops, err := db.FindOrCreateNamespace(custID, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.SaveCronWatch(custID, ops.ID, "", name, "every 1m", "echo test", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := db.GetCronWatch(custID, ops.ID, name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,8 +172,8 @@ func TestWeftFuncs_Latest(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "latest-test", []string{"10", "20", "30"}, time.Minute)
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	val, err := wf.Latest("latest-test")
+	wf := testWF(t, db, custID)
+	val, err := wf.Latest("ops/latest-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,8 +184,8 @@ func TestWeftFuncs_Latest(t *testing.T) {
 
 func TestWeftFuncs_Latest_NotFound(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	_, err := wf.Latest("nonexistent-watch")
+	wf := testWF(t, db, custID)
+	_, err := wf.Latest("ops/nonexistent-watch")
 	if err == nil {
 		t.Error("expected error for nonexistent watch")
 	}
@@ -170,8 +195,8 @@ func TestWeftFuncs_Avg(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "avg-test", []string{"10", "20", "30"}, time.Minute)
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	val, err := wf.Avg("avg-test", 1*time.Hour)
+	wf := testWF(t, db, custID)
+	val, err := wf.Avg("ops/avg-test", 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +209,8 @@ func TestWeftFuncs_Max(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "max-test", []string{"5", "42", "17"}, time.Minute)
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	val, err := wf.Max("max-test", 1*time.Hour)
+	wf := testWF(t, db, custID)
+	val, err := wf.Max("ops/max-test", 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,8 +223,8 @@ func TestWeftFuncs_Min(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "min-test", []string{"5", "42", "17"}, time.Minute)
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	val, err := wf.Min("min-test", 1*time.Hour)
+	wf := testWF(t, db, custID)
+	val, err := wf.Min("ops/min-test", 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,8 +237,8 @@ func TestWeftFuncs_Sum(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "sum-test", []string{"10", "20", "30"}, time.Minute)
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	val, err := wf.Sum("sum-test", 1*time.Hour)
+	wf := testWF(t, db, custID)
+	val, err := wf.Sum("ops/sum-test", 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,8 +252,8 @@ func TestWeftFuncs_Stddev(t *testing.T) {
 	// Values: 10, 20, 30 → mean=20, variance=((100+0+100)/3)=66.67, stddev≈8.165
 	seedWatch(t, db, custID, "stddev-test", []string{"10", "20", "30"}, time.Minute)
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	val, err := wf.Stddev("stddev-test", 1*time.Hour)
+	wf := testWF(t, db, custID)
+	val, err := wf.Stddev("ops/stddev-test", 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,8 +267,8 @@ func TestWeftFuncs_Stddev_NeedsTwoResults(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "stddev-one", []string{"42"}, time.Minute)
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	_, err := wf.Stddev("stddev-one", 1*time.Hour)
+	wf := testWF(t, db, custID)
+	_, err := wf.Stddev("ops/stddev-one", 1*time.Hour)
 	if err == nil {
 		t.Error("expected error for single result")
 	}
@@ -253,9 +278,9 @@ func TestWeftFuncs_SkipsNonNumeric(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "mixed-test", []string{"10", "not-a-number", "30", "ERROR", "20"}, time.Minute)
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
+	wf := testWF(t, db, custID)
 
-	avg, err := wf.Avg("mixed-test", 1*time.Hour)
+	avg, err := wf.Avg("ops/mixed-test", 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,17 +288,17 @@ func TestWeftFuncs_SkipsNonNumeric(t *testing.T) {
 		t.Errorf("avg: expected 20, got %f", avg)
 	}
 
-	max, _ := wf.Max("mixed-test", 1*time.Hour)
+	max, _ := wf.Max("ops/mixed-test", 1*time.Hour)
 	if max != 30.0 {
 		t.Errorf("max: expected 30, got %f", max)
 	}
 
-	min, _ := wf.Min("mixed-test", 1*time.Hour)
+	min, _ := wf.Min("ops/mixed-test", 1*time.Hour)
 	if min != 10.0 {
 		t.Errorf("min: expected 10, got %f", min)
 	}
 
-	sum, _ := wf.Sum("mixed-test", 1*time.Hour)
+	sum, _ := wf.Sum("ops/mixed-test", 1*time.Hour)
 	if sum != 60.0 {
 		t.Errorf("sum: expected 60, got %f", sum)
 	}
@@ -281,14 +306,14 @@ func TestWeftFuncs_SkipsNonNumeric(t *testing.T) {
 
 func TestWeftFuncs_DurationCap(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	wf := &WeftFuncs{Store: db, OrgID: custID}
+	wf := testWF(t, db, custID)
 
-	_, err := wf.Avg("any-watch", 25*time.Hour)
+	_, err := wf.Avg("ops/any-watch", 25*time.Hour)
 	if err == nil {
 		t.Error("expected error for duration > 24h")
 	}
 
-	_, err = wf.Avg("any-watch", -1*time.Hour)
+	_, err = wf.Avg("ops/any-watch", -1*time.Hour)
 	if err == nil {
 		t.Error("expected error for negative duration")
 	}
@@ -297,11 +322,11 @@ func TestWeftFuncs_DurationCap(t *testing.T) {
 func TestWeftFuncs_TimeRangeFiltering(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	// Seed with values spread over 2 hours. Query only last 30m.
-	err := db.SaveCronWatch(custID, 0, "", "range-filter-test", "every 1m", "echo test", true, nil)
+	err := db.SaveCronWatch(custID, opsNS(t, db, custID), "", "range-filter-test", "every 1m", "echo test", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, _ := db.GetCronWatch(custID, 0, "range-filter-test")
+	w, _ := db.GetCronWatch(custID, opsNS(t, db, custID), "range-filter-test")
 	now := time.Now()
 
 	// Old values (2h ago) — should be excluded from 30m query.
@@ -321,8 +346,8 @@ func TestWeftFuncs_TimeRangeFiltering(t *testing.T) {
 		})
 	}
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	avg, err := wf.Avg("range-filter-test", 30*time.Minute)
+	wf := testWF(t, db, custID)
+	avg, err := wf.Avg("ops/range-filter-test", 30*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,15 +360,15 @@ func TestWeftFuncs_FloatValues(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "float-test", []string{"1.5", "2.5", "3.0"}, time.Minute)
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
+	wf := testWF(t, db, custID)
 
-	avg, _ := wf.Avg("float-test", 1*time.Hour)
+	avg, _ := wf.Avg("ops/float-test", 1*time.Hour)
 	expected := (1.5 + 2.5 + 3.0) / 3.0
 	if math.Abs(avg-expected) > 0.001 {
 		t.Errorf("avg: expected %.3f, got %.3f", expected, avg)
 	}
 
-	sum, _ := wf.Sum("float-test", 1*time.Hour)
+	sum, _ := wf.Sum("ops/float-test", 1*time.Hour)
 	if math.Abs(sum-7.0) > 0.001 {
 		t.Errorf("sum: expected 7.0, got %.3f", sum)
 	}
@@ -352,16 +377,16 @@ func TestWeftFuncs_FloatValues(t *testing.T) {
 func TestWeftFuncs_EmptyResults(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	// Create watch with no results.
-	db.SaveCronWatch(custID, 0, "", "empty-test", "every 1m", "echo test", true, nil)
+	db.SaveCronWatch(custID, opsNS(t, db, custID), "", "empty-test", "every 1m", "echo test", true, nil)
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
+	wf := testWF(t, db, custID)
 
-	_, err := wf.Avg("empty-test", 1*time.Hour)
+	_, err := wf.Avg("ops/empty-test", 1*time.Hour)
 	if err == nil {
 		t.Error("expected error for empty results")
 	}
 
-	_, err = wf.Max("empty-test", 1*time.Hour)
+	_, err = wf.Max("ops/empty-test", 1*time.Hour)
 	if err == nil {
 		t.Error("expected error for empty results")
 	}
@@ -414,8 +439,8 @@ func TestWeftFuncs_First(t *testing.T) {
 	// So "10" is oldest, "30" is newest.
 	seedWatch(t, db, custID, "first-test", []string{"10", "20", "30"}, time.Minute)
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	got, err := wf.First("first-test", 10*time.Minute)
+	wf := testWF(t, db, custID)
+	got, err := wf.First("ops/first-test", 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,11 +453,11 @@ func TestWeftFuncs_First_AcceptsLongerWindow(t *testing.T) {
 	// First should accept a window > 24h, up to the raw retention.
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "first-long", []string{"5"}, time.Minute)
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	if _, err := wf.First("first-long", 48*time.Hour); err != nil {
+	wf := testWF(t, db, custID)
+	if _, err := wf.First("ops/first-long", 48*time.Hour); err != nil {
 		t.Errorf("First with 48h window: unexpected error: %v", err)
 	}
-	if _, err := wf.First("first-long", 8*24*time.Hour); err == nil {
+	if _, err := wf.First("ops/first-long", 8*24*time.Hour); err == nil {
 		t.Error("First with 8d window: expected cap error, got nil")
 	}
 }
@@ -442,8 +467,8 @@ func TestWeftFuncs_Count(t *testing.T) {
 	// Mix numeric and non-numeric — Count counts numeric results only, since
 	// the rollups that serve long windows don't keep the others.
 	seedWatch(t, db, custID, "count-test", []string{"10", "ERROR", "30", "20"}, time.Minute)
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	got, err := wf.Count("count-test", 1*time.Hour)
+	wf := testWF(t, db, custID)
+	got, err := wf.Count("ops/count-test", 1*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +480,7 @@ func TestWeftFuncs_Count(t *testing.T) {
 func TestWeftFuncs_Percentile(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "pct-test", []string{"10", "20", "30", "40", "50"}, time.Minute)
-	wf := &WeftFuncs{Store: db, OrgID: custID}
+	wf := testWF(t, db, custID)
 
 	cases := []struct {
 		p    float64
@@ -468,7 +493,7 @@ func TestWeftFuncs_Percentile(t *testing.T) {
 		{75, 40},  // exact rank 3
 	}
 	for _, c := range cases {
-		got, err := wf.Percentile("pct-test", 1*time.Hour, c.p)
+		got, err := wf.Percentile("ops/pct-test", 1*time.Hour, c.p)
 		if err != nil {
 			t.Fatalf("p=%v: %v", c.p, err)
 		}
@@ -483,8 +508,8 @@ func TestWeftFuncs_Percentile_LinearInterpolation(t *testing.T) {
 	// 4 values: ranks 0..3. p=33.33 → rank 1.0 = value at index 1.
 	// p=50 → rank 1.5 = midpoint between index 1 and index 2.
 	seedWatch(t, db, custID, "pct-interp", []string{"10", "20", "30", "40"}, time.Minute)
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	got, err := wf.Percentile("pct-interp", 1*time.Hour, 50)
+	wf := testWF(t, db, custID)
+	got, err := wf.Percentile("ops/pct-interp", 1*time.Hour, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,11 +522,11 @@ func TestWeftFuncs_Percentile_LinearInterpolation(t *testing.T) {
 func TestWeftFuncs_Percentile_OutOfRange(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "pct-bounds", []string{"1", "2", "3"}, time.Minute)
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	if _, err := wf.Percentile("pct-bounds", 1*time.Hour, -1); err == nil {
+	wf := testWF(t, db, custID)
+	if _, err := wf.Percentile("ops/pct-bounds", 1*time.Hour, -1); err == nil {
 		t.Error("expected error for p < 0")
 	}
-	if _, err := wf.Percentile("pct-bounds", 1*time.Hour, 101); err == nil {
+	if _, err := wf.Percentile("ops/pct-bounds", 1*time.Hour, 101); err == nil {
 		t.Error("expected error for p > 100")
 	}
 }
@@ -510,8 +535,8 @@ func TestWeftFuncs_Delta(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	// Oldest=10, newest=50.
 	seedWatch(t, db, custID, "delta-test", []string{"10", "20", "30", "40", "50"}, time.Minute)
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	got, err := wf.Delta("delta-test", 10*time.Minute)
+	wf := testWF(t, db, custID)
+	got, err := wf.Delta("ops/delta-test", 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,8 +548,8 @@ func TestWeftFuncs_Delta(t *testing.T) {
 func TestWeftFuncs_Delta_NeedsTwoResults(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "delta-one", []string{"42"}, time.Minute)
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	if _, err := wf.Delta("delta-one", 1*time.Hour); err == nil {
+	wf := testWF(t, db, custID)
+	if _, err := wf.Delta("ops/delta-one", 1*time.Hour); err == nil {
 		t.Error("expected error for single result")
 	}
 }
@@ -533,8 +558,8 @@ func TestWeftFuncs_Slope(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	// Delta = 50 - 10 = 40, over a window of 600s → slope = 40/600.
 	seedWatch(t, db, custID, "slope-test", []string{"10", "20", "30", "40", "50"}, time.Minute)
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	got, err := wf.Slope("slope-test", 600*time.Second)
+	wf := testWF(t, db, custID)
+	got, err := wf.Slope("ops/slope-test", 600*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,8 +574,8 @@ func TestWeftFuncs_Rate(t *testing.T) {
 	// 3 values over 2 minutes wall time, 10-minute window so all fall in.
 	// Sum = 10+20+30 = 60; window = 600s → rate = 0.1/sec.
 	seedWatch(t, db, custID, "rate-test", []string{"10", "20", "30"}, time.Minute)
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	got, err := wf.Rate("rate-test", 600*time.Second)
+	wf := testWF(t, db, custID)
+	got, err := wf.Rate("ops/rate-test", 600*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

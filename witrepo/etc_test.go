@@ -7,7 +7,7 @@ import (
 )
 
 func dash(title string) string {
-	return fmt.Sprintf("title: %s\nsections:\n  - tiles:\n      - kind: counter\n        cron: errs\n", title)
+	return fmt.Sprintf("title: %s\nsections:\n  - tiles:\n      - kind: counter\n        cron: a/errs\n", title)
 }
 
 func (f *fixture) saveDash(t *testing.T, name, body string) {
@@ -34,7 +34,7 @@ func logOldestFirst(t *testing.T, r *Repo, args ...string) []string {
 
 func TestEtc_DashboardHistoryAndRestore(t *testing.T) {
 	f := newFixture(t)
-	f.saveCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
+	f.saveNSCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
 	f.saveDash(t, "prod", dash("v1"))
 	f.saveDash(t, "prod", dash("v2"))
 	f.saveDash(t, "prod", dash("v3"))
@@ -58,7 +58,7 @@ func TestEtc_DashboardHistoryAndRestore(t *testing.T) {
 
 func TestEtc_DashboardDeletionAndRecreation(t *testing.T) {
 	f := newFixture(t)
-	f.saveCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
+	f.saveNSCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
 	f.saveDash(t, "prod", dash("v1"))
 	if err := f.db.DeleteDashboard(f.org, "prod"); err != nil {
 		t.Fatal(err)
@@ -132,10 +132,10 @@ func TestEtc_WritesNeedConfigmgr(t *testing.T) {
 
 func TestEtc_RestoreStillValidates(t *testing.T) {
 	f := newFixture(t)
-	f.saveCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
+	f.saveNSCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
 	f.saveDash(t, "prod", dash("v1"))
 	f.saveDash(t, "prod", dash("v2"))
-	if err := f.db.DeleteCronWatch(f.org, 0, "errs"); err != nil {
+	if err := f.db.DeleteCronWatch(f.org, f.nsA, "errs"); err != nil {
 		t.Fatal(err)
 	}
 	out := gitErr(t, f.repo(f.alice, "/"), "restore", "--source=HEAD~2", "/etc/dashboards/prod.yaml")
@@ -146,7 +146,7 @@ func TestEtc_RestoreStillValidates(t *testing.T) {
 
 func TestEtc_AmendAndRetentionBoundary(t *testing.T) {
 	f := newFixture(t)
-	f.saveCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
+	f.saveNSCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
 	for i := 1; i <= 8; i++ {
 		f.saveDash(t, "prod", dash(fmt.Sprintf("v%d", i)))
 	}

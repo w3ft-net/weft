@@ -16,10 +16,10 @@ import (
 // duration, stderr), not just what they printed.
 func TestWeftFuncs_Describe(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	if err := db.SaveCronWatch(custID, 0, "", "canary", "every 1m", "echo test", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, opsNS(t, db, custID), "", "canary", "every 1m", "echo test", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := db.GetCronWatch(custID, 0, "canary")
+	w, err := db.GetCronWatch(custID, opsNS(t, db, custID), "canary")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,9 +34,9 @@ func TestWeftFuncs_Describe(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	wf := &WeftFuncs{Store: db, OrgID: custID}
+	wf := testWF(t, db, custID)
 
-	got, err := wf.Describe("canary", 2)
+	got, err := wf.Describe("ops/canary", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,18 +50,18 @@ func TestWeftFuncs_Describe(t *testing.T) {
 		t.Errorf("failed run: got %+v", got[1])
 	}
 
-	all, _ := wf.Describe("canary", 10)
+	all, _ := wf.Describe("ops/canary", 10)
 	if len(all) != 3 || all[2].Value == nil || *all[2].Value != 3 {
 		t.Errorf("oldest run should carry parsed value 3: %+v", all)
 	}
 
-	if _, err := wf.Describe("no-such-cron", 10); err == nil {
+	if _, err := wf.Describe("ops/no-such-cron", 10); err == nil {
 		t.Error("unknown cron should be an error")
 	}
-	if _, err := wf.Describe("canary", 0); err == nil {
+	if _, err := wf.Describe("ops/canary", 0); err == nil {
 		t.Error("n=0 should be an error")
 	}
-	if _, err := wf.Describe("canary", maxDescribeRuns+1); err == nil {
+	if _, err := wf.Describe("ops/canary", maxDescribeRuns+1); err == nil {
 		t.Error("n over the cap should be an error")
 	}
 

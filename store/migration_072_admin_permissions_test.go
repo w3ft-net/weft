@@ -59,8 +59,8 @@ func TestTrigger_PromotionMaterializesGrants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admin should have a row: %v", err)
 	}
-	if !perm.CanManageFunctions || !perm.CanManageWatches || !perm.CanManageEtc || !perm.CanCreateNamespaces {
-		t.Errorf("promotion should materialize all four bits; got %+v", perm)
+	if !perm.CanManageFunctions || !perm.CanManageEtc || !perm.CanCreateNamespaces {
+		t.Errorf("promotion should materialize all three bits; got %+v", perm)
 	}
 }
 
@@ -82,7 +82,7 @@ func TestTrigger_DemotionRetainsGrants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("row should survive demotion: %v", err)
 	}
-	if !perm.CanManageFunctions || !perm.CanManageWatches || !perm.CanManageEtc || !perm.CanCreateNamespaces {
+	if !perm.CanManageFunctions || !perm.CanManageEtc || !perm.CanCreateNamespaces {
 		t.Errorf("demotion must not revoke; got %+v", perm)
 	}
 
@@ -95,8 +95,8 @@ func TestTrigger_DemotionRetainsGrants(t *testing.T) {
 	if perm.CanManageFunctions {
 		t.Error("binmgr should be revokable after demotion")
 	}
-	if !perm.CanManageWatches {
-		t.Error("revoking binmgr should leave cronmgr alone")
+	if !perm.CanManageEtc {
+		t.Error("revoking binmgr should leave configmgr alone")
 	}
 }
 
@@ -132,8 +132,8 @@ func TestTrigger_DemotionNotifiesOperator(t *testing.T) {
 		t.Errorf("params[org] = %v, want %s", got, cust.Name)
 	}
 	groups, _ := n.Params["groups"].([]any)
-	if len(groups) != 4 {
-		t.Errorf("params[groups] = %#v, want all four retained", n.Params["groups"])
+	if len(groups) != 3 {
+		t.Errorf("params[groups] = %#v, want all three retained", n.Params["groups"])
 	}
 
 	// The demoted member is not notified — the notice is for whoever has

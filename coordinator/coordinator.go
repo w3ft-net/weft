@@ -1512,7 +1512,7 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		// `cd` within the same pipeline is tracked too.
 		interp.SetFS(bash.NewCwdFS(shellfs.New(c.Store, custID, logServices, opts...), interp.DirStack().Cwd, ""))
 
-		wf := &WeftFuncs{Store: c.Store, OrgID: custID, Ctx: context.WithoutCancel(ctx)}
+		wf := &WeftFuncs{Store: c.Store, OrgID: custID, Ctx: context.WithoutCancel(ctx), Scoper: c.Scoper}
 		RegisterWeftCommands(interp, wf)
 		RegisterWeftPredicates(interp, wf)
 		interp.LuaExtensions = []luapkg.Extension{wf.LuaExtension()}

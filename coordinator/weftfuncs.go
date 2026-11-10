@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	luapkg "github.com/graybeardcorp/warp/pkg/lua"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
 	lua "github.com/yuin/gopher-lua"
 	"gorm.io/gorm"
 )
@@ -62,6 +64,34 @@ type WeftFuncs struct {
 	Store *store.Store
 	OrgID store.OrgID
 	Ctx   context.Context
+	// Scoper decides which namespaces' crons the request's actor may read.
+	Scoper tenancy.Scoper
+}
+
+// cron finds the cron a weft:: function names, "<namespace>/<name>". A cron in
+// a namespace the actor can't read is reported as not found, the same answer as
+// a cron that doesn't exist, and a request with no actor reads none.
+func (w *WeftFuncs) cron(ref string) (store.CronWatch, error) {
+	ns, name, err := w.Store.ResolveCronRef(w.OrgID, ref)
+	if err != nil {
+		return store.CronWatch{}, err
+	}
+	home, _, _ := strings.Cut(ref, "/")
+	a, ok := tenancy.ActorFrom(w.ctx())
+	if !ok || w.Scoper == nil {
+		return store.CronWatch{}, gorm.ErrRecordNotFound
+	}
+	readable, _, err := tenancy.Readable(w.ctx(), w.Scoper, a, func() ([]string, error) {
+		return w.Store.NamespaceNames(w.OrgID, "", true)
+	})
+	if err != nil || !slices.Contains(readable, home) {
+		return store.CronWatch{}, gorm.ErrRecordNotFound
+	}
+	cw, err := w.Store.GetCronWatch(w.OrgID, ns, name)
+	if err != nil {
+		return store.CronWatch{}, err
+	}
+	return *cw, nil
 }
 
 func (w *WeftFuncs) ctx() context.Context {
@@ -80,18 +110,18 @@ type SeasonalStatsResult struct {
 }
 
 func (w *WeftFuncs) Latest(watchName string) (string, error) {
-	r, err := func(orgID store.OrgID, watchName string) (*store.CronResult, error) {
-		var watch store.CronWatch
-		if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+	r, err := func(watchName string) (*store.CronResult, error) {
+		watch, err := w.cron(watchName)
+		if err != nil {
 			return nil, err
 		}
 		var result store.CronResult
-		err := w.Store.DB().Where("cron_watch_id = ?", watch.ID).Order("ran_at DESC").First(&result).Error
+		err = w.Store.DB().Where("cron_watch_id = ?", watch.ID).Order("ran_at DESC").First(&result).Error
 		if err != nil {
 			return nil, err
 		}
 		return &result, nil
-	}(w.OrgID, watchName)
+	}(watchName)
 	if err != nil {
 		return "", fmt.Errorf("weft::latest: cron %q: %w", watchName, err)
 	}
@@ -160,8 +190,8 @@ func (w *WeftFuncs) Describe(watchName string, n int) ([]RunRecord, error) {
 	if n < 1 || n > maxDescribeRuns {
 		return nil, fmt.Errorf("weft::describe: n must be between 1 and %d", maxDescribeRuns)
 	}
-	var watch store.CronWatch
-	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+	watch, err := w.cron(watchName)
+	if err != nil {
 		return nil, fmt.Errorf("weft::describe: cron %q: %w", watchName, err)
 	}
 	results, err := w.Store.ListCronResults(watch.ID, n, "")
@@ -194,7 +224,8 @@ func writeRunsJSONL(out io.Writer, runs []RunRecord) error {
 // changed/rising/falling predicates for prev-tick semantics.
 // Returns "" with no error when fewer than 2 results exist.
 func (w *WeftFuncs) Previous(watchName string) (string, error) {
-	cw, err := w.Store.GetCronWatch(w.OrgID, 0, watchName)
+	cwv, err := w.cron(watchName)
+	cw := &cwv
 	if err != nil {
 		return "", fmt.Errorf("weft::previous: cron %q: %w", watchName, err)
 	}
@@ -218,11 +249,11 @@ func (w *WeftFuncs) windowStats(fn, watchName string, dur time.Duration) (store.
 	if dur > maxAggDuration {
 		return store.CronWindowStats{}, fmt.Errorf("duration %s exceeds maximum of %s", dur, maxAggDuration)
 	}
-	var watch store.CronWatch
-	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+	watch, err := w.cron(watchName)
+	if err != nil {
 		return store.CronWindowStats{}, fmt.Errorf("%s: cron %q: %w", fn, watchName, err)
 	}
-	if err := w.numericCron(fn, watch); err != nil {
+	if err := w.numericCron(fn, watchName, watch); err != nil {
 		return store.CronWindowStats{}, err
 	}
 	since := store.ClampRetention(w.Store.TierForOrg(w.OrgID), time.Now().Add(-dur))
@@ -294,11 +325,11 @@ var errTextCron = errors.New("stores text")
 // refuse literal names already; this covers names built at run time. In a
 // cron run the refusal disables the cron (noteTypeError): it would fail
 // the same way every run.
-func (w *WeftFuncs) numericCron(fn string, watch store.CronWatch) error {
+func (w *WeftFuncs) numericCron(fn, ref string, watch store.CronWatch) error {
 	if watch.ValueType != store.ValueText {
 		return nil
 	}
-	err := fmt.Errorf("%s: cron %q %w (# type: text), so it has no numbers; weft::latest reads it", fn, watch.Name, errTextCron)
+	err := fmt.Errorf("%s: cron %q %w (# type: text), so it has no numbers; weft::latest reads it", fn, ref, errTextCron)
 	noteTypeError(w.ctx(), err)
 	return err
 }
@@ -306,11 +337,11 @@ func (w *WeftFuncs) numericCron(fn string, watch store.CronWatch) error {
 // CheckNumeric refuses a text cron for fn. A cron that doesn't exist, or
 // can't be read, passes: fn itself reports those.
 func (w *WeftFuncs) CheckNumeric(fn, watchName string) error {
-	var watch store.CronWatch
-	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+	watch, err := w.cron(watchName)
+	if err != nil {
 		return nil
 	}
-	return w.numericCron(fn, watch)
+	return w.numericCron(fn, watchName, watch)
 }
 
 // rawWindow finds the cron and the start of a raw-results window, enforcing
@@ -323,12 +354,12 @@ func (w *WeftFuncs) rawWindow(fn, watchName string, dur time.Duration, numeric b
 	if dur > maxRawDuration {
 		return 0, time.Time{}, fmt.Errorf("duration %s exceeds maximum of %s", dur, maxRawDuration)
 	}
-	var watch store.CronWatch
-	if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), w.OrgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+	watch, err := w.cron(watchName)
+	if err != nil {
 		return 0, time.Time{}, fmt.Errorf("%s: cron %q: %w", fn, watchName, err)
 	}
 	if numeric {
-		if err := w.numericCron(fn, watch); err != nil {
+		if err := w.numericCron(fn, watchName, watch); err != nil {
 			return 0, time.Time{}, err
 		}
 	}
@@ -451,11 +482,11 @@ func (w *WeftFuncs) SeasonalStats(watchName string, period, window time.Duration
 		return SeasonalStatsResult{}, fmt.Errorf("weft::is_seasonal: window must be larger than period")
 	}
 	avg, stddev, samples, err := func(orgID store.OrgID, watchName string, period, window time.Duration) (avg, stddev float64, samples int, err error) {
-		var watch store.CronWatch
-		if err := w.Store.DB().WithContext(store.WithOrg(w.ctx(), orgID)).Where("name = ?", watchName).First(&watch).Error; err != nil {
+		watch, err := w.cron(watchName)
+		if err != nil {
 			return 0, 0, 0, err
 		}
-		if err := w.numericCron("weft::is_seasonal", watch); err != nil {
+		if err := w.numericCron("weft::is_seasonal", watchName, watch); err != nil {
 			return 0, 0, 0, err
 		}
 		now := time.Now()

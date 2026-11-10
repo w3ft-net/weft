@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func TestDashboards_ListAndGet(t *testing.T) {
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	// Seed a watch and a dashboard that references it.
-	if err := s.SaveCronWatch(cust.ID, 0, user.ID, "error-rate-hourly", "every 5m", "echo 1", true, nil); err != nil {
+	if err := s.SaveCronWatch(cust.ID, opsNS(t, s, cust.ID), user.ID, "error-rate-hourly", "every 5m", "echo 1", true, nil); err != nil {
 		t.Fatalf("seed watch: %v", err)
 	}
 	dashYAML := `title: Production
@@ -38,7 +39,7 @@ sections:
   - title: Errors
     tiles:
       - kind: sparkline
-        cron: error-rate-hourly
+        cron: ops/error-rate-hourly
         size: md
 `
 	if err := s.SaveDashboard(cust.ID, user.ID, "prod", dashYAML); err != nil {
@@ -87,7 +88,7 @@ sections:
 	if len(getResp.Spec.Sections) != 1 || len(getResp.Spec.Sections[0].Tiles) != 1 {
 		t.Fatalf("unexpected sections shape: %+v", getResp.Spec.Sections)
 	}
-	wp, ok := getResp.Watches["error-rate-hourly"]
+	wp, ok := getResp.Watches["ops/error-rate-hourly"]
 	if !ok {
 		t.Fatalf("watches missing key, got: %+v", getResp.Watches)
 	}
@@ -153,13 +154,13 @@ func TestDashboards_Get_TileDisplay(t *testing.T) {
 	jwt, _ := auth.Generate(user, "test-secret")
 
 	seed := func(name string, v *float64) {
-		if err := s.SaveCronWatch(cust.ID, 0, user.ID, name, "every 5m", "echo 1", true, nil); err != nil {
+		if err := s.SaveCronWatch(cust.ID, opsNS(t, s, cust.ID), user.ID, name, "every 5m", "echo 1", true, nil); err != nil {
 			t.Fatalf("seed %s: %v", name, err)
 		}
 		if v == nil {
 			return
 		}
-		cw, err := s.GetCronWatch(cust.ID, 0, name)
+		cw, err := s.GetCronWatch(cust.ID, opsNS(t, s, cust.ID), name)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -175,23 +176,23 @@ func TestDashboards_Get_TileDisplay(t *testing.T) {
 	// A cron's alert cutoff is the only threshold: a tile on it is critical
 	// exactly when the value it shows breaches that cutoff.
 	for name, v := range map[string]float64{"hot": 95, "cool": 50} {
-		if err := s.SaveCronWatch(cust.ID, 0, user.ID, name, "every 5m", "echo 1 | alert above 90", true, nil); err != nil {
+		if err := s.SaveCronWatch(cust.ID, opsNS(t, s, cust.ID), user.ID, name, "every 5m", "echo 1 | alert above 90", true, nil); err != nil {
 			t.Fatalf("seed %s: %v", name, err)
 		}
-		cw, _ := s.GetCronWatch(cust.ID, 0, name)
+		cw, _ := s.GetCronWatch(cust.ID, opsNS(t, s, cust.ID), name)
 		if err := s.SaveCronResults([]store.CronResult{{CronWatchID: cw.ID, RanAt: time.Now(), Value: f(v)}}); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	yaml := `tiles:
-  - {kind: counter, cron: lat, format: "%d ms"}
-  - {kind: counter, cron: plain}
-  - {kind: gauge, cron: load, max: 200}
-  - {kind: counter, cron: empty}
-  - {kind: sparkline, cron: plain}
-  - {kind: counter, cron: hot}
-  - {kind: gauge, cron: cool}
+  - {kind: counter, cron: ops/lat, format: "%d ms"}
+  - {kind: counter, cron: ops/plain}
+  - {kind: gauge, cron: ops/load, max: 200}
+  - {kind: counter, cron: ops/empty}
+  - {kind: sparkline, cron: ops/plain}
+  - {kind: counter, cron: ops/hot}
+  - {kind: gauge, cron: ops/cool}
 `
 	if err := s.SaveDashboard(cust.ID, user.ID, "disp", yaml); err != nil {
 		t.Fatal(err)
@@ -227,5 +228,60 @@ func TestDashboards_Get_TileDisplay(t *testing.T) {
 		if (wd == nil) != (got == nil) || (wd != nil && *wd != *got) {
 			t.Errorf("tile %d display = %+v, want %+v", i, got, wd)
 		}
+	}
+}
+
+// A dashboard is readable by every member, but a tile on a cron renders only
+// for those who can read the cron's namespace. Anyone else sees the tile's
+// title in its place and nothing of the cron: not its path, not its values.
+func TestDashboards_Get_RestrictsTilesOnUnreadableNamespaces(t *testing.T) {
+	g := newGroupedOrg(t, store.TierYard)
+	secret, err := g.s.FindOrCreateNamespace(g.org.ID, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.s.SaveCronWatch(g.org.ID, secret.ID, "", "revenue", "every 5m", "echo 1", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.s.SaveCronWatch(g.org.ID, g.ops, "", "errors", "every 5m", "echo 1", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	body := "title: Mixed\nsections:\n  - tiles:\n      - {kind: counter, cron: secret/revenue, title: Revenue}\n      - {kind: counter, cron: ops/errors, title: Errors}\n"
+	if err := g.s.SaveDashboard(g.org.ID, "", "mixed", body); err != nil {
+		t.Fatal(err)
+	}
+
+	get := func(jwt string) (tiles []store.DashboardTile, raw string) {
+		t.Helper()
+		w := g.do(jwt, "GET", "/api/dashboards/mixed", nil)
+		if w.Code != 200 {
+			t.Fatalf("get: %d %s", w.Code, w.Body.String())
+		}
+		var resp dashboardGetResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp.Spec.Sections[0].Tiles, w.Body.String()
+	}
+
+	tiles, raw := get(g.plain) // reads ops, not secret
+	if !tiles[0].Restricted || tiles[0].Title != "Revenue" || tiles[0].Watch != "" {
+		t.Errorf("unreadable tile = %+v, want restricted with its title and no cron", tiles[0])
+	}
+	if strings.Contains(raw, "secret") {
+		t.Errorf("the response names the unreadable namespace: %s", raw)
+	}
+	if tiles[1].Restricted || tiles[1].Watch != "ops/errors" {
+		t.Errorf("readable tile = %+v", tiles[1])
+	}
+	if tiles, _ = get(g.owner); tiles[0].Restricted {
+		t.Error("the owner reads every namespace")
+	}
+
+	// An editor can only add a tile on a cron they can read, and a cron they
+	// can't read looks like one that doesn't exist.
+	put := g.do(g.etc, "PUT", "/api/dashboards/sneaky", mustJSON(t, map[string]string{"yaml_body": "sections:\n  - tiles:\n      - {kind: counter, cron: secret/revenue}\n"}))
+	if put.Code == 200 || !strings.Contains(put.Body.String(), "does not exist") {
+		t.Errorf("saving a tile on an unreadable cron: %d %s", put.Code, put.Body.String())
 	}
 }

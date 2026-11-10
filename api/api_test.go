@@ -196,10 +196,14 @@ func TestWatchCreate_TierFromDB_NotJWT(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if _, err := s.FindOrCreateNamespace(cust.ID, "x"); err != nil {
+		t.Fatal(err)
+	}
+
 	// Use the stale JWT to create a watch. Should succeed because the
 	// handler reads tier from the live DB (now bolt = 50 watches).
 	body := []byte(`{"schedule":"*/5 * * * *","pipeline":"echo 1"}`)
-	req := httptest.NewRequest("PUT", "/api/crons/test-watch", bytes.NewReader(body))
+	req := httptest.NewRequest("PUT", "/api/crons/x/test-watch", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -223,6 +227,10 @@ func setupWatchOwner(t *testing.T, s *store.Store, orgName string) string {
 	}
 	markUserVerified(s, user.ID)
 	s.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner)
+	// Crons live in a namespace; these tests keep theirs in "x".
+	if _, err := s.FindOrCreateNamespace(cust.ID, "x"); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now()
 	expires := now.Add(365 * 24 * time.Hour)
 	if err := s.CreateSubscription(&store.Subscription{
@@ -255,7 +263,7 @@ func TestSaveWatch_SyntaxErrorSurfacesRealMessage(t *testing.T) {
 	jwt := setupWatchOwner(t, s, "syntax-err-watch")
 
 	body := []byte(`{"schedule":"*/5 * * * *","pipeline":"cat |"}`)
-	req := httptest.NewRequest("PUT", "/api/crons/broken", bytes.NewReader(body))
+	req := httptest.NewRequest("PUT", "/api/crons/x/broken", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -283,7 +291,7 @@ func TestSaveWatch_TruncationWarning(t *testing.T) {
 	jwt := setupWatchOwner(t, s, "truncation-warn-watch")
 
 	body := []byte(`{"schedule":"*/5 * * * *","pipeline":"tail -n 1000 /log/x/y/main.log | grep -c \"boom\""}`)
-	req := httptest.NewRequest("PUT", "/api/crons/risky", bytes.NewReader(body))
+	req := httptest.NewRequest("PUT", "/api/crons/x/risky", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -306,7 +314,7 @@ func TestSaveWatch_TruncationWarning(t *testing.T) {
 		t.Errorf("warning text should name the cap, got: %q", resp.Warnings[0])
 	}
 
-	saved, err := s.GetCronWatch(func() store.OrgID { cust, _ := s.FindOrCreateOrg("truncation-warn-watch"); return cust.ID }(), 0, "risky")
+	saved, err := s.GetCronWatch(func() store.OrgID { cust, _ := s.FindOrCreateOrg("truncation-warn-watch"); return cust.ID }(), xNS(t, s, func() store.OrgID { cust, _ := s.FindOrCreateOrg("truncation-warn-watch"); return cust.ID }()), "risky")
 
 	if err != nil {
 		t.Fatalf("GetCronWatch: %v (want the watch to have actually saved)", err)
@@ -328,7 +336,7 @@ func TestWriteFS_CronPathWithWarning_StillSucceeds(t *testing.T) {
 	handler := srv.Handler()
 	jwt := setupWatchOwner(t, s, "writefs-cron-warn")
 
-	body := []byte(`{"path":"/cron.d/risky","content":"# schedule: */5 * * * *\ntail -n 1000 /log/x/y/main.log | grep -c \"boom\"\n"}`)
+	body := []byte(`{"path":"/cron.d/x/risky","content":"# schedule: */5 * * * *\ntail -n 1000 /log/x/y/main.log | grep -c \"boom\"\n"}`)
 	req := httptest.NewRequest("PUT", "/api/fs/write", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Content-Type", "application/json")
@@ -340,7 +348,7 @@ func TestWriteFS_CronPathWithWarning_StillSucceeds(t *testing.T) {
 	}
 
 	cust, _ := s.FindOrCreateOrg("writefs-cron-warn")
-	saved, err := s.GetCronWatch(cust.ID, 0, "risky")
+	saved, err := s.GetCronWatch(cust.ID, xNS(t, s, cust.ID), "risky")
 	if err != nil {
 		t.Fatalf("GetCronWatch: %v (want the watch to have actually saved)", err)
 	}
@@ -693,4 +701,14 @@ func markUserVerified(s *store.Store, userID string) error {
 			"email_verified_at": &now,
 			"updated_at":        now,
 		}).Error
+}
+
+// xNS is the id of namespace "x", where these tests keep their crons.
+func xNS(t *testing.T, s *store.Store, org store.OrgID) uint {
+	t.Helper()
+	ns, err := s.FindOrCreateNamespace(org, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ns.ID
 }

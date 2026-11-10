@@ -20,10 +20,10 @@ func longWindowCron(t *testing.T) (*WeftFuncs, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(cust.ID, 0, "", "lw", "every 1m", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(cust.ID, opsNS(t, db, cust.ID), "", "lw", "every 1m", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := db.GetCronWatch(cust.ID, 0, "lw")
+	w, err := db.GetCronWatch(cust.ID, opsNS(t, db, cust.ID), "lw")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func longWindowCron(t *testing.T) (*WeftFuncs, string) {
 	bucket("cron_results_hourly", now.Add(-10*day).Truncate(time.Hour), 3, 60, 1400, 10, 30)
 	bucket("cron_results_4h", now.Add(-20*day).Truncate(4*time.Hour), 2, 300, 50000, 100, 200)
 	bucket("cron_results_daily", now.Add(-100*day).Truncate(day), 4, 10, 30, 1, 4)
-	return &WeftFuncs{Store: db, OrgID: cust.ID}, "lw"
+	return testWF(t, db, cust.ID), "ops/lw"
 }
 
 func floatStr(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }

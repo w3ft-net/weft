@@ -30,18 +30,22 @@ func TestRESTCrons_NamespaceReadersOnly(t *testing.T) {
 		if w.Code != 200 {
 			t.Fatalf("list: %d %s", w.Code, w.Body.String())
 		}
-		var out struct{ Crons []store.CronWatch }
+		var out struct {
+			Crons []struct {
+				Name, Path string
+			}
+		}
 		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 			t.Fatal(err)
 		}
 		var got []string
 		for _, c := range out.Crons {
-			got = append(got, c.Name)
+			got = append(got, c.Path)
 		}
 		return got
 	}
-	if got := names(g.plain); len(got) != 2 || got[0] == "secret" || got[1] == "secret" {
-		t.Errorf("member lists %v, want visible and shared only", got)
+	if got := names(g.plain); len(got) != 2 || got[0] == "hidden/secret" || got[1] == "hidden/secret" {
+		t.Errorf("member lists %v, want ops/visible and shared only", got)
 	}
 	if got := names(g.owner); len(got) != 3 {
 		t.Errorf("owner lists %v, want all three", got)

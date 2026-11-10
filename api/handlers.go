@@ -1671,8 +1671,26 @@ func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
 		tier = store.Tier(sub.Tier)
 	}
 	count, _ := s.store.CountCronWatches(custID)
+	// Each cron carries its path (<namespace>/<name>, or the bare name at the
+	// org level), which is how every other call addresses it.
+	nss, _ := s.store.ListNamespaces(custID)
+	nsName := make(map[uint]string, len(nss))
+	for _, n := range nss {
+		nsName[n.ID] = n.Name
+	}
+	type cronItem struct {
+		store.CronWatch
+		Path string `json:"path"`
+	}
+	items := make([]cronItem, len(watches))
+	for i, wt := range watches {
+		items[i] = cronItem{CronWatch: wt, Path: wt.Name}
+		if wt.NamespaceID != nil {
+			items[i].Path = nsName[*wt.NamespaceID] + "/" + wt.Name
+		}
+	}
 	json.NewEncoder(w).Encode(map[string]any{
-		"crons":        watches,
+		"crons":        items,
 		"count":        count,
 		"limit":        store.WatchLimit(tier),
 		"min_interval": store.MinWatchInterval(tier).String(),

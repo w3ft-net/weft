@@ -72,6 +72,10 @@ type DashboardTile struct {
 	Points []chart.LatestPoint `yaml:"-" json:"points,omitempty"`
 	// Error is why a series tile has no Plot, such as a bar of a tagged cron.
 	Error string `yaml:"-" json:"error,omitempty"`
+	// Restricted is set by the API when the viewer can't read the cron's
+	// namespace. The tile keeps its title and place; its cron and values are
+	// withheld.
+	Restricted bool `yaml:"-" json:"restricted,omitempty"`
 }
 
 // Alert is the cutoff of the cron's alert stage, nil when it has none (only
@@ -364,10 +368,12 @@ func validateSpec(spec *DashboardSpec) error {
 	return nil
 }
 
-// ValidateDashboardWatchRefs returns an error if any tile references a
-// watch that doesn't exist for this customer. Run this after
-// ParseDashboardYAML in any save path.
-func (s *Store) ValidateDashboardWatchRefs(orgID OrgID, spec *DashboardSpec) error {
+// ValidateDashboardWatchRefs returns an error if any tile references a cron
+// that doesn't exist for this customer, or that the editor can't read: a tile
+// names its cron as <namespace>/<name>, and the editor must be able to read
+// that namespace. A cron the editor can't read reads as one that doesn't
+// exist. Run this after ParseDashboardYAML in any save path.
+func (s *Store) ValidateDashboardWatchRefs(orgID OrgID, spec *DashboardSpec, canRead func(namespace string) bool) error {
 	seen := map[string]bool{}
 	for _, sec := range spec.Sections {
 		for _, tile := range sec.Tiles {
@@ -375,7 +381,12 @@ func (s *Store) ValidateDashboardWatchRefs(orgID OrgID, spec *DashboardSpec) err
 				continue
 			}
 			seen[tile.Watch] = true
-			if _, err := s.GetCronWatch(orgID, 0, tile.Watch); err != nil {
+			home, _, _ := strings.Cut(tile.Watch, "/")
+			_, err := s.GetCronAt(orgID, tile.Watch)
+			if err == nil && !canRead(home) {
+				err = gorm.ErrRecordNotFound
+			}
+			if err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					return fmt.Errorf("cron %q does not exist", tile.Watch)
 				}

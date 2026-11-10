@@ -3,6 +3,7 @@ package mounts
 import (
 	"fmt"
 	"io/fs"
+	"slices"
 	"strings"
 	"time"
 
@@ -155,7 +156,11 @@ func (m *EtcMount) WriteFile(rel string, data []byte) error {
 			if err != nil {
 				return fmt.Errorf("/etc/%s: %w", rel, err)
 			}
-			if err := m.cfg.Store.ValidateDashboardWatchRefs(m.cfg.OrgID, spec); err != nil {
+			readable, _, err := m.cfg.scope()
+			if err != nil {
+				return fmt.Errorf("/etc/%s: %w", rel, err)
+			}
+			if err := m.cfg.Store.ValidateDashboardWatchRefs(m.cfg.OrgID, spec, func(ns string) bool { return slices.Contains(readable, ns) }); err != nil {
 				return fmt.Errorf("/etc/%s: %w", rel, err)
 			}
 			return m.cfg.Store.SaveDashboard(m.cfg.OrgID, m.cfg.UserID, dashName, body)

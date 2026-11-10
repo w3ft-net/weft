@@ -49,33 +49,33 @@ func TestCompileWatchPipeline_InlineLua(t *testing.T) {
 func TestSaveShellFunction_TextTypeChecks(t *testing.T) {
 	db := testOpen(t)
 	org, _ := db.FindOrCreateOrg("bin-types")
-	if err := db.SaveCronWatch(org.ID, 0, "", "holders", "every 5m", "# type: text\necho i-0abc", true, nil); err != nil {
+	if err := db.SaveCronWatch(org.ID, opsNS(t, db, org.ID), "", "holders", "every 5m", "# type: text\necho i-0abc", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(org.ID, 0, "", "errors", "every 5m", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(org.ID, opsNS(t, db, org.ID), "", "errors", "every 5m", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	for lang, src := range map[string]string{
-		"lua":  `print(weft.avg("holders", "1h"))`,
-		"bash": `weft::avg holders 1h`,
+		"lua":  `print(weft.avg("ops/holders", "1h"))`,
+		"bash": `weft::avg ops/holders 1h`,
 	} {
-		if err := db.SaveShellFunction(org.ID, "", "avg-"+lang, src, lang); err == nil || !strings.Contains(err.Error(), `cron "holders" stores text`) {
+		if err := db.SaveShellFunction(org.ID, "", "avg-"+lang, src, lang); err == nil || !strings.Contains(err.Error(), `cron "ops/holders" stores text`) {
 			t.Fatalf("%s /bin reading a text cron: %v", lang, err)
 		}
 	}
-	if err := db.SaveShellFunction(org.ID, "", "inline", `lua 'print(weft.avg("holders", "1h"))'`, "bash"); err == nil || !strings.Contains(err.Error(), "stores text") {
+	if err := db.SaveShellFunction(org.ID, "", "inline", `lua 'print(weft.avg("ops/holders", "1h"))'`, "bash"); err == nil || !strings.Contains(err.Error(), "stores text") {
 		t.Fatalf("bash /bin with inline Lua reading a text cron: %v", err)
 	}
-	if err := db.SaveShellFunction(org.ID, "", "who", `print(weft.latest("holders"))`, "lua"); err != nil {
+	if err := db.SaveShellFunction(org.ID, "", "who", `print(weft.latest("ops/holders"))`, "lua"); err != nil {
 		t.Fatalf("weft.latest of a text cron: %v", err)
 	}
 
 	// Turning a cron text is refused while a /bin script reads it.
-	if err := db.SaveShellFunction(org.ID, "", "error-avg", `print(weft.avg("errors", "1h"))`, "lua"); err != nil {
+	if err := db.SaveShellFunction(org.ID, "", "error-avg", `print(weft.avg("ops/errors", "1h"))`, "lua"); err != nil {
 		t.Fatal(err)
 	}
-	err := db.SaveCronWatch(org.ID, 0, "", "errors", "every 5m", "# type: text\necho busy", true, nil)
+	err := db.SaveCronWatch(org.ID, opsNS(t, db, org.ID), "", "errors", "every 5m", "# type: text\necho busy", true, nil)
 	if err == nil || !strings.Contains(err.Error(), "/bin/error-avg") {
 		t.Fatalf("turning a cron read by /bin text: %v", err)
 	}

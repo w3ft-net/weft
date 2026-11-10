@@ -56,7 +56,7 @@ func TestSaveCronWatch_TextTypeChecks(t *testing.T) {
 	db := testOpen(t)
 	org, _ := db.FindOrCreateOrg("cron-types")
 	save := func(name, pipeline string) error {
-		return db.SaveCronWatch(org.ID, 0, "", name, "every 5m", pipeline, true, nil)
+		return db.SaveCronWatch(org.ID, opsNS(t, db, org.ID), "", name, "every 5m", pipeline, true, nil)
 	}
 	if err := save("holders", "# type: text\necho i-0abc"); err != nil {
 		t.Fatal(err)
@@ -66,35 +66,35 @@ func TestSaveCronWatch_TextTypeChecks(t *testing.T) {
 	}
 
 	// A numeric reader of a text cron is refused; a text reader is fine.
-	if err := save("avg-holders", "weft::avg holders 1h"); err == nil || !strings.Contains(err.Error(), `cron "holders" stores text`) {
+	if err := save("avg-holders", "weft::avg ops/holders 1h"); err == nil || !strings.Contains(err.Error(), `cron "ops/holders" stores text`) {
 		t.Fatalf("numeric read of a text cron: %v", err)
 	}
-	if err := save("latest-holders", "weft::latest holders"); err != nil {
+	if err := save("latest-holders", "weft::latest ops/holders"); err != nil {
 		t.Fatalf("weft::latest of a text cron: %v", err)
 	}
 
 	// A cron can't turn text while numeric readers name it, and the
 	// refusal lists them.
-	if err := save("errors-trend", "weft::slope errors 6h | alert above 1"); err != nil {
+	if err := save("errors-trend", "weft::slope ops/errors 6h | alert above 1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveDashboard(org.ID, "", "ops", "tiles:\n  - kind: sparkline\n    cron: errors\n  - kind: table\n    cron: errors\n"); err != nil {
+	if err := db.SaveDashboard(org.ID, "", "ops", "tiles:\n  - kind: sparkline\n    cron: ops/errors\n  - kind: table\n    cron: ops/errors\n"); err != nil {
 		t.Fatal(err)
 	}
 	err := save("errors", "# type: text\necho busy")
-	if err == nil || !strings.Contains(err.Error(), "/cron.d/errors-trend") || !strings.Contains(err.Error(), "/etc/dashboards/ops.yaml (sparkline)") {
+	if err == nil || !strings.Contains(err.Error(), "/cron.d/ops/errors-trend") || !strings.Contains(err.Error(), "/etc/dashboards/ops.yaml (sparkline)") {
 		t.Fatalf("turning a read cron text: %v", err)
 	}
 
 	// A numeric tile on a text cron is refused at dashboard save; a table
 	// takes it.
-	if err := db.SaveDashboard(org.ID, "", "leases", "tiles:\n  - kind: counter\n    cron: holders\n"); err == nil || !strings.Contains(err.Error(), "a counter tile draws numbers") {
+	if err := db.SaveDashboard(org.ID, "", "leases", "tiles:\n  - kind: counter\n    cron: ops/holders\n"); err == nil || !strings.Contains(err.Error(), "a counter tile draws numbers") {
 		t.Fatalf("counter on a text cron: %v", err)
 	}
-	if err := db.SaveDashboard(org.ID, "", "leases", "tiles:\n  - kind: table\n    cron: holders\n"); err != nil {
+	if err := db.SaveDashboard(org.ID, "", "leases", "tiles:\n  - kind: table\n    cron: ops/holders\n"); err != nil {
 		t.Fatalf("table on a text cron: %v", err)
 	}
-	if err := db.SaveDashboard(org.ID, "", "leases", "tiles:\n  - kind: table\n    cron: holders\n    range: 1h..\n"); err == nil || !strings.Contains(err.Error(), "can't aggregate") {
+	if err := db.SaveDashboard(org.ID, "", "leases", "tiles:\n  - kind: table\n    cron: ops/holders\n    range: 1h..\n"); err == nil || !strings.Contains(err.Error(), "can't aggregate") {
 		t.Fatalf("windowed table on a text cron: %v", err)
 	}
 }
@@ -102,10 +102,10 @@ func TestSaveCronWatch_TextTypeChecks(t *testing.T) {
 func TestLatestCronRun_TableOrder(t *testing.T) {
 	db := testOpen(t)
 	org, _ := db.FindOrCreateOrg("cron-latest")
-	if err := db.SaveCronWatch(org.ID, 0, "", "disk", "every 5m", "echo 1", true, nil); err != nil {
+	if err := db.SaveCronWatch(org.ID, opsNS(t, db, org.ID), "", "disk", "every 5m", "echo 1", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, _ := db.GetCronWatch(org.ID, 0, "disk")
+	w, _ := db.GetCronWatch(org.ID, opsNS(t, db, org.ID), "disk")
 	v := func(f float64) *float64 { return &f }
 	now := time.Now().Truncate(time.Second)
 	if err := db.SaveCronResults([]CronResult{
@@ -123,4 +123,15 @@ func TestLatestCronRun_TableOrder(t *testing.T) {
 	if len(rows) != 2 || rows[0].Tag != "a" || rows[1].Tag != "b" {
 		t.Fatalf("latest = %+v, want a (80) then b (40) from the newest run with points", rows)
 	}
+}
+
+// opsNS is the id of namespace "ops", where these tests keep their crons: a
+// cron is referenced as <namespace>/<name>.
+func opsNS(t *testing.T, db *Store, org OrgID) uint {
+	t.Helper()
+	ns, err := db.FindOrCreateNamespace(org, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ns.ID
 }

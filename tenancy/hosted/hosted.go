@@ -25,6 +25,16 @@ func (a Actor) Subject() string  { return a.User }
 
 type Scoper struct{ Store *store.Store }
 
+// NamespaceScope is what a namespace's crons may read: whatever its cron user's
+// groups cover.
+func (s Scoper) NamespaceScope(ctx context.Context, partition int64, namespace string) (shape.Set, error) {
+	ns, err := s.Store.GetNamespace(store.OrgID(partition), namespace)
+	if err != nil {
+		return nil, fmt.Errorf("hosted scoper: namespace %q: %w", namespace, err)
+	}
+	return s.ReadScope(ctx, Actor{Org: store.OrgID(partition), User: store.CronUserID(ns.ID)})
+}
+
 // ReadScope grants an owner and the system identity every namespace, and
 // anyone else the namespaces they hold read permission on.
 func (s Scoper) ReadScope(_ context.Context, a tenancy.Actor) (shape.Set, error) {

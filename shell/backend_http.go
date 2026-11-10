@@ -321,11 +321,18 @@ func (b *HTTPBackend) apiListNames(endpoint, key string) ([]string, error) {
 	var envelope map[string]json.RawMessage
 	if json.Unmarshal(data, &envelope) == nil {
 		if raw, ok := envelope[key]; ok {
-			var items []struct{ Name string }
+			// A cron lists its path (<namespace>/<name>), the name every call takes.
+			var items []struct {
+				Name string
+				Path string `json:"path"`
+			}
 			if json.Unmarshal(raw, &items) == nil {
 				names := make([]string, len(items))
 				for i, item := range items {
 					names[i] = item.Name
+					if item.Path != "" {
+						names[i] = item.Path
+					}
 				}
 				return names, nil
 			}

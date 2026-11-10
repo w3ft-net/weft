@@ -25,10 +25,10 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 	dashTeamMember(s, cust, user, "cc")
 	jwt, _ := auth.Generate(user, "test-secret")
 
-	if err := s.SaveCronWatch(cust.ID, 0, user.ID, "hosts", "every 5m", "echo 1 a", true, nil); err != nil {
+	if err := s.SaveCronWatch(cust.ID, opsNS(t, s, cust.ID), user.ID, "hosts", "every 5m", "echo 1 a", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.GetCronWatch(cust.ID, 0, "hosts")
+	w, err := s.GetCronWatch(cust.ID, opsNS(t, s, cust.ID), "hosts")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 	}
 
 	spec := "2h..30m"
-	req := httptest.NewRequest("GET", "/api/crons/hosts/chart?spec="+url.QueryEscape(spec), nil)
+	req := httptest.NewRequest("GET", "/api/crons/ops/hosts/chart?spec="+url.QueryEscape(spec), nil)
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -74,7 +74,7 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 	}
 
 	// A dashboard tile on the cron gets its plot: one line per stored tag.
-	if err := s.SaveDashboard(cust.ID, user.ID, "fleet", "tiles:\n  - kind: sparkline\n    cron: hosts\n"); err != nil {
+	if err := s.SaveDashboard(cust.ID, user.ID, "fleet", "tiles:\n  - kind: sparkline\n    cron: ops/hosts\n"); err != nil {
 		t.Fatal(err)
 	}
 	req = httptest.NewRequest("GET", "/api/dashboards/fleet", nil)
@@ -106,7 +106,7 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 
 	// Tiles on one cron reduce it separately: a line draws its own tags, and
 	// a bar of a tagged cron says why it has no plot.
-	if err := s.SaveDashboard(cust.ID, user.ID, "fleet2", "tiles:\n  - kind: line\n    cron: hosts\n    aggregate: max\n    bucket: 1h\n  - kind: bar\n    cron: hosts\n"); err != nil {
+	if err := s.SaveDashboard(cust.ID, user.ID, "fleet2", "tiles:\n  - kind: line\n    cron: ops/hosts\n    aggregate: max\n    bucket: 1h\n  - kind: bar\n    cron: ops/hosts\n"); err != nil {
 		t.Fatal(err)
 	}
 	req = httptest.NewRequest("GET", "/api/dashboards/fleet2", nil)
@@ -135,7 +135,7 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 	}
 
 	// A tile's range: picks the window it draws, so one cron's tiles differ.
-	if err := s.SaveDashboard(cust.ID, user.ID, "fleet3", "tiles:\n  - kind: line\n    cron: hosts\n    range: 2h..30m\n  - kind: line\n    cron: hosts\n    range: 5m..\n"); err != nil {
+	if err := s.SaveDashboard(cust.ID, user.ID, "fleet3", "tiles:\n  - kind: line\n    cron: ops/hosts\n    range: 2h..30m\n  - kind: line\n    cron: ops/hosts\n    range: 5m..\n"); err != nil {
 		t.Fatal(err)
 	}
 	req = httptest.NewRequest("GET", "/api/dashboards/fleet3", nil)
@@ -162,7 +162,7 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 
 	// A counter and a table with a range read an aggregate over it, per tag,
 	// instead of the latest run. hosts stored a=1 and b=2 within 2h..30m.
-	if err := s.SaveDashboard(cust.ID, user.ID, "fleet4", "tiles:\n  - kind: counter\n    cron: hosts\n    aggregate: sum\n    range: 2h..30m\n  - kind: table\n    cron: hosts\n    aggregate: max\n    range: 2h..30m\n  - kind: table\n    cron: hosts\n    range: 5m..\n"); err != nil {
+	if err := s.SaveDashboard(cust.ID, user.ID, "fleet4", "tiles:\n  - kind: counter\n    cron: ops/hosts\n    aggregate: sum\n    range: 2h..30m\n  - kind: table\n    cron: ops/hosts\n    aggregate: max\n    range: 2h..30m\n  - kind: table\n    cron: ops/hosts\n    range: 5m..\n"); err != nil {
 		t.Fatal(err)
 	}
 	req = httptest.NewRequest("GET", "/api/dashboards/fleet4", nil)
@@ -198,10 +198,10 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 
 	// A text cron has nothing to chart, and its latest run comes back as
 	// text points, on /latest and in a dashboard's table tile.
-	if err := s.SaveCronWatch(cust.ID, 0, user.ID, "holders", "every 5m", "# type: text\necho i-0abc lease", true, nil); err != nil {
+	if err := s.SaveCronWatch(cust.ID, opsNS(t, s, cust.ID), user.ID, "holders", "every 5m", "# type: text\necho i-0abc lease", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	hw, _ := s.GetCronWatch(cust.ID, 0, "holders")
+	hw, _ := s.GetCronWatch(cust.ID, opsNS(t, s, cust.ID), "holders")
 	holder := "i-0abc"
 	if err := s.SaveCronResults([]store.CronResult{{CronWatchID: hw.ID, RanAt: now, TextValue: &holder, Tag: "lease"}}); err != nil {
 		t.Fatal(err)
@@ -213,24 +213,35 @@ func TestWatchChart_RangeSpec(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 		return rec
 	}
-	if rec := get("/api/crons/holders/chart?spec=1h.."); rec.Code != 400 || !strings.Contains(rec.Body.String(), "no numbers to chart") {
+	if rec := get("/api/crons/ops/holders/chart?spec=1h.."); rec.Code != 400 || !strings.Contains(rec.Body.String(), "no numbers to chart") {
 		t.Fatalf("chart of a text cron: %d %s", rec.Code, rec.Body)
 	}
-	if rec := get("/api/crons/holders/latest"); rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `[{"tag":"lease","text":"i-0abc"}]` {
+	if rec := get("/api/crons/ops/holders/latest"); rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `[{"tag":"lease","text":"i-0abc"}]` {
 		t.Fatalf("latest of a text cron: %d %s", rec.Code, rec.Body)
 	}
-	if err := s.SaveDashboard(cust.ID, user.ID, "leases", "tiles:\n  - kind: table\n    cron: holders\n"); err != nil {
+	if err := s.SaveDashboard(cust.ID, user.ID, "leases", "tiles:\n  - kind: table\n    cron: ops/holders\n"); err != nil {
 		t.Fatal(err)
 	}
 	if rec := get("/api/dashboards/leases"); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"points":[{"tag":"lease","text":"i-0abc"}]`) {
 		t.Fatalf("dashboard latest: %d %s", rec.Code, rec.Body)
 	}
 
-	req = httptest.NewRequest("GET", "/api/crons/hosts/chart?spec=nonsense", nil)
+	req = httptest.NewRequest("GET", "/api/crons/ops/hosts/chart?spec=nonsense", nil)
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != 400 {
 		t.Fatalf("bad spec: status %d, want 400", rec.Code)
 	}
+}
+
+// opsNS is the id of namespace "ops", where these tests keep their crons: a
+// cron is referenced as <namespace>/<name>.
+func opsNS(t *testing.T, s *store.Store, org store.OrgID) uint {
+	t.Helper()
+	ns, err := s.FindOrCreateNamespace(org, "ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ns.ID
 }

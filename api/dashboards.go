@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/graybeardcorp/weft/chart"
@@ -114,17 +116,29 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	readable, err := s.readable(r.Context(), session)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	watches := map[string]*dashboardWatchPayload{}
+	restricted := map[string]bool{}
 	// A series tile draws its cron over the tile's own range, so tiles on one
 	// cron share a read only when they share a range.
 	type seriesKey struct{ cron, rng string }
 	seriesByTile := map[seriesKey]chart.CronSeries{}
 	for _, sec := range spec.Sections {
 		for _, tile := range sec.Tiles {
-			if _, seen := watches[tile.Watch]; seen {
+			if _, seen := watches[tile.Watch]; seen || restricted[tile.Watch] {
 				continue
 			}
-			cw, err := s.store.GetCronWatch(custID, 0, tile.Watch)
+			cw, err := s.store.GetCronAt(custID, tile.Watch)
+			if err == nil && !slices.Contains(readable, strings.SplitN(tile.Watch, "/", 2)[0]) {
+				// A cron the viewer can't read: its tile stays, with the title
+				// the dashboard's author wrote, and shows nothing else.
+				restricted[tile.Watch] = true
+				continue
+			}
 			if err != nil {
 				// Tile references a watch that no longer exists — emit
 				// an empty payload so the client can render a placeholder
@@ -166,6 +180,10 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 		tiles := spec.Sections[si].Tiles
 		for ti := range tiles {
 			tile := &tiles[ti]
+			if restricted[tile.Watch] {
+				tile.Restricted, tile.Watch = true, ""
+				continue
+			}
 			wp := watches[tile.Watch]
 			if wp == nil {
 				tile.Display = store.FormatTileDisplay(*tile, nil)
@@ -227,6 +245,10 @@ func (s *Server) handleGetDashboard(w http.ResponseWriter, r *http.Request) {
 		Spec:      spec,
 		Watches:   watches,
 		YAMLBody:  d.YAMLBody,
+	}
+	if len(restricted) > 0 {
+		// The source names the crons the viewer may not read.
+		resp.YAMLBody = ""
 	}
 	json.NewEncoder(w).Encode(resp)
 }

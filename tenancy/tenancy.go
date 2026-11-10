@@ -78,6 +78,13 @@ func (d denied) Is(target error) bool { return target == ErrDenied }
 // Denied returns a refusal carrying msg, which is safe to show the caller.
 func Denied(msg string) error { return denied(msg) }
 
+// NamespaceScoper is the part of a Scoper that answers for a namespace's crons:
+// what they may read right now, which is the namespace itself plus whatever has
+// been opened to them. Called when a cron is saved, and at every fire.
+type NamespaceScoper interface {
+	NamespaceScope(ctx context.Context, partition int64, namespace string) (shape.Set, error)
+}
+
 // Authorizer decides actions (writes and administration). Any error means
 // the action is not allowed.
 type Authorizer interface {

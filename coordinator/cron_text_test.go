@@ -18,7 +18,7 @@ import (
 func TestCron_InlineLuaReadsCronHistory(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "errors", []string{"2", "4", "6"}, time.Minute)
-	if err := db.SaveCronWatch(custID, 0, "", "error-avg", "every 5m", `lua 'print(weft.avg("errors", "1h"))' | alert above 5`, true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, opsNS(t, db, custID), "", "error-avg", "every 5m", `lua 'print(weft.avg("ops/errors", "1h"))' | alert above 5`, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
@@ -30,12 +30,12 @@ func TestCron_InlineLuaReadsCronHistory(t *testing.T) {
 		}}
 	run := func(name string) store.CronWatch {
 		t.Helper()
-		w, err := db.GetCronWatch(custID, 0, name)
+		w, err := db.GetCronWatch(custID, opsNS(t, db, custID), name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ce.executeWatch(context.Background(), *w, TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)})
-		w, _ = db.GetCronWatch(custID, 0, name)
+		w, _ = db.GetCronWatch(custID, opsNS(t, db, custID), name)
 		return *w
 	}
 	w := run("error-avg")
@@ -47,13 +47,13 @@ func TestCron_InlineLuaReadsCronHistory(t *testing.T) {
 		t.Fatalf("latest = %+v err=%v, want avg 4", rows, err)
 	}
 
-	if err := db.SaveCronWatch(custID, 0, "", "holders", "every 5m", "# type: text\necho i-0abc", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, opsNS(t, db, custID), "", "holders", "every 5m", "# type: text\necho i-0abc", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(custID, 0, "", "holder-avg", "every 5m", `lua 'print(weft.avg("holders", "1h"))'`, true, nil); err == nil || !strings.Contains(err.Error(), `cron "holders" stores text`) {
+	if err := db.SaveCronWatch(custID, opsNS(t, db, custID), "", "holder-avg", "every 5m", `lua 'print(weft.avg("ops/holders", "1h"))'`, true, nil); err == nil || !strings.Contains(err.Error(), `cron "ops/holders" stores text`) {
 		t.Fatalf("inline Lua reading a text cron saved: %v", err)
 	}
-	if err := db.SaveCronWatch(custID, 0, "", "holder-avg", "every 5m", `lua 'print(weft.avg("hol" .. "ders", "1h"))'`, true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, opsNS(t, db, custID), "", "holder-avg", "every 5m", `lua 'print(weft.avg("ops/hol" .. "ders", "1h"))'`, true, nil); err != nil {
 		t.Fatalf("a name built at run time can't be checked at save: %v", err)
 	}
 	// The run-time check fails it the way a save would have, so one run
@@ -61,15 +61,15 @@ func TestCron_InlineLuaReadsCronHistory(t *testing.T) {
 	if w := run("holder-avg"); w.LastStatus != "error" || w.Enabled || w.ConsecutiveStrikes != 0 {
 		t.Fatalf("holder-avg status=%q enabled=%v strikes=%d, want error, disabled, no strike", w.LastStatus, w.Enabled, w.ConsecutiveStrikes)
 	}
-	if len(pages) != 1 || !strings.Contains(pages[0], `cron "holders" stores text`) || !strings.Contains(pages[0], "# enabled: false") {
+	if len(pages) != 1 || !strings.Contains(pages[0], `cron "ops/holders" stores text`) || !strings.Contains(pages[0], "# enabled: false") {
 		t.Fatalf("pages = %q, want one naming the text cron and how to re-enable", pages)
 	}
-	hw, _ := db.GetCronWatch(custID, 0, "holder-avg")
+	hw, _ := db.GetCronWatch(custID, opsNS(t, db, custID), "holder-avg")
 	if res, _ := db.ListCronResults(hw.ID, 1, ""); len(res) != 1 || !strings.Contains(res[0].Stderr, "stores text") {
 		t.Fatalf("holder-avg stored %+v, want the stores-text error", res)
 	}
 	// Bash gets there the same way.
-	if err := db.SaveCronWatch(custID, 0, "", "holder-avg-bash", "every 5m", `n=holders; weft::avg "$n" 1h`, true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, opsNS(t, db, custID), "", "holder-avg-bash", "every 5m", `n=ops/holders; weft::avg "$n" 1h`, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if w := run("holder-avg-bash"); w.Enabled || len(pages) != 2 {
@@ -109,15 +109,15 @@ func TestTextCron_StoresTextAndRefusesNumericReads(t *testing.T) {
 	if err := db.SaveShellFunction(custID, "", "holders", `printf 'i-0abc lease-a\ni-0def lease-b\n'`, "bash"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveCronWatch(custID, 0, "", "holders", "every 5m", "# type: text\nholders", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, opsNS(t, db, custID), "", "holders", "every 5m", "# type: text\nholders", true, nil); err != nil {
 		t.Fatal(err)
 	}
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	ce := &CronExecutor{Store: db, Coord: c, RunTimeout: 5 * time.Second}
-	w, _ := db.GetCronWatch(custID, 0, "holders")
+	w, _ := db.GetCronWatch(custID, opsNS(t, db, custID), "holders")
 	ce.executeWatch(context.Background(), *w, TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)})
 
-	w, _ = db.GetCronWatch(custID, 0, "holders")
+	w, _ = db.GetCronWatch(custID, opsNS(t, db, custID), "holders")
 	if w.LastStatus != "ok" {
 		t.Fatalf("status = %q", w.LastStatus)
 	}
@@ -134,20 +134,20 @@ func TestTextCron_StoresTextAndRefusesNumericReads(t *testing.T) {
 		t.Errorf("first row = %s=%s, want lease-a=i-0abc", rows[0].Tag, *rows[0].TextValue)
 	}
 
-	wf := &WeftFuncs{Store: db, OrgID: custID}
-	if _, err := wf.Avg("holders", time.Hour); err == nil || !strings.Contains(err.Error(), `cron "holders" stores text`) {
+	wf := testWF(t, db, custID)
+	if _, err := wf.Avg("ops/holders", time.Hour); err == nil || !strings.Contains(err.Error(), `cron "ops/holders" stores text`) {
 		t.Fatalf("weft::avg of a text cron: %v", err)
 	}
-	if _, err := wf.Percentile("holders", time.Hour, 0.5); err == nil || !strings.Contains(err.Error(), "stores text") {
+	if _, err := wf.Percentile("ops/holders", time.Hour, 0.5); err == nil || !strings.Contains(err.Error(), "stores text") {
 		t.Fatalf("weft::percentile of a text cron: %v", err)
 	}
-	if _, err := wf.Absent("holders", time.Hour); err != nil {
+	if _, err := wf.Absent("ops/holders", time.Hour); err != nil {
 		t.Fatalf("weft::is_absent reads text crons: %v", err)
 	}
-	if got, err := wf.Latest("holders"); err != nil || got == "" {
+	if got, err := wf.Latest("ops/holders"); err != nil || got == "" {
 		t.Fatalf("weft::latest = %q, %v", got, err)
 	}
-	if runs, err := wf.Describe("holders", 2); err != nil || len(runs) != 2 || runs[0].Text == nil || runs[0].Value != nil {
+	if runs, err := wf.Describe("ops/holders", 2); err != nil || len(runs) != 2 || runs[0].Text == nil || runs[0].Value != nil {
 		t.Fatalf("weft::describe = %+v, %v; want text values and no number", runs, err)
 	}
 
@@ -155,7 +155,7 @@ func TestTextCron_StoresTextAndRefusesNumericReads(t *testing.T) {
 	// "can't tell" (exit 1), which would read as the condition not holding.
 	var stderr strings.Builder
 	above := numericPredicate(wf, "weft::is_above", predicateAbove(wf))
-	if code := above([]string{"holders", "5"}, nil, io.Discard, &stderr); code != 2 || !strings.Contains(stderr.String(), "stores text") {
+	if code := above([]string{"ops/holders", "5"}, nil, io.Discard, &stderr); code != 2 || !strings.Contains(stderr.String(), "stores text") {
 		t.Fatalf("weft::is_above on a text cron: exit %d, stderr %q", code, stderr.String())
 	}
 }

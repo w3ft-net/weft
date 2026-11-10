@@ -110,7 +110,7 @@ type restWrite struct {
 	exists func(*groupedOrg) bool
 }
 
-const permDashboard = "title: Perm\nsections:\n  - title: S\n    tiles:\n      - kind: sparkline\n        cron: permcron\n        size: md\n"
+const permDashboard = "title: Perm\nsections:\n  - title: S\n    tiles:\n      - kind: sparkline\n        cron: ops/permcron\n        size: md\n"
 
 func restWrites() []restWrite {
 	return []restWrite{
@@ -127,7 +127,7 @@ func restWrites() []restWrite {
 		{
 			name: "save dashboard", method: "PUT", path: "/api/dashboards/permdash", body: `{"yaml_body":` + jsonString(permDashboard) + `}`,
 			seed: func(g *groupedOrg) {
-				g.s.SaveCronWatch(g.org.ID, 0, "", "permcron", "*/5 * * * *", "echo 1", true, nil)
+				g.s.SaveCronWatch(g.org.ID, g.ops, "", "permcron", "*/5 * * * *", "echo 1", true, nil)
 			},
 			group:  func(g *groupedOrg) string { return g.etc },
 			exists: func(g *groupedOrg) bool { _, err := g.s.GetDashboard(g.org.ID, "permdash"); return err == nil },
@@ -201,7 +201,7 @@ func TestRESTDeletes_RequireTheGroupTheShellRequires(t *testing.T) {
 		{
 			name: "delete dashboard", path: "/api/dashboards/permdash",
 			seed: func(g *groupedOrg) {
-				g.s.SaveCronWatch(g.org.ID, 0, "", "permcron", "*/5 * * * *", "echo 1", true, nil)
+				g.s.SaveCronWatch(g.org.ID, g.ops, "", "permcron", "*/5 * * * *", "echo 1", true, nil)
 				g.s.SaveDashboard(g.org.ID, "", "permdash", permDashboard)
 			},
 			gone:  func(g *groupedOrg) bool { _, err := g.s.GetDashboard(g.org.ID, "permdash"); return err != nil },

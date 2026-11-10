@@ -14,7 +14,7 @@ import (
 // not yet persisted (persistResults runs after the pipeline).
 func runCronAlert(t *testing.T, db *store.Store, custID store.OrgID, watchName, args, stdin string) string {
 	t.Helper()
-	w, err := db.GetCronWatch(custID, 0, watchName)
+	w, err := db.GetCronWatch(custID, opsNS(t, db, custID), watchName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,10 +36,10 @@ func TestAlert_RisingComparesAgainstPreviousTick(t *testing.T) {
 
 func TestAlert_ChangedMultiRowComparesValues(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
-	if err := db.SaveCronWatch(custID, 0, "", "changed-rows", "every 1m", "echo test", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, opsNS(t, db, custID), "", "changed-rows", "every 1m", "echo test", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := db.GetCronWatch(custID, 0, "changed-rows")
+	w, err := db.GetCronWatch(custID, opsNS(t, db, custID), "changed-rows")
 	if err != nil {
 		t.Fatal(err)
 	}

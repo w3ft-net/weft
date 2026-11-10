@@ -92,7 +92,7 @@ func (s *Store) GrantFullNamespaceAccess(userID string, namespaceID uint) error 
 }
 
 // OrgPermission grants a user the org-scoped privileges: write access to
-// /bin, /cron.d and /etc (the binmgr / cronmgr / configmgr groups) and the
+// /bin and /etc (the binmgr / configmgr groups) and the
 // right to create namespaces (nsmgr). Members with no row default to
 // read-only across all four. Granting these (via adduser/deluser or the
 // dashboard Members grid) is owner-only.
@@ -101,7 +101,6 @@ type OrgPermission struct {
 	OrgID               OrgID  `gorm:"not null;uniqueIndex:idx_orgperm_org_user"`
 	UserID              string `gorm:"not null;uniqueIndex:idx_orgperm_org_user"`
 	CanManageFunctions  bool   `gorm:"not null;default:false"`
-	CanManageWatches    bool   `gorm:"not null;default:false"`
 	CanManageEtc        bool   `gorm:"not null;default:false"`
 	CanCreateNamespaces bool   `gorm:"not null;default:false"`
 }

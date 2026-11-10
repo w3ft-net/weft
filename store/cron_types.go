@@ -23,11 +23,15 @@ func readsNumbers(t DashboardTile) bool {
 // numeric reader: this pipeline reading a text cron with a numeric weft::
 // function, or this cron turning text while numeric readers name it.
 func (s *Store) checkValueTypes(orgID OrgID, ns uint, name string, compiled CompiledWatch) error {
-	// Numeric references name org-level crons, so a namespaced cron of the
-	// same name is not the one being read.
-	self := name
+	// References name a cron by <namespace>/<name>, so this cron is "self" only
+	// when it has a namespace. An org-level cron can't be referenced.
+	self := ""
 	if ns != 0 {
-		self = ""
+		nsName, err := s.NamespaceName(orgID, ns)
+		if err != nil {
+			return err
+		}
+		self = nsName + "/" + name
 	}
 	for _, ref := range compiled.NumericRefs {
 		if self != "" && ref == self && compiled.ValueType == ValueText {
@@ -37,34 +41,32 @@ func (s *Store) checkValueTypes(orgID OrgID, ns uint, name string, compiled Comp
 	if err := s.refuseTextRefs(orgID, compiled.NumericRefs, self); err != nil {
 		return err
 	}
-	if compiled.ValueType != ValueText {
+	if compiled.ValueType != ValueText || self == "" {
 		return nil
 	}
 	if existing, err := s.GetCronWatch(orgID, ns, name); err == nil && existing.ValueType == ValueText {
 		return nil // already text: its readers were checked when they were saved
 	}
-	if ns != 0 {
-		return nil // references name org-level crons only, so nothing reads this one yet
-	}
-	readers, err := s.numericReaders(orgID, name)
+	readers, err := s.numericReaders(orgID, self)
 	if err != nil {
 		return err
 	}
 	if len(readers) > 0 {
-		return fmt.Errorf("can't make %q a text cron while numeric readers use it: %s", name, strings.Join(readers, ", "))
+		return fmt.Errorf("can't make %q a text cron while numeric readers use it: %s", self, strings.Join(readers, ", "))
 	}
 	return nil
 }
 
-// refuseTextRefs refuses numeric reads, by literal name, of crons that
-// store text. skip is the cron being saved, whose own type is checked by
-// the caller.
+// refuseTextRefs refuses numeric reads, by literal <namespace>/<name>, of crons
+// that store text. skip is the cron being saved, whose own type is checked by
+// the caller. A reference that names no namespace is refused too: it can't
+// resolve.
 func (s *Store) refuseTextRefs(orgID OrgID, refs []string, skip string) error {
 	for _, ref := range refs {
 		if ref == skip {
 			continue
 		}
-		target, err := s.GetCronWatch(orgID, 0, ref)
+		target, err := s.GetCronAt(orgID, ref)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			continue
 		}
@@ -78,14 +80,14 @@ func (s *Store) refuseTextRefs(orgID OrgID, refs []string, skip string) error {
 	return nil
 }
 
-// numericReaders lists what reads cron name as numbers: other crons' and
-// /bin scripts' literal numeric weft calls (bash or Lua), and dashboards'
-// numeric tiles.
-func (s *Store) numericReaders(orgID OrgID, name string) ([]string, error) {
+// numericReaders lists what reads the cron at path (<namespace>/<name>) as
+// numbers: other crons' and /bin scripts' literal numeric weft calls (bash or
+// Lua), and dashboards' numeric tiles.
+func (s *Store) numericReaders(orgID OrgID, path string) ([]string, error) {
 	var out []string
 	reads := func(refs []string) bool {
 		for _, ref := range refs {
-			if ref == name {
+			if ref == path {
 				return true
 			}
 		}
@@ -104,13 +106,21 @@ func (s *Store) numericReaders(orgID OrgID, name string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	nsNames, err := s.namespacesByID(orgID)
+	if err != nil {
+		return nil, err
+	}
 	for _, c := range crons {
-		if c.Name == name {
+		cpath := c.Name
+		if c.NamespaceID != nil {
+			cpath = nsNames[*c.NamespaceID] + "/" + c.Name
+		}
+		if cpath == path {
 			continue
 		}
 		compiled, err := CompileWatchPipeline(c.Pipeline)
 		if err == nil && reads(compiled.NumericRefs) {
-			out = append(out, "/cron.d/"+c.Name)
+			out = append(out, "/cron.d/"+cpath)
 		}
 	}
 	dashboards, err := s.ListDashboards(orgID)
@@ -122,7 +132,7 @@ func (s *Store) numericReaders(orgID OrgID, name string) ([]string, error) {
 		if err != nil {
 			continue
 		}
-		if kinds := numericTiles(spec, name); len(kinds) > 0 {
+		if kinds := numericTiles(spec, path); len(kinds) > 0 {
 			out = append(out, fmt.Sprintf("/etc/dashboards/%s.yaml (%s)", d.Name, strings.Join(kinds, ", ")))
 		}
 	}
@@ -176,7 +186,7 @@ func (s *Store) checkDashboardTypes(orgID OrgID, yamlBody string) error {
 			if !readsNumbers(t) {
 				continue
 			}
-			w, err := s.GetCronWatch(orgID, 0, t.Watch)
+			w, err := s.GetCronAt(orgID, t.Watch)
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				continue
 			}

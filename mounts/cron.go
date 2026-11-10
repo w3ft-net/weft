@@ -79,8 +79,15 @@ func (m *CronMount) Authorize(rel string, want shellcore.Perm) error {
 		if !m.cfg.allowedIn(tenancy.ActionManageCron, p.ns) {
 			return denyNamespaceWrite("/cron.d/"+p.ns, p.ns)
 		}
-	case !m.cfg.allowed(tenancy.ActionPublishOrgWide):
-		return fmt.Errorf("/cron.d: %w (an org-level cron is readable by every member, so only an owner publishes one; put it in a namespace: /cron.d/<namespace>/%s)", fs.ErrPermission, p.name)
+	default:
+		// Org-level crons are on their way out: an existing one stays editable
+		// by an owner until it is moved, but no new one can be made.
+		if _, err := m.get(rel); err != nil {
+			return fmt.Errorf("/cron.d/%s: %w (a cron belongs to a namespace; make it at /cron.d/<namespace>/%s)", p.name, fs.ErrPermission, p.name)
+		}
+		if !m.cfg.allowed(tenancy.ActionPublishOrgWide) {
+			return fmt.Errorf("/cron.d/%s: %w (an org-level cron can only be changed by an owner; move it into a namespace with `mv /cron.d/%s /cron.d/<namespace>/%s`)", p.name, fs.ErrPermission, p.name, p.name)
+		}
 	}
 	return nil
 }
@@ -290,6 +297,80 @@ func (m *CronMount) Remove(rel string) error {
 		return err
 	}
 	return m.cfg.Store.DeleteCronWatch(m.cfg.OrgID, home, p.name)
+}
+
+// Rename moves a cron to another home, or renames it, as the same row, so its
+// history and results come with it. MountFS has already authorized a write at
+// both paths.
+func (m *CronMount) Rename(oldRel, newRel string) error {
+	from, err := m.resolve(oldRel)
+	if err != nil {
+		return err
+	}
+	to, err := m.resolve(newRel)
+	if err != nil {
+		return err
+	}
+	if from.name == "" || to.name == "" {
+		return fmt.Errorf("/cron.d/%s: is a directory; a namespace's directory comes with the namespace", map[bool]string{true: oldRel, false: newRel}[from.name == ""])
+	}
+	cron, err := m.get(oldRel)
+	if err != nil {
+		return err
+	}
+	if _, err := m.get(newRel); err == nil {
+		return fmt.Errorf("/cron.d/%s: already exists", newRel)
+	}
+	fromHome, err := m.home(from)
+	if err != nil {
+		return err
+	}
+	toHome, err := m.home(to)
+	if err != nil {
+		return err
+	}
+	if to.ns != "" {
+		if err := m.cfg.authorizeHomedCronReads(to.ns, cron.Pipeline); err != nil {
+			return err
+		}
+	} else if to.ns == "" && from.ns != "" {
+		return fmt.Errorf("/cron.d/%s: %w (a cron belongs to a namespace)", newRel, fs.ErrPermission)
+	}
+	if err := m.cfg.Store.MoveCronWatch(m.cfg.OrgID, fromHome, from.name, toHome, to.name); err != nil {
+		return err
+	}
+	// Dashboards name crons, and a tile naming the old path no longer finds it.
+	if from.ns == "" {
+		if refs := m.dashboardsNaming(from.name); len(refs) > 0 {
+			return store.NewWarning("moved /cron.d/%s to /cron.d/%s, but dashboards %s still name it %q; point their tiles at %q", from.name, newRel, strings.Join(refs, ", "), from.name, newRel)
+		}
+	}
+	return nil
+}
+
+// dashboardsNaming lists the dashboards with a tile on the org-level cron name.
+func (m *CronMount) dashboardsNaming(name string) []string {
+	ds, err := m.cfg.Store.ListDashboards(m.cfg.OrgID)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, d := range ds {
+		spec, err := store.ParseDashboardYAML(d.YAMLBody)
+		if err != nil {
+			continue
+		}
+		for _, sec := range spec.Sections {
+			for _, t := range sec.Tiles {
+				if t.Watch == name {
+					out = append(out, d.Name)
+					goto next
+				}
+			}
+		}
+	next:
+	}
+	return out
 }
 
 // AmendVersionMessage allows recording a commit message for cron entries. It

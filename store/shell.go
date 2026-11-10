@@ -1006,6 +1006,24 @@ func (w *CronWatch) Home() uint {
 	return *w.NamespaceID
 }
 
+// MoveCronWatch re-homes a cron: the same row, so its history and results come
+// with it, under a new namespace and name. The new home must not already hold
+// the name.
+func (s *Store) MoveCronWatch(orgID OrgID, fromNS uint, fromName string, toNS uint, toName string) error {
+	if _, err := s.GetCronWatch(orgID, toNS, toName); err == nil {
+		return fmt.Errorf("a cron named %q already exists there", toName)
+	}
+	res := inCronHome(s.scoped(orgID), fromNS).Where("name = ?", fromName).Model(&CronWatch{}).
+		Updates(map[string]any{"namespace_id": cronHome(toNS), "name": toName})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
 // cronHome is the namespace_id for a home: 0 is the org level.
 func cronHome(ns uint) *uint {
 	if ns == 0 {

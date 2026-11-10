@@ -62,17 +62,21 @@ func TestCronMount_NamespaceOwnership(t *testing.T) {
 	if err := member.Authorize("orgwide", shellcore.PermWrite); !errors.Is(err, fs.ErrPermission) {
 		t.Errorf("member writing an org-level cron: err = %v, want a permission error", err)
 	}
+	// Existing org-level crons stay editable by an owner; no new one can be made.
+	if err := tx.SaveCronWatch(sys.OrgID, 0, "", "orgwide", "every 5m", "echo 1", true, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := boss.Authorize("orgwide", shellcore.PermWrite); err != nil {
-		t.Errorf("owner writing an org-level cron: %v", err)
+		t.Errorf("owner editing an existing org-level cron: %v", err)
+	}
+	if err := boss.Authorize("brandnew", shellcore.PermWrite); !errors.Is(err, fs.ErrPermission) || !strings.Contains(err.Error(), "/cron.d/<namespace>/brandnew") {
+		t.Errorf("owner creating an org-level cron: err = %v, want a pointer to a namespace", err)
 	}
 
 	for path, ns := range map[string]string{"alpha/errors": "alpha", "beta/errors": "beta"} {
 		if err := boss.WriteFile(path, []byte(strings.Replace(cronBody, "%s", ns, 1))); err != nil {
 			t.Fatalf("owner saving %s: %v", path, err)
 		}
-	}
-	if err := boss.WriteFile("orgwide", []byte(strings.Replace(cronBody, "%s", "alpha", 1))); err != nil {
-		t.Fatal(err)
 	}
 
 	// Reading: the member sees alpha and the org-level cron, never beta.
@@ -100,10 +104,9 @@ func TestCronMount_NamespaceOwnership(t *testing.T) {
 	}
 }
 
-// A namespace's cron runs with that namespace's authority, so it can't be
-// saved reading another namespace, whoever saves it. Reading across namespaces
-// is what an org-level cron, or a grant, is for.
-func TestCronMount_HomeBoundsReads(t *testing.T) {
+// A namespace's cron reads its own namespace and whatever its cron user has
+// been added to, whoever saves it. Reading more is a grant: usermod -aG y-r x-cron.
+func TestCronMount_HomeAndGrantsBoundReads(t *testing.T) {
 	cfg := ownerCfg(t, []string{"alpha/prod/api/app", "beta/prod/api/app"})
 	cfg.Tier = store.TierSwatch
 	// An owner, who reads everything, as the strictest case.
@@ -114,10 +117,59 @@ func TestCronMount_HomeBoundsReads(t *testing.T) {
 	if err := m.WriteFile("alpha/ok", []byte(strings.Replace(cronBody, "%s", "alpha", 1))); err != nil {
 		t.Errorf("a cron reading its own namespace: %v", err)
 	}
-	if err := m.WriteFile("alpha/leak", []byte(strings.Replace(cronBody, "%s", "beta", 1))); !errors.Is(err, fs.ErrPermission) {
-		t.Errorf("alpha cron reading beta: err = %v, want a permission error", err)
+	err := m.WriteFile("alpha/leak", []byte(strings.Replace(cronBody, "%s", "beta", 1)))
+	if !errors.Is(err, fs.ErrPermission) || !strings.Contains(err.Error(), "usermod -aG <namespace>-r alpha-cron") {
+		t.Errorf("alpha cron reading beta: err = %v, want a permission error naming the grant", err)
 	}
-	if err := m.WriteFile("crossing", []byte(strings.Replace(cronBody, "%s", "beta", 1))); err != nil {
-		t.Errorf("an org-level cron may read what its saver reads: %v", err)
+	if err := cfg.Store.SetCronUserGroup(cfg.OrgID, "alpha-cron", "beta-r", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.WriteFile("alpha/leak", []byte(strings.Replace(cronBody, "%s", "beta", 1))); err != nil {
+		t.Errorf("after usermod -aG beta-r alpha-cron: %v", err)
+	}
+}
+
+// mv re-homes a cron, keeping its row, so its history and results come with it.
+func TestCronMount_RenameRehomesACron(t *testing.T) {
+	cfg := ownerCfg(t, []string{"alpha/prod/api/app", "beta/prod/api/app"})
+	cfg.Tier = store.TierSwatch
+	tx := cfg.Store
+	owner, _ := tx.CreateVerifiedUser("cron-mv-owner@example.com")
+	tx.AddTeamMemberWithEmail(cfg.OrgID, owner.ID, owner.Email, store.RoleOwner)
+	m := &CronMount{cfg: asHosted(cfg, owner.ID)}
+	alpha, _ := tx.GetNamespace(cfg.OrgID, "alpha")
+
+	if err := tx.SaveCronWatch(cfg.OrgID, 0, "", "legacy", "every 5m", "cat /log/alpha/api/main.log | wc -l", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.SaveCronWatch(cfg.OrgID, 0, "", "wide", "every 5m", "cat /log/beta/api/main.log | wc -l", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.SaveCronWatch(cfg.OrgID, alpha.ID, "", "taken", "every 5m", "echo 1", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := tx.GetCronWatch(cfg.OrgID, 0, "legacy")
+
+	if err := m.Rename("legacy", "alpha/legacy"); err != nil {
+		t.Fatalf("mv legacy alpha/legacy: %v", err)
+	}
+	after, err := tx.GetCronWatch(cfg.OrgID, alpha.ID, "legacy")
+	if err != nil || after.ID != before.ID {
+		t.Errorf("the moved cron is %+v (err %v), want the same row as %d", after, err, before.ID)
+	}
+	if _, err := tx.GetCronWatch(cfg.OrgID, 0, "legacy"); err == nil {
+		t.Error("the org-level name survived the move")
+	}
+	if err := m.Rename("wide", "alpha/wide"); !errors.Is(err, fs.ErrPermission) {
+		t.Errorf("moving a cron that reads beta into alpha: err = %v, want a permission error", err)
+	}
+	if err := tx.SaveCronWatch(cfg.OrgID, 0, "", "dup", "every 5m", "echo 1", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Rename("dup", "alpha/taken"); err == nil {
+		t.Error("moving onto an existing cron should be refused")
+	}
+	if err := m.Rename("alpha/taken", "alpha"); err == nil {
+		t.Error("a cron can't be renamed onto a namespace directory")
 	}
 }

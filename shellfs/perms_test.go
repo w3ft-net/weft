@@ -34,14 +34,14 @@ func cronYAML() string {
 
 // orgPerms is a member's role and the four org bits on their org_permissions row.
 type orgPerms struct {
-	Owner, Functions, Watches, Etc, CreateNS bool
+	Owner, Functions, Etc, CreateNS bool
 }
 
 // ownerPerms is what promotion to owner materializes: every bit. Fixtures that
 // just want "a user who can write everything" use this rather than
 // orgPerms{Owner: true}, which is an owner holding no bits and so writes nothing.
 func ownerPerms() orgPerms {
-	return orgPerms{Owner: true, Functions: true, Watches: true, Etc: true, CreateNS: true}
+	return orgPerms{Owner: true, Functions: true, Etc: true, CreateNS: true}
 }
 
 // addMember adds a user to org with exactly the given role and org bits and
@@ -59,12 +59,12 @@ func addMember(t *testing.T, db *store.Store, org store.OrgID, name string, p or
 	if err := db.AddTeamMemberWithEmail(org, u.ID, u.Email, role); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DB().Exec(`INSERT INTO org_permissions (org_id, user_id, can_manage_functions, can_manage_watches, can_manage_etc, can_create_namespaces)
-		VALUES (?, ?, ?, ?, ?, ?)
+	if err := db.DB().Exec(`INSERT INTO org_permissions (org_id, user_id, can_manage_functions, can_manage_etc, can_create_namespaces)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (org_id, user_id) DO UPDATE SET can_manage_functions = EXCLUDED.can_manage_functions,
-		can_manage_watches = EXCLUDED.can_manage_watches, can_manage_etc = EXCLUDED.can_manage_etc,
+		can_manage_etc = EXCLUDED.can_manage_etc,
 		can_create_namespaces = EXCLUDED.can_create_namespaces`,
-		org, u.ID, p.Functions, p.Watches, p.Etc, p.CreateNS).Error; err != nil {
+		org, u.ID, p.Functions, p.Etc, p.CreateNS).Error; err != nil {
 		t.Fatal(err)
 	}
 	return u.ID
@@ -78,7 +78,7 @@ func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
 		{"member-no-flag", orgPerms{}, true},
 		{"member-with-flag", orgPerms{Functions: true}, false},
 		{"owner-no-flag", orgPerms{Owner: true}, true},
-		{"member-other-flag", orgPerms{Watches: true, Etc: true}, true},
+		{"member-other-flag", orgPerms{Etc: true}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -91,7 +91,7 @@ func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
 }
 
 // A namespace's crons are written by a member of its write group, or an owner;
-// an org-level cron is published by an owner alone.
+// no new org-level cron can be made.
 func TestOrgPerms_CronMount_WriteFile(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("perm-cron-%d", os.Getpid()))
@@ -106,8 +106,8 @@ func TestOrgPerms_CronMount_WriteFile(t *testing.T) {
 		{"member-without-write", false, false, "/cron.d/ops/probe", true},
 		{"member-with-write", false, true, "/cron.d/ops/probe", false},
 		{"owner", true, false, "/cron.d/ops/probe", false},
-		{"member-with-write-publishing-org-wide", false, true, "/cron.d/probe", true},
-		{"owner-publishing-org-wide", true, false, "/cron.d/probe", false},
+		{"member-with-write-creating-an-org-level-cron", false, true, "/cron.d/probe", true},
+		{"owner-creating-an-org-level-cron", true, false, "/cron.d/probe", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -130,7 +130,7 @@ func TestOrgPerms_EtcMount_WriteFile(t *testing.T) {
 		{"member-no-flag", orgPerms{}, true},
 		{"member-with-flag", orgPerms{Etc: true}, false},
 		{"owner-no-flag", orgPerms{Owner: true}, true},
-		{"member-other-flag", orgPerms{Functions: true, Watches: true}, true},
+		{"member-other-flag", orgPerms{Functions: true}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

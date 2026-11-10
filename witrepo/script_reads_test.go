@@ -20,7 +20,7 @@ func TestRestore_CronMustReadOnlyItsHomeNamespace(t *testing.T) {
 	// A cron in namespace a can't be restored to a version that reads alpha.
 	msg := gitErr(t, f.repo(f.alice, "/"), "restore", "--source=HEAD~1", "/cron.d/a/errs")
 
-	if !strings.Contains(msg, "reads only its own namespace") {
+	if !strings.Contains(msg, "a-cron can't read") {
 		t.Errorf("err = %q, want a refusal naming the home restriction", msg)
 	}
 	if w, _ := f.db.GetCronWatch(f.org, f.nsA, "errs"); w.Pipeline != "echo nothing" {

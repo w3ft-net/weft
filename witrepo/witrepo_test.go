@@ -52,7 +52,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	f := &fixture{db: tx, org: org.ID, alice: mk("alice-wr@example.test", "Alice"), bob: mk("bob-wr@example.test", "Bob")}
 	if err := tx.DB().WithContext(store.WithOrg(t.Context(), org.ID)).Create(&store.OrgPermission{
-		OrgID: org.ID, UserID: f.alice.ID, CanManageFunctions: true, CanManageWatches: true, CanManageEtc: true,
+		OrgID: org.ID, UserID: f.alice.ID, CanManageFunctions: true, CanManageEtc: true,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -370,36 +370,39 @@ func writeCron(t *testing.T, r *Repo, name, content string) {
 // has to describe the restored pipeline, not the one it replaced.
 func TestWrites_RestoredCronIsRelowered(t *testing.T) {
 	f := newFixture(t)
-	// The cron reads logs, so its saver has to be able to read any namespace.
 	if err := f.db.AddTeamMemberWithEmail(f.org, f.alice.ID, f.alice.Email, store.RoleOwner); err != nil {
 		t.Fatal(err)
 	}
 	r := f.repo(f.alice, "/cron.d")
 	// Seed through the mounts so the first version carries a lowered plan.
-	writeCron(t, r, "errs", "# schedule: */10 * * * *\ntail /log/app/web/app.log | grep ERROR\n")
-	first := lowered(t, f, "errs")
+	writeCron(t, r, "a/errs", "# schedule: */10 * * * *\ntail /log/a/web/app.log | grep ERROR\n")
+	first := lowered(t, f, "a/errs")
 	if first == "" {
 		t.Skip("pipeline did not lower; pick a lowerable shape")
 	}
-	writeCron(t, r, "errs", "# schedule: */10 * * * *\ntail /log/app/web/app.log | grep WARN\n")
-	if lowered(t, f, "errs") == first {
+	writeCron(t, r, "a/errs", "# schedule: */10 * * * *\ntail /log/a/web/app.log | grep WARN\n")
+	if lowered(t, f, "a/errs") == first {
 		t.Fatal("edit did not change the lowered plan")
 	}
 
-	git(t, r, "restore", "--source=HEAD~1", "errs")
+	git(t, r, "restore", "--source=HEAD~1", "a/errs")
 
-	w, _ := f.db.GetCronWatch(f.org, 0, "errs")
+	w, _ := f.db.GetCronWatch(f.org, f.nsA, "errs")
 	if !strings.Contains(w.Pipeline, "ERROR") {
 		t.Fatalf("pipeline after restore = %q", w.Pipeline)
 	}
-	if got := lowered(t, f, "errs"); got != first {
+	if got := lowered(t, f, "a/errs"); got != first {
 		t.Errorf("lowered plan after restore does not match the restored pipeline:\n got %s\nwant %s", got, first)
 	}
 }
 
-func lowered(t *testing.T, f *fixture, name string) string {
+func lowered(t *testing.T, f *fixture, path string) string {
 	t.Helper()
-	w, err := f.db.GetCronWatch(f.org, 0, name)
+	ns, name, err := f.db.ResolveCronPath(f.org, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := f.db.GetCronWatch(f.org, ns, name)
 	if err != nil {
 		t.Fatal(err)
 	}

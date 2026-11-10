@@ -41,7 +41,7 @@ func seededFiles() []seeded {
 		{
 			name: "dashboard", path: "/etc/dashboards/prod.yaml", group: "configmgr",
 			seed: func(t *testing.T, f *fixture) {
-				f.saveCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
+				f.saveNSCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
 				f.saveDash(t, "prod", dash("v1"))
 				f.saveDash(t, "prod", dash("v2"))
 			},
@@ -107,7 +107,7 @@ func TestWrites_RewordNeedsTheMountsGroup(t *testing.T) {
 		{"bin", "binmgr", func(t *testing.T, f *fixture) { f.saveBin(t, f.bob, "scan", "echo 1") }},
 		{"cron", "a-w", func(t *testing.T, f *fixture) { f.saveNSCron(t, f.bob, "errs", "tail /log/a/b/c.log | grep ERROR") }},
 		{"dashboard", "configmgr", func(t *testing.T, f *fixture) {
-			f.saveCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
+			f.saveNSCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")
 			if err := f.db.SaveDashboard(f.org, f.bob.ID, "prod", dash("v1")); err != nil {
 				t.Fatal(err)
 			}

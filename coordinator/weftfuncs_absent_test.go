@@ -17,10 +17,10 @@ func TestWeftFuncs_IsAbsent_OneRuleForEveryForm(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	seedWatch(t, db, custID, "fresh", []string{"1"}, time.Minute)
 	seedWatch(t, db, custID, "stale", []string{"1"}, time.Minute)
-	if err := db.SaveCronWatch(custID, 0, "", "never-ran", "every 1m", "echo test", true, nil); err != nil {
+	if err := db.SaveCronWatch(custID, opsNS(t, db, custID), "", "ops/never-ran", "every 1m", "echo test", true, nil); err != nil {
 		t.Fatal(err)
 	}
-	w, err := db.GetCronWatch(custID, 0, "stale")
+	w, err := db.GetCronWatch(custID, opsNS(t, db, custID), "stale")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestWeftFuncs_IsAbsent_OneRuleForEveryForm(t *testing.T) {
 	if err := db.ExecForTest("UPDATE cron_results SET ran_at = ? WHERE cron_watch_id = ?", time.Now().Add(-48*time.Hour), w.ID); err != nil {
 		t.Fatal(err)
 	}
-	wf := &WeftFuncs{Store: db, OrgID: custID}
+	wf := testWF(t, db, custID)
 	pred := predicateAbsent(wf)
 
 	cases := []struct {
@@ -37,13 +37,13 @@ func TestWeftFuncs_IsAbsent_OneRuleForEveryForm(t *testing.T) {
 		window string // "" = the plain form
 		absent bool
 	}{
-		{"missing cron", "no-such-cron", "", true},
-		{"missing cron, windowed", "no-such-cron", "90s", true},
-		{"never ran", "never-ran", "", true},
-		{"never ran, windowed", "never-ran", "90s", true},
-		{"has a recent result", "fresh", "", false},
-		{"has a recent result, windowed", "fresh", "10m", false},
-		{"only an old result, windowed", "stale", "10m", true},
+		{"missing cron", "ops/no-such-cron", "", true},
+		{"missing cron, windowed", "ops/no-such-cron", "90s", true},
+		{"never ran", "ops/never-ran", "", true},
+		{"never ran, windowed", "ops/never-ran", "90s", true},
+		{"has a recent result", "ops/fresh", "", false},
+		{"has a recent result, windowed", "ops/fresh", "10m", false},
+		{"only an old result, windowed", "ops/stale", "10m", true},
 	}
 	for _, c := range cases {
 		args := []string{c.cron}
@@ -69,13 +69,13 @@ func TestWeftFuncs_IsAbsent_OneRuleForEveryForm(t *testing.T) {
 
 	// The predicate doesn't fire on an over-cap window, and says why.
 	var stderr strings.Builder
-	if got := pred([]string{"fresh", "2w"}, nil, io.Discard, &stderr); got != 1 || !strings.Contains(stderr.String(), "exceeds maximum") {
+	if got := pred([]string{"ops/fresh", "2w"}, nil, io.Discard, &stderr); got != 1 || !strings.Contains(stderr.String(), "exceeds maximum") {
 		t.Errorf("is_absent fresh 2w: exit %d, stderr %q; want exit 1 and the cap error", got, stderr.String())
 	}
 
 	// A window the history can't answer (over the cap) is "can't tell":
 	// not absent, and an error — it must not page for a bad argument.
-	if absent, err := wf.Absent("fresh", 365*24*time.Hour); err == nil || absent {
+	if absent, err := wf.Absent("ops/fresh", 365*24*time.Hour); err == nil || absent {
 		t.Errorf("over-cap window: Absent = %v, %v; want false and an error", absent, err)
 	}
 }

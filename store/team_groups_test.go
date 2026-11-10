@@ -33,8 +33,8 @@ func TestTeamGroups_GrantRevoke(t *testing.T) {
 	}
 
 	// Manager group → OrgPermission bit.
-	if err := db.AddUserToGroup(cust.ID, alice, "cronmgr"); err != nil {
-		t.Fatalf("add cronmgr: %v", err)
+	if err := db.AddUserToGroup(cust.ID, alice, "configmgr"); err != nil {
+		t.Fatalf("add configmgr: %v", err)
 	}
 	// Namespace read + tokens are independent facets of one ns group.
 	if err := db.AddUserToGroup(cust.ID, alice, "payments-r"); err != nil {
@@ -45,7 +45,7 @@ func TestTeamGroups_GrantRevoke(t *testing.T) {
 	}
 
 	got := groupsFor(t, db, cust.ID, alice)
-	want := []string{"cronmgr", "payments-r", "payments-w"}
+	want := []string{"configmgr", "payments-r", "payments-w"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("groups after grant: got %v want %v", got, want)
 	}
@@ -55,7 +55,7 @@ func TestTeamGroups_GrantRevoke(t *testing.T) {
 		t.Fatalf("remove payments: %v", err)
 	}
 	got = groupsFor(t, db, cust.ID, alice)
-	want = []string{"cronmgr", "payments-w"}
+	want = []string{"configmgr", "payments-w"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("groups after revoke read: got %v want %v", got, want)
 	}
@@ -69,8 +69,8 @@ func TestTeamGroups_GrantRevoke(t *testing.T) {
 	}
 
 	// Revoking the manager group clears the org bit.
-	if err := db.RemoveUserFromGroup(cust.ID, alice, "cronmgr"); err != nil {
-		t.Fatalf("remove cronmgr: %v", err)
+	if err := db.RemoveUserFromGroup(cust.ID, alice, "configmgr"); err != nil {
+		t.Fatalf("remove configmgr: %v", err)
 	}
 	if got := groupsFor(t, db, cust.ID, alice); len(got) != 0 {
 		t.Fatalf("expected no groups after full revoke, got %v", got)
@@ -107,7 +107,7 @@ func TestTeamGroups_Errors(t *testing.T) {
 		t.Errorf("binmgr should be restored to the owner; groups = %v", got)
 	}
 	// Non-member.
-	if err := db.AddUserToGroup(cust.ID, "ghost@x.test", "cronmgr"); err == nil || !strings.Contains(err.Error(), "no such member") {
+	if err := db.AddUserToGroup(cust.ID, "ghost@x.test", "configmgr"); err == nil || !strings.Contains(err.Error(), "no such member") {
 		t.Fatalf("expected no-such-member error, got %v", err)
 	}
 }
@@ -161,7 +161,7 @@ func TestTeamGroups_RenderPasswd(t *testing.T) {
 	// "(all — implicit)" special case any more: an owner's access is
 	// four rows like everyone else's, so every rendering site reads it
 	// the same way.
-	for _, want := range []string{"USER", "ROLE", "GROUPS", owner, "binmgr", "cronmgr", "configmgr", "nsmgr", alice, "payments"} {
+	for _, want := range []string{"USER", "ROLE", "GROUPS", owner, "binmgr", "configmgr", "nsmgr", alice, "payments"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("passwd table missing %q:\n%s", want, out)
 		}
@@ -200,12 +200,12 @@ func TestTeamGroups_GrantAfterRemoveAndReadd(t *testing.T) {
 		t.Fatalf("re-add: %v", err)
 	}
 
-	if err := db.AddUserToGroup(cust.ID, alice, "cronmgr"); err != nil {
+	if err := db.AddUserToGroup(cust.ID, alice, "configmgr"); err != nil {
 		t.Fatalf("grant after re-add: %v", err)
 	}
 
 	got := groupsFor(t, db, cust.ID, alice)
-	want := []string{"cronmgr"}
+	want := []string{"configmgr"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("groups after re-add: got %v want %v (the tombstone's old binmgr must not come back)", got, want)
 	}

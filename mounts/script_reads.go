@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/graybeardcorp/weft/logreads"
+	"github.com/graybeardcorp/weft/tenancy"
 )
 
 // A cron runs as the system identity, which reads every namespace, so what it
@@ -66,10 +67,23 @@ func (c Config) authorizeCronReads(pipeline string) error {
 	return c.mustRead(reads.Namespaces, "/cron.d")
 }
 
-// authorizeHomedCronReads refuses a cron homed in a namespace that reads any
-// other. Its authority is the namespace (plus grants, which don't exist yet),
-// not whoever saves it, so even an owner is held to it.
+// authorizeHomedCronReads refuses a cron homed in a namespace that reads what
+// its cron user can't. Its authority is the cron user's groups (its own
+// namespace, plus any read group it was added to), not whoever saves it, so
+// even an owner is held to it.
 func (c Config) authorizeHomedCronReads(home, pipeline string) error {
+	scoper, ok := c.Scope.(tenancy.NamespaceScoper)
+	if !ok {
+		return errors.New("mounts: the scope can't say what a namespace's crons may read")
+	}
+	set, err := scoper.NamespaceScope(c.ctx(), int64(c.OrgID), home)
+	if err != nil {
+		return err
+	}
+	allowed, all, err := set.Namespaces(int64(c.OrgID))
+	if err != nil {
+		return err
+	}
 	env, err := c.readsEnv(nil)
 	if err != nil {
 		return err
@@ -77,14 +91,14 @@ func (c Config) authorizeHomedCronReads(home, pipeline string) error {
 	reads, err := logreads.Analyze(pipeline, env)
 	var unresolvable *logreads.UnresolvableError
 	if errors.As(err, &unresolvable) {
-		return fmt.Errorf("this cron can't be saved: %w (a cron in a namespace must name what it reads; an owner can publish it org-wide instead)", unresolvable)
+		return fmt.Errorf("this cron can't be saved: %w (a cron in a namespace must name what it reads)", unresolvable)
 	}
 	if err != nil {
 		return nil // doesn't parse: the save reports that
 	}
-	for _, ns := range reads.Namespaces {
-		if ns != home {
-			return fmt.Errorf("/cron.d/%s: %w (a cron reads only its own namespace; an owner can publish one org-wide to read across namespaces)", home, fs.ErrPermission)
+	for _, name := range reads.Namespaces {
+		if !all && !slices.Contains(allowed, name) {
+			return fmt.Errorf("/cron.d/%s: %w (it reads namespaces %s-cron can't read; `usermod -aG <namespace>-r %s-cron` adds one)", home, fs.ErrPermission, home, home)
 		}
 	}
 	return nil

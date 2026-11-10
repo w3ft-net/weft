@@ -94,6 +94,8 @@ func (f *readsFixture) seedBin(t *testing.T, name, src string) {
 
 func TestCronSave_SaverMustBeAbleToReadWhatItReads(t *testing.T) {
 	f := newReadsFixture(t)
+	// New org-level crons can't be made; this is an edit of an existing one.
+	f.seedCron(t, "c", "echo seed")
 	cases := []struct {
 		name, pipeline string
 		user           string
