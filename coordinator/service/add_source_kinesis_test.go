@@ -29,7 +29,15 @@ func TestAddSource_Kinesis(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	owner, err := st.CreateVerifiedUser("kinesis-owner@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddTeamMemberWithEmail(cust.ID, owner.ID, owner.Email, store.RoleOwner); err != nil {
+		t.Fatal(err)
+	}
 	ctx := auth.WithSession(context.Background(), &auth.Session{
+		UserID:             owner.ID,
 		ActiveOrgID:        cust.ID,
 		ActiveCustomerName: cust.Name,
 		EmailVerified:      true,
@@ -81,7 +89,15 @@ func TestAddSource_Kinesis_RequiresLogGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	owner, err := st.CreateVerifiedUser("kinesis-owner@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddTeamMemberWithEmail(cust.ID, owner.ID, owner.Email, store.RoleOwner); err != nil {
+		t.Fatal(err)
+	}
 	ctx := auth.WithSession(context.Background(), &auth.Session{
+		UserID:             owner.ID,
 		ActiveOrgID:        cust.ID,
 		ActiveCustomerName: cust.Name,
 		EmailVerified:      true,

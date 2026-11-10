@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/graybeardcorp/weft/tenancy"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 	"io"
 	"net/http"
 	"strings"
@@ -44,6 +46,7 @@ const unverifiedSweepInterval = 1 * time.Hour
 // Server is the weft API server.
 type Server struct {
 	store     *store.Store
+	authz     tenancy.Authorizer // decides every action gate; the hosted one over store by default
 	jwtSecret string
 	coordAddr string       // coordinator gRPC address
 	baseURL   string       // e.g., https://w3ft.net
@@ -132,6 +135,7 @@ func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
 	cfgPtr.Store(config.Defaults())
 	return &Server{
 		store:        s,
+		authz:        hosted.Authorizer{Store: s},
 		jwtSecret:    jwtSecret,
 		coordAddr:    coordAddr,
 		baseURL:      baseURL,
@@ -140,6 +144,12 @@ func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
 		cfgPtr:       cfgPtr,
 		limiter:      newLimiter(cfgPtr),
 	}
+}
+
+// authorize asks the Authorizer whether the session's user may take act. Any
+// error is a refusal.
+func (s *Server) authorize(ctx context.Context, session *auth.Session, act tenancy.Action, res tenancy.Resource) error {
+	return s.authz.Authorize(ctx, hosted.Actor{Org: session.ActiveOrgID, User: session.UserID}, act, res)
 }
 
 // Connect establishes the gRPC connection to the coordinator. It should be
@@ -371,7 +381,7 @@ func (s *Server) Handler() http.Handler {
 	adminMux.HandleFunc("GET /api/admin/buckets/{id}/shards", s.handleAdminListShards)
 	adminMux.HandleFunc("POST /api/admin/shards/{id}/archive", s.handleAdminArchiveShard)
 	adminMux.HandleFunc("DELETE /api/admin/shards/{id}", s.handleAdminDeleteShard)
-	mux.Handle("/api/admin/", AuthMiddleware(s.store, s.jwtSecret, RequireSuperadmin(adminMux)))
+	mux.Handle("/api/admin/", AuthMiddleware(s.store, s.jwtSecret, s.requireSuperadmin(adminMux)))
 
 	// Agent-facing routes (agent token auth).
 	agentMux := http.NewServeMux()
@@ -868,7 +878,7 @@ func (s *Server) ensureStripeCustomer(ctx context.Context, u *store.User, custom
 // that client_secret and calls stripe.confirmSetup() to collect card details.
 func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if !session.IsOwner {
+	if s.authorize(r.Context(), session, tenancy.ActionManageBilling, tenancy.Resource{}) != nil {
 		http.Error(w, "only the owner can change the plan", http.StatusForbidden)
 		return
 	}
@@ -993,7 +1003,7 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 // latest invoice's PaymentIntent so the frontend can confirm inline.
 func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if !session.IsOwner {
+	if s.authorize(r.Context(), session, tenancy.ActionManageBilling, tenancy.Resource{}) != nil {
 		http.Error(w, "only the owner can change the plan", http.StatusForbidden)
 		return
 	}
@@ -1397,7 +1407,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := session.AuthorizeNamespaceTokens(s.store, req.Namespace); err != nil {
+	if err := s.authorize(r.Context(), session, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: req.Namespace}); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -2221,7 +2231,7 @@ func (s *Server) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !session.CanCreateNamespaces {
+	if s.authorize(r.Context(), session, tenancy.ActionCreateNamespace, tenancy.Resource{}) != nil {
 		http.Error(w, "forbidden: cannot create namespaces", http.StatusForbidden)
 		return
 	}
@@ -2259,7 +2269,7 @@ func (s *Server) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
 // DELETE /api/namespaces/{name}[?force=true]
 func (s *Server) handleDeleteNamespace(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if !session.IsOwner {
+	if s.authorize(r.Context(), session, tenancy.ActionDeleteNamespace, tenancy.Resource{}) != nil {
 		http.Error(w, "forbidden: owner only", http.StatusForbidden)
 		return
 	}
@@ -2305,7 +2315,7 @@ func (s *Server) handleDeleteNamespace(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSetNamespacePermission(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if !session.IsOwner {
+	if s.authorize(r.Context(), session, tenancy.ActionManageTeam, tenancy.Resource{}) != nil {
 		http.Error(w, "forbidden: owner only", http.StatusForbidden)
 		return
 	}
@@ -2366,7 +2376,7 @@ func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 // come back as 400 with a readable message so the UI can surface them.
 func (s *Server) handleSetPermissions(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if !session.IsOwner {
+	if s.authorize(r.Context(), session, tenancy.ActionManageTeam, tenancy.Resource{}) != nil {
 		http.Error(w, "forbidden: owner only", http.StatusForbidden)
 		return
 	}

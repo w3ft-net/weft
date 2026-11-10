@@ -19,7 +19,7 @@ import (
 // coordinator — without needing a store (the claimed cases here stop at
 // the owner check or the parse guard).
 func TestMaybeHandleTeamCommand_Routing(t *testing.T) {
-	s := &Server{}
+	s := &Server{authz: denyAll{}}
 	member := &auth.Session{Email: "alice@x.test", IsOwner: false, ActiveCustomerName: "acme"}
 
 	cases := []struct {
@@ -135,7 +135,7 @@ func TestTeamAddUser_GroupGrantInvitesAndReportsPending(t *testing.T) {
 // strictly the owner's. The owner check is the first statement in each
 // handler, so a denial needs no store.
 func TestTeamCommands_NonOwnerDenied(t *testing.T) {
-	s := &Server{}
+	s := &Server{authz: denyAll{}}
 
 	nonOwners := []struct {
 		name    string
@@ -169,7 +169,7 @@ func TestTeamCommands_OwnerPassesGate(t *testing.T) {
 	srv, s := testServer(t)
 	sess, _ := ownerSession(t, s, fmt.Sprintf("tc-owner-%d", os.Getpid()))
 
-	_, err := srv.teamDelUser(sess, []string{fmt.Sprintf("ghost-%d@x.test", os.Getpid())})
+	_, err := srv.teamDelUser(context.Background(), sess, []string{fmt.Sprintf("ghost-%d@x.test", os.Getpid())})
 	if err != nil && strings.Contains(err.Error(), "only the owner") {
 		t.Fatalf("owner was blocked by the owner-only gate: %v", err)
 	}
@@ -181,9 +181,9 @@ func TestTeamCommands_OwnerPassesGate(t *testing.T) {
 // store unchecked the same way. None of these cases may reach the store:
 // the server here has none.
 func TestTeamCommands_ArgumentChecks(t *testing.T) {
-	s := &Server{}
-	owner := &auth.Session{Email: "alice@x.test", IsOwner: true, ActiveCustomerName: "acme"}
-	member := &auth.Session{Email: "bob@x.test", IsOwner: false, ActiveCustomerName: "acme"}
+	s := &Server{authz: allowUsers{"owner": true}}
+	owner := &auth.Session{UserID: "owner", Email: "alice@x.test", IsOwner: true, ActiveCustomerName: "acme"}
+	member := &auth.Session{UserID: "member", Email: "bob@x.test", IsOwner: false, ActiveCustomerName: "acme"}
 
 	cases := []struct {
 		name     string

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/graybeardcorp/weft/tenancy"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -62,7 +63,7 @@ func (s *Server) maybeHandleTeamCommand(ctx context.Context, session *auth.Sessi
 	case "adduser":
 		out, err = s.teamAddUser(ctx, session, args)
 	case "deluser":
-		out, err = s.teamDelUser(session, args)
+		out, err = s.teamDelUser(ctx, session, args)
 	}
 	return true, out, err
 }
@@ -158,7 +159,7 @@ func groupsLabel(role string, groups []string, sep string) string {
 // invites the email to the org (sending an invite email); with a group
 // it grants the membership. Owner-only.
 func (s *Server) teamAddUser(ctx context.Context, session *auth.Session, args []string) (string, error) {
-	if !session.IsOwner {
+	if s.authorize(ctx, session, tenancy.ActionManageTeam, tenancy.Resource{}) != nil {
 		return "", fmt.Errorf("only the owner can manage the team")
 	}
 	if len(args) == 0 {
@@ -206,8 +207,8 @@ func (s *Server) teamAddUser(ctx context.Context, session *auth.Session, args []
 // teamDelUser implements `deluser <email> [<group>]`. With no group it
 // removes the member from the org; with a group it revokes that
 // membership. Owner-only.
-func (s *Server) teamDelUser(session *auth.Session, args []string) (string, error) {
-	if !session.IsOwner {
+func (s *Server) teamDelUser(ctx context.Context, session *auth.Session, args []string) (string, error) {
+	if s.authorize(ctx, session, tenancy.ActionManageTeam, tenancy.Resource{}) != nil {
 		return "", fmt.Errorf("only the owner can manage the team")
 	}
 	if len(args) == 0 {
@@ -244,7 +245,7 @@ func (e *inviteErr) Error() string { return e.msg }
 // the `adduser <email>` command. Returns an *inviteErr for the known
 // rejection cases (not the owner, seat limit, duplicate).
 func (s *Server) inviteMember(ctx context.Context, session *auth.Session, email string) (*store.TeamMember, error) {
-	if !session.IsOwner {
+	if s.authorize(ctx, session, tenancy.ActionManageTeam, tenancy.Resource{}) != nil {
 		return nil, &inviteErr{http.StatusForbidden, "only the owner can manage the team"}
 	}
 	tier := store.TierTrial

@@ -55,6 +55,11 @@ func (f *nsFixture) ctx(t *testing.T, owner, tokenPerm bool) context.Context {
 			t.Fatal(err)
 		}
 	}
+	if owner {
+		if err := f.st.AddTeamMemberWithEmail(f.org.ID, u.ID, u.Email, store.RoleOwner); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return auth.WithSession(context.Background(), &auth.Session{
 		UserID: u.ID, IsOwner: owner, ActiveOrgID: f.org.ID, ActiveCustomerName: f.org.Name, EmailVerified: true,
 	})

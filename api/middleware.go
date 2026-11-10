@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/graybeardcorp/weft/tenancy"
 	"net/http"
 	"strings"
 	"time"
@@ -113,12 +114,12 @@ func RequireEmailVerified(next http.Handler) http.Handler {
 	})
 }
 
-// RequireSuperadmin gates admin endpoints on is_superadmin. Reads the
-// Session that AuthMiddleware already materialized from the DB.
-func RequireSuperadmin(next http.Handler) http.Handler {
+// requireSuperadmin gates admin endpoints on the Authorizer's superadmin
+// action, for the Session that AuthMiddleware already materialized.
+func (s *Server) requireSuperadmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		session := auth.SessionFromContext(r.Context())
-		if session == nil || !session.IsSuperadmin {
+		if session == nil || s.authorize(r.Context(), session, tenancy.ActionSuperadmin, tenancy.Resource{}) != nil {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

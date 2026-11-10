@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/graybeardcorp/weft/tenancy"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 	"io"
 	"strings"
 	"sync"
@@ -81,14 +83,15 @@ func callerUserID(ctx context.Context) string {
 }
 
 // authorizeNamespace is the namespace rule the REST handlers apply
-// (auth.Session.AuthorizeNamespaceTokens), answered as a gRPC status. The
+// (the Authorizer's manage-namespace-tokens action), answered as a gRPC status. The
 // session is the one the interceptor built from the caller's forwarded JWT.
 func (s *Server) authorizeNamespace(ctx context.Context, namespace string) error {
 	sess := auth.SessionFromContext(ctx)
 	if sess == nil {
 		return status.Errorf(codes.Unauthenticated, "no authenticated caller")
 	}
-	if err := sess.AuthorizeNamespaceTokens(s.Store, namespace); err != nil {
+	actor := hosted.Actor{Org: sess.ActiveOrgID, User: sess.UserID}
+	if err := s.authorizer().Authorize(ctx, actor, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: namespace}); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
 	return nil
@@ -104,6 +107,8 @@ type Server struct {
 	pb.UnimplementedWeftAdminServer
 	Coord *coordinator.Coordinator
 	Store *store.Store
+	// Authz decides action gates; nil means the hosted Authorizer over Store.
+	Authz tenancy.Authorizer
 
 	// ShardSecret is the fleet secret every shard boots with. A heartbeat
 	// from a shard with no identity yet (empty ShardId) presents it as its
@@ -135,6 +140,13 @@ type Server struct {
 	// AgentSeen batches the agent_tokens last_seen_* stamps written on
 	// every IngestStream open. Nil is fine (tests): stamps are dropped.
 	AgentSeen *store.AgentSeenTracker
+}
+
+func (s *Server) authorizer() tenancy.Authorizer {
+	if s.Authz == nil {
+		return hosted.Authorizer{Store: s.Store}
+	}
+	return s.Authz
 }
 
 func (s *Server) tokenLimiter() *ingestLimiter {

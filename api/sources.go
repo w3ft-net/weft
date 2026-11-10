@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/graybeardcorp/weft/tenancy"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
@@ -567,7 +568,7 @@ func (s *Server) handleAddKinesisSource(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := session.AuthorizeNamespaceTokens(s.store, req.Namespace); err != nil {
+	if err := s.authorize(r.Context(), session, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: req.Namespace}); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -599,7 +600,7 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := session.AuthorizeNamespaceTokens(s.store, namespace); err != nil {
+	if err := s.authorize(r.Context(), session, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: namespace}); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -632,7 +633,7 @@ func (s *Server) handleResampleSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := session.AuthorizeNamespaceTokens(s.store, namespace); err != nil {
+	if err := s.authorize(r.Context(), session, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: namespace}); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
