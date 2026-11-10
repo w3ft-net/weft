@@ -70,8 +70,8 @@ func TestBuildSession_AdminMembershipMaterializesRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admin should have an org_permissions row: %v", err)
 	}
-	if !perm.CanManageFunctions || !perm.CanManageEtc || !perm.CanCreateNamespaces {
-		t.Errorf("materialized row should hold all three bits; got %+v", perm)
+	if !perm.CanManageEtc || !perm.CanCreateNamespaces {
+		t.Errorf("materialized row should hold both bits; got %+v", perm)
 	}
 }
 

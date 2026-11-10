@@ -6,8 +6,9 @@ import (
 )
 
 // Every wit write goes through the same mounts as the shell, so every one
-// needs the group the shell needs: binmgr for /bin, cronmgr for /cron.d,
-// configmgr for /etc. bob holds no group; alice holds all of them.
+// needs the group the shell needs: the namespace's write group for /cron.d,
+// configmgr for /etc. bob holds no group; alice holds all of them. (/bin has no
+// group: see TestWrites_RestoreOfAScriptACronRunsNeedsItsNamespaceWrite.)
 
 // seeded is a file with two versions written by alice, and how to see which
 // one is live.
@@ -20,15 +21,6 @@ type seeded struct {
 
 func seededFiles() []seeded {
 	return []seeded{
-		{
-			name: "bin", path: "/bin/scan", group: "binmgr",
-			seed: func(t *testing.T, f *fixture) {
-				f.saveBin(t, f.alice, "scan", "echo 1")
-				f.saveBin(t, f.alice, "scan", "echo 2")
-			},
-			live:  func(f *fixture) string { fn, _ := f.db.GetShellFunction(f.org, "scan"); return fn.Source },
-			older: "echo 1", newer: "echo 2",
-		},
 		{
 			name: "cron", path: "/cron.d/a/errs", group: "a-w",
 			seed: func(t *testing.T, f *fixture) {
@@ -104,7 +96,6 @@ func TestWrites_RewordNeedsTheMountsGroup(t *testing.T) {
 		name, group string
 		write       func(*testing.T, *fixture)
 	}{
-		{"bin", "binmgr", func(t *testing.T, f *fixture) { f.saveBin(t, f.bob, "scan", "echo 1") }},
 		{"cron", "a-w", func(t *testing.T, f *fixture) { f.saveNSCron(t, f.bob, "errs", "tail /log/a/b/c.log | grep ERROR") }},
 		{"dashboard", "configmgr", func(t *testing.T, f *fixture) {
 			f.saveNSCron(t, f.alice, "errs", "tail /log/a/b/c.log | grep ERROR")

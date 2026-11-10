@@ -93,18 +93,18 @@ func TestTeamGroups_Errors(t *testing.T) {
 	// Owners are grantable and revokable like anyone else. This used to
 	// be an error ("owners have implicit full access") because there was
 	// nothing to grant to; since migration 072 an owner holds the same
-	// four bits, so `deluser <owner> binmgr` has something to do.
-	if err := db.RemoveUserFromGroup(cust.ID, owner, "binmgr"); err != nil {
-		t.Fatalf("deluser owner binmgr: %v", err)
+	// four bits, so `deluser <owner> nsmgr` has something to do.
+	if err := db.RemoveUserFromGroup(cust.ID, owner, "nsmgr"); err != nil {
+		t.Fatalf("deluser owner nsmgr: %v", err)
 	}
-	if got := groupsFor(t, db, cust.ID, owner); slices.Contains(got, "binmgr") {
-		t.Errorf("binmgr should be revoked from the owner; groups = %v", got)
+	if got := groupsFor(t, db, cust.ID, owner); slices.Contains(got, "nsmgr") {
+		t.Errorf("nsmgr should be revoked from the owner; groups = %v", got)
 	}
-	if err := db.AddUserToGroup(cust.ID, owner, "binmgr"); err != nil {
-		t.Fatalf("adduser owner binmgr: %v", err)
+	if err := db.AddUserToGroup(cust.ID, owner, "nsmgr"); err != nil {
+		t.Fatalf("adduser owner nsmgr: %v", err)
 	}
-	if got := groupsFor(t, db, cust.ID, owner); !slices.Contains(got, "binmgr") {
-		t.Errorf("binmgr should be restored to the owner; groups = %v", got)
+	if got := groupsFor(t, db, cust.ID, owner); !slices.Contains(got, "nsmgr") {
+		t.Errorf("nsmgr should be restored to the owner; groups = %v", got)
 	}
 	// Non-member.
 	if err := db.AddUserToGroup(cust.ID, "ghost@x.test", "configmgr"); err == nil || !strings.Contains(err.Error(), "no such member") {
@@ -161,7 +161,7 @@ func TestTeamGroups_RenderPasswd(t *testing.T) {
 	// "(all — implicit)" special case any more: an owner's access is
 	// four rows like everyone else's, so every rendering site reads it
 	// the same way.
-	for _, want := range []string{"USER", "ROLE", "GROUPS", owner, "binmgr", "configmgr", "nsmgr", alice, "payments"} {
+	for _, want := range []string{"USER", "ROLE", "GROUPS", owner, "configmgr", "nsmgr", alice, "payments"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("passwd table missing %q:\n%s", want, out)
 		}
@@ -190,7 +190,7 @@ func TestTeamGroups_GrantAfterRemoveAndReadd(t *testing.T) {
 	alice := fmt.Sprintf("alice-readd-%d@x.test", pid)
 	u := addTeamUser(t, db, cust.ID, alice, "member")
 
-	if err := db.AddUserToGroup(cust.ID, alice, "binmgr"); err != nil {
+	if err := db.AddUserToGroup(cust.ID, alice, "nsmgr"); err != nil {
 		t.Fatalf("initial grant: %v", err)
 	}
 	if err := db.RemoveMember(cust.ID, alice); err != nil {
@@ -207,7 +207,7 @@ func TestTeamGroups_GrantAfterRemoveAndReadd(t *testing.T) {
 	got := groupsFor(t, db, cust.ID, alice)
 	want := []string{"configmgr"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("groups after re-add: got %v want %v (the tombstone's old binmgr must not come back)", got, want)
+		t.Errorf("groups after re-add: got %v want %v (the tombstone's old nsmgr must not come back)", got, want)
 	}
 }
 

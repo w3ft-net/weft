@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"slices"
+	"strings"
 
 	"github.com/graybeardcorp/weft/logreads"
+	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy"
 )
 
@@ -25,7 +27,9 @@ func (c Config) readsEnv(override map[string]string) (logreads.Env, error) {
 		return logreads.Env{}, err
 	}
 	return logreads.Env{
-		Namespaces: nss,
+		// A cron, and the scripts it runs, name scripts by path.
+		RequireBinPath: true,
+		Namespaces:     nss,
 		Bin: func(name string) (string, bool, bool) {
 			if src, ok := override[name]; ok {
 				return src, false, true
@@ -167,4 +171,58 @@ func (c Config) authorizeBinEdit(name, source, lang string) error {
 		}
 	}
 	return nil
+}
+
+// mayWriteBin refuses a write to /bin/<name> unless the actor holds write on
+// every namespace that has a cron running it (an owner holds it everywhere), or,
+// for a script no cron runs, is a team member.
+func (c Config) mayWriteBin(name string) error {
+	crons, err := c.Store.CronsUsingBin(c.OrgID, name)
+	if err != nil {
+		return err
+	}
+	if len(crons) == 0 {
+		if c.allowed(tenancy.ActionManageBin) {
+			return nil
+		}
+		return fmt.Errorf("/bin/%s: %w (only team members change /bin)", name, fs.ErrPermission)
+	}
+	var need []string
+	for _, cron := range crons {
+		if cron.NamespaceID == nil {
+			// An org-level cron has no namespace to hold write on: an owner's call.
+			if !c.allowed(tenancy.ActionPublishOrgWide) {
+				need = append(need, "an owner (an org-level cron runs it)")
+			}
+			continue
+		}
+		ns, err := c.Store.NamespaceName(c.OrgID, *cron.NamespaceID)
+		if err != nil {
+			return err
+		}
+		if !c.allowedIn(tenancy.ActionManageBin, ns) && !slices.Contains(need, ns+"-w") {
+			need = append(need, ns+"-w")
+		}
+	}
+	if len(need) > 0 {
+		return fmt.Errorf("/bin/%s: %w (crons run this script, so changing it needs %s)", name, fs.ErrPermission, strings.Join(need, " and "))
+	}
+	return nil
+}
+
+// cronPaths renders crons as their /cron.d paths.
+func (c Config) cronPaths(crons []store.CronWatch) ([]string, error) {
+	var out []string
+	for _, cron := range crons {
+		if cron.NamespaceID == nil {
+			out = append(out, "/cron.d/"+cron.Name)
+			continue
+		}
+		ns, err := c.Store.NamespaceName(c.OrgID, *cron.NamespaceID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, "/cron.d/"+ns+"/"+cron.Name)
+	}
+	return out, nil
 }

@@ -17,7 +17,7 @@ func TestInvite_OnlyOwnersCanInvite(t *testing.T) {
 	g := newGroupedOrg(t, store.TierYard)
 	body := []byte(`{"email":"newhire@example.test"}`)
 
-	for who, jwt := range map[string]string{"no group": g.plain, "bin": g.bin, "cron": g.cron, "etc": g.etc} {
+	for who, jwt := range map[string]string{"no group": g.plain, "cron": g.cron, "etc": g.etc} {
 		w := g.do(jwt, "POST", "/api/team/invite", body)
 		if w.Code != http.StatusForbidden {
 			t.Errorf("member with %s: status %d, want 403: %s", who, w.Code, w.Body.String())

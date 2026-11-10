@@ -59,8 +59,8 @@ func TestTrigger_PromotionMaterializesGrants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admin should have a row: %v", err)
 	}
-	if !perm.CanManageFunctions || !perm.CanManageEtc || !perm.CanCreateNamespaces {
-		t.Errorf("promotion should materialize all three bits; got %+v", perm)
+	if !perm.CanManageEtc || !perm.CanCreateNamespaces {
+		t.Errorf("promotion should materialize both bits; got %+v", perm)
 	}
 }
 
@@ -82,21 +82,21 @@ func TestTrigger_DemotionRetainsGrants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("row should survive demotion: %v", err)
 	}
-	if !perm.CanManageFunctions || !perm.CanManageEtc || !perm.CanCreateNamespaces {
+	if !perm.CanManageEtc || !perm.CanCreateNamespaces {
 		t.Errorf("demotion must not revoke; got %+v", perm)
 	}
 
 	// And the grants are now ordinary member grants, revokable one at a
 	// time like anyone else's.
-	if err := db.RemoveUserFromGroup(cust.ID, dana.Email, "binmgr"); err != nil {
+	if err := db.RemoveUserFromGroup(cust.ID, dana.Email, "nsmgr"); err != nil {
 		t.Fatalf("deluser after demotion: %v", err)
 	}
 	perm, _ = db.GetOrgPermission(cust.ID, dana.ID)
-	if perm.CanManageFunctions {
-		t.Error("binmgr should be revokable after demotion")
+	if perm.CanCreateNamespaces {
+		t.Error("nsmgr should be revokable after demotion")
 	}
 	if !perm.CanManageEtc {
-		t.Error("revoking binmgr should leave configmgr alone")
+		t.Error("revoking nsmgr should leave configmgr alone")
 	}
 }
 
@@ -132,8 +132,8 @@ func TestTrigger_DemotionNotifiesOperator(t *testing.T) {
 		t.Errorf("params[org] = %v, want %s", got, cust.Name)
 	}
 	groups, _ := n.Params["groups"].([]any)
-	if len(groups) != 3 {
-		t.Errorf("params[groups] = %#v, want all three retained", n.Params["groups"])
+	if len(groups) != 2 {
+		t.Errorf("params[groups] = %#v, want both retained", n.Params["groups"])
 	}
 
 	// The demoted member is not notified — the notice is for whoever has
@@ -200,7 +200,7 @@ func TestTrigger_RemovalTombstonesGrants(t *testing.T) {
 	pid := os.Getpid()
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("trig-remove-%d", pid))
 	alice := addTeamUser(t, db, cust.ID, fmt.Sprintf("alice-remove-%d@x.test", pid), "member")
-	if err := db.AddUserToGroup(cust.ID, alice.Email, "binmgr"); err != nil {
+	if err := db.AddUserToGroup(cust.ID, alice.Email, "nsmgr"); err != nil {
 		t.Fatal(err)
 	}
 

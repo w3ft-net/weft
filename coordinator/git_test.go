@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy/hosted"
@@ -34,9 +35,7 @@ func TestGitCommand_EndToEnd(t *testing.T) {
 	if err := db.SetUserName(alice.ID, "Alice"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DB().WithContext(store.WithOrg(t.Context(), org)).Create(&store.OrgPermission{
-		OrgID: org, UserID: alice.ID, CanManageFunctions: true,
-	}).Error; err != nil {
+	if err := db.AddTeamMemberWithEmail(org, alice.ID, alice.Email, orgs.RoleMember); err != nil {
 		t.Fatal(err)
 	}
 	for _, src := range []string{"echo v1", "echo v2", "echo v3"} {

@@ -167,3 +167,26 @@ func TestAnalyze_CyclesTerminate(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A cron names its scripts by path. With RequireBinPath a bare script name is
+// refused, in the cron and in the scripts it runs; /bin/<name> resolves.
+func TestAnalyze_RequireBinPath(t *testing.T) {
+	env := testEnv()
+	env.RequireBinPath = true
+
+	reads, err := Analyze("/bin/scan", env)
+	if err != nil || !slices.Equal(reads.Bins, []string{"scan"}) {
+		t.Fatalf("/bin/scan: %+v, %v", reads, err)
+	}
+	for _, script := range []string{"scan", "echo hi | scan", "/bin/outer"} { // outer calls scan by its bare name
+		_, err := Analyze(script, env)
+		var u *UnresolvableError
+		if !errorsAs(err, &u) || !strings.Contains(u.Reason, "/bin/scan") {
+			t.Errorf("%q: err = %v, want a refusal naming /bin/scan", script, err)
+		}
+	}
+	// Without the flag, a bare name still resolves, as it does for a person at the shell.
+	if _, err := Analyze("scan", testEnv()); err != nil {
+		t.Errorf("a bare name without RequireBinPath: %v", err)
+	}
+}

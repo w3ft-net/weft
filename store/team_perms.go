@@ -20,11 +20,10 @@ import (
 type TeamPermsDoc map[string]MemberPerms
 
 // MemberPerms is one member's record — per-directory access for
-// /bin and /etc plus per-namespace permissions (a namespace's write group
-// manages its crons). Each *Access is
+// /etc plus per-namespace permissions (a namespace's write group manages its
+// crons, and /bin is any member's unless crons run the script). Each *Access is
 // "edit" or "read-only"; the namespaces map is omitted when empty.
 type MemberPerms struct {
-	Bin        AccessLevel             `json:"bin"`
 	Etc        AccessLevel             `json:"etc"`
 	Namespaces map[string]NamespaceAcl `json:"namespaces,omitempty"`
 }
@@ -79,13 +78,9 @@ func (s *Store) BuildTeamPerms(orgID OrgID) (TeamPermsDoc, error) {
 		}
 		uid := m.UserID
 		mp := MemberPerms{
-			Bin: AccessReadOnly,
 			Etc: AccessReadOnly,
 		}
 		if op, err := s.GetOrgPermission(orgID, uid); err == nil && op != nil {
-			if op.CanManageFunctions {
-				mp.Bin = AccessEdit
-			}
 			if op.CanManageEtc {
 				mp.Etc = AccessEdit
 			}
@@ -168,10 +163,9 @@ func (s *Store) ApplyTeamPerms(orgID OrgID, doc TeamPermsDoc) error {
 			uid := m.UserID
 			var existing OrgPermission
 			vals := map[string]any{
-				"org_id":               orgID,
-				"user_id":              uid,
-				"can_manage_functions": mp.Bin.CanManage(),
-				"can_manage_etc":       mp.Etc.CanManage(),
+				"org_id":         orgID,
+				"user_id":        uid,
+				"can_manage_etc": mp.Etc.CanManage(),
 			}
 			var err error
 			if txStore.scoped(orgID).Where("user_id = ?", uid).First(&existing).Error == gorm.ErrRecordNotFound {

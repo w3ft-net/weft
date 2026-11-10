@@ -51,14 +51,14 @@ func TestTeamPerms_BuildAndApply_RoundTrip(t *testing.T) {
 
 	apply := TeamPermsDoc{
 		alice.Email: {
-			Bin: AccessEdit, Etc: AccessReadOnly,
+			Etc: AccessEdit,
 			Namespaces: map[string]NamespaceAcl{
 				"api": {Read: true, Write: true},
 				"web": {Read: true},
 			},
 		},
 		bob.Email: {
-			Bin: AccessReadOnly, Etc: AccessReadOnly,
+			Etc: AccessReadOnly,
 			Namespaces: map[string]NamespaceAcl{
 				"api": {Read: true},
 			},
@@ -70,7 +70,7 @@ func TestTeamPerms_BuildAndApply_RoundTrip(t *testing.T) {
 
 	// Verify the store reflects the applied doc.
 	op, err := db.GetOrgPermission(cust.ID, alice.ID)
-	if err != nil || !op.CanManageFunctions || op.CanManageEtc {
+	if err != nil || !op.CanManageEtc {
 		t.Fatalf("alice org perms: %+v (err=%v)", op, err)
 	}
 	if _, err := db.GetNamespacePermission(alice.ID, apiNs.ID); err != nil {
@@ -88,8 +88,8 @@ func TestTeamPerms_BuildAndApply_RoundTrip(t *testing.T) {
 	if _, ok := roundtrip[alice.Email]; !ok {
 		t.Errorf("alice missing from rebuilt doc: %+v", roundtrip)
 	}
-	if got := roundtrip[alice.Email].Bin; got != AccessEdit {
-		t.Errorf("alice.Bin: got %q want %q", got, AccessEdit)
+	if got := roundtrip[alice.Email].Etc; got != AccessEdit {
+		t.Errorf("alice.Etc: got %q want %q", got, AccessEdit)
 	}
 	if got := roundtrip[bob.Email].Namespaces["api"].Read; !got {
 		t.Errorf("bob/api.Read should be true")
@@ -107,7 +107,7 @@ func TestTeamPerms_BuildAndApply_RoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("owner missing from synthesized doc: %+v", roundtrip)
 	}
-	if ownerPerms.Bin != AccessReadOnly || ownerPerms.Etc != AccessReadOnly {
+	if ownerPerms.Etc != AccessReadOnly {
 		t.Errorf("owner omitted from the applied doc should be default-denied; got %+v", ownerPerms)
 	}
 }
@@ -121,14 +121,14 @@ func TestTeamPerms_Apply_DefaultDenyWhenAbsent(t *testing.T) {
 	// First apply: alice gets edit/api perms.
 	first := TeamPermsDoc{
 		alice.Email: {
-			Bin: AccessEdit, Etc: AccessEdit,
+			Etc:        AccessEdit,
 			Namespaces: map[string]NamespaceAcl{"api": {Read: true}},
 		},
 	}
 	if err := db.ApplyTeamPerms(cust.ID, first); err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
-	if op, err := db.GetOrgPermission(cust.ID, alice.ID); err != nil || !op.CanManageFunctions {
+	if op, err := db.GetOrgPermission(cust.ID, alice.ID); err != nil || !op.CanManageEtc {
 		t.Fatalf("expected alice's perms after first apply")
 	}
 
@@ -148,7 +148,7 @@ func TestTeamPerms_Apply_RejectsUnknownMember(t *testing.T) {
 	db := teamPermsStore(t)
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tp-bad-%d", os.Getpid()))
 	doc := TeamPermsDoc{
-		"ghost@example.com": {Bin: AccessEdit},
+		"ghost@example.com": {Etc: AccessEdit},
 	}
 	err := db.ApplyTeamPerms(cust.ID, doc)
 	if err == nil || !strings.Contains(err.Error(), "unknown team member") {
@@ -169,7 +169,7 @@ func TestTeamPerms_Apply_AcceptsOwner(t *testing.T) {
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("tp-own-%d", os.Getpid()))
 	owner := addTeamUser(t, db, cust.ID, fmt.Sprintf("o-%d@x.test", os.Getpid()), "owner")
 	doc := TeamPermsDoc{
-		owner.Email: {Bin: AccessReadOnly, Etc: AccessReadOnly},
+		owner.Email: {Etc: AccessReadOnly},
 	}
 	if err := db.ApplyTeamPerms(cust.ID, doc); err != nil {
 		t.Fatalf("ApplyTeamPerms with an owner listed: %v", err)
@@ -179,7 +179,7 @@ func TestTeamPerms_Apply_AcceptsOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm.CanManageFunctions || perm.CanManageEtc {
+	if perm.CanManageEtc {
 		t.Errorf("owner's bin/etc should be downgraded to read-only; got %+v", perm)
 	}
 }
@@ -190,7 +190,7 @@ func TestTeamPerms_Apply_RejectsUnknownNamespace(t *testing.T) {
 	alice := addTeamUser(t, db, cust.ID, fmt.Sprintf("a-%d@x.test", os.Getpid()), "member")
 	doc := TeamPermsDoc{
 		alice.Email: {
-			Bin: AccessReadOnly, Etc: AccessReadOnly,
+			Etc:        AccessReadOnly,
 			Namespaces: map[string]NamespaceAcl{"nope": {Read: true}},
 		},
 	}

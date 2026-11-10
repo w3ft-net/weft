@@ -9,6 +9,7 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/gitcore"
 
+	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -21,7 +22,7 @@ type fixture struct {
 }
 
 // newFixture builds an org on a swatch plan (crons allowed) with two users,
-// alice holding binmgr+cronmgr and bob holding nothing.
+// alice and bob team members, alice writing namespace "a" and bob only reading it.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	db, err := store.Open(store.TestDSN(t))
@@ -51,8 +52,13 @@ func newFixture(t *testing.T) *fixture {
 		return u
 	}
 	f := &fixture{db: tx, org: org.ID, alice: mk("alice-wr@example.test", "Alice"), bob: mk("bob-wr@example.test", "Bob")}
+	for _, u := range []*store.User{f.alice, f.bob} {
+		if err := tx.AddTeamMemberWithEmail(org.ID, u.ID, u.Email, orgs.RoleMember); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := tx.DB().WithContext(store.WithOrg(t.Context(), org.ID)).Create(&store.OrgPermission{
-		OrgID: org.ID, UserID: f.alice.ID, CanManageFunctions: true, CanManageEtc: true,
+		OrgID: org.ID, UserID: f.alice.ID, CanManageEtc: true,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -293,14 +299,18 @@ func TestWrites_ConflictingRevertWritesNothing(t *testing.T) {
 	}
 }
 
-func TestWrites_MemberWithoutBinmgrCannotRestore(t *testing.T) {
+// Restoring a script is a write to it, so it takes write on the namespace of
+// every cron that runs it.
+func TestWrites_RestoreOfAScriptACronRunsNeedsItsNamespaceWrite(t *testing.T) {
 	f := newFixture(t)
 	f.saveBin(t, f.alice, "scan", "echo 1")
 	f.saveBin(t, f.alice, "scan", "echo 2")
+	f.saveNSCron(t, f.alice, "errs", "/bin/scan | wc -l")
 	r := f.repo(f.bob, "/")
-	msg := gitErr(t, r, "restore", "--source=HEAD~1", "/bin/scan")
-	if !strings.Contains(msg, "binmgr") {
-		t.Errorf("got %q, want a binmgr denial", msg)
+	// HEAD is the cron's creation and HEAD~1 the live version, so go back two.
+	msg := gitErr(t, r, "restore", "--source=HEAD~2", "/bin/scan")
+	if !strings.Contains(msg, "a-w") {
+		t.Errorf("got %q, want a denial naming a-w", msg)
 	}
 	if fn, _ := f.db.GetShellFunction(f.org, "scan"); fn.Source != "echo 2" {
 		t.Errorf("source changed to %q despite denial", fn.Source)

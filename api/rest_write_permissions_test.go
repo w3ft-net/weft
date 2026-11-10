@@ -16,16 +16,17 @@ import (
 )
 
 // The REST endpoints that write /bin, /cron.d and /etc must enforce the same
-// group checks as the shell: binmgr, cronmgr and configmgr. They used to write
-// straight to the store, so any member could change them with their own JWT.
+// checks as the shell: a namespace's write group for its crons, configmgr for
+// /etc, and for /bin the crons that run a script. They used to write straight
+// to the store, so any member could change them with their own JWT.
 
 type groupedOrg struct {
 	srv *Server
 	s   *store.Store
 	org *store.Organization
 
-	owner, plain, bin, cron, etc string // JWTs: the org owner / no groups / exactly one group each
-	ops                          uint   // namespace "ops", readable by every seat
+	owner, plain, cron, etc string // JWTs: the org owner / no groups / exactly one group each
+	ops                     uint   // namespace "ops", readable by every seat
 }
 
 func newGroupedOrg(t *testing.T, tier store.Tier) *groupedOrg {
@@ -57,7 +58,6 @@ func newGroupedOrg(t *testing.T, tier store.Tier) *groupedOrg {
 		return jwt
 	}
 	g.plain = seat("plain", store.MemberPerms{})
-	g.bin = seat("bin", store.MemberPerms{Bin: store.AccessEdit})
 	g.cron = seat("cron", store.MemberPerms{})
 	g.etc = seat("etc", store.MemberPerms{Etc: store.AccessEdit})
 
@@ -115,11 +115,6 @@ const permDashboard = "title: Perm\nsections:\n  - title: S\n    tiles:\n      -
 func restWrites() []restWrite {
 	return []restWrite{
 		{
-			name: "save function", method: "PUT", path: "/api/functions/permfn", body: `{"source":"echo hi"}`,
-			group:  func(g *groupedOrg) string { return g.bin },
-			exists: func(g *groupedOrg) bool { _, err := g.s.GetShellFunction(g.org.ID, "permfn"); return err == nil },
-		},
-		{
 			name: "save cron", method: "PUT", path: "/api/crons/ops/permcron", body: `{"schedule":"*/5 * * * *","pipeline":"echo 1"}`,
 			group:  func(g *groupedOrg) string { return g.cron },
 			exists: func(g *groupedOrg) bool { _, err := g.s.GetCronWatch(g.org.ID, g.ops, "permcron"); return err == nil },
@@ -150,7 +145,7 @@ func TestRESTWrites_RequireTheGroupTheShellRequires(t *testing.T) {
 			if tc.seed != nil {
 				tc.seed(g)
 			}
-			groups := map[string]string{"no group": g.plain, "bin": g.bin, "cron": g.cron, "etc": g.etc}
+			groups := map[string]string{"no group": g.plain, "cron": g.cron, "etc": g.etc}
 			right := tc.group(g)
 
 			for who, jwt := range groups {
@@ -185,12 +180,6 @@ func TestRESTDeletes_RequireTheGroupTheShellRequires(t *testing.T) {
 		group      func(*groupedOrg) string
 	}{
 		{
-			name: "delete function", path: "/api/functions/permfn",
-			seed:  func(g *groupedOrg) { g.s.SaveShellFunction(g.org.ID, "", "permfn", "echo hi", "bash") },
-			gone:  func(g *groupedOrg) bool { _, err := g.s.GetShellFunction(g.org.ID, "permfn"); return err != nil },
-			group: func(g *groupedOrg) string { return g.bin },
-		},
-		{
 			name: "delete cron", path: "/api/crons/ops/permcron",
 			seed: func(g *groupedOrg) {
 				g.s.SaveCronWatch(g.org.ID, g.ops, "", "permcron", "*/5 * * * *", "echo 1", true, nil)
@@ -214,7 +203,7 @@ func TestRESTDeletes_RequireTheGroupTheShellRequires(t *testing.T) {
 			tc.seed(g)
 			right := tc.group(g)
 
-			for who, jwt := range map[string]string{"no group": g.plain, "bin": g.bin, "cron": g.cron, "etc": g.etc} {
+			for who, jwt := range map[string]string{"no group": g.plain, "cron": g.cron, "etc": g.etc} {
 				if jwt == right {
 					continue
 				}
@@ -272,5 +261,29 @@ func TestRESTCronSave_HonorsMinimumIntervalLikeTheShell(t *testing.T) {
 	}
 	if _, err := g.s.GetCronWatch(g.org.ID, g.ops, "fast"); err == nil {
 		t.Error("cron saved below the plan's minimum interval")
+	}
+}
+
+// Any member may save a script no cron runs, and a script a cron runs needs write
+// on that cron's namespace: the same rule as the shell, over REST.
+func TestRESTFunctions_FollowTheCronsThatRunThem(t *testing.T) {
+	g := newGroupedOrg(t, store.TierYard)
+	put := func(jwt, name string) int {
+		return g.do(jwt, "PUT", "/api/functions/"+name, []byte(`{"source":"echo hi"}`)).Code
+	}
+	if code := put(g.plain, "free"); code != 200 {
+		t.Errorf("a member saving a script nothing runs: %d", code)
+	}
+	if err := g.s.SaveShellFunction(g.org.ID, "", "scan", "echo hi", "bash"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.s.SaveCronWatch(g.org.ID, g.ops, "", "errors", "every 5m", "/bin/scan", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if code := put(g.plain, "scan"); code != http.StatusForbidden {
+		t.Errorf("a member without ops-w saving a script an ops cron runs: %d, want 403", code)
+	}
+	if code := put(g.cron, "scan"); code != 200 {
+		t.Errorf("a member with ops-w: %d", code)
 	}
 }

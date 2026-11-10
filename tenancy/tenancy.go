@@ -52,7 +52,7 @@ const (
 	ActionCreateNamespace       Action = "create-namespace"
 	ActionDeleteNamespace       Action = "delete-namespace"
 	ActionManageNamespaceTokens Action = "manage-namespace-tokens" // tokens and sources of Resource.Namespace
-	ActionManageBin             Action = "manage-bin"              // write /bin
+	ActionManageBin             Action = "manage-bin"              // change a /bin script; Resource.Namespace is one whose crons run it, empty for a script no cron runs
 	ActionManageEtc             Action = "manage-etc"              // write /etc
 	ActionManageCron            Action = "manage-cron"             // write a cron homed in Resource.Namespace
 	ActionPublishOrgWide        Action = "publish-org-wide"        // write an org-level cron, whose output every member reads

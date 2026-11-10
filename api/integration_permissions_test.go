@@ -34,7 +34,7 @@ func TestIntegrationWrites_RequireConfigmgr(t *testing.T) {
 				tc.seed(g)
 			}
 
-			for who, jwt := range map[string]string{"no group": g.plain, "bin": g.bin, "cron": g.cron} {
+			for who, jwt := range map[string]string{"no group": g.plain, "cron": g.cron} {
 				w := g.do(jwt, tc.method, tc.path, []byte(tc.body))
 				if w.Code != http.StatusForbidden {
 					t.Errorf("member with %s: status %d, want 403: %s", who, w.Code, w.Body.String())

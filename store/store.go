@@ -168,7 +168,12 @@ func Connect(dsn string) (*Store, error) {
 		&AgentToken{},
 		&Namespace{},
 		&SharedLink{},
+		&CronBinDep{},
 	)
+	// Crons saved before the dependency table existed have no recorded
+	// scripts; record them. Idempotent, and a cron that can't be analyzed is
+	// skipped so it can't block startup.
+	s.backfillCronBinDeps()
 	// One-time backfill of (alert_condition, alert_threshold) for
 	// watches that predate migration 027 (the columns were added
 	// nullable, so the migration itself is instant). This second pass

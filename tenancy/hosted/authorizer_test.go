@@ -29,13 +29,11 @@ func TestAuthorize(t *testing.T) {
 	owner := mk("o@authz.test", store.RoleOwner)
 	plain := mk("p@authz.test", orgs.RoleMember)
 	maker := mk("m@authz.test", orgs.RoleMember)
-	binmgr := mk("b@authz.test", orgs.RoleMember)
 	tokener := mk("t@authz.test", orgs.RoleMember)
+	strangerUser, _ := db.CreateVerifiedUser("x@authz.test")
+	stranger := strangerUser.ID
 	writer := mk("c@authz.test", orgs.RoleMember)
 	if err := db.DB().Exec(`INSERT INTO org_permissions (org_id, user_id, can_create_namespaces) VALUES (?, ?, true)`, org.ID, maker).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.DB().Exec(`INSERT INTO org_permissions (org_id, user_id, can_manage_functions) VALUES (?, ?, true)`, org.ID, binmgr).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.UpsertNamespacePermission(&store.NamespacePermission{UserID: writer, NamespaceID: ns.ID, CanRead: true, CanWrite: true}); err != nil {
@@ -73,9 +71,11 @@ func TestAuthorize(t *testing.T) {
 		{"token holder cannot manage beta", tokener, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: "beta"}, false},
 		{"unknown namespace reads as denied", tokener, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: "nope"}, false},
 		{"member without grant cannot", plain, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: "alpha"}, false},
-		{"binmgr writes /bin", binmgr, tenancy.ActionManageBin, tenancy.Resource{}, true},
-		{"binmgr cannot write /etc", binmgr, tenancy.ActionManageEtc, tenancy.Resource{}, false},
-		{"binmgr cannot write a namespace's crons", binmgr, tenancy.ActionManageCron, tenancy.Resource{Namespace: "alpha"}, false},
+		{"a member changes a script no cron runs", plain, tenancy.ActionManageBin, tenancy.Resource{}, true},
+		{"a stranger to the org cannot", stranger, tenancy.ActionManageBin, tenancy.Resource{}, false},
+		{"alpha's writer changes a script alpha's crons run", writer, tenancy.ActionManageBin, tenancy.Resource{Namespace: "alpha"}, true},
+		{"a member without alpha-w cannot", plain, tenancy.ActionManageBin, tenancy.Resource{Namespace: "alpha"}, false},
+		{"a plain member cannot write /etc", plain, tenancy.ActionManageEtc, tenancy.Resource{}, false},
 		{"writer manages a cron in their namespace", writer, tenancy.ActionManageCron, tenancy.Resource{Namespace: "alpha"}, true},
 		{"writer cannot manage one in another namespace", writer, tenancy.ActionManageCron, tenancy.Resource{Namespace: "beta"}, false},
 		{"a cron needs a namespace", writer, tenancy.ActionManageCron, tenancy.Resource{}, false},

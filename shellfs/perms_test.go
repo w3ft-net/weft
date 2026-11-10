@@ -34,14 +34,14 @@ func cronYAML() string {
 
 // orgPerms is a member's role and the four org bits on their org_permissions row.
 type orgPerms struct {
-	Owner, Functions, Etc, CreateNS bool
+	Owner, Etc, CreateNS bool
 }
 
 // ownerPerms is what promotion to owner materializes: every bit. Fixtures that
 // just want "a user who can write everything" use this rather than
 // orgPerms{Owner: true}, which is an owner holding no bits and so writes nothing.
 func ownerPerms() orgPerms {
-	return orgPerms{Owner: true, Functions: true, Etc: true, CreateNS: true}
+	return orgPerms{Owner: true, Etc: true, CreateNS: true}
 }
 
 // addMember adds a user to org with exactly the given role and org bits and
@@ -59,12 +59,11 @@ func addMember(t *testing.T, db *store.Store, org store.OrgID, name string, p or
 	if err := db.AddTeamMemberWithEmail(org, u.ID, u.Email, role); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DB().Exec(`INSERT INTO org_permissions (org_id, user_id, can_manage_functions, can_manage_etc, can_create_namespaces)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (org_id, user_id) DO UPDATE SET can_manage_functions = EXCLUDED.can_manage_functions,
-		can_manage_etc = EXCLUDED.can_manage_etc,
+	if err := db.DB().Exec(`INSERT INTO org_permissions (org_id, user_id, can_manage_etc, can_create_namespaces)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (org_id, user_id) DO UPDATE SET can_manage_etc = EXCLUDED.can_manage_etc,
 		can_create_namespaces = EXCLUDED.can_create_namespaces`,
-		org, u.ID, p.Functions, p.Etc, p.CreateNS).Error; err != nil {
+		org, u.ID, p.Etc, p.CreateNS).Error; err != nil {
 		t.Fatal(err)
 	}
 	return u.ID
@@ -74,18 +73,18 @@ func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg(fmt.Sprintf("perm-bin-%d", os.Getpid()))
 
-	cases := []orgPermCase{
-		{"member-no-flag", orgPerms{}, true},
-		{"member-with-flag", orgPerms{Functions: true}, false},
-		{"owner-no-flag", orgPerms{Owner: true}, true},
-		{"member-other-flag", orgPerms{Etc: true}, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fs := New(db, cust.ID, nil, WithTier("swatch"),
-				WithUser(addMember(t, db, cust.ID, tc.name, tc.perms)))
-			err := fs.WriteFile("/bin/probe", []byte("echo probe\n"))
-			assertGate(t, err, tc.wantDeny)
+	// Any team member changes a script no cron runs; the system identity, which
+	// is what crons and internal callers run as, writes nothing.
+	for name, tc := range map[string]struct {
+		fs       *ShellFS
+		wantDeny bool
+	}{
+		"member": {New(db, cust.ID, nil, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "binmember", orgPerms{}))), false},
+		"owner":  {New(db, cust.ID, nil, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "binowner", orgPerms{Owner: true}))), false},
+		"system": {New(db, cust.ID, nil, WithTier("swatch")), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertGate(t, tc.fs.WriteFile("/bin/probe-"+name, []byte("echo probe\n")), tc.wantDeny)
 		})
 	}
 }
@@ -130,7 +129,7 @@ func TestOrgPerms_EtcMount_WriteFile(t *testing.T) {
 		{"member-no-flag", orgPerms{}, true},
 		{"member-with-flag", orgPerms{Etc: true}, false},
 		{"owner-no-flag", orgPerms{Owner: true}, true},
-		{"member-other-flag", orgPerms{Functions: true}, true},
+		{"member-no-etc-flag", orgPerms{CreateNS: true}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

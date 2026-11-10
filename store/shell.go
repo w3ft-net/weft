@@ -261,6 +261,14 @@ func (s *Store) SaveShellFunction(orgID OrgID, userID, name, source, language st
 	}
 	hash := computeShellFunctionHash(source)
 
+	if err := s.saveShellFunction(orgID, userID, name, source, language, hash); err != nil {
+		return err
+	}
+	// The crons that run this script now run whatever it calls.
+	return s.refreshDependents(orgID, name)
+}
+
+func (s *Store) saveShellFunction(orgID OrgID, userID, name, source, language, hash string) error {
 	return s.scoped(orgID).Transaction(func(tx *gorm.DB) error {
 		// Set the per-transaction GUC the version-history trigger
 		// reads to populate captured_by_user_id. Empty userID is
@@ -732,6 +740,13 @@ func (s *Store) SaveCronWatch(orgID OrgID, ns uint, userID, name, schedule, pipe
 		return err
 	}
 
+	saved, err := s.GetCronWatch(orgID, ns, name)
+	if err != nil {
+		return err
+	}
+	if err := s.recordCronBinDeps(orgID, saved.ID, pipeline); err != nil {
+		return err
+	}
 	return lintSavedWatch(schedule, pipeline, loweredPlan)
 }
 

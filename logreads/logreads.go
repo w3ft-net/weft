@@ -31,6 +31,10 @@ type Env struct {
 	// Namespaces lists every namespace in the org. Globs match against it, and
 	// "every namespace" means exactly these.
 	Namespaces []string
+	// RequireBinPath refuses a /bin script called by its bare name, in the
+	// script and in every script it runs: a cron names what it runs as
+	// /bin/<name>, so the scripts it depends on can all be found.
+	RequireBinPath bool
 }
 
 // Reads is the answer: the namespaces a script reads and the /bin scripts it
@@ -806,6 +810,10 @@ func (a *analyzer) bin(name string, args []bash.Word, f *frame) bool {
 	src, lua, ok := a.env.Bin(sname)
 	if !ok {
 		return false
+	}
+	if a.env.RequireBinPath && !strings.HasPrefix(name, "/bin/") {
+		a.fail("%s is a /bin script; a cron calls it by its path, /bin/%s", sname, sname)
+		return true
 	}
 	a.bins[sname] = true
 	for _, w := range args {

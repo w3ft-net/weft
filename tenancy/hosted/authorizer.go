@@ -55,7 +55,20 @@ func (z Authorizer) Authorize(_ context.Context, a tenancy.Actor, act tenancy.Ac
 	case tenancy.ActionCreateNamespace:
 		return z.orgBit(actor, "cannot create namespaces", func(p *store.OrgPermission) bool { return p.CanCreateNamespaces })
 	case tenancy.ActionManageBin:
-		return z.orgBit(actor, "writing /bin needs the binmgr group", func(p *store.OrgPermission) bool { return p.CanManageFunctions })
+		// With a namespace: changing a script that namespace's crons run, which
+		// takes its write group. Without one: a script no cron runs, which any
+		// team member may change.
+		if r.Namespace != "" {
+			if owner {
+				return nil
+			}
+			return z.holds(actor, r.Namespace, func(p *store.NamespacePermission) bool { return p.CanWrite })
+		}
+		m, err := z.Store.GetTeamMemberByUserID(actor.Org, actor.User)
+		if err != nil || m.Pending() {
+			return tenancy.Denied("only team members change /bin")
+		}
+		return nil
 	case tenancy.ActionManageEtc:
 		return z.orgBit(actor, "writing /etc needs the configmgr group", func(p *store.OrgPermission) bool { return p.CanManageEtc })
 	case tenancy.ActionGrantNamespaceRead:

@@ -12,7 +12,7 @@ import (
 // Team management is modeled as Unix-style group membership. A group is
 // one of three things:
 //
-//   - a manager group (binmgr / configmgr / nsmgr) — edit access
+//   - a manager group (configmgr / nsmgr) — edit access
 //     to /bin, /cron.d, /etc and the right to create namespaces, backed by
 //     the OrgPermission bits.
 //   - "<ns>-r" — read access to <ns>: its logs and its crons,
@@ -27,7 +27,6 @@ import (
 // managerGroupColumn maps a manager-group name to the OrgPermission
 // column it toggles.
 var managerGroupColumn = map[string]string{
-	"binmgr":    "can_manage_functions",
 	"configmgr": "can_manage_etc",
 	"nsmgr":     "can_create_namespaces",
 }
@@ -90,7 +89,7 @@ func (s *Store) setGroupMembership(orgID OrgID, email, group string, grant bool)
 //
 // Owners are grantable. They used to be refused — there was nothing to
 // grant to, since their access was derived from the role — which also
-// meant `deluser <owner> binmgr` had no way to do anything. Since
+// meant `usermod -rG nsmgr <owner>` had no way to do anything. Since
 // migration 072 an owner holds the same four bits as anyone else, so
 // both directions work.
 func (s *Store) resolveGrantableMember(orgID OrgID, email string) (string, error) {
@@ -166,7 +165,6 @@ func (s *Store) setOrgBit(orgID OrgID, userID, column string, val bool) error {
 	}
 	if existing.DeletedAt.Valid {
 		return s.scoped(orgID).Unscoped().Model(&existing).Updates(map[string]any{
-			"can_manage_functions":  false,
 			"can_manage_etc":        false,
 			"can_create_namespaces": false,
 			column:                  val,
@@ -259,7 +257,7 @@ func (s *Store) RemoveMember(orgID OrgID, email string) error {
 }
 
 // memberGroups returns the sorted group tokens a member belongs to:
-// manager groups first (binmgr/configmgr/nsmgr in that order),
+// manager groups first (configmgr/nsmgr in that order),
 // then namespace groups alphabetically with its write group following its
 // base. Pending invitees return nil — they hold no grants yet.
 //
@@ -275,9 +273,6 @@ func (s *Store) memberGroups(orgID OrgID, m TeamMember, nsByID map[uint]string) 
 	var groups []string
 	op, err := s.GetOrgPermission(orgID, uid)
 	if err == nil && op != nil {
-		if op.CanManageFunctions {
-			groups = append(groups, "binmgr")
-		}
 		if op.CanManageEtc {
 			groups = append(groups, "configmgr")
 		}

@@ -9,9 +9,10 @@ import (
 	"github.com/graybeardcorp/weft/tenancy"
 )
 
-// /bin and /etc are readable by every member; writing needs the
-// matching group, and /etc/passwd is never writable. /cron.d is per-namespace
-// and needs the store to resolve a path: see TestCronMount_NamespaceOwnership.
+// /etc is readable by every member; writing needs the
+// matching group, and /etc/passwd is never writable. /cron.d and /bin depend on
+// the store (a path's namespace, the crons that run a script): see
+// TestCronMount_NamespaceOwnership and TestBinMount_WritesFollowTheCronsThatRunTheScript.
 func TestAuthorize_WriteNeedsGroup(t *testing.T) {
 	const (
 		r = shellcore.PermRead
@@ -23,7 +24,6 @@ func TestAuthorize_WriteNeedsGroup(t *testing.T) {
 		mount func(Config) shellcore.AuthMount
 		rel   string
 	}{
-		{"/bin", func(c Config) shellcore.AuthMount { return &BinMount{cfg: c} }, "deploy"},
 		{"/etc", func(c Config) shellcore.AuthMount { return &EtcMount{cfg: c} }, "notify.yaml"},
 	}
 	for _, tc := range cases {

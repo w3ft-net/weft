@@ -8,7 +8,6 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/store"
-	"github.com/graybeardcorp/weft/tenancy"
 )
 
 type BinMount struct{ cfg Config }
@@ -20,11 +19,12 @@ func (m *BinMount) Caps() shellcore.MountCaps {
 }
 
 // Authorize is the mount's one access check, called by MountFS before every
-// operation: every member can read and run /bin, only the binmgr group can
-// change it.
+// operation: every member can read and run /bin. A script no cron runs can be
+// changed by any member; one that crons run needs write on each of their
+// namespaces, since changing it changes what they do.
 func (m *BinMount) Authorize(rel string, want shellcore.Perm) error {
-	if want&shellcore.PermWrite != 0 && !m.cfg.allowed(tenancy.ActionManageBin) {
-		return denyWrite("/bin", "binmgr")
+	if want&shellcore.PermWrite != 0 {
+		return m.cfg.mayWriteBin(rel)
 	}
 	return nil
 }
@@ -91,6 +91,17 @@ func (m *BinMount) WriteFile(rel string, data []byte) error {
 }
 
 func (m *BinMount) Remove(rel string) error {
+	crons, err := m.cfg.Store.CronsUsingBin(m.cfg.OrgID, rel)
+	if err != nil {
+		return err
+	}
+	if len(crons) > 0 {
+		paths, err := m.cfg.cronPaths(crons)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("/bin/%s: %w (crons run it: %s)", rel, fs.ErrPermission, strings.Join(paths, ", "))
+	}
 	return m.cfg.Store.DeleteShellFunction(m.cfg.OrgID, rel)
 }
 
@@ -106,8 +117,8 @@ func (m *BinMount) FileLanguage(rel string) string {
 // AmendVersionMessage allows the vim popup to record a commit message. It is
 // not a MountFS operation, so it checks write access itself.
 func (m *BinMount) AmendVersionMessage(rel, message string) error {
-	if !m.cfg.allowed(tenancy.ActionManageBin) {
-		return denyWrite("/bin", "binmgr")
+	if err := m.cfg.mayWriteBin(rel); err != nil {
+		return err
 	}
 	return m.cfg.Store.AmendShellFunctionMessage(m.cfg.OrgID, m.cfg.UserID, rel, message)
 }

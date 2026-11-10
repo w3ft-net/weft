@@ -152,7 +152,7 @@ func TestCronSave_RefusalDoesNotNameUnreadableNamespaces(t *testing.T) {
 
 func TestBinSave_CannotWidenWhatAnExistingCronReads(t *testing.T) {
 	f := newReadsFixture(t)
-	f.seedCron(t, "report", "report | wc -l") // a cron that runs the script `report`
+	f.seedCron(t, "report", "/bin/report | wc -l") // a cron that runs the script `report`
 
 	// There is no `report` yet. Creating one that reads beta would make the
 	// existing cron read it.
@@ -192,8 +192,8 @@ func TestBinSave_UnreferencedScriptIsUnrestricted(t *testing.T) {
 
 func TestBinSave_ReachesCronsThroughOtherScripts(t *testing.T) {
 	f := newReadsFixture(t)
-	f.seedBin(t, "outer", "inner")
-	f.seedCron(t, "c", "outer")
+	f.seedBin(t, "outer", "/bin/inner")
+	f.seedCron(t, "c", "/bin/outer")
 
 	err := f.fs(f.reader).WriteFile("/bin/inner", []byte("cat /log/beta/api/main.log"))
 
@@ -204,7 +204,7 @@ func TestBinSave_ReachesCronsThroughOtherScripts(t *testing.T) {
 
 func TestBinSave_OwnersAndLuaAreUnrestricted(t *testing.T) {
 	f := newReadsFixture(t)
-	f.seedCron(t, "report", "report | wc -l")
+	f.seedCron(t, "report", "/bin/report | wc -l")
 
 	if err := f.fs(f.owner).WriteFile("/bin/report", []byte("cat /log/beta/api/main.log")); err != nil {
 		t.Errorf("owner: %v", err)

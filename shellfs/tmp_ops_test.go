@@ -80,10 +80,10 @@ func TestCopyAndMove_RespectGroupPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := fs.CopyFile("/tmp/a", "/bin/c"); err == nil {
-		t.Errorf("cp into /bin without binmgr must be refused")
+		t.Errorf("cp into /bin by a non-member must be refused")
 	}
 	if err := fs.Rename("/tmp/a", "/bin/c"); err == nil {
-		t.Errorf("mv into /bin without binmgr must be refused")
+		t.Errorf("mv into /bin by a non-member must be refused")
 	}
 	if _, err := fs.Stat("/tmp/a"); err != nil {
 		t.Errorf("/tmp/a must survive a refused mv: %v", err)

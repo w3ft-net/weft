@@ -43,7 +43,7 @@ func TestPermissions_GetAndPut(t *testing.T) {
 	// PUT: owner grants member edit on /bin + read on /log/api.
 	put := store.TeamPermsDoc{
 		member.Email: {
-			Bin: store.AccessEdit, Etc: store.AccessReadOnly,
+			Etc: store.AccessEdit,
 			Namespaces: map[string]store.NamespaceAcl{
 				"api": {Read: true},
 			},
@@ -70,8 +70,8 @@ func TestPermissions_GetAndPut(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v: %s", err, w.Body.String())
 	}
-	if got[member.Email].Bin != store.AccessEdit {
-		t.Errorf("expected member.Bin == edit, got %+v", got)
+	if got[member.Email].Etc != store.AccessEdit {
+		t.Errorf("expected member.Etc == edit, got %+v", got)
 	}
 	if !got[member.Email].Namespaces["api"].Read {
 		t.Errorf("expected api.Read == true, got %+v", got)
@@ -102,7 +102,7 @@ func TestPermissions_Put_RejectsUnknownMember(t *testing.T) {
 	_, ownerJWT := permsSeed(t, s, cust, store.RoleOwner, "lonely-owner")
 
 	put := store.TeamPermsDoc{
-		"ghost@example.com": {Bin: store.AccessEdit, Etc: store.AccessReadOnly},
+		"ghost@example.com": {Etc: store.AccessEdit},
 	}
 	body, _ := json.Marshal(put)
 	req := httptest.NewRequest("PUT", "/api/permissions", bytes.NewReader(body))

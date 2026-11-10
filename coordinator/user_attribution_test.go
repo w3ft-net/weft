@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/notices"
-	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
@@ -159,8 +159,8 @@ func TestCoordinatorExecuteForWatch_StoresNullCreator(t *testing.T) {
 
 // TestCoordinatorExecute_RedirectUsesMemberGroups: a redirect into /bin
 // runs with the caller's org_permissions row, the same authority vi's
-// /api/fs/write save uses. A binmgr member's write lands; a member without
-// the group, and the system identity crons run as, are denied.
+// /api/fs/write save uses. A team member's write lands; someone outside the
+// team, and the system identity crons run as, are denied.
 func TestCoordinatorExecute_RedirectUsesMemberGroups(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	alice, err := db.CreateUser("alice-redirect@example.test")
@@ -171,9 +171,7 @@ func TestCoordinatorExecute_RedirectUsesMemberGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DB().WithContext(store.WithOrg(t.Context(), custID)).Create(&store.OrgPermission{
-		OrgID: custID, UserID: alice.ID, CanManageFunctions: true,
-	}).Error; err != nil {
+	if err := db.AddTeamMemberWithEmail(custID, alice.ID, alice.Email, orgs.RoleMember); err != nil {
 		t.Fatal(err)
 	}
 
@@ -189,13 +187,13 @@ func TestCoordinatorExecute_RedirectUsesMemberGroups(t *testing.T) {
 	}
 
 	if stderr := write(alice.ID, "from-alice"); stderr != "" {
-		t.Errorf("binmgr member's redirect: stderr %q", stderr)
+		t.Errorf("team member's redirect: stderr %q", stderr)
 	}
 	if fn, err := db.GetShellFunction(custID, "from-alice"); err != nil || fn == nil {
-		t.Errorf("binmgr member's redirect didn't save /bin/from-alice: %v", err)
+		t.Errorf("team member's redirect didn't save /bin/from-alice: %v", err)
 	}
 
-	for who, userID := range map[string]string{"member without binmgr": bob.ID, "system": ""} {
+	for who, userID := range map[string]string{"non-member": bob.ID, "system": ""} {
 		write(userID, "denied")
 		if fn, err := db.GetShellFunction(custID, "denied"); err == nil && fn != nil {
 			t.Errorf("%s's redirect saved /bin/denied", who)
