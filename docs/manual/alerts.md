@@ -287,17 +287,17 @@ whose body is JSON:
 ```
 {
   "v": 2,
-  "cron": "disk-use[web-1]",
+  "cron": "ops/disk-use[web-1]",
   "alias": "pages",
   "ts_unix": 1792677600,
-  "body": "disk-use[web-1]: 91.0 > 80.0"
+  "body": "ops/disk-use[web-1]: 91.0 > 80.0"
 }
 ```
 
 | Field | Value |
 |---|---|
 | `v` | The version of the weft webhooks protocol. |
-| `cron` | The name of the cron that alerted. With `alert -t`, the tag is appended in brackets, as above, so each tag has its own name. |
+| `cron` | The `<namespace>/<name>` of the cron that alerted. With `alert -t`, the tag is appended in brackets, as above, so each tag has its own name. |
 | `alias` | The `notify.yaml` alias that routed the alert |
 | `ts_unix` | When weft sent the request, in seconds since the epoch |
 | `body` | The alert message: what the alert prints to `stderr`, or your `--msg` if you gave one. At most 1024 bytes, with `... (truncated)` appended when it was cut |

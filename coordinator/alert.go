@@ -372,6 +372,13 @@ func evaluateAlertRow(ctx context.Context, r alertRow, parsed *alert.Args, ac *A
 func (ac *AlertContext) dispatchIdentity(tag string) (string, store.OrgID) {
 	if ac.Watch != nil {
 		name := ac.Watch.Name
+		// A namespaced cron is named <namespace>/<name>: two namespaces can
+		// each have a `disk-use`, and this name keys the PagerDuty dedup.
+		if ac.Watch.NamespaceID != nil && ac.Store != nil {
+			if ns, err := ac.Store.NamespaceName(ac.Watch.OrgID, *ac.Watch.NamespaceID); err == nil {
+				name = ns + "/" + name
+			}
+		}
 		if tag != "" {
 			name = name + "[" + tag + "]"
 		}

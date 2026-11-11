@@ -251,10 +251,10 @@ add weft to those channels for it to notify you.</p>
 whose body is JSON:</p>
 <pre><code>{
   &quot;v&quot;: 2,
-  &quot;cron&quot;: &quot;disk-use[web-1]&quot;,
+  &quot;cron&quot;: &quot;ops/disk-use[web-1]&quot;,
   &quot;alias&quot;: &quot;pages&quot;,
   &quot;ts_unix&quot;: 1792677600,
-  &quot;body&quot;: &quot;disk-use[web-1]: 91.0 &gt; 80.0&quot;
+  &quot;body&quot;: &quot;ops/disk-use[web-1]: 91.0 &gt; 80.0&quot;
 }
 </code></pre>
 <table>
@@ -271,7 +271,7 @@ whose body is JSON:</p>
 </tr>
 <tr>
 <td><code>cron</code></td>
-<td>The name of the cron that alerted. With <code>alert -t</code>, the tag is appended in brackets, as above, so each tag has its own name.</td>
+<td>The <code>&lt;namespace&gt;/&lt;name&gt;</code> of the cron that alerted. With <code>alert -t</code>, the tag is appended in brackets, as above, so each tag has its own name.</td>
 </tr>
 <tr>
 <td><code>alias</code></td>
