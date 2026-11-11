@@ -730,13 +730,17 @@ func (x *ArchiveResponse) GetCustomerStats() []*CustomerArchiveStat {
 }
 
 type CustomerArchiveStat struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CustomerId    int64                  `protobuf:"varint,5,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
-	MinTsUnixNs   int64                  `protobuf:"varint,2,opt,name=min_ts_unix_ns,json=minTsUnixNs,proto3" json:"min_ts_unix_ns,omitempty"`
-	MaxTsUnixNs   int64                  `protobuf:"varint,3,opt,name=max_ts_unix_ns,json=maxTsUnixNs,proto3" json:"max_ts_unix_ns,omitempty"`
-	RowCount      int64                  `protobuf:"varint,4,opt,name=row_count,json=rowCount,proto3" json:"row_count,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	CustomerId int64                  `protobuf:"varint,5,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
+	// partition_values are the group's partition column values as text, in the
+	// shard's layout order. customer_id is set too when the layout is the legacy
+	// one. A shard from before layouts sends none.
+	PartitionValues []string `protobuf:"bytes,6,rep,name=partition_values,json=partitionValues,proto3" json:"partition_values,omitempty"`
+	MinTsUnixNs     int64    `protobuf:"varint,2,opt,name=min_ts_unix_ns,json=minTsUnixNs,proto3" json:"min_ts_unix_ns,omitempty"`
+	MaxTsUnixNs     int64    `protobuf:"varint,3,opt,name=max_ts_unix_ns,json=maxTsUnixNs,proto3" json:"max_ts_unix_ns,omitempty"`
+	RowCount        int64    `protobuf:"varint,4,opt,name=row_count,json=rowCount,proto3" json:"row_count,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CustomerArchiveStat) Reset() {
@@ -774,6 +778,13 @@ func (x *CustomerArchiveStat) GetCustomerId() int64 {
 		return x.CustomerId
 	}
 	return 0
+}
+
+func (x *CustomerArchiveStat) GetPartitionValues() []string {
+	if x != nil {
+		return x.PartitionValues
+	}
+	return nil
 }
 
 func (x *CustomerArchiveStat) GetMinTsUnixNs() int64 {
@@ -4733,10 +4744,11 @@ const file_weft_proto_rawDesc = "" +
 	"\ts3_prefix\x18\x01 \x01(\tR\bs3Prefix\"v\n" +
 	"\x0fArchiveResponse\x12!\n" +
 	"\fparquet_path\x18\x01 \x01(\tR\vparquetPath\x12@\n" +
-	"\x0ecustomer_stats\x18\x02 \x03(\v2\x19.weft.CustomerArchiveStatR\rcustomerStats\"\xad\x01\n" +
+	"\x0ecustomer_stats\x18\x02 \x03(\v2\x19.weft.CustomerArchiveStatR\rcustomerStats\"\xd8\x01\n" +
 	"\x13CustomerArchiveStat\x12\x1f\n" +
 	"\vcustomer_id\x18\x05 \x01(\x03R\n" +
-	"customerId\x12#\n" +
+	"customerId\x12)\n" +
+	"\x10partition_values\x18\x06 \x03(\tR\x0fpartitionValues\x12#\n" +
 	"\x0emin_ts_unix_ns\x18\x02 \x01(\x03R\vminTsUnixNs\x12#\n" +
 	"\x0emax_ts_unix_ns\x18\x03 \x01(\x03R\vmaxTsUnixNs\x12\x1b\n" +
 	"\trow_count\x18\x04 \x01(\x03R\browCountJ\x04\b\x01\x10\x02R\bcustomer\";\n" +

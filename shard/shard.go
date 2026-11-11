@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -95,10 +96,15 @@ type Shard interface {
 // shard_archive_stats so the retention janitor can classify archived
 // parquet (delete / keep / rewrite) without re-scanning S3.
 type CustomerStat struct {
-	CustomerID int64     `json:"customer_id"`
-	MinTs      time.Time `json:"min_ts"`
-	MaxTs      time.Time `json:"max_ts"`
-	RowCount   int64     `json:"row_count"`
+	// CustomerID is set only when the layout is the legacy one, whose single
+	// partition column is customer_id.
+	CustomerID int64 `json:"customer_id"`
+	// PartitionValues are the group's partition column values as text, in
+	// layout order. Absent in stats from a shard from before layouts.
+	PartitionValues []string  `json:"partition_values,omitempty"`
+	MinTs           time.Time `json:"min_ts"`
+	MaxTs           time.Time `json:"max_ts"`
+	RowCount        int64     `json:"row_count"`
 }
 
 // CustomerStatsToProto / CustomerStatsFromProto bridge the Go struct and
@@ -111,8 +117,9 @@ func CustomerStatsToProto(cs []CustomerStat) []*pb.CustomerArchiveStat {
 	out := make([]*pb.CustomerArchiveStat, len(cs))
 	for i, c := range cs {
 		out[i] = &pb.CustomerArchiveStat{
-			CustomerId:  c.CustomerID,
-			MinTsUnixNs: c.MinTs.UnixNano(),
+			CustomerId:      c.CustomerID,
+			PartitionValues: c.PartitionValues,
+			MinTsUnixNs:     c.MinTs.UnixNano(),
 			MaxTsUnixNs: c.MaxTs.UnixNano(),
 			RowCount:    c.RowCount,
 		}
@@ -127,10 +134,11 @@ func CustomerStatsFromProto(ps []*pb.CustomerArchiveStat) []CustomerStat {
 	out := make([]CustomerStat, len(ps))
 	for i, p := range ps {
 		out[i] = CustomerStat{
-			CustomerID: p.CustomerId,
-			MinTs:      time.Unix(0, p.MinTsUnixNs).UTC(),
-			MaxTs:      time.Unix(0, p.MaxTsUnixNs).UTC(),
-			RowCount:   p.RowCount,
+			CustomerID:      p.CustomerId,
+			PartitionValues: p.PartitionValues,
+			MinTs:           time.Unix(0, p.MinTsUnixNs).UTC(),
+			MaxTs:           time.Unix(0, p.MaxTsUnixNs).UTC(),
+			RowCount:        p.RowCount,
 		}
 	}
 	return out
@@ -969,9 +977,42 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 // logs table. Drives the retention janitor's classify-without-scanning
 // pass (see docs/plans/retention-janitor.md).
 func (s *DuckDBShard) customerStats(ctx context.Context) ([]CustomerStat, error) {
-	return scanCustomerStats(ctx, s.db, `
-		SELECT COALESCE(customer_id, 0), MIN(ts), MAX(ts), COUNT(*)
-		FROM `+s.source()+` GROUP BY 1`)
+	// One group per combination of partition values, a missing value counting
+	// as 0 (or '' for text) as the legacy query always did.
+	var cols, group []string
+	for i, c := range s.layout.Columns {
+		zero := "''"
+		if c.Type == shape.TypeInt64 {
+			zero = "'0'"
+		}
+		cols = append(cols, fmt.Sprintf("COALESCE(CAST(%s AS VARCHAR), %s)", c.Name, zero))
+		group = append(group, fmt.Sprint(i+1))
+	}
+	query := fmt.Sprintf("SELECT %sMIN(ts), MAX(ts), COUNT(*) FROM %s", strings.Join(append(cols, ""), ", "), s.source())
+	if len(group) > 0 {
+		query += " GROUP BY " + strings.Join(group, ", ")
+	}
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CustomerStat
+	for rows.Next() {
+		c := CustomerStat{PartitionValues: make([]string, len(cols))}
+		dest := make([]any, 0, len(cols)+3)
+		for i := range c.PartitionValues {
+			dest = append(dest, &c.PartitionValues[i])
+		}
+		if err := rows.Scan(append(dest, &c.MinTs, &c.MaxTs, &c.RowCount)...); err != nil {
+			return nil, err
+		}
+		if s.layout.IsLegacy() {
+			c.CustomerID, _ = strconv.ParseInt(c.PartitionValues[0], 10, 64)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // scanCustomerStats runs a (customer, min_ts, max_ts, count) aggregation

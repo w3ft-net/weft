@@ -103,6 +103,10 @@ message CustomerArchiveStat {
   reserved 1;
   reserved "customer";
   int64 customer_id = 5;
+  // partition_values are the group's partition column values as text, in the
+  // shard's layout order. customer_id is set too when the layout is the legacy
+  // one. A shard from before layouts sends none.
+  repeated string partition_values = 6;
   int64 min_ts_unix_ns = 2;
   int64 max_ts_unix_ns = 3;
   int64 row_count = 4;
