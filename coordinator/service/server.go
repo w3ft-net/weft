@@ -64,10 +64,10 @@ func callerOrg(ctx context.Context) (store.OrgID, error) {
 	if s == nil {
 		return 0, status.Errorf(codes.Unauthenticated, "no authenticated caller")
 	}
-	if s.ActiveOrgID == 0 {
+	if s.Org() == 0 {
 		return 0, status.Errorf(codes.PermissionDenied, "authenticated user has no customer")
 	}
-	return s.ActiveOrgID, nil
+	return s.Org(), nil
 }
 
 // callerUserID returns the authenticated user's ID, or "" when no
@@ -90,7 +90,7 @@ func (s *Server) authorizeNamespace(ctx context.Context, namespace string) error
 	if sess == nil {
 		return status.Errorf(codes.Unauthenticated, "no authenticated caller")
 	}
-	actor := hosted.Actor{Org: sess.ActiveOrgID, User: sess.UserID}
+	actor := sess.Actor()
 	if err := s.authorizer().Authorize(ctx, actor, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: namespace}); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
 	}

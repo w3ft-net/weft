@@ -112,7 +112,7 @@ func planSpans(c *compiled, src sourceInfo, aggregate string, customerID int64, 
 	shardSQL, args, sources := query.ToSQLWithSources()
 	var traceStats *TraceStatsQuery
 	if aggregate == AggregateTraceIDs {
-		traceStats = planTraceStats(customerID, start, end, src.scopedNamespaces())
+		traceStats = planTraceStats(customerID, start, end, src.traceScope())
 	}
 	return &QueryPlan{
 		TraceStats:       traceStats,
@@ -124,8 +124,8 @@ func planSpans(c *compiled, src sourceInfo, aggregate string, customerID int64, 
 		SourceCmd:        src.cmd,
 		SourceCustomerID: customerID,
 		SourceNamespace:  routeNamespace(src),
-		SourceNamespaces: src.namespaces,
-		SourceService:    firstOrEmpty(src.services),
+		Coords:           src.coord,
+		SourceService:    routeService(src),
 		AlertArgs:        alertArgs,
 		ShardOrderBy:     "raw",
 		Aggregate:        aggregate,

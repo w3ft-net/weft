@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"github.com/graybeardcorp/weft/shape"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestIngestBatch_SplitsMultiLineEvents(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, ch := coord.TailFanout.Subscribe(ctx, &coordinator.RowMatcher{Namespace: "lines", Customer: int64(cust.ID)})
+	_, ch := coord.TailFanout.Subscribe(ctx, &coordinator.RowMatcher{Coords: shape.Set{{Customer: int64(cust.ID), Namespace: shape.Value("lines")}}})
 
 	json := "{\n \"a\": 1\n}"
 	srv.ingestBatch(context.Background(), []*pb.LogRow{

@@ -44,7 +44,8 @@ type TypedPlan struct {
 // source is one stream, and unless every leaf's text occurs exactly once in
 // both SQL strings, so a swap can't land on the wrong text.
 func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, directSQL, fieldSQL string) *TypedPlan {
-	if len(src.namespaces) != 1 || len(src.services) != 1 || len(src.kinds) != 1 || src.follow {
+	ns, svc, kind, ok := src.single()
+	if !ok || src.follow {
 		return nil
 	}
 	var leaves []typedLeaf
@@ -100,7 +101,7 @@ func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, direc
 	slices.Sort(requires)
 	return &TypedPlan{
 		Requires: requires, CustomerID: customerID,
-		Namespace: src.namespaces[0], Service: src.services[0], Kind: src.kinds[0], Env: src.env,
+		Namespace: ns, Service: svc, Kind: kind, Env: src.envValue(),
 		ShardSQL: shard, DirectShardSQL: direct, FieldSQL: fieldSQL,
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	coords "github.com/graybeardcorp/weft/shape"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"strconv"
 	"time"
@@ -56,7 +57,7 @@ import (
 // v15: wc -c is a Group (the shard sums each line's bytes and a newline), and
 // so is the one line `sort -n | tail -n 1` (or head, or -rn) prints: the shard
 // sends its best line and number, compute picks across shards.
-const PlannerVersion = 15
+const PlannerVersion = 16
 
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to
@@ -110,13 +111,16 @@ type LoweredPlan struct {
 	SourceNamespace   string        `json:"source_namespace,omitempty"`
 	SourceService     string        `json:"source_service,omitempty"`
 	SourceKind        string        `json:"source_kind,omitempty"`
-	Table             string        `json:"table,omitempty"`
-	AlertArgs         []string      `json:"alert_args,omitempty"`
-	RedirectTarget    string        `json:"redirect_target,omitempty"`
-	RedirectAppend    bool          `json:"redirect_append,omitempty"`
-	BinDeps           []BinDep      `json:"bin_deps,omitempty"`
-	CompiledAt        time.Time     `json:"compiled_at"`
-	PlannerVersion    int           `json:"planner_version"`
+	// Coords is what the plan reads, with the customer bound. The fire path
+	// checks the cron's scope still covers it before running the baked SQL.
+	Coords         coords.Set `json:"source_coords,omitempty"`
+	Table          string     `json:"table,omitempty"`
+	AlertArgs      []string   `json:"alert_args,omitempty"`
+	RedirectTarget string     `json:"redirect_target,omitempty"`
+	RedirectAppend bool       `json:"redirect_append,omitempty"`
+	BinDeps        []BinDep   `json:"bin_deps,omitempty"`
+	CompiledAt     time.Time  `json:"compiled_at"`
+	PlannerVersion int        `json:"planner_version"`
 	// FieldSQL and FieldSpec are QueryPlan's field form of DirectShardSQL
 	// for a stage that reads only some fields. It binds the same args, so a
 	// fire hydrates one set for both. A plan lowered before these existed has
@@ -231,6 +235,7 @@ func Lower(pipeline string, customerID int64, tier string, resolveBin BinResolve
 		SourceNamespace:   plan.SourceNamespace,
 		SourceService:     plan.SourceService,
 		SourceKind:        plan.SourceKind,
+		Coords:            plan.Coords,
 		Table:             plan.Table,
 		AlertArgs:         plan.AlertArgs,
 		RedirectTarget:    plan.RedirectTarget,

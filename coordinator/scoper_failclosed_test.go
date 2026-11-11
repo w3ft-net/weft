@@ -46,10 +46,10 @@ func (s staticScoper) ReadScope(context.Context, tenancy.Actor) (shape.Set, erro
 	return s.set, nil
 }
 
-// A scope narrower than a namespace (here one env) is a grant the query path
-// cannot enforce yet. It must refuse rather than widen the grant to the whole
-// namespace.
-func TestQuery_ScopeFinerThanNamespaceDenies(t *testing.T) {
+// A scope narrower than a namespace (here one env) is enforced exactly: the
+// query reads the intersection, so another env of the same namespace is refused
+// and the scoped env is not.
+func TestQuery_ScopeFinerThanNamespaceIsEnforcedExactly(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 	if _, err := db.FindOrCreateNamespace(custID, "alpha"); err != nil {
 		t.Fatal(err)
@@ -58,17 +58,24 @@ func TestQuery_ScopeFinerThanNamespaceDenies(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db, Scoper: staticScoper{set}})
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 
-	res, err := c.Execute(context.Background(), "cat /log/alpha/staging/api/main.log", tr, hosted.Actor{Org: custID, User: ""})
-	if err == nil && res != nil {
-		d, derr := res.Drain(context.Background())
-		if derr != nil {
-			err = derr
-		} else if d.Stderr != "" {
-			err = errors.New(d.Stderr)
+	run := func(pipeline string) error {
+		res, err := c.Execute(context.Background(), pipeline, tr, hosted.Actor{Org: custID, User: ""})
+		if err == nil && res != nil {
+			d, derr := res.Drain(context.Background())
+			if derr != nil {
+				return derr
+			}
+			if d.Stderr != "" {
+				return errors.New(d.Stderr)
+			}
 		}
+		return err
 	}
-	if err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("err = %v, want a refusal of the unenforceable scope", err)
+	if err := run("cat /log/alpha/staging/api/main.log"); err == nil || !strings.Contains(err.Error(), "unknown source") {
+		t.Errorf("another env of the namespace: err = %v, want a refusal", err)
+	}
+	if err := run("cat /log/alpha/prod/api/main.log"); err != nil && strings.Contains(err.Error(), "unknown source") {
+		t.Errorf("the scoped env was refused: %v", err)
 	}
 }
 

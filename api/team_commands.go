@@ -171,11 +171,11 @@ func (s *Server) teamGroupsCmd(session *auth.Session, args []string) (string, er
 
 // groupsOf is a member's role and groups, or those of a namespace's cron user.
 func (s *Server) groupsOf(session *auth.Session, user string) (role string, groups []string, err error) {
-	if s.store.IsCronUser(session.ActiveOrgID, user) {
-		groups, err = s.store.CronUserGroups(session.ActiveOrgID, user)
+	if s.store.IsCronUser(session.Org(), user) {
+		groups, err = s.store.CronUserGroups(session.Org(), user)
 		return "cron", groups, err
 	}
-	role, _, groups, err = s.store.MemberGroups(session.ActiveOrgID, user)
+	role, _, groups, err = s.store.MemberGroups(session.Org(), user)
 	return role, groups, err
 }
 
@@ -221,7 +221,7 @@ func (s *Server) teamDelUser(ctx context.Context, session *auth.Session, args []
 	if email == session.Email {
 		return "", fmt.Errorf("you can't remove yourself")
 	}
-	if err := s.store.RemoveMember(session.ActiveOrgID, email); err != nil {
+	if err := s.store.RemoveMember(session.Org(), email); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Removed %s from %s.\n", email, session.ActiveCustomerName), nil
@@ -237,7 +237,7 @@ func (s *Server) teamUsermod(ctx context.Context, session *auth.Session, args []
 		return "", errors.New(strings.TrimRight(teamUsage["usermod"], "\n"))
 	}
 	add, group, user := args[0] == "-aG", args[1], args[2]
-	org := session.ActiveOrgID
+	org := session.Org()
 
 	if !strings.Contains(user, "@") {
 		home, ok := s.store.CronUserHome(org, user)
@@ -303,18 +303,18 @@ func (s *Server) inviteMember(ctx context.Context, session *auth.Session, email 
 		return nil, &inviteErr{http.StatusForbidden, "only the owner can manage the team"}
 	}
 	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.Org()); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
-	count, _ := s.store.CountTeamMembers(session.ActiveOrgID)
+	count, _ := s.store.CountTeamMembers(session.Org())
 	if limit := store.SeatLimit(tier); count >= limit {
 		return nil, &inviteErr{http.StatusForbidden, fmt.Sprintf("seat limit reached (%d/%d)", count, limit)}
 	}
-	if existing, _ := s.store.GetTeamMemberByEmail(session.ActiveOrgID, email); existing != nil {
+	if existing, _ := s.store.GetTeamMemberByEmail(session.Org(), email); existing != nil {
 		return nil, &inviteErr{http.StatusConflict, "already a team member"}
 	}
 
-	member, err := s.store.InviteTeamMember(session.ActiveOrgID, email, orgs.RoleMember, session.UserID)
+	member, err := s.store.InviteTeamMember(session.Org(), email, orgs.RoleMember, session.UserID)
 	if err != nil {
 		return nil, &inviteErr{http.StatusInternalServerError, "internal error"}
 	}

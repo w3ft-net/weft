@@ -5,34 +5,23 @@ import (
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 )
 
-// RowMatcher filters live rows for a tail subscription. The source
-// coordinates are matched structurally against the row's columns —
-// an empty Namespace means "match every source" (warp.log follow); a
-// set Namespace with empty Service/Kind widens to the namespace (or
-// namespace+service) level.
+// RowMatcher filters live rows for a tail subscription. Coords is the same
+// pinned coordinate set the query's SQL was rendered from (see
+// planner.QueryPlan.Coords), so a live row is admitted exactly when the
+// historical read would have returned it: the same customer, namespace, env,
+// service and kind. An empty set admits nothing.
 type RowMatcher struct {
-	Customer                 int64
-	Namespace, Service, Kind string
-	Patterns                 []planner.GrepPattern
+	Coords   shape.Set
+	Patterns []planner.GrepPattern
 }
 
 // Match returns true if the row passes all filters.
 func (m *RowMatcher) Match(row *pb.LogRow) bool {
-	if m.Customer != row.CustomerId {
+	if !m.Coords.Matches(row.CustomerId, row.Namespace, row.Env, row.Service, row.Kind) {
 		return false
-	}
-	if m.Namespace != "" {
-		if row.Namespace != m.Namespace {
-			return false
-		}
-		if m.Service != "" && row.Service != m.Service {
-			return false
-		}
-		if m.Kind != "" && row.Kind != m.Kind {
-			return false
-		}
 	}
 	for _, p := range m.Patterns {
 		raw := row.Raw

@@ -12,6 +12,7 @@ import (
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
+	"github.com/graybeardcorp/weft/store"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -57,8 +58,15 @@ func TestExecuteRPC_FollowFlushesSingleLineImmediately(t *testing.T) {
 
 	cust, _ := st.FindOrCreateOrg("follow-flush")
 	st.SeedDevSubscription(cust.ID)
-	user, err := st.CreateUser("flush@example.test")
+	if _, err := st.FindOrCreateNamespace(cust.ID, "follow-flush"); err != nil {
+		t.Fatal(err)
+	}
+	// A live tail reads only what its caller may, so the caller owns the org.
+	user, err := st.CreateVerifiedUser("flush@example.test")
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddTeamMemberWithEmail(cust.ID, user.ID, user.Email, store.RoleOwner); err != nil {
 		t.Fatal(err)
 	}
 

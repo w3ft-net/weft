@@ -35,12 +35,7 @@ type LiveFilter func(*pb.LogRow) []string
 // pipeline — or, when the plan has no stages (bare `tail -f foo.log`),
 // straight to the caller as the raw line.
 func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
-	gate := &RowMatcher{
-		Customer:  plan.SourceCustomerID,
-		Namespace: plan.SourceNamespace,
-		Service:   plan.SourceService,
-		Kind:      plan.SourceKind,
-	}
+	gate := &RowMatcher{Coords: plan.Coords}
 
 	// Leading row stages keep or drop the live row (LiveRowStages), and
 	// a jq after them reads its payload (LiveReadsPayload). Same rule

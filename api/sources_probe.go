@@ -49,7 +49,7 @@ func (s *Server) handleProbeSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lg, err := s.store.FindLogGroup(session.ActiveOrgID, namespace, app)
+	lg, err := s.store.FindLogGroup(session.Org(), namespace, app)
 	if err != nil {
 		weftsdk.Infof(r.Context(), "probe source %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

@@ -28,7 +28,7 @@ var permissionReads = map[string]bool{
 // Files that read a permission-shaped value for a reason other than gating.
 // Each needs its reason.
 var gateExceptions = map[string]string{
-	"auth/session.go": "IsOwner is session identity (the active membership's role) for the UI; no handler gates on it",
+	"auth/session.go": "builds the session: IsOwner is identity for the UI (no handler gates on it) and ActiveOrgID is what Session.Actor() exposes as the partition",
 }
 
 // TestNoPermissionChecksOutsideTheGates enforces contract 8: access is decided
@@ -71,6 +71,11 @@ func TestNoPermissionChecksOutsideTheGates(t *testing.T) {
 			case *ast.CallExpr:
 				if sel, ok := n.Fun.(*ast.SelectorExpr); ok && permissionReads[sel.Sel.Name] {
 					found = append(found, rel+": calls "+sel.Sel.Name)
+				}
+			case *ast.SelectorExpr:
+				// The session's org is read through Session.Actor().Partition().
+				if n.Sel.Name == "ActiveOrgID" {
+					found = append(found, rel+": reads Session.ActiveOrgID; use session.Org()")
 				}
 			case *ast.BinaryExpr:
 				if n.Op == token.EQL || n.Op == token.NEQ {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // Session is the resolved identity for an authenticated request. It is
@@ -37,6 +38,15 @@ type Session struct {
 	IsOwner         bool
 	IsSuperadmin    bool
 }
+
+// Actor is the session as the party the Scoper and Authorizer judge. Every
+// reader of the session's org goes through it, so the partition has one source.
+func (s *Session) Actor() hosted.Actor {
+	return hosted.Actor{Org: s.ActiveOrgID, User: s.UserID}
+}
+
+// Org is the partition the session's store calls are scoped by: the actor's.
+func (s *Session) Org() store.OrgID { return store.OrgID(s.Actor().Partition()) }
 
 type sessionContextKey struct{}
 

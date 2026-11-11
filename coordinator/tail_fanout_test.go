@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"github.com/graybeardcorp/weft/shape"
 	"os"
 	"testing"
 	"time"
@@ -22,7 +23,7 @@ func TestTailFanout_LocalPassthrough(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	matcher := &RowMatcher{Namespace: "vimgym", Service: "api", Kind: "main"}
+	matcher := &RowMatcher{Coords: shape.Set{{Namespace: shape.Value("vimgym"), Service: shape.Value("api"), Kind: shape.Value("main")}}}
 	id, ch := f.Subscribe(ctx, matcher)
 	defer f.Unsubscribe(context.Background(), id, matcher)
 
@@ -74,7 +75,7 @@ func TestTailFanout_RedisCrossDelivery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	matcher := &RowMatcher{Namespace: "ns1", Service: "svc1", Kind: "main"}
+	matcher := &RowMatcher{Coords: shape.Set{{Namespace: shape.Value("ns1"), Service: shape.Value("svc1"), Kind: shape.Value("main")}}}
 	id, ch := b.Subscribe(ctx, matcher)
 	defer b.Unsubscribe(context.Background(), id, matcher)
 

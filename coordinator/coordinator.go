@@ -621,7 +621,11 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 	if org == 0 {
 		return nil, errNoOrg
 	}
-	plan, err := planner.Plan(pipeline, int64(org), cwd, time.Time{}, time.Time{})
+	scope, err := c.queryScope(ctx, org)
+	if err != nil {
+		return nil, fmt.Errorf("plan: %w", err)
+	}
+	plan, err := planner.PlanIn(pipeline, int64(org), scope, cwd, time.Time{}, time.Time{})
 	if err != nil {
 		return nil, err
 	}
@@ -631,13 +635,8 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 		return nil, err
 	}
 
-	matcher := &RowMatcher{
-		Customer:  plan.SourceCustomerID,
-		Namespace: plan.SourceNamespace,
-		Service:   plan.SourceService,
-		Kind:      plan.SourceKind,
-		Patterns:  plan.FollowPatterns,
-	}
+	// The live rows are held to the same coordinates the historical batch read.
+	matcher := &RowMatcher{Coords: plan.Coords, Patterns: plan.FollowPatterns}
 	filter := BuildLiveFilter(plan)
 
 	next := func() compute.LineStream {
@@ -721,18 +720,12 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 	if !ok {
 		return nil, false
 	}
-	// A lowered plan skips Plan, and with it the source check. A cron homed in
-	// a namespace is held to it here; one the scope refuses re-plans, and the
-	// slow path reports the refusal. (An org-level cron reads the org, as the
-	// system identity does, so it needs no check.)
-	if watch.NamespaceID != nil {
-		var sources []string
-		if lp.SourceNamespace != "" {
-			sources = []string{lp.SourceNamespace}
-		}
-		if err := c.authorizeNamespaces(ctx, watch.OrgID, sources); err != nil {
-			return nil, false
-		}
+	// A lowered plan skips Plan, and with it the intersection. The baked SQL
+	// is only right while the cron's scope still covers everything it reads;
+	// if a grant was revoked it re-plans, and the slow path reports the denial.
+	scope, err := c.queryScope(ctx, watch.OrgID)
+	if err != nil || !shape.Covers(scope, lp.Coords) {
+		return nil, false
 	}
 	if lp.PlannerVersion != planner.PlannerVersion {
 		weftsdk.Infof(ctx, "watch %d: lowered_plan stamped at version %d, planner is at %d — recompiling",
@@ -1031,11 +1024,11 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 		}
 	}
 
-	readable, err := c.readScope(ctx, custID)
+	scope, err := c.queryScope(ctx, custID)
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
 	}
-	plan, err := planner.PlanScoped(pipeline, int64(custID), cwd, tr.Start, tr.End, readable)
+	plan, err := planner.PlanIn(pipeline, int64(custID), scope, cwd, tr.Start, tr.End)
 	if err != nil {
 		// The rewriter only substitutes pipelines whose first command
 		// is on /log/..., which the planner accepts. ErrNotPlannable
@@ -1043,6 +1036,9 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 		// substitution and re-render — surface it.
 		weftsdk.Errorf(ctx, "rewriter callback: plan error: %v (pipeline=%q)", err, pipeline)
 		return nil, fmt.Errorf("plan: %w", err)
+	}
+	if err := c.sourcesExist(custID, plan); err != nil {
+		return nil, err
 	}
 
 	execResult, err := c.executeQuery(ctx, plan, tr, custID, userID, alertCtx)
@@ -1107,30 +1103,6 @@ func (c *Coordinator) preflight(pipeline string, custID store.OrgID) (store.OrgI
 // scopes tenant-backed features (ShellFS, weft.*). alertCtx is forwarded
 // to runLocal so interior queries dispatched by the interceptor inherit
 // the caller's alert identity; may be nil.
-// readScope is the namespaces a trace is restricted to for userID: nil when
-// the actor may read everything (an owner, or the system identity), otherwise
-// the namespaces they may read, which may be none.
-func (c *Coordinator) readScope(ctx context.Context, custID store.OrgID) ([]string, error) {
-	if c.Store == nil {
-		return nil, nil
-	}
-	set, err := c.actorScope(ctx)
-	if err != nil {
-		return nil, err
-	}
-	names, all, err := set.Namespaces(int64(custID))
-	if err != nil {
-		return nil, err
-	}
-	if all {
-		return nil, nil
-	}
-	if names == nil {
-		names = []string{}
-	}
-	return names, nil
-}
-
 // actorScope is what the request's actor may read. A request that reached
 // here without an actor has no scope.
 func (c *Coordinator) actorScope(ctx context.Context) (shape.Set, error) {
@@ -1141,55 +1113,49 @@ func (c *Coordinator) actorScope(ctx context.Context) (shape.Set, error) {
 	return c.Scoper.ReadScope(ctx, a)
 }
 
-// authorizeSources refuses a log query that reads a namespace the actor's
-// scope does not cover. The empty user is the system identity, whose scope is
-// every namespace.
-func (c *Coordinator) authorizeSources(ctx context.Context, custID store.OrgID, plan *planner.QueryPlan) error {
-	return c.authorizeNamespaces(ctx, custID, plan.SourceNamespaces)
-}
-
-// authorizeNamespaces is authorizeSources for the namespaces a query names; none
-// means it reads them all.
-func (c *Coordinator) authorizeNamespaces(ctx context.Context, custID store.OrgID, sources []string) error {
-	a, ok := tenancy.ActorFrom(ctx)
-	if !ok {
-		return errors.New("validate source: request has no actor")
+// sourcesExist refuses a query that names a namespace the customer does not
+// have. That is not a permission check (the scope already held the query to
+// what the actor may read): a wildcard scope such as an owner's would
+// otherwise let a mistyped namespace read as an empty log. Missing and
+// unreadable namespaces read the same.
+func (c *Coordinator) sourcesExist(custID store.OrgID, plan *planner.QueryPlan) error {
+	if c.Store == nil {
+		return nil
+	}
+	var named []string
+	for _, t := range plan.Coords {
+		if ns, ok := t.Namespace.Literal(); ok && !slices.Contains(named, ns) {
+			named = append(named, ns)
+		}
+	}
+	if len(named) == 0 {
+		return nil
 	}
 	existing, err := c.Store.NamespaceNames(custID, "", true)
 	if err != nil {
 		return fmt.Errorf("validate source: %w", err)
 	}
-	// A wildcard resolves against the namespaces that exist.
-	readable, _, err := tenancy.Readable(ctx, c.Scoper, a, func() ([]string, error) { return existing, nil })
-	if err != nil {
-		return fmt.Errorf("validate source: %w", err)
-	}
-	if len(sources) == 0 {
-		if len(readable) < len(existing) {
-			return fmt.Errorf("this script reads from all namespaces, and you can read only %s", strings.Join(readable, ", "))
-		}
-		return nil
-	}
-	for _, ns := range sources {
-		if !slices.Contains(readable, ns) {
-			return errors.New("unknown source: " + ns)
+	for _, ns := range named {
+		if !slices.Contains(existing, ns) {
+			return fmt.Errorf("%w: %s", planner.ErrNoSource, ns)
 		}
 	}
 	return nil
 }
 
+// queryScope is what the request's actor may read, as the set a query is planned
+// against. A coordinator built without a store (a few tests) has no org tables
+// to ask, so it reads the whole customer.
+func (c *Coordinator) queryScope(ctx context.Context, custID store.OrgID) (shape.Set, error) {
+	if c.Store == nil {
+		return shape.Set{{Customer: int64(custID)}}, nil
+	}
+	return c.actorScope(ctx)
+}
+
 func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan, tr TimeRange, custID store.OrgID, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
 	if plan.ShardSQL == "" {
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
-	}
-
-	// Authorization: every namespace the query reads must be one the user may
-	// read (the same rule the /log listing applies), and a query that names no
-	// namespace reads all of them. This also serves as the allowlist before a
-	// name reaches SQL interpolation: only namespaces that exist can pass. A
-	// namespace that is missing and one that is unreadable read the same.
-	if err := c.authorizeSources(ctx, custID, plan); err != nil {
-		return nil, err
 	}
 
 	// Every shard query goes through plan.DirectShardSQL so each shard

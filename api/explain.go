@@ -45,7 +45,7 @@ func (s *Server) maybeHandleExplain(r *http.Request, session *auth.Session, line
 	if first := strings.Fields(rest)[0]; strings.HasPrefix(first, "-") {
 		return true, "", fmt.Errorf("unknown option %s", first)
 	}
-	a, err := planner.Analyze(rest, cwd, storeBinResolver{store: s.store, orgID: session.ActiveOrgID})
+	a, err := planner.Analyze(rest, cwd, storeBinResolver{store: s.store, orgID: session.Org()})
 	if err != nil {
 		return true, "", err
 	}

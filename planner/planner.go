@@ -10,6 +10,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/bash"
 
 	"github.com/graybeardcorp/weft/logtable"
+	coords "github.com/graybeardcorp/weft/shape"
 )
 
 // QueryPlan is the result of analyzing a weft pipeline. ShardSQL is the
@@ -66,13 +67,13 @@ type QueryPlan struct {
 	SourceCmd        string // source command: "cat", "head", "tail", or "trace"
 	SourceCustomerID int64  // the customer_id the query is scoped to (0 only in tests)
 	SourceNamespace  string // namespace column value — routing ("" = all namespaces)
-	// SourceNamespaces is every namespace the source reads, sorted; empty means
-	// all of them. SourceNamespace is only the first. Authorization must use
-	// this, not SourceNamespace.
-	SourceNamespaces []string
-	SourceService    string   // service column value — routing ("" = all services in the namespace)
-	SourceKind       string   // kind column value — live-tail matching ("" = all kinds)
-	AlertArgs        []string // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
+	// Coords is what the query reads: the source's tuples intersected with the
+	// scope, pinned before any pass runs. The SQL, shard routing, table choice
+	// and the live matcher are all backends over it.
+	Coords        coords.Set
+	SourceService string   // service column value — routing ("" = all services in the namespace)
+	SourceKind    string   // kind column value — live-tail matching ("" = all kinds)
+	AlertArgs     []string // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
 
 	// Table names the shard table that holds the source's rows, when the source
 	// pins exactly one (customer, namespace, service, kind). "" = no hint: the
@@ -212,30 +213,57 @@ func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (
 	return plan, err
 }
 
-// PlanScoped is Plan for a user who may read only the namespaces in readable.
-// A trace spans services, so rather than refuse one that names no namespace it
-// is restricted to readable: its rows, counts and per-trace service lists
-// come only from those namespaces, because the restriction is in the SQL and
-// not applied to the output afterwards. Every other command is planned as
-// Plan would, and the coordinator refuses it if it names a namespace the user
-// can't read.
-func PlanScoped(pipeline string, customerID int64, cwd string, start, end time.Time, readable []string) (*QueryPlan, error) {
-	plan, _, err := compile(pipeline, customerID, cwd, start, end, readable)
+// ErrNoSource is the deny for a query whose source, intersected with what the
+// principal may read, is empty. It never says whether the source exists.
+var ErrNoSource = errors.New("unknown source")
+
+// PlanIn is Plan for a principal who may read only scope. The query reads the
+// intersection of what it names and scope (customerID is the partition, and
+// every tuple of scope must be in it): a wildcard (warp.log, a glob, an
+// unnamed namespace) means every tuple in scope, never "no predicate", and an
+// empty intersection is ErrNoSource before anything is routed. A trace that
+// names no namespace is restricted to scope, because its rows, counts and
+// per-trace service lists come only from the SQL.
+func PlanIn(pipeline string, customerID int64, scope coords.Set, cwd string, start, end time.Time) (*QueryPlan, error) {
+	if customerID == 0 {
+		return nil, errors.New("plan: no customer")
+	}
+	for _, t := range scope {
+		if t.Customer != customerID {
+			return nil, errors.New("plan: scope reaches another customer")
+		}
+	}
+	if scope == nil {
+		scope = coords.Set{} // an empty scope is a deny, not the whole customer
+	}
+	plan, _, err := compile(pipeline, customerID, cwd, start, end, scope)
 	return plan, err
+}
+
+// noSource is ErrNoSource naming the first namespace the user wrote, which is
+// their own input, so the refusal reads the same for a namespace that is
+// missing and one they may not read.
+func noSource(named coords.Set) error {
+	for _, t := range named {
+		if ns, ok := t.Namespace.Literal(); ok {
+			return fmt.Errorf("%w: %s", ErrNoSource, ns)
+		}
+	}
+	return ErrNoSource
 }
 
 // compile plans a pipeline and also returns its IR, which Explain shows.
 // The IR is nil for an alert-only pipeline. readable, if non-nil, scopes trace
-// commands (see PlanScoped).
-func compile(pipeline string, customerID int64, cwd string, start, end time.Time, readable []string) (*QueryPlan, *compiled, error) {
-	plan, c, err := compileFor(pipeline, customerID, cwd, start, end, readable, false)
+// commands (see PlanIn).
+func compile(pipeline string, customerID int64, cwd string, start, end time.Time, scope coords.Set) (*QueryPlan, *compiled, error) {
+	plan, c, err := compileFor(pipeline, customerID, cwd, start, end, scope, false)
 	if err != nil || plan.Typed == nil {
 		return plan, c, err
 	}
 	// The same pipeline planned for shards that have said every field it
 	// compares is a finite decimal: the comparison is then exact, so SQL can
 	// compute all of the stage and compute has less (or nothing) to run.
-	exact, _, err := compileFor(pipeline, customerID, cwd, start, end, readable, true)
+	exact, _, err := compileFor(pipeline, customerID, cwd, start, end, scope, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -245,7 +273,7 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 
 // compileFor is compile for one reading of the facts: assumeTyped says every
 // field the pipeline compares with a number holds a finite decimal.
-func compileFor(pipeline string, customerID int64, cwd string, start, end time.Time, readable []string, assumeTyped bool) (*QueryPlan, *compiled, error) {
+func compileFor(pipeline string, customerID int64, cwd string, start, end time.Time, scope coords.Set, assumeTyped bool) (*QueryPlan, *compiled, error) {
 	queryPart, alertArgs := SplitAlertStage(pipeline)
 
 	// Alert-only pipeline (`alert ...` with nothing in front). Return
@@ -276,15 +304,38 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 		return nil, nil, fmt.Errorf("plan: %w", err)
 	}
 
-	if readable != nil && strings.HasPrefix(info.source.cmd, "trace") && len(info.source.namespaces) == 0 {
-		// Nothing readable selects nothing; an empty namespace list would
-		// mean "all", so it cannot be expressed as a predicate.
-		if len(readable) == 0 {
+	// Pin the coordinates: what the source names, held to what the scope allows.
+	// A nil scope is the whole customer, which is what Plan always meant.
+	unscoped := scope == nil
+	if unscoped {
+		scope = coords.Set{{Customer: customerID}}
+	}
+	named := info.source.tuples
+	if len(named) == 0 {
+		named = coords.Set{{}} // a trace that names no namespace
+	}
+	bound := make(coords.Set, len(named))
+	for i, t := range named {
+		t.Customer = customerID
+		bound[i] = t
+	}
+	info.source.coord = coords.Intersect(bound, scope)
+	// A tuple the scope leaves nothing of is a refusal, not something to
+	// drop: the rest would run and the answer would silently miss it.
+	for _, t := range bound {
+		if len(info.source.coord) > 0 && len(coords.Intersect(coords.Set{t}, scope)) == 0 {
+			return nil, nil, noSource(coords.Set{t})
+		}
+	}
+	if len(info.source.coord) == 0 {
+		// Nothing readable selects nothing for a trace listing; every other
+		// source is refused.
+		if strings.HasPrefix(info.source.cmd, "trace") && len(info.source.tuples) == 0 {
 			return &QueryPlan{SourceCmd: info.source.cmd, AlertArgs: alertArgs}, &compiled{source: info.source}, nil
 		}
-		info.source.namespaces = slices.Sorted(slices.Values(readable))
-		info.source.scoped = true
+		return nil, nil, noSource(bound)
 	}
+	info.source.scope = scope
 
 	if info.source.follow && redirTarget != "" {
 		return nil, nil, fmt.Errorf("plan: %w", FollowRedirectError(redirTarget))
@@ -485,9 +536,9 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 		SourceCmd:         info.source.cmd,
 		SourceCustomerID:  customerID,
 		SourceNamespace:   routeNamespace(info.source),
-		SourceNamespaces:  info.source.namespaces,
-		SourceService:     firstOrEmpty(info.source.services),
-		SourceKind:        firstOrEmpty(info.source.kinds),
+		Coords:            info.source.coord,
+		SourceService:     routeService(info.source),
+		SourceKind:        routeKind(info.source),
 		Table:             sourceTable(customerID, info.source),
 		AlertArgs:         alertArgs,
 		ShardOrderBy:      mergeOrderBy,
@@ -510,10 +561,25 @@ func sourceTable(customerID int64, src sourceInfo) string {
 	default:
 		return ""
 	}
-	if customerID == 0 || len(src.namespaces) != 1 || len(src.services) != 1 || len(src.kinds) != 1 {
+	ns, svc, kind, ok := src.single()
+	if customerID == 0 || !ok {
 		return ""
 	}
-	return logtable.Name(customerID, src.namespaces[0], src.services[0], src.kinds[0])
+	return logtable.Name(customerID, ns, svc, kind)
+}
+
+// single is the one (namespace, service, kind) the pinned coordinates name, when
+// they are exactly one tuple that pins all three; env is a column, not part of
+// a table.
+func (s sourceInfo) single() (ns, svc, kind string, ok bool) {
+	if len(s.coord) != 1 {
+		return "", "", "", false
+	}
+	t := s.coord[0]
+	ns, ok1 := t.Namespace.Literal()
+	svc, ok2 := t.Service.Literal()
+	kind, ok3 := t.Kind.Literal()
+	return ns, svc, kind, ok1 && ok2 && ok3
 }
 
 // addSourcePredicates applies the source's filters: each pseudofile
@@ -524,12 +590,7 @@ func sourceTable(customerID int64, src sourceInfo) string {
 // against an adversarial namespace name even though the coordinator's
 // CustomerHasSource allowlist gates the source up front.
 func addSourcePredicates(sql *Query, src sourceInfo) {
-	if src.env != "" {
-		sql.addPredicate("env = ?", src.env)
-	}
-	addInPredicate(sql, "namespace", src.namespaces)
-	addInPredicate(sql, "service", src.services)
-	addInPredicate(sql, "kind", src.kinds)
+	addCoordPredicates(sql, src.coord)
 
 	if src.cmd == "trace" && src.traceID != "" {
 		sql.addPredicate("trace_id = ?", src.traceID)
@@ -554,6 +615,128 @@ func addSourcePredicates(sql *Query, src sourceInfo) {
 		// rows always carry namespace and service.
 		sql.metaCols = MetaVarColumns
 	}
+}
+
+// colOf is a coordinate column as the SQL names it.
+type colOf struct {
+	name string
+	cell func(coords.Coord) coords.Cell
+}
+
+var coordCols = []colOf{
+	{"env", func(c coords.Coord) coords.Cell { return c.Env }},
+	{"namespace", func(c coords.Coord) coords.Cell { return c.Namespace }},
+	{"service", func(c coords.Coord) coords.Cell { return c.Service }},
+	{"kind", func(c coords.Coord) coords.Cell { return c.Kind }},
+}
+
+// literal is the SQL value a constrained cell compares to. Null is the empty
+// string, which is how storage records a missing value.
+func literal(c coords.Cell) (string, bool) {
+	if v, ok := c.Literal(); ok {
+		return v, true
+	}
+	return "", !c.IsAny()
+}
+
+// addCoordPredicates is the SQL backend over the pinned coordinates, and it is
+// exact. When the tuples are a per-column product it renders each column on
+// its own (`namespace IN (...)`), which reads the same rows and stays compact;
+// otherwise it renders the union of tuples. A tuple that constrains nothing
+// admits every row, so the union adds no predicate.
+func addCoordPredicates(sql *Query, set coords.Set) {
+	if len(set) == 0 {
+		return
+	}
+	if isProduct(set) {
+		for _, col := range coordCols {
+			var vals []string
+			seen := map[string]bool{}
+			for _, t := range set {
+				if v, ok := literal(col.cell(t)); ok && !seen[v] {
+					seen[v] = true
+					vals = append(vals, v)
+				}
+			}
+			slices.Sort(vals)
+			addInPredicate(sql, col.name, vals)
+		}
+		return
+	}
+	exact, args, hasEnv := unionOf(set, coordCols)
+	if exact == "" {
+		return
+	}
+	if hasEnv {
+		// env is not part of an archive's key directories, so a branch that
+		// names it hides the key columns from hive pruning and every key
+		// directory gets opened. The same union over the key columns alone is a
+		// superset of the exact one: it adds no rows, and lets DuckDB skip the
+		// directories no branch can match.
+		if keys, keyArgs, _ := unionOf(set, coordCols[1:]); keys != "" {
+			sql.addPredicate(keys, keyArgs...)
+		}
+	}
+	sql.addPredicate(exact, args...)
+}
+
+// unionOf renders the tuples as a union over cols: each tuple's constrained
+// columns ANDed, the tuples ORed, repeated branches dropped. It is "" when some
+// tuple constrains none of cols, since that tuple admits every row. hasEnv
+// reports whether any branch constrains env.
+func unionOf(set coords.Set, cols []colOf) (sql string, args []string, hasEnv bool) {
+	var groups []string
+	seen := map[string]bool{}
+	for _, t := range set {
+		var conj, vals []string
+		for _, col := range cols {
+			if v, ok := literal(col.cell(t)); ok {
+				conj = append(conj, col.name+" = ?")
+				vals = append(vals, v)
+				hasEnv = hasEnv || col.name == "env"
+			}
+		}
+		if len(conj) == 0 {
+			return "", nil, false
+		}
+		g := "(" + strings.Join(conj, " AND ") + ")"
+		if key := g + "\x00" + strings.Join(vals, "\x00"); !seen[key] {
+			seen[key] = true
+			groups = append(groups, g)
+			args = append(args, vals...)
+		}
+	}
+	return "(" + strings.Join(groups, " OR ") + ")", args, hasEnv
+}
+
+// isProduct reports whether the tuples are exactly the per-column product of
+// their values, with each column either constrained in every tuple or in none.
+// Only then do per-column lists read the same rows as the tuples.
+func isProduct(set coords.Set) bool {
+	size := 1
+	for _, col := range coordCols {
+		vals := map[string]bool{}
+		constrained := 0
+		for _, t := range set {
+			if v, ok := literal(col.cell(t)); ok {
+				constrained++
+				vals[v] = true
+			}
+		}
+		if constrained != 0 && constrained != len(set) {
+			return false
+		}
+		if constrained != 0 {
+			size *= len(vals)
+		}
+	}
+	distinct := set[:0:0]
+	for _, t := range set {
+		if !slices.Contains(distinct, t) {
+			distinct = append(distinct, t)
+		}
+	}
+	return size == len(distinct)
 }
 
 // addInPredicate filters col to values: nothing for none (warp.log, or
@@ -583,21 +766,23 @@ func SourceFollows(pipeline, cwd string) bool {
 	return err == nil && info.source.follow
 }
 
-// routeNamespace is the namespace a query is routed by: its first, which
-// narrows the shards searched. A scoped trace is restricted by a predicate
-// over several namespaces, so it must search every shard.
+// routeNamespace and its siblings are the superset backend over the pinned
+// coordinates: shards are narrowed by a value every tuple shares, and by
+// nothing otherwise, so a read of several namespaces searches every shard
+// rather than only the first namespace's.
 func routeNamespace(src sourceInfo) string {
-	if src.scoped {
-		return ""
-	}
-	return firstOrEmpty(src.namespaces)
+	v, _ := coords.Shared(src.coord, func(c coords.Coord) coords.Cell { return c.Namespace })
+	return v
 }
 
-func firstOrEmpty(s []string) string {
-	if len(s) > 0 {
-		return s[0]
-	}
-	return ""
+func routeService(src sourceInfo) string {
+	v, _ := coords.Shared(src.coord, func(c coords.Coord) coords.Cell { return c.Service })
+	return v
+}
+
+func routeKind(src sourceInfo) string {
+	v, _ := coords.Shared(src.coord, func(c coords.Coord) coords.Cell { return c.Kind })
+	return v
 }
 
 // extractTrailingFSRedirect detects a `> /tmp/...` (or `>>`, or any

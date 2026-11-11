@@ -7,7 +7,10 @@ are in (`1091269b`, `45f4f4e5`, `8b466a3b`, `7d287b05`, `e0eefc74`,
 `d579a916`). Namespace-owned crons are in (`2e68cd81`, `cad75572`,
 `e21764ba`, `30c74d55`, `7fa2c00f`, `61fdbf6c`): home namespaces, the
 `-r`/`-w` groups and cron users, `ns/name` references, restricted dashboard
-tiles, and the `/bin` dependency rule. Phases 3-6 are not started.
+tiles, and the `/bin` dependency rule. The action sweep and the lint test are
+done, and every reader of the session's org goes through `Session.Actor()`
+(`Session.Org()`). Phase 3 is in.
+Phases 4-6 are not started.
 
 ## Why
 
@@ -626,13 +629,13 @@ are no interim fixes.
 | Gap | Closes in |
 |---|---|
 | 1 zero means everything | 2 (planner takes only a scope set; `required` columns) |
-| 2 live tail ignores env | 3 (generated matcher, `Null` env) |
+| 2 live tail ignores env | 3 (done: the matcher is a backend over the pinned coordinates) |
 | 3 cron scope | 2 (done for namespaced crons; org-level crons still fire as the system identity until moved) |
-| 4 source endpoints | 2 (filtered by `ReadScope`; done in `f48651e7`) |
+| 4 source endpoints | 2 (filtered by `ReadScope`, `f48651e7`; by coordinates in 3) |
 | 5 unauthenticated compute | infra-interfaces plan |
 | 6 un-enrolled tables | 6 (behind the control-plane interfaces) |
 | 7 legacy mixed archives | not fixed by this plan |
-| 8 multi-source product | 3 (tuple sets) |
+| 8 multi-source product | 3 (done: tuple sets) |
 | 9, 10 cleanup | 2 (9 done: `mounts.Config.CustomerName` is gone; 10 done: `nsIDCache` entries expire after a minute) |
 
 1. ✅ **Zero means "everything" in the query path.** `resolveCustomerID("")`
@@ -765,16 +768,35 @@ Each gap fix starts with a failing test.
 
 **Phase 3: coordinates as IR (~4d).**
 
-- Replace `sourceInfo`'s per-column slices with a `shape.Set`. The
-  planner takes the `ReadScope` set directly, intersects it with the
-  source, and pins the result as `coordNode`.
-- Write the backends: SQL, the live matcher (replacing `RowMatcher`'s
-  coordinate half), routing, cold pruning, table selection and the
-  source endpoints' filter.
-- Add the differential and superset tests, including `Null` env.
-- Logs and traces stop differing on namespace authz.
-  `authorizeSources` goes away; the empty-intersection deny replaces
-  it. *(Closes gaps 2 and 8.)*
+- ✅ `sourceInfo` holds tuples, one per file. `PlanIn(pipeline, customerID,
+  scope, ...)` intersects them with the `ReadScope` set and pins the result as
+  `QueryPlan.Coords` (`LoweredPlan.Coords` for crons). `Plan` is the whole
+  customer. An empty scope is a deny, not "no predicate".
+- ✅ Backends over `Coords`: SQL (exact; a per-column product keeps the compact
+  `IN` form, anything else is a union of tuples), the live `RowMatcher` (exact,
+  with env and every tuple), shard routing and the Redis tail topics (superset,
+  narrowed only by a value every tuple shares), table selection, and the cron
+  fire check (`shape.Covers`, else re-plan).
+- ✅ The differential test (`coordinator/coords_differential_test.go`) runs the
+  planned SQL in DuckDB, the matcher, and an oracle over random scopes,
+  sources and rows, including `Null` env, and checks routing never drops an
+  admitted row.
+- ✅ `authorizeSources` is gone. A source tuple the scope leaves nothing of
+  refuses the whole query (`planner.ErrNoSource`), since running the rest
+  would be a partial answer. `sourcesExist` still refuses a namespace the
+  customer lacks, so an owner's typo isn't an empty log. Scopes finer than a
+  namespace are now enforced exactly on this path.
+- ✅ Cold parquet pruning by coordinates needs no shard code: an archive's key
+  directories are hive partitions, and DuckDB skips the ones the SQL can't
+  match. A union whose branches name env (not a partition) hid the keys from
+  it and opened every directory, so the SQL backend adds the same union over
+  the key columns alone as a superset. `coords_prune_test.go` pins that a query
+  opens exactly the admitted key directories.
+- ✅ The source endpoints (list, pending, pending count, schema) filter by the
+  set: a source is visible when the scope admits some row of its namespace and
+  service (`Set.Overlaps`), so a scope narrower than a namespace is honoured and
+  an unreadable source reads as missing. Namespaces only narrow the SQL.
+- *(Closes gaps 2 and 8.)*
 
 **Phase 4: shape generator, shape-agnostic shards, and extract the
 hosted adapter (~9d).**

@@ -36,6 +36,7 @@ import (
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/store"
 	"gorm.io/gorm"
 )
@@ -154,14 +155,42 @@ func NewServer(s *store.Store, jwtSecret, coordAddr, baseURL string) *Server {
 // error is a refusal.
 // readable is the namespaces the session may read.
 func (s *Server) readable(ctx context.Context, session *auth.Session) ([]string, error) {
-	names, _, err := tenancy.Readable(ctx, s.scoper, hosted.Actor{Org: session.ActiveOrgID, User: session.UserID}, func() ([]string, error) {
-		return s.store.NamespaceNames(session.ActiveOrgID, "", true)
+	names, _, err := tenancy.Readable(ctx, s.scoper, session.Actor(), func() ([]string, error) {
+		return s.store.NamespaceNames(session.Org(), "", true)
 	})
 	return names, err
 }
 
+// sourceScope is what the session may read, held for the source endpoints. A
+// source is a coordinate, not a namespace, so they are filtered by the scope
+// itself and a scope narrower than a namespace is honoured.
+type sourceScope struct {
+	set shape.Set
+	org int64
+}
+
+func (s *Server) sourceScope(ctx context.Context, session *auth.Session) (sourceScope, error) {
+	set, err := s.scoper.ReadScope(ctx, session.Actor())
+	return sourceScope{set: set, org: int64(session.Org())}, err
+}
+
+// sees reports whether the scope reads any of the service's rows.
+func (ss sourceScope) sees(namespace, service string) bool {
+	return ss.set.Overlaps(shape.Coord{Customer: ss.org, Namespace: shape.Value(namespace), Service: shape.Value(service)})
+}
+
+// narrow limits a log-group query to the namespaces the scope touches. The
+// caller still filters each row with sees.
+func (ss sourceScope) narrow(q *gorm.DB) *gorm.DB {
+	names, all := ss.set.NamespaceSuperset(ss.org)
+	if all {
+		return q
+	}
+	return q.Where("namespaces.name IN ?", names)
+}
+
 func (s *Server) authorize(ctx context.Context, session *auth.Session, act tenancy.Action, res tenancy.Resource) error {
-	return s.authz.Authorize(ctx, hosted.Actor{Org: session.ActiveOrgID, User: session.UserID}, act, res)
+	return s.authz.Authorize(ctx, session.Actor(), act, res)
 }
 
 // Connect establishes the gRPC connection to the coordinator. It should be
@@ -759,14 +788,14 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 				weftsdk.Infof(r.Context(), "onboarding: graduate %s: %v", user.ID, err)
 			}
 			// graduateOnboarding pins the home org; the user chose this one.
-			_ = s.store.UpdateUserLastActiveOrg(user.ID, session.ActiveOrgID)
+			_ = s.store.UpdateUserLastActiveOrg(user.ID, session.Org())
 			if fresh, err := s.store.GetUserByID(user.ID); err == nil {
 				user = fresh
 			}
 		}
 	}
 
-	json.NewEncoder(w).Encode(s.userResponse(r.Context(), user, session.ActiveOrgID, session.ActiveCustomerName))
+	json.NewEncoder(w).Encode(s.userResponse(r.Context(), user, session.Org(), session.ActiveCustomerName))
 }
 
 // userResponse builds the canonical user object the SPA consumes. Both
@@ -929,9 +958,9 @@ func (s *Server) handleSetupIntent(w http.ResponseWriter, r *http.Request) {
 
 	// The row this checkout belongs to: the pending one a signup leaves, or
 	// the active legacy trial of an account that predates card-first signup.
-	trial, _ := s.store.PendingPaymentSubscription(session.ActiveOrgID)
+	trial, _ := s.store.PendingPaymentSubscription(session.Org())
 	if trial == nil {
-		trial, _ = s.store.ActiveSubscription(session.ActiveOrgID)
+		trial, _ = s.store.ActiveSubscription(session.Org())
 	}
 
 	// Reuse an existing trialing Stripe subscription if the trial row already
@@ -1039,7 +1068,7 @@ func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
 
 	stripe.Key = s.StripeSecretKey
 
-	currentSub, _ := s.store.ActiveSubscription(session.ActiveOrgID)
+	currentSub, _ := s.store.ActiveSubscription(session.Org())
 	if currentSub == nil || currentSub.StripeSubscriptionID == "" {
 		http.Error(w, "no active stripe subscription; complete signup first", http.StatusBadRequest)
 		return
@@ -1294,7 +1323,7 @@ func projectedOverageCents(bytes int64, tier store.Tier) int {
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub == nil {
+	if sub, _ := s.store.ActiveSubscription(session.Org()); sub == nil {
 		http.Error(w, "no active subscription", http.StatusPaymentRequired)
 		return
 	}
@@ -1310,7 +1339,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	// via TierForOrg); fall through to the active subscription
 	// in case display tier evolves separately.
 	tier := session.Tier
-	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.Org()); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 
@@ -1505,11 +1534,11 @@ func (s *Server) handleIngestionStatus(w http.ResponseWriter, r *http.Request) {
 // active org (a superadmin who belongs to none) has no org-scoped data, so
 // that is a 403 rather than a lookup that would create an org on the fly.
 func activeOrg(w http.ResponseWriter, session *auth.Session) (store.OrgID, bool) {
-	if session.ActiveOrgID == 0 {
+	if session.Org() == 0 {
 		http.Error(w, "no active org", http.StatusForbidden)
 		return 0, false
 	}
-	return session.ActiveOrgID, true
+	return session.Org(), true
 }
 
 func (s *Server) handleListFunctions(w http.ResponseWriter, r *http.Request) {
@@ -1613,7 +1642,7 @@ func cronPath(r *http.Request) string {
 // cronAt finds the cron at a /cron.d path, or reports it missing when it is
 // homed in a namespace the caller can't read: the same answer as no such cron.
 func (s *Server) cronAt(ctx context.Context, session *auth.Session, p string) (*store.CronWatch, error) {
-	ns, name, err := s.store.ResolveCronPath(session.ActiveOrgID, p)
+	ns, name, err := s.store.ResolveCronPath(session.Org(), p)
 	if err != nil {
 		return nil, gorm.ErrRecordNotFound
 	}
@@ -1626,13 +1655,13 @@ func (s *Server) cronAt(ctx context.Context, session *auth.Session, p string) (*
 			return nil, gorm.ErrRecordNotFound
 		}
 	}
-	return s.store.GetCronWatch(session.ActiveOrgID, ns, name)
+	return s.store.GetCronWatch(session.Org(), ns, name)
 }
 
 // readableCrons lists the org-level crons and those homed in a namespace the
 // caller can read.
 func (s *Server) readableCrons(ctx context.Context, session *auth.Session) ([]store.CronWatch, error) {
-	all, err := s.store.ListCronWatches(session.ActiveOrgID)
+	all, err := s.store.ListCronWatches(session.Org())
 	if err != nil {
 		return nil, err
 	}
@@ -1642,7 +1671,7 @@ func (s *Server) readableCrons(ctx context.Context, session *auth.Session) ([]st
 	}
 	var ids []uint
 	for _, n := range readable {
-		if ns, err := s.store.GetNamespace(session.ActiveOrgID, n); err == nil {
+		if ns, err := s.store.GetNamespace(session.Org(), n); err == nil {
 			ids = append(ids, ns.ID)
 		}
 	}
@@ -1667,7 +1696,7 @@ func (s *Server) handleListWatches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.Org()); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 	count, _ := s.store.CountCronWatches(custID)
@@ -1969,14 +1998,14 @@ func (s *Server) handleWatchChart(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListTeam(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	members, err := s.store.ListTeamMembers(session.ActiveOrgID)
+	members, err := s.store.ListTeamMembers(session.Org())
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	count, _ := s.store.CountTeamMembers(session.ActiveOrgID)
+	count, _ := s.store.CountTeamMembers(session.Org())
 	tier := store.TierTrial
-	if sub, _ := s.store.ActiveSubscription(session.ActiveOrgID); sub != nil {
+	if sub, _ := s.store.ActiveSubscription(session.Org()); sub != nil {
 		tier = store.Tier(sub.Tier)
 	}
 	orgName := session.ActiveCustomerName
@@ -2107,7 +2136,7 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	target, err := s.store.GetTeamMemberByID(session.ActiveOrgID, id)
+	target, err := s.store.GetTeamMemberByID(session.Org(), id)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		http.Error(w, "member not found", http.StatusNotFound)
 		return
@@ -2121,7 +2150,7 @@ func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := s.store.RemoveMember(session.ActiveOrgID, target.Email); err != nil {
+	if err := s.store.RemoveMember(session.Org(), target.Email); err != nil {
 		if errors.Is(err, store.ErrOwnerImmutable) {
 			http.Error(w, "owners cannot be removed", http.StatusForbidden)
 			return
@@ -2446,7 +2475,7 @@ func (s *Server) handleSetNamespacePermission(w http.ResponseWriter, r *http.Req
 // dashboard's Members grid.
 func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	doc, err := s.store.BuildTeamPerms(session.ActiveOrgID)
+	doc, err := s.store.BuildTeamPerms(session.Org())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2470,7 +2499,7 @@ func (s *Server) handleSetPermissions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.ApplyTeamPerms(session.ActiveOrgID, doc); err != nil {
+	if err := s.store.ApplyTeamPerms(session.Org(), doc); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

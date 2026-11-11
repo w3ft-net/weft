@@ -1,10 +1,13 @@
 package planner
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	coords "github.com/graybeardcorp/weft/shape"
 )
 
 // A trace spans services, so a user who can read only some namespaces still
@@ -13,12 +16,25 @@ import (
 // durations and the per-trace service list are computed over rows the user may
 // read, so nothing about the others leaks through an aggregate.
 
+// namespaceScope is a scope that reads exactly the named namespaces of customer 1.
+func namespaceScope(readable []string) coords.Set {
+	set := coords.Set{}
+	for _, n := range readable {
+		set = append(set, coords.Coord{Customer: 1, Namespace: coords.Value(n)})
+	}
+	return set
+}
+
+func scopedPlanErr(pipeline string, readable []string) (*QueryPlan, error) {
+	end := time.Now()
+	return PlanIn(pipeline, 1, namespaceScope(readable), "/", end.Add(-time.Hour), end)
+}
+
 func scopedPlan(t *testing.T, pipeline string, readable []string) *QueryPlan {
 	t.Helper()
-	end := time.Now()
-	p, err := PlanScoped(pipeline, 1, "/", end.Add(-time.Hour), end, readable)
+	p, err := scopedPlanErr(pipeline, readable)
 	if err != nil {
-		t.Fatalf("PlanScoped(%q): %v", pipeline, err)
+		t.Fatalf("PlanIn(%q): %v", pipeline, err)
 	}
 	return p
 }
@@ -46,8 +62,8 @@ func TestPlanScoped_TraceIsRestrictedToReadableNamespaces(t *testing.T) {
 			if !strings.Contains(p.ShardSQL, "namespace IN (?, ?)") || !hasArg(p.Args, "alpha") || !hasArg(p.Args, "gamma") {
 				t.Errorf("shard SQL is not restricted to the readable namespaces:\n%s\nargs=%v", p.ShardSQL, p.Args)
 			}
-			if !slices.Equal(p.SourceNamespaces, []string{"alpha", "gamma"}) {
-				t.Errorf("SourceNamespaces = %v, want [alpha gamma]", p.SourceNamespaces)
+			if got, _, _ := p.Coords.Namespaces(1); !slices.Equal(got, []string{"alpha", "gamma"}) {
+				t.Errorf("Coords namespaces = %v, want [alpha gamma]", got)
 			}
 			// Routing stays on every shard: SourceNamespace routes by the
 			// first namespace only, which would skip the others' shards.
@@ -82,37 +98,47 @@ func TestPlan_UnscopedTraceReadsEveryNamespace(t *testing.T) {
 	}
 }
 
-// Scoping is for trace only; every other command keeps its explicit namespaces
-// and is refused by the coordinator if the user can't read them.
-func TestPlanScoped_OtherCommandsAreUnchanged(t *testing.T) {
-	p := scopedPlan(t, "cat /log/beta/api/main.log", []string{"alpha"})
-
-	if !slices.Equal(p.SourceNamespaces, []string{"beta"}) {
-		t.Errorf("SourceNamespaces = %v, want [beta] so the coordinator can refuse it", p.SourceNamespaces)
+// A source the scope does not cover is refused by the planner itself, whether
+// or not it exists, and the refusal never says which.
+func TestPlanIn_SourceOutsideTheScopeIsRefused(t *testing.T) {
+	for _, pipeline := range []string{"cat /log/beta/api/main.log", "trace beta"} {
+		if _, err := scopedPlanErr(pipeline, []string{"alpha"}); !errors.Is(err, ErrNoSource) {
+			t.Errorf("%q: err = %v, want ErrNoSource", pipeline, err)
+		}
 	}
 }
 
-// A trace that names its own namespace keeps it; the coordinator refuses it if
-// the user can't read that one.
-func TestPlanScoped_TraceNamingANamespaceKeepsIt(t *testing.T) {
-	p := scopedPlan(t, "trace beta", []string{"alpha"})
-
-	if !slices.Equal(p.SourceNamespaces, []string{"beta"}) {
-		t.Errorf("SourceNamespaces = %v, want [beta]", p.SourceNamespaces)
+// A wildcard source means every tuple in scope, never "no predicate".
+func TestPlanIn_WildcardResolvesAgainstTheScope(t *testing.T) {
+	p := scopedPlan(t, "cat /log/warp.log", []string{"alpha", "gamma"})
+	if !strings.Contains(p.ShardSQL, "namespace IN (?, ?)") || !hasArg(p.Args, "alpha") || !hasArg(p.Args, "gamma") {
+		t.Errorf("warp.log was not held to the scope:\n%s\nargs=%v", p.ShardSQL, p.Args)
 	}
 }
 
-// An empty readable list means the user may read nothing, not everything (an
-// empty namespace list in a plan means "all"). A trace for them selects no
-// rows, and an ordinary query is unchanged.
-func TestPlanScoped_NothingReadableSelectsNothing(t *testing.T) {
+// A source that names one namespace the scope reads and one it does not is
+// refused whole. Running the readable half would return a partial answer.
+func TestPlanIn_MixedSourceIsRefusedWhole(t *testing.T) {
+	_, err := scopedPlanErr("cat /log/alpha/api/main.log /log/beta/api/main.log", []string{"alpha"})
+	if !errors.Is(err, ErrNoSource) || !strings.Contains(err.Error(), "beta") {
+		t.Errorf("err = %v, want ErrNoSource naming beta", err)
+	}
+}
+
+// An empty scope means the user may read nothing. A trace for them selects no
+// rows, and an ordinary query is refused.
+func TestPlanIn_NothingReadableSelectsNothing(t *testing.T) {
 	p := scopedPlan(t, "trace", []string{})
 	if p.ShardSQL != "" {
 		t.Errorf("a user who can read nothing got a trace query:\n%s", p.ShardSQL)
 	}
+	if _, err := scopedPlanErr("cat /log/beta/api/main.log", []string{}); !errors.Is(err, ErrNoSource) {
+		t.Errorf("err = %v, want ErrNoSource", err)
+	}
+}
 
-	q := scopedPlan(t, "cat /log/beta/api/main.log", []string{})
-	if q.ShardSQL == "" || !slices.Equal(q.SourceNamespaces, []string{"beta"}) {
-		t.Errorf("an ordinary query was changed: sql=%q namespaces=%v", q.ShardSQL, q.SourceNamespaces)
+func TestPlanIn_ScopeOfAnotherCustomerIsRefused(t *testing.T) {
+	if _, err := PlanIn("cat /log/a/api/main.log", 1, coords.Set{{Customer: 2}}, "/", time.Time{}, time.Time{}); err == nil {
+		t.Error("a scope reaching customer 2 planned for customer 1")
 	}
 }

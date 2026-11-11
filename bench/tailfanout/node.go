@@ -34,10 +34,15 @@ type Topic struct {
 
 // topicFor derives a Topic from a subscription's RowMatcher.
 func topicFor(m *coordinator.RowMatcher) Topic {
-	if m.Namespace == "" {
+	// The benchmark subscribes one tuple at a time.
+	t := m.Coords[0]
+	ns, ok := t.Namespace.Literal()
+	if !ok {
 		return Topic{Wildcard: true}
 	}
-	return Topic{Namespace: m.Namespace, Service: m.Service, Kind: m.Kind}
+	svc, _ := t.Service.Literal()
+	kind, _ := t.Kind.Literal()
+	return Topic{Namespace: ns, Service: svc, Kind: kind}
 }
 
 // Transport moves rows between Nodes for topics a peer has announced

@@ -23,7 +23,7 @@ import (
 // route that changes /bin, /cron.d or /etc goes through it instead of calling
 // the store, so there is one implementation of who may write what.
 func (s *Server) shellFS(r *http.Request, session *auth.Session, logServices []string) *shellfs.ShellFS {
-	return shellfs.New(s.store, session.ActiveOrgID, logServices,
+	return shellfs.New(s.store, session.Org(), logServices,
 		shellfs.WithUser(session.UserID),
 		shellfs.WithTier(session.Tier),
 		shellfs.WithContext(r.Context()))

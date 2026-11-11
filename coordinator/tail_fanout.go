@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -18,11 +19,25 @@ type tailTopic struct {
 	Wildcard                 bool
 }
 
-func topicFor(m *RowMatcher) tailTopic {
-	if m.Namespace == "" {
-		return tailTopic{Customer: m.Customer, Wildcard: true}
+// topicsFor is the superset backend over a matcher's coordinates: one topic per
+// distinct tuple, as wide as the tuple's namespace, service and kind allow. A
+// peer may deliver a row the matcher then rejects (env, say), never the reverse.
+func topicsFor(m *RowMatcher) []tailTopic {
+	var out []tailTopic
+	for _, t := range m.Coords {
+		topic := tailTopic{Customer: t.Customer}
+		if ns, ok := t.Namespace.Literal(); !ok {
+			topic.Wildcard = true
+		} else {
+			topic.Namespace = ns
+			topic.Service, _ = t.Service.Literal()
+			topic.Kind, _ = t.Kind.Literal()
+		}
+		if !slices.Contains(out, topic) {
+			out = append(out, topic)
+		}
 	}
-	return tailTopic{Customer: m.Customer, Namespace: m.Namespace, Service: m.Service, Kind: m.Kind}
+	return out
 }
 
 // TailFanout wraps a *TailBroker with optional Redis-Pub/Sub cross-
@@ -55,13 +70,14 @@ func (f *TailFanout) Subscribe(ctx context.Context, matcher *RowMatcher) (uint64
 	if f.redis == nil {
 		return id, ch
 	}
-	t := topicFor(matcher)
-	f.mu.Lock()
-	f.refs[t]++
-	first := f.refs[t] == 1
-	f.mu.Unlock()
-	if first {
-		f.redis.announceInterest(ctx, t, true)
+	for _, t := range topicsFor(matcher) {
+		f.mu.Lock()
+		f.refs[t]++
+		first := f.refs[t] == 1
+		f.mu.Unlock()
+		if first {
+			f.redis.announceInterest(ctx, t, true)
+		}
 	}
 	return id, ch
 }
@@ -73,16 +89,17 @@ func (f *TailFanout) Unsubscribe(ctx context.Context, id uint64, matcher *RowMat
 	if f.redis == nil {
 		return
 	}
-	t := topicFor(matcher)
-	f.mu.Lock()
-	f.refs[t]--
-	last := f.refs[t] <= 0
-	if last {
-		delete(f.refs, t)
-	}
-	f.mu.Unlock()
-	if last {
-		f.redis.announceInterest(ctx, t, false)
+	for _, t := range topicsFor(matcher) {
+		f.mu.Lock()
+		f.refs[t]--
+		last := f.refs[t] <= 0
+		if last {
+			delete(f.refs, t)
+		}
+		f.mu.Unlock()
+		if last {
+			f.redis.announceInterest(ctx, t, false)
+		}
 	}
 }
 

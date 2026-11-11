@@ -5,6 +5,7 @@ package bench
 import (
 	"context"
 	"fmt"
+	"github.com/graybeardcorp/weft/shape"
 	"os"
 	"sort"
 	"strings"
@@ -43,11 +44,11 @@ const fanoutTopicService = "bench-svc"
 const fanoutTopicKind = "main"
 
 func fanoutMatcher() *coordinator.RowMatcher {
-	return &coordinator.RowMatcher{
-		Namespace: fanoutTopicNamespace,
-		Service:   fanoutTopicService,
-		Kind:      fanoutTopicKind,
-	}
+	return &coordinator.RowMatcher{Coords: shape.Set{{
+		Namespace: shape.Value(fanoutTopicNamespace),
+		Service:   shape.Value(fanoutTopicService),
+		Kind:      shape.Value(fanoutTopicKind),
+	}}}
 }
 
 func syntheticRow() *pb.LogRow {

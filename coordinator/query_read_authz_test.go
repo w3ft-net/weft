@@ -10,7 +10,6 @@ import (
 
 	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/compute"
-	"github.com/graybeardcorp/weft/planner"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy"
 	"github.com/graybeardcorp/weft/tenancy/hosted"
@@ -105,10 +104,13 @@ func TestQuery_ReadsOnlyNamespacesTheUserMayRead(t *testing.T) {
 		// first; naming one the user can't read taints the whole query.
 		{"reader mixing a readable and an unreadable namespace", f.reader, "cat /log/alpha/api/main.log /log/beta/api/main.log", true},
 		{"owner mixing namespaces", f.owner, "cat /log/alpha/api/main.log /log/beta/api/main.log", false},
-		// These plan a query that names no namespace, which reads all of them.
-		{"reader naming no namespace", f.reader, "cat /log", true},
-		{"reader naming no namespace, trailing slash", f.reader, "head -n 5 /log/", true},
-		{"reader with an empty namespace segment", f.reader, "cat /log//api/main.log", true},
+		// A source that names no namespace means every namespace in the reader's
+		// scope, not every namespace there is: it is held to the scope rather than
+		// refused, and a member whose scope is empty has nothing to read.
+		{"reader naming no namespace", f.reader, "cat /log", false},
+		{"reader naming no namespace, trailing slash", f.reader, "head -n 5 /log/", false},
+		{"reader with an empty namespace segment", f.reader, "cat /log//api/main.log", false},
+		{"no-permission member naming no namespace", f.none, "cat /log", true},
 		{"owner naming no namespace", f.owner, "cat /log", false},
 		{"system identity naming no namespace", "", "cat /log", false},
 	}
@@ -139,24 +141,6 @@ func TestQuery_TraceRunsForEveryoneButOnlyOverReadableNamespaces(t *testing.T) {
 	}
 	if err := f.run(t, f.reader, "trace alpha"); refused(err) {
 		t.Errorf("reader tracing their own namespace alpha was refused: %v", err)
-	}
-}
-
-// Any other plan that names no namespace would read all of them. The planner
-// does not produce one today; if it ever does, a restricted user is refused
-// rather than shown everything.
-func TestAuthorizeSources_FailsClosedOnAPlanWithNoNamespace(t *testing.T) {
-	f := newReadFixture(t)
-	plan := &planner.QueryPlan{ShardSQL: "SELECT 1", SourceCmd: "cat"}
-
-	if err := f.c.authorizeSources(as(f.org, f.reader), f.org, plan); !refused(err) {
-		t.Errorf("reader: err = %v, want a refusal", err)
-	}
-	if err := f.c.authorizeSources(as(f.org, f.owner), f.org, plan); err != nil {
-		t.Errorf("owner: err = %v, want it allowed", err)
-	}
-	if err := f.c.authorizeSources(as(f.org, ""), f.org, plan); err != nil {
-		t.Errorf("system identity: err = %v, want it allowed", err)
 	}
 }
 

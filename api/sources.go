@@ -154,18 +154,40 @@ func (s *Server) handleAgentSourceStatus(w http.ResponseWriter, r *http.Request)
 func (s *Server) handlePendingSourcesCount(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
-	readable, err := s.readable(r.Context(), session)
+	scope, err := s.sourceScope(r.Context(), session)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	n, err := s.store.CountPendingLogGroups(session.ActiveOrgID, readable)
+	// Only the coordinates are read, not the sample blobs.
+	var pending []store.LogGroupJoined
+	err = s.pendingSourcesQuery(session, scope).
+		Select("namespaces.name as namespace_name, log_groups.app").
+		Find(&pending).Error
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	n := 0
+	for _, lg := range pending {
+		if scope.sees(lg.NamespaceName, lg.Service) {
+			n++
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"count": n})
+}
+
+// pendingSourcesQuery is the sources awaiting a schema in the namespaces the
+// scope touches. Callers filter each row with scope.sees.
+func (s *Server) pendingSourcesQuery(session *auth.Session, scope sourceScope) *gorm.DB {
+	q := s.store.DB().
+		Table("log_groups").
+		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
+		Joins("JOIN organizations ON namespaces.org_id = organizations.id").
+		Where("organizations.id = ?", session.Org()).
+		Scopes(store.AwaitingSchema)
+	return scope.narrow(q)
 }
 
 // handlePendingSources lists pending sources for the authenticated customer.
@@ -173,22 +195,17 @@ func (s *Server) handlePendingSourcesCount(w http.ResponseWriter, r *http.Reques
 func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
-	readable, err := s.readable(r.Context(), session)
+	scope, err := s.sourceScope(r.Context(), session)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	namespace := r.URL.Query().Get("namespace")
 	var sources []store.LogGroupJoined
-	q := s.store.DB().
-		Table("log_groups").
+	q := s.pendingSourcesQuery(session, scope).
 		Select(`log_groups.*,
 		        organizations.name as customer_name,
-		        namespaces.name as namespace_name`).
-		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
-		Joins("JOIN organizations ON namespaces.org_id = organizations.id").
-		Where("organizations.id = ? AND namespaces.name IN ?", session.ActiveOrgID, readable).
-		Scopes(store.AwaitingSchema)
+		        namespaces.name as namespace_name`)
 	if namespace != "" {
 		q = q.Where("namespaces.name = ?", namespace)
 	}
@@ -197,6 +214,7 @@ func (s *Server) handlePendingSources(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	sources = slices.DeleteFunc(sources, func(lg store.LogGroupJoined) bool { return !scope.sees(lg.NamespaceName, lg.Service) })
 
 	type pendingResp struct {
 		Service    string          `json:"service"`
@@ -411,7 +429,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	schema := req.schema(app, int64(session.ActiveOrgID))
+	schema := req.schema(app, int64(session.Org()))
 
 	// Defense in depth: the CLI validates before ever sending this
 	// request, but the endpoint accepts any authenticated caller (MCP,
@@ -477,7 +495,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	readable, err := s.readable(r.Context(), session)
+	scope, err := s.sourceScope(r.Context(), session)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -511,7 +529,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	var shown []store.LogGroupJoined
 	var weftdIDs []uint
 	for _, lg := range all {
-		if lg.CustomerName != customer.Name || !slices.Contains(readable, lg.NamespaceName) {
+		if lg.CustomerName != customer.Name || !scope.sees(lg.NamespaceName, lg.Service) {
 			continue
 		}
 		if nsFilter != "" && lg.NamespaceName != nsFilter {
@@ -644,7 +662,7 @@ func (s *Server) handleResampleSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ns, err := s.store.GetNamespace(session.ActiveOrgID, namespace)
+	ns, err := s.store.GetNamespace(session.Org(), namespace)
 	if err != nil {
 		http.Error(w, "namespace not found", http.StatusNotFound)
 		return
@@ -697,19 +715,19 @@ func (s *Server) handleSourceSchema(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	readable, err := s.readable(r.Context(), session)
+	scope, err := s.sourceScope(r.Context(), session)
 	if err != nil {
 		http.Error(w, "store error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	lg, err := s.store.FindLogGroup(session.ActiveOrgID, namespace, app)
+	lg, err := s.store.FindLogGroup(session.Org(), namespace, app)
 	if err != nil {
 		weftsdk.Infof(r.Context(), "source schema %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	// An unreadable namespace answers exactly like a missing source.
-	if lg == nil || !slices.Contains(readable, namespace) {
+	if lg == nil || !scope.sees(namespace, app) {
 		http.Error(w, "no source found", http.StatusNotFound)
 		return
 	}
@@ -829,7 +847,7 @@ func (s *Server) handleSchemaPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lg, err := s.store.FindLogGroup(session.ActiveOrgID, namespace, app)
+	lg, err := s.store.FindLogGroup(session.Org(), namespace, app)
 	if err != nil {
 		weftsdk.Infof(r.Context(), "schema preview %s/%s: FindLogGroup: %v", namespace, app, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -861,7 +879,7 @@ func (s *Server) handleSchemaPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	schema := req.schema(app, int64(session.ActiveOrgID))
+	schema := req.schema(app, int64(session.Org()))
 
 	preview, err := ingest.SchemaPreview(schema, lines)
 	if err != nil {

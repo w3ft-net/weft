@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"github.com/graybeardcorp/weft/shape"
 	"testing"
 	"time"
 
@@ -45,7 +46,7 @@ func TestIngestStream_FlushesImmediatelyForActiveTailSubscriber(t *testing.T) {
 
 	subCtx, cancelSub := context.WithCancel(context.Background())
 	defer cancelSub()
-	_, ch := coord.TailFanout.Subscribe(subCtx, &coordinator.RowMatcher{Namespace: "flushtest", Customer: int64(cust.ID)})
+	_, ch := coord.TailFanout.Subscribe(subCtx, &coordinator.RowMatcher{Coords: shape.Set{{Customer: int64(cust.ID), Namespace: shape.Value("flushtest")}}})
 
 	streamCtx := metadata.NewIncomingContext(context.Background(),
 		metadata.Pairs("authorization", "Bearer "+rawTok))

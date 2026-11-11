@@ -3,11 +3,13 @@ package planner
 import (
 	"fmt"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 
+	coords "github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/tracecmd"
 )
 
@@ -19,6 +21,10 @@ import (
 // predicates. Empty slices mean warp.log (the all-sources wildcard) — no
 // predicate at all on that column.
 type sourceInfo struct {
+	// tuples is what the source names, one tuple per file: `cat a/api b/web`
+	// is two tuples, not {a,b} x {api,web}. The customer column is unset;
+	// the planner binds it. nil for a trace source, which uses the slices.
+	tuples     coords.Set
 	namespaces []string // namespace column values for SQL predicates
 	services   []string // service column values for SQL predicates
 	kinds      []string // kind column values for SQL predicates
@@ -34,10 +40,12 @@ type sourceInfo struct {
 	// samples is `trace spans <name> --samples`: the slowest occurrences
 	// of one span name, not the aggregate.
 	samples bool
-	// scoped marks a trace restricted to the namespaces the user may read
-	// (PlanScoped): namespaces then holds that list although the user named
-	// none, so it must not narrow shard routing.
-	scoped bool
+	// coord is what the query reads: tuples intersected with scope, pinned
+	// before any pass runs. Every backend renders from it, never from the
+	// per-column slices above, which only describe what the user wrote.
+	coord coords.Set
+	// scope is what the principal may read, kept for a trace's summary query.
+	scope coords.Set
 	// spansOnly is `trace <id> --spans`: the trace's span rows, for the
 	// rollup, not every line of the trace.
 	spansOnly bool
@@ -153,7 +161,7 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "cat"}, nil
+		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, tuples: sf.tuples, cmd: "cat"}, nil
 
 	case "head":
 		limit := 10
@@ -189,7 +197,7 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "head", limit: limit}, nil
+		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, tuples: sf.tuples, cmd: "head", limit: limit}, nil
 
 	case "tail":
 		limit := 10
@@ -228,7 +236,7 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, cmd: "tail", limit: limit, follow: follow}, nil
+		return &sourceInfo{namespaces: sf.namespaces, services: sf.services, kinds: sf.kinds, env: sf.env, tuples: sf.tuples, cmd: "tail", limit: limit, follow: follow}, nil
 
 	case "trace":
 		// The arguments are a correlation ID and a scope, not pseudofile
@@ -244,6 +252,16 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 		}
 		if tc.Service != "" {
 			info.services = []string{tc.Service}
+		}
+		if tc.Namespace != "" || tc.Service != "" {
+			t := coords.Coord{}
+			if tc.Namespace != "" {
+				t.Namespace = coords.Value(tc.Namespace)
+			}
+			if tc.Service != "" {
+				t.Service = coords.Value(tc.Service)
+			}
+			info.tuples = coords.Set{t}
 		}
 		switch tc.Mode() {
 		case tracecmd.ModeList:
@@ -304,6 +322,7 @@ type sourceFields struct {
 	services   []string
 	kinds      []string
 	env        string
+	tuples     coords.Set
 }
 
 func extractServicesEnv(files []string, cmd string) (sourceFields, error) {
@@ -336,6 +355,16 @@ func extractServicesEnv(files []string, cmd string) (sourceFields, error) {
 				seenKind[kind] = struct{}{}
 				sf.kinds = append(sf.kinds, kind)
 			}
+		}
+		cell := func(v string) coords.Cell {
+			if v == "" {
+				return coords.Any()
+			}
+			return coords.Value(v)
+		}
+		t := coords.Coord{Namespace: cell(ns), Env: cell(env), Service: cell(svc), Kind: cell(kind)}
+		if !slices.Contains(sf.tuples, t) {
+			sf.tuples = append(sf.tuples, t)
 		}
 		if i == 0 {
 			sf.env = env
@@ -474,11 +503,25 @@ func literalArgs(words []bash.Word) []string {
 	return out
 }
 
-// scopedNamespaces is the user's readable namespaces for a scoped trace, nil
-// for any other source.
-func (s sourceInfo) scopedNamespaces() []string {
-	if s.scoped {
-		return s.namespaces
+// traceScope is the namespaces the principal's scope limits a trace to, nil
+// when it limits none. The per-trace summary describes the trace only as far as
+// they can see it, or its service list and counts would reveal the rest.
+func (s sourceInfo) traceScope() []string {
+	if len(s.tuples) > 0 {
+		return nil // the trace names its namespace; the summary is unscoped
 	}
-	return nil
+	names, all, err := s.scope.Namespaces(s.coord[0].Customer)
+	if err != nil || all {
+		return nil
+	}
+	return names
+}
+
+// envValue is the env the pinned coordinates fix, or "" when they leave it open.
+func (s sourceInfo) envValue() string {
+	if len(s.coord) != 1 {
+		return ""
+	}
+	v, _ := s.coord[0].Env.Literal()
+	return v
 }

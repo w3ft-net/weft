@@ -80,13 +80,13 @@ func persistLastActive(ctx context.Context, st *store.Store, session *auth.Sessi
 	// An org-less session (a superadmin with no membership) has no active
 	// customer to pin. Writing 0 trips the last_active_org_id foreign
 	// key, so there's nothing to persist.
-	if session.ActiveOrgID == 0 {
+	if session.Org() == 0 {
 		return
 	}
-	if session.LastActiveOrgID != nil && *session.LastActiveOrgID == session.ActiveOrgID {
+	if session.LastActiveOrgID != nil && *session.LastActiveOrgID == session.Org() {
 		return
 	}
-	if err := st.UpdateUserLastActiveOrg(session.UserID, session.ActiveOrgID); err != nil {
+	if err := st.UpdateUserLastActiveOrg(session.UserID, session.Org()); err != nil {
 		weftsdk.Infof(ctx, "update last_active_org_id for %s: %v", session.UserID, err)
 	}
 }
