@@ -499,12 +499,28 @@ looks hosted, `tmp_files` relational):
   dashboards, grants, namespaces, tokens, incidents, shards). Every call
   takes a `StorePartition`; the default build ignores it. Hosted's
   implementation wraps today's `store/`, so nothing is rewritten up front.
-- **Cron results.** The results table, its hourly, 4-hour and daily
-  rollups, and the `weft::*` functions and alert checks that query them
-  are one unit, keyed by an opaque cron key. The contract is append,
-  range read, windowed stats and series. It says nothing about
-  retention. Hosted meets it with partman and pg_cron, and the default
-  build can keep plain rows and leave pruning to the operator.
+- **Cron results.** Append-only, on a DB of the implementer's choice.
+  The open-source build has no rollups. The contract is:
+  - `Append` rows for a run, and a range read by opaque cron key and tag.
+    A window is bounded by what the adapter stores, and the spec says so.
+  - `LatestRuns(keys)`, a batch read of each cron's last run (time and
+    status) for listings, dashboards and `ls -l`. The default derives it
+    from the newest row. Hosted keeps its denormalized columns behind it.
+  - The `weft::*` functions and alert checks compute from raw rows. A
+    backend that can push aggregates down (hosted, with its rollups, tier
+    tables, partman and pg_cron) offers that as an optional capability
+    and the functions use it when present.
+
+  Strikes and benching (`consecutive_strikes`, `Enabled`) stay in the
+  relational crons interface, since they change the cron's definition.
+- **Policy hooks, not metering in the interfaces.**
+  - Cron count and minimum interval are checked when a cron is saved.
+    The relational crons save method takes the request context and
+    `StorePartition`, so a hosted hook can look up the tier. The default
+    build has no hook, so no limits.
+  - How far back `weft::*` windows and alert stats may look
+    (`ClampRetention` by tier) is a read-side hook. The caller passes an
+    already-clamped `since`.
 
 **Shard state is core, not hosted-only.** The registry, FSM transitions,
 slot and cron claims, archive stats and the retention janitor are how any
@@ -815,8 +831,8 @@ for the two shapes we ship.
 **Phase 6: control-plane interfaces (not yet estimated).** Carve the
 interfaces in "The control plane" one domain at a time, after Phase 4.
 Start with what the Authorizer and cron work already touch (crons, grants,
-namespaces), then shard state, then the cron-results unit (first moving the raw SQL
-in `coordinator/` behind it). Each domain
+namespaces), then shard state, then the cron-results adapter (first moving the raw SQL in
+`coordinator/` behind it). Each domain
 lands as an interface, a hosted implementation wrapping the current
 `store/` methods, and a conformance test. Then write the default
 implementation. Replace `OrgID` with `StorePartition` in the exposed
