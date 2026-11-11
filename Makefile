@@ -2,7 +2,7 @@
 # in `kevcons` (see .kevcons.yaml); this Makefile holds local-dev
 # tasks that don't touch AWS.
 
-.PHONY: hooks docs generate generate-check collapse test test-deploy integration integration-clean
+.PHONY: hooks docs generate generate-check test-default-shape collapse test test-deploy integration integration-clean
 
 # Point git at the committed hooks. Run once per clone.
 hooks:
@@ -26,6 +26,18 @@ generate:
 
 generate-check:
 	go run ./cmd/shapegen -spec $(SHAPE) -out shape/coord_gen.go -check
+
+# Build and test the packages that no longer name the tenant under the DEFAULT
+# shape (shape/specs/default.yaml: no tenant column), then put the hosted shape
+# back whatever happened. A package joins DEFAULT_SHAPE_PKGS when its extraction
+# step lands; CI runs this as 'Default shape builds' so a tenant column cannot
+# creep back into them.
+DEFAULT_SHAPE_PKGS ?= ./shape/... ./internal/shapegen/... ./planner/...
+test-default-shape:
+	@trap '$(MAKE) --no-print-directory generate SHAPE=shape/specs/hosted.yaml' EXIT; \
+	$(MAKE) --no-print-directory generate SHAPE=shape/specs/default.yaml && \
+	go build $(DEFAULT_SHAPE_PKGS) && \
+	go test -tags test -count=1 $(DEFAULT_SHAPE_PKGS)
 
 # Collapse store/migrations/* into store/schema.sql. Run after a
 # successful production deploy (kevcons will eventually trigger this

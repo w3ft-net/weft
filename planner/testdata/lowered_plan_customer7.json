@@ -1,0 +1,72 @@
+{
+  "customer_id": 7,
+  "tier": "bolt",
+  "shard_sql": "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE customer_id = CAST(? AS BIGINT) AND ts \u003e= CAST(? AS TIMESTAMP) AND ts \u003c= CAST(? AS TIMESTAMP) AND namespace = ? AND service = ? AND kind = ? AND regexp_matches(raw, 'ERROR') AND (TRY_CAST(list_extract(fields, 5) AS DOUBLE) \u003e 500 OR list_extract(fields, 5) \u003e '500' OR regexp_matches(list_extract(fields, 5), '^[+-]?(?i:inf|nan|0x)'))",
+  "direct_shard_sql": "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE customer_id = CAST(? AS BIGINT) AND ts \u003e= CAST(? AS TIMESTAMP) AND ts \u003c= CAST(? AS TIMESTAMP) AND namespace = ? AND service = ? AND kind = ? AND regexp_matches(raw, 'ERROR') AND (TRY_CAST(list_extract(fields, 5) AS DOUBLE) \u003e 500 OR list_extract(fields, 5) \u003e '500' OR regexp_matches(list_extract(fields, 5), '^[+-]?(?i:inf|nan|0x)')) ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST",
+  "args": [
+    {
+      "Kind": 1,
+      "Value": "7"
+    },
+    {
+      "Kind": 2,
+      "Value": "1970-01-01 00:00:00"
+    },
+    {
+      "Kind": 3,
+      "Value": "1970-01-01 00:00:00"
+    },
+    {
+      "Kind": 0,
+      "Value": "acme"
+    },
+    {
+      "Kind": 0,
+      "Value": "api"
+    },
+    {
+      "Kind": 0,
+      "Value": "main"
+    }
+  ],
+  "compute_stages": [
+    "awk '$5 \u003e 500'"
+  ],
+  "live_stages": [
+    "grep ERROR",
+    "awk '$5 \u003e 500'"
+  ],
+  "merge_key": "ts",
+  "follow_patterns": [
+    {
+      "Pattern": "ERROR",
+      "IgnoreCase": false,
+      "Invert": false
+    }
+  ],
+  "source_cmd": "cat",
+  "source_namespace": "acme",
+  "source_service": "api",
+  "source_kind": "main",
+  "source_coords": [
+    {
+      "Namespace": {
+        "k": "value",
+        "v": "acme"
+      },
+      "Env": {},
+      "Service": {
+        "k": "value",
+        "v": "api"
+      },
+      "Kind": {
+        "k": "value",
+        "v": "main"
+      },
+      "Customer": 7
+    }
+  ],
+  "table": "l_7_acme_api_main_e226414c9e5b0523dfb3638b2c6b3608",
+  "compiled_at": "2026-11-11T22:58:51Z",
+  "planner_version": 16
+}

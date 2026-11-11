@@ -102,7 +102,7 @@ func TestProjectFields_Plan(t *testing.T) {
 		{`cat vimgym.log | awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'`, false},
 	} {
 		t.Run(tt.pipeline, func(t *testing.T) {
-			plan, c, err := compile(tt.pipeline, 0, "", time.Time{}, time.Time{}, nil)
+			plan, c, err := compileBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatal(err)
 			}

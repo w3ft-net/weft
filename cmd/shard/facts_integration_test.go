@@ -19,6 +19,7 @@ import (
 	"github.com/graybeardcorp/weft/logtable"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/shard"
 	shardsvc "github.com/graybeardcorp/weft/shard/service"
 	"github.com/graybeardcorp/weft/store"
@@ -206,7 +207,7 @@ func TestFieldFacts_ShardToCoordinatorToPostgres(t *testing.T) {
 // takes it away again.
 func TestFieldFacts_ReachTheQueryPlannersKey(t *testing.T) {
 	r := newFactsRig(t)
-	plan, err := planner.Plan(`cat /log/ns/prod/svc/main.log | awk '$2 > 500'`, 1, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(`cat /log/ns/prod/svc/main.log | awk '$2 > 500'`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil || plan.Typed == nil {
 		t.Fatalf("plan: %v, typed %+v", err, plan.Typed)
 	}
@@ -235,7 +236,7 @@ func TestFieldFacts_ReachTheQueryPlannersKey(t *testing.T) {
 // one, so a field holding fractions types the second plan and not the first.
 func TestFieldFacts_KeyedAggregatePlansAskForTheKeysTheShardReports(t *testing.T) {
 	typedFor := func(r *factsRig, program string) bool {
-		plan, err := planner.Plan(`cat /log/ns/prod/svc/main.log | awk '`+program+`'`, 1, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(`cat /log/ns/prod/svc/main.log | awk '`+program+`'`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil || plan.Typed == nil {
 			t.Fatalf("plan %s: %v, typed %+v", program, err, plan.Typed)
 		}
@@ -322,7 +323,7 @@ const factTypedAfterForTest = 1000
 func TestFieldFacts_AShardWithoutTableNamesStillReachesThePlannersKey(t *testing.T) {
 	r := newFactsRig(t)
 	r.oldShard.Store(true)
-	plan, err := planner.Plan(`cat /log/ns/prod/svc/main.log | awk '$2 > 500'`, 1, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(`cat /log/ns/prod/svc/main.log | awk '$2 > 500'`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil || plan.Typed == nil {
 		t.Fatalf("plan: %v, typed %+v", err, plan.Typed)
 	}

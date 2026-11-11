@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/weft/planner"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -26,7 +27,7 @@ func TestExecuteForWatch_LoweredHotPath(t *testing.T) {
 	pipeline := `cat /log/vimgym.log | grep ERROR`
 
 	// Compile the watch the same way the save handlers do.
-	lp, err := planner.Lower(pipeline, 1, "bolt", noBinResolver{})
+	lp, err := planner.Lower(pipeline, shapetest.Tenant(1), "bolt", noBinResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -94,7 +95,7 @@ func TestExecuteForWatch_LoweredVersionMismatch(t *testing.T) {
 	cust, _ := c.Store.GetOrgByName("kevlar")
 
 	pipeline := `cat /log/vimgym.log | grep ERROR`
-	lp, err := planner.Lower(pipeline, 1, "bolt", noBinResolver{})
+	lp, err := planner.Lower(pipeline, shapetest.Tenant(1), "bolt", noBinResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestExecuteForWatch_LoweredPlanSendsTheFieldForm(t *testing.T) {
 	}
 
 	pipeline := `cat /log/vimgym.log | awk '{ n += $2 } END { print n }'`
-	lp, err := planner.Lower(pipeline, 1, "bolt", noBinResolver{})
+	lp, err := planner.Lower(pipeline, shapetest.Tenant(1), "bolt", noBinResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}

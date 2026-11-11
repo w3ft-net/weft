@@ -7,6 +7,8 @@ import (
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // TestLiveFilter_CutAppliesToLiveRow pins the bug we just hit running
@@ -76,12 +78,12 @@ func TestLiveFilter_AppGateNamespaceMatchesSubApp(t *testing.T) {
 
 func runFilterCase(t *testing.T, pipeline string, row *pb.LogRow, want []string) {
 	t.Helper()
-	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan(%q): %v", pipeline, err)
 	}
 	filter := BuildLiveFilter(plan)
-	got := filter(Row{LogRow: row})
+	got := filter(Row{LogRow: row, Added: shape.Added{Customer: 1}})
 	if len(got) != len(want) {
 		t.Fatalf("filter(%q on %q):\n  got:  %v\n  want: %v",
 			pipeline, row.Raw, got, want)

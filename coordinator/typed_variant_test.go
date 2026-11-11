@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy/hosted"
 
@@ -32,7 +33,7 @@ func TestApplyTypedVariant_OnlyShardsWhoseFactsAllowIt(t *testing.T) {
 	fold("other-env", typedFact(7, "acme", "api", "main", "staging", "$5", 1))
 	fold("other-field", typedFact(7, "acme", "api", "main", "", "$4", 1))
 
-	plan, err := planner.Plan(`cat /log/acme/api/main.log | awk '$5 > 500'`, 7, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(`cat /log/acme/api/main.log | awk '$5 > 500'`, shapetest.Tenant(7), "", time.Time{}, time.Time{})
 	if err != nil || plan.Typed == nil {
 		t.Fatalf("plan: %v, typed %+v", err, plan.Typed)
 	}
@@ -63,7 +64,7 @@ func TestApplyTypedVariant_NeedsEveryLocator(t *testing.T) {
 		typedFact(7, "acme", "api", "main", "", "$3", 1), typedFact(7, "acme", "api", "main", "", "$5", 2)})
 	c.Provisioner.FoldFieldFacts("one", []*pb.FieldFactDelta{typedFact(7, "acme", "api", "main", "", "$3", 1)})
 
-	plan, err := planner.Plan(`cat /log/acme/api/main.log | awk '$3 > 1 && $5 < 100'`, 7, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(`cat /log/acme/api/main.log | awk '$3 > 1 && $5 < 100'`, shapetest.Tenant(7), "", time.Time{}, time.Time{})
 	if err != nil || plan.Typed == nil {
 		t.Fatalf("plan: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestApplyTypedVariant_NeedsEveryLocator(t *testing.T) {
 
 func TestApplyTypedVariant_NoVariantNoChange(t *testing.T) {
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}})
-	plan, err := planner.Plan(`cat /log/acme/api/main.log | grep error`, 7, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(`cat /log/acme/api/main.log | grep error`, shapetest.Tenant(7), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +96,7 @@ func TestExactPlan_OnlyWhenEveryShardHasTheFacts(t *testing.T) {
 	for _, id := range []string{"a", "b"} {
 		c.Provisioner.FoldFieldFacts(id, []*pb.FieldFactDelta{typedFact(7, "acme", "api", "main", "", "$3", 1)})
 	}
-	plan, err := planner.Plan(`cat /log/acme/api/main.log | awk '$3 > 100 {print $1, $3}'`, 7, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(`cat /log/acme/api/main.log | awk '$3 > 100 {print $1, $3}'`, shapetest.Tenant(7), "", time.Time{}, time.Time{})
 	if err != nil || plan.Typed == nil || plan.Typed.Exact == nil {
 		t.Fatalf("plan: %v, typed %+v", err, plan.Typed)
 	}
@@ -113,7 +114,7 @@ func TestExactPlan_OnlyWhenEveryShardHasTheFacts(t *testing.T) {
 	if got := c.exactPlan(plan, nil); got != nil {
 		t.Errorf("no shards: got an exact plan")
 	}
-	noVariant, err := planner.Plan(`cat /log/acme/api/main.log | grep error`, 7, "", time.Time{}, time.Time{})
+	noVariant, err := planner.Plan(`cat /log/acme/api/main.log | grep error`, shapetest.Tenant(7), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestApplyTypedVariant_CarriesTheFieldForm(t *testing.T) {
 	logdb.SeedShard(c.Provisioner, &logdb.Shard{ID: "typed", State: logdb.StateIngesting, CreatedAt: time.Now()})
 	c.Provisioner.FoldFieldFacts("typed", []*pb.FieldFactDelta{typedFact(7, "acme", "api", "main", "", "$5", 1)})
 
-	plan, err := planner.Plan(`cat /log/acme/api/main.log | awk '$5 > 500 { n += $2 } END { print n }'`, 7, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(`cat /log/acme/api/main.log | awk '$5 > 500 { n += $2 } END { print n }'`, shapetest.Tenant(7), "", time.Time{}, time.Time{})
 	if err != nil || plan.Typed == nil || plan.FieldSQL == "" {
 		t.Fatalf("plan: %v, typed %+v, field sql %q", err, plan.Typed, plan.FieldSQL)
 	}

@@ -28,6 +28,7 @@ import (
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -250,7 +251,7 @@ func TestFieldProjectionShrinksTheWire(t *testing.T) {
 	const whole = `cat /log/acme/api/main.log`
 	const cut = whole + ` | awk '{ s[$4] += $8 } END { for (k in s) print k, s[k] }'`
 	wire := func(p string) (lines, bytes int) {
-		plan, err := planner.Plan(p, 0, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(p, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -338,7 +339,7 @@ func TestDifferentialJqPayloadKeys(t *testing.T) {
 	for _, p := range projected {
 		p := `cat /log/acme/api/main.log | ` + p
 		t.Run(p, func(t *testing.T) {
-			plan, err := planner.Plan(p, 0, "", time.Time{}, time.Time{})
+			plan, err := planner.Plan(p, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -382,7 +383,7 @@ func TestJqProjectionShrinksTheWire(t *testing.T) {
 	const whole = `cat /log/acme/api/main.log | jq 'keys'`
 	const cut = `cat /log/acme/api/main.log | jq '[.status, .action] | join("/")'`
 	wire := func(p string) (n, bytes int) {
-		plan, err := planner.Plan(p, 0, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(p, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -556,7 +557,7 @@ func newHarnessWith(t testing.TB, rows []*pb.LogRow, nShards int, old func(i int
 // check runs a pipeline both ways and compares them. It returns the plan
 // under test, or nil when the pipeline isn't plannable.
 func (h *harness) check(t *testing.T, pipeline string) *planner.QueryPlan {
-	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Logf("not plannable: %v", err)
 		return nil
@@ -657,7 +658,7 @@ func (h *harness) dispatch(req *pb.ExecuteQueryRequest) (string, error) {
 // projecting them would also show them to `keys` or `.`; the reference
 // projects them only when a stage names one, as compute does.
 func (h *harness) runReference(source string, stages []string, meta bool) (string, error) {
-	src, err := planner.Plan(source, 0, "", time.Time{}, time.Time{})
+	src, err := planner.Plan(source, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		return "", err
 	}

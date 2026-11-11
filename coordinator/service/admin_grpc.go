@@ -3,12 +3,12 @@ package service
 import (
 	"google.golang.org/grpc"
 
-	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/grpctoken"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // NewAdminGRPCServer builds a gRPC server that hosts WeftAdmin and ONLY
-// WeftAdmin, gated by auth.SharedTokenUnaryServerInterceptor. The
+// WeftAdmin, gated by grpctoken.SharedTokenUnaryServerInterceptor. The
 // coordinator boots it on a 127.0.0.1:<admin-port> listener so it's
 // unreachable from anywhere outside the coordinator instance; the shared
 // token (WEFT_ADMIN_TOKEN env) is the second wall.
@@ -21,8 +21,8 @@ import (
 // see admin_grpc_test.go.
 func NewAdminGRPCServer(server *Server, token string) *grpc.Server {
 	srv := grpc.NewServer(
-		grpc.UnaryInterceptor(auth.SharedTokenUnaryServerInterceptor(token)),
-		grpc.StreamInterceptor(auth.SharedTokenStreamServerInterceptor(token)),
+		grpc.UnaryInterceptor(grpctoken.SharedTokenUnaryServerInterceptor(token)),
+		grpc.StreamInterceptor(grpctoken.SharedTokenStreamServerInterceptor(token)),
 	)
 	pb.RegisterWeftAdminServer(srv, server)
 	return srv

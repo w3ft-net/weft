@@ -47,6 +47,51 @@ jobs:
           scripts/check-binary-bump.sh weft "$BASE_REF"
           scripts/check-binary-bump.sh weftd "$BASE_REF"
 
+  # The packages in DEFAULT_SHAPE_PKGS (Makefile) must build and pass under the
+  # default shape, which has no tenant column. A tenant column that creeps back
+  # into one fails here, not when the open-source tree is cut. Each extraction
+  # step adds its packages to that list.
+  default-shape:
+    name: Default shape builds
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout weft
+        uses: actions/checkout@v4
+        with:
+          path: weft
+      - name: Mint GitHub App token (private sibling checkouts)
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: graybeardcorp
+      - name: Checkout warp
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/warp
+          path: warp
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Checkout saaskit
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/saaskit
+          path: saaskit
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Point warp/saaskit at sibling source (ephemeral build-time replace)
+        working-directory: weft
+        run: go mod edit -replace github.com/graybeardcorp/warp=../warp -replace github.com/graybeardcorp/saaskit=../saaskit
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: weft/go.mod
+          cache-dependency-path: weft/go.sum
+      - name: Build and test under the default shape
+        working-directory: weft
+        run: make test-default-shape
+
   unit:
     name: Unit tests
     runs-on: ubuntu-latest

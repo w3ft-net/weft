@@ -8,6 +8,7 @@ import (
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // metaRows are request lines with a level, an instance and a JSON payload, so a
@@ -47,7 +48,7 @@ func BenchmarkMetaVarStages(b *testing.B) {
 		{"jq-no-meta-big-output", `cat /log/typed/api/main.log | jq -c '. + {x: 1}'`},
 		{"awk-no-meta-big-output", `cat /log/typed/api/main.log | awk '{ print toupper($1), $3 }'`},
 	} {
-		plan, err := planner.Plan(c.pipeline, 0, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(c.pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil {
 			b.Fatal(err)
 		}

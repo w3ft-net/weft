@@ -110,7 +110,7 @@ func TestPlan_UnexpandedGlobIsRefused(t *testing.T) {
 		`tail -n 1 /log/acme/prod/api/*.log`,
 		`cat /log/acme/prod/api/m?in.log`,
 	} {
-		_, err := Plan(p, 0, "", time.Time{}, time.Time{})
+		_, err := planBare(p, "", time.Time{}, time.Time{})
 		if err == nil || !strings.Contains(err.Error(), "glob") {
 			t.Errorf("Plan(%q) = %v, want a glob error", p, err)
 		}

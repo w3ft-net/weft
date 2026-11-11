@@ -1,15 +1,41 @@
 package planner
 
 import (
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	coords "github.com/graybeardcorp/weft/shape"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
-// TestPlanCustomer_HappyPath: the customer id lands as the first
-// predicate in the WHERE clause, bound via a placeholder.
+// TestPlanCustomer_HappyPath: the tenant's partition lands as the first
+// predicates in the WHERE clause, bound via placeholders.
 func TestPlanCustomer_HappyPath(t *testing.T) {
-	plan, err := Plan(`cat foo.log`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`cat foo.log`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	wantSQL := `SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE ` + shapetest.Predicate() + `namespace = ?`
+	if plan.ShardSQL != wantSQL {
+		t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, wantSQL)
+	}
+	wantArgs := append(shapetest.Args(1), "foo")
+	if !slices.Equal(plan.Args, wantArgs) {
+		t.Errorf("Args: got %v, want %v", plan.Args, wantArgs)
+	}
+}
+
+// The hosted shape's predicate is pinned as text, not derived: it is what every
+// shard and every stored plan already holds, and the generator must keep
+// producing it byte for byte. Skipped in a shape with another tenant.
+func TestPlanCustomer_HostedPredicateIsPinned(t *testing.T) {
+	if coords.BuildLayout().Fingerprint != coords.Legacy().Fingerprint {
+		t.Skip("not the hosted shape")
+	}
+	plan, err := Plan(`cat foo.log`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -17,9 +43,8 @@ func TestPlanCustomer_HappyPath(t *testing.T) {
 	if plan.ShardSQL != wantSQL {
 		t.Errorf("ShardSQL\n got: %s\nwant: %s", plan.ShardSQL, wantSQL)
 	}
-	wantArgs := []any{"1", "foo"}
-	if len(plan.Args) != len(wantArgs) || plan.Args[0] != wantArgs[0] || plan.Args[1] != wantArgs[1] {
-		t.Errorf("Args: got %v, want %v", plan.Args, wantArgs)
+	if want := []any{"1", "foo"}; !reflect.DeepEqual(plan.Args, want) {
+		t.Errorf("Args: got %v, want %v", plan.Args, want)
 	}
 }
 
@@ -27,7 +52,7 @@ func TestPlanCustomer_HappyPath(t *testing.T) {
 // shape) emits no customer predicate. Real production code never
 // passes 0 — the coordinator threads the session's org id through.
 func TestPlanCustomer_EmptySkipsPredicate(t *testing.T) {
-	plan, err := Plan(`cat foo.log`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`cat foo.log`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -41,18 +66,19 @@ func TestPlanCustomer_EmptySkipsPredicate(t *testing.T) {
 // explicitly (args travel as strings; the predicate must not depend on how
 // DuckDB coerces a VARCHAR parameter against the BIGINT column).
 func TestPlanCustomer_BoundAsCastPlaceholder(t *testing.T) {
-	plan, err := Plan(`cat foo.log`, 424242, "", time.Time{}, time.Time{})
+	plan, err := Plan(`cat foo.log`, shapetest.Tenant(424242), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if !strings.Contains(plan.ShardSQL, "customer_id = CAST(? AS BIGINT)") {
-		t.Errorf("customer predicate missing cast placeholder: %s", plan.ShardSQL)
+	if !strings.Contains(plan.ShardSQL, shapetest.Predicate()) {
+		t.Errorf("tenant predicate missing cast placeholder: %s", plan.ShardSQL)
 	}
 	if strings.Contains(plan.ShardSQL, "424242") {
-		t.Errorf("customer id inlined into SQL: %s", plan.ShardSQL)
+		t.Errorf("tenant inlined into SQL: %s", plan.ShardSQL)
 	}
-	if len(plan.Args) == 0 || plan.Args[0] != "424242" {
-		t.Errorf("customer arg: got %v, want \"424242\"", plan.Args)
+	want := shapetest.Args(424242)
+	if len(plan.Args) < len(want) || !slices.Equal(plan.Args[:len(want)], want) {
+		t.Errorf("tenant args: got %v, want them to lead: %v", plan.Args, want)
 	}
 }
 
@@ -64,7 +90,7 @@ func TestPlanCustomer_BoundAsCastPlaceholder(t *testing.T) {
 // copy-pasted from an upstream system) would land in the SQL unescaped.
 // This test would fail before the jq.go:118 fix and pass after.
 func TestPlanJQMetaVar_Escaping(t *testing.T) {
-	plan, err := Plan(`cat vimgym.log | jq 'select($trace_id == "trace-o'"'"'brien-123")'`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`cat vimgym.log | jq 'select($trace_id == "trace-o'"'"'brien-123")'`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -81,7 +107,7 @@ func TestPlanJQMetaVar_Escaping(t *testing.T) {
 func TestPlanTimeBounds_BothSet(t *testing.T) {
 	start := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
-	plan, err := Plan(`cat foo.log`, 1, "", start, end)
+	plan, err := Plan(`cat foo.log`, shapetest.Tenant(1), "", start, end)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -91,8 +117,8 @@ func TestPlanTimeBounds_BothSet(t *testing.T) {
 	if !strings.Contains(plan.ShardSQL, "ts <= CAST(? AS TIMESTAMP)") {
 		t.Errorf("missing upper bound predicate: %s", plan.ShardSQL)
 	}
-	// Args order: customer, start, end, namespace.
-	wantArgs := []any{"1", "2026-04-01 12:00:00", "2026-04-02 12:00:00", "foo"}
+	// Args order: tenant, start, end, namespace.
+	wantArgs := append(shapetest.Args(1), "2026-04-01 12:00:00", "2026-04-02 12:00:00", "foo")
 	if len(plan.Args) != len(wantArgs) {
 		t.Fatalf("Args length: got %v, want %v", plan.Args, wantArgs)
 	}
@@ -108,7 +134,7 @@ func TestPlanTimeBounds_BothSet(t *testing.T) {
 // or zero respectively; either should produce a sensible plan.
 func TestPlanTimeBounds_LowerOnly(t *testing.T) {
 	start := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	plan, err := Plan(`cat foo.log`, 0, "", start, time.Time{})
+	plan, err := planBare(`cat foo.log`, "", start, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -125,7 +151,7 @@ func TestPlanTimeBounds_LowerOnly(t *testing.T) {
 // time.Time{}, time.Time{} — they all rely on this property to keep
 // their SQL goldens stable.
 func TestPlanTimeBounds_BothZero(t *testing.T) {
-	plan, err := Plan(`cat foo.log`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`cat foo.log`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -148,7 +174,7 @@ func TestPlanTimeBounds_BothZero(t *testing.T) {
 func TestPlanCustomer_InsideLimitBoundedSubquery(t *testing.T) {
 	// `cat | sort | head` emits a subquery via direct-to-compute
 	// classification (sort terminal + non-trivial projection).
-	plan, err := Plan(`cat foo.log | sort | head -5`, 4, "", time.Time{}, time.Time{})
+	plan, err := Plan(`cat foo.log | sort | head -5`, shapetest.Tenant(4), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -163,11 +189,12 @@ func TestPlanCustomer_InsideLimitBoundedSubquery(t *testing.T) {
 		t.Fatalf("expected WHERE clause: %s", sql)
 	}
 	clause := rest[whereIdx+len(" WHERE "):]
-	if !strings.HasPrefix(clause, "customer_id = CAST(? AS BIGINT)") {
-		t.Errorf("customer predicate not at head of inner WHERE:\n  rendered: %s\n  clause start: %q", sql, clause[:min(60, len(clause))])
+	if !strings.HasPrefix(clause, shapetest.Predicate()) {
+		t.Errorf("tenant predicate not at head of inner WHERE:\n  rendered: %s\n  clause start: %q", sql, clause[:min(60, len(clause))])
 	}
-	if len(plan.Args) == 0 || plan.Args[0] != "4" {
-		t.Errorf("customer arg: got %v, want first arg to be \"4\"", plan.Args)
+	want := shapetest.Args(4)
+	if len(plan.Args) < len(want) || !slices.Equal(plan.Args[:len(want)], want) {
+		t.Errorf("tenant args: got %v, want them to lead: %v", plan.Args, want)
 	}
 }
 

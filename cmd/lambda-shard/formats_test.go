@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/planner"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -142,7 +143,7 @@ func archiveFormats(t *testing.T, db *sql.DB) map[string]string {
 // SQL and its args, as strings.
 func planFor(t *testing.T, pipeline string, customer int64, start, end time.Time) (string, []string) {
 	t.Helper()
-	plan, err := planner.Plan(pipeline, customer, "", start, end)
+	plan, err := planner.Plan(pipeline, shapetest.Tenant(customer), "", start, end)
 	if err != nil {
 		t.Fatalf("plan %q: %v", pipeline, err)
 	}

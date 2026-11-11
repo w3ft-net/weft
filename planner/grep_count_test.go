@@ -18,7 +18,7 @@ func TestGrepCountLowersToAShardCount(t *testing.T) {
 		{`grep -cE 'a|b'`, `regexp_matches(raw, 'a|b')`},
 	} {
 		t.Run(tt.pipeline, func(t *testing.T) {
-			plan, err := Plan(`cat vimgym.log | `+tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(`cat vimgym.log | `+tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -39,7 +39,7 @@ func TestGrepCountLowersToAShardCount(t *testing.T) {
 // Behind a line count the shard can't count: compute applies the count to
 // the merged rows, and grep -c runs there, verbatim.
 func TestGrepCountAfterTailStaysInCompute(t *testing.T) {
-	plan, err := Plan(`tail -n 500 vimgym.log | grep -c timeout`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`tail -n 500 vimgym.log | grep -c timeout`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestGrepCountAfterTailStaysInCompute(t *testing.T) {
 
 // Flags grep -c can't lower leave the stage in compute, verbatim.
 func TestGrepCountKeepsUnloweredFlagsInCompute(t *testing.T) {
-	plan, err := Plan(`cat vimgym.log | grep -cw timeout`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`cat vimgym.log | grep -cw timeout`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

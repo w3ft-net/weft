@@ -24,11 +24,10 @@ type data struct {
 // key a row is matched by, and what the hand-written algebra needs of them. It
 // is gofmt-formatted. source names the spec in the header.
 func Generate(s *Spec, source string) ([]byte, error) {
-	d := data{Source: source, Cols: s.Columns()}
+	d := data{Source: source, Cols: s.Columns(), NeedFmt: true}
 	for _, c := range d.Cols {
 		if c.Required {
 			d.Required = append(d.Required, c)
-			d.NeedFmt = true
 		} else {
 			d.Cells = append(d.Cells, c)
 			if c.Name != "namespace" {
@@ -180,6 +179,66 @@ func (c Coord) PartitionValues() []string {
 {{- else}}
 	return nil
 {{- end}}
+}
+
+// CoordFromPartition is the tuple of one partition with every other column open:
+// the inverse of PartitionValues. values are in BuildLayout order, as text, and
+// are typed per column. A wrong count, an unparsable value, or one that leaves a
+// required column unset is an error.
+func CoordFromPartition(values []string) (Coord, error) {
+	var c Coord
+	if len(values) != {{len .Partition}} {
+		return c, fmt.Errorf("shape: a partition has {{len .Partition}} values, got %d", len(values))
+	}
+{{- range $i, $c := .Partition}}
+{{- if eq $c.Type "int64"}}
+	n{{$i}}, err := strconv.ParseInt(values[{{$i}}], 10, 64)
+	if err != nil {
+		return c, fmt.Errorf("shape: partition column {{$c.Name}}: %w", err)
+	}
+	c.{{$c.GoName}} = n{{$i}}
+{{- else}}
+	c.{{$c.GoName}} = values[{{$i}}]
+{{- end}}
+{{- end}}
+	return c, c.validate()
+}
+
+// WithPartition is the tuple with the partition p names: the required columns
+// are p's, and every other column is the tuple's own.
+func (c Coord) WithPartition(p Coord) Coord {
+{{- range .Required}}
+	c.{{.GoName}} = p.{{.GoName}}
+{{- end}}
+	return c
+}
+
+// InPartition is the key of a row of the partition p names: the required
+// columns are p's, and every other column is the key's own.
+func (k Key) InPartition(p Coord) Key {
+{{- range .Required}}
+	k.{{.GoName}} = p.{{.GoName}}
+{{- end}}
+	return k
+}
+
+// Partition is the one partition every tuple of the set names, as
+// PartitionValues gives it. It is ErrNoScope for an empty set,
+// ErrMixedPartitions when the tuples differ, and an error for a tuple that
+// leaves a required column unset.
+func (s Set) Partition() ([]string, error) {
+	if len(s) == 0 {
+		return nil, ErrNoScope
+	}
+	for i := range s {
+		if err := s[i].validate(); err != nil {
+			return nil, err
+		}
+		if !s[i].samePartition(s[0]) {
+			return nil, ErrMixedPartitions
+		}
+	}
+	return s[0].PartitionValues(), nil
 }
 
 // BuildLayout is the partition layout of this build's shape.

@@ -11,6 +11,7 @@ import (
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // TestLineOrderAcrossShards: multi-line events that tie on ts, on
@@ -72,7 +73,7 @@ func TestLineOrderAcrossShards(t *testing.T) {
 		{`cat /log/acme/api/main.log | grep -v '^d$'`, order[1:]},
 	} {
 		t.Run(tc.pipeline, func(t *testing.T) {
-			plan, err := planner.Plan(tc.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planner.Plan(tc.pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatal(err)
 			}

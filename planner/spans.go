@@ -97,9 +97,9 @@ func (q *Query) renderSpans(b *strings.Builder, onArg func(ArgSource)) {
 	}
 }
 
-func planSpans(c *compiled, src sourceInfo, aggregate string, customerID int64, start, end time.Time, alertArgs []string, redirTarget string, redirAppend bool) (*QueryPlan, *compiled, error) {
+func planSpans(c *compiled, src sourceInfo, aggregate string, tn tenant, start, end time.Time, alertArgs []string, redirTarget string, redirAppend bool) (*QueryPlan, *compiled, error) {
 	sql := newSQLBuilder()
-	sql.addCustomer(customerID)
+	sql.addTenant(tn)
 	sql.addTimeBounds(start, end)
 	addSourcePredicates(sql, src)
 
@@ -112,24 +112,24 @@ func planSpans(c *compiled, src sourceInfo, aggregate string, customerID int64, 
 	shardSQL, args, sources := query.ToSQLWithSources()
 	var traceStats *TraceStatsQuery
 	if aggregate == AggregateTraceIDs {
-		traceStats = planTraceStats(customerID, start, end, src.traceScope())
+		traceStats = planTraceStats(tn, start, end, src.traceScope())
 	}
 	return &QueryPlan{
-		TraceStats:       traceStats,
-		ShardSQL:         shardSQL,
-		Args:             args,
-		ArgSources:       sources,
-		DirectShardSQL:   shardSQL,
-		ComputeStages:    stageTexts(c.compute),
-		SourceCmd:        src.cmd,
-		SourceCustomerID: customerID,
-		SourceNamespace:  routeNamespace(src),
-		Coords:           src.coord,
-		SourceService:    routeService(src),
-		AlertArgs:        alertArgs,
-		ShardOrderBy:     "raw",
-		Aggregate:        aggregate,
-		RedirectTarget:   redirTarget,
-		RedirectAppend:   redirAppend,
+		TraceStats:      traceStats,
+		ShardSQL:        shardSQL,
+		Args:            args,
+		ArgSources:      sources,
+		DirectShardSQL:  shardSQL,
+		ComputeStages:   stageTexts(c.compute),
+		SourceCmd:       src.cmd,
+		SourcePartition: tn.values,
+		SourceNamespace: routeNamespace(src),
+		Coords:          src.coord,
+		SourceService:   routeService(src),
+		AlertArgs:       alertArgs,
+		ShardOrderBy:    "raw",
+		Aggregate:       aggregate,
+		RedirectTarget:  redirTarget,
+		RedirectAppend:  redirAppend,
 	}, c, nil
 }

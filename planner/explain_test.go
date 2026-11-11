@@ -81,7 +81,7 @@ func TestExplain_JqPctExtraction(t *testing.T) {
 
 func TestExplain_PlannerOutput(t *testing.T) {
 	t.Run("jq select with field access splits correctly", func(t *testing.T) {
-		plan, err := Plan(`tail log/weft/metrics.log | jq 'select(.type == "memory") | .pct'`, 0, "", time.Time{}, time.Time{})
+		plan, err := planBare(`tail log/weft/metrics.log | jq 'select(.type == "memory") | .pct'`, "", time.Time{}, time.Time{})
 		if err != nil {
 			t.Fatalf("Plan: %v", err)
 		}

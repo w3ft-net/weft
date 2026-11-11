@@ -55,7 +55,7 @@ func TestPushdown_NewDimensions(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, err := Plan(tc.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tc.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tc.pipeline, err)
 			}
@@ -131,7 +131,7 @@ func TestPathLayout_KindSegment(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			plan, err := Plan(tc.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tc.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tc.pipeline, err)
 			}

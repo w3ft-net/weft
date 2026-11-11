@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/planner"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // This file documents the PRE-PLAN splicer path specifically: when
@@ -28,7 +29,7 @@ func planAfterExpand(t *testing.T, fs *testFS, pipeline string) *planner.QueryPl
 	if err != nil {
 		t.Fatalf("expandBinPipeline: %v", err)
 	}
-	plan, err := planner.Plan(expanded, 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(expanded, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("planner.Plan(%q): %v", expanded, err)
 	}

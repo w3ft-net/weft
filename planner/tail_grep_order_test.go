@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // Pipeline order matters when the post-LIMIT filter is *inclusive*
@@ -57,7 +59,7 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -89,11 +91,11 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 // compute-side ordering invariant survives the test.
 func TestPlanCustomer_BoundsPerShardLimit(t *testing.T) {
 	pipeline := `cat warp.log | tail -n 100 | grep -v ERROR | wc -l`
-	plan, err := Plan(pipeline, 3, "", time.Time{}, time.Time{})
+	plan, err := Plan(pipeline, shapetest.Tenant(3), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	want := `SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE customer_id = CAST(? AS BIGINT) ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 100) AS t ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST`
+	want := `SELECT raw, ts, event_id, line_no FROM (SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs` + shapetest.Where() + ` ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT 100) AS t ORDER BY ts, event_id NULLS FIRST, line_no NULLS FIRST`
 	if plan.ShardSQL != want {
 		t.Errorf("ShardSQL must place customer predicate before the LIMIT\n got: %s\nwant: %s", plan.ShardSQL, want)
 	}
@@ -160,7 +162,7 @@ func TestPushdown_HardLimitBlocksPredicatePushdown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -186,7 +188,7 @@ func TestPushdown_HardLimitBlocksPredicatePushdown(t *testing.T) {
 // asks for the last N matching rows, which is exactly the SQL
 // `WHERE ... ORDER BY ts DESC, event_id DESC NULLS LAST, line_no DESC NULLS LAST LIMIT N`.
 func TestPushdown_PreLimitFilterStillPushes(t *testing.T) {
-	plan, err := Plan(`cat vimgym.log | grep ERROR | tail -n 100`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`cat vimgym.log | grep ERROR | tail -n 100`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +207,7 @@ func TestPushdown_DynamicRegexStaysInCompute(t *testing.T) {
 		`awk 'SERVICE ~ "api"'`,
 		`awk '$0 !~ "ERR" "OR"'`,
 	} {
-		plan, err := Plan(`cat vimgym.log | `+stage, 0, "", time.Time{}, time.Time{})
+		plan, err := planBare(`cat vimgym.log | `+stage, "", time.Time{}, time.Time{})
 		if err != nil {
 			t.Fatalf("Plan(%s): %v", stage, err)
 		}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/planner"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // testFS satisfies bash.FS + bash.LangFS by delegating most methods to an
@@ -192,7 +193,7 @@ func TestExpandBinPipeline_QuotedArgRoundTripsToPlanner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := planner.Plan(expanded, 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(expanded, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("planner.Plan(%q): %v", expanded, err)
 	}
@@ -230,7 +231,7 @@ func TestExpandBinPipeline_QuotedArgRoundTripsToPlanner(t *testing.T) {
 func TestComputeStage_PreservesShellMetacharacters(t *testing.T) {
 	pipeline := `tail -n 100 /log/weft/shard/metrics.log | jq -r '$node // "(empty)"' | sort | uniq -c | grep '(empty)' | awk '{print $1}'`
 
-	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}

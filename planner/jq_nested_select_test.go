@@ -17,7 +17,7 @@ func TestJq_SelectNestedPathPushdown(t *testing.T) {
 		`cat vimgym.log | jq 'select(.items[0].n == 1)'`,
 	} {
 		t.Run(pipeline, func(t *testing.T) {
-			plan, err := Plan(pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -45,7 +45,7 @@ func TestJq_SubjectRelativeSelect(t *testing.T) {
 		{`jq 'select($level == "ERROR") | .foo | select(.bar == 1)'`, `level = 'ERROR'`, proj(".foo")},
 	} {
 		t.Run(tt.pipeline, func(t *testing.T) {
-			plan, err := Plan("cat vimgym.log | "+tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare("cat vimgym.log | "+tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -64,7 +64,7 @@ func TestJq_SubjectRelativeSelect(t *testing.T) {
 // it still reach the shard as a prefilter, which the stage implies.
 func TestJq_SubjectRelativeTail(t *testing.T) {
 	stage := `jq '.foo | select(.bar == 1) | {x: .bar}'`
-	plan, err := Plan("cat vimgym.log | "+stage, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare("cat vimgym.log | "+stage, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestJq_SelectUnpushableNestedPaths(t *testing.T) {
 		`cat vimgym.log | jq '.disk[] | select(.pct > 90)'`,
 	} {
 		t.Run(pipeline, func(t *testing.T) {
-			plan, err := Plan(pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}

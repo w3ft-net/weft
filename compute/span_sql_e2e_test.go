@@ -9,6 +9,7 @@ import (
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/theme"
 )
@@ -18,7 +19,7 @@ var spanBase = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 func sdkSpanRow(i int, service, name, id, parent, level string, dur int64, body string) *pb.LogRow {
 	return &pb.LogRow{
 		TsUnixNs: spanBase.Add(time.Duration(i) * time.Millisecond).UnixNano(),
-		Raw:      body, Namespace: "acme", Service: service, Kind: "main", Level: level,
+		Raw:      body, Namespace: "acme", Service: service, Kind: "main", Level: level, CustomerId: 1,
 		TraceId: "t1", SpanName: name, SpanId: id, ParentSpanId: parent, DurationNs: dur,
 	}
 }
@@ -41,7 +42,7 @@ func newSpanShard(t *testing.T, id string, rows []*pb.LogRow) *shard.DuckDBShard
 
 func runSpanQuery(t *testing.T, pipeline string, shards ...*shard.DuckDBShard) []string {
 	t.Helper()
-	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

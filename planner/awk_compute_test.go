@@ -11,7 +11,7 @@ import (
 // When awk's pattern is pushed into SQL as a prefilter only, the stage
 // still runs in compute exactly as written, whatever its action contains.
 func TestAwkPushdown_ComputeRunsTheProgramVerbatim(t *testing.T) {
-	plan, err := Plan(`cat /log/acme/api/main.log | awk 'LEVEL == "ERROR" { n++ ; print $1 $2 }'`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`cat /log/acme/api/main.log | awk 'LEVEL == "ERROR" { n++ ; print $1 $2 }'`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestAwkPushdown_ComputeRunsTheProgramVerbatim(t *testing.T) {
 // sees, so a multi-rule program pushes the OR of its patterns and runs
 // whole in compute.
 func TestAwkPushdown_SecondRuleKeepsItsRows(t *testing.T) {
-	plan, err := Plan(`cat /log/acme/api/main.log | awk 'LEVEL == "a" { print "A" } LEVEL == "b" { print "B" }'`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`cat /log/acme/api/main.log | awk 'LEVEL == "a" { print "A" } LEVEL == "b" { print "B" }'`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestAwkPushdown_SecondRuleKeepsItsRows(t *testing.T) {
 // program containing a single quote (close, escaped quote, reopen in the
 // shell) can't be wrapped in bare single quotes.
 func TestPlan_ComputeStageKeepsEmbeddedSingleQuote(t *testing.T) {
-	plan, err := Plan(`cat /log/acme/api/main.log | sort | awk '{ print "it'\''s" }'`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`cat /log/acme/api/main.log | sort | awk '{ print "it'\''s" }'`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

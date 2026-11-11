@@ -3,6 +3,8 @@ package planner
 import (
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // benchFixtures are the representative watch shapes we measure Plan()
@@ -46,7 +48,7 @@ func BenchmarkPlan(b *testing.B) {
 		b.Run(fx.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				plan, err := Plan(fx.pipeline, 1, "", benchStart, benchEnd)
+				plan, err := Plan(fx.pipeline, shapetest.Tenant(1), "", benchStart, benchEnd)
 				if err != nil {
 					b.Fatalf("Plan(%q): %v", fx.pipeline, err)
 				}

@@ -21,7 +21,7 @@ func TestPlan_FilesystemCommandsWithLogPath_FallThrough(t *testing.T) {
 		`pwd`,
 		`pushd /log/loom`,
 	} {
-		_, err := Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		_, err := planBare(pipeline, "", time.Time{}, time.Time{})
 		if !errors.Is(err, ErrNotPlannable) {
 			t.Errorf("Plan(%q) err = %v, want ErrNotPlannable", pipeline, err)
 		}
@@ -31,7 +31,7 @@ func TestPlan_FilesystemCommandsWithLogPath_FallThrough(t *testing.T) {
 // The b5c68b6 guard stays: a content reader given a /log/ path directly
 // still gets the explicit error rather than silently returning no rows.
 func TestPlan_ContentReaderWithLogPath_StillRejected(t *testing.T) {
-	_, err := Plan(`grep ERROR /log/weft/coordinator/main.log`, 0, "", time.Time{}, time.Time{})
+	_, err := planBare(`grep ERROR /log/weft/coordinator/main.log`, "", time.Time{}, time.Time{})
 	if err == nil || errors.Is(err, ErrNotPlannable) || !strings.Contains(err.Error(), "must start with cat, head, or tail") {
 		t.Fatalf("err = %v, want the 'must start with cat, head, or tail' rejection", err)
 	}
@@ -45,7 +45,7 @@ func TestPlan_FollowWithFSRedirectIsRefused(t *testing.T) {
 		`tail -f /log/acme/prod/api/main.log > /tmp/stream`,
 		`tail -f /log/acme/prod/api/main.log | grep ERROR >> /tmp/stream`,
 	} {
-		_, err := Plan(p, 0, "", time.Time{}, time.Time{})
+		_, err := planBare(p, "", time.Time{}, time.Time{})
 		if err == nil || !strings.Contains(err.Error(), "tail -f") {
 			t.Errorf("Plan(%q) = %v, want an error naming tail -f", p, err)
 		}

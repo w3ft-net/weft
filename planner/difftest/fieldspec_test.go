@@ -8,6 +8,7 @@ import (
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // fieldProgram are awk stages that stay in compute and read only some fields:
@@ -77,7 +78,7 @@ func TestDifferentialFieldRowSpec(t *testing.T) {
 		for _, prog := range fieldPrograms {
 			pipeline := "cat /log/spec/api/main.log | " + prog
 			t.Run(mode.name+"/"+prog, func(t *testing.T) {
-				plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+				plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -134,7 +135,7 @@ func TestDifferentialFieldProjectionRespectsAwkFlags(t *testing.T) {
 func TestDifferentialFieldFormOfAStageWithVars(t *testing.T) {
 	h := newHarness(t, fieldLines(), 2)
 	pipeline := `cat /log/spec/api/main.log | awk -v k=2 -v name=x '{ s += $2 * k } END { print name, s }'`
-	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil || plan.FieldSQL == "" || plan.FieldSpec == nil {
 		t.Fatalf("no field form: %v\n%s", err, planner.Explain(pipeline))
 	}

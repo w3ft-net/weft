@@ -9,7 +9,7 @@ import (
 // TestMultiSourceReadsTheNamedTuples pins gap 8 of docs/plans/tenant-scope.md:
 // `cat a/api b/web` reads those two tuples, not {a,b} x {api,web}.
 func TestMultiSourceReadsTheNamedTuples(t *testing.T) {
-	plan, err := Plan(`cat /log/a/api/main.log /log/b/web/main.log`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`cat /log/a/api/main.log /log/b/web/main.log`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestMultiSourceReadsTheNamedTuples(t *testing.T) {
 
 // A set that is its own per-column product keeps the compact IN form.
 func TestMultiSourceProductStaysCompact(t *testing.T) {
-	plan, err := Plan(`cat /log/a/api/main.log /log/a/web/main.log /log/b/api/main.log /log/b/web/main.log`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`cat /log/a/api/main.log /log/a/web/main.log /log/b/api/main.log /log/b/web/main.log`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestMultiSourceProductStaysCompact(t *testing.T) {
 
 // warp.log beside a specific file reads every row, so the file cannot narrow it.
 func TestWildcardSourceBesideFileIsNotNarrowed(t *testing.T) {
-	plan, err := Plan(`cat /log/warp.log /log/a/api/main.log`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`cat /log/warp.log /log/a/api/main.log`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

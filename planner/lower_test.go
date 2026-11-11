@@ -2,10 +2,14 @@ package planner
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	coords "github.com/graybeardcorp/weft/shape"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // noResolver is the no-/bin resolver used by tests that don't exercise
@@ -31,7 +35,7 @@ func TestLower_RoundTrip(t *testing.T) {
 
 	// Lower at save time (customer matters for the row-level
 	// boundary; time bounds are sentinels and don't matter here).
-	lp, err := Lower(pipeline, customer, "bolt", noResolver{})
+	lp, err := Lower(pipeline, shapetest.Tenant(customer), "bolt", noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -47,11 +51,11 @@ func TestLower_RoundTrip(t *testing.T) {
 	}
 
 	// Hydrate against the fire-time context.
-	hydratedArgs := got.Hydrate(ResolveCtx{CustomerID: customer, Start: start, End: end})
+	hydratedArgs := got.Hydrate(ResolveCtx{Partition: shapetest.Partition(customer), Start: start, End: end})
 
 	// Fresh Plan call against the same context — what the live
 	// dispatch path would produce today.
-	plan, err := Plan(pipeline, customer, "", start, end)
+	plan, err := Plan(pipeline, shapetest.Tenant(customer), "", start, end)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -74,20 +78,20 @@ func TestLower_RoundTrip(t *testing.T) {
 // windows.
 func TestLower_HydrateUsesFireTimeBounds(t *testing.T) {
 	pipeline := `cat /log/loom/api/prod.log | grep ERROR`
-	lp, err := Lower(pipeline, 1, "bolt", noResolver{})
+	lp, err := Lower(pipeline, shapetest.Tenant(1), "bolt", noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
 
 	fire1 := ResolveCtx{
-		CustomerID: 1,
-		Start:      time.Date(2026, 5, 13, 9, 0, 0, 0, time.UTC),
-		End:        time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC),
+		Partition: shapetest.Partition(1),
+		Start:     time.Date(2026, 5, 13, 9, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC),
 	}
 	fire2 := ResolveCtx{
-		CustomerID: 1,
-		Start:      time.Date(2026, 5, 13, 11, 0, 0, 0, time.UTC),
-		End:        time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC),
+		Partition: shapetest.Partition(1),
+		Start:     time.Date(2026, 5, 13, 11, 0, 0, 0, time.UTC),
+		End:       time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC),
 	}
 
 	args1 := lp.Hydrate(fire1)
@@ -115,9 +119,9 @@ func TestLower_HydrateUsesFireTimeBounds(t *testing.T) {
 				t.Errorf("args1[%d] (ArgTimeEnd) = %v, want %s",
 					i, args1[i], formatTS(fire1.End))
 			}
-		case ArgCustomer:
-			if args1[i] != "1" {
-				t.Errorf("args1[%d] (ArgCustomer) = %v, want 1", i, args1[i])
+		case ArgPartition:
+			if want := shapetest.Partition(1)[src.Part]; args1[i] != want {
+				t.Errorf("args1[%d] (ArgPartition %d) = %v, want %s", i, src.Part, args1[i], want)
 			}
 		}
 	}
@@ -127,7 +131,7 @@ func TestLower_HydrateUsesFireTimeBounds(t *testing.T) {
 // must carry the current PlannerVersion. Consumers compare against
 // PlannerVersion to detect stale plans after a planner-breaking change.
 func TestLower_PlannerVersion(t *testing.T) {
-	lp, err := Lower(`cat /log/foo.log`, 1, "bolt", noResolver{})
+	lp, err := Lower(`cat /log/foo.log`, shapetest.Tenant(1), "bolt", noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -167,7 +171,7 @@ func TestLower_InlinesBinScript(t *testing.T) {
 		binByName: map[string]string{"find-errors": binBody},
 	}
 
-	lp, err := Lower(`find-errors ERROR | wc -l`, 1, "bolt", resolver)
+	lp, err := Lower(`find-errors ERROR | wc -l`, shapetest.Tenant(1), "bolt", resolver)
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -199,21 +203,17 @@ func TestLower_InlinesBinScript(t *testing.T) {
 	}
 }
 
-// TestLower_NoArgSourcesWhenCustomerEmpty pins the planner contract
-// that an empty customer skips the ArgCustomer predicate. Lower
-// inherits this: if the caller passes customer == 0, the lowered
-// form has zero ArgCustomer entries. (No production caller does this
-// for watches — but the test pins it as a property so a future Lower
-// caller doesn't quietly add a customer="" path.)
-func TestLower_NoArgSourcesWhenCustomerEmpty(t *testing.T) {
-	lp, err := Lower(`cat /log/foo.log`, 0, "bolt", noResolver{})
-	if err != nil {
-		t.Fatalf("Lower: %v", err)
-	}
-	for i, src := range lp.ArgSources {
-		if src.Kind == ArgCustomer {
-			t.Errorf("ArgSources[%d] = ArgCustomer with empty customer; want skipped", i)
+// A plan is lowered for one tenant. A scope that names none (a required
+// partition column unset) or that reads nothing is refused, so no lowered plan
+// quietly carries no tenant predicate for a watch that needs one.
+func TestLower_RefusesAScopeWithNoTenant(t *testing.T) {
+	if len(coords.BuildLayout().Columns) > 0 {
+		if _, err := Lower(`cat /log/foo.log`, coords.Set{{}}, "bolt", noResolver{}); !errors.Is(err, coords.ErrRequiredUnset) {
+			t.Errorf("Lower with an unset tenant = %v, want ErrRequiredUnset", err)
 		}
+	}
+	if _, err := Lower(`cat /log/foo.log`, coords.Set{}, "bolt", noResolver{}); !errors.Is(err, ErrNoSource) {
+		t.Errorf("Lower with an empty scope = %v, want ErrNoSource", err)
 	}
 }
 
@@ -222,7 +222,7 @@ func TestLower_NoArgSourcesWhenCustomerEmpty(t *testing.T) {
 // for both. Without it a cron's awk stage would be sent whole lines.
 func TestLower_KeepsTheFieldForm(t *testing.T) {
 	pipeline := `cat /log/weft/coordinator/main.log | awk '{ s += $3 } END { print s }'`
-	lp, err := Lower(pipeline, 1, "bolt", noResolver{})
+	lp, err := Lower(pipeline, shapetest.Tenant(1), "bolt", noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestLower_KeepsTheFieldForm(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	live, err := Plan(pipeline, 1, "", time.Time{}, time.Time{})
+	live, err := Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

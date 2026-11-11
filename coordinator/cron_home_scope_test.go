@@ -10,6 +10,7 @@ import (
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/planner"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -64,7 +65,7 @@ func TestExecuteForWatch_LoweredPlanOutsideTheHomeIsRefused(t *testing.T) {
 	db.FindOrCreateNamespace(custID, "beta")
 
 	pipeline := "cat /log/beta/api/main.log | grep ERROR"
-	lp, err := planner.Lower(pipeline, int64(custID), "bolt", noBinResolver{})
+	lp, err := planner.Lower(pipeline, shapetest.Tenant(int64(custID)), "bolt", noBinResolver{})
 	if err != nil {
 		t.Fatal(err)
 	}

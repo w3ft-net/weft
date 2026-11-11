@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/weft/logtable"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 func planTyped(t *testing.T, pipeline string) *QueryPlan {
 	t.Helper()
-	p, err := Plan(pipeline, 7, "", time.Time{}, time.Time{})
+	p, err := Plan(pipeline, shapetest.Tenant(7), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("%s: %v", pipeline, err)
 	}
@@ -26,7 +26,7 @@ func TestTypedPlan_AwkFieldComparison(t *testing.T) {
 		t.Errorf("requires %q, want $5", got)
 	}
 	tp := p.Typed
-	if tp.Table != logtable.Name([]any{int64(7)}, "acme", "api", "main") || tp.Env != "" {
+	if tp.Table != shapetest.Table(7, "acme", "api", "main") || tp.Env != "" {
 		t.Errorf("source = %+v", tp)
 	}
 	// The base keeps the string alternative that makes it a wide prefilter;
@@ -47,7 +47,7 @@ func TestTypedPlan_AwkFieldComparison(t *testing.T) {
 
 func TestTypedPlan_EnvComesFromThePath(t *testing.T) {
 	p := planTyped(t, `cat /log/acme/prod/api/main.log | awk '$2 >= 3'`)
-	if p.Typed == nil || p.Typed.Env != "prod" || p.Typed.Table != logtable.Name([]any{int64(7)}, "acme", "api", "main") {
+	if p.Typed == nil || p.Typed.Env != "prod" || p.Typed.Table != shapetest.Table(7, "acme", "api", "main") {
 		t.Fatalf("typed = %+v", p.Typed)
 	}
 }
@@ -70,7 +70,7 @@ func TestTypedPlan_JQKeyComparison(t *testing.T) {
 	if got := strings.Join(p.Typed.Requires, ","); got != ".q_max_ms" {
 		t.Errorf("requires %q, want .q_max_ms", got)
 	}
-	if p.Typed.Table != logtable.Name([]any{int64(7)}, "weft", "shard", "stats") {
+	if p.Typed.Table != shapetest.Table(7, "weft", "shard", "stats") {
 		t.Errorf("source = %+v", p.Typed)
 	}
 	if !strings.Contains(p.ShardSQL, "json_type") {
@@ -99,7 +99,7 @@ func TestTypedPlan_AbsentWhereItCannotApply(t *testing.T) {
 		"follow":                   `tail -f /log/acme/api/main.log | awk '$5 > 500'`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			p, err := Plan(pipeline, 7, "", time.Time{}, time.Time{})
+			p, err := Plan(pipeline, shapetest.Tenant(7), "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Skipf("not plannable: %v", err)
 			}

@@ -22,8 +22,8 @@ import (
 // predicate at all on that column.
 type sourceInfo struct {
 	// tuples is what the source names, one tuple per file: `cat a/api b/web`
-	// is two tuples, not {a,b} x {api,web}. The customer column is unset;
-	// the planner binds it. nil for a trace source, which uses the slices.
+	// is two tuples, not {a,b} x {api,web}. The partition columns are unset;
+	// the planner binds them. nil for a trace source, which uses the slices.
 	tuples     coords.Set
 	namespaces []string // namespace column values for SQL predicates
 	services   []string // service column values for SQL predicates
@@ -307,7 +307,7 @@ func parseSource(cmd *bash.SimpleCommand, cwd string) (*sourceInfo, error) {
 // extractServicesEnv extracts namespace/service/kind + env from a list
 // of pseudofile arguments. warp.log (the all-sources wildcard) yields
 // empty slices, which means no predicate on those columns — a fan-out
-// across every source the customer can read. Values are deduplicated
+// across every source the tenant can read. Values are deduplicated
 // and sorted per column for stable SQL.
 //
 // 2-seg paths (/log/<ns>/<svc>.log) are rejected outright: every log

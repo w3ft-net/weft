@@ -20,8 +20,8 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/graybeardcorp/weft/auth"
 	weftcfg "github.com/graybeardcorp/weft/config"
+	"github.com/graybeardcorp/weft/grpctoken"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	shardsvc "github.com/graybeardcorp/weft/shard/service"
@@ -95,7 +95,7 @@ func main() {
 	// so a single shared secret is enough instead of per-peer JWTs.
 	// Both the coordinator and compute read the same SHARD_SECRET env
 	// var and attach the bearer on every outbound call via
-	// auth.ClientTokenUnaryInterceptor. Prod gets SHARD_SECRET from
+	// grpctoken.ClientTokenUnaryInterceptor. Prod gets SHARD_SECRET from
 	// Secrets Manager via load-app-env; dev sets it explicitly in
 	// docker-compose.yml. No fallback — a process running with an
 	// undeclared shared secret is a misconfiguration, not a default.
@@ -128,8 +128,8 @@ func main() {
 	}
 	gs := grpc.NewServer(
 		grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
-		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor(), auth.SharedTokenUnaryServerInterceptor(shardSecret), srv.UnaryInterceptor()),
-		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor(), auth.SharedTokenStreamServerInterceptor(shardSecret), srv.StreamInterceptor()),
+		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor(), grpctoken.SharedTokenUnaryServerInterceptor(shardSecret), srv.UnaryInterceptor()),
+		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor(), grpctoken.SharedTokenStreamServerInterceptor(shardSecret), srv.StreamInterceptor()),
 	)
 	pb.RegisterShardQueryServer(gs, srv)
 

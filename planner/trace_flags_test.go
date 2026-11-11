@@ -13,7 +13,7 @@ func TestPlan_TraceRejectsUnknownOptions(t *testing.T) {
 		{`trace -v`, "trace: unknown option -v"},
 		{`trace --spans --bogus`, "trace: unknown option --bogus"},
 	} {
-		_, err := Plan(c.pipeline, 0, "", time.Time{}, time.Time{})
+		_, err := planBare(c.pipeline, "", time.Time{}, time.Time{})
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("Plan(%q) = %v, want an error containing %q", c.pipeline, err, c.want)
 		}
@@ -33,7 +33,7 @@ func TestPlan_TraceKeepsSupportedForms(t *testing.T) {
 		`trace --spans --name db.query`,
 		`trace --spans --name db.query --samples`,
 	} {
-		if _, err := Plan(p, 0, "", time.Time{}, time.Time{}); err != nil {
+		if _, err := planBare(p, "", time.Time{}, time.Time{}); err != nil {
 			t.Errorf("Plan(%q) = %v", p, err)
 		}
 	}

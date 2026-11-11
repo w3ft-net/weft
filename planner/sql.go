@@ -2,9 +2,10 @@ package planner
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
+
+	coords "github.com/graybeardcorp/weft/shape"
 )
 
 // Query is the AST node for the SQL the planner emits at each shard.
@@ -157,8 +158,8 @@ type Predicate struct {
 
 // ArgKind tags how a positional `?` placeholder gets resolved. The
 // distinction matters at save-time lowering: literals get baked into
-// the persisted form; the runtime-context kinds (Customer, TimeStart,
-// TimeEnd) get resolved fresh at each fire from the watch's customer
+// the persisted form; the runtime-context kinds (Partition, TimeStart,
+// TimeEnd) get resolved fresh at each fire from the watch's tenant
 // and the fire's time window.
 type ArgKind int
 
@@ -167,25 +168,32 @@ const (
 	// service name, env, etc.). The pipeline can't reference it at
 	// fire time — it IS the pipeline.
 	ArgLiteral ArgKind = iota
-	// ArgCustomer is the row-level-security boundary. Resolved from
-	// the watch's stored OrgID at fire time (or the active
-	// session's customer for interactive queries).
+	// ArgCustomer is the row-level-security boundary of a plan stored before
+	// the tenant came from the shape: its one value is the customer, the
+	// first partition value. Only read; new plans use ArgPartition.
 	ArgCustomer
 	// ArgTimeStart / ArgTimeEnd are the time window. Resolved from
 	// the fire's TimeRange.
 	ArgTimeStart
 	ArgTimeEnd
+	// ArgPartition is one value of the tenant's partition, the one at
+	// ArgSource.Part in layout order. Resolved from the watch's stored
+	// partition at fire time (or the session's for interactive queries).
+	// Appended last so the numbers of the kinds above, which are stored, hold.
+	ArgPartition
 )
 
 // ArgSource describes one positional argument. Value carries the
 // resolved value as of the Plan() that produced this source —
 // for ArgLiteral that's the only place the value comes from;
-// for ArgCustomer/TimeStart/TimeEnd that's the current call's
+// for ArgPartition/TimeStart/TimeEnd that's the current call's
 // resolved value but a save-time-lowering consumer ignores Value
 // and re-resolves from fire-time context.
 type ArgSource struct {
 	Kind  ArgKind
 	Value string
+	// Part is which partition value an ArgPartition is, in layout order.
+	Part int `json:",omitempty"`
 }
 
 // newSQLBuilder returns a fresh Query rooted at the logs table with
@@ -202,7 +210,7 @@ func (q *Query) setSelect(rawExpr string) { q.rawExpr = rawExpr }
 
 // addPredicate appends a WHERE fragment whose `?` placeholders are
 // literal values from the pipeline (namespace name, service name,
-// etc.). Use addCustomer / addTimeBounds for the runtime-resolved
+// etc.). Use addTenant / addTimeBounds for the runtime-resolved
 // sources — those tag Args differently so save-time lowering can
 // distinguish bake-at-save from resolve-at-fire.
 func (q *Query) addPredicate(pred string, literals ...string) {
@@ -213,22 +221,26 @@ func (q *Query) addPredicate(pred string, literals ...string) {
 	q.predicates = append(q.predicates, Predicate{SQL: pred, Args: args})
 }
 
-// addCustomer attaches the row-level security predicate. A zero id is a
-// no-op (no production caller passes zero; tests do). Tagged ArgCustomer so
-// a save-time-lowered form resolves this from the watch's stored OrgID at
-// fire time, not from whatever customer was active during Plan().
+// addTenant attaches the row-level security predicate: one equality per
+// partition column of the shape, which is none for a shape without a tenant. A
+// tenant with no values adds nothing (explain). Tagged ArgPartition so a
+// save-time-lowered form resolves each value from the watch's stored
+// partition at fire time, not from whatever tenant was active during Plan().
 //
 // Args travel as strings (see ArgSource), so the placeholder is cast
 // explicitly, the same way the timestamp bounds are: it must not depend on
-// how DuckDB would coerce a VARCHAR parameter against a BIGINT column.
-func (q *Query) addCustomer(customerID int64) {
-	if customerID == 0 {
+// how DuckDB would coerce a VARCHAR parameter against a typed column.
+func (q *Query) addTenant(tn tenant) {
+	cols := coords.BuildLayout().Columns
+	if len(tn.values) != len(cols) {
 		return
 	}
-	q.predicates = append(q.predicates, Predicate{
-		SQL:  "customer_id = CAST(? AS BIGINT)",
-		Args: []ArgSource{{Kind: ArgCustomer, Value: strconv.FormatInt(customerID, 10)}},
-	})
+	for i, c := range cols {
+		q.predicates = append(q.predicates, Predicate{
+			SQL:  c.Name + " = CAST(? AS " + c.Type.SQL() + ")",
+			Args: []ArgSource{{Kind: ArgPartition, Value: tn.values[i], Part: i}},
+		})
+	}
 }
 
 // addTimeBounds attaches ts >= / ts <= predicates for the user's query
@@ -389,7 +401,7 @@ func (q *Query) ToSQL() (string, []any) {
 }
 
 // ToLowered walks the AST and emits (sql, sources). Sources carry the
-// kind (Customer / TimeStart / TimeEnd / Literal) rather than resolved
+// kind (Partition / TimeStart / TimeEnd / Literal) rather than resolved
 // values — a save-time-lowered consumer re-resolves runtime kinds at
 // each fire and uses Value as-is for ArgLiteral.
 func (q *Query) ToLowered() (string, []ArgSource) {

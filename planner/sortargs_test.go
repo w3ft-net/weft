@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // parseSortArgs reads a sort stage the way warp's sort does, and says which
@@ -78,7 +80,7 @@ func TestKeyedAggregate_ExplainShowsTheFoldedSorts(t *testing.T) {
 
 // A saved count with an ordering carries the order: a cron fire sends it too.
 func TestKeyedAggregate_ASavedCountKeepsItsOrder(t *testing.T) {
-	lp, err := Lower("cat /log/ns/svc/main.log | awk '{ c[$1]++ } END { for (k in c) print k, c[k] }' | sort -k2 -rn | head -n 2", 1, "bolt", noResolver{})
+	lp, err := Lower("cat /log/ns/svc/main.log | awk '{ c[$1]++ } END { for (k in c) print k, c[k] }' | sort -k2 -rn | head -n 2", shapetest.Tenant(1), "bolt", noResolver{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +93,7 @@ func TestKeyedAggregate_ASavedCountKeepsItsOrder(t *testing.T) {
 // Dropping a sort ahead of a sum is the plan for shards with the facts; the
 // base plan keeps both stages, since the sum alone cannot be lowered there.
 func TestKeyedAggregate_ASortBeforeASumNeedsTheSameFacts(t *testing.T) {
-	plan, err := Plan("cat /log/ns/svc/main.log | sort -n | awk '"+keyedSum+"'", 1, "", time.Time{}, time.Time{})
+	plan, err := Plan("cat /log/ns/svc/main.log | sort -n | awk '"+keyedSum+"'", shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

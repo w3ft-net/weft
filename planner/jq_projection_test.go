@@ -64,7 +64,7 @@ func TestRawExpr_JqNestedField(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -81,7 +81,7 @@ func TestRawExpr_JqNestedField(t *testing.T) {
 // TestRawExpr_JqArrayIndex — `.items[0]` parses as PipeExpr{FieldExpr, IndexExpr}
 // and should collapse to a JSONPath array index in the SELECT.
 func TestRawExpr_JqArrayIndex(t *testing.T) {
-	plan, err := Plan(`cat vimgym.log | jq '.items[0]'`, 0, "", time.Time{}, time.Time{})
+	plan, err := planBare(`cat vimgym.log | jq '.items[0]'`, "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestRawExpr_JqObject(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -169,7 +169,7 @@ func TestRawExpr_JqArray(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -193,7 +193,7 @@ func TestRawExpr_JqInternalPipeBreak(t *testing.T) {
 		`cat vimgym.log | jq '.items[]'`:         "items",
 	} {
 		t.Run(pipeline, func(t *testing.T) {
-			plan, err := Plan(pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}

@@ -4,11 +4,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 func planKeyed(t *testing.T, program string) *QueryPlan {
 	t.Helper()
-	plan, err := Plan("cat /log/ns/svc/main.log | awk '"+program+"'", 1, "", time.Time{}, time.Time{})
+	plan, err := Plan("cat /log/ns/svc/main.log | awk '"+program+"'", shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +67,7 @@ func TestKeyedAggregate_ACountNeedsNoFacts(t *testing.T) {
 // bad: the plan only goes to shards whose facts say the values fit.
 func TestKeyedAggregate_ShardSQL(t *testing.T) {
 	const from = ` FROM (SELECT unnest(string_split(COALESCE(list_extract(fields, 1), ''), chr(10))) as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no, `
-	const where = ` FROM logs WHERE customer_id = CAST(? AS BIGINT) AND namespace = ? AND service = ? AND kind = ?) AS t GROUP BY raw ORDER BY raw`
+	where := ` FROM logs WHERE ` + shapetest.Predicate() + `namespace = ? AND service = ? AND kind = ?) AS t GROUP BY raw ORDER BY raw`
 	for name, want := range map[string]string{
 		keyedSum: "SELECT raw, min(ts) AS ts, count(*) AS count, COALESCE(CAST(sum(agg_val) AS VARCHAR), '0') AS agg_sum" +
 			from + "TRY_CAST(list_extract(fields, 2) AS BIGINT) AS agg_val" + where,
@@ -147,7 +149,7 @@ func TestKeyedAggregate_ExplainSaysWhatItWaitsFor(t *testing.T) {
 // A saved cron or dashboard carries the base plan only: it never waits on facts
 // a later run might not find.
 func TestKeyedAggregate_ASavedPlanKeepsTheStage(t *testing.T) {
-	lp, err := Lower("cat /log/ns/svc/main.log | awk '"+keyedSum+"'", 1, "bolt", noResolver{})
+	lp, err := Lower("cat /log/ns/svc/main.log | awk '"+keyedSum+"'", shapetest.Tenant(1), "bolt", noResolver{})
 	if err != nil {
 		t.Fatal(err)
 	}

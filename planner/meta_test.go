@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 var time0 time.Time
@@ -75,7 +77,7 @@ func TestPlan_ProjectsOnlyTheMetaColumnsStagesRead(t *testing.T) {
 		{`cat vimgym.log | awk -f prog.awk`, MetaVarColumns, nil},
 		{`cat vimgym.log | awk '{ n += $2 } END { print n }'`, nil, MetaVarColumns},
 	} {
-		plan, err := Plan(c.pipeline, 1, "", time0, time0)
+		plan, err := Plan(c.pipeline, shapetest.Tenant(1), "", time0, time0)
 		if err != nil {
 			t.Fatalf("%s: %v", c.pipeline, err)
 		}

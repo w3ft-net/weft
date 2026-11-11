@@ -15,7 +15,7 @@ import (
 
 // QueryPlan is the result of analyzing a weft pipeline. ShardSQL is the
 // pushed-down SQL sent to shard nodes — always SELECT {raw_expr} as raw, ts.
-// The customer + ts >=/<= bounds + namespace/env/service predicates are
+// The tenant partition + ts >=/<= bounds + namespace/env/service predicates are
 // parameterized via positional `?` placeholders; the bound values live
 // in Args, in render order. Coordinator ships Args alongside Sql to the
 // shard's QueryContext, which forwards to DuckDB's prepared-statement
@@ -25,7 +25,7 @@ type QueryPlan struct {
 	ShardSQL string
 	Args     []any // positional values for ShardSQL/DirectShardSQL placeholders, in render order
 	// ArgSources is the same args slice but each entry is tagged with its
-	// Kind (Customer, TimeStart, TimeEnd, Literal). Live dispatch ignores
+	// Kind (Partition, TimeStart, TimeEnd, Literal). Live dispatch ignores
 	// this; save-time lowering reads it so each fire can re-resolve the
 	// runtime kinds from fresh context. 1:1 with Args.
 	ArgSources    []ArgSource
@@ -65,8 +65,10 @@ type QueryPlan struct {
 	LiveRowStages    []string
 	LiveReadsPayload bool
 	SourceCmd        string // source command: "cat", "head", "tail", or "trace"
-	SourceCustomerID int64  // the customer_id the query is scoped to (0 only in tests)
-	SourceNamespace  string // namespace column value — routing ("" = all namespaces)
+	// SourcePartition is the partition the query is scoped to, as text in the
+	// shape's layout order; nil when the plan carries no tenant (explain).
+	SourcePartition []string
+	SourceNamespace string // namespace column value — routing ("" = all namespaces)
 	// Coords is what the query reads: the source's tuples intersected with the
 	// scope, pinned before any pass runs. The SQL, shard routing, table choice
 	// and the live matcher are all backends over it.
@@ -76,7 +78,7 @@ type QueryPlan struct {
 	AlertArgs     []string // argv for a terminal `alert` stage; nil if absent. Set even for alert-only pipelines (ShardSQL is empty in that case).
 
 	// Table names the shard table that holds the source's rows, when the source
-	// pins exactly one (customer, namespace, service, kind). "" = no hint: the
+	// pins exactly one (partition, namespace, service, kind). "" = no hint: the
 	// predicates alone pick the rows. See sourceTable.
 	Table string
 
@@ -208,37 +210,22 @@ type GrepPattern struct {
 // pipeline whose shape unexpectedly changed.
 var ErrNotPlannable = errors.New("not a plannable log query")
 
-func Plan(pipeline string, customerID int64, cwd string, start, end time.Time) (*QueryPlan, error) {
-	plan, _, err := compile(pipeline, customerID, cwd, start, end, nil)
+// Plan plans a pipeline for a principal who may read only scope. The query
+// reads the intersection of what it names and scope, and scope names the one
+// partition (tenant) the query is for: a scope whose tuples name different
+// partitions is an error. A wildcard (warp.log, a glob, an unnamed namespace)
+// means every tuple in scope, never "no predicate", and an empty intersection
+// is ErrNoSource before anything is routed, which is also what an empty scope
+// gets. A trace that names no namespace is restricted to scope, because its
+// rows, counts and per-trace service lists come only from the SQL.
+func Plan(pipeline string, scope coords.Set, cwd string, start, end time.Time) (*QueryPlan, error) {
+	plan, _, err := compile(pipeline, scope, cwd, start, end)
 	return plan, err
 }
 
 // ErrNoSource is the deny for a query whose source, intersected with what the
 // principal may read, is empty. It never says whether the source exists.
 var ErrNoSource = errors.New("unknown source")
-
-// PlanIn is Plan for a principal who may read only scope. The query reads the
-// intersection of what it names and scope (customerID is the partition, and
-// every tuple of scope must be in it): a wildcard (warp.log, a glob, an
-// unnamed namespace) means every tuple in scope, never "no predicate", and an
-// empty intersection is ErrNoSource before anything is routed. A trace that
-// names no namespace is restricted to scope, because its rows, counts and
-// per-trace service lists come only from the SQL.
-func PlanIn(pipeline string, customerID int64, scope coords.Set, cwd string, start, end time.Time) (*QueryPlan, error) {
-	if customerID == 0 {
-		return nil, errors.New("plan: no customer")
-	}
-	for _, t := range scope {
-		if t.Customer != customerID {
-			return nil, errors.New("plan: scope reaches another customer")
-		}
-	}
-	if scope == nil {
-		scope = coords.Set{} // an empty scope is a deny, not the whole customer
-	}
-	plan, _, err := compile(pipeline, customerID, cwd, start, end, scope)
-	return plan, err
-}
 
 // noSource is ErrNoSource naming the first namespace the user wrote, which is
 // their own input, so the refusal reads the same for a namespace that is
@@ -253,17 +240,31 @@ func noSource(named coords.Set) error {
 }
 
 // compile plans a pipeline and also returns its IR, which Explain shows.
-// The IR is nil for an alert-only pipeline. readable, if non-nil, scopes trace
-// commands (see PlanIn).
-func compile(pipeline string, customerID int64, cwd string, start, end time.Time, scope coords.Set) (*QueryPlan, *compiled, error) {
-	plan, c, err := compileFor(pipeline, customerID, cwd, start, end, scope, false)
+// The IR is nil for an alert-only pipeline. scope also scopes trace commands
+// (see Plan).
+func compile(pipeline string, scope coords.Set, cwd string, start, end time.Time) (*QueryPlan, *compiled, error) {
+	tn, err := tenantOf(scope)
+	if err != nil {
+		return nil, nil, err
+	}
+	return compileTenant(pipeline, tn, scope, cwd, start, end)
+}
+
+// compileBare plans with no tenant and no scope limit: how Explain and analyze
+// show a pipeline. The plan it returns reads nothing for anyone.
+func compileBare(pipeline, cwd string, start, end time.Time) (*QueryPlan, *compiled, error) {
+	return compileTenant(pipeline, tenant{}, coords.Set{coords.Coord{}}, cwd, start, end)
+}
+
+func compileTenant(pipeline string, tn tenant, scope coords.Set, cwd string, start, end time.Time) (*QueryPlan, *compiled, error) {
+	plan, c, err := compileFor(pipeline, tn, cwd, start, end, scope, false)
 	if err != nil || plan.Typed == nil {
 		return plan, c, err
 	}
 	// The same pipeline planned for shards that have said every field it
 	// compares is a finite decimal: the comparison is then exact, so SQL can
 	// compute all of the stage and compute has less (or nothing) to run.
-	exact, _, err := compileFor(pipeline, customerID, cwd, start, end, scope, true)
+	exact, _, err := compileFor(pipeline, tn, cwd, start, end, scope, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -273,7 +274,7 @@ func compile(pipeline string, customerID int64, cwd string, start, end time.Time
 
 // compileFor is compile for one reading of the facts: assumeTyped says every
 // field the pipeline compares with a number holds a finite decimal.
-func compileFor(pipeline string, customerID int64, cwd string, start, end time.Time, scope coords.Set, assumeTyped bool) (*QueryPlan, *compiled, error) {
+func compileFor(pipeline string, tn tenant, cwd string, start, end time.Time, scope coords.Set, assumeTyped bool) (*QueryPlan, *compiled, error) {
 	queryPart, alertArgs := SplitAlertStage(pipeline)
 
 	// Alert-only pipeline (`alert ...` with nothing in front). Return
@@ -305,19 +306,14 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 	}
 
 	// Pin the coordinates: what the source names, held to what the scope allows.
-	// A nil scope is the whole customer, which is what Plan always meant.
-	unscoped := scope == nil
-	if unscoped {
-		scope = coords.Set{{Customer: customerID}}
-	}
 	named := info.source.tuples
 	if len(named) == 0 {
 		named = coords.Set{{}} // a trace that names no namespace
 	}
 	bound := make(coords.Set, len(named))
+	partition := tn.coord()
 	for i, t := range named {
-		t.Customer = customerID
-		bound[i] = t
+		bound[i] = t.WithPartition(partition)
 	}
 	info.source.coord = coords.Intersect(bound, scope)
 	// A tuple the scope leaves nothing of is a refusal, not something to
@@ -357,7 +353,7 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 	}
 
 	if agg := spanAggregateOf(info.source); agg != "" {
-		return planSpans(c, info.source, agg, customerID, start, end, alertArgs, redirTarget, redirAppend)
+		return planSpans(c, info.source, agg, tn, start, end, alertArgs, redirTarget, redirAppend)
 	}
 
 	// Passes. Aggregate recognition and sort/limit fusion run below,
@@ -375,10 +371,10 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 
 	// SQL backend: the source, then every node the shard runs.
 	sql := newSQLBuilder()
-	// Customer + time bounds first so they sit at the head of the
+	// Tenant + time bounds first so they sit at the head of the
 	// WHERE clause regardless of subsequent app/source/stage pushdowns.
-	// addCustomer/addTimeBounds are no-ops on empty/zero values.
-	sql.addCustomer(customerID)
+	// addTenant/addTimeBounds are no-ops on empty/zero values.
+	sql.addTenant(tn)
 	sql.addTimeBounds(start, end)
 	addSourcePredicates(sql, info.source)
 
@@ -506,7 +502,7 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 		fieldSpec = c.fieldSpec.spec()
 	}
 
-	typed := typedVariant(c, info.source, customerID, shardSQL, directShardSQL, fieldSQL)
+	typed := typedVariant(c, info.source, tn, shardSQL, directShardSQL, fieldSQL)
 	if assumeTyped {
 		// What the facts leave to swap (a jq key) is swapped in this plan,
 		// which is only ever used where they all hold.
@@ -534,12 +530,12 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 		LiveRowStages:     stageTexts(liveRows),
 		LiveReadsPayload:  len(liveRest) > 0 && liveRest[0].cmd == "jq",
 		SourceCmd:         info.source.cmd,
-		SourceCustomerID:  customerID,
+		SourcePartition:   tn.values,
 		SourceNamespace:   routeNamespace(info.source),
 		Coords:            info.source.coord,
 		SourceService:     routeService(info.source),
 		SourceKind:        routeKind(info.source),
-		Table:             sourceTable(customerID, info.source),
+		Table:             sourceTable(tn, info.source),
 		AlertArgs:         alertArgs,
 		ShardOrderBy:      mergeOrderBy,
 		ShardLimit:        c.shardLimit,
@@ -551,21 +547,21 @@ func compileFor(pipeline string, customerID int64, cwd string, start, end time.T
 }
 
 // sourceTable names the shard table that holds a cat, head or tail source's
-// rows, or "" when the source does not pin exactly one (customer, namespace,
+// rows, or "" when the source does not pin exactly one (partition, namespace,
 // service, kind): several files or a glob, or a trace. The env is a column and
-// stays a predicate, so it is not part of the name. The customer comes from
+// stays a predicate, so it is not part of the name. The partition comes from
 // the authenticated query, never from the pipeline.
-func sourceTable(customerID int64, src sourceInfo) string {
+func sourceTable(tn tenant, src sourceInfo) string {
 	switch src.cmd {
 	case "cat", "head", "tail":
 	default:
 		return ""
 	}
 	ns, svc, kind, ok := src.single()
-	if customerID == 0 || !ok {
+	if !tn.complete() || !ok {
 		return ""
 	}
-	return logtable.Name([]any{customerID}, ns, svc, kind)
+	return logtable.Name(tn.typed, ns, svc, kind)
 }
 
 // single is the one (namespace, service, kind) the pinned coordinates name, when

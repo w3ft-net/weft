@@ -81,7 +81,7 @@ type ProvisionerConfig struct {
 	ConfigureRetries  int            // attempts to Configure a freshly-launched shard (default 12)
 	ConfigureBackoff  time.Duration  // sleep between Configure attempts (default 5s)
 	// ShardSecret is the shared bearer token attached to every outbound
-	// coord→shard gRPC call (see auth.ClientTokenUnaryInterceptor). The
+	// coord→shard gRPC call (see grpctoken.ClientTokenUnaryInterceptor). The
 	// shard's server-side interceptor validates against the same value.
 	// Empty is only valid in in-process tests where the shard server
 	// runs without an interceptor — production deploys populate this

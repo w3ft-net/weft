@@ -9,6 +9,7 @@ import (
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
@@ -42,7 +43,7 @@ func TestExecuteQuery_GroupedPipelineSendsAGroupSpec(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			lp, err := planner.Lower(tc.pipeline, 1, "bolt", noBinResolver{})
+			lp, err := planner.Lower(tc.pipeline, shapetest.Tenant(1), "bolt", noBinResolver{})
 			if err != nil {
 				t.Fatalf("Lower: %v", err)
 			}

@@ -44,7 +44,7 @@ type TypedPlan struct {
 // typed leaf's predicate for its typed form. It declines (nil) unless the
 // source is one stream, and unless every leaf's text occurs exactly once in
 // both SQL strings, so a swap can't land on the wrong text.
-func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, directSQL, fieldSQL string) *TypedPlan {
+func typedVariant(c *compiled, src sourceInfo, tn tenant, shardSQL, directSQL, fieldSQL string) *TypedPlan {
 	ns, svc, kind, ok := src.single()
 	if !ok || src.follow {
 		return nil
@@ -101,7 +101,7 @@ func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, direc
 	}
 	slices.Sort(requires)
 	return &TypedPlan{
-		Requires: requires, Table: logtable.Name([]any{customerID}, ns, svc, kind), Env: src.envValue(),
+		Requires: requires, Table: logtable.Name(tn.typed, ns, svc, kind), Env: src.envValue(),
 		ShardSQL: shard, DirectShardSQL: direct, FieldSQL: fieldSQL,
 	}
 }

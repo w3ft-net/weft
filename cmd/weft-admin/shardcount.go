@@ -13,7 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/grpctoken"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -98,7 +98,7 @@ func shardCountCmd(args []string) {
 	token := os.Getenv("SHARD_SECRET")
 	conn, err := grpc.NewClient(resp.Shard.Addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithChainStreamInterceptor(auth.ClientTokenStreamInterceptor(token)),
+		grpc.WithChainStreamInterceptor(grpctoken.ClientTokenStreamInterceptor(token)),
 	)
 	if err != nil {
 		log.Fatalf("dial shard %s at %s: %v", id, resp.Shard.Addr, err)

@@ -83,7 +83,7 @@ func TestColdArchiveOpensOnlyAdmittedKeys(t *testing.T) {
 			}
 			source = append(source, tup)
 		}
-		plan, err := planner.PlanIn("cat "+strings.Join(paths, " "), 1, scope, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan("cat "+strings.Join(paths, " "), scope, "", time.Time{}, time.Time{})
 		if err != nil {
 			continue // a source the scope leaves nothing of is refused before any file opens
 		}

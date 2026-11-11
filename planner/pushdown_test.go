@@ -91,7 +91,7 @@ func TestPushdown_SingleStage_Awk(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -135,7 +135,7 @@ func TestPushdown_SingleStage_Grep(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -164,7 +164,7 @@ func TestPushdown_SingleStage_Sed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -222,7 +222,7 @@ func TestPushdown_SingleStage_HeadTail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -256,7 +256,7 @@ func TestPushdown_SingleStage_Source(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -349,7 +349,7 @@ func TestPushdown_MergedStages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}
@@ -549,7 +549,7 @@ func TestPushdown_ComputeSplit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}

@@ -4,13 +4,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // TestPlanTrace_Predicate: `trace <id>` emits a parameterized trace_id
 // predicate and no namespace/service/kind predicate — it fans out across
 // every source the customer can read, the same way `cat warp.log` does.
 func TestPlanTrace_Predicate(t *testing.T) {
-	plan, err := Plan(`trace --id abc-123`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`trace --id abc-123`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -38,7 +40,7 @@ func TestPlanTrace_Predicate(t *testing.T) {
 // SourceService stay empty so ShardDescriptorsFor(namespaceID=0) fans out
 // across every app/service, the same live path warp.log already exercises.
 func TestPlanTrace_OrderAndScope(t *testing.T) {
-	plan, err := Plan(`trace --id abc-123`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`trace --id abc-123`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -59,7 +61,7 @@ func TestPlanTrace_OrderAndScope(t *testing.T) {
 func TestPlanTrace_TimeBoundsApplied(t *testing.T) {
 	start := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
-	plan, err := Plan(`trace --id abc-123`, 1, "", start, end)
+	plan, err := Plan(`trace --id abc-123`, shapetest.Tenant(1), "", start, end)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -78,7 +80,7 @@ func TestPlanTrace_TimeBoundsApplied(t *testing.T) {
 // display layer has namespace/service available on every row) even
 // with no downstream compute stage.
 func TestPlanTrace_IncludeMetaVars(t *testing.T) {
-	plan, err := Plan(`trace --id abc-123`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`trace --id abc-123`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -94,7 +96,7 @@ func TestPlanTrace_IncludeMetaVars(t *testing.T) {
 func TestPlanTrace_GrammarErrors(t *testing.T) {
 	for _, pipeline := range []string{"trace id1 id2", "trace --id", "trace --id a --id b", "trace --name x", "trace --samples", "trace /log/acme/api"} {
 		t.Run(pipeline, func(t *testing.T) {
-			if _, err := Plan(pipeline, 1, "", time.Time{}, time.Time{}); err == nil {
+			if _, err := Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{}); err == nil {
 				t.Errorf("Plan(%q): expected error, got nil", pipeline)
 			}
 		})
@@ -104,7 +106,7 @@ func TestPlanTrace_GrammarErrors(t *testing.T) {
 func TestPlanTrace_SpansFlag(t *testing.T) {
 	for _, pipeline := range []string{"trace --spans --id abc-123", "trace --id abc-123 --spans"} {
 		t.Run(pipeline, func(t *testing.T) {
-			plan, err := Plan(pipeline, 1, "", time.Time{}, time.Time{})
+			plan, err := Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", pipeline, err)
 			}
@@ -124,7 +126,7 @@ func TestPlanTrace_SpansFlag(t *testing.T) {
 }
 
 func TestPlanTraceSpans_Aggregate(t *testing.T) {
-	plan, err := Plan(`trace --spans`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`trace --spans`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -147,7 +149,7 @@ func TestPlanTraceSpans_Aggregate(t *testing.T) {
 }
 
 func TestPlanTraceSpans_WithName(t *testing.T) {
-	plan, err := Plan(`trace --spans --name shard.Query`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`trace --spans --name shard.Query`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -168,7 +170,7 @@ func TestPlanTraceSpans_WithName(t *testing.T) {
 // Spans group by service: the same span name in two services is two
 // different things.
 func TestPlanTraceSpans_GroupsByService(t *testing.T) {
-	plan, err := Plan(`trace --spans`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`trace --spans`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -181,7 +183,7 @@ func TestPlanTraceSpans_GroupsByService(t *testing.T) {
 }
 
 func TestPlanTraceSpans_Samples(t *testing.T) {
-	plan, err := Plan(`trace --spans --name db.query --samples`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`trace --spans --name db.query --samples`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -199,7 +201,7 @@ func TestPlanTraceSpans_Samples(t *testing.T) {
 }
 
 func TestPlanTraceSpans_StagesRunInCompute(t *testing.T) {
-	plan, err := Plan(`trace --spans | jq 'select(.p99_ns > 1000000)'`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`trace --spans | jq 'select(.p99_ns > 1000000)'`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -213,7 +215,7 @@ func TestPlanTraceSpans_StagesRunInCompute(t *testing.T) {
 
 func TestPlanTraceSpans_OptionErrors(t *testing.T) {
 	for _, pipeline := range []string{"trace --spans --by service", "trace --spans --by host", "trace --spans --samples", "trace --spans --name a --samples --by service", "trace --spans --bogus"} {
-		if _, err := Plan(pipeline, 1, "", time.Time{}, time.Time{}); err == nil {
+		if _, err := Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{}); err == nil {
 			t.Errorf("Plan(%q): expected error, got nil", pipeline)
 		}
 	}
@@ -221,7 +223,7 @@ func TestPlanTraceSpans_OptionErrors(t *testing.T) {
 
 // TestPlanTraceSpans_ArityErrors: at most one span name argument.
 func TestPlanTraceSpans_ArityErrors(t *testing.T) {
-	if _, err := Plan(`trace --spans a b`, 1, "", time.Time{}, time.Time{}); err == nil {
+	if _, err := Plan(`trace --spans a b`, shapetest.Tenant(1), "", time.Time{}, time.Time{}); err == nil {
 		t.Errorf("Plan(%q): expected error, got nil", "trace --spans a b")
 	}
 }

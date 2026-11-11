@@ -10,13 +10,14 @@ import (
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/shard"
 )
 
 func traceLine(i int, service, traceID, level, spanName, parent string) *pb.LogRow {
 	return &pb.LogRow{
 		TsUnixNs: spanBase.Add(time.Duration(i) * time.Millisecond).UnixNano(),
-		Raw:      fmt.Sprintf("line %d", i), Namespace: "acme", Service: service, Kind: "main", Level: level,
+		Raw:      fmt.Sprintf("line %d", i), Namespace: "acme", Service: service, Kind: "main", Level: level, CustomerId: 1,
 		TraceId: traceID, SpanName: spanName, SpanId: fmt.Sprintf("sp%d", i), ParentSpanId: parent,
 	}
 }
@@ -63,7 +64,7 @@ type traceSummary struct {
 // newest trace IDs, then summarize exactly those.
 func runTraceList(t *testing.T, pipeline string, shards ...*shard.DuckDBShard) []traceSummary {
 	t.Helper()
-	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

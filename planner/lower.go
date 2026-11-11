@@ -24,7 +24,9 @@ import (
 // v2: dropped the composite follow_app/source_app fields; the
 // (namespace, service, kind) columns are carried split.
 // v3: the row-level-security predicate is `customer_id = CAST(? AS BIGINT)`
-// and LoweredPlan carries customer_id (was the customer name).
+// and LoweredPlan carries customer_id (was the customer name). The tenant now
+// comes from the shape (LoweredPlan.Partition); a v3 plan still loads, see
+// LoweredPlan.UnmarshalJSON, so the version did not move.
 // v4: compute stages are the user's stages verbatim (no synthesized awk/jq
 // remainders); awk $N and cut -f no longer push down; a jq stage reads
 // the payload; row stages run per row (RowStages).
@@ -62,7 +64,7 @@ const PlannerVersion = 16
 // LoweredPlan is the persisted shape we store next to a watch's
 // pipeline string. It captures everything the runtime needs to
 // dispatch the query without re-running Plan() — the SQL strings,
-// the arg sources (so customer + time bounds can be re-resolved
+// the arg sources (so tenant + time bounds can be re-resolved
 // against fresh fire context), the compute stages, and the
 // metadata that watches/dashboards consume (alert args,
 // source coordinates, follow flags). BinDeps records each /bin/ inlined during
@@ -74,14 +76,16 @@ const PlannerVersion = 16
 // `weft.cat /cron.d/foo` or a SQL query. New fields go at the end
 // with omitempty; renames trigger a PlannerVersion bump.
 type LoweredPlan struct {
-	// Customer is the row-level-security boundary captured at save
-	// time. The fire path uses it to construct ResolveCtx without
-	// looking up the customer name by ID — which is the dominant
-	// non-warp cost of an uncached cron fire (see Phase A bench
-	// profile). Customer renames invalidate this field; the fire
-	// path will need to re-lower if it diverges, but renames are
-	// rare enough that the bake-in is worth the saved DB hit.
-	CustomerID int64 `json:"customer_id"`
+	// Partition is the row-level-security boundary captured at save time: the
+	// tenant's partition values, in layout order. The fire path uses it to
+	// construct ResolveCtx without looking the tenant up — which is the
+	// dominant non-warp cost of an uncached cron fire (see Phase A bench
+	// profile). A rename of the tenant invalidates this field; the fire path
+	// will need to re-lower if it diverges, but renames are rare enough that
+	// the bake-in is worth the saved DB hit. A plan stored before the tenant
+	// came from the shape has customer_id instead; UnmarshalJSON reads it as
+	// the one partition value.
+	Partition []string `json:"partition,omitempty"`
 	// Tier is the customer's tier at save time. Cached here so the
 	// fire path can clamp the time-range retention + select shards
 	// (both tier-dependent) without two DB roundtrips per fire. A
@@ -111,7 +115,7 @@ type LoweredPlan struct {
 	SourceNamespace   string        `json:"source_namespace,omitempty"`
 	SourceService     string        `json:"source_service,omitempty"`
 	SourceKind        string        `json:"source_kind,omitempty"`
-	// Coords is what the plan reads, with the customer bound. The fire path
+	// Coords is what the plan reads, with the tenant bound. The fire path
 	// checks the cron's scope still covers it before running the baked SQL.
 	Coords         coords.Set `json:"source_coords,omitempty"`
 	Table          string     `json:"table,omitempty"`
@@ -154,20 +158,31 @@ type BinResolver interface {
 // symbolic; Hydrate consumes the lowered form plus a ResolveCtx to
 // produce concrete dispatch args.
 type ResolveCtx struct {
-	CustomerID int64
-	Start      time.Time
-	End        time.Time
+	Partition []string
+	Start     time.Time
+	End       time.Time
+}
+
+// part is the partition value at index i, or "" when the context has none, which
+// the shard's cast refuses: a plan that does not fit its tenant fails loudly.
+func (c ResolveCtx) part(i int) string {
+	if i >= 0 && i < len(c.Partition) {
+		return c.Partition[i]
+	}
+	return ""
 }
 
 // Resolve produces the concrete value for one ArgSource. For
 // ArgLiteral the value comes from the lowered form itself; the
-// runtime kinds (Customer, TimeStart, TimeEnd) read from ctx.
+// runtime kinds (Partition, TimeStart, TimeEnd) read from ctx.
 func (a ArgSource) Resolve(ctx ResolveCtx) string {
 	switch a.Kind {
 	case ArgLiteral:
 		return a.Value
 	case ArgCustomer:
-		return strconv.FormatInt(ctx.CustomerID, 10)
+		return ctx.part(0)
+	case ArgPartition:
+		return ctx.part(a.Part)
 	case ArgTimeStart:
 		return formatTS(ctx.Start)
 	case ArgTimeEnd:
@@ -176,10 +191,10 @@ func (a ArgSource) Resolve(ctx ResolveCtx) string {
 	return ""
 }
 
-// Lower compiles a pipeline at save time. customer fixes the row-
+// Lower compiles a pipeline at save time. scope fixes the row-
 // level-security boundary for the duration of this lowering call;
-// the resulting LoweredPlan carries the customer as ArgCustomer
-// (re-resolved at each fire from the watch's stored OrgID).
+// the resulting LoweredPlan carries the tenant's partition as ArgPartition
+// (re-resolved at each fire from the watch's stored partition).
 // tier is captured so the fire path can clamp retention + select
 // shards without a DB lookup; pass "" if the caller doesn't have
 // it (the fire path falls back to looking it up).
@@ -191,7 +206,7 @@ func (a ArgSource) Resolve(ctx ResolveCtx) string {
 // range into Plan() so the ts predicates get emitted with
 // ArgTimeStart / ArgTimeEnd sources; Hydrate replaces the Values
 // at fire time.
-func Lower(pipeline string, customerID int64, tier string, resolveBin BinResolver) (*LoweredPlan, error) {
+func Lower(pipeline string, scope coords.Set, tier string, resolveBin BinResolver) (*LoweredPlan, error) {
 	expanded, deps, err := expandForLowering(pipeline, resolveBin)
 	if err != nil {
 		return nil, fmt.Errorf("lower: expand /bin: %w", err)
@@ -204,7 +219,7 @@ func Lower(pipeline string, customerID int64, tier string, resolveBin BinResolve
 	sentinelStart := time.Unix(0, 1).UTC()
 	sentinelEnd := time.Unix(0, 2).UTC()
 
-	plan, err := Plan(expanded, customerID, "", sentinelStart, sentinelEnd)
+	plan, err := Plan(expanded, scope, "", sentinelStart, sentinelEnd)
 	if err != nil {
 		return nil, fmt.Errorf("lower: plan: %w", err)
 	}
@@ -214,7 +229,7 @@ func Lower(pipeline string, customerID int64, tier string, resolveBin BinResolve
 	}
 
 	return &LoweredPlan{
-		CustomerID:        customerID,
+		Partition:         plan.SourcePartition,
 		Tier:              tier,
 		ShardSQL:          plan.ShardSQL,
 		DirectShardSQL:    plan.DirectShardSQL,
@@ -274,18 +289,55 @@ func HashBinSource(source string) string {
 // lowered_plan into SaveCronWatch — the watch saves cleanly and the
 // fire path falls back to inline Plan(). This is the canonical entry
 // point for save handlers; do NOT call Lower + Marshal directly.
-func LowerForStorage(ctx context.Context, pipeline string, customerID int64, tier string, resolveBin BinResolver) []byte {
-	lp, err := Lower(pipeline, customerID, tier, resolveBin)
+func LowerForStorage(ctx context.Context, pipeline string, scope coords.Set, tier string, resolveBin BinResolver) []byte {
+	lp, err := Lower(pipeline, scope, tier, resolveBin)
 	if err != nil {
-		weftsdk.Infof(ctx, "lower: skip save-time lowering for pipeline (customer=%d): %v", customerID, err)
+		weftsdk.Infof(ctx, "lower: skip save-time lowering for pipeline (partition=%v): %v", scopePartition(scope), err)
 		return nil
 	}
 	b, err := json.Marshal(lp)
 	if err != nil {
-		weftsdk.Infof(ctx, "lower: marshal LoweredPlan (customer=%d): %v", customerID, err)
+		weftsdk.Infof(ctx, "lower: marshal LoweredPlan (partition=%v): %v", lp.Partition, err)
 		return nil
 	}
 	return b
+}
+
+// scopePartition is scope's partition for a log line, or nil.
+func scopePartition(scope coords.Set) []string {
+	v, _ := scope.Partition()
+	return v
+}
+
+// UnmarshalJSON reads a stored plan, including one stored before the tenant
+// came from the shape: customer_id with no partition is the one partition
+// value. A plan that does not fit this build's shape (a different number of
+// partition values, an argument naming a value it lacks) is an error, so the
+// caller falls back to planning the pipeline inline, as it does for any plan it
+// cannot use.
+func (lp *LoweredPlan) UnmarshalJSON(b []byte) error {
+	type plain LoweredPlan
+	aux := struct {
+		*plain
+		LegacyCustomerID int64 `json:"customer_id"`
+	}{plain: (*plain)(lp)}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	if lp.Partition == nil && aux.LegacyCustomerID != 0 {
+		lp.Partition = []string{strconv.FormatInt(aux.LegacyCustomerID, 10)}
+	}
+	if want := len(coords.BuildLayout().Columns); len(lp.Partition) != want {
+		return fmt.Errorf("lowered plan names a partition of %d values, this build's shape has %d", len(lp.Partition), want)
+	}
+	for _, a := range lp.ArgSources {
+		switch {
+		case a.Kind == ArgCustomer && len(lp.Partition) == 0,
+			a.Kind == ArgPartition && (a.Part < 0 || a.Part >= len(lp.Partition)):
+			return errors.New("lowered plan has an argument for a partition value it does not hold")
+		}
+	}
+	return nil
 }
 
 // expandForLowering is the save-time counterpart to coordinator's

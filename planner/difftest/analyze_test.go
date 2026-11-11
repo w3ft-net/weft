@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/planner"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // Analyze must describe what Plan does. Every stage Plan leaves to run
@@ -15,7 +16,7 @@ import (
 func TestAnalyzeAgreesWithPlan(t *testing.T) {
 	checked := 0
 	for _, p := range corpus(t) {
-		plan, perr := planner.Plan(p, 0, "", time.Time{}, time.Time{})
+		plan, perr := planner.Plan(p, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		a, aerr := planner.Analyze(p, "", nil)
 		if (perr == nil) != (aerr == nil) {
 			t.Errorf("%s: Plan error %v, Analyze error %v", p, perr, aerr)

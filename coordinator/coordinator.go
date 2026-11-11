@@ -633,7 +633,7 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
 	}
-	plan, err := planner.PlanIn(pipeline, int64(org), scope, cwd, time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, scope, cwd, time.Time{}, time.Time{})
 	if err != nil {
 		return nil, err
 	}
@@ -772,7 +772,7 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 	if !tr.Start.IsZero() && tr.Start.Before(cap) {
 		tr.Start = cap
 	}
-	resolveCtx := planner.ResolveCtx{CustomerID: lp.CustomerID, Start: tr.Start, End: tr.End}
+	resolveCtx := planner.ResolveCtx{Partition: lp.Partition, Start: tr.Start, End: tr.End}
 	args := lp.Hydrate(resolveCtx)
 	res, err := c.dispatchLoweredWithTier(ctx, lp, args, tr, tier, alertCtx)
 	if err != nil {
@@ -791,7 +791,7 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 // than wrong), and skips the per-fire TierForOrg lookup (tier
 // is baked into LoweredPlan at save time).
 func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
-	nsID := c.resolveNamespaceID(store.OrgID(lp.CustomerID), lp.SourceNamespace)
+	nsID := c.resolveNamespaceID(loweredOrg(lp), lp.SourceNamespace)
 	descs, err := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, lp.SourceService, retentionHorizon(tier))
 	if err != nil {
 		return nil, err
@@ -807,7 +807,7 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 			argStrs[i] = fmt.Sprintf("%v", a)
 		}
 	}
-	stream, err := c.executeCompute(ctx, store.OrgID(lp.CustomerID), tier, &pb.ExecuteQueryRequest{
+	stream, err := c.executeCompute(ctx, loweredOrg(lp), tier, &pb.ExecuteQueryRequest{
 		Sql:               lp.DirectShardSQL,
 		FieldSql:          lp.FieldSQL,
 		Table:             lp.Table,
@@ -888,7 +888,7 @@ func (c *Coordinator) refreshLoweredSync(ctx context.Context, watch *store.CronW
 	}
 	resolver := watchBinResolver{store: c.Store, orgID: watch.OrgID}
 	tier := string(c.Store.TierForOrg(watch.OrgID))
-	loweredJSON := planner.LowerForStorage(ctx, watch.Pipeline, int64(watch.OrgID), tier, resolver)
+	loweredJSON := planner.LowerForStorage(ctx, watch.Pipeline, wholeOrg(watch.OrgID), tier, resolver)
 	if loweredJSON == nil {
 		return
 	}
@@ -1036,7 +1036,7 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
 	}
-	plan, err := planner.PlanIn(pipeline, int64(custID), scope, cwd, tr.Start, tr.End)
+	plan, err := planner.Plan(pipeline, scope, cwd, tr.Start, tr.End)
 	if err != nil {
 		// The rewriter only substitutes pipelines whose first command
 		// is on /log/..., which the planner accepts. ErrNotPlannable
@@ -1156,9 +1156,35 @@ func (c *Coordinator) sourcesExist(custID store.OrgID, plan *planner.QueryPlan) 
 // to ask, so it reads the whole customer.
 func (c *Coordinator) queryScope(ctx context.Context, custID store.OrgID) (shape.Set, error) {
 	if c.Store == nil {
-		return shape.Set{{Customer: int64(custID)}}, nil
+		return wholeOrg(custID), nil
 	}
-	return c.actorScope(ctx)
+	scope, err := c.actorScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// The planner takes its tenant from the scope, so the scope must be the
+	// caller's own: one that reaches another customer is refused here.
+	for _, t := range scope {
+		if t.Customer != int64(custID) {
+			return nil, errors.New("scope reaches another customer")
+		}
+	}
+	return scope, nil
+}
+
+// wholeOrg is everything one org may read: the set a query, a stored plan or a
+// cron is planned against when no narrower scope applies.
+func wholeOrg(org store.OrgID) shape.Set { return shape.Set{{Customer: int64(org)}} }
+
+// loweredOrg is the org a stored plan was lowered for: its one partition value.
+// A plan whose partition is not one number never reaches here, because the
+// hosted build rejects it when it decodes (planner.LoweredPlan.UnmarshalJSON).
+func loweredOrg(lp *planner.LoweredPlan) store.OrgID {
+	if len(lp.Partition) != 1 {
+		return 0
+	}
+	n, _ := strconv.ParseInt(lp.Partition[0], 10, 64)
+	return store.OrgID(n)
 }
 
 func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan, tr TimeRange, custID store.OrgID, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {

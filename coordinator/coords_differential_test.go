@@ -106,7 +106,7 @@ func TestCoordinateBackendsAgree(t *testing.T) {
 		}
 		pipeline := "cat " + strings.Join(paths, " ")
 
-		plan, err := planner.PlanIn(pipeline, 1, scope, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(pipeline, scope, "", time.Time{}, time.Time{})
 		someTupleEmpty := false
 		for _, s := range source {
 			if len(shape.Intersect(shape.Set{s}, scope)) == 0 {

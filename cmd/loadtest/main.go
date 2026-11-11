@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/grpctoken"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -61,8 +62,8 @@ func main() {
 	}
 	conn, err := grpc.NewClient(*coordAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithUnaryInterceptor(auth.ClientTokenUnaryInterceptor(loadtestJWT)),
-		grpc.WithStreamInterceptor(auth.ClientTokenStreamInterceptor(loadtestJWT)),
+		grpc.WithUnaryInterceptor(grpctoken.ClientTokenUnaryInterceptor(loadtestJWT)),
+		grpc.WithStreamInterceptor(grpctoken.ClientTokenStreamInterceptor(loadtestJWT)),
 	)
 	if err != nil {
 		log.Fatalf("connect to coordinator: %v", err)

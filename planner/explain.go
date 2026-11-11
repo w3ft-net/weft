@@ -11,15 +11,15 @@ import (
 // Explain runs the planner on a pipeline and returns a human-readable
 // breakdown: the IR (each node with the stage it came from, and why a
 // stage stayed opaque or lowered only as a prefilter), what each pass
-// did or declined, the shard SQL, and the compute stages. Customer +
-// bounds are passed empty/zero — Explain is for human inspection, not
+// did or declined, the shard SQL, and the compute stages. The tenant and
+// time bounds are passed empty/zero — Explain is for human inspection, not
 // dispatch, so the row-level security predicates are elided to keep the
 // output focused on pipeline shape.
 //
 // The shard SQL is split at keyword boundaries, and the bound args are
 // listed in render order so readers can correlate placeholders to args.
 func Explain(pipeline string) string {
-	plan, c, err := compile(pipeline, 0, "", time.Time{}, time.Time{}, nil)
+	plan, c, err := compileBare(pipeline, "", time.Time{}, time.Time{})
 	if err != nil {
 		return fmt.Sprintf("Error: %v\n", err)
 	}

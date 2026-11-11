@@ -1,10 +1,12 @@
 package planner
 
 import (
-	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 func TestPlanTrace_ScopeNarrowsEveryForm(t *testing.T) {
@@ -16,7 +18,7 @@ func TestPlanTrace_ScopeNarrowsEveryForm(t *testing.T) {
 		"trace --spans --name db.query acme/api",
 	} {
 		t.Run(pipeline, func(t *testing.T) {
-			plan, err := Plan(pipeline, 1, "", time.Time{}, time.Time{})
+			plan, err := Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -33,7 +35,7 @@ func TestPlanTrace_ScopeNarrowsEveryForm(t *testing.T) {
 }
 
 func TestPlanTrace_NamespaceOnlyScope(t *testing.T) {
-	plan, err := Plan("trace acme", 1, "", time.Time{}, time.Time{})
+	plan, err := Plan("trace acme", shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -48,7 +50,7 @@ func TestPlanTrace_NamespaceOnlyScope(t *testing.T) {
 // A bare `trace` lists recent traces in two steps: the newest IDs, then
 // their stats (see traces.go for why one step is not exact).
 func TestPlanTraceList_TwoSteps(t *testing.T) {
-	plan, err := Plan("trace", 1, "", time.Time{}, time.Time{})
+	plan, err := Plan("trace", shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -76,7 +78,7 @@ func TestPlanTraceList_TwoSteps(t *testing.T) {
 }
 
 func TestPlanTraceList_StatsStepIsNotScoped(t *testing.T) {
-	plan, err := Plan("trace acme/api", 1, "", time.Time{}, time.Time{})
+	plan, err := Plan("trace acme/api", shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -89,7 +91,7 @@ func TestPlanTraceList_StatsStepIsNotScoped(t *testing.T) {
 }
 
 func TestTraceStatsQuery_WithIDsPads(t *testing.T) {
-	plan, err := Plan("trace", 1, "", time.Time{}, time.Time{})
+	plan, err := Plan("trace", shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -107,7 +109,7 @@ func TestTraceStatsQuery_WithIDsPads(t *testing.T) {
 }
 
 func TestPlanTraceList_StagesRunInCompute(t *testing.T) {
-	plan, err := Plan(`trace | jq 'select(.lines > 100)'`, 1, "", time.Time{}, time.Time{})
+	plan, err := Plan(`trace | jq 'select(.lines > 100)'`, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -117,7 +119,7 @@ func TestPlanTraceList_StagesRunInCompute(t *testing.T) {
 }
 
 func TestLower_RejectsTheTraceList(t *testing.T) {
-	if _, err := Lower("trace", 1, "", nil); err == nil || !strings.Contains(err.Error(), "two steps") {
+	if _, err := Lower("trace", shapetest.Tenant(1), "", nil); err == nil || !strings.Contains(err.Error(), "two steps") {
 		t.Errorf("Lower(trace) = %v, want a two-step refusal", err)
 	}
 }
@@ -126,20 +128,21 @@ func TestLower_RejectsTheTraceList(t *testing.T) {
 // thing keeping one org out of another's traces. Both steps must carry it,
 // including the unscoped stats step.
 func TestPlanTraceList_BothStepsAreOrgScoped(t *testing.T) {
-	plan, err := Plan("trace acme/api", 42, "", time.Time{}, time.Time{})
+	plan, err := Plan("trace acme/api", shapetest.Tenant(42), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if plan.SourceCustomerID != 42 {
-		t.Errorf("SourceCustomerID = %d, want 42", plan.SourceCustomerID)
+	if !slices.Equal(plan.SourcePartition, shapetest.Partition(42)) {
+		t.Errorf("SourcePartition = %v, want %v", plan.SourcePartition, shapetest.Partition(42))
 	}
-	if !strings.Contains(plan.ShardSQL, "customer_id = CAST(? AS BIGINT)") {
+	if !strings.Contains(plan.ShardSQL, shapetest.Predicate()) {
 		t.Errorf("step 1 is not org scoped: %s", plan.ShardSQL)
 	}
-	if !strings.Contains(plan.TraceStats.SQL, "customer_id = CAST(? AS BIGINT)") {
+	if !strings.Contains(plan.TraceStats.SQL, shapetest.Predicate()) {
 		t.Errorf("step 2 is not org scoped: %s", plan.TraceStats.SQL)
 	}
-	if len(plan.TraceStats.Args) == 0 || fmt.Sprint(plan.TraceStats.Args[0]) != "42" {
-		t.Errorf("step 2 args don't start with customer 42: %v", plan.TraceStats.Args)
+	want := shapetest.Args(42)
+	if len(plan.TraceStats.Args) < len(want) || !slices.Equal(plan.TraceStats.Args[:len(want)], want) {
+		t.Errorf("step 2 args don't start with tenant 42's %v: %v", want, plan.TraceStats.Args)
 	}
 }

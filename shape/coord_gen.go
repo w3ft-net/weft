@@ -97,6 +97,56 @@ func (c Coord) PartitionValues() []string {
 	return []string{strconv.FormatInt(c.Customer, 10)}
 }
 
+// CoordFromPartition is the tuple of one partition with every other column open:
+// the inverse of PartitionValues. values are in BuildLayout order, as text, and
+// are typed per column. A wrong count, an unparsable value, or one that leaves a
+// required column unset is an error.
+func CoordFromPartition(values []string) (Coord, error) {
+	var c Coord
+	if len(values) != 1 {
+		return c, fmt.Errorf("shape: a partition has 1 values, got %d", len(values))
+	}
+	n0, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil {
+		return c, fmt.Errorf("shape: partition column customer_id: %w", err)
+	}
+	c.Customer = n0
+	return c, c.validate()
+}
+
+// WithPartition is the tuple with the partition p names: the required columns
+// are p's, and every other column is the tuple's own.
+func (c Coord) WithPartition(p Coord) Coord {
+	c.Customer = p.Customer
+	return c
+}
+
+// InPartition is the key of a row of the partition p names: the required
+// columns are p's, and every other column is the key's own.
+func (k Key) InPartition(p Coord) Key {
+	k.Customer = p.Customer
+	return k
+}
+
+// Partition is the one partition every tuple of the set names, as
+// PartitionValues gives it. It is ErrNoScope for an empty set,
+// ErrMixedPartitions when the tuples differ, and an error for a tuple that
+// leaves a required column unset.
+func (s Set) Partition() ([]string, error) {
+	if len(s) == 0 {
+		return nil, ErrNoScope
+	}
+	for i := range s {
+		if err := s[i].validate(); err != nil {
+			return nil, err
+		}
+		if !s[i].samePartition(s[0]) {
+			return nil, ErrMixedPartitions
+		}
+	}
+	return s[0].PartitionValues(), nil
+}
+
 // BuildLayout is the partition layout of this build's shape.
 func BuildLayout() Layout {
 	return NewLayout(

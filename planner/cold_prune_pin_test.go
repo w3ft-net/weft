@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/weft/planner"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -16,7 +17,7 @@ import (
 func TestPlanTimeBounds_ColdPartitionsArePruned(t *testing.T) {
 	start := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
-	plan, err := planner.Plan(`cat foo.log`, 1, "", start, end)
+	plan, err := planner.Plan(`cat foo.log`, shapetest.Tenant(1), "", start, end)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}

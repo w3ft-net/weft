@@ -1,6 +1,10 @@
 package planner
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/graybeardcorp/weft/shape/shapetest"
+)
 
 // lowerFor is a small helper that lowers pipeline with a resolver
 // that knows the real /bin/log-pattern-count body, so tests exercise
@@ -12,7 +16,7 @@ func lowerFor(t *testing.T, pipeline string) *LoweredPlan {
 		"log-pattern-count": `tail -n $2 /log/weft/$1/main.log | grep -c "$3"`,
 		"runtime-field":     `tail -n 1 /log/weft/$1/runtime.log | jq -r ".$2"`,
 	}}
-	lp, err := Lower(pipeline, 1, "bolt", resolver)
+	lp, err := Lower(pipeline, shapetest.Tenant(1), "bolt", resolver)
 	if err != nil {
 		t.Fatalf("Lower(%q): %v", pipeline, err)
 	}

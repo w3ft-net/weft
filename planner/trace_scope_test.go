@@ -8,6 +8,7 @@ import (
 	"time"
 
 	coords "github.com/graybeardcorp/weft/shape"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // A trace spans services, so a user who can read only some namespaces still
@@ -16,18 +17,20 @@ import (
 // durations and the per-trace service list are computed over rows the user may
 // read, so nothing about the others leaks through an aggregate.
 
-// namespaceScope is a scope that reads exactly the named namespaces of customer 1.
+// namespaceScope is a scope that reads exactly the named namespaces of tenant 1.
 func namespaceScope(readable []string) coords.Set {
 	set := coords.Set{}
 	for _, n := range readable {
-		set = append(set, coords.Coord{Customer: 1, Namespace: coords.Value(n)})
+		c := shapetest.Tenant(1)[0]
+		c.Namespace = coords.Value(n)
+		set = append(set, c)
 	}
 	return set
 }
 
 func scopedPlanErr(pipeline string, readable []string) (*QueryPlan, error) {
 	end := time.Now()
-	return PlanIn(pipeline, 1, namespaceScope(readable), "/", end.Add(-time.Hour), end)
+	return Plan(pipeline, namespaceScope(readable), "/", end.Add(-time.Hour), end)
 }
 
 func scopedPlan(t *testing.T, pipeline string, readable []string) *QueryPlan {
@@ -62,7 +65,7 @@ func TestPlanScoped_TraceIsRestrictedToReadableNamespaces(t *testing.T) {
 			if !strings.Contains(p.ShardSQL, "namespace IN (?, ?)") || !hasArg(p.Args, "alpha") || !hasArg(p.Args, "gamma") {
 				t.Errorf("shard SQL is not restricted to the readable namespaces:\n%s\nargs=%v", p.ShardSQL, p.Args)
 			}
-			if got, _, _ := p.Coords.Namespaces(coords.Coord{Customer: 1}); !slices.Equal(got, []string{"alpha", "gamma"}) {
+			if got, _, _ := p.Coords.Namespaces(shapetest.Tenant(1)[0]); !slices.Equal(got, []string{"alpha", "gamma"}) {
 				t.Errorf("Coords namespaces = %v, want [alpha gamma]", got)
 			}
 			// Routing stays on every shard: SourceNamespace routes by the
@@ -89,7 +92,7 @@ func TestPlanScoped_TraceStatsAreRestrictedToo(t *testing.T) {
 
 func TestPlan_UnscopedTraceReadsEveryNamespace(t *testing.T) {
 	end := time.Now()
-	p, err := Plan("trace", 1, "/", end.Add(-time.Hour), end)
+	p, err := Plan("trace", shapetest.Tenant(1), "/", end.Add(-time.Hour), end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,8 +140,14 @@ func TestPlanIn_NothingReadableSelectsNothing(t *testing.T) {
 	}
 }
 
-func TestPlanIn_ScopeOfAnotherCustomerIsRefused(t *testing.T) {
-	if _, err := PlanIn("cat /log/a/api/main.log", 1, coords.Set{{Customer: 2}}, "/", time.Time{}, time.Time{}); err == nil {
-		t.Error("a scope reaching customer 2 planned for customer 1")
+// The tenant comes from the scope, so a scope that reaches two of them has no
+// single tenant to plan for and is refused, not planned for one of them.
+func TestPlan_ScopeOfTwoTenantsIsRefused(t *testing.T) {
+	if len(coords.BuildLayout().Columns) == 0 {
+		t.Skip("the shape has no tenant to mix")
+	}
+	both := append(shapetest.Tenant(1), shapetest.Tenant(2)...)
+	if _, err := Plan("cat /log/a/api/main.log", both, "/", time.Time{}, time.Time{}); !errors.Is(err, coords.ErrMixedPartitions) {
+		t.Errorf("a scope reaching tenants 1 and 2 gave %v, want ErrMixedPartitions", err)
 	}
 }

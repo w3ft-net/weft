@@ -11,6 +11,7 @@ import (
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // awkNumbers are the spellings a typed field may hold: finite decimals, which
@@ -37,7 +38,7 @@ func awkRows() []*pb.LogRow {
 			rows = append(rows, &pb.LogRow{
 				Raw:       fmt.Sprintf("id%d %s tail", i, v),
 				TsUnixNs:  time.Date(2026, 10, 30, 12, 0, i*3+rep, 0, time.UTC).UnixNano(),
-				Namespace: "typed", Service: "api", Kind: "main",
+				Namespace: "typed", Service: "api", Kind: "main", CustomerId: 1,
 			})
 		}
 	}
@@ -83,7 +84,7 @@ func (h *harness) rowsShipped(t *testing.T, sql string, args []any) int {
 
 func checkTyped(t *testing.T, h *harness, pipeline, locator string) (base, typed int) {
 	t.Helper()
-	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("%s: %v", pipeline, err)
 	}
@@ -140,7 +141,7 @@ func jqRows() []*pb.LogRow {
 				Raw:         "x",
 				PayloadJson: []byte(`{"q":` + v + `,"name":"n` + fmt.Sprint(i) + `"}`),
 				TsUnixNs:    time.Date(2026, 10, 30, 12, 0, i*3+rep, 0, time.UTC).UnixNano(),
-				Namespace:   "typed", Service: "stats", Kind: "main",
+				Namespace:   "typed", Service: "stats", Kind: "main", CustomerId: 1,
 			})
 		}
 	}
@@ -173,7 +174,7 @@ func TestDifferentialTypedMixedShards(t *testing.T) {
 	h := newHarness(t, rows, 2)
 	for _, cond := range []string{"$2 > 500", "$2 <= 7", "$2 == 500", "$2 != 7"} {
 		pipeline := fmt.Sprintf("cat /log/typed/api/main.log | awk '%s'", cond)
-		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil || plan.Typed == nil {
 			t.Fatalf("%s: %v, typed %+v", pipeline, err, plan.Typed)
 		}
@@ -216,7 +217,7 @@ func decimalRows() []*pb.LogRow {
 			rows = append(rows, &pb.LogRow{
 				Raw:       fmt.Sprintf("id%d GET %s tail", i, v),
 				TsUnixNs:  time.Date(2026, 10, 30, 12, 0, i*3+rep, 0, time.UTC).UnixNano(),
-				Namespace: "typed", Service: "api", Kind: "main",
+				Namespace: "typed", Service: "api", Kind: "main", CustomerId: 1,
 			})
 		}
 	}
@@ -233,7 +234,7 @@ func TestDifferentialTypedFilterAndPrintIsAllSQL(t *testing.T) {
 		"$3 > 10 && $3 < 1000", "$3 < 10 || $3 > 1000",
 	} {
 		pipeline := fmt.Sprintf("cat /log/typed/api/main.log | awk '%s {print $1, $3}'", cond)
-		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil || plan.Typed == nil || plan.Typed.Exact == nil {
 			t.Fatalf("%s: err %v, typed %+v", pipeline, err, plan.Typed)
 		}
@@ -308,7 +309,7 @@ func TestDifferentialMultiLineEventsExactPlan(t *testing.T) {
 	), 2)
 	for _, cond := range []string{"$2 > 3", "$2 < 6", "$2 == 3", "$2 != 5"} {
 		pipeline := fmt.Sprintf("cat /log/typed/api/main.log | awk '%s {print $1, $2}'", cond)
-		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil || plan.Typed == nil || plan.Typed.Exact == nil {
 			t.Fatalf("%s: %v, typed %+v", pipeline, err, plan.Typed)
 		}

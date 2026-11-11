@@ -8,6 +8,7 @@ import (
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -113,7 +114,7 @@ func BenchmarkExecuteForWatch(b *testing.B) {
 			}
 
 			if tc.lowered {
-				lp, err := planner.Lower(tc.pipeline, 1, "bolt", tc.resolver)
+				lp, err := planner.Lower(tc.pipeline, shapetest.Tenant(1), "bolt", tc.resolver)
 				if err != nil {
 					// Pipelines that don't lower (e.g. /bin/ refs the
 					// stub can't inline) skip the lowered sub-bench

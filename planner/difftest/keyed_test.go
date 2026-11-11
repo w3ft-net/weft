@@ -9,6 +9,7 @@ import (
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // keyedRows are lines `key value tail`, one second apart so every row has its
@@ -28,7 +29,7 @@ func keyedRows(pools map[string][]string) []*pb.LogRow {
 		rows = append(rows, &pb.LogRow{
 			Raw:       fmt.Sprintf("%s %s tail%d", key, pool[(i*7+i/len(keyedNames))%len(pool)], i%3),
 			TsUnixNs:  time.Date(2026, 10, 31, 12, 0, i, 0, time.UTC).UnixNano(),
-			Namespace: "keyed", Service: "api", Kind: "main",
+			Namespace: "keyed", Service: "api", Kind: "main", CustomerId: 1,
 		})
 	}
 	return rows
@@ -69,7 +70,7 @@ var sumValues = []string{"0", "-0", "7", "-3", "12", "007", "+5", "1000000", "-1
 func keyedPlan(t *testing.T, program string, facts ...string) (*planner.QueryPlan, *planner.QueryPlan) {
 	t.Helper()
 	pipeline := fmt.Sprintf("cat /log/keyed/api/main.log | awk '%s'", program)
-	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("%s: %v", pipeline, err)
 	}
@@ -163,7 +164,7 @@ func lines(raws ...string) []*pb.LogRow {
 	for i, raw := range raws {
 		rows = append(rows, &pb.LogRow{
 			Raw: raw, TsUnixNs: time.Date(2026, 10, 31, 12, 0, i, 0, time.UTC).UnixNano(),
-			Namespace: "keyed", Service: "api", Kind: "main",
+			Namespace: "keyed", Service: "api", Kind: "main", CustomerId: 1,
 		})
 	}
 	return rows
@@ -189,7 +190,7 @@ func TestDifferentialKeyedSumIsExactPastFloatRange(t *testing.T) {
 		}
 		want[key].add(v)
 	}
-	plan, err := planner.Plan("cat /log/keyed/api/main.log | awk '"+sumProg+"'", 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan("cat /log/keyed/api/main.log | awk '"+sumProg+"'", shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +230,7 @@ func TestKeyedAggregateShapesThatDoNotLower(t *testing.T) {
 		`{ if ($2 > m[$1]) m[$1] = $2; else n[$1]++ } END { for (k in m) print k, m[k] }`,
 		`{ if ($2 > m) m = $2 } END { print m }`,
 	} {
-		plan, err := planner.Plan("cat /log/keyed/api/main.log | awk '"+program+"'", 0, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan("cat /log/keyed/api/main.log | awk '"+program+"'", shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -292,7 +293,7 @@ func checkKeyedPipeline(t *testing.T, h *harness, program, tail string) (base, e
 	if tail != "" {
 		pipeline += " | " + tail
 	}
-	base, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	base, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("%s: %v", pipeline, err)
 	}
@@ -417,7 +418,7 @@ func TestDifferentialKeyedSortBefore(t *testing.T) {
 					rows = hf
 				}
 				pipeline := "cat /log/keyed/api/main.log | " + sortCmd + " | awk '" + c.prog + "'"
-				base, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+				base, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -448,7 +449,7 @@ func TestDifferentialKeyedSortBefore(t *testing.T) {
 func TestKeyedSortBeforeThatStays(t *testing.T) {
 	for _, sortCmd := range []string{"sort -u", "sort -k2 -u", "sort -t ' '", "sort -z", "sort somefile", "sort -k", "sort -k 0", "sort -k2,1"} {
 		pipeline := "cat /log/keyed/api/main.log | " + sortCmd + " | awk '" + sumProg + "'"
-		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil {
 			t.Fatal(err)
 		}

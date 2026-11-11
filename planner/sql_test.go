@@ -3,6 +3,8 @@ package planner
 import (
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 // TestQueryBuilder_BareSelect covers the simplest output shape: no
@@ -38,14 +40,14 @@ func TestQueryBuilder_AllClauses(t *testing.T) {
 	}
 }
 
-// TestQueryBuilder_CustomerAndBoundsOrder pins that addCustomer +
+// TestQueryBuilder_TenantAndBoundsOrder pins that addTenant +
 // addTimeBounds emit their predicates in the order they were called
-// (the planner relies on this so customer_id = CAST(? AS BIGINT) lands first in the
+// (the planner relies on this so the tenant predicate lands first in the
 // WHERE clause — see customer_predicate_test.go for the security-
 // boundary rationale). Args appear in render order.
-func TestQueryBuilder_CustomerAndBoundsOrder(t *testing.T) {
+func TestQueryBuilder_TenantAndBoundsOrder(t *testing.T) {
 	q := newSQLBuilder()
-	q.addCustomer(1)
+	q.addTenant(tenantOfTest(1))
 	q.addTimeBounds(
 		time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC),
 		time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
@@ -53,11 +55,11 @@ func TestQueryBuilder_CustomerAndBoundsOrder(t *testing.T) {
 	q.addPredicate("namespace = ?", "vimgym")
 
 	sql, args := q.ToSQL()
-	wantSQL := "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE customer_id = CAST(? AS BIGINT) AND ts >= CAST(? AS TIMESTAMP) AND ts <= CAST(? AS TIMESTAMP) AND namespace = ?"
+	wantSQL := "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE " + shapetest.Predicate() + "ts >= CAST(? AS TIMESTAMP) AND ts <= CAST(? AS TIMESTAMP) AND namespace = ?"
 	if sql != wantSQL {
 		t.Fatalf("ordered predicates:\n got: %s\nwant: %s", sql, wantSQL)
 	}
-	wantArgs := []any{"1", "2026-04-01 12:00:00", "2026-04-02 12:00:00", "vimgym"}
+	wantArgs := append(shapetest.Args(1), "2026-04-01 12:00:00", "2026-04-02 12:00:00", "vimgym")
 	if len(args) != len(wantArgs) {
 		t.Fatalf("args: got %v, want %v", args, wantArgs)
 	}

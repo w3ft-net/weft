@@ -10,6 +10,7 @@ import (
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -55,7 +56,7 @@ func BenchmarkTypedAwkFilter(b *testing.B) {
 
 	for _, thr := range []string{"1000", "500", "100", "9"} {
 		pipeline := fmt.Sprintf("cat /log/typed/api/main.log | awk '$2 > %s'", thr)
-		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil || plan.Typed == nil {
 			b.Fatalf("%s: %v, typed %+v", pipeline, err, plan.Typed)
 		}
@@ -107,7 +108,7 @@ func BenchmarkAwkFilterPrint(b *testing.B) {
 	defer func() { h.unchecked = false }()
 	for _, thr := range []string{"1000", "100"} {
 		pipeline := fmt.Sprintf("cat /log/typed/api/main.log | awk '$3 > %s {print $1, $3}'", thr)
-		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil || plan.Typed == nil {
 			b.Fatalf("%s: %v, typed %+v", pipeline, err, plan.Typed)
 		}
@@ -177,7 +178,7 @@ func BenchmarkFieldRowSpec(b *testing.B) {
 	h := newHarness(b, requestRows(benchRows), 1)
 	sh := h.shards[0]
 	pipeline := "cat /log/typed/api/main.log | awk '{ s += $3 } END { print s }'"
-	plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+	plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 	if err != nil || plan.FieldSQL == "" {
 		b.Fatalf("%s: %v, field sql %q", pipeline, err, plan.FieldSQL)
 	}
@@ -242,7 +243,7 @@ func BenchmarkKeyedAggregate(b *testing.B) {
 		"max": `{ if ($3 > m[$4]) m[$4] = $3 } END { for (k in m) print k, m[k] }`,
 	} {
 		pipeline := "cat /log/typed/api/main.log | awk '" + program + "'"
-		plan, err := planner.Plan(pipeline, 0, "", time.Time{}, time.Time{})
+		plan, err := planner.Plan(pipeline, shapetest.Tenant(1), "", time.Time{}, time.Time{})
 		if err != nil || plan.Typed == nil || plan.Typed.Exact.Group == nil {
 			b.Fatalf("%s: %v, typed %+v", pipeline, err, plan.Typed)
 		}

@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/grpctoken"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
@@ -102,7 +102,7 @@ func (p grpcPauser) Resume(ctx context.Context, addr string) error {
 func (p grpcPauser) with(addr string, call func(pb.ShardQueryClient) error) error {
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor(), auth.ClientTokenUnaryInterceptor(p.shardSecret)),
+		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor(), grpctoken.ClientTokenUnaryInterceptor(p.shardSecret)),
 	)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", addr, err)

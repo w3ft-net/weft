@@ -17,7 +17,7 @@ func TestEventMetaVarsPushDown(t *testing.T) {
 		{`jq 'select($line_no == 1)'`, `COALESCE(line_no, 0) = 1`},
 		{`jq 'select($event_id == "")'`, `COALESCE(CAST(event_id AS VARCHAR), '') = ''`},
 	} {
-		plan, err := Plan("cat /log/acme/api/main.log | "+tc.pipeline, 0, "", time.Time{}, time.Time{})
+		plan, err := planBare("cat /log/acme/api/main.log | "+tc.pipeline, "", time.Time{}, time.Time{})
 		if err != nil {
 			t.Fatalf("%s: %v", tc.pipeline, err)
 		}
@@ -32,7 +32,7 @@ func TestEventMetaVarsPushDown(t *testing.T) {
 // named like a meta-variable is the payload's.
 func TestJqMetaVarTypesPushDown(t *testing.T) {
 	sqlOf := func(pipeline string) string {
-		plan, err := Plan("cat /log/acme/api/main.log | "+pipeline, 0, "", time.Time{}, time.Time{})
+		plan, err := planBare("cat /log/acme/api/main.log | "+pipeline, "", time.Time{}, time.Time{})
 		if err != nil {
 			t.Fatalf("%s: %v", pipeline, err)
 		}

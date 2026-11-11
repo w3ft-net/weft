@@ -16,7 +16,7 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/grpctoken"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -88,8 +88,8 @@ func NewGRPCShard(id, addr, token string) (*GRPCShard, error) {
 	conn, err := grpc.NewClient(res.Scheme()+":///"+id,
 		grpc.WithResolvers(res),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor(), auth.ClientTokenUnaryInterceptor(token)),
-		grpc.WithChainStreamInterceptor(weftsdk.GRPC.StreamClientInterceptor(), auth.ClientTokenStreamInterceptor(token)),
+		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor(), grpctoken.ClientTokenUnaryInterceptor(token)),
+		grpc.WithChainStreamInterceptor(weftsdk.GRPC.StreamClientInterceptor(), grpctoken.ClientTokenStreamInterceptor(token)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("connect to shard %s at %s: %w", id, addr, err)

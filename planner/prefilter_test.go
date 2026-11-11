@@ -273,7 +273,7 @@ func runPlanCases(t *testing.T, cases []planCase) {
 	t.Helper()
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			plan, err := Plan(tt.pipeline, 0, "", time.Time{}, time.Time{})
+			plan, err := planBare(tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatalf("Plan(%q): %v", tt.pipeline, err)
 			}

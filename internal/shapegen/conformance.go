@@ -61,9 +61,7 @@ var conformanceTmpl = template.Must(template.New("conformance").Funcs(template.F
 package shape
 
 import (
-{{- if or .Required .Finer}}
 	"errors"
-{{- end}}
 	"math/rand"
 	"slices"
 	"testing"
@@ -187,6 +185,58 @@ func TestConformance_PartitionValuesFitTheLayout(t *testing.T) {
 		t.Fatalf("a shard cannot read the tuple's own partition values: %v", err)
 	}
 }
+
+// A partition's values round trip through the tuple that names it, and a set
+// reads as one partition only when every tuple names the same one.
+func TestConformance_PartitionRoundTripsThroughACoord(t *testing.T) {
+	r := rand.New(rand.NewSource(5))
+	for i := 0; i < 500; i++ {
+		a := randCoord(r)
+		vals := a.PartitionValues()
+		c, err := CoordFromPartition(vals)
+		if err != nil {
+			t.Fatalf("CoordFromPartition(%v): %v", vals, err)
+		}
+		if got := c.PartitionValues(); !slices.Equal(got, vals) {
+			t.Fatalf("partition %v came back as %v", vals, got)
+		}
+		// every column that is not part of the partition is open
+		if back := a.WithPartition(c); back != a {
+			t.Fatalf("WithPartition of its own partition changed %+v to %+v", a, back)
+		}
+		// a row placed in a partition is admitted by the tuple that names exactly it
+		k := randKey(r).InPartition(a)
+		if !(Set{pointOf(k)}).Matches(&k) {
+			t.Fatalf("row %+v placed in partition %v is not admitted by its own point", k, vals)
+		}
+		got, err := (Set{a, randCoord(r).WithPartition(a)}).Partition()
+		if err != nil || !slices.Equal(got, vals) {
+			t.Fatalf("Partition of two tuples of one partition = %v, %v; want %v", got, err, vals)
+		}
+	}
+	if _, err := CoordFromPartition(append(base(Any()).PartitionValues(), "extra")); err == nil {
+		t.Error("a wrong count of partition values was accepted")
+	}
+	if _, err := (Set{}).Partition(); !errors.Is(err, ErrNoScope) {
+		t.Errorf("an empty set gave %v, want ErrNoScope", err)
+	}
+}
+{{- if .Required}}
+
+func TestConformance_PartitionRefusesADifferentOrUnsetPartition(t *testing.T) {
+	a := base(Any())
+	b := a
+	b.{{(index .Required 0).GoName}} = a.{{(index .Required 0).GoName}} {{- /* trim */ -}}
+	{{- with (index .Required 0)}}{{if eq .Type "int64"}} + 1{{else}} + "!"{{end}}{{end}}
+	if _, err := (Set{a, b}).Partition(); !errors.Is(err, ErrMixedPartitions) {
+		t.Errorf("tuples of two partitions gave %v, want ErrMixedPartitions", err)
+	}
+	var zero Coord
+	if _, err := (Set{zero}).Partition(); !errors.Is(err, ErrRequiredUnset) {
+		t.Errorf("a tuple with an unset required column gave %v, want ErrRequiredUnset", err)
+	}
+}
+{{- end}}
 
 func TestConformance_NamespacesOfOnePartition(t *testing.T) {
 	within := base(Any())

@@ -70,6 +70,15 @@ type Set []Coord
 // a required column is never a wildcard.
 var ErrRequiredUnset = errors.New("shape: tuple leaves a required column unset")
 
+// ErrNoScope is returned by Partition for an empty set: it names no partition,
+// and an empty set reads nothing.
+var ErrNoScope = errors.New("shape: an empty set names no partition")
+
+// ErrMixedPartitions is returned by Partition for a set whose tuples name more
+// than one partition. A caller that serves one tenant at a time refuses it
+// rather than picking one.
+var ErrMixedPartitions = errors.New("shape: the set names more than one partition")
+
 // Validate refuses a set that leaves a required column unset.
 func (s Set) Validate() error {
 	for i := range s {
