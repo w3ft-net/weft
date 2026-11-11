@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -44,6 +46,36 @@ func TestConfigure_PersistsIdentity(t *testing.T) {
 	}
 	if id.WindowEnd.Sub(id.WindowStart) != 7*24*time.Hour {
 		t.Errorf("expected 7d window, got %v", id.WindowEnd.Sub(id.WindowStart))
+	}
+}
+
+// The coordinator's layout is what the volume records; an older coordinator
+// that sends none leaves the legacy customer_id layout.
+func TestConfigure_PersistsLayout(t *testing.T) {
+	custom := shape.NewLayout(shape.LayoutColumn{Name: "region", Type: shape.TypeString, Role: shape.RolePartition})
+	for _, tc := range []struct {
+		name string
+		req  *pb.PartitionLayout
+		want shape.Layout
+	}{
+		{"sent", shard.LayoutToProto(custom), custom},
+		{"absent", nil, shape.Legacy()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			srv := NewBlankServer(dir, filepath.Join(dir, "shard.duckdb"))
+			_, err := srv.Configure(context.Background(), &pb.ConfigureRequest{ShardId: "s1", Layout: tc.req})
+			if err != nil {
+				t.Fatalf("Configure: %v", err)
+			}
+			id, err := shard.LoadIdentity(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(id.Layout, tc.want) {
+				t.Errorf("layout = %+v, want %+v", id.Layout, tc.want)
+			}
+		})
 	}
 }
 

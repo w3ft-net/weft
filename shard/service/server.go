@@ -190,6 +190,7 @@ func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.C
 		WindowEnd:      winEnd,
 		Apps:           req.Services,
 		HeartbeatToken: req.HeartbeatToken,
+		Layout:         shard.LayoutFromProto(req.Layout),
 	}
 	if err := shard.SaveIdentity(s.dataDir, ident); err != nil {
 		return nil, fmt.Errorf("persist identity: %w", err)

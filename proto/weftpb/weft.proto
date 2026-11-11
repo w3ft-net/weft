@@ -61,9 +61,28 @@ message ConfigureRequest {
   // compares to the stored value and rejects mismatches. Closes the
   // rogue-shard-registration attack in the pre-launch audit.
   string heartbeat_token = 5;
+  // layout is the partition columns the shard stores rows under, from the
+  // coordinator's build. The shard records it in shard.json. Absent from an
+  // older coordinator: the shard then keeps (or adopts) the legacy
+  // customer_id BIGINT layout.
+  PartitionLayout layout = 6;
 }
 
 message ConfigureResponse {}
+
+// PartitionLayout describes a build's partition columns (the columns that own
+// storage) and a fingerprint of them. Values arrive per ingest batch,
+// positionally, in column order.
+message PartitionLayout {
+  repeated PartitionColumn columns = 1;
+  string fingerprint = 2;
+}
+
+message PartitionColumn {
+  string name = 1;
+  string type = 2; // "int64" or "string"
+  string role = 3; // "partition"
+}
 
 message ArchiveRequest {
   string s3_prefix = 1; // e.g. "s3://bucket/apps" — shard appends /<shard_id>.parquet
