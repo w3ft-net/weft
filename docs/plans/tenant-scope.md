@@ -7,7 +7,7 @@ are in (`1091269b`, `45f4f4e5`, `8b466a3b`, `7d287b05`, `e0eefc74`,
 `d579a916`). Namespace-owned crons are in (`2e68cd81`, `cad75572`,
 `e21764ba`, `30c74d55`, `7fa2c00f`, `61fdbf6c`): home namespaces, the
 `-r`/`-w` groups and cron users, `ns/name` references, restricted dashboard
-tiles, and the `/bin` dependency rule. Phases 3-5 are not started.
+tiles, and the `/bin` dependency rule. Phases 3-6 are not started.
 
 ## Why
 
@@ -39,8 +39,9 @@ seam they belong to (see "Current gaps").
 - **Coordinate shape**: the columns that locate a row, chosen **at
   compile time**. The open-source default is 4 fields (namespace, env,
   service, kind). Hosted weft uses 5, adding a tenant (`customer_id`).
-  The default build has no tenant anywhere: no column, no partition,
-  no code path. The tenant is a hosted-only concept.
+  The default build has no tenant in its log data: no column, no
+  partition, no code path. The tenant is a hosted-only concept. The
+  control plane is behind its own interfaces (see "The control plane").
 - **Partition columns**: the subset of the shape that owns storage
   (role `RolePartition`): caches, per-key tables, hive paths, metering
   and retention key on them. Hosted: tenant. Default: none.
@@ -141,7 +142,7 @@ package tenancy
 type Actor interface {
     // Partition is the opaque control-plane partition (today: org ID)
     // that store calls are scoped by. Default build: a constant. See
-    // open question 4.
+    // "The control plane".
     Partition() StorePartition
 }
 type Agent interface {
@@ -483,6 +484,51 @@ Reference implementations:
   owner, superadmin). Both live in the private hosted repo and never
   appear in public code.
 
+## The control plane
+
+Everything in Postgres today: crons, dashboards, grants, tokens,
+incidents, team, shard state, results. It is **not** a schema every build
+shares. It's behind interfaces, and each implementation owns its schema
+and migrations. Hosted keeps Postgres, goose and the `schema.sql`
+collapse, and the public repo hosts no hosted-only tables.
+
+Two interfaces:
+
+- **Relational state.** One small interface per domain (crons,
+  dashboards, grants, namespaces, tokens, incidents, shards). Every call
+  takes a `StorePartition`; the default build ignores it. Hosted's
+  implementation wraps today's `store/`, so nothing is rewritten up front.
+- **Time series.** Cron results, rollups, shard heartbeats and usage:
+  append, range query, rollup. The contract says nothing about retention
+  of these. Hosted meets it with partman and pg_cron, and the default
+  build can keep plain rows and leave pruning to the operator.
+  Heartbeats feed shard health, so an implementation must serve their
+  recent window.
+
+**Shard state is core, not hosted-only.** The registry, FSM transitions,
+slot and cron claims, archive stats and the retention janitor are how any
+operator controls how logs age out, so the default build implements them.
+The relational interface therefore needs atomic primitives:
+compare-and-set transitions and claim-with-expiry. One coordinator can
+run on a single-node store such as SQLite. More than one needs a store
+with shared atomic claims; Postgres is the one we ship, and the spec says
+so. Launching a shard (`ec2:RunInstances`, Docker) is provisioning and
+belongs to the infra-interfaces plan.
+
+**Two kinds of retention.** Log-data retention (shard archival and the
+janitor) is core. Control-plane time-series retention is the
+implementer's decision.
+
+Consequences:
+
+- Gap 6 (un-enrolled tables) is not fixed by enrolling them. Org scoping
+  is an argument to the interfaces; a table's own `org_id` is hosted's
+  business.
+- `StorePartition` replaces `OrgID` in the signatures the interfaces
+  expose.
+- A third party can run the default build without Postgres, pg_cron or
+  partman.
+
 ## The contract
 
 These are the invariants an implementation (and weft's own consumers)
@@ -565,7 +611,7 @@ are no interim fixes.
 | 3 cron scope | 2 (done for namespaced crons; org-level crons still fire as the system identity until moved) |
 | 4 source endpoints | 2 (filtered by `ReadScope`; done in `f48651e7`) |
 | 5 unauthenticated compute | infra-interfaces plan |
-| 6 un-enrolled tables | Deferred until the table-shape question is settled |
+| 6 un-enrolled tables | 6 (behind the control-plane interfaces) |
 | 7 legacy mixed archives | not fixed by this plan |
 | 8 multi-source product | 3 (tuple sets) |
 | 9, 10 cleanup | 2 (9 done: `mounts.Config.CustomerName` is gone; 10 done: `nsIDCache` entries expire after a minute) |
@@ -602,10 +648,9 @@ are no interim fixes.
 6. **Un-enrolled tenant tables:** `log_groups`, `namespace_permissions`,
    `shard_field_facts` (which uses `customer_id`, not `org_id`), `usage`,
    `cold_scan_daily`, `cron_results`. Each method passes the org by hand.
-   `namespace_permissions` and `cron_results` have no `org_id` column, so
-   enrolling them needs a migration and backfill. **Deferred:** the plan
-   doesn't yet say how tenant tables should be shaped (`org_id` on every row,
-   or reached through a scoped parent), so decide that first.
+   `namespace_permissions` and `cron_results` have no `org_id` column.
+   Not fixed by enrolling: org scoping moves behind the control-plane
+   interfaces (phase 6), and each implementation shapes its own tables.
 7. **Legacy archives mix tenants in one parquet file**, and the S3 prefix
    is per service label (`logdb/shardsm.go:963`). It's correct only
    because of the SQL predicate. It's fine under contract 1, but it means
@@ -764,6 +809,17 @@ extra coordinate, plus two added columns). That way the generator and
 the hand-written algebra are proven shape-independent, not just right
 for the two shapes we ship.
 
+**Phase 6: control-plane interfaces (not yet estimated).** Carve the
+interfaces in "The control plane" one domain at a time, after Phase 4.
+Start with what the Authorizer and cron work already touch (crons, grants,
+namespaces), then shard state, then the time-series interface. Each domain
+lands as an interface, a hosted implementation wrapping the current
+`store/` methods, and a conformance test. Then write the default
+implementation. Replace `OrgID` with `StorePartition` in the exposed
+signatures as each domain moves. Hosted-only tables (subscriptions,
+billing, Stripe, org/team membership) move out of the public `store/` with
+the hosted adapter.
+
 ## Non-goals
 
 - GCP/k8s/other infra. Those are a separate infra-interfaces plan
@@ -787,9 +843,8 @@ for the two shapes we ship.
 3. ~~Do cron output and dashboards inherit the cron's read scope?~~
    **Resolved:** output lives in the home namespace. Dashboards stay
    org-wide, with per-tile scope checks.
-4. **Control-plane tenancy in Postgres.** The coordinate shape covers
-   log rows only. About 12 enrolled tables plus several unenrolled ones
-   carry `org_id`. Proposal: the open-source build keeps `org_id` with a
-   single implicit org, since it's never visible to users and not on a
-   hot path. The alternative is making the control-plane schema
-   shape-dependent too, which is a much larger change.
+4. ~~Control-plane tenancy in Postgres.~~ **Resolved:** the control plane
+   is behind interfaces, not a shared schema (see "The control plane").
+   Still open: the default backend (proposal: embedded SQLite for one
+   coordinator) and whether the time-series interface needs a rollup
+   operation or leaves rollups to the implementation.
