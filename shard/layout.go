@@ -59,12 +59,25 @@ func (k tableKey) table() string {
 	return logtable.Name(k.customerID, k.namespace, k.service, k.kind)
 }
 
-func rowKey(r *pb.LogRow) tableKey {
+func rowKey(partition []any, r *pb.LogRow) tableKey {
 	kind := r.Kind
 	if kind == "" {
 		kind = "main"
 	}
-	return tableKey{r.CustomerId, r.Namespace, r.Service, kind}
+	return tableKey{customerOf(partition, r), r.Namespace, r.Service, kind}
+}
+
+// customerOf is the customer a row belongs to under the legacy layout: its
+// batch's one partition value, or, from a coordinator that sends none, the
+// row's own customer_id. Namespace, service, kind and env are columns of the
+// row itself, so the customer is the only part of a key the batch supplies.
+func customerOf(partition []any, r *pb.LogRow) int64 {
+	if len(partition) == 1 {
+		if c, ok := partition[0].(int64); ok {
+			return c
+		}
+	}
+	return r.CustomerId
 }
 
 // PerKey reports whether the shard keeps a table per key.

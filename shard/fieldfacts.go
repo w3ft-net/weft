@@ -99,7 +99,7 @@ type sourceKey struct {
 // FieldClassifier learns field facts from the batches a shard ingests. A nil
 // *FieldClassifier is valid and holds no facts.
 type FieldClassifier struct {
-	in   chan []*pb.LogRow
+	in   chan observed
 	done chan struct{}
 	// inflight counts batches queued or being classified; tests wait on it.
 	inflight sync.WaitGroup
@@ -124,7 +124,7 @@ type FieldClassifier struct {
 // NewFieldClassifier starts a classifier. Stop it with Stop.
 func NewFieldClassifier() *FieldClassifier {
 	c := &FieldClassifier{
-		in:      make(chan []*pb.LogRow, factQueueDepth),
+		in:      make(chan observed, factQueueDepth),
 		done:    make(chan struct{}),
 		sources: map[sourceKey]*factSource{},
 	}
@@ -144,17 +144,23 @@ func (c *FieldClassifier) Stop() {
 	}
 }
 
+// observed is a committed batch with the partition values it was stored under.
+type observed struct {
+	partition []any
+	rows      []*pb.LogRow
+}
+
 // Observe hands the classifier a committed batch. It never blocks. A batch
 // that doesn't fit the queue was not classified, so any fact could now be
 // wrong: the classifier turns itself off for good and reports nothing, which
 // every consumer reads as "unknown".
-func (c *FieldClassifier) Observe(rows []*pb.LogRow) {
+func (c *FieldClassifier) Observe(partition []any, rows []*pb.LogRow) {
 	if c == nil || len(rows) == 0 {
 		return
 	}
 	// The caller may reuse its slice (the ingest stream does), the rows
 	// themselves are not mutated.
-	batch := append([]*pb.LogRow(nil), rows...)
+	batch := observed{partition, append([]*pb.LogRow(nil), rows...)}
 	c.inflight.Add(1)
 	select {
 	case c.in <- batch:
@@ -202,8 +208,8 @@ func (c *FieldClassifier) run() {
 		case batch := <-c.in:
 			c.mu.Lock()
 			if !c.disabled {
-				for _, r := range batch {
-					c.classify(r)
+				for _, r := range batch.rows {
+					c.classify(batch.partition, r)
 				}
 			}
 			snap, save := c.takeChange()
@@ -222,12 +228,12 @@ func (c *FieldClassifier) run() {
 }
 
 // classify folds one row in. Caller holds c.mu.
-func (c *FieldClassifier) classify(r *pb.LogRow) {
+func (c *FieldClassifier) classify(partition []any, r *pb.LogRow) {
 	kind := r.Kind
 	if kind == "" {
 		kind = "main"
 	}
-	c.classifyRow(sourceKey{r.CustomerId, r.Namespace, r.Service, kind, r.Env}, awkFields(r.Raw), r.PayloadJson)
+	c.classifyRow(sourceKey{customerOf(partition, r), r.Namespace, r.Service, kind, r.Env}, awkFields(r.Raw), r.PayloadJson)
 }
 
 // awkLocators names the first fields without building a string per row.

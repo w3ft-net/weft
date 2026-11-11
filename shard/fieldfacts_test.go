@@ -51,13 +51,13 @@ func TestFieldClassifier_TypedAfterEnoughNumericRows(t *testing.T) {
 	c := NewFieldClassifier()
 	defer c.Stop()
 
-	c.Observe(numRows(factTypedAfter-1, "GET /a 200 12.5"))
+	c.Observe(nil, numRows(factTypedAfter-1, "GET /a 200 12.5"))
 	settle(t, c)
 	if got := c.Pending(); len(got) != 0 {
 		t.Fatalf("typed before %d rows: %+v", factTypedAfter, got)
 	}
 
-	c.Observe(numRows(1, "GET /a 200 12.5"))
+	c.Observe(nil, numRows(1, "GET /a 200 12.5"))
 	settle(t, c)
 	facts := c.Pending()
 	if f, ok := factFor(facts, "$3"); !ok || f.State != FactTyped || f.Env != "prod" || f.CustomerID != 1 {
@@ -76,7 +76,7 @@ func TestFieldClassifier_TypedAfterEnoughNumericRows(t *testing.T) {
 func TestFieldClassifier_TypedThenViolationReportsDirty(t *testing.T) {
 	c := NewFieldClassifier()
 	defer c.Stop()
-	c.Observe(numRows(factTypedAfter, "x 7"))
+	c.Observe(nil, numRows(factTypedAfter, "x 7"))
 	settle(t, c)
 	typed, _ := factFor(c.Pending(), "$2")
 	c.Ack(newestEpoch(c.Pending()))
@@ -84,7 +84,7 @@ func TestFieldClassifier_TypedThenViolationReportsDirty(t *testing.T) {
 		t.Fatalf("acked fact still pending: %+v", got)
 	}
 
-	c.Observe(numRows(1, "x 12abc"))
+	c.Observe(nil, numRows(1, "x 12abc"))
 	settle(t, c)
 	f, ok := factFor(c.Pending(), "$2")
 	if !ok || f.State != FactDirty || f.Epoch <= typed.Epoch {
@@ -95,7 +95,7 @@ func TestFieldClassifier_TypedThenViolationReportsDirty(t *testing.T) {
 	}
 
 	// Dirty is permanent.
-	c.Observe(numRows(factTypedAfter, "x 7"))
+	c.Observe(nil, numRows(factTypedAfter, "x 7"))
 	settle(t, c)
 	if f, _ := factFor(c.Pending(), "$2"); f.State != FactDirty {
 		t.Errorf("dirty fact recovered: %+v", f)
@@ -105,9 +105,9 @@ func TestFieldClassifier_TypedThenViolationReportsDirty(t *testing.T) {
 func TestFieldClassifier_ShortRowMakesTypedFieldDirty(t *testing.T) {
 	c := NewFieldClassifier()
 	defer c.Stop()
-	c.Observe(numRows(factTypedAfter, "x 7 8"))
+	c.Observe(nil, numRows(factTypedAfter, "x 7 8"))
 	settle(t, c)
-	c.Observe(numRows(1, "x 7"))
+	c.Observe(nil, numRows(1, "x 7"))
 	settle(t, c)
 	facts := c.Pending()
 	if f, _ := factFor(facts, "$2"); f.State != FactTyped {
@@ -121,8 +121,8 @@ func TestFieldClassifier_ShortRowMakesTypedFieldDirty(t *testing.T) {
 func TestFieldClassifier_FieldFirstSeenLateIsNeverTyped(t *testing.T) {
 	c := NewFieldClassifier()
 	defer c.Stop()
-	c.Observe(numRows(10, "x 7"))
-	c.Observe(numRows(factTypedAfter*2, "x 7 8"))
+	c.Observe(nil, numRows(10, "x 7"))
+	c.Observe(nil, numRows(factTypedAfter*2, "x 7 8"))
 	settle(t, c)
 	// The first ten rows had no $3.
 	if _, ok := factFor(c.Pending(), "$3"); ok {
@@ -138,8 +138,8 @@ func TestFieldClassifier_SourcesDoNotShareFacts(t *testing.T) {
 	defer c.Stop()
 	staging := numRows(1, "x oops")
 	staging[0].Env = "staging"
-	c.Observe(numRows(factTypedAfter, "x 7"))
-	c.Observe(staging)
+	c.Observe(nil, numRows(factTypedAfter, "x 7"))
+	c.Observe(nil, staging)
 	settle(t, c)
 	f, ok := factFor(c.Pending(), "$2")
 	if !ok || f.State != FactTyped || f.Env != "prod" {
@@ -154,7 +154,7 @@ func TestFieldClassifier_TracksAtMostFactMaxLocators(t *testing.T) {
 	for i := 0; i < factMaxLocators+10; i++ {
 		wide = append(wide, "1")
 	}
-	c.Observe(numRows(factTypedAfter, strings.Join(wide, " ")))
+	c.Observe(nil, numRows(factTypedAfter, strings.Join(wide, " ")))
 	settle(t, c)
 	var decimals, ints int
 	for _, f := range c.Pending() {
@@ -171,11 +171,11 @@ func TestFieldClassifier_TracksAtMostFactMaxLocators(t *testing.T) {
 
 func TestFieldClassifier_FullQueueDisablesRatherThanGuess(t *testing.T) {
 	c := &FieldClassifier{
-		in:      make(chan []*pb.LogRow), // unbuffered with no reader: always full
+		in:      make(chan observed), // unbuffered with no reader: always full
 		done:    make(chan struct{}),
 		sources: map[sourceKey]*factSource{},
 	}
-	c.Observe(numRows(factTypedAfter, "x 7"))
+	c.Observe(nil, numRows(factTypedAfter, "x 7"))
 	if got := c.Pending(); got != nil {
 		t.Errorf("a classifier that dropped a batch reported %+v", got)
 	}
@@ -213,7 +213,7 @@ func jsonRows(n int, payload string) []*pb.LogRow {
 func TestFieldClassifier_JQKeyTypedWhenEveryValueIsANumber(t *testing.T) {
 	c := NewFieldClassifier()
 	defer c.Stop()
-	c.Observe(jsonRows(factTypedAfter, `{"q_max_ms":14.2,"count":-3,"shard_id":"a","nested":{"n":1}}`))
+	c.Observe(nil, jsonRows(factTypedAfter, `{"q_max_ms":14.2,"count":-3,"shard_id":"a","nested":{"n":1}}`))
 	settle(t, c)
 	facts := c.Pending()
 	for _, loc := range []string{".q_max_ms", ".count"} {
@@ -243,9 +243,9 @@ func TestFieldClassifier_JQNonNumbersMakeATypedKeyDirty(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := NewFieldClassifier()
 			defer c.Stop()
-			c.Observe(jsonRows(factTypedAfter, `{"v":7}`))
+			c.Observe(nil, jsonRows(factTypedAfter, `{"v":7}`))
 			settle(t, c)
-			c.Observe(jsonRows(1, bad))
+			c.Observe(nil, jsonRows(1, bad))
 			settle(t, c)
 			if f, ok := factFor(c.Pending(), ".v"); !ok || f.State != FactDirty {
 				t.Errorf("want .v retracted after %s, got %+v (ok=%v)", name, f, ok)
@@ -257,8 +257,8 @@ func TestFieldClassifier_JQNonNumbersMakeATypedKeyDirty(t *testing.T) {
 func TestFieldClassifier_JQKeyFirstSeenLateIsNeverTyped(t *testing.T) {
 	c := NewFieldClassifier()
 	defer c.Stop()
-	c.Observe(jsonRows(10, `{"a":1}`))
-	c.Observe(jsonRows(factTypedAfter*2, `{"a":1,"b":2}`))
+	c.Observe(nil, jsonRows(10, `{"a":1}`))
+	c.Observe(nil, jsonRows(factTypedAfter*2, `{"a":1,"b":2}`))
 	settle(t, c)
 	if _, ok := factFor(c.Pending(), ".b"); ok {
 		t.Error(".b was absent from earlier rows and must not type")
@@ -281,7 +281,7 @@ func TestFieldClassifier_JSONRowsAwkFieldsDoNotCrowdOutKeys(t *testing.T) {
 	for _, r := range rows {
 		r.Raw = strings.Join(raw, " ")
 	}
-	c.Observe(rows)
+	c.Observe(nil, rows)
 	settle(t, c)
 	if f, ok := factFor(c.Pending(), ".q"); !ok || f.State != FactTyped {
 		t.Errorf(".q want typed, got %+v (ok=%v)", f, ok)
@@ -295,7 +295,7 @@ func TestFieldClassifier_TracksAtMostFactMaxJQKeys(t *testing.T) {
 	for i := 0; i < factMaxLocators+10; i++ {
 		kv = append(kv, fmt.Sprintf(`"k%d":1`, i))
 	}
-	c.Observe(jsonRows(factTypedAfter, "{"+strings.Join(kv, ",")+"}"))
+	c.Observe(nil, jsonRows(factTypedAfter, "{"+strings.Join(kv, ",")+"}"))
 	settle(t, c)
 	if got := len(c.Pending()); got != factMaxLocators {
 		t.Errorf("tracked %d keys, want the cap %d", got, factMaxLocators)
@@ -344,7 +344,7 @@ func BenchmarkClassifyJSONRow(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		c.mu.Lock()
-		c.classify(row)
+		c.classify(nil, row)
 		c.mu.Unlock()
 	}
 }
@@ -527,7 +527,7 @@ func TestFieldClassifier_OnlyFiniteDecimalsTypeAField(t *testing.T) {
 	typed := []string{"7", "-3", "+5", "12.5", ".5", "5.", "1e3", "1E-2", "007", "-0", "9007199254740993", "1e308", "4.9e-324"}
 	for _, v := range typed {
 		c := NewFieldClassifier()
-		c.Observe(numRows(factTypedAfter, "x "+v))
+		c.Observe(nil, numRows(factTypedAfter, "x "+v))
 		settle(t, c)
 		if f, ok := factFor(c.Pending(), "$2"); !ok || f.State != FactTyped {
 			t.Errorf("%q: want typed, got %+v (ok=%v)", v, f, ok)
@@ -536,8 +536,8 @@ func TestFieldClassifier_OnlyFiniteDecimalsTypeAField(t *testing.T) {
 	}
 	for _, v := range []string{"inf", "-inf", "Inf", "+Inf", "infinity", "nan", "NaN", "-nan", "0x1p3", "0X1P-2", "0x10"} {
 		c := NewFieldClassifier()
-		c.Observe(numRows(factTypedAfter, "x 7"))
-		c.Observe(numRows(1, "x "+v))
+		c.Observe(nil, numRows(factTypedAfter, "x 7"))
+		c.Observe(nil, numRows(1, "x "+v))
 		settle(t, c)
 		if f, ok := factFor(c.Pending(), "$2"); ok && f.State == FactTyped {
 			t.Errorf("%q: a spelling DuckDB reads differently from awk must not leave the field typed", v)
@@ -547,7 +547,7 @@ func TestFieldClassifier_OnlyFiniteDecimalsTypeAField(t *testing.T) {
 	// And a field made only of such spellings never gets typed at all.
 	c := NewFieldClassifier()
 	defer c.Stop()
-	c.Observe(numRows(factTypedAfter, "x inf"))
+	c.Observe(nil, numRows(factTypedAfter, "x inf"))
 	settle(t, c)
 	if f, ok := factFor(c.Pending(), "$2"); ok && f.State == FactTyped {
 		t.Errorf("a field of inf values was typed: %+v", f)
@@ -627,7 +627,7 @@ func TestFinitelyIntegral(t *testing.T) {
 func TestFieldClassifier_IntegerFactTypesOnlyIntegerFields(t *testing.T) {
 	c := NewFieldClassifier()
 	defer c.Stop()
-	c.Observe(numRows(factTypedAfter, "GET 200 12.5 -7 1e3"))
+	c.Observe(nil, numRows(factTypedAfter, "GET 200 12.5 -7 1e3"))
 	settle(t, c)
 	facts := c.Pending()
 	for loc, want := range map[string]bool{
@@ -647,10 +647,10 @@ func TestFieldClassifier_IntegerFactTypesOnlyIntegerFields(t *testing.T) {
 func TestFieldClassifier_AFloatInAnIntegerFieldRetractsOnlyTheIntegerFact(t *testing.T) {
 	c := NewFieldClassifier()
 	defer c.Stop()
-	c.Observe(numRows(factTypedAfter, "x 7"))
+	c.Observe(nil, numRows(factTypedAfter, "x 7"))
 	settle(t, c)
 	c.Ack(newestEpoch(c.Pending()))
-	c.Observe(numRows(1, "x 7.5"))
+	c.Observe(nil, numRows(1, "x 7.5"))
 	settle(t, c)
 	facts := c.Pending()
 	if f, ok := factFor(facts, "$2#int"); !ok || f.State != FactDirty {
@@ -666,7 +666,7 @@ func TestFieldFacts_IntegerFactSurvivesARoll(t *testing.T) {
 	defer c.Stop()
 	var saved []byte
 	c.SetPersist(func(b []byte) error { saved = b; return nil }, func() {})
-	c.Observe(numRows(factTypedAfter, "x 7 1.5"))
+	c.Observe(nil, numRows(factTypedAfter, "x 7 1.5"))
 	settle(t, c)
 	if saved == nil {
 		t.Fatal("nothing persisted")

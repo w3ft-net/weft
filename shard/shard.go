@@ -595,7 +595,7 @@ func (s *DuckDBShard) IngestBatch(ctx context.Context, b Batch, rec IngestRecord
 		return wrapIngestError(s.id, err, rec)
 	}
 	s.rowCount.Add(int64(len(rows)))
-	s.facts.Observe(rows)
+	s.facts.Observe(partition, rows)
 	if rec != nil {
 		rec.ResetIngestFailures(s.id)
 	}
@@ -623,7 +623,7 @@ func (s *DuckDBShard) ingestPerKey(ctx context.Context, partition []any, rows []
 	var order []tableKey
 	groups := map[tableKey][]*pb.LogRow{}
 	for _, r := range rows {
-		k := rowKey(r)
+		k := rowKey(partition, r)
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}

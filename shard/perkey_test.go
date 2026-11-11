@@ -258,6 +258,35 @@ func TestPerKey_AFailedBatchStoresNothing(t *testing.T) {
 	}
 }
 
+// The customer of a key comes from the batch's partition values, not from the
+// rows: a coordinator that no longer stamps customer_id still lands rows in
+// their customer's table and records their facts under it.
+func TestPerKey_CustomerComesFromThePartitionNotTheRows(t *testing.T) {
+	s := openPerKey(t, filepath.Join(t.TempDir(), "s.duckdb"))
+	k := pkKey{9, "acme", "api", "main"}
+	rows := pkRows(k, 4, "x")
+	for _, r := range rows {
+		r.CustomerId = 0
+	}
+	if err := s.IngestBatch(context.Background(), Batch{Rows: rows, PartitionValues: []string{"9"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(t, s, `"`+k.table()+`"`); got != 4 {
+		t.Fatalf("customer 9's table holds %d rows, want 4", got)
+	}
+	s.facts.Drain()
+	s.facts.mu.Lock()
+	defer s.facts.mu.Unlock()
+	if len(s.facts.sources) == 0 {
+		t.Error("no fact source recorded")
+	}
+	for sk := range s.facts.sources {
+		if sk.customerID != 9 {
+			t.Errorf("fact source %+v is not under customer 9", sk)
+		}
+	}
+}
+
 // A new column added to the schema must reach the tables that already exist.
 func TestPerKey_ReopenAddsColumnsATableLacks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.duckdb")
