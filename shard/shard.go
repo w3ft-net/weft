@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // RowSink receives result rows streamed from a shard query. compute.Job satisfies this.
@@ -149,6 +150,8 @@ type DuckDBShard struct {
 	db       *sql.DB
 	rowCount atomic.Int64
 	qstats   queryStats
+	// layout is the partition columns every table carries; see shape.Layout.
+	layout shape.Layout
 
 	// facts learns which awk fields hold only numbers; see fieldfacts.go.
 	facts *FieldClassifier
@@ -227,7 +230,9 @@ func (q *queryStats) snapshot() QueryStatsSnapshot {
 // Called once per telemetry interval by the stats emitter.
 func (s *DuckDBShard) QueryStatsSnapshot() QueryStatsSnapshot { return s.qstats.snapshot() }
 
-const createTableSQL = `
+// createTableTemplate is the logs table; partitionDDL is replaced by the
+// layout's partition columns, which follow the base columns.
+const createTableTemplate = `
 CREATE TABLE IF NOT EXISTS logs (
     raw            TEXT,
     fields         TEXT[],
@@ -237,7 +242,6 @@ CREATE TABLE IF NOT EXISTS logs (
     service        TEXT,
     kind           TEXT,
     instance       TEXT,
-    customer_id    BIGINT,
     payload        JSON,
     deployment     TEXT,
     env            TEXT,
@@ -255,8 +259,19 @@ CREATE TABLE IF NOT EXISTS logs (
     duration_ns    BIGINT,
     event_id       UUID,
     line_no        INTEGER
+    partitionDDL
 );
 `
+
+// createTableDDL is the logs table for a layout: the base columns, then one
+// column per partition column, typed as the layout declares.
+func createTableDDL(l shape.Layout) string {
+	var b strings.Builder
+	for _, c := range l.Columns {
+		fmt.Fprintf(&b, ",\n    %s %s", c.Name, c.Type.SQL())
+	}
+	return strings.Replace(createTableTemplate, "\n    partitionDDL", b.String(), 1)
+}
 
 // migrationSteps converges existing shards' schemas to the current target.
 // Each step is idempotent: rename guarded by column existence, ADD guarded
@@ -327,7 +342,7 @@ var legacyColumns = []string{"host_group", "app", "line_num"}
 // nothing. It only reads the catalog, where running the migrations takes a
 // write for every statement even when each is a no-op. Any doubt (a failed
 // read) says it is not current, and the migrations run.
-func schemaIsCurrent(db *sql.DB) bool {
+func schemaIsCurrent(db *sql.DB, layout shape.Layout) bool {
 	rows, err := db.Query(`SELECT name FROM pragma_table_info('logs')`)
 	if err != nil {
 		return false
@@ -344,7 +359,7 @@ func schemaIsCurrent(db *sql.DB) bool {
 	if rows.Err() != nil {
 		return false
 	}
-	for _, c := range logColumns {
+	for _, c := range logColumns(layout) {
 		if !have[c] {
 			return false
 		}
@@ -361,7 +376,7 @@ func schemaIsCurrent(db *sql.DB) bool {
 // logs table. Use "" or ":memory:" for an in-memory database. The database
 // keeps the layout it already has; see Option for how a new one is laid out.
 func NewDuckDBShard(id, path string, opts ...Option) (*DuckDBShard, error) {
-	var cfg openOptions
+	cfg := openOptions{layout: shape.Legacy()}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -377,7 +392,7 @@ func NewDuckDBShard(id, path string, opts ...Option) (*DuckDBShard, error) {
 		return nil, fmt.Errorf("open duckdb %q: %w", path, err)
 	}
 	connected := time.Now()
-	if _, err := db.Exec(createTableSQL); err != nil {
+	if _, err := db.Exec(createTableDDL(cfg.layout)); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create table: %w", err)
 	}
@@ -386,14 +401,14 @@ func NewDuckDBShard(id, path string, opts ...Option) (*DuckDBShard, error) {
 	// shards that never had host_group, the ADDs fail on fully-migrated
 	// shards. Either way the schema converges to the CREATE TABLE shape.
 	migrate := "skipped"
-	if !schemaIsCurrent(db) {
+	if !schemaIsCurrent(db, cfg.layout) {
 		for _, step := range migrationSteps {
 			_, _ = db.Exec(step)
 		}
 		migrate = ""
 	}
 	migrated := time.Now()
-	ds := &DuckDBShard{id: id, dbPath: path, db: db}
+	ds := &DuckDBShard{id: id, dbPath: path, db: db, layout: cfg.layout}
 	if err := ds.initLayout(cfg.perKey); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init layout: %w", err)
@@ -484,12 +499,23 @@ func (s *DuckDBShard) QueryFieldsToSink(ctx context.Context, _, fieldSQL string,
 // migrated shards, whose on-disk column order diverges from createTableSQL once
 // ALTER TABLE ADD/DROP has run. The AppendRow argument order below must match
 // this list exactly.
-var logColumns = []string{
+var baseColumns = []string{
 	"raw", "fields", "ts", "level", "namespace", "service", "kind",
-	"instance", "customer_id", "payload", "deployment", "env", "version",
+	"instance", "payload", "deployment", "env", "version",
 	"region", "cluster", "k8s_namespace", "pod", "container", "node",
 	"trace_id", "span_name", "span_id", "parent_span_id", "duration_ns",
 	"event_id", "line_no",
+}
+
+// logColumns is the appender's column list for a layout: the base columns,
+// then the partition columns.
+func logColumns(l shape.Layout) []string {
+	cols := make([]string, 0, len(baseColumns)+len(l.Columns))
+	cols = append(cols, baseColumns...)
+	for _, c := range l.Columns {
+		cols = append(cols, c.Name)
+	}
+	return cols
 }
 
 // awkFields splits a line into the fields column the way awk's default
@@ -540,7 +566,7 @@ func (s *DuckDBShard) ingestTable(ctx context.Context, table string, rows []*pb.
 	}
 	defer conn.Close()
 	return conn.Raw(func(dc any) error {
-		return appendRows(dc.(driver.Conn), table, rows)
+		return appendRows(dc.(driver.Conn), table, s.layout, rows)
 	})
 }
 
@@ -570,7 +596,7 @@ func (s *DuckDBShard) ingestPerKey(ctx context.Context, rows []*pb.LogRow) error
 	}
 	err = conn.Raw(func(dc any) error {
 		for _, k := range order {
-			if err := appendRows(dc.(driver.Conn), k.table(), groups[k]); err != nil {
+			if err := appendRows(dc.(driver.Conn), k.table(), s.layout, groups[k]); err != nil {
 				return err
 			}
 		}
@@ -588,8 +614,14 @@ func (s *DuckDBShard) ingestPerKey(ctx context.Context, rows []*pb.LogRow) error
 }
 
 // appendRows streams rows into table through DuckDB's Appender on dc.
-func appendRows(dc driver.Conn, table string, rows []*pb.LogRow) error {
-	appender, aerr := duckdb.NewAppenderWithColumns(dc, "", "", table, logColumns)
+func appendRows(dc driver.Conn, table string, layout shape.Layout, rows []*pb.LogRow) error {
+	// Until batches carry their partition values, only the legacy layout has a
+	// source for them (the row's customer_id). Any other layout fails closed
+	// rather than writing NULL partition columns.
+	if !layout.IsLegacy() {
+		return fmt.Errorf("layout %s: no source for its partition values", layout.Fingerprint)
+	}
+	appender, aerr := duckdb.NewAppenderWithColumns(dc, "", "", table, logColumns(layout))
 	if aerr != nil {
 		return fmt.Errorf("new appender: %w", aerr)
 	}
@@ -625,7 +657,6 @@ func appendRows(dc driver.Conn, table string, rows []*pb.LogRow) error {
 			r.Service,
 			kind,
 			r.Instance,
-			r.CustomerId,
 			payload,
 			r.Deployment,
 			r.Env,
@@ -643,6 +674,7 @@ func appendRows(dc driver.Conn, table string, rows []*pb.LogRow) error {
 			r.DurationNs,
 			eventID,
 			lineNo,
+			r.CustomerId, // the legacy layout's one partition column
 		); rerr != nil {
 			appender.Close()
 			return fmt.Errorf("append row: %w", rerr)

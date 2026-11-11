@@ -229,7 +229,7 @@ func (s *Server) openFromDisk() error {
 	if id == nil {
 		return nil
 	}
-	ds, err := shard.NewDuckDBShard(id.ShardID, s.dbPath, s.shardOpts...)
+	ds, err := shard.NewDuckDBShard(id.ShardID, s.dbPath, s.optsWithLayout(id.Layout)...)
 	if err != nil {
 		return fmt.Errorf("open duckdb at %s: %w", s.dbPath, err)
 	}

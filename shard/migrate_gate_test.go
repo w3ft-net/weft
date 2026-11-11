@@ -63,7 +63,7 @@ func TestNewDuckDBShard_AnOlderSchemaIsStillMigrated(t *testing.T) {
 		rows.Scan(&n)
 		have[n] = true
 	}
-	for _, c := range logColumns {
+	for _, c := range logColumns(ds.layout) {
 		if !have[c] {
 			t.Errorf("column %q missing after migrating an older shard", c)
 		}

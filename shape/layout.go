@@ -53,6 +53,9 @@ func NewLayout(cols ...LayoutColumn) Layout {
 	return Layout{Columns: cols, Fingerprint: hex.EncodeToString(sum[:8])}
 }
 
+// IsLegacy reports whether the layout is the legacy customer_id one.
+func (l Layout) IsLegacy() bool { return l.Fingerprint == Legacy().Fingerprint }
+
 // Legacy is the layout every shard volume written before layouts existed has:
 // a customer_id BIGINT column. The hosted shape reproduces it exactly.
 func Legacy() Layout {

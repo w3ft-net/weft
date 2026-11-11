@@ -52,7 +52,7 @@ func TestConfigure_PersistsIdentity(t *testing.T) {
 // The coordinator's layout is what the volume records; an older coordinator
 // that sends none leaves the legacy customer_id layout.
 func TestConfigure_PersistsLayout(t *testing.T) {
-	custom := shape.NewLayout(shape.LayoutColumn{Name: "region", Type: shape.TypeString, Role: shape.RolePartition})
+	custom := shape.NewLayout(shape.LayoutColumn{Name: "tier", Type: shape.TypeString, Role: shape.RolePartition})
 	for _, tc := range []struct {
 		name string
 		req  *pb.PartitionLayout

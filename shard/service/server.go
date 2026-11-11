@@ -12,6 +12,7 @@ import (
 
 	weftcfg "github.com/graybeardcorp/weft/config"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -98,7 +99,7 @@ func NewServerFromIdentity(dataDir, dbPath string, opts ...shard.Option) (*Serve
 	if id == nil {
 		return nil, fmt.Errorf("no shard.json in %s", dataDir)
 	}
-	ds, err := shard.NewDuckDBShard(id.ShardID, dbPath, opts...)
+	ds, err := shard.NewDuckDBShard(id.ShardID, dbPath, append(opts[:len(opts):len(opts)], shard.WithLayout(id.Layout))...)
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb at %s: %w", dbPath, err)
 	}
@@ -147,6 +148,12 @@ func (s *Server) getShard() (*shard.DuckDBShard, error) {
 	return s.shard, nil
 }
 
+// optsWithLayout is the server's shard options with the layout the database is
+// opened under; it wins over any layout in the options.
+func (s *Server) optsWithLayout(l shape.Layout) []shard.Option {
+	return append(s.shardOpts[:len(s.shardOpts):len(s.shardOpts)], shard.WithLayout(l))
+}
+
 // Configure assigns an identity, opens the DuckDB, and persists the
 // identity to disk. Rejects reconfigure: once a shard has an id, it
 // keeps that id for life.
@@ -168,7 +175,7 @@ func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.C
 
 	if s.dataDir == "" {
 		// In-process test mode: no persistence, in-memory DB.
-		ds, err := shard.NewDuckDBShard(req.ShardId, "", s.shardOpts...)
+		ds, err := shard.NewDuckDBShard(req.ShardId, "", s.optsWithLayout(shard.LayoutFromProto(req.Layout))...)
 		if err != nil {
 			return nil, fmt.Errorf("create shard: %w", err)
 		}
@@ -196,7 +203,7 @@ func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.C
 		return nil, fmt.Errorf("persist identity: %w", err)
 	}
 
-	ds, err := shard.NewDuckDBShard(req.ShardId, s.dbPath, s.shardOpts...)
+	ds, err := shard.NewDuckDBShard(req.ShardId, s.dbPath, s.optsWithLayout(ident.Layout)...)
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb at %s: %w", s.dbPath, err)
 	}

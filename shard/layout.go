@@ -10,6 +10,7 @@ import (
 
 	"github.com/graybeardcorp/weft/logtable"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // A shard keeps its rows in one of two layouts.
@@ -31,6 +32,13 @@ type Option func(*openOptions)
 
 type openOptions struct {
 	perKey bool
+	layout shape.Layout
+}
+
+// WithLayout sets the partition columns a new database's tables carry. The
+// default is shape.Legacy(). A database that already has its tables keeps them.
+func WithLayout(l shape.Layout) Option {
+	return func(o *openOptions) { o.layout = l }
 }
 
 // WithPerKeyTables makes a database that holds no rows use the per-key layout.
@@ -193,7 +201,7 @@ func (s *DuckDBShard) createTable(ctx context.Context, name string, k tableKey) 
 	}
 	// The table is made from createTableSQL, the shape the appender writes, so
 	// column types match exactly.
-	ddl := strings.Replace(createTableSQL, "IF NOT EXISTS logs", fmt.Sprintf(`IF NOT EXISTS "%s"`, name), 1)
+	ddl := strings.Replace(createTableDDL(s.layout), "IF NOT EXISTS logs", fmt.Sprintf(`IF NOT EXISTS "%s"`, name), 1)
 	if _, err := s.db.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("create table for %v: %w", k, err)
 	}
