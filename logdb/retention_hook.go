@@ -2,6 +2,7 @@ package logdb
 
 import (
 	"context"
+	"time"
 
 	"github.com/graybeardcorp/weft/shard"
 )
@@ -13,6 +14,9 @@ type Retention interface {
 	// ArchiveRecorded is told of each archive's per-partition stats. It is
 	// best effort: a failure is logged and does not fail the archive.
 	ArchiveRecorded(shardID string, stats []shard.CustomerStat) error
+	// CheckDelete is asked before an operator deletes an archived shard
+	// without force. An error wrapping ErrShardWithinRetention refuses it.
+	CheckDelete(shardID string, bucketID int64, windowEnd time.Time) error
 	// Start begins the feature's background work once the provisioner runs.
 	Start(ctx context.Context, prov *Provisioner)
 }

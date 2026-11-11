@@ -130,6 +130,25 @@ func TestProvisionerSwapArchive_OnlyAnArchivedShard(t *testing.T) {
 	}
 }
 
+// A deployment's retention decides whether an archive may be deleted without
+// force; force skips the question, and a build with no retention is never asked.
+func TestProvisionerDeleteArchived_AsksTheRetentionUnlessForced(t *testing.T) {
+	p, _ := swapProvisioner(t, "sh-del")
+	ret := &recordingRetention{refuse: ErrShardWithinRetention}
+	p.config.Retention = ret
+
+	if err := p.DeleteArchived("sh-del", false); !errors.Is(err, ErrShardWithinRetention) {
+		t.Fatalf("err = %v, want ErrShardWithinRetention", err)
+	}
+	if ret.checked != 1 {
+		t.Fatalf("retention was asked %d times, want 1", ret.checked)
+	}
+	_ = p.DeleteArchived("sh-del", true)
+	if ret.checked != 1 {
+		t.Errorf("a forced delete asked retention (%d calls)", ret.checked)
+	}
+}
+
 func TestProvisionerSwapArchive_UnknownShard(t *testing.T) {
 	p, _ := swapProvisioner(t, "sh-here")
 	if err := p.SwapArchive("sh-gone", swapOld, swapNew); !errors.Is(err, ErrShardNotInRegistry) {

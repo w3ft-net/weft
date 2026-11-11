@@ -102,6 +102,14 @@ func TestTombstoneSweeper_DeletesWhatIsDueWithNoRetentionInstalled(t *testing.T)
 type recordingRetention struct {
 	shardID string
 	stats   []shard.CustomerStat
+	// refuse, when set, is what CheckDelete returns; checked counts its calls.
+	refuse  error
+	checked int
+}
+
+func (r *recordingRetention) CheckDelete(string, int64, time.Time) error {
+	r.checked++
+	return r.refuse
 }
 
 func (r *recordingRetention) ArchiveRecorded(id string, stats []shard.CustomerStat) error {

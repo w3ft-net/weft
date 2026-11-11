@@ -520,6 +520,11 @@ func (c *Coordinator) resolveNamespaceID(custID store.OrgID, namespace string) u
 //
 // The registry's MatchingEntries re-applies this clamp as defense in
 // depth — idempotent because we pass the already-clamped value.
+// retentionHorizon is the earliest instant a customer on tier may read.
+func retentionHorizon(tier store.Tier) time.Time {
+	return time.Now().Add(-store.LogRetention(tier))
+}
+
 func (c *Coordinator) clampTimeRange(tr TimeRange, custID store.OrgID) TimeRange {
 	var tier store.Tier
 	if custID != 0 && c.Store != nil {
@@ -787,7 +792,7 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 // is baked into LoweredPlan at save time).
 func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
 	nsID := c.resolveNamespaceID(store.OrgID(lp.CustomerID), lp.SourceNamespace)
-	descs, err := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, lp.SourceService, tier)
+	descs, err := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, lp.SourceService, retentionHorizon(tier))
 	if err != nil {
 		return nil, err
 	}
@@ -1179,7 +1184,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 		tier = c.Store.TierForOrg(custID)
 	}
 	nsID := c.resolveNamespaceID(custID, plan.SourceNamespace)
-	descs, err := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, plan.SourceService, tier)
+	descs, err := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, plan.SourceService, retentionHorizon(tier))
 	if err != nil {
 		logQuery(ctx, "query: namespace=%s service=%s: %v", plan.SourceNamespace, plan.SourceService, err)
 		return nil, err
@@ -1333,7 +1338,7 @@ func (c *Coordinator) executeTraceList(ctx context.Context, plan *planner.QueryP
 		return &ExecuteResult{Stream: compute.NewSliceLineStream(nil, nil)}, nil
 	}
 
-	all, err := c.Provisioner.ShardDescriptorsFor(ctx, tr, 0, "", tier)
+	all, err := c.Provisioner.ShardDescriptorsFor(ctx, tr, 0, "", retentionHorizon(tier))
 	if err != nil {
 		logQuery(ctx, "query: trace list stats: %v", err)
 		return nil, err

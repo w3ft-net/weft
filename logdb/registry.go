@@ -844,23 +844,23 @@ func (r *ShardRegistry) HasAddr(addr string) bool {
 // is the caller's job (ShardDescriptorsFor), keeping the registry free
 // of store knowledge and the routing tests DB-free.
 //
-// tr.Start is clamped up to now − LogRetention(tier) so a customer
-// never reaches a shard whose data falls entirely outside their
-// advertised retention. Boundary-spanning shards (window started
-// before the cap, ended after it) still match — the planner's
+// tr.Start is clamped up to earliest, the earliest instant the caller may
+// read, so a customer never reaches a shard whose data falls entirely
+// outside their advertised retention. Boundary-spanning shards (window
+// started before the cap, ended after it) still match — the planner's
 // `ts >= TIMESTAMP '...'` predicate (built from the same already-
 // clamped tr at the call site) hides the portion before the cap
 // within that shard. The clamp here is defense in depth; passing the
-// already-clamped value keeps it idempotent. tier="" yields the
-// trial-tier retention (24h, conservative).
+// already-clamped value keeps it idempotent. The zero time means no
+// limit: what a deployment without retention passes.
 //
 // A shard that holds rows for the query but can't be queried (its instance
 // is dead or being replaced, or it has stopped heartbeating) is not left
 // out: the query has no answer without its rows, so MatchingEntries returns
 // an *UnavailableShardsError naming every such shard instead.
-func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{}, tier store.Tier) ([]*Shard, error) {
-	if cap := time.Now().Add(-store.LogRetention(tier)); tr.Start.Before(cap) {
-		tr.Start = cap
+func (r *ShardRegistry) MatchingEntries(tr TimeRange, serving map[string]struct{}, earliest time.Time) ([]*Shard, error) {
+	if tr.Start.Before(earliest) {
+		tr.Start = earliest
 	}
 
 	r.mu.RLock()

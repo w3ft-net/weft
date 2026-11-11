@@ -2,6 +2,7 @@ package retention
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -33,6 +34,20 @@ var _ logdb.Retention = (*Retention)(nil)
 // ArchiveRecorded stores an archive's stats for the janitor to classify by.
 func (r *Retention) ArchiveRecorded(shardID string, stats []shard.CustomerStat) error {
 	return Store{logdb.ShardStore{Store: r.db}}.RecordArchiveStats(shardID, stats)
+}
+
+// CheckDelete refuses to delete a shard whose window ended inside its bucket's
+// retention.
+func (r *Retention) CheckDelete(shardID string, bucketID int64, windowEnd time.Time) error {
+	b, found, _ := r.db.GetBucket(bucketID)
+	if !found {
+		return nil
+	}
+	retention := store.LogRetention(store.Tier(b.Tier))
+	if time.Since(windowEnd) < retention {
+		return fmt.Errorf("shard %s is within the %s retention window: %w", shardID, retention, logdb.ErrShardWithinRetention)
+	}
+	return nil
 }
 
 // Start wires and starts the daily janitor. With COMPACTOR_FUNCTION_URL unset

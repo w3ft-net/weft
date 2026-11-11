@@ -40,7 +40,7 @@ func TestMatchingEntries_SuspendedFailsTheQuery(t *testing.T) {
 	})
 
 	tr := TimeRange{Start: now.Add(-time.Hour), End: now}
-	got, err := reg.MatchingEntries(tr, servingFor(reg, "vimgym"), store.Tier(""))
+	got, err := reg.MatchingEntries(tr, servingFor(reg, "vimgym"), time.Now().Add(-store.LogRetention(store.Tier(""))))
 	requireUnavailable(t, got, err, "shard-suspended")
 
 	// Outside its window, or for a service it doesn't serve, the
@@ -74,6 +74,6 @@ func TestMatchingEntries_RelaunchingShardFailsTheQuery(t *testing.T) {
 	reg.Add(mk("shard-relaunching", 500))
 
 	tr := TimeRange{Start: now.Add(-time.Hour), End: now}
-	got, err := reg.MatchingEntries(tr, servingFor(reg, "vimgym"), store.Tier(""))
+	got, err := reg.MatchingEntries(tr, servingFor(reg, "vimgym"), time.Now().Add(-store.LogRetention(store.Tier(""))))
 	requireUnavailable(t, got, err, "shard-relaunching")
 }

@@ -32,7 +32,7 @@ func TestShardDescriptorsFor_ArchivedCarriesTheLayout(t *testing.T) {
 		WindowStart: now.Add(-time.Hour), WindowEnd: now.Add(time.Hour), CreatedAt: now.Add(-time.Hour),
 	})
 
-	ds, err := p.ShardDescriptorsFor(context.Background(), TimeRange{Start: now.Add(-72 * time.Hour), End: now}, 0, "", store.TierTrial)
+	ds, err := p.ShardDescriptorsFor(context.Background(), TimeRange{Start: now.Add(-72 * time.Hour), End: now}, 0, "", time.Now().Add(-store.LogRetention(store.TierTrial)))
 	if err != nil {
 		t.Fatal(err)
 	}

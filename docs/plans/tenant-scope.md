@@ -530,9 +530,13 @@ looks hosted, `tmp_files` relational):
     already-clamped `since`.
 
 **Shard state is core, not hosted-only.** The registry, FSM transitions,
-slot and cron claims, archive stats and the retention janitor are how any
-operator controls how logs age out, so the default build implements them.
-Shard heartbeats are part of that state: they're log-storage
+slot and cron claims and the tombstone GC that follows an archive swap
+are how any operator runs log storage, so the default build implements
+them. Archive stats and the retention janitor are not: the default build
+ships no retention feature, and `logdb.Retention` is the hook hosted
+installs it through (`tenancy/hosted/retention`). Tiers do not reach
+`logdb`: a query passes the earliest instant it may read, and the hook
+decides whether an archive may be deleted. Shard heartbeats are part of that state: they're log-storage
 architecture, not telemetry. The relational interface therefore needs
 atomic primitives:
 compare-and-set transitions and claim-with-expiry. One coordinator can
@@ -541,8 +545,9 @@ with shared atomic claims; Postgres is the one we ship, and the spec says
 so. Launching a shard (`ec2:RunInstances`, Docker) is provisioning and
 belongs to the infra-interfaces plan.
 
-**Two kinds of retention.** Log-data retention (shard archival and the
-janitor) is core. Retention of cron results is the
+**Two kinds of retention.** The default build keeps log data until an
+operator removes it, and ships no janitor. Hosted adds expiry through
+the `logdb.Retention` hook. Retention of cron results is the
 implementer's decision.
 
 Consequences:

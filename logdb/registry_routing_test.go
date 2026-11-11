@@ -3,6 +3,7 @@ package logdb
 import (
 	"context"
 	"testing"
+	"time"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
@@ -13,7 +14,7 @@ import (
 // queried: an *UnavailableShardsError fails the test.
 func mustMatch(t *testing.T, reg *ShardRegistry, tr TimeRange, serving map[string]struct{}, tier store.Tier) []*Shard {
 	t.Helper()
-	out, err := reg.MatchingEntries(tr, serving, tier)
+	out, err := reg.MatchingEntries(tr, serving, time.Now().Add(-store.LogRetention(tier)))
 	if err != nil {
 		t.Fatalf("MatchingEntries: %v", err)
 	}

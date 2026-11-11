@@ -271,7 +271,7 @@ func TestUpgradeEndToEnd_ARollUnderLoadLosesNoRowAndFailsNoQuery(t *testing.T) {
 				default:
 				}
 				floor := acked.Load()
-				entries, err := reg.MatchingEntries(TimeRange{Start: now.Add(-time.Hour), End: now.Add(time.Hour)}, nil, store.Tier("pro"))
+				entries, err := reg.MatchingEntries(TimeRange{Start: now.Add(-time.Hour), End: now.Add(time.Hour)}, nil, time.Now().Add(-store.LogRetention(store.Tier("pro"))))
 				if err != nil {
 					fail(fmt.Errorf("routing: %w", err))
 					return

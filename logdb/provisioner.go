@@ -422,8 +422,8 @@ func (p *Provisioner) ResetIngestFailures(id string) {
 // queried (namespaceID, service), then builds the proto ShardDescriptor
 // each compute worker needs to dial or restore them. The serving set is
 // resolved from shard_services (the christen-time stamp) here, then
-// handed to the registry's pure MatchingEntries. tier clamps the time
-// range to the caller's retention window before matching. The
+// handed to the registry's pure MatchingEntries. earliest clamps the time
+// range to the caller's retention window before matching (zero: no limit). The
 // provisioner's own LambdaFunctionURL (set from $LAMBDA_FUNCTION_URL in
 // logdb.Start) is stamped onto archived entries for the cold-shard
 // restore path; live entries get the gRPC address instead.
@@ -440,7 +440,7 @@ func (p *Provisioner) ResetIngestFailures(id string) {
 // holding rows for the query can't be queried (see MatchingEntries). This
 // is the only path coordinator-side code uses to read shard state for
 // queries.
-func (p *Provisioner) ShardDescriptorsFor(ctx context.Context, tr TimeRange, namespaceID uint, service string, tier store.Tier) ([]*pb.ShardDescriptor, error) {
+func (p *Provisioner) ShardDescriptorsFor(ctx context.Context, tr TimeRange, namespaceID uint, service string, earliest time.Time) ([]*pb.ShardDescriptor, error) {
 	var serving map[string]struct{}
 	if namespaceID != 0 && p.config.ShardOps != nil {
 		s, err := p.config.ShardOps.ShardIDsServingService(namespaceID, service)
@@ -450,7 +450,7 @@ func (p *Provisioner) ShardDescriptorsFor(ctx context.Context, tr TimeRange, nam
 			serving = s
 		}
 	}
-	entries, err := p.registry.MatchingEntries(tr, serving, tier)
+	entries, err := p.registry.MatchingEntries(tr, serving, earliest)
 	if err != nil {
 		return nil, err
 	}
@@ -1112,12 +1112,9 @@ func (p *Provisioner) DeleteArchived(shardID string, force bool) error {
 	if st != StateArchived {
 		return fmt.Errorf("shard %s is %s, not ARCHIVED: %w", shardID, st, ErrShardWrongState)
 	}
-	if !force && p.store != nil {
-		if b, found, _ := p.store.GetBucket(bucketID); found {
-			retention := store.LogRetention(store.Tier(b.Tier))
-			if time.Since(windowEnd) < retention {
-				return fmt.Errorf("shard %s is within the %s retention window: %w", shardID, retention, ErrShardWithinRetention)
-			}
+	if !force && p.config.Retention != nil {
+		if err := p.config.Retention.CheckDelete(shardID, bucketID, windowEnd); err != nil {
+			return err
 		}
 	}
 	if err := entry.Fire(context.Background(), TriggerAdminDelete); err != nil {

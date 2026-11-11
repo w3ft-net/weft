@@ -41,7 +41,7 @@ func TestRegistry_MatchingEntries_StaleHeartbeatFailsTheQuery(t *testing.T) {
 		LastHeartbeatAt: time.Now().Add(-5 * time.Minute),
 	})
 
-	matching, err := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt")
+	matching, err := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), time.Now().Add(-store.LogRetention("bolt")))
 	requireUnavailable(t, matching, err, "stale")
 }
 
@@ -279,7 +279,7 @@ func TestAdoptFromHeartbeats_LateSweepKeepsShardLive(t *testing.T) {
 	// query over its window has no answer.
 	hbs.heartbeats = nil
 	prov.adoptFromHeartbeats()
-	got, err := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), "bolt")
+	got, err := reg.MatchingEntries(fullRange, servingFor(reg, "vimgym"), time.Now().Add(-store.LogRetention("bolt")))
 	requireUnavailable(t, got, err, "shard-elsewhere")
 	if !reg.Get("shard-elsewhere").actuallyStale(context.Background()) {
 		t.Fatal("a sweep that saw no beat for 79s should mark the shard stale")
