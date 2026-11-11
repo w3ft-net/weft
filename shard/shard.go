@@ -1145,13 +1145,13 @@ func (s *DuckDBShard) exportKeyedParquet(ctx context.Context, path string, estPa
 			return "", 0, fmt.Errorf("%s: %w", stmt, err)
 		}
 	}
-	if err := createKeyWidths(ctx, conn, s.source(), estParquetBytes); err != nil {
+	if err := createKeyWidths(ctx, conn, s.source(), s.layout, estParquetBytes); err != nil {
 		return "", 0, err
 	}
 	dir := path + "/sized"
 	res, err := conn.ExecContext(ctx, fmt.Sprintf(
 		"COPY (%s) TO '%s' (FORMAT PARQUET, PARTITION_BY (%s), OVERWRITE_OR_IGNORE)",
-		sizedSelect(s.source()), dir, keyedPartitionBy))
+		sizedSelect(s.source(), s.layout), dir, partitionBy(s.layout)))
 	if err != nil {
 		return "", 0, err
 	}

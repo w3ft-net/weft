@@ -12,6 +12,8 @@ import (
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
+
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // CaptureStats reads an archived parquet and returns its per-customer row
@@ -135,7 +137,7 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 		}
 	}
 	if IsSized(dstPath) {
-		if err := copySized(db, keep, strings.TrimSuffix(dstPath, "/**/*.parquet")); err != nil {
+		if err := copySized(db, keep, shape.Legacy(), strings.TrimSuffix(dstPath, "/**/*.parquet")); err != nil {
 			return CompactResult{}, fmt.Errorf("copy survivors to %s: %w", dstPath, err)
 		}
 	} else if _, err := db.Exec(fmt.Sprintf("COPY (%s) TO '%s' (FORMAT PARQUET)", keep, dstPath)); err != nil {
@@ -187,7 +189,7 @@ func lambdaSettings() []string {
 // a whole archive does not fit in a Lambda's disk to sort (a 2.5 GiB real archive
 // needed more than 6.5 GiB of spill); partitionedWriteSettings keeps it from
 // splitting partitions into many files instead.
-func copySized(db *sql.DB, query, dir string) error {
+func copySized(db *sql.DB, query string, layout shape.Layout, dir string) error {
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -219,10 +221,10 @@ func copySized(db *sql.DB, query, dir string) error {
 	if len(drop) > 0 {
 		src = fmt.Sprintf("(SELECT * EXCLUDE (%s) FROM (%s))", strings.Join(drop, ", "), query)
 	}
-	if err := createKeyWidths(ctx, conn, src, 0); err != nil {
+	if err := createKeyWidths(ctx, conn, src, layout, 0); err != nil {
 		return err
 	}
 	_, err = conn.ExecContext(ctx, fmt.Sprintf(
-		"COPY (%s) TO '%s' (FORMAT PARQUET, PARTITION_BY (%s), OVERWRITE_OR_IGNORE)", sizedSelect(src), dir, keyedPartitionBy))
+		"COPY (%s) TO '%s' (FORMAT PARQUET, PARTITION_BY (%s), OVERWRITE_OR_IGNORE)", sizedSelect(src, layout), dir, partitionBy(layout)))
 	return err
 }

@@ -49,10 +49,6 @@ const (
 	parquetToDBRatio = 0.9
 )
 
-// keyedPartitionBy is the partition columns of a sized archive, in directory
-// order.
-const keyedPartitionBy = "customer_id, namespace, service, kind, _w, _part"
-
 // keyedWidths are the time buckets, in minutes, a sized archive gives a key:
 // whole hours, each dividing a week or being whole days, so buckets line up
 // with the calendar. A reader needs no list of them: it reads the width of

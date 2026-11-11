@@ -17,6 +17,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // The ephemeral archive export (docs/plans/ephemeral-archive-export.md): a
@@ -99,7 +101,19 @@ func OpenForExport(id, path string) (*DuckDBShard, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb %q: %w", path, err)
 	}
-	s := &DuckDBShard{id: id, dbPath: path, db: db}
+	// The archive is written in the layout the data was ingested with, which
+	// the volume records in shard.json beside the database. A volume with no
+	// shard.json (a dev database) has the legacy layout.
+	layout := shape.Legacy()
+	ident, err := LoadIdentity(filepath.Dir(path))
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("export database %q: %w", path, err)
+	}
+	if ident != nil {
+		layout = ident.Layout
+	}
+	s := &DuckDBShard{id: id, dbPath: path, db: db, layout: layout}
 	// A database with a table per key must be exported from those tables: its
 	// logs table is an empty template, and exporting that would report success.
 	if err := s.initLayout(false); err != nil {

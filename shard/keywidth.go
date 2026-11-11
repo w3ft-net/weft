@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // parquetPerRawByte estimates the Parquet bytes a row takes per byte of its text
@@ -24,12 +27,26 @@ const rowOverheadBytes = 64
 // connection it will run on. The join treats a missing customer, namespace,
 // service or kind as a value, since rows from before they were filled in have
 // none. The rows are not sorted: see partitionedWriteSettings.
-func sizedSelect(src string) string {
+func sizedSelect(src string, layout shape.Layout) string {
+	var on strings.Builder
+	for i, c := range layout.Columns {
+		fmt.Fprintf(&on, "l.%s IS NOT DISTINCT FROM k.p%d AND ", c.Name, i)
+	}
 	return fmt.Sprintf(`SELECT l.*, k.w AS _w,
 		time_bucket(to_minutes(k.w), l.ts, TIMESTAMP '1970-01-01') AS _part
 		FROM %s l JOIN key_widths k
-		ON l.customer_id IS NOT DISTINCT FROM k.kc AND l.namespace IS NOT DISTINCT FROM k.kn
-		AND l.service IS NOT DISTINCT FROM k.ks AND l.kind IS NOT DISTINCT FROM k.kk`, src)
+		ON %sl.namespace IS NOT DISTINCT FROM k.kn
+		AND l.service IS NOT DISTINCT FROM k.ks AND l.kind IS NOT DISTINCT FROM k.kk`, src, on.String())
+}
+
+// partitionBy is the partition columns of a sized archive, in directory order:
+// the layout's, then the key and the time bucket.
+func partitionBy(layout shape.Layout) string {
+	var b strings.Builder
+	for _, c := range layout.Columns {
+		b.WriteString(c.Name + ", ")
+	}
+	return b.String() + "namespace, service, kind, _w, _part"
 }
 
 // Open files a partitioned write may keep: one per partition being written.
@@ -56,23 +73,35 @@ func partitionedWriteSettings() []string {
 // the bucket width its files should have. A key's share of estParquetBytes is its
 // share of the rows' text, and its span is its own first row to its last. With
 // estParquetBytes 0 the total is estimated from the text (parquetPerRawByte).
-func createKeyWidths(ctx context.Context, conn *sql.Conn, src string, estParquetBytes int64) error {
-	rows, err := conn.QueryContext(ctx, fmt.Sprintf(`SELECT customer_id, namespace, service, kind,
-		sum(length(raw) + %d), min(ts), max(ts) FROM %s GROUP BY ALL`, rowOverheadBytes, src))
+func createKeyWidths(ctx context.Context, conn *sql.Conn, src string, layout shape.Layout, estParquetBytes int64) error {
+	var cols, ddl, marks string
+	for i, c := range layout.Columns {
+		cols += c.Name + ", "
+		ddl += fmt.Sprintf("p%d %s, ", i, c.Type.SQL())
+		marks += "?, "
+	}
+	rows, err := conn.QueryContext(ctx, fmt.Sprintf(`SELECT %snamespace, service, kind,
+		sum(length(raw) + %d), min(ts), max(ts) FROM %s GROUP BY ALL`, cols, rowOverheadBytes, src))
 	if err != nil {
 		return fmt.Errorf("size keys: %w", err)
 	}
+	// key is one log key's partition values, then its namespace, service and
+	// kind; a NULL stays nil.
 	type keyStat struct {
-		customer          sql.NullInt64
-		namespace, svc, k sql.NullString
-		bytes             int64
-		lo, hi            time.Time
+		key    []any
+		bytes  int64
+		lo, hi time.Time
 	}
 	var keys []keyStat
 	var total int64
 	for rows.Next() {
-		var s keyStat
-		if err := rows.Scan(&s.customer, &s.namespace, &s.svc, &s.k, &s.bytes, &s.lo, &s.hi); err != nil {
+		s := keyStat{key: make([]any, len(layout.Columns)+3)}
+		dest := make([]any, 0, len(s.key)+3)
+		for i := range s.key {
+			dest = append(dest, &s.key[i])
+		}
+		dest = append(dest, &s.bytes, &s.lo, &s.hi)
+		if err := rows.Scan(dest...); err != nil {
 			rows.Close()
 			return fmt.Errorf("size keys: %w", err)
 		}
@@ -89,13 +118,13 @@ func createKeyWidths(ctx context.Context, conn *sql.Conn, src string, estParquet
 	}
 
 	if _, err := conn.ExecContext(ctx, `CREATE OR REPLACE TEMP TABLE key_widths
-		(kc BIGINT, kn TEXT, ks TEXT, kk TEXT, w INTEGER)`); err != nil {
+		(`+ddl+`kn TEXT, ks TEXT, kk TEXT, w INTEGER)`); err != nil {
 		return fmt.Errorf("create key_widths: %w", err)
 	}
 	for _, s := range keys {
 		est := int64(float64(estParquetBytes) * float64(s.bytes) / float64(total))
-		if _, err := conn.ExecContext(ctx, `INSERT INTO key_widths VALUES (?, ?, ?, ?, ?)`,
-			s.customer, s.namespace, s.svc, s.k, pickWidth(est, s.hi.Sub(s.lo))); err != nil {
+		args := append(s.key, pickWidth(est, s.hi.Sub(s.lo)))
+		if _, err := conn.ExecContext(ctx, `INSERT INTO key_widths VALUES (`+marks+`?, ?, ?, ?)`, args...); err != nil {
 			return fmt.Errorf("record key width: %w", err)
 		}
 	}
