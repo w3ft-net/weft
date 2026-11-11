@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -71,8 +72,9 @@ func (r *RetentionResolver) Cutoffs(stats []ShardArchiveStat, now time.Time, gra
 			continue // unmapped: preserved, no cutoff
 		}
 		out = append(out, shard.CustomerCutoff{
-			CustomerID: int64(st.OrgID),
-			Cutoff:     now.Add(-retention - grace),
+			CustomerID:      int64(st.OrgID),
+			PartitionValues: shape.Coord{Customer: int64(st.OrgID)}.PartitionValues(),
+			Cutoff:          now.Add(-retention - grace),
 		})
 	}
 	return out
@@ -87,8 +89,9 @@ func (r *RetentionResolver) AllCutoffs(now time.Time, grace time.Duration) []sha
 	out := make([]shard.CustomerCutoff, 0, len(r.tiers))
 	for cust, tier := range r.tiers {
 		out = append(out, shard.CustomerCutoff{
-			CustomerID: int64(cust),
-			Cutoff:     now.Add(-store.LogRetention(tier) - grace),
+			CustomerID:      int64(cust),
+			PartitionValues: shape.Coord{Customer: int64(cust)}.PartitionValues(),
+			Cutoff:          now.Add(-store.LogRetention(tier) - grace),
 		})
 	}
 	return out

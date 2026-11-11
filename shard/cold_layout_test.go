@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shape"
@@ -38,6 +39,39 @@ func exportCustomArchive(t *testing.T) string {
 		t.Fatal(err)
 	}
 	glob, _, err := ds.exportKeyedParquet(context.Background(), dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return glob
+}
+
+// exportTwoPartitionArchive writes a sized archive in customLayout with two
+// partitions: [7 gold] with two rows at 1_700_000_000s and 100s on, and
+// [7 free] with one at 1_700_000_900s.
+func exportTwoPartitionArchive(t *testing.T) string {
+	t.Helper()
+	ds, err := NewDuckDBShard("x", "", WithLayout(customLayout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+	row := func(raw string, sec int64) *pb.LogRow {
+		return &pb.LogRow{Raw: raw, TsUnixNs: sec * 1e9, Namespace: "ns", Service: "svc", Kind: "main"}
+	}
+	ctx := context.Background()
+	for _, b := range []Batch{
+		{Rows: []*pb.LogRow{row("g1", 1_700_000_000), row("g2", 1_700_000_100)}, PartitionValues: []string{"7", "gold"}},
+		{Rows: []*pb.LogRow{row("f1", 1_700_000_900)}, PartitionValues: []string{"7", "free"}},
+	} {
+		if err := ds.IngestBatch(ctx, b, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir() + "/shard.attempt-1"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	glob, _, err := ds.exportKeyedParquet(ctx, dir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,14 +121,68 @@ func TestCompactor_UsesTheArchivesLayout(t *testing.T) {
 	}
 }
 
-// Cutoffs are per customer, so a layout with no customer_id refuses them
-// rather than applying them to a column the archive does not have.
-func TestCompactor_RefusesCutoffsWithoutACustomerColumn(t *testing.T) {
-	glob := exportCustomArchive(t)
+// A cutoff names the partition it applies to by values, in layout order, so
+// retention works in any layout; a partition with no cutoff is kept whole.
+func TestCompactor_CutoffsByPartitionValues(t *testing.T) {
+	glob := exportTwoPartitionArchive(t)
+	c := LocalCompactor{Layout: customLayout}
+	after := time.Unix(1_700_000_500, 0)
+	res, err := c.Rewrite(glob, t.TempDir()+"/o/sized/**/*.parquet", []CustomerCutoff{
+		{PartitionValues: []string{"7", "gold"}, Cutoff: after},
+	})
+	if err != nil {
+		t.Fatalf("Rewrite: %v", err)
+	}
+	if res.RowsDeleted != 2 || res.RowsKept != 1 {
+		t.Fatalf("deleted %d kept %d, want the gold partition's 2 rows deleted and free's 1 kept", res.RowsDeleted, res.RowsKept)
+	}
+	if len(res.Stats) != 1 || !reflect.DeepEqual(res.Stats[0].PartitionValues, []string{"7", "free"}) {
+		t.Fatalf("survivor stats = %+v, want only [7 free]", res.Stats)
+	}
+}
+
+// A cutoff that names no partition cannot be applied to a layout that has no
+// customer_id, and says so.
+func TestCompactor_RefusesACutoffItCannotPlace(t *testing.T) {
+	glob := exportTwoPartitionArchive(t)
 	c := LocalCompactor{Layout: customLayout}
 	_, err := c.Rewrite(glob, t.TempDir()+"/o/sized/**/*.parquet", []CustomerCutoff{{CustomerID: 7}})
-	if err == nil || !strings.Contains(err.Error(), "customer_id") {
-		t.Fatalf("err = %v, want a refusal naming customer_id", err)
+	if err == nil || !strings.Contains(err.Error(), "partition values") {
+		t.Fatalf("err = %v, want a refusal naming partition values", err)
+	}
+}
+
+// A layout with no partition columns has one partition, and a cutoff with no
+// values applies to all of it.
+func TestCompactor_CutoffInALayoutWithNoColumns(t *testing.T) {
+	none := shape.NewLayout()
+	ds, err := NewDuckDBShard("n", "", WithLayout(none))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+	rows := []*pb.LogRow{{Raw: "a", TsUnixNs: 1_700_000_000 * 1e9, Namespace: "ns", Service: "svc", Kind: "main"}}
+	// A layout with no columns has no values to send: nil is complete.
+	if err := ds.IngestBatch(context.Background(), Batch{Rows: rows}, nil); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir() + "/shard.attempt-1"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	glob, _, err := ds.exportKeyedParquet(context.Background(), dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := LocalCompactor{Layout: none}
+	res, err := c.Rewrite(glob, t.TempDir()+"/o/sized/**/*.parquet", []CustomerCutoff{
+		{PartitionValues: []string{}, Cutoff: time.Unix(1_700_000_500, 0)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RowsDeleted != 1 || res.RowsKept != 0 {
+		t.Fatalf("deleted %d kept %d, want the one row deleted", res.RowsDeleted, res.RowsKept)
 	}
 }
 

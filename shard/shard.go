@@ -569,7 +569,8 @@ func (s *DuckDBShard) IngestBatch(ctx context.Context, b Batch, rec IngestRecord
 
 	var partition []any
 	switch {
-	case b.PartitionValues != nil:
+	case b.PartitionValues != nil || len(s.layout.Columns) == 0:
+		// A layout with no partition columns needs no values: nil is complete.
 		var perr error
 		if partition, perr = s.layout.Parse(b.PartitionValues); perr != nil {
 			return wrapIngestError(s.id, perr, rec)
@@ -663,6 +664,7 @@ func (s *DuckDBShard) ingestPerKey(ctx context.Context, partition []any, rows []
 // other layout.
 func appendRows(dc driver.Conn, table string, layout shape.Layout, partition []any, rows []*pb.LogRow) error {
 	args := make([]driver.Value, 0, len(baseColumns)+len(layout.Columns))
+	fromRows := partition == nil
 	var constants []driver.Value
 	for _, v := range partition {
 		constants = append(constants, v)
@@ -722,7 +724,7 @@ func appendRows(dc driver.Conn, table string, layout shape.Layout, partition []a
 			lineNo,
 		}
 		args = append(args[:0], base[:]...)
-		if constants == nil {
+		if fromRows {
 			args = append(args, r.CustomerId) // the legacy layout's one partition column
 		} else {
 			args = append(args, constants...)

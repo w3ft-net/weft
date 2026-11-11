@@ -42,8 +42,25 @@ func CaptureStats(parquetPath string, layout shape.Layout, s3cfg *S3Config) ([]C
 // the janitor protects an unmapped customer (no active subscription)
 // from deletion. See docs/plans/retention-janitor.md.
 type CustomerCutoff struct {
-	CustomerID int64     `json:"customer_id"`
-	Cutoff     time.Time `json:"cutoff"`
+	CustomerID int64 `json:"customer_id"`
+	// PartitionValues name the partition the cutoff applies to, as text in
+	// layout order. Absent from an older caller, which names a customer: the
+	// legacy layout reads CustomerID instead.
+	PartitionValues []string  `json:"partition_values,omitempty"`
+	Cutoff          time.Time `json:"cutoff"`
+}
+
+// values are the partition values the cutoff names under layout.
+func (c CustomerCutoff) values(layout shape.Layout) ([]string, error) {
+	switch {
+	case c.PartitionValues != nil:
+		return c.PartitionValues, nil
+	case layout.IsLegacy():
+		return []string{strconv.FormatInt(c.CustomerID, 10)}, nil
+	case len(layout.Columns) == 0:
+		return nil, nil // the one partition
+	}
+	return nil, fmt.Errorf("a cutoff must name partition values under layout %s, which has no customer_id", layout.Fingerprint)
 }
 
 // CompactResult reports the outcome of RewriteRetention. JSON-tagged: it
@@ -74,12 +91,6 @@ type CompactResult struct {
 // When no rows survive, the result's OutputPath is "" and nothing is
 // written; the caller deletes the source and moves the shard to GONE.
 func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, layout shape.Layout, s3cfg *S3Config) (CompactResult, error) {
-	// Cutoffs are per customer, which only the legacy layout has. A cutoff by
-	// another layout's partition values is a later change; until then it is
-	// refused, not applied to a column the archive does not have.
-	if len(cutoffs) > 0 && !layout.IsLegacy() {
-		return CompactResult{}, fmt.Errorf("retention cutoffs are per customer, and layout %s has no customer_id", layout.Fingerprint)
-	}
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return CompactResult{}, fmt.Errorf("open duckdb: %w", err)
@@ -92,23 +103,37 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, layout 
 	}
 
 	src := ParquetReadExpr(srcPath, layout)
-	keep := fmt.Sprintf("SELECT l.* FROM %s l", src)
-	if layout.IsLegacy() {
-		if _, err := db.Exec("CREATE TEMP TABLE cutoffs (customer_id BIGINT, cutoff TIMESTAMP)"); err != nil {
-			return CompactResult{}, fmt.Errorf("create cutoffs: %w", err)
-		}
-		for _, c := range cutoffs {
-			if _, err := db.Exec("INSERT INTO cutoffs VALUES (?, ?)", c.CustomerID, c.Cutoff); err != nil {
-				return CompactResult{}, fmt.Errorf("insert cutoff %d: %w", c.CustomerID, err)
-			}
-		}
-		// Keep a row when its customer has no cutoff (LEFT JOIN miss → preserve)
-		// or its ts is still within retention. A NULL customer never matches a
-		// cutoff, so it is preserved too.
-		keep = fmt.Sprintf(
-			"SELECT l.* FROM %s l LEFT JOIN cutoffs c ON l.customer_id = c.customer_id "+
-				"WHERE c.customer_id IS NULL OR l.ts >= c.cutoff", src)
+	// One cutoffs row per partition, its columns typed as the layout's. hit is
+	// always true, so a LEFT JOIN miss is detectable in a layout with no
+	// partition columns too.
+	var ddl, on, marks string
+	for i, col := range layout.Columns {
+		ddl += fmt.Sprintf("p%d %s, ", i, col.Type.SQL())
+		on += fmt.Sprintf("l.%s = c.p%d AND ", col.Name, i)
+		marks += "?, "
 	}
+	if _, err := db.Exec("CREATE TEMP TABLE cutoffs (" + ddl + "hit BOOLEAN, cutoff TIMESTAMP)"); err != nil {
+		return CompactResult{}, fmt.Errorf("create cutoffs: %w", err)
+	}
+	for _, c := range cutoffs {
+		vals, err := c.values(layout)
+		if err != nil {
+			return CompactResult{}, err
+		}
+		args, err := layout.Parse(vals)
+		if err != nil {
+			return CompactResult{}, fmt.Errorf("cutoff %v: %w", vals, err)
+		}
+		args = append(args, true, c.Cutoff)
+		if _, err := db.Exec("INSERT INTO cutoffs VALUES ("+marks+"?, ?)", args...); err != nil {
+			return CompactResult{}, fmt.Errorf("insert cutoff %v: %w", vals, err)
+		}
+	}
+	// Keep a row when its partition has no cutoff (LEFT JOIN miss → preserve)
+	// or its ts is still within retention. A NULL partition value never matches
+	// a cutoff, so those rows are preserved too.
+	keep := fmt.Sprintf(
+		"SELECT l.* FROM %s l LEFT JOIN cutoffs c ON %strue WHERE c.hit IS NULL OR l.ts >= c.cutoff", src, on)
 
 	var total, kept int64
 	if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", src)).Scan(&total); err != nil {
