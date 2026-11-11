@@ -3,9 +3,44 @@ package shard
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape"
 )
+
+func TestLoadIdentity_LegacyVolumeAdoptsCustomerLayout(t *testing.T) {
+	dir := t.TempDir()
+	legacy := `{"shard_id":"s1","window_start":"2026-04-13T00:00:00Z","window_end":"2026-04-20T00:00:00Z","apps":["weft"]}`
+	if err := os.WriteFile(filepath.Join(dir, "shard.json"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id, err := LoadIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := id.Layout, shape.Legacy(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("layout = %+v, want legacy %+v", got, want)
+	}
+}
+
+func TestSaveLoadIdentity_LayoutRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	lay := shape.NewLayout(
+		shape.LayoutColumn{Name: "region", Type: shape.TypeString, Role: shape.RolePartition},
+	)
+	if err := SaveIdentity(dir, &Identity{ShardID: "s1", Layout: lay}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := LoadIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(id.Layout, lay) {
+		t.Fatalf("layout = %+v, want %+v", id.Layout, lay)
+	}
+}
 
 func TestLoadIdentity_Missing(t *testing.T) {
 	dir := t.TempDir()

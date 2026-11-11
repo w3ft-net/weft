@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // identityFilename is the on-disk filename for a shard's durable identity.
@@ -22,6 +24,11 @@ type Identity struct {
 	WindowEnd      time.Time `json:"window_end"`
 	Apps           []string  `json:"apps"`
 	HeartbeatToken string    `json:"heartbeat_token,omitempty"`
+	// Layout is the partition columns this volume's data is stored in. A
+	// volume written before layouts existed has none on disk and is adopted
+	// as shape.Legacy() on load; an archive is always written in the layout
+	// its data was ingested with.
+	Layout shape.Layout `json:"layout"`
 }
 
 // LoadIdentity reads shard.json from dataDir. Returns (nil, nil) when the
@@ -45,6 +52,9 @@ func LoadIdentity(dataDir string) (*Identity, error) {
 	}
 	if id.ShardID == "" {
 		return nil, fmt.Errorf("%s: shard_id empty", path)
+	}
+	if len(id.Layout.Columns) == 0 {
+		id.Layout = shape.Legacy()
 	}
 	return &id, nil
 }
