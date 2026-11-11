@@ -31,9 +31,9 @@ func TestIngestBatch_SplitsMultiLineEvents(t *testing.T) {
 	_, ch := coord.TailFanout.Subscribe(ctx, &coordinator.RowMatcher{Coords: shape.Set{{Customer: int64(cust.ID), Namespace: shape.Value("lines")}}})
 
 	json := "{\n \"a\": 1\n}"
-	srv.ingestBatch(context.Background(), []*pb.LogRow{
-		{Namespace: "lines", Service: "api", CustomerId: int64(cust.ID), Raw: "Traceback:\r\n  File x\r\nValueError\r\n", TsUnixNs: 5},
-		{Namespace: "lines", Service: "api", CustomerId: int64(cust.ID), Raw: json, PayloadJson: []byte(`{"a":1}`), TsUnixNs: 6},
+	srv.ingestBatch(context.Background(), shape.Added{Customer: int64(cust.ID)}, []*pb.LogRow{
+		{Namespace: "lines", Service: "api", Raw: "Traceback:\r\n  File x\r\nValueError\r\n", TsUnixNs: 5},
+		{Namespace: "lines", Service: "api", Raw: json, PayloadJson: []byte(`{"a":1}`), TsUnixNs: 6},
 	})
 
 	want := []string{"Traceback:", "  File x", "ValueError", json}
@@ -44,6 +44,9 @@ func TestIngestBatch_SplitsMultiLineEvents(t *testing.T) {
 	for i, w := range want {
 		if buffered[i].Raw != w {
 			t.Fatalf("buffer row %d = %q, want %q", i, buffered[i].Raw, w)
+		}
+		if buffered[i].Customer != int64(cust.ID) {
+			t.Fatalf("buffer row %d belongs to customer %d, want %d", i, buffered[i].Customer, cust.ID)
 		}
 		select {
 		case r := <-ch:
@@ -80,11 +83,11 @@ func TestIngestBatch_JSONRawFillsPayload(t *testing.T) {
 	srv := &Server{Coord: coord, Store: tx}
 
 	record := `{"coordinator_id":"i-1","goroutines":244}`
-	srv.ingestBatch(context.Background(), []*pb.LogRow{
-		{Namespace: "weft", Service: "coordinator", Kind: "runtime", CustomerId: int64(cust.ID), Raw: record, TsUnixNs: 1},
-		{Namespace: "weft", Service: "coordinator", CustomerId: int64(cust.ID), Raw: `[1,2]`, TsUnixNs: 2},
-		{Namespace: "weft", Service: "coordinator", CustomerId: int64(cust.ID), Raw: `{not json`, TsUnixNs: 3},
-		{Namespace: "weft", Service: "coordinator", CustomerId: int64(cust.ID), Raw: `level=info {"a":1}`, PayloadJson: []byte(`{"a":1}`), TsUnixNs: 4},
+	srv.ingestBatch(context.Background(), shape.Added{Customer: int64(cust.ID)}, []*pb.LogRow{
+		{Namespace: "weft", Service: "coordinator", Kind: "runtime", Raw: record, TsUnixNs: 1},
+		{Namespace: "weft", Service: "coordinator", Raw: `[1,2]`, TsUnixNs: 2},
+		{Namespace: "weft", Service: "coordinator", Raw: `{not json`, TsUnixNs: 3},
+		{Namespace: "weft", Service: "coordinator", Raw: `level=info {"a":1}`, PayloadJson: []byte(`{"a":1}`), TsUnixNs: 4},
 	})
 
 	want := []string{record, "", "", `{"a":1}`}

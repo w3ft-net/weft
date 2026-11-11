@@ -1134,7 +1134,10 @@ type LogRow struct {
 	Instance    string `protobuf:"bytes,6,opt,name=instance,proto3" json:"instance,omitempty"` // hostname of the emitting machine
 	PayloadJson []byte `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
 	// customer_id is the owning org's id, stamped by the coordinator from the
-	// authenticated token (row-level security). Senders never set it.
+	// authenticated token (row-level security). Senders never set it. Only
+	// peers that predate IngestRequest.partition_values read it: the coordinator
+	// itself carries the customer beside the row, and stops stamping this once
+	// every shard and coordinator runs a build that does.
 	CustomerId   int64  `protobuf:"varint,26,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"`
 	Deployment   string `protobuf:"bytes,10,opt,name=deployment,proto3" json:"deployment,omitempty"`                         // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
 	Env          string `protobuf:"bytes,11,opt,name=env,proto3" json:"env,omitempty"`                                       // deployment environment (token-derived)

@@ -53,7 +53,7 @@ func seedWriter(c *Coordinator, sh *countingShard, state logdb.ShardState, phase
 // loop round-robins each over the writable candidates.
 func writeBatches(c *Coordinator, n int) {
 	for i := 0; i < n; i++ {
-		c.Ingest.Write(dlqTestRows("weft/coordinator", 1))
+		c.Ingest.Write(dlqIngestRows("weft/coordinator", 1))
 		time.Sleep(2 * time.Millisecond)
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/graybeardcorp/weft/compute"
-	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // brokerStream wraps a TailBroker subscription as a LineStream. Each
@@ -12,7 +11,7 @@ import (
 // skipped; multi-line filter output is queued and emitted across
 // consecutive Next calls. Close releases the broker subscription.
 type brokerStream struct {
-	ch     <-chan *pb.LogRow
+	ch     <-chan Row
 	filter LiveFilter
 	unsub  func()
 	queue  []compute.Line

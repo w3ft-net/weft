@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -41,13 +42,13 @@ func NewIngestionErrorRecorder(s *store.Store) *IngestionErrorRecorder {
 }
 
 // Record queues an ingestion error for async persistence.
-func (r *IngestionErrorRecorder) Record(shardID, errMsg string, rows []*pb.LogRow, dlqPath string) {
+func (r *IngestionErrorRecorder) Record(shardID, errMsg string, added shape.Added, rows []*pb.LogRow, dlqPath string) {
 	if r == nil {
 		return
 	}
 
 	apps := distinctStrings(rows, func(r *pb.LogRow) string { return shard.JoinApp(r.Namespace, r.Service, r.Kind) })
-	customers := distinctStrings(rows, func(r *pb.LogRow) string { return strconv.FormatInt(r.CustomerId, 10) })
+	customers := []string{strconv.FormatInt(added.Customer, 10)}
 
 	select {
 	case r.ch <- ingestionError{

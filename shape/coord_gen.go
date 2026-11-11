@@ -27,6 +27,13 @@ type Key struct {
 	Customer  int64
 }
 
+// Added holds the values of the columns this shape adds to a LogRow. They are
+// never in the LogRow: the coordinator stamps them from the ingest token and
+// carries them beside the row.
+type Added struct {
+	Customer int64
+}
+
 // Matches reports whether any tuple admits the row. The live matcher and the
 // SQL backend must agree on this for every row.
 //

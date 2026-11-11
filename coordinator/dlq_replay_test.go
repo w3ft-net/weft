@@ -43,12 +43,12 @@ func fullRow(i int) *pb.LogRow {
 func TestDLQ_ReplayRestoresEveryRowExactly(t *testing.T) {
 	d, putter := testDLQ()
 	want := []*pb.LogRow{fullRow(1), fullRow(2), fullRow(3)}
-	if d.Write(want) == "" {
+	if d.Write(dlqAdded, want) == "" {
 		t.Fatal("Write failed")
 	}
 
-	var got []*pb.LogRow
-	n, err := d.Replay(context.Background(), func(rows []*pb.LogRow) { got = append(got, rows...) })
+	var got []Row
+	n, err := d.Replay(context.Background(), func(rows []Row) { got = append(got, rows...) })
 	if err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
@@ -56,8 +56,8 @@ func TestDLQ_ReplayRestoresEveryRowExactly(t *testing.T) {
 		t.Fatalf("replayed %d rows (sink saw %d), want %d", n, len(got), len(want))
 	}
 	for i := range want {
-		if !proto.Equal(want[i], got[i]) {
-			t.Errorf("row %d changed in the DLQ:\n want %v\n  got %v", i, want[i], got[i])
+		if !proto.Equal(want[i], got[i].LogRow) || got[i].Added != dlqAdded {
+			t.Errorf("row %d changed in the DLQ:\n want %v %+v\n  got %v %+v", i, want[i], dlqAdded, got[i].LogRow, got[i].Added)
 		}
 	}
 	if live := putter.Live(); live != 0 {
@@ -69,10 +69,10 @@ func TestDLQ_ReplayRestoresEveryRowExactly(t *testing.T) {
 // deleted after the sink has taken its rows.
 func TestDLQ_ReplayKeepsObjectUntilSinkTookRows(t *testing.T) {
 	d, putter := testDLQ()
-	d.Write([]*pb.LogRow{fullRow(1)})
+	d.Write(dlqAdded, []*pb.LogRow{fullRow(1)})
 
 	var seenLive int
-	_, err := d.Replay(context.Background(), func([]*pb.LogRow) { seenLive = putter.Live() })
+	_, err := d.Replay(context.Background(), func([]Row) { seenLive = putter.Live() })
 	if err != nil {
 		t.Fatalf("Replay: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestDLQ_RowsFailedWhileDownLandOnceAfterRecovery(t *testing.T) {
 	defer cancel()
 	c.StartDrain(ctx)
 
-	c.Ingest.Write(dlqTestRows("weft/coordinator", 7))
+	c.Ingest.Write(dlqIngestRows("weft/coordinator", 7))
 	if err := waitFor(time.Second, func() bool { return putter.Live() == 1 }); err != nil {
 		t.Fatalf("rows never reached the DLQ: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestDLQ_RowsFailedWhileDownLandOnceAfterRecovery(t *testing.T) {
 func TestStartDLQReplay_ReplaysOnlyWhileLeader(t *testing.T) {
 	dlq, putter := testDLQ()
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, DLQ: dlq})
-	dlq.Write(dlqTestRows("weft/coordinator", 4))
+	dlq.Write(dlqAdded, dlqTestRows("weft/coordinator", 4))
 
 	var leader atomic.Bool
 	ctx, cancel := context.WithCancel(context.Background())

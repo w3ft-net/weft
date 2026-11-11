@@ -12,7 +12,7 @@ import (
 // ingest volume up to capacity × row size, which OOMs the coordinator.
 func TestRingBufferDrainReleasesRows(t *testing.T) {
 	r := NewRingBuffer(8)
-	r.Write([]*pb.LogRow{{Raw: "a"}, {Raw: "b"}, {Raw: "c"}})
+	r.Write([]Row{{LogRow: &pb.LogRow{Raw: "a"}}, {LogRow: &pb.LogRow{Raw: "b"}}, {LogRow: &pb.LogRow{Raw: "c"}}})
 
 	if got := r.Drain(2); len(got) != 2 {
 		t.Fatalf("Drain(2) returned %d rows", len(got))
@@ -22,7 +22,7 @@ func TestRingBufferDrainReleasesRows(t *testing.T) {
 	}
 
 	for i, row := range r.buf {
-		if row != nil {
+		if row.LogRow != nil {
 			t.Errorf("slot %d still retains drained row %q", i, row.Raw)
 		}
 	}
@@ -32,9 +32,9 @@ func TestRingBufferDrainReleasesRows(t *testing.T) {
 // unread ones intact.
 func TestRingBufferDrainReleasesRowsAcrossWrap(t *testing.T) {
 	r := NewRingBuffer(4)
-	r.Write([]*pb.LogRow{{Raw: "1"}, {Raw: "2"}, {Raw: "3"}})
+	r.Write([]Row{{LogRow: &pb.LogRow{Raw: "1"}}, {LogRow: &pb.LogRow{Raw: "2"}}, {LogRow: &pb.LogRow{Raw: "3"}}})
 	r.Drain(3)
-	r.Write([]*pb.LogRow{{Raw: "4"}, {Raw: "5"}, {Raw: "6"}}) // wraps: slots 3,0,1
+	r.Write([]Row{{LogRow: &pb.LogRow{Raw: "4"}}, {LogRow: &pb.LogRow{Raw: "5"}}, {LogRow: &pb.LogRow{Raw: "6"}}}) // wraps: slots 3,0,1
 
 	got := r.Drain(2)
 	if len(got) != 2 || got[0].Raw != "4" || got[1].Raw != "5" {
@@ -43,7 +43,7 @@ func TestRingBufferDrainReleasesRowsAcrossWrap(t *testing.T) {
 
 	var retained []string
 	for _, row := range r.buf {
-		if row != nil {
+		if row.LogRow != nil {
 			retained = append(retained, row.Raw)
 		}
 	}

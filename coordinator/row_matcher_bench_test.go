@@ -11,17 +11,16 @@ import (
 
 // liveRows is a stream like the coordinator's: rows from many customers, of
 // which a subscription wants one customer's.
-func liveRows() []*pb.LogRow {
-	rows := make([]*pb.LogRow, 0, 1000)
+func liveRows() []Row {
+	rows := make([]Row, 0, 1000)
 	for i := 0; i < 1000; i++ {
-		rows = append(rows, &pb.LogRow{
-			CustomerId: int64(1 + i%50),
-			Namespace:  fmt.Sprintf("ns%d", i%4),
-			Service:    fmt.Sprintf("svc%d", i%8),
-			Kind:       "main",
-			Env:        "prod",
-			Raw:        "2026-11-11T10:00:00Z INFO request path=/api/v1/items status=200",
-		})
+		rows = append(rows, Row{LogRow: &pb.LogRow{
+			Namespace: fmt.Sprintf("ns%d", i%4),
+			Service:   fmt.Sprintf("svc%d", i%8),
+			Kind:      "main",
+			Env:       "prod",
+			Raw:       "2026-11-11T10:00:00Z INFO request path=/api/v1/items status=200",
+		}, Added: shape.Added{Customer: int64(1 + i%50)}})
 	}
 	return rows
 }

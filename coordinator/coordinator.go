@@ -457,6 +457,9 @@ type drainKey struct {
 	service    string
 }
 
+// added is the added columns every row under the key shares.
+func (k drainKey) added() shape.Added { return shape.Added{Customer: k.customerID} }
+
 // ingestNamespaceID resolves (customer, namespace) to namespaces.id for
 // the ingest hot path, memoizing in nsIDCache so the per-batch drain
 // grouping keeps the DB lookup off the per-row path. Only non-zero

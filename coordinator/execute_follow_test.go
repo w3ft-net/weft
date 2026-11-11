@@ -12,6 +12,7 @@ import (
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // TestExecuteFollow_HistoricalThenBroker pins the splice contract:
@@ -46,11 +47,10 @@ func TestExecuteFollow_HistoricalThenBroker(t *testing.T) {
 	// Broadcast a live row that matches the follow's app filter
 	// (vimgym). The brokerStream's filter is BuildLiveFilter(plan),
 	// which for `tail vimgym.log` is a passthrough scoped to vimgym.
-	c.Tail.Broadcast([]*pb.LogRow{{
-		Raw:        "2026-03-28T12:00:00 INFO vimgym i-001 live broadcast",
-		Namespace:  "vimgym",
-		CustomerId: 1,
-	}})
+	c.Tail.Broadcast([]Row{{LogRow: &pb.LogRow{
+		Raw:       "2026-03-28T12:00:00 INFO vimgym i-001 live broadcast",
+		Namespace: "vimgym",
+	}, Added: shape.Added{Customer: 1}}})
 
 	// Read one more line — should be the broadcast row.
 	readCtx, readCancel := context.WithTimeout(ctx, 2*time.Second)
@@ -88,13 +88,12 @@ func TestExecuteFollow_RelativeSourceResolvesAgainstCwd(t *testing.T) {
 	// Drain the (empty) historical phase; the broker takes over after.
 	drainHistorical(t, res.Stream, 500*time.Millisecond)
 
-	c.Tail.Broadcast([]*pb.LogRow{{
-		Raw:        "live gamestate row",
-		Namespace:  "vimgym",
-		Service:    "api",
-		Kind:       "gamestate",
-		CustomerId: 1,
-	}})
+	c.Tail.Broadcast([]Row{{LogRow: &pb.LogRow{
+		Raw:       "live gamestate row",
+		Namespace: "vimgym",
+		Service:   "api",
+		Kind:      "gamestate",
+	}, Added: shape.Added{Customer: 1}}})
 
 	readCtx, readCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer readCancel()
@@ -137,9 +136,9 @@ func TestExecuteFollow_DoesNotLeakOtherTenants(t *testing.T) {
 			}
 			drainHistorical(t, res.Stream, 500*time.Millisecond)
 
-			c.Tail.Broadcast([]*pb.LogRow{
-				{Raw: "OTHER TENANT SECRET", Namespace: "vimgym", CustomerId: 12},
-				{Raw: "my own row", Namespace: "vimgym", CustomerId: 1},
+			c.Tail.Broadcast([]Row{
+				{LogRow: &pb.LogRow{Raw: "OTHER TENANT SECRET", Namespace: "vimgym"}, Added: shape.Added{Customer: 12}},
+				{LogRow: &pb.LogRow{Raw: "my own row", Namespace: "vimgym"}, Added: shape.Added{Customer: 1}},
 			})
 
 			readCtx, readCancel := context.WithTimeout(ctx, 2*time.Second)

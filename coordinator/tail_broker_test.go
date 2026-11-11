@@ -17,17 +17,19 @@ func tailSet(customers ...int64) *RowMatcher {
 	return &RowMatcher{Coords: s}
 }
 
-func tailRow(customer int64, raw string) *pb.LogRow {
-	return &pb.LogRow{CustomerId: customer, Namespace: "ns", Service: "svc", Kind: "main", Raw: raw}
+// tailRow is customer's row. The customer is an added column: the LogRow does
+// not carry it.
+func tailRow(customer int64, raw string) Row {
+	return Row{LogRow: &pb.LogRow{Namespace: "ns", Service: "svc", Kind: "main", Raw: raw}, Added: shape.Added{Customer: customer}}
 }
 
 // received is what a subscription's channel holds now.
-func received(ch <-chan *pb.LogRow) []string {
+func received(ch <-chan Row) []string {
 	var out []string
 	for {
 		select {
 		case r := <-ch:
-			if r == nil {
+			if r.LogRow == nil {
 				return out
 			}
 			out = append(out, r.Raw)
@@ -47,12 +49,12 @@ func TestTailBroker_DeliversOnlyWhatEachSubscriptionAdmits(t *testing.T) {
 	_, ch12 := b.Subscribe(ctx, tailSet(1, 2))   // spans two customers
 	_, chNone := b.Subscribe(ctx, &RowMatcher{}) // an empty set admits nothing
 
-	b.Broadcast([]*pb.LogRow{
+	b.Broadcast([]Row{
 		tailRow(1, "a1"), tailRow(2, "b1"), tailRow(3, "c1"), tailRow(1, "a2"), tailRow(9, "z"),
 	})
 
 	for name, tc := range map[string]struct {
-		ch   <-chan *pb.LogRow
+		ch   <-chan Row
 		want []string
 	}{
 		"customer 1":        {ch1, []string{"a1", "a2"}},
@@ -74,8 +76,10 @@ func TestTailBroker_AdmitsByTheWholeTupleOnceEach(t *testing.T) {
 		{Customer: 3, Service: shape.Value("a")},
 		{Customer: 3, Service: shape.Value("b")},
 	}})
-	row := func(svc, raw string) *pb.LogRow { return &pb.LogRow{CustomerId: 3, Service: svc, Raw: raw} }
-	b.Broadcast([]*pb.LogRow{row("a", "1"), row("c", "2"), row("b", "3")})
+	row := func(svc, raw string) Row {
+		return Row{LogRow: &pb.LogRow{Service: svc, Raw: raw}, Added: shape.Added{Customer: 3}}
+	}
+	b.Broadcast([]Row{row("a", "1"), row("c", "2"), row("b", "3")})
 	if got := received(ch); !slices.Equal(got, []string{"1", "3"}) {
 		t.Fatalf("got %v, want [1 3]", got)
 	}
@@ -86,7 +90,7 @@ func TestTailBroker_UnsubscribeStopsDelivery(t *testing.T) {
 	id, ch := b.Subscribe(context.Background(), tailSet(1))
 	_, other := b.Subscribe(context.Background(), tailSet(1))
 	b.Unsubscribe(id)
-	b.Broadcast([]*pb.LogRow{tailRow(1, "x")})
+	b.Broadcast([]Row{tailRow(1, "x")})
 	if _, open := <-ch; open {
 		t.Fatal("an unsubscribed channel is still open")
 	}

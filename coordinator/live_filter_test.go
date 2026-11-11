@@ -81,7 +81,7 @@ func runFilterCase(t *testing.T, pipeline string, row *pb.LogRow, want []string)
 		t.Fatalf("Plan(%q): %v", pipeline, err)
 	}
 	filter := BuildLiveFilter(plan)
-	got := filter(row)
+	got := filter(Row{LogRow: row})
 	if len(got) != len(want) {
 		t.Fatalf("filter(%q on %q):\n  got:  %v\n  want: %v",
 			pipeline, row.Raw, got, want)

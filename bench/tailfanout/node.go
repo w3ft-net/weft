@@ -18,6 +18,7 @@ import (
 
 	"github.com/graybeardcorp/weft/coordinator"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // Topic is the routing key both candidates fan rows out by — the
@@ -87,13 +88,13 @@ func NewNode(id string, tr Transport) *Node {
 		tr:     tr,
 		refs:   make(map[Topic]int),
 	}
-	tr.SetDeliverFunc(broker.Broadcast)
+	tr.SetDeliverFunc(func(rows []*pb.LogRow) { broker.Broadcast(withCustomer(rows)) })
 	return n
 }
 
 // Subscribe registers a local tail subscription and, on the first
 // subscriber for a topic, announces interest to peers.
-func (n *Node) Subscribe(ctx context.Context, matcher *coordinator.RowMatcher) (uint64, <-chan *pb.LogRow) {
+func (n *Node) Subscribe(ctx context.Context, matcher *coordinator.RowMatcher) (uint64, <-chan coordinator.Row) {
 	id, ch := n.Broker.Subscribe(ctx, matcher)
 
 	t := topicFor(matcher)
@@ -136,8 +137,18 @@ func (n *Node) Unsubscribe(id uint64, matcher *coordinator.RowMatcher) {
 // ingestBatch's Tail.Broadcast call) and fans them out to interested
 // peers.
 func (n *Node) Publish(rows []*pb.LogRow) {
-	n.Broker.Broadcast(rows)
+	n.Broker.Broadcast(withCustomer(rows))
 	n.tr.Publish(rows)
+}
+
+// withCustomer wraps rows whose customer is on the wire in customer_id, as this
+// harness's candidate transport carries them.
+func withCustomer(rows []*pb.LogRow) []coordinator.Row {
+	out := make([]coordinator.Row, len(rows))
+	for i, r := range rows {
+		out[i] = coordinator.Row{LogRow: r, Added: shape.Added{Customer: r.CustomerId}}
+	}
+	return out
 }
 
 // Close releases the node's transport resources.

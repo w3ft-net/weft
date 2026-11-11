@@ -368,15 +368,19 @@ The deploy order is coordinator, then compute, then shard, and wire
 changes are additive, so old receivers must stay correct.
 
 1. **Additive.** The new coordinator sends both `LogRow.customer_id`
-   (26) *and* the batch `table_key`/`partition_values`. New shards
-   prefer the batch values. Old shards keep reading tag 26.
-2. **Cut over.** Once every live shard reports the new version, the
-   coordinator stops setting tag 26. The public proto keeps
-   `reserved 26;` by number only.
-3. **Dead-letter queue.** Stored entries are protobuf rows with tag 26
-   already stamped (`coordinator/dlq.go:112`). New entries store the
-   stamp alongside the row. Legacy entries are decoded by a legacy row
-   type that lives in the hosted repo, until the queue holds none.
+   (26) *and* the batch `partition_values`. New shards prefer the batch
+   values, for table names and field facts too: the rest of a key is
+   columns of the row. Old shards keep reading tag 26. The coordinator
+   carries the added columns beside each row (`coordinator.Row`) and
+   reads tag 26 nowhere but at its two compatibility edges, a legacy
+   dead-letter line and a peer coordinator's tail fan-out.
+2. **Cut over.** Once every shard and coordinator runs step 1's build,
+   delete the one stamp in the ingest stream handler. The public proto
+   keeps `reserved 26;` by number only.
+3. **Dead-letter queue.** New entries store the added columns beside the
+   row (`coordinator/dlq.go`). Legacy entries, bare rows with tag 26,
+   are decoded by a legacy reader that lives in the hosted repo, until
+   the queue holds none.
 
 A cross-version test covers the new coordinator with old shards, and
 the new coordinator with new shards, for both ingest and archive.

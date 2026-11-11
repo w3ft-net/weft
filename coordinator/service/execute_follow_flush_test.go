@@ -12,8 +12,9 @@ import (
 	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
-	"github.com/graybeardcorp/weft/store"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
+	"github.com/graybeardcorp/weft/store"
 )
 
 // flushCaptureStream is notice_wire_test.go's captureStream, made safe
@@ -100,10 +101,10 @@ func TestExecuteRPC_FollowFlushesSingleLineImmediately(t *testing.T) {
 	// subscribe to the broker before broadcasting.
 	time.Sleep(200 * time.Millisecond)
 
-	coord.TailFanout.Publish([]*pb.LogRow{{
+	coord.TailFanout.Publish([]coordinator.Row{{LogRow: &pb.LogRow{
 		Namespace: "follow-flush", Service: "svc", Kind: "main",
-		Raw: "single live row", CustomerId: int64(cust.ID),
-	}})
+		Raw: "single live row",
+	}, Added: shape.Added{Customer: int64(cust.ID)}}})
 
 	select {
 	case resp := <-stream.sent:

@@ -27,9 +27,9 @@ func TestTailFanout_LocalPassthrough(t *testing.T) {
 	id, ch := f.Subscribe(ctx, matcher)
 	defer f.Unsubscribe(context.Background(), id, matcher)
 
-	f.Publish([]*pb.LogRow{{
+	f.Publish([]Row{{LogRow: &pb.LogRow{
 		Namespace: "vimgym", Service: "api", Kind: "main", Raw: "local row",
-	}})
+	}}})
 
 	select {
 	case row := <-ch:
@@ -81,9 +81,9 @@ func TestTailFanout_RedisCrossDelivery(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond) // let the PSUBSCRIBE register with redis
 
-	a.Publish([]*pb.LogRow{
-		{Namespace: "ns1", Service: "svc1", Kind: "main", Raw: "match"},
-		{Namespace: "ns2", Service: "svc2", Kind: "main", Raw: "no-match"},
+	a.Publish([]Row{
+		{LogRow: &pb.LogRow{Namespace: "ns1", Service: "svc1", Kind: "main", Raw: "match"}},
+		{LogRow: &pb.LogRow{Namespace: "ns2", Service: "svc2", Kind: "main", Raw: "no-match"}},
 	})
 
 	select {

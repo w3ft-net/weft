@@ -6,8 +6,6 @@ import (
 	"sync/atomic"
 
 	weftsdk "github.com/w3ft-net/weft-go"
-
-	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // RingBuffer is a fixed-size circular buffer for log rows. Writes never block;
@@ -16,7 +14,7 @@ import (
 // silent. Readers drain batches for shard ingestion.
 type RingBuffer struct {
 	mu      sync.Mutex
-	buf     []*pb.LogRow
+	buf     []Row
 	size    int
 	head    int           // next write position
 	count   int           // number of unread rows (for drain)
@@ -41,14 +39,14 @@ func (r *RingBuffer) UsagePct() int {
 // NewRingBuffer creates a ring buffer with the given capacity.
 func NewRingBuffer(capacity int) *RingBuffer {
 	return &RingBuffer{
-		buf:    make([]*pb.LogRow, capacity),
+		buf:    make([]Row, capacity),
 		size:   capacity,
 		notify: make(chan struct{}, 1),
 	}
 }
 
 // Write appends rows to the buffer. Never blocks.
-func (r *RingBuffer) Write(rows []*pb.LogRow) {
+func (r *RingBuffer) Write(rows []Row) {
 	r.mu.Lock()
 	overwritten := 0
 	for _, row := range rows {
@@ -75,7 +73,7 @@ func (r *RingBuffer) Write(rows []*pb.LogRow) {
 
 // Drain returns up to maxRows unread rows and removes them from the buffer.
 // Returns nil if no rows are available.
-func (r *RingBuffer) Drain(maxRows int) []*pb.LogRow {
+func (r *RingBuffer) Drain(maxRows int) []Row {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -90,13 +88,13 @@ func (r *RingBuffer) Drain(maxRows int) []*pb.LogRow {
 
 	// Read from tail (oldest unread) forward.
 	tail := (r.head - r.count + r.size) % r.size
-	rows := make([]*pb.LogRow, n)
+	rows := make([]Row, n)
 	for i := 0; i < n; i++ {
 		idx := (tail + i) % r.size
 		rows[i] = r.buf[idx]
 		// Release the slot: otherwise a drained row stays reachable until
 		// the write head laps it, pinning up to capacity rows' worth of heap.
-		r.buf[idx] = nil
+		r.buf[idx] = Row{}
 	}
 	r.count -= n
 

@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // s3API is the slice of *s3.Client that DLQ actually uses.
@@ -65,10 +66,19 @@ func NewDLQ(region, bucket string) *DLQ {
 	}
 }
 
-// Write uploads a failed batch to S3 as gzipped JSON-lines, one protojson
-// LogRow per line, so a replay restores every field.
-// Returns the S3 key path, or "" on failure.
-func (d *DLQ) Write(rows []*pb.LogRow) string {
+// dlqLine is one stored row: the LogRow as protojson, and the columns the shape
+// adds to it, which are not part of a LogRow, so a replay restores every one.
+// An object written before the envelope holds bare LogRows, whose customer is
+// in the row's own customer_id.
+type dlqLine struct {
+	Added shape.Added     `json:"added"`
+	Row   json.RawMessage `json:"row"`
+}
+
+// Write uploads a failed batch to S3 as gzipped JSON-lines, one dlqLine per
+// row; added is what the batch's rows share. Returns the S3 key path, or ""
+// on failure.
+func (d *DLQ) Write(added shape.Added, rows []*pb.LogRow) string {
 	if d == nil || len(rows) == 0 {
 		return ""
 	}
@@ -80,7 +90,12 @@ func (d *DLQ) Write(rows []*pb.LogRow) string {
 	gz := gzip.NewWriter(&buf)
 
 	for _, r := range rows {
-		line, err := protojson.Marshal(r)
+		row, err := protojson.Marshal(r)
+		if err != nil {
+			weftsdk.Errorf(context.Background(), "dlq: marshal row: %v", err)
+			return ""
+		}
+		line, err := json.Marshal(dlqLine{Added: added, Row: row})
 		if err != nil {
 			weftsdk.Errorf(context.Background(), "dlq: marshal row: %v", err)
 			return ""
@@ -109,7 +124,7 @@ func (d *DLQ) Write(rows []*pb.LogRow) string {
 // delivers the object twice rather than never. Returns the rows delivered.
 // An object that can't be read or decoded stays in the bucket and is
 // reported in the error; the others still replay.
-func (d *DLQ) Replay(ctx context.Context, sink func([]*pb.LogRow)) (int, error) {
+func (d *DLQ) Replay(ctx context.Context, sink func([]Row)) (int, error) {
 	if d == nil {
 		return 0, nil
 	}
@@ -139,7 +154,7 @@ func (d *DLQ) Replay(ctx context.Context, sink func([]*pb.LogRow)) (int, error) 
 	return total, errors.Join(errs...)
 }
 
-func (d *DLQ) readObject(ctx context.Context, key string) ([]*pb.LogRow, error) {
+func (d *DLQ) readObject(ctx context.Context, key string) ([]Row, error) {
 	out, err := d.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(d.bucket), Key: aws.String(key)})
 	if err != nil {
 		return nil, fmt.Errorf("get %s: %w", key, err)
@@ -150,7 +165,7 @@ func (d *DLQ) readObject(ctx context.Context, key string) ([]*pb.LogRow, error) 
 		return nil, fmt.Errorf("gunzip %s: %w", key, err)
 	}
 	defer gz.Close()
-	var rows []*pb.LogRow
+	var rows []Row
 	dec := json.NewDecoder(gz)
 	for {
 		var raw json.RawMessage
@@ -159,10 +174,36 @@ func (d *DLQ) readObject(ctx context.Context, key string) ([]*pb.LogRow, error) 
 		} else if err != nil {
 			return nil, fmt.Errorf("decode %s: %w", key, err)
 		}
-		row := &pb.LogRow{}
-		if err := protojson.Unmarshal(raw, row); err != nil {
+		r, err := decodeDLQLine(raw)
+		if err != nil {
 			return nil, fmt.Errorf("decode %s: %w", key, err)
 		}
-		rows = append(rows, row)
+		rows = append(rows, r)
 	}
+}
+
+// decodeDLQLine reads one stored row, in the envelope or, for an object written
+// before it, as a bare LogRow.
+func decodeDLQLine(raw json.RawMessage) (Row, error) {
+	var env struct {
+		Added *shape.Added    `json:"added"`
+		Row   json.RawMessage `json:"row"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return Row{}, err
+	}
+	lr := &pb.LogRow{}
+	if env.Row == nil {
+		if err := protojson.Unmarshal(raw, lr); err != nil {
+			return Row{}, err
+		}
+		return Row{lr, shape.Added{Customer: lr.CustomerId}}, nil
+	}
+	if err := protojson.Unmarshal(env.Row, lr); err != nil {
+		return Row{}, err
+	}
+	if env.Added == nil {
+		return Row{}, errors.New("row has no added columns")
+	}
+	return Row{lr, *env.Added}, nil
 }

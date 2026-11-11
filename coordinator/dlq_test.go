@@ -19,6 +19,7 @@ import (
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -124,18 +125,24 @@ func (s *dlqFailingShard) Ingest(_ context.Context, _ []*pb.LogRow, _ shard.Inge
 	return fmt.Errorf("shard %s down", s.id)
 }
 
+// dlqAdded is the added columns of the rows dlqTestRows makes: customer 1. The
+// LogRows themselves carry no customer_id.
+var dlqAdded = shape.Added{Customer: 1}
+
+// dlqIngestRows is dlqTestRows as the coordinator holds them.
+func dlqIngestRows(app string, n int) []Row { return RowsOf(dlqAdded, dlqTestRows(app, n)) }
+
 func dlqTestRows(app string, n int) []*pb.LogRow {
 	rows := make([]*pb.LogRow, n)
 	now := time.Now().UnixNano()
 	ns, svc, kind := shard.SplitApp(app)
 	for i := range rows {
 		rows[i] = &pb.LogRow{
-			Namespace:  ns,
-			Service:    svc,
-			Kind:       kind,
-			CustomerId: 1,
-			Raw:        fmt.Sprintf("row-%d", i),
-			TsUnixNs:   now,
+			Namespace: ns,
+			Service:   svc,
+			Kind:      kind,
+			Raw:       fmt.Sprintf("row-%d", i),
+			TsUnixNs:  now,
 		}
 	}
 	return rows
@@ -149,7 +156,7 @@ func TestDLQ_Write_PayloadShape(t *testing.T) {
 	d, putter := testDLQ()
 	rows := dlqTestRows("weft/coordinator", 3)
 
-	key := d.Write(rows)
+	key := d.Write(dlqAdded, rows)
 	if key == "" {
 		t.Fatal("Write returned empty key on success")
 	}
@@ -185,8 +192,14 @@ func TestDLQ_Write_PayloadShape(t *testing.T) {
 	if len(decoded) != len(rows) {
 		t.Fatalf("expected %d records, got %d", len(rows), len(decoded))
 	}
-	if decoded[0]["namespace"] != "weft" || decoded[0]["service"] != "coordinator" || decoded[0]["customerId"] != "1" { // protojson encodes int64 as a string
+	if decoded[0]["added"].(map[string]any)["Customer"] != float64(1) {
+		t.Errorf("record carries the wrong added columns: %v", decoded[0])
+	}
+	if row, _ := decoded[0]["row"].(map[string]any); row["namespace"] != "weft" || row["service"] != "coordinator" {
 		t.Errorf("record fields wrong: %v", decoded[0])
+	}
+	if _, stamped := decoded[0]["row"].(map[string]any)["customerId"]; stamped {
+		t.Errorf("the row carries customer_id: %v", decoded[0])
 	}
 }
 
@@ -194,11 +207,11 @@ func TestDLQ_Write_PayloadShape(t *testing.T) {
 // call Write on a nil receiver and an empty batch — both no-op paths.
 func TestDLQ_Write_NilSafe(t *testing.T) {
 	var d *DLQ
-	if got := d.Write(dlqTestRows("x", 1)); got != "" {
+	if got := d.Write(dlqAdded, dlqTestRows("x", 1)); got != "" {
 		t.Errorf("nil DLQ.Write should return empty, got %q", got)
 	}
 	d2, putter := testDLQ()
-	if got := d2.Write(nil); got != "" {
+	if got := d2.Write(dlqAdded, nil); got != "" {
 		t.Errorf("empty rows should return empty, got %q", got)
 	}
 	if calls := putter.Calls(); len(calls) != 0 {
@@ -217,7 +230,7 @@ func TestDrain_NoHealthyShards_RoutesToDLQ(t *testing.T) {
 	defer cancel()
 	c.StartDrain(ctx)
 
-	c.Ingest.Write(dlqTestRows("weft/coordinator", 4))
+	c.Ingest.Write(dlqIngestRows("weft/coordinator", 4))
 
 	if err := waitFor(500*time.Millisecond, func() bool {
 		return len(putter.Calls()) >= 1
@@ -254,7 +267,7 @@ func TestDrain_PrimaryAndFallbackFail_RoutesToDLQ(t *testing.T) {
 	defer cancel()
 	c.StartDrain(ctx)
 
-	c.Ingest.Write(dlqTestRows("weft/coordinator", 5))
+	c.Ingest.Write(dlqIngestRows("weft/coordinator", 5))
 
 	if err := waitFor(500*time.Millisecond, func() bool {
 		return len(putter.Calls()) >= 1
@@ -267,7 +280,7 @@ func TestDrain_PrimaryAndFallbackFail_RoutesToDLQ(t *testing.T) {
 	if len(rows) != 5 {
 		t.Errorf("expected 5 rows in DLQ, got %d", len(rows))
 	}
-	if rows[0]["service"] != "coordinator" {
+	if row, _ := rows[0]["row"].(map[string]any); row["service"] != "coordinator" {
 		t.Errorf("wrong app in DLQ record: %v", rows[0])
 	}
 }

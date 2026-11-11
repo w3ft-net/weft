@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/weft/planner"
-	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shape"
 )
 
@@ -19,8 +18,8 @@ type RowMatcher struct {
 }
 
 // Match returns true if the row passes all filters.
-func (m *RowMatcher) Match(row *pb.LogRow) bool {
-	key := shape.Key{Customer: row.CustomerId, Namespace: row.Namespace, Env: row.Env, Service: row.Service, Kind: row.Kind}
+func (m *RowMatcher) Match(row Row) bool {
+	key := row.key()
 	if !m.Coords.Matches(&key) {
 		return false
 	}

@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shape"
 )
 
@@ -27,7 +26,7 @@ type TailBroker struct {
 type tailSubscription struct {
 	id        uint64
 	matcher   *RowMatcher
-	ch        chan *pb.LogRow
+	ch        chan Row
 	ctx       context.Context
 	customers []int64 // the distinct customers matcher.Coords names
 }
@@ -54,9 +53,9 @@ func customersOf(s shape.Set) []int64 {
 // Subscribe registers a new tail subscription. Returns a channel that
 // receives matching rows. The subscription is automatically cleaned up
 // when the context is cancelled (e.g., client disconnect).
-func (b *TailBroker) Subscribe(ctx context.Context, matcher *RowMatcher) (uint64, <-chan *pb.LogRow) {
+func (b *TailBroker) Subscribe(ctx context.Context, matcher *RowMatcher) (uint64, <-chan Row) {
 	id := b.nextID.Add(1)
-	ch := make(chan *pb.LogRow, 1000)
+	ch := make(chan Row, 1000)
 
 	sub := &tailSubscription{id: id, matcher: matcher, ch: ch, ctx: ctx, customers: customersOf(matcher.Coords)}
 	b.mu.Lock()
@@ -89,11 +88,11 @@ func (b *TailBroker) Unsubscribe(id uint64) {
 // accept row, without delivering it. Used to decide whether an ingest
 // batch containing row is worth flushing early instead of waiting for
 // the periodic ticker.
-func (b *TailBroker) HasSubscriber(row *pb.LogRow) bool {
+func (b *TailBroker) HasSubscriber(row Row) bool {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	for _, sub := range b.byCustomer[row.CustomerId] {
+	for _, sub := range b.byCustomer[row.Customer] {
 		if sub.ctx.Err() != nil {
 			continue // subscriber disconnected, skip
 		}
@@ -107,12 +106,12 @@ func (b *TailBroker) HasSubscriber(row *pb.LogRow) bool {
 // Broadcast sends rows to all matching subscribers. Non-blocking:
 // if a subscriber's channel is full, rows are dropped (tail -f
 // semantics — the terminal can scroll past things).
-func (b *TailBroker) Broadcast(rows []*pb.LogRow) {
+func (b *TailBroker) Broadcast(rows []Row) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
 	for _, row := range rows {
-		for _, sub := range b.byCustomer[row.CustomerId] {
+		for _, sub := range b.byCustomer[row.Customer] {
 			if sub.ctx.Err() != nil {
 				continue // subscriber disconnected, skip
 			}

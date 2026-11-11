@@ -76,13 +76,13 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 				byKey := make(map[drainKey][]*pb.LogRow)
 				var order []drainKey
 				for _, row := range batch {
-					k := drainKey{row.CustomerId, row.Namespace, row.Service}
+					k := drainKey{row.Customer, row.Namespace, row.Service}
 					if _, seen := byKey[k]; !seen {
 						order = append(order, k)
 					}
-					byKey[k] = append(byKey[k], row)
-					if c.Usage != nil && row.CustomerId != 0 {
-						c.Usage.Record(row.CustomerId, int64(len(row.Raw)))
+					byKey[k] = append(byKey[k], row.LogRow)
+					if c.Usage != nil && row.Customer != 0 {
+						c.Usage.Record(row.Customer, int64(len(row.Raw)))
 					}
 				}
 
@@ -101,8 +101,8 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					// scanner re-ingests once a shard serves them.
 					sh := c.Provisioner.IngestingShard(nsID, k.service)
 					if sh == nil {
-						dlqPath := c.DLQ.Write(rows)
-						c.Errors.Record("none", "no shard serves "+k.namespace+"/"+k.service, rows, dlqPath)
+						dlqPath := c.DLQ.Write(k.added(), rows)
+						c.Errors.Record("none", "no shard serves "+k.namespace+"/"+k.service, k.added(), rows, dlqPath)
 						weftsdk.Infof(ctx, "drain: DLQ'd %d rows for %s (no shard serves this service)", len(rows), k.namespace+"/"+k.service)
 						continue
 					}
@@ -140,9 +140,9 @@ func (c *Coordinator) enqueue(ctx context.Context, b drainBatch) {
 		if s.rows+len(b.rows) > maxQueuedRowsPerShard {
 			backlog := s.rows
 			s.mu.Unlock()
-			dlqPath := c.DLQ.Write(b.rows)
+			dlqPath := c.DLQ.Write(b.key.added(), b.rows)
 			err := fmt.Errorf("shard %s send queue full (%d rows waiting)", id, backlog)
-			c.Errors.Record(id, err.Error(), b.rows, dlqPath)
+			c.Errors.Record(id, err.Error(), b.key.added(), b.rows, dlqPath)
 			weftsdk.Errorf(ctx, "drain: DLQ'd %d rows for %s: %v", len(b.rows), b.key.namespace+"/"+b.key.service, err)
 			return
 		}
@@ -232,8 +232,8 @@ func (c *Coordinator) ingestBatch(ctx context.Context, b drainBatch) {
 	}
 
 	// All retries exhausted — DLQ.
-	dlqPath := c.DLQ.Write(b.rows)
-	c.Errors.Record(b.sh.ID(), err.Error(), b.rows, dlqPath)
+	dlqPath := c.DLQ.Write(b.key.added(), b.rows)
+	c.Errors.Record(b.sh.ID(), err.Error(), b.key.added(), b.rows, dlqPath)
 	weftsdk.Errorf(ctx, "drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(b.rows), app, b.sh.ID())
 }
 

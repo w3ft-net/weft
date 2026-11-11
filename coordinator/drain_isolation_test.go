@@ -63,9 +63,9 @@ func TestDrain_APausedShardHoldsOnlyItsOwnRows(t *testing.T) {
 	defer cancel()
 	c.StartDrain(ctx)
 
-	c.Ingest.Write(dlqTestRows("weft/held", 3))
+	c.Ingest.Write(dlqIngestRows("weft/held", 3))
 	time.Sleep(50 * time.Millisecond) // the drain is now inside the held Ingest
-	c.Ingest.Write(dlqTestRows("weft/flowing", 4))
+	c.Ingest.Write(dlqIngestRows("weft/flowing", 4))
 
 	if err := waitFor(2*time.Second, func() bool { return healthy.count() == 4 }); err != nil {
 		t.Fatalf("rows for the healthy shard stalled behind the paused one (landed %d of 4)", healthy.count())
@@ -91,7 +91,7 @@ func TestDrain_KeepsPerShardOrder(t *testing.T) {
 	defer cancel()
 	c.StartDrain(ctx)
 	for i := 0; i < 20; i++ {
-		rows := dlqTestRows("weft/order", 1)
+		rows := dlqIngestRows("weft/order", 1)
 		rows[0].Raw = string(rune('a' + i))
 		c.Ingest.Write(rows)
 	}
@@ -130,11 +130,11 @@ func (s *orderShard) seen() []string {
 // overwrites must be counted, not lost without a trace.
 func TestRingBuffer_CountsOverwrittenRows(t *testing.T) {
 	rb := NewRingBuffer(4)
-	rb.Write(dlqTestRows("weft/x", 3))
+	rb.Write(dlqIngestRows("weft/x", 3))
 	if got := rb.Dropped(); got != 0 {
 		t.Fatalf("dropped %d rows before the buffer was full", got)
 	}
-	rb.Write(dlqTestRows("weft/x", 3))
+	rb.Write(dlqIngestRows("weft/x", 3))
 	if got := rb.Dropped(); got != 2 {
 		t.Fatalf("Dropped() = %d after overflowing a 4-row buffer by 2", got)
 	}

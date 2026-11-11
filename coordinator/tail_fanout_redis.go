@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -37,7 +38,7 @@ type redisFanout struct {
 // already documented as best-effort, so a transient ElastiCache blip at
 // coordinator boot must not crash-loop the process that also owns the
 // durable ingest path. go-redis's client is lazy/auto-reconnecting.
-func newRedisFanout(addr string, tlsEnabled bool, deliver func(rows []*pb.LogRow)) *redisFanout {
+func newRedisFanout(addr string, tlsEnabled bool, deliver func(rows []Row)) *redisFanout {
 	opts := &redis.Options{Addr: addr}
 	if tlsEnabled {
 		opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -57,7 +58,7 @@ func newRedisFanout(addr string, tlsEnabled bool, deliver func(rows []*pb.LogRow
 	return r
 }
 
-func (r *redisFanout) recvLoop(deliver func(rows []*pb.LogRow)) {
+func (r *redisFanout) recvLoop(deliver func(rows []Row)) {
 	for msg := range r.ps.Channel() {
 		row := &pb.LogRow{}
 		if err := proto.Unmarshal([]byte(msg.Payload), row); err != nil {
@@ -65,7 +66,11 @@ func (r *redisFanout) recvLoop(deliver func(rows []*pb.LogRow)) {
 			store.LogTailFanoutEvent(context.Background(), "unmarshal", err)
 			continue
 		}
-		deliver([]*pb.LogRow{row})
+		// The one place the coordinator still reads tag 26: a peer of the
+		// previous build publishes the customer only there, and this build
+		// stamps it for that reason. Read the channel name instead, or carry the
+		// added columns in the payload, once no such peer remains.
+		deliver([]Row{{row, shape.Added{Customer: row.CustomerId}}})
 	}
 }
 
@@ -88,12 +93,12 @@ func pattern(t tailTopic) string {
 // channelFor is the concrete publish-side channel name for a row. Kind
 // resolves to its "main" default, matching the proto's own documented
 // default (proto/weftpb/weft.proto's LogRow.kind comment).
-func channelFor(row *pb.LogRow) string {
+func channelFor(row Row) string {
 	kind := row.Kind
 	if kind == "" {
 		kind = "main"
 	}
-	return fmt.Sprintf("tail:%d:%s:%s:%s", row.CustomerId, row.Namespace, row.Service, kind)
+	return fmt.Sprintf("tail:%d:%s:%s:%s", row.Customer, row.Namespace, row.Service, kind)
 }
 
 func (r *redisFanout) announceInterest(ctx context.Context, t tailTopic, add bool) {
@@ -119,14 +124,14 @@ func (r *redisFanout) announceInterest(ctx context.Context, t tailTopic, add boo
 
 // publish pipelines one PUBLISH per row so a multi-row batch costs one
 // Redis round trip.
-func (r *redisFanout) publish(rows []*pb.LogRow) {
+func (r *redisFanout) publish(rows []Row) {
 	if len(rows) == 0 {
 		return
 	}
 	ctx := context.Background()
 	pipe := r.client.Pipeline()
 	for _, row := range rows {
-		data, err := proto.Marshal(row)
+		data, err := proto.Marshal(row.LogRow)
 		if err != nil {
 			weftsdk.Infof(ctx, "tailfanout: redis marshal row: %v", err)
 			store.LogTailFanoutEvent(ctx, "marshal", err)

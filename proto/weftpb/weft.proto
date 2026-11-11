@@ -194,7 +194,10 @@ message LogRow {
   reserved 8, 9;
   reserved "fields", "customer";
   // customer_id is the owning org's id, stamped by the coordinator from the
-  // authenticated token (row-level security). Senders never set it.
+  // authenticated token (row-level security). Senders never set it. Only
+  // peers that predate IngestRequest.partition_values read it: the coordinator
+  // itself carries the customer beside the row, and stops stamping this once
+  // every shard and coordinator runs a build that does.
   int64 customer_id = 26;
   string deployment = 10;    // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
   string env = 11;            // deployment environment (token-derived)

@@ -4,8 +4,6 @@ import (
 	"context"
 	"slices"
 	"sync"
-
-	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // tailTopic is the routing key for optional cross-coordinator fan-out: the
@@ -65,7 +63,7 @@ func NewTailFanout(broker *TailBroker, redisAddr string, redisTLS bool) *TailFan
 
 // Subscribe registers a local tail subscription and, on the first
 // subscriber for a topic, announces interest to Redis.
-func (f *TailFanout) Subscribe(ctx context.Context, matcher *RowMatcher) (uint64, <-chan *pb.LogRow) {
+func (f *TailFanout) Subscribe(ctx context.Context, matcher *RowMatcher) (uint64, <-chan Row) {
 	id, ch := f.broker.Subscribe(ctx, matcher)
 	if f.redis == nil {
 		return id, ch
@@ -107,14 +105,14 @@ func (f *TailFanout) Unsubscribe(ctx context.Context, id uint64, matcher *RowMat
 // Cross-coordinator subscribers (reachable only via Redis) aren't
 // visible here — this is a local-only fast-path signal, not a
 // fleet-wide one.
-func (f *TailFanout) HasSubscriber(row *pb.LogRow) bool {
+func (f *TailFanout) HasSubscriber(row Row) bool {
 	return f.broker.HasSubscriber(row)
 }
 
 // Publish delivers rows to this process's own local subscribers (mirroring
 // ingestBatch's prior direct Tail.Broadcast call) and, if Redis is
 // configured, fans them out to interested peer coordinators.
-func (f *TailFanout) Publish(rows []*pb.LogRow) {
+func (f *TailFanout) Publish(rows []Row) {
 	f.broker.Broadcast(rows)
 	if f.redis != nil {
 		f.redis.publish(rows)

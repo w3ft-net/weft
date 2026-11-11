@@ -3,8 +3,6 @@ package coordinator
 import (
 	"context"
 	"testing"
-
-	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
 // BenchmarkTailBroker offers a 500-row batch from 50 customers to 100
@@ -21,7 +19,7 @@ func BenchmarkTailBroker(b *testing.B) {
 			}
 		}()
 	}
-	rows := make([]*pb.LogRow, 500)
+	rows := make([]Row, 500)
 	for i := range rows {
 		rows[i] = tailRow(int64(1+i%50), "2026-11-11T10:00:00Z INFO request path=/api/v1/items status=200")
 	}

@@ -23,7 +23,7 @@ import (
 // compute an optimized program (pushdown, projection absorption); for
 // the live pass we re-run the user-written stages per row via warp's
 // bash interpreter, so the two agree on what the pipeline means.
-type LiveFilter func(*pb.LogRow) []string
+type LiveFilter func(Row) []string
 
 // BuildLiveFilter constructs a per-row closure from a parsed QueryPlan.
 // Callers own one per subscription.
@@ -46,11 +46,11 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 		if err != nil {
 			// Plan only emits row stages it parsed; see the parse
 			// error note below.
-			return func(*pb.LogRow) []string { return nil }
+			return func(Row) []string { return nil }
 		}
 		rowStages = rs
 	}
-	admit := func(row *pb.LogRow) bool {
+	admit := func(row Row) bool {
 		if !gate.Match(row) {
 			return false
 		}
@@ -59,7 +59,7 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 		}
 		var meta map[string]string
 		if rowStages.ReadsMeta() {
-			meta = liveMetaVars(row)
+			meta = liveMetaVars(row.LogRow)
 		}
 		return rowStages.Keep(row.Raw, string(row.PayloadJson), meta)
 	}
@@ -81,7 +81,7 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 		return row.Raw
 	}
 
-	passthrough := func(row *pb.LogRow) []string {
+	passthrough := func(row Row) []string {
 		if !admit(row) {
 			return nil
 		}
@@ -104,15 +104,15 @@ func BuildLiveFilter(plan *planner.QueryPlan) LiveFilter {
 		return passthrough
 	}
 
-	return func(row *pb.LogRow) []string {
+	return func(row Row) []string {
 		if !admit(row) {
 			return nil
 		}
 		var vars map[string]jq.Value
 		if jqVars != nil {
-			vars = jqVars.Vars(liveMetaVars(row))
+			vars = jqVars.Vars(liveMetaVars(row.LogRow))
 		}
-		return runStages(input(row), ast, vars)
+		return runStages(input(row.LogRow), ast, vars)
 	}
 }
 

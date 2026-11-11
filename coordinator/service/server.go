@@ -546,6 +546,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	}
 	authCustomer := auth.Organization.Name
 	authCustomerID := int64(auth.Organization.ID)
+	added := shape.Added{Customer: authCustomerID}
 	authNamespace := auth.Namespace
 	authEnv := auth.Env
 
@@ -600,7 +601,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 			case <-ticker.C:
 				mu.Lock()
 				if len(rows) > 0 {
-					s.ingestBatch(stream.Context(), rows)
+					s.ingestBatch(stream.Context(), added, rows)
 					rows = rows[:0]
 				}
 				mu.Unlock()
@@ -766,10 +767,10 @@ recvLoop:
 		// before a live tail session sees them (docs/known-issues.md).
 		flushNow := len(rows) >= 100
 		if !flushNow && s.Coord.TailFanout != nil {
-			flushNow = s.Coord.TailFanout.HasSubscriber(row)
+			flushNow = s.Coord.TailFanout.HasSubscriber(coordinator.Row{LogRow: row, Added: added})
 		}
 		if flushNow {
-			s.ingestBatch(stream.Context(), rows)
+			s.ingestBatch(stream.Context(), added, rows)
 			rows = rows[:0]
 		}
 		mu.Unlock()
@@ -779,7 +780,7 @@ recvLoop:
 
 	mu.Lock()
 	if len(rows) > 0 {
-		s.ingestBatch(stream.Context(), rows)
+		s.ingestBatch(stream.Context(), added, rows)
 	}
 	mu.Unlock()
 
@@ -813,12 +814,12 @@ func (s *Server) authenticateStream(ctx context.Context) (*store.AgentAuthResult
 	return auth, nil
 }
 
-func (s *Server) ingestBatch(ctx context.Context, rows []*pb.LogRow) {
+func (s *Server) ingestBatch(ctx context.Context, added shape.Added, lines []*pb.LogRow) {
 	// A JSON line is its own payload, so jq reads its fields; a filled
 	// row is never split. Then store a multi-line text event as one row
 	// per line, here, so the shards' buffer and live tail see the same rows.
-	ingest.FillJSONPayload(rows)
-	rows = ingest.SplitLines(rows)
+	ingest.FillJSONPayload(lines)
+	rows := coordinator.RowsOf(added, ingest.SplitLines(lines))
 
 	// Write to ring buffer (non-blocking). Background drain pushes to
 	// shards. NewCoordinator always installs a buffer, so no nil-check.

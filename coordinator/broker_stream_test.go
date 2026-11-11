@@ -10,14 +10,14 @@ import (
 )
 
 func TestBrokerStream_RowsThroughFilter(t *testing.T) {
-	ch := make(chan *pb.LogRow, 4)
+	ch := make(chan Row, 4)
 	bs := &brokerStream{
 		ch:     ch,
 		filter: passthroughFilter,
 	}
 
-	ch <- &pb.LogRow{Raw: "first"}
-	ch <- &pb.LogRow{Raw: "second"}
+	ch <- Row{LogRow: &pb.LogRow{Raw: "first"}}
+	ch <- Row{LogRow: &pb.LogRow{Raw: "second"}}
 	close(ch)
 
 	ctx := context.Background()
@@ -29,11 +29,11 @@ func TestBrokerStream_RowsThroughFilter(t *testing.T) {
 }
 
 func TestBrokerStream_FilterReturnsZero_RowSkipped(t *testing.T) {
-	ch := make(chan *pb.LogRow, 4)
-	rejectAll := func(*pb.LogRow) []string { return nil }
+	ch := make(chan Row, 4)
+	rejectAll := func(Row) []string { return nil }
 	bs := &brokerStream{ch: ch, filter: rejectAll}
 
-	ch <- &pb.LogRow{Raw: "rejected"}
+	ch <- Row{LogRow: &pb.LogRow{Raw: "rejected"}}
 	close(ch)
 
 	ctx := context.Background()
@@ -47,13 +47,13 @@ func TestBrokerStream_FilterReturnsZero_RowSkipped(t *testing.T) {
 }
 
 func TestBrokerStream_MultiLineFilter_QueuesExtras(t *testing.T) {
-	ch := make(chan *pb.LogRow, 1)
-	expand := func(row *pb.LogRow) []string {
+	ch := make(chan Row, 1)
+	expand := func(row Row) []string {
 		return []string{row.Raw + "-a", row.Raw + "-b", row.Raw + "-c"}
 	}
 	bs := &brokerStream{ch: ch, filter: expand}
 
-	ch <- &pb.LogRow{Raw: "row"}
+	ch <- Row{LogRow: &pb.LogRow{Raw: "row"}}
 	close(ch)
 
 	ctx := context.Background()
@@ -65,7 +65,7 @@ func TestBrokerStream_MultiLineFilter_QueuesExtras(t *testing.T) {
 }
 
 func TestBrokerStream_CtxCancel_Returns(t *testing.T) {
-	ch := make(chan *pb.LogRow)
+	ch := make(chan Row)
 	bs := &brokerStream{ch: ch, filter: passthroughFilter}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -83,7 +83,7 @@ func TestBrokerStream_CtxCancel_Returns(t *testing.T) {
 func TestBrokerStream_Close_Unsubscribes(t *testing.T) {
 	calls := 0
 	bs := &brokerStream{
-		ch:     make(chan *pb.LogRow),
+		ch:     make(chan Row),
 		filter: passthroughFilter,
 		unsub:  func() { calls++ },
 	}
@@ -98,7 +98,7 @@ func TestBrokerStream_Close_Unsubscribes(t *testing.T) {
 	}
 }
 
-func passthroughFilter(row *pb.LogRow) []string {
+func passthroughFilter(row Row) []string {
 	return []string{row.Raw}
 }
 

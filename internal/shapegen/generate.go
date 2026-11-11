@@ -111,6 +111,15 @@ type Key struct {
 {{- end}}
 }
 
+// Added holds the values of the columns this shape adds to a LogRow. They are
+// never in the LogRow: the coordinator stamps them from the ingest token and
+// carries them beside the row.
+type Added struct {
+{{- range .Cols}}{{if .Added}}
+	{{.GoName}} {{valueType .}}
+{{- end}}{{end}}
+}
+
 // Matches reports whether any tuple admits the row. The live matcher and the
 // SQL backend must agree on this for every row.
 //

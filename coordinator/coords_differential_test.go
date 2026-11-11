@@ -156,7 +156,7 @@ func TestCoordinateBackendsAgree(t *testing.T) {
 		m := &RowMatcher{Coords: plan.Coords}
 		var gotLive []string
 		for _, r := range rows {
-			if m.Match(&pb.LogRow{CustomerId: r.cust, Namespace: r.ns, Env: r.env, Service: r.svc, Kind: r.kind}) {
+			if m.Match(Row{LogRow: &pb.LogRow{Namespace: r.ns, Env: r.env, Service: r.svc, Kind: r.kind}, Added: shape.Added{Customer: r.cust}}) {
 				gotLive = append(gotLive, r.id)
 			}
 		}

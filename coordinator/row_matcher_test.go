@@ -16,21 +16,21 @@ func TestRowMatcher_HonoursEnvAndEveryNamespace(t *testing.T) {
 		{Customer: 1, Namespace: shape.Value("b"), Env: shape.Value("prod")},
 	}}
 	for _, tc := range []struct {
-		row  *pb.LogRow
+		row  Row
 		want bool
 	}{
-		{&pb.LogRow{CustomerId: 1, Namespace: "a", Env: "prod"}, true},
-		{&pb.LogRow{CustomerId: 1, Namespace: "b", Env: "prod"}, true},
-		{&pb.LogRow{CustomerId: 1, Namespace: "a", Env: "staging"}, false},
-		{&pb.LogRow{CustomerId: 1, Namespace: "b", Env: ""}, false},
-		{&pb.LogRow{CustomerId: 1, Namespace: "c", Env: "prod"}, false},
-		{&pb.LogRow{CustomerId: 2, Namespace: "a", Env: "prod"}, false},
+		{Row{LogRow: &pb.LogRow{Namespace: "a", Env: "prod"}, Added: shape.Added{Customer: 1}}, true},
+		{Row{LogRow: &pb.LogRow{Namespace: "b", Env: "prod"}, Added: shape.Added{Customer: 1}}, true},
+		{Row{LogRow: &pb.LogRow{Namespace: "a", Env: "staging"}, Added: shape.Added{Customer: 1}}, false},
+		{Row{LogRow: &pb.LogRow{Namespace: "b", Env: ""}, Added: shape.Added{Customer: 1}}, false},
+		{Row{LogRow: &pb.LogRow{Namespace: "c", Env: "prod"}, Added: shape.Added{Customer: 1}}, false},
+		{Row{LogRow: &pb.LogRow{Namespace: "a", Env: "prod"}, Added: shape.Added{Customer: 2}}, false},
 	} {
 		if got := m.Match(tc.row); got != tc.want {
 			t.Errorf("Match(%+v) = %v, want %v", tc.row, got, tc.want)
 		}
 	}
-	if (&RowMatcher{}).Match(&pb.LogRow{CustomerId: 1}) {
+	if (&RowMatcher{}).Match(Row{LogRow: &pb.LogRow{}, Added: shape.Added{Customer: 1}}) {
 		t.Error("a matcher with no coordinates admits nothing")
 	}
 }
