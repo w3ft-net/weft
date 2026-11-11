@@ -14,6 +14,7 @@ import (
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -35,6 +36,10 @@ type QueryRequest struct {
 	// (and bills) to the Lambda's own timeout. Keep in sync with
 	// shard.LambdaQueryRequest.
 	DeadlineUnixMs int64 `json:"deadline_unix_ms,omitempty"`
+	// Layout is the partition layout the archive was written in; absent
+	// from an older caller, which means the legacy one. Keep in sync with
+	// shard.LambdaQueryRequest.
+	Layout shape.Layout `json:"layout,omitzero"`
 }
 
 // queryContext bounds ctx by the request's deadline. The caller cancels it
@@ -143,7 +148,7 @@ func runQuery(ctx context.Context, req QueryRequest, s3cfg *shard.S3Config) (*co
 	if strings.Contains(req.ParquetPath, "*") {
 		sqlText = shard.PruneColdPartitions(sqlText, req.Args, req.ParquetPath)
 	}
-	query := strings.Replace(sqlText, "FROM logs", "FROM "+shard.ParquetReadExpr(req.ParquetPath), 1)
+	query := strings.Replace(sqlText, "FROM logs", "FROM "+shard.ParquetReadExpr(req.ParquetPath, req.Layout.OrLegacy()), 1)
 
 	args := make([]any, len(req.Args))
 	for i, a := range req.Args {

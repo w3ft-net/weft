@@ -22,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -359,10 +360,12 @@ func startRetentionJanitor(ctx context.Context, prov *Provisioner, region string
 
 	var compactor shard.Compactor
 	if url := os.Getenv("COMPACTOR_FUNCTION_URL"); url != "" {
-		compactor = shard.NewLambdaCompactor(url, lambdaSigningCreds(ctx, region), region)
+		lc := shard.NewLambdaCompactor(url, lambdaSigningCreds(ctx, region), region)
+		lc.Layout = shape.Legacy()
+		compactor = lc
 		weftsdk.Infof(ctx, "janitor: compactor Lambda at %s", url)
 	} else {
-		compactor = shard.LocalCompactor{S3: shard.S3ConfigFromEnv()}
+		compactor = shard.LocalCompactor{S3: shard.S3ConfigFromEnv(), Layout: shape.Legacy()}
 		weftsdk.Infof(ctx, "janitor: in-process compactor (COMPACTOR_FUNCTION_URL unset)")
 	}
 

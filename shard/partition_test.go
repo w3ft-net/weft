@@ -8,6 +8,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape"
 )
 
 func TestPartitionMinutes_ReadsTheWidthFromTheArchiveGlob(t *testing.T) {
@@ -130,7 +132,7 @@ func TestExportedArchive_BoundedReadMatchesAnUnboundedOne(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			q = replaceFirst(q, "FROM logs", "FROM "+ParquetReadExpr(glob))
+			q = replaceFirst(q, "FROM logs", "FROM "+ParquetReadExpr(glob, shape.Legacy()))
 			var n int
 			if err := db.QueryRow(q, toAny(args)...).Scan(&n); err != nil {
 				t.Fatalf("width %d: %v\n%s", minutes, err, q)

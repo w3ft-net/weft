@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -59,12 +60,15 @@ type ColdResolver struct {
 	Apps        []string
 	Creds       aws.CredentialsProvider
 	Region      string
+	// Layout is the partition layout the archive was written in; zero means
+	// the legacy one.
+	Layout shape.Layout
 }
 
 func (r *ColdResolver) ShardID() string { return r.ID }
 
 func (r *ColdResolver) Dial() (shard.Shard, error) {
-	cs, err := shard.NewColdShard(r.ID, r.Apps, r.ParquetPath, r.LambdaURL, nil)
+	cs, err := shard.NewColdShard(r.ID, r.Apps, r.ParquetPath, r.LambdaURL, nil, shard.ColdLayout(r.Layout))
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +98,7 @@ func ResolverFromDescriptor(d *pb.ShardDescriptor, secret string, creds aws.Cred
 			Apps:        d.Services,
 			Creds:       creds,
 			Region:      region,
+			Layout:      shard.LayoutFromProto(d.Layout),
 		}, nil
 	}
 	return nil, fmt.Errorf("shard %s: descriptor carries no grpc_addr or lambda_url and no resolver override registered", d.ShardId)

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // A keyed archive splits its files by (customer, namespace, service, kind) as
@@ -120,7 +122,7 @@ func TestKeyedExport_WritesADirectoryPerKeyAndReadsBackWhole(t *testing.T) {
 	count := func(where string, args ...any) int {
 		t.Helper()
 		var n int
-		q := "SELECT count(*) FROM " + ParquetReadExpr(glob) + " WHERE " + where
+		q := "SELECT count(*) FROM " + ParquetReadExpr(glob, shape.Legacy()) + " WHERE " + where
 		if err := db.QueryRow(q, args...).Scan(&n); err != nil {
 			t.Fatalf("%s: %v", q, err)
 		}
@@ -148,7 +150,7 @@ func TestKeyedExport_AQueryOpensOnlyItsKeysFiles(t *testing.T) {
 	ds := legacyShardWith(t, keyedFixture, 6)
 	_, glob, _ := exportSizedTo(t, ds, smallShardBytes)
 
-	expr := ParquetReadExpr(glob)
+	expr := ParquetReadExpr(glob, shape.Legacy())
 	withNames := strings.Replace(expr, "hive_partitioning=true", "hive_partitioning=true, filename=true", 1)
 	if withNames == expr {
 		t.Fatal("ParquetReadExpr no longer says hive_partitioning=true; update this test")
@@ -195,10 +197,10 @@ func TestKeyedExport_NumericLookingServiceNamesStayStrings(t *testing.T) {
 	}
 	defer db.Close()
 	var n int
-	if err := db.QueryRow("SELECT count(*) FROM "+ParquetReadExpr(glob)+" WHERE service = ?", "api").Scan(&n); err != nil {
+	if err := db.QueryRow("SELECT count(*) FROM "+ParquetReadExpr(glob, shape.Legacy())+" WHERE service = ?", "api").Scan(&n); err != nil {
 		t.Fatalf("a predicate on a name that isn't a number failed: %v", err)
 	}
-	if err := db.QueryRow("SELECT count(*) FROM "+ParquetReadExpr(glob)+" WHERE service = ?", "123").Scan(&n); err != nil || n != 3 {
+	if err := db.QueryRow("SELECT count(*) FROM "+ParquetReadExpr(glob, shape.Legacy())+" WHERE service = ?", "123").Scan(&n); err != nil || n != 3 {
 		t.Fatalf("service 123: %d rows, err=%v, want 3", n, err)
 	}
 }
@@ -220,7 +222,7 @@ func TestKeyedExport_TimePruningStillMatches(t *testing.T) {
 	defer db.Close()
 	count := func(q string) int {
 		var n int
-		q = replaceFirst(q, "FROM logs", "FROM "+ParquetReadExpr(glob))
+		q = replaceFirst(q, "FROM logs", "FROM "+ParquetReadExpr(glob, shape.Legacy()))
 		if err := db.QueryRow(q, toAny(args)...).Scan(&n); err != nil {
 			t.Fatalf("%v\n%s", err, q)
 		}
@@ -309,7 +311,7 @@ func TestRewriteRetention_ConversionDoesNotSplitIntoManyFiles(t *testing.T) {
 	ds := interleavedShard(t)
 	_, src, _ := exportTo(t, ds, 1440)
 	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
-	res, err := RewriteRetention(src, dstDir+"/sized/**/*.parquet", nil, nil)
+	res, err := RewriteRetention(src, dstDir+"/sized/**/*.parquet", nil, shape.Legacy(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +333,7 @@ func TestRewriteRetention_KeepsAKeyedLayout(t *testing.T) {
 	// Rows are 7 hours apart from 2026-10-14 00:00; customer 1 loses the two
 	// before 14:00 in each of its 5 keys, customer 2 keeps everything.
 	cutoff := time.Date(2026, 10, 14, 14, 0, 0, 0, time.UTC)
-	res, err := RewriteRetention(src, dst, []CustomerCutoff{{CustomerID: 1, Cutoff: cutoff}}, nil)
+	res, err := RewriteRetention(src, dst, []CustomerCutoff{{CustomerID: 1, Cutoff: cutoff}}, shape.Legacy(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,14 +357,14 @@ func TestRewriteRetention_KeepsAKeyedLayout(t *testing.T) {
 	}
 	defer db.Close()
 	var n, early int
-	q := "SELECT count(*), count(*) FILTER (WHERE customer_id = 1 AND ts < TIMESTAMP '2026-10-14 14:00:00') FROM " + ParquetReadExpr(dst)
+	q := "SELECT count(*), count(*) FILTER (WHERE customer_id = 1 AND ts < TIMESTAMP '2026-10-14 14:00:00') FROM " + ParquetReadExpr(dst, shape.Legacy())
 	if err := db.QueryRow(q).Scan(&n, &early); err != nil {
 		t.Fatal(err)
 	}
 	if n != 26 || early != 0 {
 		t.Errorf("rewritten archive holds %d rows, %d of them expired; want 26 and 0", n, early)
 	}
-	if err := db.QueryRow("SELECT count(*) FROM "+ParquetReadExpr(dst)+" WHERE service = ? AND kind = ? AND customer_id = CAST(? AS BIGINT)", "api", "main", "1").Scan(&n); err != nil || n != 4 {
+	if err := db.QueryRow("SELECT count(*) FROM "+ParquetReadExpr(dst, shape.Legacy())+" WHERE service = ? AND kind = ? AND customer_id = CAST(? AS BIGINT)", "api", "main", "1").Scan(&n); err != nil || n != 4 {
 		t.Errorf("weft/api/main holds %d rows after the rewrite (err %v), want 4", n, err)
 	}
 }
@@ -386,7 +388,7 @@ func TestRewriteRetention_ConvertsAnythingToKeyed(t *testing.T) {
 			}
 			dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
 			dst := dstDir + "/sized/**/*.parquet"
-			res, err := RewriteRetention(src, dst, nil, nil)
+			res, err := RewriteRetention(src, dst, nil, shape.Legacy(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -403,7 +405,7 @@ func TestRewriteRetention_ConvertsAnythingToKeyed(t *testing.T) {
 			}
 			defer db.Close()
 			var n, parts, nulls int
-			q := "SELECT count(*), count(DISTINCT _part), count(*) FILTER (WHERE kind IS NULL) FROM " + ParquetReadExpr(dst)
+			q := "SELECT count(*), count(DISTINCT _part), count(*) FILTER (WHERE kind IS NULL) FROM " + ParquetReadExpr(dst, shape.Legacy())
 			if err := db.QueryRow(q).Scan(&n, &parts, &nulls); err != nil {
 				t.Fatal(err)
 			}

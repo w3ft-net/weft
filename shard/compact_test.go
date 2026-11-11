@@ -7,6 +7,7 @@ import (
 	"time"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // archiveFixture ingests rows then archives to a local temp dir, returning
@@ -65,7 +66,7 @@ func TestRewriteRetention_DropsExpiredPreservesUnmapped(t *testing.T) {
 	res, err := RewriteRetention(src, dst, []CustomerCutoff{
 		{CustomerID: 5, Cutoff: cutoff},
 		{CustomerID: 6, Cutoff: cutoff},
-	}, nil)
+	}, shape.Legacy(), nil)
 	if err != nil {
 		t.Fatalf("rewrite: %v", err)
 	}
@@ -98,7 +99,7 @@ func TestRewriteRetention_EmptyResultWritesNothing(t *testing.T) {
 
 	cutoff := time.Unix(0, base+50*int64(24*time.Hour)) // after every row
 	dst := t.TempDir() + "/empty.parquet"
-	res, err := RewriteRetention(src, dst, []CustomerCutoff{{CustomerID: 6, Cutoff: cutoff}}, nil)
+	res, err := RewriteRetention(src, dst, []CustomerCutoff{{CustomerID: 6, Cutoff: cutoff}}, shape.Legacy(), nil)
 	if err != nil {
 		t.Fatalf("rewrite: %v", err)
 	}

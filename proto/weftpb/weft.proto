@@ -282,6 +282,10 @@ message ShardDescriptor {
   // field_sql is what this shard runs, in place of the request's field_sql,
   // when sql is set: the same override for the field form.
   string field_sql = 8;
+  // layout is the partition layout a cold shard's archive was written in,
+  // which compute forwards to the cold-scan Lambda to type the archive's hive
+  // columns. Absent from an older coordinator: the legacy layout.
+  PartitionLayout layout = 9;
 }
 
 message ExecuteQueryRequest {

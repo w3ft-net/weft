@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // Compactor performs the janitor's heavy parquet work — rewriting an
@@ -29,6 +31,9 @@ type CompactRequest struct {
 	Src     string           `json:"src"`
 	Dst     string           `json:"dst,omitempty"`
 	Cutoffs []CustomerCutoff `json:"cutoffs,omitempty"`
+	// Layout is the partition layout the archive was written in. Absent from
+	// an older caller: the compactor then reads the legacy layout.
+	Layout shape.Layout `json:"layout,omitzero"`
 }
 
 const (
@@ -37,15 +42,19 @@ const (
 )
 
 // LocalCompactor runs the work in-process. S3 is nil for local-filesystem
-// parquet (dev) and set for s3:// paths.
-type LocalCompactor struct{ S3 *S3Config }
+// parquet (dev) and set for s3:// paths. Layout is the partition layout the
+// archives were written in; zero means the legacy one.
+type LocalCompactor struct {
+	S3     *S3Config
+	Layout shape.Layout
+}
 
 func (c LocalCompactor) Rewrite(src, dst string, cutoffs []CustomerCutoff) (CompactResult, error) {
-	return RewriteRetention(src, dst, cutoffs, c.S3)
+	return RewriteRetention(src, dst, cutoffs, c.Layout.OrLegacy(), c.S3)
 }
 
 func (c LocalCompactor) CaptureStats(src string) ([]CustomerStat, error) {
-	return CaptureStats(src, c.S3)
+	return CaptureStats(src, c.Layout.OrLegacy(), c.S3)
 }
 
 // LambdaCompactor invokes the compactor Lambda over its Function URL,
@@ -55,6 +64,9 @@ type LambdaCompactor struct {
 	client *http.Client
 	creds  aws.CredentialsProvider
 	region string
+	// Layout is the partition layout the archives were written in, sent with
+	// every request; zero means the legacy one.
+	Layout shape.Layout
 }
 
 // NewLambdaCompactor builds a Lambda-backed compactor. Pass nil creds for
@@ -70,11 +82,11 @@ func NewLambdaCompactor(url string, creds aws.CredentialsProvider, region string
 }
 
 func (c *LambdaCompactor) Rewrite(src, dst string, cutoffs []CustomerCutoff) (CompactResult, error) {
-	return c.invoke(CompactRequest{Op: CompactOpRewrite, Src: src, Dst: dst, Cutoffs: cutoffs})
+	return c.invoke(CompactRequest{Op: CompactOpRewrite, Src: src, Dst: dst, Cutoffs: cutoffs, Layout: c.Layout})
 }
 
 func (c *LambdaCompactor) CaptureStats(src string) ([]CustomerStat, error) {
-	res, err := c.invoke(CompactRequest{Op: CompactOpCapture, Src: src})
+	res, err := c.invoke(CompactRequest{Op: CompactOpCapture, Src: src, Layout: c.Layout})
 	return res.Stats, err
 }
 

@@ -20,6 +20,7 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // ColdShard implements the Shard interface for archived data in Parquet.
@@ -30,6 +31,8 @@ type ColdShard struct {
 	id          string
 	apps        []string
 	parquetPath string
+	// layout is the partition layout the archive was written in.
+	layout shape.Layout
 
 	// In-process mode.
 	db *sql.DB
@@ -61,6 +64,23 @@ type LambdaQueryRequest struct {
 	// the coordinator has hung up. Keep in sync with
 	// cmd/lambda-shard/handler.go's QueryRequest.
 	DeadlineUnixMs int64 `json:"deadline_unix_ms,omitempty"`
+	// Layout is the partition layout the archive was written in, which the
+	// handler needs to type the archive's hive columns. Absent from an older
+	// caller: the handler then reads the legacy layout.
+	Layout shape.Layout `json:"layout,omitzero"`
+}
+
+// ColdOption configures NewColdShard.
+type ColdOption func(*ColdShard)
+
+// ColdLayout sets the partition layout the archive was written in. A shard made
+// without it reads the legacy layout; so does one given a zero layout.
+func ColdLayout(l shape.Layout) ColdOption {
+	return func(s *ColdShard) {
+		if !l.IsZero() {
+			s.layout = l
+		}
+	}
 }
 
 // deadlineUnixMs is ctx's deadline for the wire, or zero if it has none.
@@ -95,11 +115,15 @@ func anyArgsToStrings(args []any) []string {
 // If functionURL is non-empty, queries are sent to that HTTP endpoint
 // instead of running in-process. Pass nil for s3cfg when using local
 // filesystem or remote mode.
-func NewColdShard(id string, apps []string, parquetPath, functionURL string, s3cfg *S3Config) (*ColdShard, error) {
+func NewColdShard(id string, apps []string, parquetPath, functionURL string, s3cfg *S3Config, opts ...ColdOption) (*ColdShard, error) {
 	cs := &ColdShard{
 		id:          id,
 		apps:        apps,
 		parquetPath: parquetPath,
+		layout:      shape.Legacy(),
+	}
+	for _, o := range opts {
+		o(cs)
 	}
 
 	if functionURL != "" {
@@ -137,33 +161,42 @@ func (s *ColdShard) Archive(_ context.Context, _ string) (string, []CustomerStat
 	return "", nil, fmt.Errorf("cold shard %s is already archived", s.id)
 }
 
-func (s *ColdShard) readParquetExpr() string { return ParquetReadExpr(s.parquetPath) }
+func (s *ColdShard) readParquetExpr() string { return ParquetReadExpr(s.parquetPath, s.layout) }
 
-// keyedHiveTypes pins the columns a keyed archive keeps in its directory names.
-// Left to DuckDB, a column whose values all look like numbers (every service
-// named like a number) is typed as one, and a predicate on a name that isn't a
+// hiveTypes pins the columns a keyed archive keeps in its directory names: the
+// layout's partition columns, typed as it declares them, then the key. Left to
+// DuckDB, a column whose values all look like numbers (every service named
+// like a number) is typed as one, and a predicate on a name that isn't a
 // number then fails to bind. The time column _part is left to be typed as a
-// timestamp, which PruneColdPartitions relies on.
-const keyedHiveTypes = "{'customer_id': 'BIGINT', 'namespace': 'VARCHAR', 'service': 'VARCHAR', 'kind': 'VARCHAR'}"
-
-// sizedHiveTypes adds the key's bucket width, which a sized archive keeps in a
-// directory of its own.
-const sizedHiveTypes = "{'customer_id': 'BIGINT', 'namespace': 'VARCHAR', 'service': 'VARCHAR', 'kind': 'VARCHAR', '_w': 'BIGINT'}"
+// timestamp, which PruneColdPartitions relies on. A sized archive adds the
+// key's bucket width, which it keeps in a directory of its own.
+func hiveTypes(layout shape.Layout, sized bool) string {
+	var parts []string
+	for _, c := range layout.Columns {
+		parts = append(parts, fmt.Sprintf("'%s': '%s'", c.Name, c.Type.SQL()))
+	}
+	parts = append(parts, "'namespace': 'VARCHAR'", "'service': 'VARCHAR'", "'kind': 'VARCHAR'")
+	if sized {
+		parts = append(parts, "'_w': 'BIGINT'")
+	}
+	return "{" + strings.Join(parts, ", ") + "}"
+}
 
 // ParquetReadExpr builds the DuckDB read_parquet(...) source for a stored
 // path. A glob (the hive-partitioned layout from a large shard's archive)
 // enables hive_partitioning so the partition columns are read back, and for a
-// keyed archive types the key columns; a plain path reads a single file. The
-// cold-shard Lambda builds the same expression.
-func ParquetReadExpr(path string) string {
+// keyed archive types the key columns per the layout the archive was written
+// in; a plain path reads a single file. The cold-shard Lambda builds the same
+// expression.
+func ParquetReadExpr(path string, layout shape.Layout) string {
 	if !strings.Contains(path, "*") {
 		return fmt.Sprintf("read_parquet('%s')", path)
 	}
 	if IsSized(path) {
-		return fmt.Sprintf("read_parquet('%s', hive_partitioning=true, hive_types=%s)", path, sizedHiveTypes)
+		return fmt.Sprintf("read_parquet('%s', hive_partitioning=true, hive_types=%s)", path, hiveTypes(layout, true))
 	}
 	if IsKeyed(path) {
-		return fmt.Sprintf("read_parquet('%s', hive_partitioning=true, hive_types=%s)", path, keyedHiveTypes)
+		return fmt.Sprintf("read_parquet('%s', hive_partitioning=true, hive_types=%s)", path, hiveTypes(layout, false))
 	}
 	return fmt.Sprintf("read_parquet('%s', hive_partitioning=true)", path)
 }
@@ -195,6 +228,7 @@ func (s *ColdShard) queryRemote(ctx context.Context, query string, args []any) (
 		Args:           anyArgsToStrings(args),
 		TraceId:        traceID,
 		DeadlineUnixMs: deadlineUnixMs(ctx),
+		Layout:         s.layout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -256,6 +290,7 @@ func (s *ColdShard) queryToSinkRemote(ctx context.Context, query string, args []
 		Args:           anyArgsToStrings(args),
 		TraceId:        traceID,
 		DeadlineUnixMs: deadlineUnixMs(ctx),
+		Layout:         s.layout,
 	})
 	if err != nil {
 		weftsdk.Infof(ctx, "cold shard %s: marshal request: %v", s.id, err)

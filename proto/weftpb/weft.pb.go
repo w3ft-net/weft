@@ -1513,7 +1513,11 @@ type ShardDescriptor struct {
 	Args []string `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
 	// field_sql is what this shard runs, in place of the request's field_sql,
 	// when sql is set: the same override for the field form.
-	FieldSql      string `protobuf:"bytes,8,opt,name=field_sql,json=fieldSql,proto3" json:"field_sql,omitempty"`
+	FieldSql string `protobuf:"bytes,8,opt,name=field_sql,json=fieldSql,proto3" json:"field_sql,omitempty"`
+	// layout is the partition layout a cold shard's archive was written in,
+	// which compute forwards to the cold-scan Lambda to type the archive's hive
+	// columns. Absent from an older coordinator: the legacy layout.
+	Layout        *PartitionLayout `protobuf:"bytes,9,opt,name=layout,proto3" json:"layout,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1602,6 +1606,13 @@ func (x *ShardDescriptor) GetFieldSql() string {
 		return x.FieldSql
 	}
 	return ""
+}
+
+func (x *ShardDescriptor) GetLayout() *PartitionLayout {
+	if x != nil {
+		return x.Layout
+	}
+	return nil
 }
 
 type ExecuteQueryRequest struct {
@@ -4816,7 +4827,7 @@ const file_weft_proto_rawDesc = "" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\x12)\n" +
 	"\x10partition_values\x18\x02 \x03(\tR\x0fpartitionValues\"5\n" +
 	"\x0eIngestResponse\x12#\n" +
-	"\rrows_ingested\x18\x01 \x01(\x03R\frowsIngested\"\xea\x01\n" +
+	"\rrows_ingested\x18\x01 \x01(\x03R\frowsIngested\"\x99\x02\n" +
 	"\x0fShardDescriptor\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x1b\n" +
 	"\tgrpc_addr\x18\x02 \x01(\tR\bgrpcAddr\x12\x1d\n" +
@@ -4826,7 +4837,8 @@ const file_weft_proto_rawDesc = "" +
 	"\bservices\x18\x05 \x03(\tR\bservices\x12\x10\n" +
 	"\x03sql\x18\x06 \x01(\tR\x03sql\x12\x12\n" +
 	"\x04args\x18\a \x03(\tR\x04args\x12\x1b\n" +
-	"\tfield_sql\x18\b \x01(\tR\bfieldSql\"\xfa\x03\n" +
+	"\tfield_sql\x18\b \x01(\tR\bfieldSql\x12-\n" +
+	"\x06layout\x18\t \x01(\v2\x15.weft.PartitionLayoutR\x06layout\"\xfa\x03\n" +
 	"\x13ExecuteQueryRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12-\n" +
 	"\x06shards\x18\x02 \x03(\v2\x15.weft.ShardDescriptorR\x06shards\x12\x16\n" +
@@ -5209,84 +5221,85 @@ var file_weft_proto_depIdxs = []int32{
 	13, // 2: weft.ArchiveResponse.customer_stats:type_name -> weft.CustomerArchiveStat
 	72, // 3: weft.ResultRow.meta_vars:type_name -> weft.ResultRow.MetaVarsEntry
 	18, // 4: weft.IngestRequest.rows:type_name -> weft.LogRow
-	21, // 5: weft.ExecuteQueryRequest.shards:type_name -> weft.ShardDescriptor
-	23, // 6: weft.ExecuteQueryRequest.group:type_name -> weft.GroupSpec
-	17, // 7: weft.ExecuteQueryRequest.field_spec:type_name -> weft.FieldSpec
-	0,  // 8: weft.GroupSpec.render:type_name -> weft.GroupRender
-	1,  // 9: weft.GroupSpec.order:type_name -> weft.GroupOrder
-	26, // 10: weft.AuditFleetResponse.shards:type_name -> weft.AuditShardState
-	27, // 11: weft.AuditFleetResponse.spares:type_name -> weft.AuditSpareState
-	30, // 12: weft.ShardHeartbeatRequest.field_facts:type_name -> weft.FieldFactDelta
-	2,  // 13: weft.FieldFactDelta.state:type_name -> weft.FieldFactState
-	37, // 14: weft.AuthenticateRequest.metrics_config:type_name -> weft.MetricsConfig
-	41, // 15: weft.CoordinatorExecuteResponse.lines:type_name -> weft.Line
-	42, // 16: weft.CoordinatorExecuteResponse.notices:type_name -> weft.Notice
-	55, // 17: weft.ListShardsResponse.shards:type_name -> weft.ShardInfo
-	55, // 18: weft.GetShardResponse.shard:type_name -> weft.ShardInfo
-	70, // 19: weft.ListBucketsResponse.buckets:type_name -> weft.BucketInfo
-	15, // 20: weft.ShardQuery.Query:input_type -> weft.QueryRequest
-	19, // 21: weft.ShardQuery.Ingest:input_type -> weft.IngestRequest
-	18, // 22: weft.ShardQuery.IngestStream:input_type -> weft.LogRow
-	7,  // 23: weft.ShardQuery.Configure:input_type -> weft.ConfigureRequest
-	11, // 24: weft.ShardQuery.Archive:input_type -> weft.ArchiveRequest
-	3,  // 25: weft.ShardQuery.Pause:input_type -> weft.PauseRequest
-	5,  // 26: weft.ShardQuery.Resume:input_type -> weft.ResumeRequest
-	22, // 27: weft.WeftCompute.ExecuteQueryStream:input_type -> weft.ExecuteQueryRequest
-	39, // 28: weft.WeftCoordinator.Execute:input_type -> weft.CoordinatorExecuteRequest
-	43, // 29: weft.WeftCoordinator.ListServices:input_type -> weft.ListServicesRequest
-	45, // 30: weft.WeftCoordinator.AddSource:input_type -> weft.AddSourceRequest
-	47, // 31: weft.WeftCoordinator.RemoveSource:input_type -> weft.RemoveSourceRequest
-	36, // 32: weft.WeftCoordinator.Authenticate:input_type -> weft.AuthenticateRequest
-	18, // 33: weft.WeftCoordinator.IngestStream:input_type -> weft.LogRow
-	34, // 34: weft.WeftCoordinator.CreateToken:input_type -> weft.CreateTokenRequest
-	32, // 35: weft.WeftCoordinator.GetUsage:input_type -> weft.GetUsageRequest
-	50, // 36: weft.WeftCoordinator.SubmitSample:input_type -> weft.SubmitSampleRequest
-	52, // 37: weft.WeftCoordinator.GetSourceStatus:input_type -> weft.GetSourceStatusRequest
-	29, // 38: weft.WeftCoordinator.Heartbeat:input_type -> weft.ShardHeartbeatRequest
-	54, // 39: weft.WeftCoordinator.ListShards:input_type -> weft.ListShardsRequest
-	57, // 40: weft.WeftCoordinator.ForceArchiveShard:input_type -> weft.ForceArchiveShardRequest
-	59, // 41: weft.WeftCoordinator.DeleteArchivedShard:input_type -> weft.DeleteArchivedShardRequest
-	61, // 42: weft.WeftAdmin.RelaunchShard:input_type -> weft.RelaunchShardRequest
-	63, // 43: weft.WeftAdmin.ForceRemoveShard:input_type -> weft.ForceRemoveShardRequest
-	65, // 44: weft.WeftAdmin.SwapShardArchive:input_type -> weft.SwapShardArchiveRequest
-	67, // 45: weft.WeftAdmin.GetShard:input_type -> weft.GetShardRequest
-	54, // 46: weft.WeftAdmin.ListShards:input_type -> weft.ListShardsRequest
-	69, // 47: weft.WeftAdmin.ListBuckets:input_type -> weft.ListBucketsRequest
-	25, // 48: weft.WeftAdmin.AuditFleet:input_type -> weft.AuditFleetRequest
-	16, // 49: weft.ShardQuery.Query:output_type -> weft.ResultRow
-	20, // 50: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
-	14, // 51: weft.ShardQuery.IngestStream:output_type -> weft.IngestStreamResponse
-	8,  // 52: weft.ShardQuery.Configure:output_type -> weft.ConfigureResponse
-	12, // 53: weft.ShardQuery.Archive:output_type -> weft.ArchiveResponse
-	4,  // 54: weft.ShardQuery.Pause:output_type -> weft.PauseResponse
-	6,  // 55: weft.ShardQuery.Resume:output_type -> weft.ResumeResponse
-	24, // 56: weft.WeftCompute.ExecuteQueryStream:output_type -> weft.ExecuteQueryStreamResponse
-	40, // 57: weft.WeftCoordinator.Execute:output_type -> weft.CoordinatorExecuteResponse
-	44, // 58: weft.WeftCoordinator.ListServices:output_type -> weft.ListServicesResponse
-	46, // 59: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
-	48, // 60: weft.WeftCoordinator.RemoveSource:output_type -> weft.RemoveSourceResponse
-	38, // 61: weft.WeftCoordinator.Authenticate:output_type -> weft.AuthenticateResponse
-	14, // 62: weft.WeftCoordinator.IngestStream:output_type -> weft.IngestStreamResponse
-	35, // 63: weft.WeftCoordinator.CreateToken:output_type -> weft.CreateTokenResponse
-	33, // 64: weft.WeftCoordinator.GetUsage:output_type -> weft.GetUsageResponse
-	51, // 65: weft.WeftCoordinator.SubmitSample:output_type -> weft.SubmitSampleResponse
-	53, // 66: weft.WeftCoordinator.GetSourceStatus:output_type -> weft.GetSourceStatusResponse
-	31, // 67: weft.WeftCoordinator.Heartbeat:output_type -> weft.HeartbeatResponse
-	56, // 68: weft.WeftCoordinator.ListShards:output_type -> weft.ListShardsResponse
-	58, // 69: weft.WeftCoordinator.ForceArchiveShard:output_type -> weft.ForceArchiveShardResponse
-	60, // 70: weft.WeftCoordinator.DeleteArchivedShard:output_type -> weft.DeleteArchivedShardResponse
-	62, // 71: weft.WeftAdmin.RelaunchShard:output_type -> weft.RelaunchShardResponse
-	64, // 72: weft.WeftAdmin.ForceRemoveShard:output_type -> weft.ForceRemoveShardResponse
-	66, // 73: weft.WeftAdmin.SwapShardArchive:output_type -> weft.SwapShardArchiveResponse
-	68, // 74: weft.WeftAdmin.GetShard:output_type -> weft.GetShardResponse
-	56, // 75: weft.WeftAdmin.ListShards:output_type -> weft.ListShardsResponse
-	71, // 76: weft.WeftAdmin.ListBuckets:output_type -> weft.ListBucketsResponse
-	28, // 77: weft.WeftAdmin.AuditFleet:output_type -> weft.AuditFleetResponse
-	49, // [49:78] is the sub-list for method output_type
-	20, // [20:49] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	9,  // 5: weft.ShardDescriptor.layout:type_name -> weft.PartitionLayout
+	21, // 6: weft.ExecuteQueryRequest.shards:type_name -> weft.ShardDescriptor
+	23, // 7: weft.ExecuteQueryRequest.group:type_name -> weft.GroupSpec
+	17, // 8: weft.ExecuteQueryRequest.field_spec:type_name -> weft.FieldSpec
+	0,  // 9: weft.GroupSpec.render:type_name -> weft.GroupRender
+	1,  // 10: weft.GroupSpec.order:type_name -> weft.GroupOrder
+	26, // 11: weft.AuditFleetResponse.shards:type_name -> weft.AuditShardState
+	27, // 12: weft.AuditFleetResponse.spares:type_name -> weft.AuditSpareState
+	30, // 13: weft.ShardHeartbeatRequest.field_facts:type_name -> weft.FieldFactDelta
+	2,  // 14: weft.FieldFactDelta.state:type_name -> weft.FieldFactState
+	37, // 15: weft.AuthenticateRequest.metrics_config:type_name -> weft.MetricsConfig
+	41, // 16: weft.CoordinatorExecuteResponse.lines:type_name -> weft.Line
+	42, // 17: weft.CoordinatorExecuteResponse.notices:type_name -> weft.Notice
+	55, // 18: weft.ListShardsResponse.shards:type_name -> weft.ShardInfo
+	55, // 19: weft.GetShardResponse.shard:type_name -> weft.ShardInfo
+	70, // 20: weft.ListBucketsResponse.buckets:type_name -> weft.BucketInfo
+	15, // 21: weft.ShardQuery.Query:input_type -> weft.QueryRequest
+	19, // 22: weft.ShardQuery.Ingest:input_type -> weft.IngestRequest
+	18, // 23: weft.ShardQuery.IngestStream:input_type -> weft.LogRow
+	7,  // 24: weft.ShardQuery.Configure:input_type -> weft.ConfigureRequest
+	11, // 25: weft.ShardQuery.Archive:input_type -> weft.ArchiveRequest
+	3,  // 26: weft.ShardQuery.Pause:input_type -> weft.PauseRequest
+	5,  // 27: weft.ShardQuery.Resume:input_type -> weft.ResumeRequest
+	22, // 28: weft.WeftCompute.ExecuteQueryStream:input_type -> weft.ExecuteQueryRequest
+	39, // 29: weft.WeftCoordinator.Execute:input_type -> weft.CoordinatorExecuteRequest
+	43, // 30: weft.WeftCoordinator.ListServices:input_type -> weft.ListServicesRequest
+	45, // 31: weft.WeftCoordinator.AddSource:input_type -> weft.AddSourceRequest
+	47, // 32: weft.WeftCoordinator.RemoveSource:input_type -> weft.RemoveSourceRequest
+	36, // 33: weft.WeftCoordinator.Authenticate:input_type -> weft.AuthenticateRequest
+	18, // 34: weft.WeftCoordinator.IngestStream:input_type -> weft.LogRow
+	34, // 35: weft.WeftCoordinator.CreateToken:input_type -> weft.CreateTokenRequest
+	32, // 36: weft.WeftCoordinator.GetUsage:input_type -> weft.GetUsageRequest
+	50, // 37: weft.WeftCoordinator.SubmitSample:input_type -> weft.SubmitSampleRequest
+	52, // 38: weft.WeftCoordinator.GetSourceStatus:input_type -> weft.GetSourceStatusRequest
+	29, // 39: weft.WeftCoordinator.Heartbeat:input_type -> weft.ShardHeartbeatRequest
+	54, // 40: weft.WeftCoordinator.ListShards:input_type -> weft.ListShardsRequest
+	57, // 41: weft.WeftCoordinator.ForceArchiveShard:input_type -> weft.ForceArchiveShardRequest
+	59, // 42: weft.WeftCoordinator.DeleteArchivedShard:input_type -> weft.DeleteArchivedShardRequest
+	61, // 43: weft.WeftAdmin.RelaunchShard:input_type -> weft.RelaunchShardRequest
+	63, // 44: weft.WeftAdmin.ForceRemoveShard:input_type -> weft.ForceRemoveShardRequest
+	65, // 45: weft.WeftAdmin.SwapShardArchive:input_type -> weft.SwapShardArchiveRequest
+	67, // 46: weft.WeftAdmin.GetShard:input_type -> weft.GetShardRequest
+	54, // 47: weft.WeftAdmin.ListShards:input_type -> weft.ListShardsRequest
+	69, // 48: weft.WeftAdmin.ListBuckets:input_type -> weft.ListBucketsRequest
+	25, // 49: weft.WeftAdmin.AuditFleet:input_type -> weft.AuditFleetRequest
+	16, // 50: weft.ShardQuery.Query:output_type -> weft.ResultRow
+	20, // 51: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
+	14, // 52: weft.ShardQuery.IngestStream:output_type -> weft.IngestStreamResponse
+	8,  // 53: weft.ShardQuery.Configure:output_type -> weft.ConfigureResponse
+	12, // 54: weft.ShardQuery.Archive:output_type -> weft.ArchiveResponse
+	4,  // 55: weft.ShardQuery.Pause:output_type -> weft.PauseResponse
+	6,  // 56: weft.ShardQuery.Resume:output_type -> weft.ResumeResponse
+	24, // 57: weft.WeftCompute.ExecuteQueryStream:output_type -> weft.ExecuteQueryStreamResponse
+	40, // 58: weft.WeftCoordinator.Execute:output_type -> weft.CoordinatorExecuteResponse
+	44, // 59: weft.WeftCoordinator.ListServices:output_type -> weft.ListServicesResponse
+	46, // 60: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
+	48, // 61: weft.WeftCoordinator.RemoveSource:output_type -> weft.RemoveSourceResponse
+	38, // 62: weft.WeftCoordinator.Authenticate:output_type -> weft.AuthenticateResponse
+	14, // 63: weft.WeftCoordinator.IngestStream:output_type -> weft.IngestStreamResponse
+	35, // 64: weft.WeftCoordinator.CreateToken:output_type -> weft.CreateTokenResponse
+	33, // 65: weft.WeftCoordinator.GetUsage:output_type -> weft.GetUsageResponse
+	51, // 66: weft.WeftCoordinator.SubmitSample:output_type -> weft.SubmitSampleResponse
+	53, // 67: weft.WeftCoordinator.GetSourceStatus:output_type -> weft.GetSourceStatusResponse
+	31, // 68: weft.WeftCoordinator.Heartbeat:output_type -> weft.HeartbeatResponse
+	56, // 69: weft.WeftCoordinator.ListShards:output_type -> weft.ListShardsResponse
+	58, // 70: weft.WeftCoordinator.ForceArchiveShard:output_type -> weft.ForceArchiveShardResponse
+	60, // 71: weft.WeftCoordinator.DeleteArchivedShard:output_type -> weft.DeleteArchivedShardResponse
+	62, // 72: weft.WeftAdmin.RelaunchShard:output_type -> weft.RelaunchShardResponse
+	64, // 73: weft.WeftAdmin.ForceRemoveShard:output_type -> weft.ForceRemoveShardResponse
+	66, // 74: weft.WeftAdmin.SwapShardArchive:output_type -> weft.SwapShardArchiveResponse
+	68, // 75: weft.WeftAdmin.GetShard:output_type -> weft.GetShardResponse
+	56, // 76: weft.WeftAdmin.ListShards:output_type -> weft.ListShardsResponse
+	71, // 77: weft.WeftAdmin.ListBuckets:output_type -> weft.ListBucketsResponse
+	28, // 78: weft.WeftAdmin.AuditFleet:output_type -> weft.AuditFleetResponse
+	50, // [50:79] is the sub-list for method output_type
+	21, // [21:50] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_weft_proto_init() }

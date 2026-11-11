@@ -120,8 +120,8 @@ func CustomerStatsToProto(cs []CustomerStat) []*pb.CustomerArchiveStat {
 			CustomerId:      c.CustomerID,
 			PartitionValues: c.PartitionValues,
 			MinTsUnixNs:     c.MinTs.UnixNano(),
-			MaxTsUnixNs: c.MaxTs.UnixNano(),
-			RowCount:    c.RowCount,
+			MaxTsUnixNs:     c.MaxTs.UnixNano(),
+			RowCount:        c.RowCount,
 		}
 	}
 	return out
@@ -977,10 +977,15 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 // logs table. Drives the retention janitor's classify-without-scanning
 // pass (see docs/plans/retention-janitor.md).
 func (s *DuckDBShard) customerStats(ctx context.Context) ([]CustomerStat, error) {
-	// One group per combination of partition values, a missing value counting
-	// as 0 (or '' for text) as the legacy query always did.
+	return partitionStats(ctx, s.db, s.layout, s.source())
+}
+
+// partitionStats summarizes each group of rows in from (a table or a parquet
+// read) by its partition values: one group per combination, a missing value
+// counting as 0 (or ” for text) as the legacy query always did.
+func partitionStats(ctx context.Context, db *sql.DB, layout shape.Layout, from string) ([]CustomerStat, error) {
 	var cols, group []string
-	for i, c := range s.layout.Columns {
+	for i, c := range layout.Columns {
 		zero := "''"
 		if c.Type == shape.TypeInt64 {
 			zero = "'0'"
@@ -988,11 +993,11 @@ func (s *DuckDBShard) customerStats(ctx context.Context) ([]CustomerStat, error)
 		cols = append(cols, fmt.Sprintf("COALESCE(CAST(%s AS VARCHAR), %s)", c.Name, zero))
 		group = append(group, fmt.Sprint(i+1))
 	}
-	query := fmt.Sprintf("SELECT %sMIN(ts), MAX(ts), COUNT(*) FROM %s", strings.Join(append(cols, ""), ", "), s.source())
+	query := fmt.Sprintf("SELECT %sMIN(ts), MAX(ts), COUNT(*) FROM %s", strings.Join(append(cols, ""), ", "), from)
 	if len(group) > 0 {
 		query += " GROUP BY " + strings.Join(group, ", ")
 	}
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -1007,29 +1012,8 @@ func (s *DuckDBShard) customerStats(ctx context.Context) ([]CustomerStat, error)
 		if err := rows.Scan(append(dest, &c.MinTs, &c.MaxTs, &c.RowCount)...); err != nil {
 			return nil, err
 		}
-		if s.layout.IsLegacy() {
+		if layout.IsLegacy() {
 			c.CustomerID, _ = strconv.ParseInt(c.PartitionValues[0], 10, 64)
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
-}
-
-// scanCustomerStats runs a (customer, min_ts, max_ts, count) aggregation
-// and scans it into CustomerStat rows. The query must project exactly
-// those four columns in that order; COALESCE the customer so the scan
-// target is always a plain string (the column is nullable).
-func scanCustomerStats(ctx context.Context, db *sql.DB, query string) ([]CustomerStat, error) {
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []CustomerStat
-	for rows.Next() {
-		var c CustomerStat
-		if err := rows.Scan(&c.CustomerID, &c.MinTs, &c.MaxTs, &c.RowCount); err != nil {
-			return nil, err
 		}
 		out = append(out, c)
 	}

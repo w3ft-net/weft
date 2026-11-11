@@ -48,7 +48,7 @@ func TestColdArchiveOpensOnlyAdmittedKeys(t *testing.T) {
 	if _, err := db.Exec(fmt.Sprintf(`COPY src TO '%s/sized' (FORMAT PARQUET, PARTITION_BY (%s))`, dir, "customer_id, namespace, service, kind, _w, _part")); err != nil {
 		t.Fatal(err)
 	}
-	read := shard.ParquetReadExpr(dir + "/sized/**/*.parquet")
+	read := shard.ParquetReadExpr(dir+"/sized/**/*.parquet", shape.Legacy())
 	filesRead := regexp.MustCompile(`Total Files Read: (\d+)`)
 
 	rng := rand.New(rand.NewSource(11))

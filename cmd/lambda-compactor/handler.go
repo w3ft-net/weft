@@ -18,7 +18,7 @@ import (
 // result (counts + survivor stats) before it can swap parquet_path.
 // Testable without the Lambda runtime.
 func HandleCompact(req shard.CompactRequest, s3cfg *shard.S3Config) (shard.CompactResult, error) {
-	c := shard.LocalCompactor{S3: s3cfg}
+	c := shard.LocalCompactor{S3: s3cfg, Layout: req.Layout}
 	switch req.Op {
 	case shard.CompactOpRewrite:
 		return c.Rewrite(req.Src, req.Dst, req.Cutoffs)

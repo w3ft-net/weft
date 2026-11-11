@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // A dry run of the conversion on a real archive, run by hand before the janitor
@@ -56,7 +58,7 @@ func TestRealArchive_Conversion(t *testing.T) {
 	}()
 
 	start := time.Now()
-	res, err := RewriteRetention(src, dst, nil, nil)
+	res, err := RewriteRetention(src, dst, nil, shape.Legacy(), nil)
 	took := time.Since(start)
 	close(stop)
 	<-done
@@ -87,7 +89,7 @@ func TestRealArchive_Conversion(t *testing.T) {
 	t.Logf("%d keys compared", keys)
 
 	// What the copy looks like: widths per key, and the file counts and sizes.
-	rows, err := db.Query(`SELECT service, kind, _w, count(DISTINCT _part), count(*) FROM ` + ParquetReadExpr(dst) +
+	rows, err := db.Query(`SELECT service, kind, _w, count(DISTINCT _part), count(*) FROM ` + ParquetReadExpr(dst, shape.Legacy()) +
 		` GROUP BY ALL ORDER BY count(*) DESC`)
 	if err != nil {
 		t.Fatal(err)

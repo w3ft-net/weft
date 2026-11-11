@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // A keyed archive sizes its time buckets per key, so a big key's files and a
@@ -134,7 +136,7 @@ func TestSizedExport_EachKeyGetsAWidthForItsOwnSize(t *testing.T) {
 			base := "SELECT count(*) FROM logs WHERE service = ? AND ts >= CAST(? AS TIMESTAMP) AND ts <= CAST(? AS TIMESTAMP)"
 			count := func(q string) int {
 				var n int
-				q = replaceFirst(q, "FROM logs", "FROM "+ParquetReadExpr(glob))
+				q = replaceFirst(q, "FROM logs", "FROM "+ParquetReadExpr(glob, shape.Legacy()))
 				if err := db.QueryRow(q, toAny(args)...).Scan(&n); err != nil {
 					t.Fatalf("%v\n%s", err, q)
 				}
@@ -208,7 +210,7 @@ func TestRewriteRetention_ConvertsInAMemoryLimitedLambda(t *testing.T) {
 	t.Setenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "512") // a 307 MB limit for about 480 MB of rows
 
 	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
-	res, err := RewriteRetention(src, dstDir+"/sized/**/*.parquet", nil, nil)
+	res, err := RewriteRetention(src, dstDir+"/sized/**/*.parquet", nil, shape.Legacy(), nil)
 	if err != nil {
 		t.Fatalf("a conversion larger than memory failed: %v", err)
 	}

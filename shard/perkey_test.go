@@ -11,6 +11,7 @@ import (
 
 	"github.com/graybeardcorp/weft/logtable"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // A shard in the per-key layout keeps each (customer, namespace, service,
@@ -301,7 +302,7 @@ func TestPerKey_SmallLocalArchiveHoldsEveryRow(t *testing.T) {
 	}
 	defer db.Close()
 	var n int64
-	if err := db.QueryRow("SELECT count(*) FROM " + ParquetReadExpr(path)).Scan(&n); err != nil {
+	if err := db.QueryRow("SELECT count(*) FROM " + ParquetReadExpr(path, shape.Legacy())).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 30 {
@@ -348,7 +349,7 @@ func TestPerKey_SizedExportWritesEveryKey(t *testing.T) {
 		want int
 	}{{pkStats, 5}, {pkMain, 10}, {pkOther, 15}} {
 		var got int
-		q := "SELECT count(*) FROM " + ParquetReadExpr(glob) + " WHERE customer_id = CAST(? AS BIGINT) AND namespace = ? AND service = ? AND kind = ?"
+		q := "SELECT count(*) FROM " + ParquetReadExpr(glob, shape.Legacy()) + " WHERE customer_id = CAST(? AS BIGINT) AND namespace = ? AND service = ? AND kind = ?"
 		if err := db.QueryRow(q, fmt.Sprint(c.k.customer), c.k.namespace, c.k.service, c.k.kind).Scan(&got); err != nil {
 			t.Fatal(err)
 		}

@@ -22,7 +22,7 @@ import (
 // shard_archive_stats for a shard archived before stats existed (or by an
 // un-rolled old shard binary), so a later pass can classify it without a
 // re-scan. Pass s3cfg for s3:// paths, nil for local.
-func CaptureStats(parquetPath string, s3cfg *S3Config) ([]CustomerStat, error) {
+func CaptureStats(parquetPath string, layout shape.Layout, s3cfg *S3Config) ([]CustomerStat, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb: %w", err)
@@ -33,9 +33,7 @@ func CaptureStats(parquetPath string, s3cfg *S3Config) ([]CustomerStat, error) {
 			return nil, err
 		}
 	}
-	return scanCustomerStats(context.Background(), db, fmt.Sprintf(
-		"SELECT COALESCE(customer_id, 0), MIN(ts), MAX(ts), COUNT(*) FROM %s GROUP BY 1",
-		ParquetReadExpr(parquetPath)))
+	return partitionStats(context.Background(), db, layout, ParquetReadExpr(parquetPath, layout))
 }
 
 // CustomerCutoff is one customer's deletion boundary for a retention
@@ -75,7 +73,13 @@ type CompactResult struct {
 //
 // When no rows survive, the result's OutputPath is "" and nothing is
 // written; the caller deletes the source and moves the shard to GONE.
-func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *S3Config) (CompactResult, error) {
+func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, layout shape.Layout, s3cfg *S3Config) (CompactResult, error) {
+	// Cutoffs are per customer, which only the legacy layout has. A cutoff by
+	// another layout's partition values is a later change; until then it is
+	// refused, not applied to a column the archive does not have.
+	if len(cutoffs) > 0 && !layout.IsLegacy() {
+		return CompactResult{}, fmt.Errorf("retention cutoffs are per customer, and layout %s has no customer_id", layout.Fingerprint)
+	}
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return CompactResult{}, fmt.Errorf("open duckdb: %w", err)
@@ -87,22 +91,24 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 		}
 	}
 
-	if _, err := db.Exec("CREATE TEMP TABLE cutoffs (customer_id BIGINT, cutoff TIMESTAMP)"); err != nil {
-		return CompactResult{}, fmt.Errorf("create cutoffs: %w", err)
-	}
-	for _, c := range cutoffs {
-		if _, err := db.Exec("INSERT INTO cutoffs VALUES (?, ?)", c.CustomerID, c.Cutoff); err != nil {
-			return CompactResult{}, fmt.Errorf("insert cutoff %d: %w", c.CustomerID, err)
+	src := ParquetReadExpr(srcPath, layout)
+	keep := fmt.Sprintf("SELECT l.* FROM %s l", src)
+	if layout.IsLegacy() {
+		if _, err := db.Exec("CREATE TEMP TABLE cutoffs (customer_id BIGINT, cutoff TIMESTAMP)"); err != nil {
+			return CompactResult{}, fmt.Errorf("create cutoffs: %w", err)
 		}
+		for _, c := range cutoffs {
+			if _, err := db.Exec("INSERT INTO cutoffs VALUES (?, ?)", c.CustomerID, c.Cutoff); err != nil {
+				return CompactResult{}, fmt.Errorf("insert cutoff %d: %w", c.CustomerID, err)
+			}
+		}
+		// Keep a row when its customer has no cutoff (LEFT JOIN miss → preserve)
+		// or its ts is still within retention. A NULL customer never matches a
+		// cutoff, so it is preserved too.
+		keep = fmt.Sprintf(
+			"SELECT l.* FROM %s l LEFT JOIN cutoffs c ON l.customer_id = c.customer_id "+
+				"WHERE c.customer_id IS NULL OR l.ts >= c.cutoff", src)
 	}
-
-	src := ParquetReadExpr(srcPath)
-	// Keep a row when its customer has no cutoff (LEFT JOIN miss → preserve)
-	// or its ts is still within retention. A NULL customer never matches a
-	// cutoff, so it is preserved too.
-	keep := fmt.Sprintf(
-		"SELECT l.* FROM %s l LEFT JOIN cutoffs c ON l.customer_id = c.customer_id "+
-			"WHERE c.customer_id IS NULL OR l.ts >= c.cutoff", src)
 
 	var total, kept int64
 	if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", src)).Scan(&total); err != nil {
@@ -117,8 +123,7 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 		return res, nil // nothing survives → caller deletes the source
 	}
 
-	stats, err := scanCustomerStats(context.Background(), db, fmt.Sprintf(
-		"SELECT COALESCE(customer_id, 0), MIN(ts), MAX(ts), COUNT(*) FROM (%s) GROUP BY 1", keep))
+	stats, err := partitionStats(context.Background(), db, layout, "("+keep+")")
 	if err != nil {
 		return CompactResult{}, fmt.Errorf("survivor stats: %w", err)
 	}
@@ -137,7 +142,7 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, s3cfg *
 		}
 	}
 	if IsSized(dstPath) {
-		if err := copySized(db, keep, shape.Legacy(), strings.TrimSuffix(dstPath, "/**/*.parquet")); err != nil {
+		if err := copySized(db, keep, layout, strings.TrimSuffix(dstPath, "/**/*.parquet")); err != nil {
 			return CompactResult{}, fmt.Errorf("copy survivors to %s: %w", dstPath, err)
 		}
 	} else if _, err := db.Exec(fmt.Sprintf("COPY (%s) TO '%s' (FORMAT PARQUET)", keep, dstPath)); err != nil {

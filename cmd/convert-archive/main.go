@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -46,7 +47,7 @@ func convertArchive(m shard.ExportManifest, root, out string, now time.Time) (co
 
 	newPath := shard.SizedArchivePath(m.ParquetPath, now)
 	dst := shard.LocalPathOf(newPath, out)
-	if _, err := shard.RewriteRetention(src, dst, nil, nil); err != nil {
+	if _, err := shard.RewriteRetention(src, dst, nil, shape.Legacy(), nil); err != nil {
 		return res, fmt.Errorf("convert %s: %w", m.ShardID, err)
 	}
 	keys, err := shard.CompareArchives(src, dst, nil)

@@ -80,6 +80,14 @@ func (l Layout) Parse(values []string) ([]any, error) {
 // has a fingerprint. A reader treats a zero layout as the legacy one.
 func (l Layout) IsZero() bool { return l.Fingerprint == "" }
 
+// OrLegacy is the layout, or the legacy one when none was stated.
+func (l Layout) OrLegacy() Layout {
+	if l.IsZero() {
+		return Legacy()
+	}
+	return l
+}
+
 // IsLegacy reports whether the layout is the legacy customer_id one.
 func (l Layout) IsLegacy() bool { return l.Fingerprint == Legacy().Fingerprint }
 

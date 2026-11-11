@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // layoutSegment is the last directory of an archive glob that names its layout.
@@ -30,6 +32,9 @@ func LocalPathOf(s3Path, root string) string {
 	return strings.TrimRight(root, "/") + "/" + rest
 }
 
+// VerifyAgainstManifest and CompareArchives are the operator's checks on the
+// hosted (legacy layout, customer_id) archives; they read no other layout.
+//
 // VerifyAgainstManifest checks an archive against what its export recorded: the
 // total rows, and the rows of each customer (a row with no customer counts under
 // 0, as the export's stats do). An archive missing rows, holding extra ones, or
@@ -46,7 +51,7 @@ func VerifyAgainstManifest(path string, m ExportManifest, s3cfg *S3Config) error
 			return err
 		}
 	}
-	rows, err := db.Query("SELECT COALESCE(customer_id, 0), count(*) FROM " + ParquetReadExpr(path) + " GROUP BY 1")
+	rows, err := db.Query("SELECT COALESCE(customer_id, 0), count(*) FROM " + ParquetReadExpr(path, shape.Legacy()) + " GROUP BY 1")
 	if err != nil {
 		return fmt.Errorf("count %s: %w", path, err)
 	}
@@ -106,7 +111,7 @@ func CompareArchives(src, dst string, s3cfg *S3Config) (keys int, err error) {
 		return `SELECT customer_id, namespace, service, kind, count(*) AS n,
 			sum(CAST(hash(raw) AS HUGEINT)) AS h, min(ts) AS lo, max(ts) AS hi FROM ` + from + ` GROUP BY ALL`
 	}
-	a, b := fingerprint(ParquetReadExpr(src)), fingerprint(ParquetReadExpr(dst))
+	a, b := fingerprint(ParquetReadExpr(src, shape.Legacy())), fingerprint(ParquetReadExpr(dst, shape.Legacy()))
 
 	var differ int
 	if err := db.QueryRow(fmt.Sprintf("SELECT count(*) FROM ((%[1]s EXCEPT %[2]s) UNION ALL (%[2]s EXCEPT %[1]s))", a, b)).Scan(&differ); err != nil {

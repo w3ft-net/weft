@@ -11,6 +11,7 @@ import (
 	"time"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -458,6 +459,9 @@ func (p *Provisioner) ShardDescriptorsFor(ctx context.Context, tr TimeRange, nam
 		if e.State == StateArchived {
 			d.LambdaUrl = p.config.LambdaFunctionURL
 			d.ParquetPath = e.ParquetPath
+			// An archive is read in the layout it was written in, which is
+			// this build's: a shape change means new shards and new archives.
+			d.Layout = shard.LayoutToProto(shape.Legacy())
 		} else {
 			d.GrpcAddr = e.Addr
 		}
