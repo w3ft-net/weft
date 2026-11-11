@@ -91,3 +91,7 @@ func TestIngestBatch_WithNoSiblingTheBatchIsDLQd(t *testing.T) {
 		t.Errorf("the only shard was tried %d times, want once (the retry has nowhere else to go)", down.attempts)
 	}
 }
+
+func (s *downShard) IngestBatch(ctx context.Context, b shard.Batch, rec shard.IngestRecorder) error {
+	return s.Ingest(ctx, b.Rows, rec)
+}

@@ -9,6 +9,7 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -211,7 +212,9 @@ func (c *Coordinator) ingestBatch(ctx context.Context, b drainBatch) {
 	// The returned error names the shard and the running failure count
 	// (N/M) for the log line. (Routing exclusion is the FSM's job now, not
 	// a per-failure ingest latch.)
-	err := b.sh.Ingest(ctx, b.rows, c.Provisioner)
+	// A batch is one customer's rows (drainKey), so it is one partition.
+	batch := shard.Batch{Rows: b.rows, PartitionValues: shape.Coord{Customer: b.key.customerID}.PartitionValues()}
+	err := b.sh.IngestBatch(ctx, batch, c.Provisioner)
 	if err == nil {
 		c.Provisioner.Stats().Record(app, int64(len(b.rows)))
 		return
@@ -222,7 +225,7 @@ func (c *Coordinator) ingestBatch(ctx context.Context, b drainBatch) {
 	// candidate until it has failed several times in a row, and the round-robin
 	// counter every sender advances would send the retry straight back to it.
 	if fallback := c.Provisioner.IngestingShardExcept(b.nsID, b.key.service, b.sh.ID()); fallback != nil {
-		if retryErr := fallback.Ingest(ctx, b.rows, c.Provisioner); retryErr == nil {
+		if retryErr := fallback.IngestBatch(ctx, batch, c.Provisioner); retryErr == nil {
 			c.Provisioner.Stats().Record(app, int64(len(b.rows)))
 			return
 		}

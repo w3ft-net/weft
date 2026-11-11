@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 )
 
 type cellKind uint8
@@ -48,6 +49,12 @@ func (c Cell) Matches(v string) bool {
 type Coord struct {
 	Customer                      int64
 	Namespace, Env, Service, Kind Cell
+}
+
+// PartitionValues are the tuple's partition column values as text, in the order
+// of Legacy().Columns. A shard types them back per its layout.
+func (c Coord) PartitionValues() []string {
+	return []string{strconv.FormatInt(c.Customer, 10)}
 }
 
 // Set is a union of tuples. The empty set matches nothing.

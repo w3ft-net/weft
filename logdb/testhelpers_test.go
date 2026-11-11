@@ -162,3 +162,7 @@ func (m *mockHeartbeatStore) PruneShardHeartbeats(time.Duration) error {
 // on. Re-homed here from launcher_asg.go when the ASG launcher was deleted in
 // the EC2-direct migration; volume tests still use it for mocked EC2 output.
 func strPtr(s string) *string { return &s }
+
+func (s *failingShard) IngestBatch(ctx context.Context, b shard.Batch, rec shard.IngestRecorder) error {
+	return s.Ingest(ctx, b.Rows, rec)
+}

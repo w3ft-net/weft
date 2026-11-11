@@ -23,6 +23,15 @@ import (
 	"github.com/graybeardcorp/weft/shape"
 )
 
+// Batch is rows bound for one shard that all belong to one partition.
+// PartitionValues are the partition's values, positional per the shard's
+// layout. nil means the batch names none, and the legacy layout then reads each
+// row's customer_id.
+type Batch struct {
+	Rows            []*pb.LogRow
+	PartitionValues []string
+}
+
 // RowSink receives result rows streamed from a shard query. compute.Job satisfies this.
 type RowSink interface {
 	SendRow(row *pb.ResultRow, shardID string)
@@ -69,6 +78,8 @@ type Shard interface {
 	// cold-shard Lambda invocation).
 	QueryToSink(ctx context.Context, sql string, args []any, sink RowSink)
 	Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestRecorder) error
+	// IngestBatch is Ingest for a batch that carries its partition values.
+	IngestBatch(ctx context.Context, b Batch, rec IngestRecorder) error
 	// Archive exports the shard's data to Parquet and returns the path
 	// written plus per-customer stats (row counts and ts spans) captured
 	// during export. The coordinator persists the stats to
@@ -535,15 +546,38 @@ func awkFields(raw string) []string {
 // reports the failure to rec (if non-nil) and returns an error naming the shard
 // and the resulting consecutive-failure count so callers need a single log line.
 func (s *DuckDBShard) Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestRecorder) error {
+	return s.IngestBatch(ctx, Batch{Rows: rows}, rec)
+}
+
+// IngestBatch is Ingest for a batch that carries its partition values. They are
+// typed once here and stored as constants on every row; a batch without them
+// is stored by the legacy layout from its rows' customer_id, and refused under
+// any other layout. A batch the layout cannot store is refused whole.
+func (s *DuckDBShard) IngestBatch(ctx context.Context, b Batch, rec IngestRecorder) error {
+	rows := b.Rows
 	if len(rows) == 0 {
 		return nil
 	}
 
+	var partition []any
+	switch {
+	case b.PartitionValues != nil:
+		var perr error
+		if partition, perr = s.layout.Parse(b.PartitionValues); perr != nil {
+			return wrapIngestError(s.id, perr, rec)
+		}
+	case !s.layout.IsLegacy():
+		return wrapIngestError(s.id, fmt.Errorf("layout %s: batch carries no partition values", s.layout.Fingerprint), rec)
+	}
+
 	var err error
 	if s.perKey {
-		err = s.ingestPerKey(ctx, rows)
+		if !s.layout.IsLegacy() {
+			return wrapIngestError(s.id, fmt.Errorf("layout %s: per-key tables are not supported", s.layout.Fingerprint), rec)
+		}
+		err = s.ingestPerKey(ctx, partition, rows)
 	} else {
-		err = s.ingestTable(ctx, "logs", rows)
+		err = s.ingestTable(ctx, "logs", partition, rows)
 	}
 	if err != nil {
 		return wrapIngestError(s.id, err, rec)
@@ -557,7 +591,7 @@ func (s *DuckDBShard) Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestR
 }
 
 // ingestTable appends rows to one table on a connection of its own.
-func (s *DuckDBShard) ingestTable(ctx context.Context, table string, rows []*pb.LogRow) error {
+func (s *DuckDBShard) ingestTable(ctx context.Context, table string, partition []any, rows []*pb.LogRow) error {
 	// The Appender works against a single driver connection, so borrow one from
 	// the pool for the batch and hand it back on return.
 	conn, err := s.db.Conn(ctx)
@@ -566,14 +600,14 @@ func (s *DuckDBShard) ingestTable(ctx context.Context, table string, rows []*pb.
 	}
 	defer conn.Close()
 	return conn.Raw(func(dc any) error {
-		return appendRows(dc.(driver.Conn), table, s.layout, rows)
+		return appendRows(dc.(driver.Conn), table, s.layout, partition, rows)
 	})
 }
 
 // ingestPerKey appends each row to the table of its key. The whole batch is
 // one transaction: a caller that retries a failed batch must not find its good
 // rows already stored.
-func (s *DuckDBShard) ingestPerKey(ctx context.Context, rows []*pb.LogRow) error {
+func (s *DuckDBShard) ingestPerKey(ctx context.Context, partition []any, rows []*pb.LogRow) error {
 	var order []tableKey
 	groups := map[tableKey][]*pb.LogRow{}
 	for _, r := range rows {
@@ -596,7 +630,7 @@ func (s *DuckDBShard) ingestPerKey(ctx context.Context, rows []*pb.LogRow) error
 	}
 	err = conn.Raw(func(dc any) error {
 		for _, k := range order {
-			if err := appendRows(dc.(driver.Conn), k.table(), s.layout, groups[k]); err != nil {
+			if err := appendRows(dc.(driver.Conn), k.table(), s.layout, partition, groups[k]); err != nil {
 				return err
 			}
 		}
@@ -614,12 +648,16 @@ func (s *DuckDBShard) ingestPerKey(ctx context.Context, rows []*pb.LogRow) error
 }
 
 // appendRows streams rows into table through DuckDB's Appender on dc.
-func appendRows(dc driver.Conn, table string, layout shape.Layout, rows []*pb.LogRow) error {
-	// Until batches carry their partition values, only the legacy layout has a
-	// source for them (the row's customer_id). Any other layout fails closed
-	// rather than writing NULL partition columns.
-	if !layout.IsLegacy() {
-		return fmt.Errorf("layout %s: no source for its partition values", layout.Fingerprint)
+//
+// partition is the batch's typed partition values, appended after the base
+// columns as constants. nil means the batch carried none: the legacy layout
+// then reads customer_id from each row, and IngestBatch has already refused any
+// other layout.
+func appendRows(dc driver.Conn, table string, layout shape.Layout, partition []any, rows []*pb.LogRow) error {
+	args := make([]driver.Value, 0, len(baseColumns)+len(layout.Columns))
+	var constants []driver.Value
+	for _, v := range partition {
+		constants = append(constants, v)
 	}
 	appender, aerr := duckdb.NewAppenderWithColumns(dc, "", "", table, logColumns(layout))
 	if aerr != nil {
@@ -648,7 +686,7 @@ func appendRows(dc driver.Conn, table string, layout shape.Layout, rows []*pb.Lo
 			}
 			eventID, lineNo = duckdb.UUID(id), r.LineNo
 		}
-		if rerr := appender.AppendRow(
+		base := [...]driver.Value{
 			r.Raw,
 			awkFields(r.Raw),
 			time.Unix(0, r.TsUnixNs),
@@ -674,8 +712,14 @@ func appendRows(dc driver.Conn, table string, layout shape.Layout, rows []*pb.Lo
 			r.DurationNs,
 			eventID,
 			lineNo,
-			r.CustomerId, // the legacy layout's one partition column
-		); rerr != nil {
+		}
+		args = append(args[:0], base[:]...)
+		if constants == nil {
+			args = append(args, r.CustomerId) // the legacy layout's one partition column
+		} else {
+			args = append(args, constants...)
+		}
+		if rerr := appender.AppendRow(args...); rerr != nil {
 			appender.Close()
 			return fmt.Errorf("append row: %w", rerr)
 		}

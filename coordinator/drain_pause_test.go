@@ -107,3 +107,7 @@ func TestDrain_SolePausedShardStillTakesWrites(t *testing.T) {
 		t.Errorf("%d batches went to the DLQ", n)
 	}
 }
+
+func (s *countingShard) IngestBatch(ctx context.Context, b shard.Batch, rec shard.IngestRecorder) error {
+	return s.Ingest(ctx, b.Rows, rec)
+}

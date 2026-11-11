@@ -139,3 +139,11 @@ func TestRingBuffer_CountsOverwrittenRows(t *testing.T) {
 		t.Fatalf("Dropped() = %d after overflowing a 4-row buffer by 2", got)
 	}
 }
+
+func (s *heldShard) IngestBatch(ctx context.Context, b shard.Batch, rec shard.IngestRecorder) error {
+	return s.Ingest(ctx, b.Rows, rec)
+}
+
+func (s *orderShard) IngestBatch(ctx context.Context, b shard.Batch, rec shard.IngestRecorder) error {
+	return s.Ingest(ctx, b.Rows, rec)
+}

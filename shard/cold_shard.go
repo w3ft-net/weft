@@ -326,6 +326,11 @@ func (s *ColdShard) Ingest(_ context.Context, rows []*pb.LogRow, _ IngestRecorde
 	return fmt.Errorf("cold shard %s is read-only", s.id)
 }
 
+// IngestBatch is refused for the same reason as Ingest.
+func (s *ColdShard) IngestBatch(ctx context.Context, b Batch, rec IngestRecorder) error {
+	return s.Ingest(ctx, b.Rows, rec)
+}
+
 func (s *ColdShard) signRequest(req *http.Request, body []byte) error {
 	return signLambdaV4(req, body, s.creds, s.region)
 }

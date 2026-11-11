@@ -312,7 +312,7 @@ func (s *Server) Ingest(ctx context.Context, req *pb.IngestRequest) (*pb.IngestR
 	if err != nil {
 		return nil, err
 	}
-	if err := ds.Ingest(ctx, req.Rows, nil); err != nil {
+	if err := ds.IngestBatch(ctx, shard.Batch{Rows: req.Rows, PartitionValues: req.PartitionValues}, nil); err != nil {
 		return nil, err
 	}
 	return &pb.IngestResponse{RowsIngested: int64(len(req.Rows))}, nil

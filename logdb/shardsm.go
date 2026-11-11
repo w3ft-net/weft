@@ -10,6 +10,7 @@ import (
 	"github.com/qmuntal/stateless"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -1073,6 +1074,7 @@ func (sh *Shard) dialConfigure(ctx context.Context, hb store.ShardHeartbeat) (sh
 		WindowStart:    sh.WindowStart.Format(time.RFC3339),
 		WindowEnd:      sh.WindowEnd.Format(time.RFC3339),
 		HeartbeatToken: sh.HeartbeatToken,
+		Layout:         shard.LayoutToProto(shape.Legacy()),
 	}
 	sh.mu.RUnlock()
 
@@ -1196,6 +1198,7 @@ func (sh *Shard) reconnect(ctx context.Context, hb store.ShardHeartbeat) error {
 		WindowStart:    sh.WindowStart.Format(time.RFC3339),
 		WindowEnd:      sh.WindowEnd.Format(time.RFC3339),
 		HeartbeatToken: sh.HeartbeatToken,
+		Layout:         shard.LayoutToProto(shape.Legacy()),
 	}
 	sh.mu.Unlock()
 

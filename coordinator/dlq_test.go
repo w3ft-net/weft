@@ -311,3 +311,7 @@ func waitFor(timeout time.Duration, cond func() bool) error {
 	}
 	return fmt.Errorf("condition not met within %s", timeout)
 }
+
+func (s *dlqFailingShard) IngestBatch(ctx context.Context, b shard.Batch, rec shard.IngestRecorder) error {
+	return s.Ingest(ctx, b.Rows, rec)
+}

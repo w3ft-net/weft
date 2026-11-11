@@ -1381,10 +1381,15 @@ func (x *LogRow) GetLineNo() int32 {
 }
 
 type IngestRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Rows          []*LogRow              `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Rows  []*LogRow              `protobuf:"bytes,1,rep,name=rows,proto3" json:"rows,omitempty"`
+	// partition_values are the one partition every row in the batch belongs to:
+	// one value per column of the shard's PartitionLayout, in order, as text.
+	// The shard types them once and stores them on every row. Absent from an
+	// older coordinator: the shard then reads LogRow.customer_id (tag 26).
+	PartitionValues []string `protobuf:"bytes,2,rep,name=partition_values,json=partitionValues,proto3" json:"partition_values,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *IngestRequest) Reset() {
@@ -1420,6 +1425,13 @@ func (*IngestRequest) Descriptor() ([]byte, []int) {
 func (x *IngestRequest) GetRows() []*LogRow {
 	if x != nil {
 		return x.Rows
+	}
+	return nil
+}
+
+func (x *IngestRequest) GetPartitionValues() []string {
+	if x != nil {
+		return x.PartitionValues
 	}
 	return nil
 }
@@ -4787,9 +4799,10 @@ const file_weft_proto_rawDesc = "" +
 	"durationNs\x12\x19\n" +
 	"\bevent_id\x18\x1b \x01(\tR\aeventId\x12\x17\n" +
 	"\aline_no\x18\x1c \x01(\x05R\x06lineNoJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
-	"R\x06fieldsR\bcustomer\"1\n" +
+	"R\x06fieldsR\bcustomer\"\\\n" +
 	"\rIngestRequest\x12 \n" +
-	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\"5\n" +
+	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\x12)\n" +
+	"\x10partition_values\x18\x02 \x03(\tR\x0fpartitionValues\"5\n" +
 	"\x0eIngestResponse\x12#\n" +
 	"\rrows_ingested\x18\x01 \x01(\x03R\frowsIngested\"\xea\x01\n" +
 	"\x0fShardDescriptor\x12\x19\n" +

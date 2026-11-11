@@ -250,8 +250,13 @@ func (s *GRPCShard) call(ctx context.Context, op string, retryTransport bool, at
 // carries the resulting consecutive-failure count, so callers only
 // need a single log line.
 func (s *GRPCShard) Ingest(ctx context.Context, rows []*pb.LogRow, rec IngestRecorder) error {
+	return s.IngestBatch(ctx, Batch{Rows: rows}, rec)
+}
+
+// IngestBatch is Ingest for a batch that carries its partition values.
+func (s *GRPCShard) IngestBatch(ctx context.Context, b Batch, rec IngestRecorder) error {
 	err := s.call(ctx, "Ingest", false, func() (bool, error) {
-		_, err := s.client.Ingest(ctx, &pb.IngestRequest{Rows: rows})
+		_, err := s.client.Ingest(ctx, &pb.IngestRequest{Rows: b.Rows, PartitionValues: b.PartitionValues})
 		return false, err
 	})
 	if err != nil {

@@ -214,3 +214,7 @@ var _ compute.LineStream = (compute.LineStream)(nil)
 
 // _ keeps sync imported.
 var _ sync.WaitGroup
+
+func (s *errShard) IngestBatch(ctx context.Context, b shard.Batch, rec shard.IngestRecorder) error {
+	return s.Ingest(ctx, b.Rows, rec)
+}

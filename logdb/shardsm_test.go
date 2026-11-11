@@ -1608,3 +1608,7 @@ func TestProvisioner_ForceRemove_WrongStateAndUnknown(t *testing.T) {
 		t.Fatalf("READ_ONLY: got %v", err)
 	}
 }
+
+func (s *fakeArchivableShard) IngestBatch(ctx context.Context, b shard.Batch, rec shard.IngestRecorder) error {
+	return s.Ingest(ctx, b.Rows, rec)
+}

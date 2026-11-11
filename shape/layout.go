@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -51,6 +52,27 @@ func NewLayout(cols ...LayoutColumn) Layout {
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return Layout{Columns: cols, Fingerprint: hex.EncodeToString(sum[:8])}
+}
+
+// Parse converts a batch's positional partition values to the layout's column
+// types, once per batch. It refuses a count that differs from the layout's.
+func (l Layout) Parse(values []string) ([]any, error) {
+	if len(values) != len(l.Columns) {
+		return nil, fmt.Errorf("layout %s has %d partition columns, batch carries %d values", l.Fingerprint, len(l.Columns), len(values))
+	}
+	out := make([]any, len(values))
+	for i, c := range l.Columns {
+		if c.Type != TypeInt64 {
+			out[i] = values[i]
+			continue
+		}
+		n, err := strconv.ParseInt(values[i], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("partition column %s: %w", c.Name, err)
+		}
+		out[i] = n
+	}
+	return out, nil
 }
 
 // IsLegacy reports whether the layout is the legacy customer_id one.

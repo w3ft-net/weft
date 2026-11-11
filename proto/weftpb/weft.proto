@@ -234,6 +234,11 @@ message LogRow {
 
 message IngestRequest {
   repeated LogRow rows = 1;
+  // partition_values are the one partition every row in the batch belongs to:
+  // one value per column of the shard's PartitionLayout, in order, as text.
+  // The shard types them once and stores them on every row. Absent from an
+  // older coordinator: the shard then reads LogRow.customer_id (tag 26).
+  repeated string partition_values = 2;
 }
 
 message IngestResponse {
