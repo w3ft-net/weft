@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/graybeardcorp/weft/logtable"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -60,8 +61,8 @@ func TestFieldClassifier_TypedAfterEnoughNumericRows(t *testing.T) {
 	c.Observe(nil, numRows(1, "GET /a 200 12.5"))
 	settle(t, c)
 	facts := c.Pending()
-	if f, ok := factFor(facts, "$3"); !ok || f.State != FactTyped || f.Env != "prod" || f.CustomerID != 1 {
-		t.Errorf("$3 want typed for customer 1 env prod, got %+v (ok=%v)", f, ok)
+	if f, ok := factFor(facts, "$3"); !ok || f.State != FactTyped || f.Env != "prod" || f.Customer != 1 || f.Table != logtable.Name([]any{int64(1)}, "ns", "svc", "main") {
+		t.Errorf("$3 want typed for customer 1 env prod in its table, got %+v (ok=%v)", f, ok)
 	}
 	if f, ok := factFor(facts, "$4"); !ok || f.State != FactTyped {
 		t.Errorf("$4 (a float) want typed, got %+v (ok=%v)", f, ok)
@@ -344,7 +345,7 @@ func BenchmarkClassifyJSONRow(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		c.mu.Lock()
-		c.classify(nil, row)
+		c.classify(nil, "", row)
 		c.mu.Unlock()
 	}
 }
@@ -405,6 +406,49 @@ func TestFieldFacts_RestoredByTheNextInstance(t *testing.T) {
 		if f, ok := factFor(facts, loc); !ok || f.State != FactTyped {
 			t.Errorf("%s want typed straight after the roll, got %+v (ok=%v)", loc, f, ok)
 		}
+	}
+}
+
+// A fact is reported under the source's logical table, the same one before and
+// after a roll.
+func TestFieldFacts_TableSurvivesARoll(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.duckdb")
+	ds := openAt(t, path)
+	ingest(t, ds, mixedRows(factTypedAfter, "7", "3"))
+	want, _ := factFor(ds.FieldFacts(), "$2")
+	roll(t, ds)
+
+	next := openAt(t, path)
+	got, ok := factFor(next.FieldFacts(), "$2")
+	if !ok || got.Table == "" || got.Table != want.Table || got.Customer != want.Customer {
+		t.Errorf("after a roll $2 is %+v (ok=%v), want table %q customer %d", got, ok, want.Table, want.Customer)
+	}
+}
+
+// The facts file the previous build wrote names a source by customer_id alone.
+// A new shard that restores it must report the same facts under the logical
+// table of that customer, or every typed fact is lost in the upgrade roll.
+func TestFieldFacts_RestoresAFileFromBeforeTables(t *testing.T) {
+	old := `{"Epoch":4,"Sources":[{"CustomerID":7,"Namespace":"ns","Service":"svc","Kind":"main","Env":"prod",
+		"Locators":[{"Locator":"$2","State":1,"WasTyped":true,"Epoch":4}]}]}`
+	c := NewFieldClassifier()
+	defer c.Stop()
+	if err := c.Restore([]byte(old)); err != nil {
+		t.Fatal(err)
+	}
+	f, ok := factFor(c.Pending(), "$2")
+	want := logtable.Name([]any{int64(7)}, "ns", "svc", "main")
+	if !ok || f.State != FactTyped || f.Table != want || f.Customer != 7 || f.Env != "prod" {
+		t.Fatalf("restored $2 = %+v (ok=%v), want typed in table %s for customer 7", f, ok, want)
+	}
+	// and it is the same source a new batch of that customer lands in
+	c.mu.Lock()
+	n := len(c.sources)
+	c.classify([]any{int64(7)}, "7", &pb.LogRow{Raw: "a 1", Namespace: "ns", Service: "svc", Env: "prod"})
+	grew := len(c.sources) != n
+	c.mu.Unlock()
+	if grew {
+		t.Error("a row of the restored source started a second source")
 	}
 }
 

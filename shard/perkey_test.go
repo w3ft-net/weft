@@ -23,7 +23,9 @@ type pkKey struct {
 	kind               string
 }
 
-func (k pkKey) table() string { return logtable.Name([]any{k.customer}, k.namespace, k.service, k.kind) }
+func (k pkKey) table() string {
+	return logtable.Name([]any{k.customer}, k.namespace, k.service, k.kind)
+}
 
 func pkRows(k pkKey, n int, tag string) []*pb.LogRow {
 	rows := make([]*pb.LogRow, n)
@@ -281,8 +283,8 @@ func TestPerKey_CustomerComesFromThePartitionNotTheRows(t *testing.T) {
 		t.Error("no fact source recorded")
 	}
 	for sk := range s.facts.sources {
-		if sk.customerID != 9 {
-			t.Errorf("fact source %+v is not under customer 9", sk)
+		if sk.partition != "9" {
+			t.Errorf("fact source %+v is not under partition 9", sk)
 		}
 	}
 }

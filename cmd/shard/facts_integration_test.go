@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,11 +16,13 @@ import (
 	"github.com/graybeardcorp/weft/coordinator"
 	coordsvc "github.com/graybeardcorp/weft/coordinator/service"
 	"github.com/graybeardcorp/weft/logdb"
+	"github.com/graybeardcorp/weft/logtable"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	shardsvc "github.com/graybeardcorp/weft/shard/service"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // factsRig is a shard server and a coordinator on real Postgres, joined by the
@@ -32,6 +35,9 @@ type factsRig struct {
 	shard   *shardsvc.Server
 	client  pb.WeftCoordinatorClient
 	shardID string
+	// oldShard makes the heartbeat look as a shard that predates table names
+	// sends it: field facts without the table.
+	oldShard *atomic.Bool
 }
 
 func newFactsRig(t *testing.T) *factsRig {
@@ -55,6 +61,7 @@ func newFactsRig(t *testing.T) *factsRig {
 	// The coordinator: a registry over the real store, holding the shard's record.
 	reg := logdb.NewShardRegistry()
 	reg.SetStore(logdb.ShardStore{Store: db})
+	reg.SetLegacyFactTable(hosted.LegacyFactTable)
 	coord := coordinator.NewCoordinator(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Store: db})
 	prov := logdb.NewProvisioner(reg, nil, logdb.ProvisionerConfig{})
 	prov.SetStore(db)
@@ -70,7 +77,16 @@ func newFactsRig(t *testing.T) *factsRig {
 	pb.RegisterWeftCoordinatorServer(gs, &coordsvc.Server{Coord: coord, Store: db, ShardSecret: fleet})
 	go gs.Serve(lis)
 	t.Cleanup(gs.Stop)
+	oldShard := &atomic.Bool{}
 	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+			if hb, ok := req.(*pb.ShardHeartbeatRequest); ok && oldShard.Load() {
+				for _, d := range hb.FieldFacts {
+					d.Table = ""
+				}
+			}
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}),
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -89,7 +105,7 @@ func newFactsRig(t *testing.T) *factsRig {
 	}
 	t.Cleanup(func() { srv.Shard().Close() })
 
-	return &factsRig{t: t, db: db, prov: prov, reg: reg, shard: srv, client: pb.NewWeftCoordinatorClient(conn), shardID: shardID}
+	return &factsRig{t: t, db: db, prov: prov, reg: reg, shard: srv, client: pb.NewWeftCoordinatorClient(conn), shardID: shardID, oldShard: oldShard}
 }
 
 // ingest lands n rows of one source whose $2 and .q are the given values.
@@ -130,7 +146,7 @@ func (r *factsRig) storedLocators() map[string]bool {
 }
 
 func (r *factsRig) typedOnCoordinator(locator string) bool {
-	return r.reg.Get(r.shardID).FieldTyped(shard.FactKey{CustomerID: 1, Namespace: "ns", Service: "svc", Kind: "main", Env: "prod", Locator: locator})
+	return r.reg.Get(r.shardID).FieldTyped(shard.FactKey{Table: logtable.Name([]any{int64(1)}, "ns", "svc", "main"), Env: "prod", Locator: locator})
 }
 
 // A fresh shard types a source from its own rows, reports it on a heartbeat,
@@ -196,7 +212,7 @@ func TestFieldFacts_ReachTheQueryPlannersKey(t *testing.T) {
 	}
 	tp := plan.Typed
 	typed := func() bool {
-		return r.prov.ShardFieldsTyped(r.shardID, tp.CustomerID, tp.Namespace, tp.Service, tp.Kind, tp.Env, tp.Requires)
+		return r.prov.ShardFieldsTyped(r.shardID, tp.Table, tp.Env, tp.Requires)
 	}
 
 	if typed() {
@@ -224,7 +240,7 @@ func TestFieldFacts_KeyedAggregatePlansAskForTheKeysTheShardReports(t *testing.T
 			t.Fatalf("plan %s: %v, typed %+v", program, err, plan.Typed)
 		}
 		tp := plan.Typed
-		return r.prov.ShardFieldsTyped(r.shardID, tp.CustomerID, tp.Namespace, tp.Service, tp.Kind, tp.Env, tp.Requires)
+		return r.prov.ShardFieldsTyped(r.shardID, tp.Table, tp.Env, tp.Requires)
 	}
 	const sum = `{ s[$1] += $2 } END { for (k in s) print k, s[k] }`
 	const max = `{ if ($2 > m[$1]) m[$1] = $2 } END { for (k in m) print k, m[k] }`
@@ -298,3 +314,29 @@ func TestFieldFacts_ALostAckIsResentAndTheDuplicateIsHarmless(t *testing.T) {
 }
 
 const factTypedAfterForTest = 1000
+
+// A shard of the previous build reports a fact without a table, naming the
+// source by customer_id, namespace, service and kind. During an upgrade the
+// coordinator must still resolve it to the planner's key, and take the
+// retraction the same way.
+func TestFieldFacts_AShardWithoutTableNamesStillReachesThePlannersKey(t *testing.T) {
+	r := newFactsRig(t)
+	r.oldShard.Store(true)
+	plan, err := planner.Plan(`cat /log/ns/prod/svc/main.log | awk '$2 > 500'`, 1, "", time.Time{}, time.Time{})
+	if err != nil || plan.Typed == nil {
+		t.Fatalf("plan: %v, typed %+v", err, plan.Typed)
+	}
+	tp := plan.Typed
+	typed := func() bool { return r.prov.ShardFieldsTyped(r.shardID, tp.Table, tp.Env, tp.Requires) }
+
+	r.ingest(factTypedAfterForTest, "7", "3")
+	r.beat()
+	if !typed() {
+		t.Fatal("a fact from a shard that sends no table is not typed under the planner's table")
+	}
+	r.ingest(1, "7abc", "3")
+	r.beat()
+	if typed() {
+		t.Error("still typed after the old shard's retraction")
+	}
+}

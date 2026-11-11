@@ -404,7 +404,8 @@ func fieldFactDeltas(facts []shard.FieldFact) []*pb.FieldFactDelta {
 			state = pb.FieldFactState_FIELD_FACT_STATE_DIRTY
 		}
 		out[i] = &pb.FieldFactDelta{
-			CustomerId: f.CustomerID,
+			CustomerId: f.Customer,
+			Table:      f.Table,
 			Namespace:  f.Namespace,
 			Service:    f.Service,
 			Kind:       f.Kind,

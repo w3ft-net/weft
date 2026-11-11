@@ -22,6 +22,13 @@ type fieldFactSet struct {
 	entries map[shard.FactKey]factEntry
 }
 
+// LegacyFactTable names the logical table of a source a shard identified by
+// customer_id, namespace, service and kind alone: a shard that predates table
+// names, or a row of the store, which never held one. The deployment that has
+// such shards supplies it; without one their facts are unknown, which plans as
+// before.
+type LegacyFactTable func(customerID int64, namespace, service, kind string) string
+
 type factEntry struct {
 	typed bool
 	epoch uint64
@@ -38,21 +45,27 @@ func (sh *Shard) FieldTyped(k shard.FactKey) bool {
 // foldFieldFacts applies a heartbeat's deltas and returns what changed: the
 // facts that became typed and the ones that stopped being. A delta not newer
 // than what the shard already has is ignored.
-func (sh *Shard) foldFieldFacts(deltas []*pb.FieldFactDelta) (typed, dropped []store.ShardFieldFact) {
+func (sh *Shard) foldFieldFacts(legacy LegacyFactTable, deltas []*pb.FieldFactDelta) (typed, dropped []store.ShardFieldFact) {
 	sh.facts.mu.Lock()
 	defer sh.facts.mu.Unlock()
 	if sh.facts.entries == nil {
 		sh.facts.entries = map[shard.FactKey]factEntry{}
 	}
 	for _, d := range deltas {
-		k := shard.FactKey{CustomerID: d.CustomerId, Namespace: d.Namespace, Service: d.Service,
-			Kind: d.Kind, Env: d.Env, Locator: d.Locator}
+		table := d.Table
+		if table == "" && legacy != nil {
+			table = legacy(d.CustomerId, d.Namespace, d.Service, d.Kind)
+		}
+		if table == "" {
+			continue // a source this coordinator can't name: unknown
+		}
+		k := shard.FactKey{Table: table, Env: d.Env, Locator: d.Locator}
 		cur, seen := sh.facts.entries[k]
 		if seen && d.Epoch <= cur.epoch {
 			continue
 		}
-		row := store.ShardFieldFact{ShardID: sh.ID, CustomerID: k.CustomerID, Namespace: k.Namespace,
-			Service: k.Service, Kind: k.Kind, Env: k.Env, Locator: k.Locator, Epoch: int64(d.Epoch)}
+		row := store.ShardFieldFact{ShardID: sh.ID, CustomerID: d.CustomerId, Namespace: d.Namespace,
+			Service: d.Service, Kind: d.Kind, Env: d.Env, Locator: d.Locator, Epoch: int64(d.Epoch)}
 		switch d.State {
 		case pb.FieldFactState_FIELD_FACT_STATE_TYPED:
 			sh.facts.entries[k] = factEntry{typed: true, epoch: d.Epoch}
@@ -63,18 +76,21 @@ func (sh *Shard) foldFieldFacts(deltas []*pb.FieldFactDelta) (typed, dropped []s
 				dropped = append(dropped, row)
 			}
 			weftsdk.Infof(context.Background(), "registry: shard %s: %d/%s/%s/%s env=%s %s is no longer all numbers (epoch %d)",
-				sh.ID, k.CustomerID, k.Namespace, k.Service, k.Kind, k.Env, k.Locator, d.Epoch)
+				sh.ID, d.CustomerId, d.Namespace, d.Service, d.Kind, d.Env, d.Locator, d.Epoch)
 		}
 	}
 	return typed, dropped
 }
 
 // replaceFieldFacts makes the typed facts exactly rows, the store's view.
-func (sh *Shard) replaceFieldFacts(rows []store.ShardFieldFact) {
+func (sh *Shard) replaceFieldFacts(legacy LegacyFactTable, rows []store.ShardFieldFact) {
 	m := make(map[shard.FactKey]factEntry, len(rows))
 	for _, r := range rows {
-		m[shard.FactKey{CustomerID: r.CustomerID, Namespace: r.Namespace, Service: r.Service,
-			Kind: r.Kind, Env: r.Env, Locator: r.Locator}] = factEntry{typed: true, epoch: uint64(r.Epoch)}
+		if legacy == nil {
+			continue // the store names a source by customer, which this coordinator can't resolve
+		}
+		table := legacy(r.CustomerID, r.Namespace, r.Service, r.Kind)
+		m[shard.FactKey{Table: table, Env: r.Env, Locator: r.Locator}] = factEntry{typed: true, epoch: uint64(r.Epoch)}
 	}
 	sh.facts.mu.Lock()
 	sh.facts.entries = m
@@ -90,7 +106,7 @@ func (r *ShardRegistry) FoldFieldFacts(id string, deltas []*pb.FieldFactDelta) u
 	if entry == nil || len(deltas) == 0 {
 		return 0
 	}
-	typed, dropped := entry.foldFieldFacts(deltas)
+	typed, dropped := entry.foldFieldFacts(r.legacyFactTable, deltas)
 	if r.store != nil && len(typed)+len(dropped) > 0 {
 		if err := r.store.ApplyShardFieldFacts(id, typed, dropped); err != nil {
 			weftsdk.Errorf(context.Background(), "registry: persist field facts for %s: %v", id, err)
@@ -124,17 +140,16 @@ func (r *ShardRegistry) fieldFactsByShard() (map[string][]store.ShardFieldFact, 
 }
 
 // ShardFieldsTyped reports whether the shard has said every locator is all
-// numbers in the one stream (customer, namespace, service, kind, env). False
+// numbers in the one stream (table, env). False
 // for a shard the registry doesn't hold, and for any locator not known typed:
 // absence is unknown, which plans as it always has.
-func (p *Provisioner) ShardFieldsTyped(shardID string, customerID int64, namespace, service, kind, env string, locators []string) bool {
+func (p *Provisioner) ShardFieldsTyped(shardID, table, env string, locators []string) bool {
 	sh := p.registry.Get(shardID)
 	if sh == nil || len(locators) == 0 {
 		return false
 	}
 	for _, loc := range locators {
-		if !sh.FieldTyped(shard.FactKey{CustomerID: customerID, Namespace: namespace, Service: service,
-			Kind: kind, Env: env, Locator: loc}) {
+		if !sh.FieldTyped(shard.FactKey{Table: table, Env: env, Locator: loc}) {
 			return false
 		}
 	}

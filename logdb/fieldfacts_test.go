@@ -4,15 +4,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/logtable"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 )
 
-var prodKey = shard.FactKey{CustomerID: 1, Namespace: "ns", Service: "svc", Kind: "main", Env: "prod", Locator: "$5"}
+// testLegacy is how a deployment with customer-keyed shards names a source's
+// table: its one partition column is the customer.
+func testLegacy(customerID int64, namespace, service, kind string) string {
+	return logtable.Name([]any{customerID}, namespace, service, kind)
+}
 
+var prodKey = shard.FactKey{Table: testLegacy(1, "ns", "svc", "main"), Env: "prod", Locator: "$5"}
+
+// delta is what a shard of this build reports for k, a source of customer 1.
 func delta(k shard.FactKey, state pb.FieldFactState, epoch uint64) *pb.FieldFactDelta {
-	return &pb.FieldFactDelta{CustomerId: k.CustomerID, Namespace: k.Namespace, Service: k.Service,
-		Kind: k.Kind, Env: k.Env, Locator: k.Locator, State: state, Epoch: epoch}
+	d := legacyDelta(k, state, epoch)
+	d.Table = k.Table
+	return d
+}
+
+// legacyDelta is what a shard that predates table names reports: the source
+// by customer_id, namespace, service and kind.
+func legacyDelta(k shard.FactKey, state pb.FieldFactState, epoch uint64) *pb.FieldFactDelta {
+	return &pb.FieldFactDelta{CustomerId: 1, Namespace: "ns", Service: "svc", Kind: "main",
+		Env: k.Env, Locator: k.Locator, State: state, Epoch: epoch}
 }
 
 const (
@@ -25,6 +41,7 @@ func registryWithShard(t *testing.T) (*ShardRegistry, *fakeRegistryStore) {
 	fake := newFakeRegistryStore()
 	reg := NewShardRegistry()
 	reg.SetStore(fake)
+	reg.SetLegacyFactTable(testLegacy)
 	reg.Add(&Shard{ID: "s1", State: StateIngesting, CreatedAt: time.Now()})
 	return reg, fake
 }
@@ -83,6 +100,7 @@ func TestFieldFacts_LoadedAtBootAndFollowedOnRefresh(t *testing.T) {
 	// A second coordinator boots from the same store.
 	boot := NewShardRegistry()
 	boot.SetStore(fake)
+	boot.SetLegacyFactTable(testLegacy)
 	if err := boot.LoadFromStore(func(*Shard) (shard.Shard, error) { return nil, nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -95,5 +113,55 @@ func TestFieldFacts_LoadedAtBootAndFollowedOnRefresh(t *testing.T) {
 	boot.RefreshFromStore(false)
 	if boot.Get("s1").FieldTyped(prodKey) {
 		t.Error("a follower still holds a retracted fact after refresh")
+	}
+}
+
+// A shard that predates table names says which source a fact is about by
+// customer_id, namespace, service and kind. The coordinator's hook names the
+// same table the new shard reports, so a fleet in the middle of an upgrade
+// agrees on the facts.
+func TestFoldFieldFacts_OldShardsFactsLandInTheTableANewShardWouldReport(t *testing.T) {
+	reg, _ := registryWithShard(t)
+	if acked := reg.FoldFieldFacts("s1", []*pb.FieldFactDelta{legacyDelta(prodKey, typed, 3)}); acked != 3 {
+		t.Errorf("acked = %d, want 3", acked)
+	}
+	if !reg.Get("s1").FieldTyped(prodKey) {
+		t.Fatal("a fact from a shard with no table name is not held under the table the planner asks for")
+	}
+	// and the new shard's retraction of it, by table, reaches the same entry
+	reg.FoldFieldFacts("s1", []*pb.FieldFactDelta{delta(prodKey, dirty, 9)})
+	if reg.Get("s1").FieldTyped(prodKey) {
+		t.Error("a retraction by table did not reach a fact held from a legacy delta")
+	}
+}
+
+// A build that has no customer-keyed shards supplies no hook: such facts are
+// unknown, which plans as it always has, and are never stored.
+func TestFoldFieldFacts_WithoutAHookAFactWithNoTableIsUnknown(t *testing.T) {
+	reg, fake := registryWithShard(t)
+	reg.SetLegacyFactTable(nil)
+	reg.FoldFieldFacts("s1", []*pb.FieldFactDelta{legacyDelta(prodKey, typed, 3)})
+	if reg.Get("s1").FieldTyped(prodKey) {
+		t.Error("a fact with no table became typed without a hook to name it")
+	}
+	if rows, _ := fake.ListShardFieldFacts(); len(rows) != 0 {
+		t.Errorf("an unresolvable fact was stored: %+v", rows)
+	}
+	// a shard of this build needs no hook
+	reg.FoldFieldFacts("s1", []*pb.FieldFactDelta{delta(prodKey, typed, 4)})
+	if !reg.Get("s1").FieldTyped(prodKey) {
+		t.Error("a fact with a table was not held")
+	}
+}
+
+func TestShardFieldsTyped_AsksByTable(t *testing.T) {
+	reg, _ := registryWithShard(t)
+	p := NewProvisioner(reg, nil, ProvisionerConfig{})
+	reg.FoldFieldFacts("s1", []*pb.FieldFactDelta{delta(prodKey, typed, 3)})
+	if !p.ShardFieldsTyped("s1", prodKey.Table, "prod", []string{"$5"}) {
+		t.Error("typed fact not found by table")
+	}
+	if p.ShardFieldsTyped("s1", testLegacy(2, "ns", "svc", "main"), "prod", []string{"$5"}) {
+		t.Error("another customer's table reads as typed")
 	}
 }

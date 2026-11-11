@@ -1255,7 +1255,7 @@ func (c *Coordinator) exactPlan(plan *planner.QueryPlan, descs []*pb.ShardDescri
 		return nil
 	}
 	for _, d := range descs {
-		if !c.Provisioner.ShardFieldsTyped(d.ShardId, t.CustomerID, t.Namespace, t.Service, t.Kind, t.Env, t.Requires) {
+		if !c.Provisioner.ShardFieldsTyped(d.ShardId, t.Table, t.Env, t.Requires) {
 			return nil
 		}
 	}
@@ -1274,7 +1274,7 @@ func (c *Coordinator) applyTypedVariant(plan *planner.QueryPlan, args []string, 
 	}
 	n := 0
 	for _, d := range descs {
-		if c.Provisioner.ShardFieldsTyped(d.ShardId, t.CustomerID, t.Namespace, t.Service, t.Kind, t.Env, t.Requires) {
+		if c.Provisioner.ShardFieldsTyped(d.ShardId, t.Table, t.Env, t.Requires) {
 			d.Sql, d.Args, d.FieldSql = t.DirectShardSQL, args, t.FieldSQL
 			n++
 		}

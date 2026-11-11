@@ -60,6 +60,11 @@ type Config struct {
 	// Retention is the optional retention feature: told of each archive's
 	// stats and started with the provisioner. Nil: archives are kept forever.
 	Retention Retention
+
+	// LegacyFactTable names the table of a field fact that identifies its
+	// source by customer, from a shard that predates table names or from the
+	// store. Nil: such facts are unknown.
+	LegacyFactTable LegacyFactTable
 }
 
 // Start hydrates the shard registry, constructs the Provisioner with
@@ -76,6 +81,7 @@ func Start(cfg Config) (*Provisioner, error) {
 	// the first tick converges from real state rather than an empty world.
 	reg := NewShardRegistry()
 	reg.SetStore(ShardStore{cfg.DB})
+	reg.SetLegacyFactTable(cfg.LegacyFactTable)
 	lambdaURL := os.Getenv("LAMBDA_FUNCTION_URL")
 	reconstructCfg := ReconstructConfig{
 		ShardSecret:       cfg.ShardSecret,

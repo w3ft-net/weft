@@ -377,6 +377,14 @@ changes are additive, so old receivers must stay correct.
 2. **Cut over.** Once every shard and coordinator runs step 1's build,
    delete the one stamp in the ingest stream handler. The public proto
    keeps `reserved 26;` by number only.
+   **Field facts** are keyed by `(table, env, locator)`, the table being
+   `logtable.Name` of the source, which already carries the partition. A
+   shard sends the table beside the old fields. A shard that predates it
+   sends none, and the coordinator names the table through a hook the
+   hosted adapter supplies (`logdb.Config.LegacyFactTable`); with no
+   hook such a fact is unknown, which plans as before. The same hook
+   names the table of a row the store holds, so the Postgres table is
+   unchanged.
 3. **Dead-letter queue.** New entries store the added columns beside the
    row (`coordinator/dlq.go`). Legacy entries, bare rows with tag 26,
    are decoded by a legacy reader that lives in the hosted repo, until

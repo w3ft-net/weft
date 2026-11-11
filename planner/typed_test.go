@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/logtable"
 )
 
 func planTyped(t *testing.T, pipeline string) *QueryPlan {
@@ -24,7 +26,7 @@ func TestTypedPlan_AwkFieldComparison(t *testing.T) {
 		t.Errorf("requires %q, want $5", got)
 	}
 	tp := p.Typed
-	if tp.CustomerID != 7 || tp.Namespace != "acme" || tp.Service != "api" || tp.Kind != "main" || tp.Env != "" {
+	if tp.Table != logtable.Name([]any{int64(7)}, "acme", "api", "main") || tp.Env != "" {
 		t.Errorf("source = %+v", tp)
 	}
 	// The base keeps the string alternative that makes it a wide prefilter;
@@ -45,7 +47,7 @@ func TestTypedPlan_AwkFieldComparison(t *testing.T) {
 
 func TestTypedPlan_EnvComesFromThePath(t *testing.T) {
 	p := planTyped(t, `cat /log/acme/prod/api/main.log | awk '$2 >= 3'`)
-	if p.Typed == nil || p.Typed.Env != "prod" || p.Typed.Namespace != "acme" || p.Typed.Service != "api" {
+	if p.Typed == nil || p.Typed.Env != "prod" || p.Typed.Table != logtable.Name([]any{int64(7)}, "acme", "api", "main") {
 		t.Fatalf("typed = %+v", p.Typed)
 	}
 }
@@ -68,7 +70,7 @@ func TestTypedPlan_JQKeyComparison(t *testing.T) {
 	if got := strings.Join(p.Typed.Requires, ","); got != ".q_max_ms" {
 		t.Errorf("requires %q, want .q_max_ms", got)
 	}
-	if p.Typed.Namespace != "weft" || p.Typed.Service != "shard" || p.Typed.Kind != "stats" {
+	if p.Typed.Table != logtable.Name([]any{int64(7)}, "weft", "shard", "stats") {
 		t.Errorf("source = %+v", p.Typed)
 	}
 	if !strings.Contains(p.ShardSQL, "json_type") {

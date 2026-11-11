@@ -187,16 +187,16 @@ func TestSendHeartbeat_UnchristenedShardPresentsTheFleetSecret(t *testing.T) {
 }
 
 func TestFieldFactDeltas_CarryEveryKeyFieldAndTheState(t *testing.T) {
-	key := shard.FactKey{CustomerID: 7, Namespace: "ns", Service: "svc", Kind: "main", Env: "prod", Locator: "$5"}
+	key := shard.FactKey{Table: "l_7_ns_svc_main_abc", Env: "prod", Locator: "$5"}
 	got := fieldFactDeltas([]shard.FieldFact{
-		{FactKey: key, State: shard.FactTyped, Epoch: 3},
-		{FactKey: key, State: shard.FactDirty, Epoch: 4},
+		{FactKey: key, Namespace: "ns", Service: "svc", Kind: "main", Customer: 7, State: shard.FactTyped, Epoch: 3},
+		{FactKey: key, Namespace: "ns", Service: "svc", Kind: "main", Customer: 7, State: shard.FactDirty, Epoch: 4},
 	})
 	if len(got) != 2 {
 		t.Fatalf("want 2 deltas, got %d", len(got))
 	}
 	d := got[0]
-	if d.CustomerId != 7 || d.Namespace != "ns" || d.Service != "svc" || d.Kind != "main" || d.Env != "prod" ||
+	if d.Table != "l_7_ns_svc_main_abc" || d.CustomerId != 7 || d.Namespace != "ns" || d.Service != "svc" || d.Kind != "main" || d.Env != "prod" ||
 		d.Locator != "$5" || d.Epoch != 3 || d.State != pb.FieldFactState_FIELD_FACT_STATE_TYPED {
 		t.Errorf("typed delta = %+v", d)
 	}

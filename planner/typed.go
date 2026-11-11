@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/graybeardcorp/weft/logtable"
 )
 
 // A typed leaf is a comparison whose SQL gets simpler, and tighter, if the
@@ -24,11 +26,10 @@ type typedLeaf struct {
 // being narrower (it never drops a row the base SQL keeps and the stage
 // would), so compute's stages still run unchanged on what comes back.
 type TypedPlan struct {
-	Requires       []string
-	CustomerID     int64
-	Namespace      string
-	Service        string
-	Kind           string
+	Requires []string
+	// Table is the one stream's logical table (logtable.Name): with Env, what a
+	// shard's field facts are keyed by.
+	Table          string
 	Env            string
 	ShardSQL       string
 	DirectShardSQL string
@@ -100,8 +101,7 @@ func typedVariant(c *compiled, src sourceInfo, customerID int64, shardSQL, direc
 	}
 	slices.Sort(requires)
 	return &TypedPlan{
-		Requires: requires, CustomerID: customerID,
-		Namespace: ns, Service: svc, Kind: kind, Env: src.envValue(),
+		Requires: requires, Table: logtable.Name([]any{customerID}, ns, svc, kind), Env: src.envValue(),
 		ShardSQL: shard, DirectShardSQL: direct, FieldSQL: fieldSQL,
 	}
 }

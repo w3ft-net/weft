@@ -12,6 +12,7 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/graybeardcorp/warp/pkg/awk"
+	"github.com/graybeardcorp/weft/logtable"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
@@ -47,18 +48,17 @@ const (
 	FactDirty
 )
 
-// FactKey names a locator in a source. Customer is part of the key because
-// shards are shared across customers; env so that a stray row in staging
-// doesn't downgrade production. Locator is "$N" for awk field N, "$N#int"
-// for awk field N holding only integers (see finiteInteger), or ".key" for a
-// top-level payload key.
+// FactKey names a locator in a source. Table is the source's logical table,
+// logtable.Name of its partition, namespace, service and kind, whether or not
+// the shard stores a table per key: shards are shared across tenants, and the
+// name carries the partition, so a fact of one tenant is never another's. Env
+// so that a stray row in staging doesn't downgrade production. Locator is "$N"
+// for awk field N, "$N#int" for awk field N holding only integers (see
+// finiteInteger), or ".key" for a top-level payload key.
 type FactKey struct {
-	CustomerID int64
-	Namespace  string
-	Service    string
-	Kind       string
-	Env        string
-	Locator    string
+	Table   string
+	Env     string
+	Locator string
 }
 
 // FieldFact is one locator's reportable state. Epoch increases with every
@@ -66,8 +66,15 @@ type FactKey struct {
 // dirty), across all of the shard's facts.
 type FieldFact struct {
 	FactKey
-	State FactState
-	Epoch uint64
+	// Namespace, Service and Kind are the source's, for people reading a
+	// table name, which is a hash.
+	Namespace, Service, Kind string
+	// Customer is the legacy layout's one partition value, for a coordinator
+	// that identifies a source by it. Zero under any other layout. It goes
+	// with tag 26.
+	Customer int64
+	State    FactState
+	Epoch    uint64
 }
 
 type locatorState struct {
@@ -84,16 +91,43 @@ type locatorState struct {
 // factMaxLocators of each: a JSON row also has awk fields (the text of its
 // line), which must not crowd out its keys.
 type factSource struct {
-	rows   int64
-	awk    map[int]*locatorState
-	awkInt map[int]*locatorState
-	jq     map[string]*locatorState
-	order  []*locatorState // every tracked locator, to find the ones a row lacks
+	table    string // logtable.Name of the source
+	customer int64  // see FieldFact.Customer
+	rows     int64
+	awk      map[int]*locatorState
+	awkInt   map[int]*locatorState
+	jq       map[string]*locatorState
+	order    []*locatorState // every tracked locator, to find the ones a row lacks
 }
 
+// sourceKey identifies a source. partition is the batch's partition values as
+// text, so a key is cheap to build per row; the logical table, a hash, is
+// computed once when a source is first seen.
 type sourceKey struct {
-	customerID                    int64
+	partition                     string
 	namespace, service, kind, env string
+}
+
+// partitionText is a comparable form of a batch's partition values.
+func partitionText(partition []any) string {
+	var b strings.Builder
+	for i, v := range partition {
+		if i > 0 {
+			b.WriteByte(0x1f)
+		}
+		fmt.Fprint(&b, v)
+	}
+	return b.String()
+}
+
+// legacyCustomer is a legacy-layout partition's customer, or zero.
+func legacyCustomer(partition []any) int64 {
+	if len(partition) == 1 {
+		if c, ok := partition[0].(int64); ok {
+			return c
+		}
+	}
+	return 0
 }
 
 // FieldClassifier learns field facts from the batches a shard ingests. A nil
@@ -142,19 +176,6 @@ func (c *FieldClassifier) Stop() {
 	default:
 		close(c.done)
 	}
-}
-
-// customerOf is the customer a row's facts are kept under: its batch's one
-// partition value, or, from a coordinator that sends none, the row's own
-// customer_id. Fact keys, their saved form and their wire message still name
-// the customer; generalizing them touches all three.
-func customerOf(partition []any, r *pb.LogRow) int64 {
-	if len(partition) == 1 {
-		if c, ok := partition[0].(int64); ok {
-			return c
-		}
-	}
-	return r.CustomerId
 }
 
 // observed is a committed batch with the partition values it was stored under.
@@ -221,8 +242,12 @@ func (c *FieldClassifier) run() {
 		case batch := <-c.in:
 			c.mu.Lock()
 			if !c.disabled {
+				var text string
+				if batch.partition != nil {
+					text = partitionText(batch.partition)
+				}
 				for _, r := range batch.rows {
-					c.classify(batch.partition, r)
+					c.classify(batch.partition, text, r)
 				}
 			}
 			snap, save := c.takeChange()
@@ -241,12 +266,18 @@ func (c *FieldClassifier) run() {
 }
 
 // classify folds one row in. Caller holds c.mu.
-func (c *FieldClassifier) classify(partition []any, r *pb.LogRow) {
+func (c *FieldClassifier) classify(partition []any, text string, r *pb.LogRow) {
 	kind := r.Kind
 	if kind == "" {
 		kind = "main"
 	}
-	c.classifyRow(sourceKey{customerOf(partition, r), r.Namespace, r.Service, kind, r.Env}, awkFields(r.Raw), r.PayloadJson)
+	if partition == nil {
+		// From a coordinator that sends no partition values: the legacy
+		// layout's customer, from the row.
+		partition = []any{r.CustomerId}
+		text = partitionText(partition)
+	}
+	c.classifyRow(sourceKey{text, r.Namespace, r.Service, kind, r.Env}, partition, awkFields(r.Raw), r.PayloadJson)
 }
 
 // awkLocators names the first fields without building a string per row.
@@ -267,10 +298,12 @@ func awkLocator(n int) string {
 
 // classifyRow folds one row's awk fields and top-level payload keys in.
 // Caller holds c.mu.
-func (c *FieldClassifier) classifyRow(sk sourceKey, fields []string, payload []byte) {
+func (c *FieldClassifier) classifyRow(sk sourceKey, partition []any, fields []string, payload []byte) {
 	src := c.sources[sk]
 	if src == nil {
 		src = newFactSource(0)
+		src.table = logtable.Name(partition, sk.namespace, sk.service, sk.kind)
+		src.customer = legacyCustomer(partition)
 		c.sources[sk] = src
 		c.changed = true
 	}
@@ -356,8 +389,8 @@ func (c *FieldClassifier) observe(ls *locatorState, numeric bool, sk sourceKey) 
 			c.epoch++
 			c.changed = true
 			ls.state, ls.epoch = FactDirty, c.epoch
-			weftsdk.Infof(context.Background(), "field fact flipped dirty: customer=%d %s/%s/%s env=%s locator=%s",
-				sk.customerID, sk.namespace, sk.service, sk.kind, sk.env, ls.locator)
+			weftsdk.Infof(context.Background(), "field fact flipped dirty: partition=%q %s/%s/%s env=%s locator=%s",
+				sk.partition, sk.namespace, sk.service, sk.kind, sk.env, ls.locator)
 		}
 	default:
 		if !numeric {
@@ -394,9 +427,11 @@ func (c *FieldClassifier) Pending() []FieldFact {
 				continue
 			}
 			out = append(out, FieldFact{
-				FactKey: FactKey{sk.customerID, sk.namespace, sk.service, sk.kind, sk.env, ls.locator},
-				State:   ls.state,
-				Epoch:   ls.epoch,
+				FactKey:   FactKey{src.table, sk.env, ls.locator},
+				Namespace: sk.namespace, Service: sk.service, Kind: sk.kind,
+				Customer: src.customer,
+				State:    ls.state,
+				Epoch:    ls.epoch,
 			})
 		}
 	}
@@ -446,8 +481,13 @@ type savedFacts struct {
 	Sources []savedSource
 }
 
+// savedSource is a source as kept across a roll. Partition and Table are
+// absent from a file the previous build wrote, which knew only CustomerID, the
+// legacy layout's partition.
 type savedSource struct {
 	CustomerID                    int64
+	Partition                     []string `json:",omitempty"`
+	Table                         string   `json:",omitempty"`
 	Namespace, Service, Kind, Env string
 	Locators                      []savedLocator
 }
@@ -463,8 +503,8 @@ type savedLocator struct {
 func (c *FieldClassifier) snapshot() ([]byte, error) {
 	out := savedFacts{Epoch: c.epoch}
 	for sk, src := range c.sources {
-		ss := savedSource{CustomerID: sk.customerID, Namespace: sk.namespace, Service: sk.service,
-			Kind: sk.kind, Env: sk.env}
+		ss := savedSource{CustomerID: src.customer, Partition: strings.Split(sk.partition, "\x1f"), Table: src.table,
+			Namespace: sk.namespace, Service: sk.service, Kind: sk.kind, Env: sk.env}
 		for _, ls := range src.order {
 			ss.Locators = append(ss.Locators, savedLocator{ls.locator, ls.state, ls.wasTyped, ls.epoch})
 		}
@@ -486,6 +526,14 @@ func (c *FieldClassifier) Restore(b []byte) error {
 	c.epoch = in.Epoch
 	for _, ss := range in.Sources {
 		src := newFactSource(1)
+		sk := sourceKey{namespace: ss.Namespace, service: ss.Service, kind: ss.Kind, env: ss.Env}
+		src.customer = ss.CustomerID
+		if ss.Table == "" {
+			legacy := []any{ss.CustomerID}
+			sk.partition, src.table = partitionText(legacy), logtable.Name(legacy, ss.Namespace, ss.Service, ss.Kind)
+		} else {
+			sk.partition, src.table = strings.Join(ss.Partition, "\x1f"), ss.Table
+		}
 		for _, sl := range ss.Locators {
 			ls := &locatorState{locator: sl.Locator, state: sl.State, wasTyped: sl.WasTyped, epoch: sl.Epoch}
 			src.order = append(src.order, ls)
@@ -507,7 +555,7 @@ func (c *FieldClassifier) Restore(b []byte) error {
 				return fmt.Errorf("saved field facts: locator %q", sl.Locator)
 			}
 		}
-		c.sources[sourceKey{ss.CustomerID, ss.Namespace, ss.Service, ss.Kind, ss.Env}] = src
+		c.sources[sk] = src
 	}
 	c.changed = false
 	return nil

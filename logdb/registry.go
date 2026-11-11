@@ -293,6 +293,10 @@ type RegistryStore interface {
 	ApplyShardFieldFacts(shardID string, typed, dropped []store.ShardFieldFact) error
 }
 
+// SetLegacyFactTable installs the resolver for field facts that name a source
+// by customer. Set it before LoadFromStore, which reads the store's facts.
+func (r *ShardRegistry) SetLegacyFactTable(f LegacyFactTable) { r.legacyFactTable = f }
+
 // ShardRegistry tracks all shard entries. Thread-safe.
 // If a Store is set, mutations are persisted.
 type ShardRegistry struct {
@@ -302,6 +306,9 @@ type ShardRegistry struct {
 	// livenessReadAt is MarkLivenessRead's time in unix nanos; 0 = never.
 	livenessReadAt atomic.Int64
 	store          RegistryStore // optional persistence (nil in tests)
+	// legacyFactTable resolves the field facts of a source known only by
+	// customer; see LegacyFactTable. Nil: such facts are unknown.
+	legacyFactTable LegacyFactTable
 	// reconstruct is LoadFromStore's live-handle builder, kept so
 	// RefreshFromStore attaches a shard it adopts the same way boot does.
 	reconstruct func(sh *Shard) (shard.Shard, error)
@@ -492,7 +499,7 @@ func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 				f.Services = svcByShard[f.ID]
 			}
 			if factsOK {
-				f.replaceFieldFacts(factsByShard[f.ID])
+				f.replaceFieldFacts(r.legacyFactTable, factsByShard[f.ID])
 			}
 			if r.reconstruct != nil {
 				f.Live, _ = r.reconstruct(f)
@@ -576,7 +583,7 @@ func (r *ShardRegistry) RefreshFromStore(dropDeleted bool) {
 		// The store is never behind memory for facts (a heartbeat persists
 		// before it acknowledges), so a follower takes the store's view.
 		if factsOK {
-			entry.replaceFieldFacts(factsByShard[f.ID])
+			entry.replaceFieldFacts(r.legacyFactTable, factsByShard[f.ID])
 		}
 	}
 }
@@ -637,7 +644,7 @@ func (r *ShardRegistry) LoadFromStore(reconstruct func(sh *Shard) (shard.Shard, 
 		live, _ := reconstruct(sh)
 		sh.Services = svcByShard[sh.ID]
 		if factsOK {
-			sh.replaceFieldFacts(factsByShard[sh.ID])
+			sh.replaceFieldFacts(r.legacyFactTable, factsByShard[sh.ID])
 		}
 		sh.Live = live
 

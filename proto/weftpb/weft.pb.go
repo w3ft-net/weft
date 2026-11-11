@@ -2364,7 +2364,13 @@ type FieldFactDelta struct {
 	State   FieldFactState `protobuf:"varint,7,opt,name=state,proto3,enum=weft.FieldFactState" json:"state,omitempty"`
 	// epoch increases with every transition across the shard's facts, so the
 	// coordinator can order them and acknowledge them.
-	Epoch         uint64 `protobuf:"varint,8,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Epoch uint64 `protobuf:"varint,8,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	// table is the source's logical table (logtable.Name of its partition,
+	// namespace, service and kind), the fact's identity with env and locator.
+	// Absent from a shard that predates it, which identifies a source by
+	// customer_id, namespace, service and kind; customer_id is still sent for
+	// a coordinator that does.
+	Table         string `protobuf:"bytes,9,opt,name=table,proto3" json:"table,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2453,6 +2459,13 @@ func (x *FieldFactDelta) GetEpoch() uint64 {
 		return x.Epoch
 	}
 	return 0
+}
+
+func (x *FieldFactDelta) GetTable() string {
+	if x != nil {
+		return x.Table
+	}
+	return ""
 }
 
 type HeartbeatResponse struct {
@@ -4916,7 +4929,7 @@ const file_weft_proto_rawDesc = "" +
 	"\x05spare\x18\v \x01(\bR\x05spare\x125\n" +
 	"\vfield_facts\x18\f \x03(\v2\x14.weft.FieldFactDeltaR\n" +
 	"fieldFacts\x12-\n" +
-	"\x12layout_fingerprint\x18\r \x01(\tR\x11layoutFingerprint\"\xeb\x01\n" +
+	"\x12layout_fingerprint\x18\r \x01(\tR\x11layoutFingerprint\"\x81\x02\n" +
 	"\x0eFieldFactDelta\x12\x1f\n" +
 	"\vcustomer_id\x18\x01 \x01(\x03R\n" +
 	"customerId\x12\x1c\n" +
@@ -4926,7 +4939,8 @@ const file_weft_proto_rawDesc = "" +
 	"\x03env\x18\x05 \x01(\tR\x03env\x12\x18\n" +
 	"\alocator\x18\x06 \x01(\tR\alocator\x12*\n" +
 	"\x05state\x18\a \x01(\x0e2\x14.weft.FieldFactStateR\x05state\x12\x14\n" +
-	"\x05epoch\x18\b \x01(\x04R\x05epoch\"?\n" +
+	"\x05epoch\x18\b \x01(\x04R\x05epoch\x12\x14\n" +
+	"\x05table\x18\t \x01(\tR\x05table\"?\n" +
 	"\x11HeartbeatResponse\x12*\n" +
 	"\x11field_facts_acked\x18\x01 \x01(\x04R\x0ffieldFactsAcked\"9\n" +
 	"\x0fGetUsageRequest\x12\x16\n" +

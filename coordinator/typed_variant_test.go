@@ -14,8 +14,11 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
+// typedFact is a typed fact as a shard of this build reports it: under the
+// source's logical table, with the readable parts beside it.
 func typedFact(customer int64, ns, svc, kind, env, locator string, epoch uint64) *pb.FieldFactDelta {
 	return &pb.FieldFactDelta{CustomerId: customer, Namespace: ns, Service: svc, Kind: kind, Env: env, Locator: locator,
+		Table: hosted.LegacyFactTable(customer, ns, svc, kind),
 		State: pb.FieldFactState_FIELD_FACT_STATE_TYPED, Epoch: epoch}
 }
 

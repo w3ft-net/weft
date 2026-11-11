@@ -651,6 +651,12 @@ message FieldFactDelta {
   // epoch increases with every transition across the shard's facts, so the
   // coordinator can order them and acknowledge them.
   uint64 epoch = 8;
+  // table is the source's logical table (logtable.Name of its partition,
+  // namespace, service and kind), the fact's identity with env and locator.
+  // Absent from a shard that predates it, which identifies a source by
+  // customer_id, namespace, service and kind; customer_id is still sent for
+  // a coordinator that does.
+  string table = 9;
 }
 
 message HeartbeatResponse {

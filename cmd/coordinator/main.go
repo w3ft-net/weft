@@ -32,6 +32,7 @@ import (
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 	"github.com/graybeardcorp/weft/tenancy/hosted/retention"
 )
 
@@ -248,6 +249,8 @@ func main() {
 		AWSRegion:   *awsRegion,
 		Holder:      holder,
 		Retention:   retention.New(db, *awsRegion),
+
+		LegacyFactTable: hosted.LegacyFactTable,
 	})
 	if err != nil {
 		log.Fatalf("logdb.Start: %v", err)
