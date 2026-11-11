@@ -11,6 +11,7 @@ import (
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
+	"github.com/graybeardcorp/weft/tenancy/hosted/retention"
 )
 
 // testParquet ingests rows and archives them to a local temp dir.
@@ -39,11 +40,11 @@ func TestHandleCompact_Rewrite(t *testing.T) {
 	})
 	dst := t.TempDir() + "/out.parquet"
 
-	res, err := HandleCompact(shard.CompactRequest{
-		Op:  shard.CompactOpRewrite,
+	res, err := HandleCompact(retention.CompactRequest{
+		Op:  retention.CompactOpRewrite,
 		Src: src,
 		Dst: dst,
-		Cutoffs: []shard.CustomerCutoff{
+		Cutoffs: []retention.CustomerCutoff{
 			{CustomerID: 5, Cutoff: time.Unix(0, base+50*int64(24*time.Hour))},
 		},
 	}, nil)
@@ -65,7 +66,7 @@ func TestHandleCompact_Capture(t *testing.T) {
 		{Raw: "b", CustomerId: 6, TsUnixNs: base},
 	})
 
-	res, err := HandleCompact(shard.CompactRequest{Op: shard.CompactOpCapture, Src: src}, nil)
+	res, err := HandleCompact(retention.CompactRequest{Op: retention.CompactOpCapture, Src: src}, nil)
 	if err != nil {
 		t.Fatalf("HandleCompact: %v", err)
 	}
@@ -82,7 +83,7 @@ func TestServeHTTP_RewriteRoundTrip(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(ServeHTTP))
 	defer srv.Close()
 
-	body, _ := json.Marshal(shard.CompactRequest{Op: shard.CompactOpRewrite, Src: src, Dst: dst})
+	body, _ := json.Marshal(retention.CompactRequest{Op: retention.CompactOpRewrite, Src: src, Dst: dst})
 	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +92,7 @@ func TestServeHTTP_RewriteRoundTrip(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	var res shard.CompactResult
+	var res retention.CompactResult
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		t.Fatal(err)
 	}
@@ -106,12 +107,12 @@ func TestServeHTTP_Errors(t *testing.T) {
 
 	cases := []struct {
 		name string
-		req  shard.CompactRequest
+		req  retention.CompactRequest
 		want int
 	}{
-		{"missing src", shard.CompactRequest{Op: shard.CompactOpCapture}, http.StatusBadRequest},
-		{"rewrite missing dst", shard.CompactRequest{Op: shard.CompactOpRewrite, Src: "x"}, http.StatusBadRequest},
-		{"missing parquet", shard.CompactRequest{Op: shard.CompactOpCapture, Src: "/nope/missing.parquet"}, http.StatusInternalServerError},
+		{"missing src", retention.CompactRequest{Op: retention.CompactOpCapture}, http.StatusBadRequest},
+		{"rewrite missing dst", retention.CompactRequest{Op: retention.CompactOpRewrite, Src: "x"}, http.StatusBadRequest},
+		{"missing parquet", retention.CompactRequest{Op: retention.CompactOpCapture, Src: "/nope/missing.parquet"}, http.StatusInternalServerError},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

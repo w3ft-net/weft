@@ -1,4 +1,4 @@
-package shard
+package retention
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 
 	"github.com/graybeardcorp/weft/shape"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // Compactor performs the janitor's heavy parquet work — rewriting an
@@ -21,7 +22,7 @@ import (
 // route to a Lambda in prod). See docs/plans/retention-janitor.md.
 type Compactor interface {
 	Rewrite(src, dst string, cutoffs []CustomerCutoff) (CompactResult, error)
-	CaptureStats(src string) ([]CustomerStat, error)
+	CaptureStats(src string) ([]shard.CustomerStat, error)
 }
 
 // CompactRequest is the compactor Lambda's JSON request body. Op selects
@@ -45,7 +46,7 @@ const (
 // parquet (dev) and set for s3:// paths. Layout is the partition layout the
 // archives were written in; zero means the legacy one.
 type LocalCompactor struct {
-	S3     *S3Config
+	S3     *shard.S3Config
 	Layout shape.Layout
 }
 
@@ -53,7 +54,7 @@ func (c LocalCompactor) Rewrite(src, dst string, cutoffs []CustomerCutoff) (Comp
 	return RewriteRetention(src, dst, cutoffs, c.Layout.OrLegacy(), c.S3)
 }
 
-func (c LocalCompactor) CaptureStats(src string) ([]CustomerStat, error) {
+func (c LocalCompactor) CaptureStats(src string) ([]shard.CustomerStat, error) {
 	return CaptureStats(src, c.Layout.OrLegacy(), c.S3)
 }
 
@@ -85,7 +86,7 @@ func (c *LambdaCompactor) Rewrite(src, dst string, cutoffs []CustomerCutoff) (Co
 	return c.invoke(CompactRequest{Op: CompactOpRewrite, Src: src, Dst: dst, Cutoffs: cutoffs, Layout: c.Layout})
 }
 
-func (c *LambdaCompactor) CaptureStats(src string) ([]CustomerStat, error) {
+func (c *LambdaCompactor) CaptureStats(src string) ([]shard.CustomerStat, error) {
 	res, err := c.invoke(CompactRequest{Op: CompactOpCapture, Src: src, Layout: c.Layout})
 	return res.Stats, err
 }
@@ -100,7 +101,7 @@ func (c *LambdaCompactor) invoke(reqBody CompactRequest) (CompactResult, error) 
 		return CompactResult{}, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if err := signLambdaV4(req, body, c.creds, c.region); err != nil {
+	if err := shard.SignLambdaV4(req, body, c.creds, c.region); err != nil {
 		return CompactResult{}, fmt.Errorf("sign request: %w", err)
 	}
 	resp, err := c.client.Do(req)

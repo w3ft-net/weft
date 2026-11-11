@@ -81,7 +81,7 @@ func purgeFixture(t *testing.T, shardID, path string, stats []shard.CustomerStat
 	}
 	var retired []string
 	deps := PurgeDeps{
-		Compactor: shard.LocalCompactor{}, // local parquet, no S3
+		Compactor: LocalCompactor{}, // local parquet, no S3
 		Grace:     testGrace,
 		GCDelay:   time.Hour,
 		Now:       func() time.Time { return janitorNow },

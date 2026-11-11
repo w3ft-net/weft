@@ -116,14 +116,14 @@ func (r *RetentionResolver) Retention(customer store.OrgID) (time.Duration, bool
 // omitted, which is exactly how the rewrite preserves them (a customer
 // with no cutoff keeps all its rows). The result is empty when no present
 // customer is mapped (nothing to delete).
-func (r *RetentionResolver) Cutoffs(stats []ShardArchiveStat, now time.Time, grace time.Duration) []shard.CustomerCutoff {
-	var out []shard.CustomerCutoff
+func (r *RetentionResolver) Cutoffs(stats []ShardArchiveStat, now time.Time, grace time.Duration) []CustomerCutoff {
+	var out []CustomerCutoff
 	for _, st := range stats {
 		retention, ok := r.Retention(st.OrgID)
 		if !ok {
 			continue // unmapped: preserved, no cutoff
 		}
-		out = append(out, shard.CustomerCutoff{
+		out = append(out, CustomerCutoff{
 			CustomerID:      int64(st.OrgID),
 			PartitionValues: shape.Coord{Customer: int64(st.OrgID)}.PartitionValues(),
 			Cutoff:          now.Add(-retention - grace),
@@ -137,10 +137,10 @@ func (r *RetentionResolver) Cutoffs(stats []ShardArchiveStat, now time.Time, gra
 // which customers it holds. The rewrite only drops rows for customers
 // actually present (the LEFT JOIN misses the rest), so an over-broad
 // cutoff set is harmless.
-func (r *RetentionResolver) AllCutoffs(now time.Time, grace time.Duration) []shard.CustomerCutoff {
-	out := make([]shard.CustomerCutoff, 0, len(r.tiers))
+func (r *RetentionResolver) AllCutoffs(now time.Time, grace time.Duration) []CustomerCutoff {
+	out := make([]CustomerCutoff, 0, len(r.tiers))
 	for cust, tier := range r.tiers {
-		out = append(out, shard.CustomerCutoff{
+		out = append(out, CustomerCutoff{
 			CustomerID:      int64(cust),
 			PartitionValues: shape.Coord{Customer: int64(cust)}.PartitionValues(),
 			Cutoff:          now.Add(-store.LogRetention(tier) - grace),
@@ -291,9 +291,9 @@ func (s Store) archiveStatsByShard() (map[string][]ShardArchiveStat, error) {
 // is testable without S3 or the live registry.
 type PurgeDeps struct {
 	// Compactor runs the heavy parquet work (rewrite, capture). In prod a
-	// shard.LambdaCompactor offloads it so the coordinator stays free of
-	// DuckDB + S3 I/O; tests use shard.LocalCompactor over local parquet.
-	Compactor shard.Compactor
+	// LambdaCompactor offloads it so the coordinator stays free of
+	// DuckDB + S3 I/O; tests use LocalCompactor over local parquet.
+	Compactor Compactor
 	// Grace is the retention cushion (RetentionGrace in production).
 	Grace time.Duration
 	// GCDelay is how long a tombstoned object lingers before GC
@@ -454,7 +454,7 @@ func rewriteDestPath(old string, now time.Time) string {
 // live registry.
 type Janitor struct {
 	Store     Store
-	Compactor shard.Compactor
+	Compactor Compactor
 	// Retire moves a fully-expired shard out of service (fires the SM's
 	// GONE trigger in the coordinator).
 	Retire func(shardID string) error
@@ -478,7 +478,7 @@ type Janitor struct {
 // supersedes DeleteArchived's coarser bucket-tier retention guard. Refresh
 // repoints the in-memory registry entry after a rewrite. Grace, GCDelay,
 // and the clock take the production defaults.
-func NewProvisionerJanitor(prov *logdb.Provisioner, compactor shard.Compactor, interval time.Duration) *Janitor {
+func NewProvisionerJanitor(prov *logdb.Provisioner, compactor Compactor, interval time.Duration) *Janitor {
 	return &Janitor{
 		Store:     Store{prov.ShardStore()},
 		Compactor: compactor,

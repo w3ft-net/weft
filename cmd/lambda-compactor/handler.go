@@ -9,6 +9,7 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 
 	"github.com/graybeardcorp/weft/shard"
+	"github.com/graybeardcorp/weft/tenancy/hosted/retention"
 )
 
 // HandleCompact runs one compaction op (rewrite or capture) against the
@@ -17,16 +18,16 @@ import (
 // no streaming — since the coordinator's finalizer needs the whole
 // result (counts + survivor stats) before it can swap parquet_path.
 // Testable without the Lambda runtime.
-func HandleCompact(req shard.CompactRequest, s3cfg *shard.S3Config) (shard.CompactResult, error) {
-	c := shard.LocalCompactor{S3: s3cfg, Layout: req.Layout}
+func HandleCompact(req retention.CompactRequest, s3cfg *shard.S3Config) (retention.CompactResult, error) {
+	c := retention.LocalCompactor{S3: s3cfg, Layout: req.Layout}
 	switch req.Op {
-	case shard.CompactOpRewrite:
+	case retention.CompactOpRewrite:
 		return c.Rewrite(req.Src, req.Dst, req.Cutoffs)
-	case shard.CompactOpCapture:
+	case retention.CompactOpCapture:
 		stats, err := c.CaptureStats(req.Src)
-		return shard.CompactResult{Stats: stats}, err
+		return retention.CompactResult{Stats: stats}, err
 	default:
-		return shard.CompactResult{}, fmt.Errorf("unknown op %q", req.Op)
+		return retention.CompactResult{}, fmt.Errorf("unknown op %q", req.Op)
 	}
 }
 
@@ -40,7 +41,7 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	var req shard.CompactRequest
+	var req retention.CompactRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("bad request: %v", err), http.StatusBadRequest)
 		return
@@ -49,7 +50,7 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "src required", http.StatusBadRequest)
 		return
 	}
-	if req.Op == shard.CompactOpRewrite && req.Dst == "" {
+	if req.Op == retention.CompactOpRewrite && req.Dst == "" {
 		http.Error(w, "dst required for rewrite", http.StatusBadRequest)
 		return
 	}

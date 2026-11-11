@@ -28,7 +28,7 @@ func TestCompareArchives_PassesAFaithfulCopy(t *testing.T) {
 	_, src, _ := exportTo(t, ds, 1440)
 	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
 	dst := dstDir + "/sized/**/*.parquet"
-	if _, err := RewriteRetention(src, dst, nil, shape.Legacy(), nil); err != nil {
+	if _, err := CopyArchive(src, dst, shape.Legacy(), nil); err != nil {
 		t.Fatal(err)
 	}
 	keys, err := CompareArchives(src, dst, nil)
@@ -45,7 +45,7 @@ func TestCompareArchives_FailsACopyThatLostRows(t *testing.T) {
 	_, src, _ := exportTo(t, ds, 1440)
 	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
 	dst := dstDir + "/sized/**/*.parquet"
-	if _, err := RewriteRetention(src, dst, nil, shape.Legacy(), nil); err != nil {
+	if _, err := CopyArchive(src, dst, shape.Legacy(), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -69,7 +69,7 @@ func TestCompareArchives_FailsACopyWithAChangedLine(t *testing.T) {
 	_, src, _ := exportTo(t, ds, 1440)
 	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
 	dst := dstDir + "/sized/**/*.parquet"
-	if _, err := RewriteRetention(src, dst, nil, shape.Legacy(), nil); err != nil {
+	if _, err := CopyArchive(src, dst, shape.Legacy(), nil); err != nil {
 		t.Fatal(err)
 	}
 	// Rewrite one file's lines in place, keeping its row count.

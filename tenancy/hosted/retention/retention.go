@@ -56,14 +56,14 @@ func (r *Retention) Start(ctx context.Context, prov *logdb.Provisioner) {
 	if prov == nil {
 		return
 	}
-	var compactor shard.Compactor
+	var compactor Compactor
 	if url := os.Getenv("COMPACTOR_FUNCTION_URL"); url != "" {
-		lc := shard.NewLambdaCompactor(url, lambdaSigningCreds(ctx, r.region), r.region)
+		lc := NewLambdaCompactor(url, lambdaSigningCreds(ctx, r.region), r.region)
 		lc.Layout = shape.BuildLayout()
 		compactor = lc
 		weftsdk.Infof(ctx, "janitor: compactor Lambda at %s", url)
 	} else {
-		compactor = shard.LocalCompactor{S3: shard.S3ConfigFromEnv(), Layout: shape.BuildLayout()}
+		compactor = LocalCompactor{S3: shard.S3ConfigFromEnv(), Layout: shape.BuildLayout()}
 		weftsdk.Infof(ctx, "janitor: in-process compactor (COMPACTOR_FUNCTION_URL unset)")
 	}
 	NewProvisionerJanitor(prov, compactor, 24*time.Hour).Start(ctx)

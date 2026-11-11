@@ -307,72 +307,23 @@ func TestKeyedExport_ManyPartitionsDoNotSplitIntoManyFiles(t *testing.T) {
 }
 
 // Converting a time-only archive does not split its partitions into many files either.
-func TestRewriteRetention_ConversionDoesNotSplitIntoManyFiles(t *testing.T) {
+func TestCopyArchive_ConversionDoesNotSplitIntoManyFiles(t *testing.T) {
 	ds := interleavedShard(t)
 	_, src, _ := exportTo(t, ds, 1440)
 	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
-	res, err := RewriteRetention(src, dstDir+"/sized/**/*.parquet", nil, shape.Legacy(), nil)
+	copied, err := CopyArchive(src, dstDir+"/sized/**/*.parquet", shape.Legacy(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.RowsKept != 500000 {
-		t.Fatalf("kept %d rows, want 500000", res.RowsKept)
+	if copied != 500000 {
+		t.Fatalf("copied %d rows, want 500000", copied)
 	}
 	checkFewFilesPerPartition(t, filepath.Join(dstDir, "sized"), 500) // 250 services x 2 weeks
 }
 
-// A retention rewrite of a keyed archive writes a keyed archive. Written as one
-// file it would put every service back in every file and drop the bucket width.
-func TestRewriteRetention_KeepsAKeyedLayout(t *testing.T) {
-	const perKey = 6
-	ds := legacyShardWith(t, keyedFixture, perKey)
-	_, src, _ := exportSizedTo(t, ds, smallShardBytes)
-
-	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
-	dst := dstDir + "/sized/**/*.parquet"
-	// Rows are 7 hours apart from 2026-10-14 00:00; customer 1 loses the two
-	// before 14:00 in each of its 5 keys, customer 2 keeps everything.
-	cutoff := time.Date(2026, 10, 14, 14, 0, 0, 0, time.UTC)
-	res, err := RewriteRetention(src, dst, []CustomerCutoff{{CustomerID: 1, Cutoff: cutoff}}, shape.Legacy(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.RowsKept != 5*4+6 || res.RowsDeleted != 5*2 {
-		t.Fatalf("kept %d, deleted %d; want 26 and 10", res.RowsKept, res.RowsDeleted)
-	}
-	if res.OutputPath != dst || !IsKeyed(res.OutputPath) {
-		t.Fatalf("output path %q is not the keyed destination %q", res.OutputPath, dst)
-	}
-	if !IsSized(res.OutputPath) {
-		t.Errorf("the rewrite of a sized archive is %q, which is not sized", res.OutputPath)
-	}
-	files, _ := filepath.Glob(filepath.Join(dstDir, "sized", "customer_id=1/namespace=weft/service=api/kind=main", "_w=*", "*", "data_0.parquet"))
-	if len(files) == 0 {
-		t.Error("the rewrite wrote no directory for weft/api/main")
-	}
-
-	db, err := sql.Open("duckdb", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var n, early int
-	q := "SELECT count(*), count(*) FILTER (WHERE customer_id = 1 AND ts < TIMESTAMP '2026-10-14 14:00:00') FROM " + ParquetReadExpr(dst, shape.Legacy())
-	if err := db.QueryRow(q).Scan(&n, &early); err != nil {
-		t.Fatal(err)
-	}
-	if n != 26 || early != 0 {
-		t.Errorf("rewritten archive holds %d rows, %d of them expired; want 26 and 0", n, early)
-	}
-	if err := db.QueryRow("SELECT count(*) FROM "+ParquetReadExpr(dst, shape.Legacy())+" WHERE service = ? AND kind = ? AND customer_id = CAST(? AS BIGINT)", "api", "main", "1").Scan(&n); err != nil || n != 4 {
-		t.Errorf("weft/api/main holds %d rows after the rewrite (err %v), want 4", n, err)
-	}
-}
-
-// Converting an archive is a rewrite with no cutoffs whose destination is
-// keyed. The source may be a single file, which has no _part, or a time-only
+// Converting an archive is a copy whose destination is keyed. The source may be a single file, which has no _part, or a time-only
 // archive of any width, whose _part is rebuilt for the new one.
-func TestRewriteRetention_ConvertsAnythingToKeyed(t *testing.T) {
+func TestCopyArchive_ConvertsAnythingToKeyed(t *testing.T) {
 	const perKey = 6
 	ds := legacyShardWith(t, keyedFixture, perKey)
 	want := len(keyedFixture) * perKey
@@ -388,12 +339,12 @@ func TestRewriteRetention_ConvertsAnythingToKeyed(t *testing.T) {
 			}
 			dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
 			dst := dstDir + "/sized/**/*.parquet"
-			res, err := RewriteRetention(src, dst, nil, shape.Legacy(), nil)
+			copied, err := CopyArchive(src, dst, shape.Legacy(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res.RowsKept != int64(want) || res.RowsDeleted != 0 {
-				t.Fatalf("kept %d, deleted %d; want %d and 0", res.RowsKept, res.RowsDeleted, want)
+			if copied != int64(want) {
+				t.Fatalf("copied %d rows, want %d", copied, want)
 			}
 			if files, _ := filepath.Glob(filepath.Join(dstDir, "sized", "customer_id=1/namespace=weft/service=api/kind=main", "_w=*", "*", "data_0.parquet")); len(files) == 0 {
 				t.Error("no directory for weft/api/main")

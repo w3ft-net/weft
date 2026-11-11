@@ -367,14 +367,14 @@ func (s *ColdShard) IngestBatch(ctx context.Context, b Batch, rec IngestRecorder
 }
 
 func (s *ColdShard) signRequest(req *http.Request, body []byte) error {
-	return signLambdaV4(req, body, s.creds, s.region)
+	return SignLambdaV4(req, body, s.creds, s.region)
 }
 
-// signLambdaV4 SigV4-signs a Lambda Function URL request when creds are
+// SignLambdaV4 SigV4-signs a Lambda Function URL request when creds are
 // present (the URL uses AWS_IAM auth); a nil provider is a no-op for the
 // unsigned test/localstack path. Shared by the cold-shard query client
 // and the compactor client.
-func signLambdaV4(req *http.Request, body []byte, creds aws.CredentialsProvider, region string) error {
+func SignLambdaV4(req *http.Request, body []byte, creds aws.CredentialsProvider, region string) error {
 	if creds == nil {
 		return nil
 	}

@@ -1,19 +1,16 @@
-package shard
+package retention
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 
 	"github.com/graybeardcorp/weft/shape"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // CaptureStats reads an archived parquet and returns its per-customer row
@@ -22,7 +19,7 @@ import (
 // shard_archive_stats for a shard archived before stats existed (or by an
 // un-rolled old shard binary), so a later pass can classify it without a
 // re-scan. Pass s3cfg for s3:// paths, nil for local.
-func CaptureStats(parquetPath string, layout shape.Layout, s3cfg *S3Config) ([]CustomerStat, error) {
+func CaptureStats(parquetPath string, layout shape.Layout, s3cfg *shard.S3Config) ([]shard.CustomerStat, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb: %w", err)
@@ -33,7 +30,7 @@ func CaptureStats(parquetPath string, layout shape.Layout, s3cfg *S3Config) ([]C
 			return nil, err
 		}
 	}
-	return partitionStats(context.Background(), db, layout, ParquetReadExpr(parquetPath, layout))
+	return shard.PartitionStats(context.Background(), db, layout, shard.ParquetReadExpr(parquetPath, layout))
 }
 
 // CustomerCutoff is one customer's deletion boundary for a retention
@@ -75,7 +72,7 @@ type CompactResult struct {
 	// Stats is the per-customer breakdown of the survivors, so the caller
 	// can refresh shard_archive_stats from the rewritten file without a
 	// re-scan. Empty when nothing survived.
-	Stats []CustomerStat `json:"stats,omitempty"`
+	Stats []shard.CustomerStat `json:"stats,omitempty"`
 }
 
 // RewriteRetention reads the Parquet at srcPath, drops each cutoff
@@ -90,7 +87,7 @@ type CompactResult struct {
 //
 // When no rows survive, the result's OutputPath is "" and nothing is
 // written; the caller deletes the source and moves the shard to GONE.
-func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, layout shape.Layout, s3cfg *S3Config) (CompactResult, error) {
+func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, layout shape.Layout, s3cfg *shard.S3Config) (CompactResult, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return CompactResult{}, fmt.Errorf("open duckdb: %w", err)
@@ -102,7 +99,7 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, layout 
 		}
 	}
 
-	src := ParquetReadExpr(srcPath, layout)
+	src := shard.ParquetReadExpr(srcPath, layout)
 	// One cutoffs row per partition, its columns typed as the layout's. hit is
 	// always true, so a LEFT JOIN miss is detectable in a layout with no
 	// partition columns too.
@@ -148,113 +145,15 @@ func RewriteRetention(srcPath, dstPath string, cutoffs []CustomerCutoff, layout 
 		return res, nil // nothing survives → caller deletes the source
 	}
 
-	stats, err := partitionStats(context.Background(), db, layout, "("+keep+")")
+	stats, err := shard.PartitionStats(context.Background(), db, layout, "("+keep+")")
 	if err != nil {
 		return CompactResult{}, fmt.Errorf("survivor stats: %w", err)
 	}
 	res.Stats = stats
 
-	if IsKeyed(dstPath) && !IsSized(dstPath) {
-		return CompactResult{}, fmt.Errorf("cannot write the %s layout: only sized archives are written", dstPath)
-	}
-	if s3cfg == nil && !strings.HasPrefix(dstPath, "s3://") {
-		parent := filepath.Dir(dstPath)
-		if IsSized(dstPath) {
-			parent = strings.TrimSuffix(dstPath, "/**/*.parquet")
-		}
-		if err := os.MkdirAll(parent, 0755); err != nil {
-			return CompactResult{}, fmt.Errorf("mkdir for %s: %w", dstPath, err)
-		}
-	}
-	if IsSized(dstPath) {
-		if err := copySized(db, keep, layout, strings.TrimSuffix(dstPath, "/**/*.parquet")); err != nil {
-			return CompactResult{}, fmt.Errorf("copy survivors to %s: %w", dstPath, err)
-		}
-	} else if _, err := db.Exec(fmt.Sprintf("COPY (%s) TO '%s' (FORMAT PARQUET)", keep, dstPath)); err != nil {
-		return CompactResult{}, fmt.Errorf("copy survivors to %s: %w", dstPath, err)
+	if err := shard.WriteArchive(db, keep, dstPath, layout, s3cfg); err != nil {
+		return CompactResult{}, err
 	}
 	res.OutputPath = dstPath
 	return res, nil
-}
-
-// lambdaThreads caps DuckDB's threads in a Lambda: the compactor's function has
-// about two cores, and each thread needs its own buffers inside the memory limit.
-const lambdaThreads = 2
-
-// lambdaMemoryMB is the memory of the Lambda function this runs in, in MB, or 0
-// when it is not in one.
-func lambdaMemoryMB() int {
-	mb, err := strconv.Atoi(os.Getenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE"))
-	if err != nil || mb <= 0 {
-		return 0
-	}
-	return mb
-}
-
-func inLambda() bool { return lambdaMemoryMB() > 0 }
-
-// lambdaSettings keep DuckDB inside the function it runs in. In a Lambda DuckDB
-// sees the host's memory, not the function's, so the limit is 60% of the
-// function's (AWS_LAMBDA_FUNCTION_MEMORY_SIZE), leaving room for what DuckDB does
-// not count, shared among at most lambdaThreads threads; elsewhere the defaults
-// stand. Anything that does spill goes to the temp directory, because DuckDB's
-// default is relative to a working directory a Lambda cannot write (a larger
-// than memory sort failed there with "Failed to create directory .tmp:
-// Permission denied").
-func lambdaSettings() []string {
-	var stmts []string
-	if mb := lambdaMemoryMB(); mb > 0 {
-		stmts = append(stmts,
-			fmt.Sprintf("SET memory_limit='%dMB'", mb*60/100),
-			fmt.Sprintf("SET threads=%d", min(runtime.NumCPU(), lambdaThreads)))
-	}
-	return append(stmts, "SET temp_directory='"+filepath.Join(os.TempDir(), "duckdb-spill")+"'")
-}
-
-// copySized writes the rows of query to dir as a sized archive (see IsSized),
-// whatever layout they came from: a sized or keyed archive, a time-only one, or
-// a single file. Their own _part and _w are dropped and rebuilt from ts and the
-// widths chosen for the keys in query, so a time-only archive of another width,
-// or a single file with no _part, comes out the same. The rows are not sorted:
-// a whole archive does not fit in a Lambda's disk to sort (a 2.5 GiB real archive
-// needed more than 6.5 GiB of spill); partitionedWriteSettings keeps it from
-// splitting partitions into many files instead.
-func copySized(db *sql.DB, query string, layout shape.Layout, dir string) error {
-	ctx := context.Background()
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	for _, stmt := range append(lambdaSettings(), partitionedWriteSettings()...) {
-		if _, err := conn.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("%s: %w", stmt, err)
-		}
-	}
-
-	src := "(" + query + ")"
-	var drop []string
-	rows, err := conn.QueryContext(ctx, fmt.Sprintf(
-		"SELECT column_name FROM (DESCRIBE SELECT * FROM (%s)) WHERE column_name IN ('_part', '_w')", query))
-	if err != nil {
-		return fmt.Errorf("describe source: %w", err)
-	}
-	for rows.Next() {
-		var c string
-		if err := rows.Scan(&c); err != nil {
-			rows.Close()
-			return err
-		}
-		drop = append(drop, c)
-	}
-	rows.Close()
-	if len(drop) > 0 {
-		src = fmt.Sprintf("(SELECT * EXCLUDE (%s) FROM (%s))", strings.Join(drop, ", "), query)
-	}
-	if err := createKeyWidths(ctx, conn, src, layout, 0); err != nil {
-		return err
-	}
-	_, err = conn.ExecContext(ctx, fmt.Sprintf(
-		"COPY (%s) TO '%s' (FORMAT PARQUET, PARTITION_BY (%s), OVERWRITE_OR_IGNORE)", sizedSelect(src, layout), dir, partitionBy(layout)))
-	return err
 }

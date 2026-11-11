@@ -58,7 +58,7 @@ func TestRealArchive_Conversion(t *testing.T) {
 	}()
 
 	start := time.Now()
-	res, err := RewriteRetention(src, dst, nil, shape.Legacy(), nil)
+	copied, err := CopyArchive(src, dst, shape.Legacy(), nil)
 	took := time.Since(start)
 	close(stop)
 	<-done
@@ -73,7 +73,7 @@ func TestRealArchive_Conversion(t *testing.T) {
 		rss *= 1024
 	}
 	t.Logf("converted %d rows in %s; spill peaked at %d MiB; process peak %d MiB; AWS_LAMBDA_FUNCTION_MEMORY_SIZE=%q",
-		res.RowsKept, took.Round(time.Second), peak>>20, rss>>20, os.Getenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE"))
+		copied, took.Round(time.Second), peak>>20, rss>>20, os.Getenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE"))
 
 	db, err := sql.Open("duckdb", "")
 	if err != nil {

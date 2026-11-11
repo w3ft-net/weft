@@ -1,4 +1,4 @@
-package shard
+package retention
 
 import (
 	"context"
@@ -8,15 +8,16 @@ import (
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shape"
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // archiveFixture ingests rows then archives to a local temp dir, returning
 // the parquet path. Cutoffs in the rewrite tests are built with time.Unix
 // (matching how Ingest stores ts), so the ts/cutoff comparison is in the
 // same frame regardless of the test machine's timezone.
-func archiveFixture(t *testing.T, rows []*pb.LogRow) (string, *DuckDBShard) {
+func archiveFixture(t *testing.T, rows []*pb.LogRow) (string, *shard.DuckDBShard) {
 	t.Helper()
-	s, err := NewDuckDBShard("compact-test", "")
+	s, err := shard.NewDuckDBShard("compact-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +35,7 @@ func archiveFixture(t *testing.T, rows []*pb.LogRow) (string, *DuckDBShard) {
 // and counts surviving rows per customer.
 func survivorsByCustomer(t *testing.T, path string, customer int64) int {
 	t.Helper()
-	cold, err := NewColdShard("verify", nil, path, "", nil)
+	cold, err := shard.NewColdShard("verify", nil, path, "", nil)
 	if err != nil {
 		t.Fatalf("cold shard: %v", err)
 	}

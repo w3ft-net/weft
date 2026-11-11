@@ -982,13 +982,13 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 // logs table. Drives the retention janitor's classify-without-scanning
 // pass (see docs/plans/retention-janitor.md).
 func (s *DuckDBShard) customerStats(ctx context.Context) ([]CustomerStat, error) {
-	return partitionStats(ctx, s.db, s.layout, s.source())
+	return PartitionStats(ctx, s.db, s.layout, s.source())
 }
 
 // partitionStats summarizes each group of rows in from (a table or a parquet
 // read) by its partition values: one group per combination, a missing value
 // counting as 0 (or ” for text) as the legacy query always did.
-func partitionStats(ctx context.Context, db *sql.DB, layout shape.Layout, from string) ([]CustomerStat, error) {
+func PartitionStats(ctx context.Context, db *sql.DB, layout shape.Layout, from string) ([]CustomerStat, error) {
 	var cols, group []string
 	for i, c := range layout.Columns {
 		zero := "''"

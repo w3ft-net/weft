@@ -1,4 +1,4 @@
-package shard
+package retention
 
 import (
 	"encoding/json"
@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/graybeardcorp/weft/shard"
 )
 
 // TestLambdaCompactor_RoundTrip exercises the client wire: it sends a
@@ -22,7 +24,7 @@ func TestLambdaCompactor_RoundTrip(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(CompactResult{
 			RowsKept: 3, RowsDeleted: 2, OutputPath: got.Dst,
-			Stats: []CustomerStat{{CustomerID: 5, RowCount: 3}},
+			Stats: []shard.CustomerStat{{CustomerID: 5, RowCount: 3}},
 		})
 	}))
 	defer srv.Close()
@@ -55,7 +57,7 @@ func TestLambdaCompactor_CaptureAndErrorStatus(t *testing.T) {
 		var req CompactRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		if req.Op == CompactOpCapture {
-			json.NewEncoder(w).Encode(CompactResult{Stats: []CustomerStat{{CustomerID: 11, RowCount: 9}}})
+			json.NewEncoder(w).Encode(CompactResult{Stats: []shard.CustomerStat{{CustomerID: 11, RowCount: 9}}})
 			return
 		}
 		http.Error(w, "boom", http.StatusInternalServerError)

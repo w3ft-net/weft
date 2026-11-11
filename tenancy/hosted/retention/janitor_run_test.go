@@ -7,7 +7,6 @@ import (
 
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
-	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -56,7 +55,7 @@ func TestJanitor_RunOnce(t *testing.T) {
 	refreshed := map[string]string{}
 	j := &Janitor{
 		Store:     ss,
-		Compactor: shard.LocalCompactor{},
+		Compactor: LocalCompactor{},
 		Retire:    func(id string) error { retired = append(retired, id); return nil },
 		Refresh:   func(id, p string) { refreshed[id] = p },
 		Grace:     testGrace,
