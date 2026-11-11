@@ -11,7 +11,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict bH64iGhRb6vQZ5mTOMNqFy0t8t83OheJcDXhaN3HP3NGWeo6mhCbZI8tVLXociW
+\restrict qrVoBnsenETCrvYbJLqCXsvmj4RylCxQcxZLvfJpfeOBGG3UxG3Ld5t8gEkw47Y
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -548,13 +548,11 @@ BEGIN
     -- status without changing them.
     IF NEW.role = 'admin' AND NEW.status = 'active' THEN
         INSERT INTO public.org_permissions
-                (org_id, user_id, can_manage_functions, can_manage_watches,
-                 can_manage_etc, can_create_namespaces, created_at, updated_at)
-        VALUES (NEW.org_id, NEW.user_id, true, true, true, true, now(), now())
+                (org_id, user_id, can_manage_etc, can_create_namespaces,
+                 created_at, updated_at)
+        VALUES (NEW.org_id, NEW.user_id, true, true, now(), now())
         ON CONFLICT (org_id, user_id) DO UPDATE
-            SET can_manage_functions  = true,
-                can_manage_watches    = true,
-                can_manage_etc        = true,
+            SET can_manage_etc        = true,
                 can_create_namespaces = true,
                 deleted_at            = NULL,
                 updated_at            = now();
@@ -577,8 +575,6 @@ BEGIN
 
     retained := ARRAY(
         SELECT g FROM (VALUES
-            ('binmgr',    perm.can_manage_functions),
-            ('cronmgr',   perm.can_manage_watches),
             ('configmgr', perm.can_manage_etc),
             ('nsmgr',     perm.can_create_namespaces)
         ) AS t(g, held) WHERE held
@@ -836,6 +832,17 @@ CREATE TABLE public.cold_scan_daily (
     org_id bigint NOT NULL,
     day date NOT NULL,
     rows_scanned bigint DEFAULT 0 NOT NULL
+);
+
+
+--
+-- Name: cron_bin_deps; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cron_bin_deps (
+    org_id bigint NOT NULL,
+    cron_watch_id bigint NOT NULL,
+    function_id bigint NOT NULL
 );
 
 
@@ -1147,6 +1154,7 @@ CREATE TABLE public.cron_watches (
     consecutive_strikes integer DEFAULT 0 NOT NULL,
     has_alert boolean DEFAULT false NOT NULL,
     value_type text DEFAULT 'number'::text NOT NULL,
+    namespace_id bigint,
     CONSTRAINT cron_watches_value_type_check CHECK ((value_type = ANY (ARRAY['number'::text, 'text'::text])))
 );
 
@@ -1488,7 +1496,7 @@ CREATE TABLE public.namespace_permissions (
     user_id text NOT NULL,
     namespace_id bigint NOT NULL,
     can_read boolean DEFAULT true NOT NULL,
-    can_create_tokens boolean DEFAULT false NOT NULL
+    can_write boolean DEFAULT false NOT NULL
 );
 
 
@@ -1634,8 +1642,6 @@ CREATE TABLE public.org_permissions (
     updated_at timestamp with time zone,
     deleted_at timestamp with time zone,
     user_id text NOT NULL,
-    can_manage_functions boolean DEFAULT false NOT NULL,
-    can_manage_watches boolean DEFAULT false NOT NULL,
     can_manage_etc boolean DEFAULT false NOT NULL,
     org_id bigint NOT NULL,
     can_create_namespaces boolean DEFAULT false NOT NULL
@@ -2510,6 +2516,14 @@ ALTER TABLE ONLY public.buckets
 
 
 --
+-- Name: cron_bin_deps cron_bin_deps_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cron_bin_deps
+    ADD CONSTRAINT cron_bin_deps_pkey PRIMARY KEY (cron_watch_id, function_id);
+
+
+--
 -- Name: cron_claims cron_claims_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3037,10 +3051,24 @@ CREATE INDEX idx_cold_scan_daily_org_day ON public.cold_scan_daily USING btree (
 
 
 --
+-- Name: idx_cron_bin_deps_function; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_cron_bin_deps_function ON public.cron_bin_deps USING btree (function_id);
+
+
+--
 -- Name: idx_cron_org_name; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX idx_cron_org_name ON public.cron_watches USING btree (org_id, name);
+CREATE UNIQUE INDEX idx_cron_org_name ON public.cron_watches USING btree (org_id, name) WHERE (namespace_id IS NULL);
+
+
+--
+-- Name: idx_cron_org_ns_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_cron_org_ns_name ON public.cron_watches USING btree (org_id, namespace_id, name) WHERE (namespace_id IS NOT NULL);
 
 
 --
@@ -3738,6 +3766,22 @@ ALTER TABLE ONLY public.alert_incident_deliveries
 
 
 --
+-- Name: cron_bin_deps cron_bin_deps_cron_watch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cron_bin_deps
+    ADD CONSTRAINT cron_bin_deps_cron_watch_id_fkey FOREIGN KEY (cron_watch_id) REFERENCES public.cron_watches(id) ON DELETE CASCADE;
+
+
+--
+-- Name: cron_bin_deps cron_bin_deps_function_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cron_bin_deps
+    ADD CONSTRAINT cron_bin_deps_function_id_fkey FOREIGN KEY (function_id) REFERENCES public.shell_functions(id) ON DELETE CASCADE;
+
+
+--
 -- Name: cron_watch_history cron_watch_history_predecessor_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3917,13 +3961,13 @@ ALTER TABLE ONLY public.webhook_secrets
 -- PostgreSQL database dump complete
 --
 
-\unrestrict bH64iGhRb6vQZ5mTOMNqFy0t8t83OheJcDXhaN3HP3NGWeo6mhCbZI8tVLXociW
+\unrestrict qrVoBnsenETCrvYbJLqCXsvmj4RylCxQcxZLvfJpfeOBGG3UxG3Ld5t8gEkw47Y
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict BCTdDAJpM0hgsIywTbfFnl2gyFzczTTb6QR4cdj0SOj8ZblDAe8HdLKraeFfEQN
+\restrict G2wHA35xMtfYcMtpdqBjp6hjZ6CDawhbi1Q6qTJOT89hOgyhogIENU8y7WIyep3
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -3957,13 +4001,13 @@ SELECT pg_catalog.setval('public.buckets_new_id_seq', 1, true);
 -- PostgreSQL database dump complete
 --
 
-\unrestrict BCTdDAJpM0hgsIywTbfFnl2gyFzczTTb6QR4cdj0SOj8ZblDAe8HdLKraeFfEQN
+\unrestrict G2wHA35xMtfYcMtpdqBjp6hjZ6CDawhbi1Q6qTJOT89hOgyhogIENU8y7WIyep3
 
 --
 -- PostgreSQL database dump
 --
 
-\restrict zK3G7aBSQYjcF2mDowcK8E3wtgtFTehAHUgW55gildu5zJEYi7T95ZLFw0oNDKO
+\restrict oA8MugrgEjtSNf55bcQOikEcLzkwieOOxNwQQuBufGgy64vgrTEpzlQnngRqcQT
 
 -- Dumped from database version 16.15 (Debian 16.15-1.pgdg13+2)
 -- Dumped by pg_dump version 16.15 (Debian 16.15-1.pgdg13+2)
@@ -4093,20 +4137,26 @@ INSERT INTO public.goose_db_version VALUES (107, 108, true, '2026-10-28 23:42:51
 INSERT INTO public.goose_db_version VALUES (108, 109, true, '2026-10-29 17:16:56.324056');
 INSERT INTO public.goose_db_version VALUES (109, 110, true, '2026-10-30 23:23:14.365231');
 INSERT INTO public.goose_db_version VALUES (110, 111, true, '2026-11-08 16:29:05.248121');
+INSERT INTO public.goose_db_version VALUES (111, 112, true, '2026-11-11 15:56:42.539073');
+INSERT INTO public.goose_db_version VALUES (112, 113, true, '2026-11-11 15:56:42.547896');
+INSERT INTO public.goose_db_version VALUES (113, 114, true, '2026-11-11 15:56:42.550216');
+INSERT INTO public.goose_db_version VALUES (114, 115, true, '2026-11-11 15:56:42.552276');
+INSERT INTO public.goose_db_version VALUES (115, 116, true, '2026-11-11 15:56:42.555107');
+INSERT INTO public.goose_db_version VALUES (116, 117, true, '2026-11-11 15:56:42.55855');
 
 
 --
 -- Name: goose_db_version_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.goose_db_version_id_seq', 110, true);
+SELECT pg_catalog.setval('public.goose_db_version_id_seq', 116, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict zK3G7aBSQYjcF2mDowcK8E3wtgtFTehAHUgW55gildu5zJEYi7T95ZLFw0oNDKO
+\unrestrict oA8MugrgEjtSNf55bcQOikEcLzkwieOOxNwQQuBufGgy64vgrTEpzlQnngRqcQT
 
 
 -- +weft partman/cron reconstruction (generated by scripts/collapse-migrations.sh; do not hand-edit)
