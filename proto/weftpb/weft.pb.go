@@ -2236,9 +2236,15 @@ type ShardHeartbeatRequest struct {
 	// field_facts are the shard's field facts the coordinator has not yet
 	// acknowledged (see HeartbeatResponse.field_facts_acked). Absent from an
 	// older shard, which the coordinator reads as "nothing known".
-	FieldFacts    []*FieldFactDelta `protobuf:"bytes,12,rep,name=field_facts,json=fieldFacts,proto3" json:"field_facts,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	FieldFacts []*FieldFactDelta `protobuf:"bytes,12,rep,name=field_facts,json=fieldFacts,proto3" json:"field_facts,omitempty"`
+	// layout_fingerprint is the fingerprint of the partition layout the shard's
+	// volume records (PartitionLayout.fingerprint). The coordinator refuses a
+	// shard whose layout is not its own build's, so a shape change means new
+	// shards and never reinterprets data. Absent from an older shard, which is
+	// the legacy layout.
+	LayoutFingerprint string `protobuf:"bytes,13,opt,name=layout_fingerprint,json=layoutFingerprint,proto3" json:"layout_fingerprint,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ShardHeartbeatRequest) Reset() {
@@ -2332,6 +2338,13 @@ func (x *ShardHeartbeatRequest) GetFieldFacts() []*FieldFactDelta {
 		return x.FieldFacts
 	}
 	return nil
+}
+
+func (x *ShardHeartbeatRequest) GetLayoutFingerprint() string {
+	if x != nil {
+		return x.LayoutFingerprint
+	}
+	return ""
 }
 
 // FieldFactDelta is one transition of a locator's fact. See
@@ -4884,7 +4897,7 @@ const file_weft_proto_rawDesc = "" +
 	"\x12AuditFleetResponse\x12-\n" +
 	"\x06shards\x18\x01 \x03(\v2\x15.weft.AuditShardStateR\x06shards\x12-\n" +
 	"\x06spares\x18\x02 \x03(\v2\x15.weft.AuditSpareStateR\x06spares\x12)\n" +
-	"\x10ingestion_errors\x18\x03 \x01(\x03R\x0fingestionErrors\"\xa5\x02\n" +
+	"\x10ingestion_errors\x18\x03 \x01(\x03R\x0fingestionErrors\"\xd4\x02\n" +
 	"\x15ShardHeartbeatRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1f\n" +
@@ -4899,7 +4912,8 @@ const file_weft_proto_rawDesc = "" +
 	" \x01(\tR\tbinarySha\x12\x14\n" +
 	"\x05spare\x18\v \x01(\bR\x05spare\x125\n" +
 	"\vfield_facts\x18\f \x03(\v2\x14.weft.FieldFactDeltaR\n" +
-	"fieldFacts\"\xeb\x01\n" +
+	"fieldFacts\x12-\n" +
+	"\x12layout_fingerprint\x18\r \x01(\tR\x11layoutFingerprint\"\xeb\x01\n" +
 	"\x0eFieldFactDelta\x12\x1f\n" +
 	"\vcustomer_id\x18\x01 \x01(\x03R\n" +
 	"customerId\x12\x1c\n" +

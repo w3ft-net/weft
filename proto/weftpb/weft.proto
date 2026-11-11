@@ -614,6 +614,12 @@ message ShardHeartbeatRequest {
   // acknowledged (see HeartbeatResponse.field_facts_acked). Absent from an
   // older shard, which the coordinator reads as "nothing known".
   repeated FieldFactDelta field_facts = 12;
+  // layout_fingerprint is the fingerprint of the partition layout the shard's
+  // volume records (PartitionLayout.fingerprint). The coordinator refuses a
+  // shard whose layout is not its own build's, so a shape change means new
+  // shards and never reinterprets data. Absent from an older shard, which is
+  // the legacy layout.
+  string layout_fingerprint = 13;
 }
 
 // FieldFactState is what a shard has learned about a locator's values.

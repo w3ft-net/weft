@@ -469,6 +469,9 @@ func (s *DuckDBShard) OpenTiming() string { return s.openTiming }
 
 func (s *DuckDBShard) ID() string { return s.id }
 
+// Layout is the partition layout the shard's tables carry.
+func (s *DuckDBShard) Layout() shape.Layout { return s.layout }
+
 func (s *DuckDBShard) Close() error {
 	s.facts.Stop()
 	return s.db.Close()

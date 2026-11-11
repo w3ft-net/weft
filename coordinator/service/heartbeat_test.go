@@ -13,6 +13,7 @@ import (
 	"github.com/graybeardcorp/weft/coordinator"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -49,6 +50,33 @@ func TestHeartbeat_ValidToken_Accepted(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("valid heartbeat rejected: %v", err)
+	}
+}
+
+// A shard stores rows in the layout the coordinator told it, and an archive is
+// read back in this build's. One that heartbeats a layout this build does not
+// have would be reinterpreted, so it is refused. A shard from before layouts
+// sends none, and is the legacy layout the hosted build reproduces.
+func TestHeartbeat_LayoutFingerprint(t *testing.T) {
+	other := shape.NewLayout(shape.LayoutColumn{Name: "account_id", Type: shape.TypeInt64, Role: shape.RolePartition})
+	for _, tc := range []struct {
+		name        string
+		fingerprint string
+		want        codes.Code
+	}{
+		{"none (an older shard)", "", codes.OK},
+		{"this build's layout", shape.Legacy().Fingerprint, codes.OK},
+		{"another layout", other.Fingerprint, codes.FailedPrecondition},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newRegisteredShard(t, "shard-a", "good-token")
+			_, err := srv.Heartbeat(heartbeatCtx("good-token"), &pb.ShardHeartbeatRequest{
+				ShardId: "shard-a", Addr: "10.0.0.1:9000", State: "INGESTING", LayoutFingerprint: tc.fingerprint,
+			})
+			if got := status.Code(err); got != tc.want {
+				t.Fatalf("code = %v (%v), want %v", got, err, tc.want)
+			}
+		})
 	}
 }
 

@@ -356,6 +356,7 @@ func heartbeatFor(srv *shardsvc.Server, addr, instanceID string) (*pb.ShardHeart
 	req := buildHeartbeatRequest(shardID, addr, instanceID, state, rowCount, diskBytes)
 	if ds := srv.Shard(); ds != nil && !srv.Spare() {
 		req.FieldFacts = fieldFactDeltas(ds.FieldFacts())
+		req.LayoutFingerprint = ds.Layout().Fingerprint
 	}
 	if srv.Spare() {
 		req.State = "SPARE"

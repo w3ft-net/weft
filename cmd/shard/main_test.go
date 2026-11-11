@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 	shardsvc "github.com/graybeardcorp/weft/shard/service"
 )
@@ -86,6 +88,30 @@ func TestHeartbeat_SpareAnnouncesItself(t *testing.T) {
 	}
 	if !req.Spare || req.ShardId != "" || req.InstanceId != "i-spare" {
 		t.Fatalf("spare heartbeat: spare=%v shard=%q instance=%q", req.Spare, req.ShardId, req.InstanceId)
+	}
+}
+
+// A configured shard heartbeats the layout its volume records, so the
+// coordinator can refuse one it would misread. One with no shard yet has none
+// to report.
+func TestHeartbeat_ReportsTheVolumesLayout(t *testing.T) {
+	blank := shardsvc.NewBlankServer(t.TempDir(), "")
+	if req, _ := heartbeatFor(blank, "10.0.0.2:9000", "i-new"); req.LayoutFingerprint != "" {
+		t.Fatalf("an unconfigured shard reported layout %q", req.LayoutFingerprint)
+	}
+
+	lay := shape.NewLayout(shape.LayoutColumn{Name: "account_id", Type: shape.TypeInt64, Role: shape.RolePartition})
+	dir := t.TempDir()
+	srv := shardsvc.NewBlankServer(dir, filepath.Join(dir, "shard.duckdb"))
+	if _, err := srv.Configure(context.Background(), &pb.ConfigureRequest{ShardId: "s1", Layout: shard.LayoutToProto(lay)}); err != nil {
+		t.Fatal(err)
+	}
+	req, send := heartbeatFor(srv, "10.0.0.2:9000", "i-s1")
+	if !send {
+		t.Fatal("a configured shard must heartbeat")
+	}
+	if req.LayoutFingerprint != lay.Fingerprint {
+		t.Fatalf("heartbeat layout = %q, want %q", req.LayoutFingerprint, lay.Fingerprint)
 	}
 }
 
