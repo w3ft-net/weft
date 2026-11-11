@@ -38,29 +38,3 @@ func WriteArchive(db *sql.DB, query, dstPath string, layout shape.Layout, s3cfg 
 	}
 	return nil
 }
-
-// CopyArchive rewrites the archive at srcPath to dstPath whole and returns how
-// many rows it copied: how an archive is converted to the sized layout. Nothing
-// is written for an archive with no rows. Pass s3cfg for s3:// paths, nil for
-// local ones.
-func CopyArchive(srcPath, dstPath string, layout shape.Layout, s3cfg *S3Config) (int64, error) {
-	db, err := sql.Open("duckdb", "")
-	if err != nil {
-		return 0, fmt.Errorf("open duckdb: %w", err)
-	}
-	defer db.Close()
-	if s3cfg != nil {
-		if err := s3cfg.ConfigureDuckDB(db); err != nil {
-			return 0, err
-		}
-	}
-	src := ParquetReadExpr(srcPath, layout)
-	var n int64
-	if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", src)).Scan(&n); err != nil {
-		return 0, fmt.Errorf("count source: %w", err)
-	}
-	if n == 0 {
-		return 0, nil
-	}
-	return n, WriteArchive(db, "SELECT * FROM "+src, dstPath, layout, s3cfg)
-}

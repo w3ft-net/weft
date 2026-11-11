@@ -12,6 +12,14 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
+// ObjectDeleter removes an archived parquet object. path is a single file
+// or a hive glob (.../**/*.parquet); the implementation expands a glob to
+// its underlying objects. Deleting an already-gone object must be a
+// success so the GC sweep is idempotent across retries.
+type ObjectDeleter interface {
+	DeleteParquet(path string) error
+}
+
 // LocalFileDeleter is the dev ObjectDeleter: it removes parquet from the
 // local filesystem. A partitioned shard's path is "<dir>/**/*.parquet" —
 // the whole directory goes. Missing-file is success (idempotent retry).

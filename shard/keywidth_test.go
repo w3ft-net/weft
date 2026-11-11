@@ -178,7 +178,7 @@ func TestLambdaSettings(t *testing.T) {
 
 // Under the memory a small Lambda has, from a read-only working directory, a
 // conversion larger than memory completes by spilling.
-func TestCopyArchive_ConvertsInAMemoryLimitedLambda(t *testing.T) {
+func TestWriteArchive_ConvertsInAMemoryLimitedLambda(t *testing.T) {
 	if testing.Short() {
 		t.Skip("writes and sorts a few hundred MB")
 	}
@@ -210,7 +210,7 @@ func TestCopyArchive_ConvertsInAMemoryLimitedLambda(t *testing.T) {
 	t.Setenv("AWS_LAMBDA_FUNCTION_MEMORY_SIZE", "512") // a 307 MB limit for about 480 MB of rows
 
 	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
-	copied, err := CopyArchive(src, dstDir+"/sized/**/*.parquet", shape.Legacy(), nil)
+	copied, err := copyArchive(src, dstDir+"/sized/**/*.parquet", shape.Legacy())
 	if err != nil {
 		t.Fatalf("a conversion larger than memory failed: %v", err)
 	}

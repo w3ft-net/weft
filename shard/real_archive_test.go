@@ -17,12 +17,12 @@ import (
 	"github.com/graybeardcorp/weft/shape"
 )
 
-// A dry run of the conversion on a real archive, run by hand before the janitor
+// A dry run of a rewrite on a real archive, run by hand before the janitor
 // does it for real. Skipped unless WEFT_REAL_ARCHIVE is set to a directory
 // holding a downloaded archive (the contents of an s3://.../<shard>.attempt-N/
 // prefix, whatever its layout). Set AWS_LAMBDA_FUNCTION_MEMORY_SIZE to the
 // compactor Lambda's memory to run under its limits. It converts exactly as the
-// compactor does, then checks the copy against the original, key by key.
+// compactor does, then reports what the copy looks like.
 //
 //	WEFT_REAL_ARCHIVE=/path/to/attempt-1 AWS_LAMBDA_FUNCTION_MEMORY_SIZE=2048 \
 //	  go test -tags test -run TestRealArchive_Conversion -v ./shard/
@@ -58,7 +58,7 @@ func TestRealArchive_Conversion(t *testing.T) {
 	}()
 
 	start := time.Now()
-	copied, err := CopyArchive(src, dst, shape.Legacy(), nil)
+	copied, err := copyArchive(src, dst, shape.Legacy())
 	took := time.Since(start)
 	close(stop)
 	<-done
@@ -80,13 +80,6 @@ func TestRealArchive_Conversion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-
-	// Every key holds the same rows in the copy as in the original.
-	keys, err := CompareArchives(src, dst, shape.Legacy(), nil)
-	if err != nil {
-		t.Errorf("the copy differs from the original: %v", err)
-	}
-	t.Logf("%d keys compared", keys)
 
 	// What the copy looks like: widths per key, and the file counts and sizes.
 	rows, err := db.Query(`SELECT service, kind, _w, count(DISTINCT _part), count(*) FROM ` + ParquetReadExpr(dst, shape.Legacy()) +

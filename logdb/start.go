@@ -338,7 +338,6 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 	if cfg.Retention != nil {
 		cfg.Retention.Start(cfg.Ctx, prov)
 	}
-	startTombstoneSweeper(cfg.Ctx, prov, cfg.AWSRegion)
 	startArchiveSweeper(cfg.Ctx, prov)
 	return prov, nil
 }
@@ -358,31 +357,6 @@ func startArchiveSweeper(ctx context.Context, prov *Provisioner) {
 	}
 	sw.Start(ctx)
 	weftsdk.Infof(ctx, "coordinator: archive sweeper started (orphan removal=%v, stuck-archive alert after %s)", sw.Resources != nil, archivingStuckAfter)
-}
-
-// startTombstoneSweeper starts the daily GC of tombstoned parquet. The
-// objects go from the local disk, or from S3 when the archives live there.
-func startTombstoneSweeper(ctx context.Context, prov *Provisioner, region string) {
-	if prov == nil {
-		return
-	}
-	var deleter ObjectDeleter = LocalFileDeleter{}
-	if strings.HasPrefix(prov.config.ParquetDir, "s3://") {
-		d, err := NewS3ObjectDeleter(ctx, region)
-		if err != nil {
-			weftsdk.Infof(ctx, "tombstone GC: S3 deleter unavailable, not starting: %v", err)
-			return
-		}
-		deleter = d
-	}
-	(&TombstoneSweeper{
-		Store:    prov.ShardStore(),
-		Deleter:  deleter,
-		Clock:    time.Now,
-		Interval: 24 * time.Hour,
-		IsLeader: prov.IsLeader,
-	}).Start(ctx)
-	weftsdk.Infof(ctx, "coordinator: tombstone GC started (daily)")
 }
 
 // startDev wires the docker-based dev launcher and provisioner. Fatal

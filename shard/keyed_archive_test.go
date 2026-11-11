@@ -307,11 +307,11 @@ func TestKeyedExport_ManyPartitionsDoNotSplitIntoManyFiles(t *testing.T) {
 }
 
 // Converting a time-only archive does not split its partitions into many files either.
-func TestCopyArchive_ConversionDoesNotSplitIntoManyFiles(t *testing.T) {
+func TestWriteArchive_ConversionDoesNotSplitIntoManyFiles(t *testing.T) {
 	ds := interleavedShard(t)
 	_, src, _ := exportTo(t, ds, 1440)
 	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
-	copied, err := CopyArchive(src, dstDir+"/sized/**/*.parquet", shape.Legacy(), nil)
+	copied, err := copyArchive(src, dstDir+"/sized/**/*.parquet", shape.Legacy())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestCopyArchive_ConversionDoesNotSplitIntoManyFiles(t *testing.T) {
 
 // Converting an archive is a copy whose destination is keyed. The source may be a single file, which has no _part, or a time-only
 // archive of any width, whose _part is rebuilt for the new one.
-func TestCopyArchive_ConvertsAnythingToKeyed(t *testing.T) {
+func TestWriteArchive_ConvertsAnythingToKeyed(t *testing.T) {
 	const perKey = 6
 	ds := legacyShardWith(t, keyedFixture, perKey)
 	want := len(keyedFixture) * perKey
@@ -339,7 +339,7 @@ func TestCopyArchive_ConvertsAnythingToKeyed(t *testing.T) {
 			}
 			dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
 			dst := dstDir + "/sized/**/*.parquet"
-			copied, err := CopyArchive(src, dst, shape.Legacy(), nil)
+			copied, err := copyArchive(src, dst, shape.Legacy())
 			if err != nil {
 				t.Fatal(err)
 			}

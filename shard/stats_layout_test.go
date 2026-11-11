@@ -3,7 +3,6 @@ package shard
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -155,51 +154,5 @@ func TestExportManifest_KeepsTheKeyAndTheCustomerNumberForTheOldBuild(t *testing
 	old := `{"shard_id":"s","rows":7,"customers":[{"customer_id":5,"row_count":7,"min_ts":"2026-05-01T00:00:00Z","max_ts":"2026-05-01T00:00:00Z"}]}`
 	if err := json.Unmarshal([]byte(old), &m); err != nil || len(m.Partitions) != 1 || !reflect.DeepEqual(m.Partitions[0].PartitionValues, []string{"5"}) {
 		t.Fatalf("an old manifest decodes to %+v, %v", m, err)
-	}
-}
-
-// Verify and Compare read an archive of any layout: here one partitioned by an
-// int and a string column, with no customer_id anywhere.
-func TestArchiveChecks_ReadALayoutWithNoCustomer(t *testing.T) {
-	ds := shardOfAccountTier(t)
-	dir := t.TempDir()
-	path, stats, err := ds.Archive(context.Background(), dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := ExportManifest{ShardID: "s", ParquetPath: path, Rows: 4, Partitions: stats}
-	if err := VerifyAgainstManifest(path, m, accountTier, nil); err != nil {
-		t.Fatalf("an archive that matches its manifest failed: %v", err)
-	}
-
-	wrong := m
-	wrong.Partitions = append([]PartitionStat(nil), stats...)
-	for i := range wrong.Partitions {
-		if reflect.DeepEqual(wrong.Partitions[i].PartitionValues, []string{"7", "gold"}) {
-			wrong.Partitions[i].RowCount = 1
-		}
-		if reflect.DeepEqual(wrong.Partitions[i].PartitionValues, []string{"7", "free"}) {
-			wrong.Partitions[i].RowCount = 2
-		}
-	}
-	err = VerifyAgainstManifest(path, wrong, accountTier, nil)
-	if err == nil || !strings.Contains(err.Error(), "7/") {
-		t.Errorf("a manifest with the right total and the wrong partitions passed or named none: %v", err)
-	}
-
-	unlisted := m
-	unlisted.Partitions = stats[:len(stats)-1]
-	unlisted.Rows = m.Rows
-	if err := VerifyAgainstManifest(path, unlisted, accountTier, nil); err == nil {
-		t.Error("an archive holding a partition the manifest does not list passed")
-	}
-
-	dst := filepath.Join(dir, "copy")
-	if _, err := CopyArchive(path, dst, accountTier, nil); err != nil {
-		t.Fatalf("copy: %v", err)
-	}
-	keys, err := CompareArchives(path, dst, accountTier, nil)
-	if err != nil || keys != 3 {
-		t.Fatalf("compare = %d keys, %v; want 3 keys (7/gold, 7/free, 8/gold under one namespace and service)", keys, err)
 	}
 }

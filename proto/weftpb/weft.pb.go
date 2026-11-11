@@ -4411,104 +4411,6 @@ func (*ForceRemoveShardResponse) Descriptor() ([]byte, []int) {
 	return file_weft_proto_rawDescGZIP(), []int{61}
 }
 
-type SwapShardArchiveRequest struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	ShardId string                 `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
-	// old_path is the archive's parquet path as the shard has it now; the swap is
-	// refused if the shard is at some other path.
-	OldPath       string `protobuf:"bytes,2,opt,name=old_path,json=oldPath,proto3" json:"old_path,omitempty"`
-	NewPath       string `protobuf:"bytes,3,opt,name=new_path,json=newPath,proto3" json:"new_path,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SwapShardArchiveRequest) Reset() {
-	*x = SwapShardArchiveRequest{}
-	mi := &file_weft_proto_msgTypes[62]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SwapShardArchiveRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SwapShardArchiveRequest) ProtoMessage() {}
-
-func (x *SwapShardArchiveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_weft_proto_msgTypes[62]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SwapShardArchiveRequest.ProtoReflect.Descriptor instead.
-func (*SwapShardArchiveRequest) Descriptor() ([]byte, []int) {
-	return file_weft_proto_rawDescGZIP(), []int{62}
-}
-
-func (x *SwapShardArchiveRequest) GetShardId() string {
-	if x != nil {
-		return x.ShardId
-	}
-	return ""
-}
-
-func (x *SwapShardArchiveRequest) GetOldPath() string {
-	if x != nil {
-		return x.OldPath
-	}
-	return ""
-}
-
-func (x *SwapShardArchiveRequest) GetNewPath() string {
-	if x != nil {
-		return x.NewPath
-	}
-	return ""
-}
-
-type SwapShardArchiveResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SwapShardArchiveResponse) Reset() {
-	*x = SwapShardArchiveResponse{}
-	mi := &file_weft_proto_msgTypes[63]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SwapShardArchiveResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SwapShardArchiveResponse) ProtoMessage() {}
-
-func (x *SwapShardArchiveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_weft_proto_msgTypes[63]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SwapShardArchiveResponse.ProtoReflect.Descriptor instead.
-func (*SwapShardArchiveResponse) Descriptor() ([]byte, []int) {
-	return file_weft_proto_rawDescGZIP(), []int{63}
-}
-
 type GetShardRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ShardId       string                 `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
@@ -4518,7 +4420,7 @@ type GetShardRequest struct {
 
 func (x *GetShardRequest) Reset() {
 	*x = GetShardRequest{}
-	mi := &file_weft_proto_msgTypes[64]
+	mi := &file_weft_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4530,7 +4432,7 @@ func (x *GetShardRequest) String() string {
 func (*GetShardRequest) ProtoMessage() {}
 
 func (x *GetShardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_weft_proto_msgTypes[64]
+	mi := &file_weft_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4543,7 +4445,7 @@ func (x *GetShardRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetShardRequest.ProtoReflect.Descriptor instead.
 func (*GetShardRequest) Descriptor() ([]byte, []int) {
-	return file_weft_proto_rawDescGZIP(), []int{64}
+	return file_weft_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *GetShardRequest) GetShardId() string {
@@ -4562,7 +4464,7 @@ type GetShardResponse struct {
 
 func (x *GetShardResponse) Reset() {
 	*x = GetShardResponse{}
-	mi := &file_weft_proto_msgTypes[65]
+	mi := &file_weft_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4574,7 +4476,7 @@ func (x *GetShardResponse) String() string {
 func (*GetShardResponse) ProtoMessage() {}
 
 func (x *GetShardResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_weft_proto_msgTypes[65]
+	mi := &file_weft_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4587,7 +4489,7 @@ func (x *GetShardResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetShardResponse.ProtoReflect.Descriptor instead.
 func (*GetShardResponse) Descriptor() ([]byte, []int) {
-	return file_weft_proto_rawDescGZIP(), []int{65}
+	return file_weft_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *GetShardResponse) GetShard() *ShardInfo {
@@ -4605,7 +4507,7 @@ type ListBucketsRequest struct {
 
 func (x *ListBucketsRequest) Reset() {
 	*x = ListBucketsRequest{}
-	mi := &file_weft_proto_msgTypes[66]
+	mi := &file_weft_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4617,7 +4519,7 @@ func (x *ListBucketsRequest) String() string {
 func (*ListBucketsRequest) ProtoMessage() {}
 
 func (x *ListBucketsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_weft_proto_msgTypes[66]
+	mi := &file_weft_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4630,7 +4532,7 @@ func (x *ListBucketsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBucketsRequest.ProtoReflect.Descriptor instead.
 func (*ListBucketsRequest) Descriptor() ([]byte, []int) {
-	return file_weft_proto_rawDescGZIP(), []int{66}
+	return file_weft_proto_rawDescGZIP(), []int{64}
 }
 
 type BucketInfo struct {
@@ -4646,7 +4548,7 @@ type BucketInfo struct {
 
 func (x *BucketInfo) Reset() {
 	*x = BucketInfo{}
-	mi := &file_weft_proto_msgTypes[67]
+	mi := &file_weft_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4658,7 +4560,7 @@ func (x *BucketInfo) String() string {
 func (*BucketInfo) ProtoMessage() {}
 
 func (x *BucketInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_weft_proto_msgTypes[67]
+	mi := &file_weft_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4671,7 +4573,7 @@ func (x *BucketInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BucketInfo.ProtoReflect.Descriptor instead.
 func (*BucketInfo) Descriptor() ([]byte, []int) {
-	return file_weft_proto_rawDescGZIP(), []int{67}
+	return file_weft_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *BucketInfo) GetId() int64 {
@@ -4718,7 +4620,7 @@ type ListBucketsResponse struct {
 
 func (x *ListBucketsResponse) Reset() {
 	*x = ListBucketsResponse{}
-	mi := &file_weft_proto_msgTypes[68]
+	mi := &file_weft_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4730,7 +4632,7 @@ func (x *ListBucketsResponse) String() string {
 func (*ListBucketsResponse) ProtoMessage() {}
 
 func (x *ListBucketsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_weft_proto_msgTypes[68]
+	mi := &file_weft_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4743,7 +4645,7 @@ func (x *ListBucketsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBucketsResponse.ProtoReflect.Descriptor instead.
 func (*ListBucketsResponse) Descriptor() ([]byte, []int) {
-	return file_weft_proto_rawDescGZIP(), []int{68}
+	return file_weft_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *ListBucketsResponse) GetBuckets() []*BucketInfo {
@@ -5076,12 +4978,7 @@ const file_weft_proto_rawDesc = "" +
 	"\x17ForceRemoveShardRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x14\n" +
 	"\x05force\x18\x02 \x01(\bR\x05force\"\x1a\n" +
-	"\x18ForceRemoveShardResponse\"j\n" +
-	"\x17SwapShardArchiveRequest\x12\x19\n" +
-	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x19\n" +
-	"\bold_path\x18\x02 \x01(\tR\aoldPath\x12\x19\n" +
-	"\bnew_path\x18\x03 \x01(\tR\anewPath\"\x1a\n" +
-	"\x18SwapShardArchiveResponse\",\n" +
+	"\x18ForceRemoveShardResponse\",\n" +
 	"\x0fGetShardRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\"9\n" +
 	"\x10GetShardResponse\x12%\n" +
@@ -5145,11 +5042,10 @@ const file_weft_proto_rawDesc = "" +
 	"\n" +
 	"ListShards\x12\x17.weft.ListShardsRequest\x1a\x18.weft.ListShardsResponse\x12T\n" +
 	"\x11ForceArchiveShard\x12\x1e.weft.ForceArchiveShardRequest\x1a\x1f.weft.ForceArchiveShardResponse\x12Z\n" +
-	"\x13DeleteArchivedShard\x12 .weft.DeleteArchivedShardRequest\x1a!.weft.DeleteArchivedShardResponse2\xfc\x03\n" +
+	"\x13DeleteArchivedShard\x12 .weft.DeleteArchivedShardRequest\x1a!.weft.DeleteArchivedShardResponse2\xa9\x03\n" +
 	"\tWeftAdmin\x12H\n" +
 	"\rRelaunchShard\x12\x1a.weft.RelaunchShardRequest\x1a\x1b.weft.RelaunchShardResponse\x12Q\n" +
-	"\x10ForceRemoveShard\x12\x1d.weft.ForceRemoveShardRequest\x1a\x1e.weft.ForceRemoveShardResponse\x12Q\n" +
-	"\x10SwapShardArchive\x12\x1d.weft.SwapShardArchiveRequest\x1a\x1e.weft.SwapShardArchiveResponse\x129\n" +
+	"\x10ForceRemoveShard\x12\x1d.weft.ForceRemoveShardRequest\x1a\x1e.weft.ForceRemoveShardResponse\x129\n" +
 	"\bGetShard\x12\x15.weft.GetShardRequest\x1a\x16.weft.GetShardResponse\x12?\n" +
 	"\n" +
 	"ListShards\x12\x17.weft.ListShardsRequest\x1a\x18.weft.ListShardsResponse\x12B\n" +
@@ -5170,7 +5066,7 @@ func file_weft_proto_rawDescGZIP() []byte {
 }
 
 var file_weft_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_weft_proto_msgTypes = make([]protoimpl.MessageInfo, 70)
+var file_weft_proto_msgTypes = make([]protoimpl.MessageInfo, 68)
 var file_weft_proto_goTypes = []any{
 	(GroupRender)(0),                    // 0: weft.GroupRender
 	(GroupOrder)(0),                     // 1: weft.GroupOrder
@@ -5237,20 +5133,18 @@ var file_weft_proto_goTypes = []any{
 	(*RelaunchShardResponse)(nil),       // 62: weft.RelaunchShardResponse
 	(*ForceRemoveShardRequest)(nil),     // 63: weft.ForceRemoveShardRequest
 	(*ForceRemoveShardResponse)(nil),    // 64: weft.ForceRemoveShardResponse
-	(*SwapShardArchiveRequest)(nil),     // 65: weft.SwapShardArchiveRequest
-	(*SwapShardArchiveResponse)(nil),    // 66: weft.SwapShardArchiveResponse
-	(*GetShardRequest)(nil),             // 67: weft.GetShardRequest
-	(*GetShardResponse)(nil),            // 68: weft.GetShardResponse
-	(*ListBucketsRequest)(nil),          // 69: weft.ListBucketsRequest
-	(*BucketInfo)(nil),                  // 70: weft.BucketInfo
-	(*ListBucketsResponse)(nil),         // 71: weft.ListBucketsResponse
-	nil,                                 // 72: weft.ResultRow.MetaVarsEntry
+	(*GetShardRequest)(nil),             // 65: weft.GetShardRequest
+	(*GetShardResponse)(nil),            // 66: weft.GetShardResponse
+	(*ListBucketsRequest)(nil),          // 67: weft.ListBucketsRequest
+	(*BucketInfo)(nil),                  // 68: weft.BucketInfo
+	(*ListBucketsResponse)(nil),         // 69: weft.ListBucketsResponse
+	nil,                                 // 70: weft.ResultRow.MetaVarsEntry
 }
 var file_weft_proto_depIdxs = []int32{
 	9,  // 0: weft.ConfigureRequest.layout:type_name -> weft.PartitionLayout
 	10, // 1: weft.PartitionLayout.columns:type_name -> weft.PartitionColumn
 	13, // 2: weft.ArchiveResponse.customer_stats:type_name -> weft.CustomerArchiveStat
-	72, // 3: weft.ResultRow.meta_vars:type_name -> weft.ResultRow.MetaVarsEntry
+	70, // 3: weft.ResultRow.meta_vars:type_name -> weft.ResultRow.MetaVarsEntry
 	18, // 4: weft.IngestRequest.rows:type_name -> weft.LogRow
 	9,  // 5: weft.ShardDescriptor.layout:type_name -> weft.PartitionLayout
 	21, // 6: weft.ExecuteQueryRequest.shards:type_name -> weft.ShardDescriptor
@@ -5267,7 +5161,7 @@ var file_weft_proto_depIdxs = []int32{
 	42, // 17: weft.CoordinatorExecuteResponse.notices:type_name -> weft.Notice
 	55, // 18: weft.ListShardsResponse.shards:type_name -> weft.ShardInfo
 	55, // 19: weft.GetShardResponse.shard:type_name -> weft.ShardInfo
-	70, // 20: weft.ListBucketsResponse.buckets:type_name -> weft.BucketInfo
+	68, // 20: weft.ListBucketsResponse.buckets:type_name -> weft.BucketInfo
 	15, // 21: weft.ShardQuery.Query:input_type -> weft.QueryRequest
 	19, // 22: weft.ShardQuery.Ingest:input_type -> weft.IngestRequest
 	18, // 23: weft.ShardQuery.IngestStream:input_type -> weft.LogRow
@@ -5292,42 +5186,40 @@ var file_weft_proto_depIdxs = []int32{
 	59, // 42: weft.WeftCoordinator.DeleteArchivedShard:input_type -> weft.DeleteArchivedShardRequest
 	61, // 43: weft.WeftAdmin.RelaunchShard:input_type -> weft.RelaunchShardRequest
 	63, // 44: weft.WeftAdmin.ForceRemoveShard:input_type -> weft.ForceRemoveShardRequest
-	65, // 45: weft.WeftAdmin.SwapShardArchive:input_type -> weft.SwapShardArchiveRequest
-	67, // 46: weft.WeftAdmin.GetShard:input_type -> weft.GetShardRequest
-	54, // 47: weft.WeftAdmin.ListShards:input_type -> weft.ListShardsRequest
-	69, // 48: weft.WeftAdmin.ListBuckets:input_type -> weft.ListBucketsRequest
-	25, // 49: weft.WeftAdmin.AuditFleet:input_type -> weft.AuditFleetRequest
-	16, // 50: weft.ShardQuery.Query:output_type -> weft.ResultRow
-	20, // 51: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
-	14, // 52: weft.ShardQuery.IngestStream:output_type -> weft.IngestStreamResponse
-	8,  // 53: weft.ShardQuery.Configure:output_type -> weft.ConfigureResponse
-	12, // 54: weft.ShardQuery.Archive:output_type -> weft.ArchiveResponse
-	4,  // 55: weft.ShardQuery.Pause:output_type -> weft.PauseResponse
-	6,  // 56: weft.ShardQuery.Resume:output_type -> weft.ResumeResponse
-	24, // 57: weft.WeftCompute.ExecuteQueryStream:output_type -> weft.ExecuteQueryStreamResponse
-	40, // 58: weft.WeftCoordinator.Execute:output_type -> weft.CoordinatorExecuteResponse
-	44, // 59: weft.WeftCoordinator.ListServices:output_type -> weft.ListServicesResponse
-	46, // 60: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
-	48, // 61: weft.WeftCoordinator.RemoveSource:output_type -> weft.RemoveSourceResponse
-	38, // 62: weft.WeftCoordinator.Authenticate:output_type -> weft.AuthenticateResponse
-	14, // 63: weft.WeftCoordinator.IngestStream:output_type -> weft.IngestStreamResponse
-	35, // 64: weft.WeftCoordinator.CreateToken:output_type -> weft.CreateTokenResponse
-	33, // 65: weft.WeftCoordinator.GetUsage:output_type -> weft.GetUsageResponse
-	51, // 66: weft.WeftCoordinator.SubmitSample:output_type -> weft.SubmitSampleResponse
-	53, // 67: weft.WeftCoordinator.GetSourceStatus:output_type -> weft.GetSourceStatusResponse
-	31, // 68: weft.WeftCoordinator.Heartbeat:output_type -> weft.HeartbeatResponse
-	56, // 69: weft.WeftCoordinator.ListShards:output_type -> weft.ListShardsResponse
-	58, // 70: weft.WeftCoordinator.ForceArchiveShard:output_type -> weft.ForceArchiveShardResponse
-	60, // 71: weft.WeftCoordinator.DeleteArchivedShard:output_type -> weft.DeleteArchivedShardResponse
-	62, // 72: weft.WeftAdmin.RelaunchShard:output_type -> weft.RelaunchShardResponse
-	64, // 73: weft.WeftAdmin.ForceRemoveShard:output_type -> weft.ForceRemoveShardResponse
-	66, // 74: weft.WeftAdmin.SwapShardArchive:output_type -> weft.SwapShardArchiveResponse
-	68, // 75: weft.WeftAdmin.GetShard:output_type -> weft.GetShardResponse
-	56, // 76: weft.WeftAdmin.ListShards:output_type -> weft.ListShardsResponse
-	71, // 77: weft.WeftAdmin.ListBuckets:output_type -> weft.ListBucketsResponse
-	28, // 78: weft.WeftAdmin.AuditFleet:output_type -> weft.AuditFleetResponse
-	50, // [50:79] is the sub-list for method output_type
-	21, // [21:50] is the sub-list for method input_type
+	65, // 45: weft.WeftAdmin.GetShard:input_type -> weft.GetShardRequest
+	54, // 46: weft.WeftAdmin.ListShards:input_type -> weft.ListShardsRequest
+	67, // 47: weft.WeftAdmin.ListBuckets:input_type -> weft.ListBucketsRequest
+	25, // 48: weft.WeftAdmin.AuditFleet:input_type -> weft.AuditFleetRequest
+	16, // 49: weft.ShardQuery.Query:output_type -> weft.ResultRow
+	20, // 50: weft.ShardQuery.Ingest:output_type -> weft.IngestResponse
+	14, // 51: weft.ShardQuery.IngestStream:output_type -> weft.IngestStreamResponse
+	8,  // 52: weft.ShardQuery.Configure:output_type -> weft.ConfigureResponse
+	12, // 53: weft.ShardQuery.Archive:output_type -> weft.ArchiveResponse
+	4,  // 54: weft.ShardQuery.Pause:output_type -> weft.PauseResponse
+	6,  // 55: weft.ShardQuery.Resume:output_type -> weft.ResumeResponse
+	24, // 56: weft.WeftCompute.ExecuteQueryStream:output_type -> weft.ExecuteQueryStreamResponse
+	40, // 57: weft.WeftCoordinator.Execute:output_type -> weft.CoordinatorExecuteResponse
+	44, // 58: weft.WeftCoordinator.ListServices:output_type -> weft.ListServicesResponse
+	46, // 59: weft.WeftCoordinator.AddSource:output_type -> weft.AddSourceResponse
+	48, // 60: weft.WeftCoordinator.RemoveSource:output_type -> weft.RemoveSourceResponse
+	38, // 61: weft.WeftCoordinator.Authenticate:output_type -> weft.AuthenticateResponse
+	14, // 62: weft.WeftCoordinator.IngestStream:output_type -> weft.IngestStreamResponse
+	35, // 63: weft.WeftCoordinator.CreateToken:output_type -> weft.CreateTokenResponse
+	33, // 64: weft.WeftCoordinator.GetUsage:output_type -> weft.GetUsageResponse
+	51, // 65: weft.WeftCoordinator.SubmitSample:output_type -> weft.SubmitSampleResponse
+	53, // 66: weft.WeftCoordinator.GetSourceStatus:output_type -> weft.GetSourceStatusResponse
+	31, // 67: weft.WeftCoordinator.Heartbeat:output_type -> weft.HeartbeatResponse
+	56, // 68: weft.WeftCoordinator.ListShards:output_type -> weft.ListShardsResponse
+	58, // 69: weft.WeftCoordinator.ForceArchiveShard:output_type -> weft.ForceArchiveShardResponse
+	60, // 70: weft.WeftCoordinator.DeleteArchivedShard:output_type -> weft.DeleteArchivedShardResponse
+	62, // 71: weft.WeftAdmin.RelaunchShard:output_type -> weft.RelaunchShardResponse
+	64, // 72: weft.WeftAdmin.ForceRemoveShard:output_type -> weft.ForceRemoveShardResponse
+	66, // 73: weft.WeftAdmin.GetShard:output_type -> weft.GetShardResponse
+	56, // 74: weft.WeftAdmin.ListShards:output_type -> weft.ListShardsResponse
+	69, // 75: weft.WeftAdmin.ListBuckets:output_type -> weft.ListBucketsResponse
+	28, // 76: weft.WeftAdmin.AuditFleet:output_type -> weft.AuditFleetResponse
+	49, // [49:77] is the sub-list for method output_type
+	21, // [21:49] is the sub-list for method input_type
 	21, // [21:21] is the sub-list for extension type_name
 	21, // [21:21] is the sub-list for extension extendee
 	0,  // [0:21] is the sub-list for field type_name
@@ -5345,7 +5237,7 @@ func file_weft_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_weft_proto_rawDesc), len(file_weft_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   70,
+			NumMessages:   68,
 			NumExtensions: 0,
 			NumServices:   4,
 		},

@@ -1,10 +1,13 @@
-package logdb
+package retention
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	weftsdk "github.com/w3ft-net/weft-go"
+
+	"github.com/graybeardcorp/weft/logdb"
 )
 
 // ParquetTombstone is a superseded or retired parquet object awaiting GC.
@@ -21,23 +24,15 @@ type ParquetTombstone struct {
 
 func (*ParquetTombstone) TableName() string { return "parquet_tombstones" }
 
-// ObjectDeleter removes an archived parquet object. path is a single file
-// or a hive glob (.../**/*.parquet); the implementation expands a glob to
-// its underlying objects. Deleting an already-gone object must be a
-// success so the GC sweep is idempotent across retries.
-type ObjectDeleter interface {
-	DeleteParquet(path string) error
-}
-
 // SweepTombstones deletes every parquet object whose grace window has
 // elapsed, then drops its tombstone row. S3 delete precedes the row
 // delete, so a crash between them leaves the tombstone for the next
 // sweep to retry (re-deleting a gone object is a no-op) — never a dropped
 // row pointing at a live object. Per-object failures are logged and left
 // for retry; the sweep continues. Returns the count deleted.
-func (s ShardStore) SweepTombstones(now time.Time, deleter ObjectDeleter) (int, error) {
+func (s Store) SweepTombstones(now time.Time, deleter logdb.ObjectDeleter) (int, error) {
 	var tombs []ParquetTombstone
-	if err := s.db().Where("delete_after < ?", now).Find(&tombs).Error; err != nil {
+	if err := s.DB().Where("delete_after < ?", now).Find(&tombs).Error; err != nil {
 		return 0, err
 	}
 	deleted := 0
@@ -46,7 +41,7 @@ func (s ShardStore) SweepTombstones(now time.Time, deleter ObjectDeleter) (int, 
 			weftsdk.Infof(context.Background(), "tombstone GC: delete %s (shard %s): %v", t.Path, t.ShardID, err)
 			continue
 		}
-		if err := s.db().Delete(&ParquetTombstone{}, t.ID).Error; err != nil {
+		if err := s.DB().Delete(&ParquetTombstone{}, t.ID).Error; err != nil {
 			weftsdk.Infof(context.Background(), "tombstone GC: drop tombstone %d: %v", t.ID, err)
 			continue
 		}
@@ -55,12 +50,11 @@ func (s ShardStore) SweepTombstones(now time.Time, deleter ObjectDeleter) (int, 
 	return deleted, nil
 }
 
-// TombstoneSweeper is the daily GC of tombstoned parquet. Archive swaps write
-// the tombstones, so the sweep is core, whether or not a retention feature is
-// installed.
+// TombstoneSweeper is the daily GC of the parquet the janitor tombstones when
+// it rewrites or retires an archive.
 type TombstoneSweeper struct {
-	Store   ShardStore
-	Deleter ObjectDeleter
+	Store   Store
+	Deleter logdb.ObjectDeleter
 	Clock   func() time.Time
 	// Interval is the sweep cadence (24h in production).
 	Interval time.Duration
@@ -93,4 +87,26 @@ func (t *TombstoneSweeper) Start(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// startTombstoneSweeper starts the daily GC of tombstoned parquet. The
+// objects go from the local disk, or from S3 when the archives live there.
+func startTombstoneSweeper(ctx context.Context, prov *logdb.Provisioner, region string) {
+	var deleter logdb.ObjectDeleter = logdb.LocalFileDeleter{}
+	if strings.HasPrefix(prov.ParquetDir(), "s3://") {
+		d, err := logdb.NewS3ObjectDeleter(ctx, region)
+		if err != nil {
+			weftsdk.Infof(ctx, "tombstone GC: S3 deleter unavailable, not starting: %v", err)
+			return
+		}
+		deleter = d
+	}
+	(&TombstoneSweeper{
+		Store:    Store{prov.ShardStore()},
+		Deleter:  deleter,
+		Clock:    time.Now,
+		Interval: 24 * time.Hour,
+		IsLeader: prov.IsLeader,
+	}).Start(ctx)
+	weftsdk.Infof(ctx, "coordinator: tombstone GC started (daily)")
 }

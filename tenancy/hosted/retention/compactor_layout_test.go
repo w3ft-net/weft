@@ -49,7 +49,12 @@ func sizedArchive(t *testing.T, layout shape.Layout, batches ...batch) string {
 		t.Fatal(err)
 	}
 	glob := filepath.Join(t.TempDir(), "sized", "**", "*.parquet")
-	if _, err := shard.CopyArchive(path, glob, layout, nil); err != nil {
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := shard.WriteArchive(db, "SELECT * FROM "+shard.ParquetReadExpr(path, layout), glob, layout, nil); err != nil {
 		t.Fatal(err)
 	}
 	return glob

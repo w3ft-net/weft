@@ -279,30 +279,15 @@ An archive without it reads as it does now. Converting is one archive at a time,
 one back is repointing `parquet_path` at the old object while it is still there.
 
 **Converting existing archives (decided 2026-11-02: a one-off, not the janitor).** The sized
-layout is what the export writes from now on, so converting the archives that already exist
-is a supervised one-off, run from a machine with the disk and memory for it, not a daily job
-in a Lambda. An early version made it a janitor disposition behind `KEYED_ARCHIVES`; it was
-removed because the Lambda's limits, the leader gate it needed (two coordinators would
-convert the same archive twice), tombstones and a row-count check were all machinery for a
-job that runs once. The one-off is `scripts/convert_archives.py`, run from the repo root on a
-workstation (stdlib Python; every AWS call goes through `kevcons aws`):
-
-- `--stage plan` (the default) reads each shard's export manifest from `_manifests/` and
-  lists what is not yet sized. Nothing is downloaded.
-- `--stage convert` downloads each archive, converts it with `convert-archive` (`cmd/convert-archive`, its own binary because `weft-admin` is built without cgo)
-  and verifies it. The command refuses a download that does not match the manifest (an
-  incomplete one), then checks the copy against the original key by key (count, a hash of
-  every line, first and last time) and against the manifest's row and customer counts.
-- `--stage apply` uploads the copy beside the original (`<archive>.r<ns>/sized/`), checks
-  S3 holds exactly the converted files and bytes, and swaps each coordinator's shard to it
-  with `weft-admin swap-archive`. The swap is the `SwapShardArchive` admin RPC: it succeeds
-  only if the shard is still at the old path, updates the database and the live registry
-  with no restart, and tombstones the old objects for deletion after 7 days
-  (`ArchiveSwapGCDelay`). It is idempotent, so the script sends it to every coordinator.
-
-Progress is kept in `<workdir>/state.json` and a rerun resumes. A shard that fails is
-reported and the rest continue. To undo a swap before the week is up, swap back with
-`weft-admin swap-archive --old <new> --new <old>`.
+layout is what the export writes from now on, so the five archives that already existed were
+converted once, by hand, from a workstation with the disk and memory for it: each was
+downloaded, copied to the sized layout, verified against its export manifest and against the
+original key by key, uploaded beside the original (`<archive>.r<ns>/sized/`), and swapped in
+with an admin RPC that tombstoned the old objects for a week. The code for it (`cmd/convert-archive`,
+`scripts/convert_archives.py`, `weft-admin swap-archive`, the `SwapShardArchive` RPC and its
+coordinator side) is deleted, as are `CompareArchives`, `VerifyAgainstManifest` and
+`CopyArchive`. The old objects were collected by the tombstone sweep, which now belongs to the
+hosted retention package.
 
 **Result (2026-11-02).** All five archives (17.0M to 21.2M rows each, 31 to 46 keys, 155 to
 168 files of about 15 to 32 MiB) were converted, verified key by key, uploaded and swapped
@@ -439,12 +424,12 @@ steps"). Then remove:
 - **The janitor's other branch.** The single-file destination in `rewriteDestPath`
   (`logdb/janitor.go`) and the plain `COPY ... TO file` in `RewriteRetention`, plus its error
   for a non-sized keyed destination (`shard/compact.go`).
-- **The one-off conversion.** `cmd/convert-archive`, `scripts/convert_archives.py` and its
+- **The one-off conversion (done).** `cmd/convert-archive`, `scripts/convert_archives.py` and its
   tests, `CompareArchives`, `LocalPathOf` and `VerifyAgainstManifest` (`shard/archive_compare.go`;
   keep `VerifyAgainstManifest` only while the first production exports are being checked),
   and `SizedArchivePath` once `rewriteDestPath` has one branch. The compactor and exporter
   keep working without any of them.
-- **The swap.** After the 7-day rollback window of the five swapped archives: the
+- **The swap (done).** After the 7-day rollback window of the five swapped archives: the
   `SwapShardArchive` RPC and its messages (mark the field numbers `reserved`),
   `Provisioner.SwapArchive`, `ShardStore.SwapArchivePath`, `ErrArchivePathChanged`, the
   `swap` tombstone reason, and `weft-admin swap-archive` (`cmd/weft-admin/swaparchive.go`).

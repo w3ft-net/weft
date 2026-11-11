@@ -25,6 +25,10 @@ type Retention interface {
 // Retention that reads and rewrites archived shards.
 func (p *Provisioner) ShardStore() ShardStore { return ShardStore{p.store} }
 
+// ParquetDir is where this deployment's archives are written: a local path or
+// an s3:// prefix.
+func (p *Provisioner) ParquetDir() string { return p.config.ParquetDir }
+
 // RefreshArchivedPath repoints an archived shard's in-memory entry at a
 // rewritten parquet, so new query descriptors read the new file.
 func (p *Provisioner) RefreshArchivedPath(shardID, newPath string) {

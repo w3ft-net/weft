@@ -139,7 +139,7 @@ func TestExecutePurge_Rewrite(t *testing.T) {
 		t.Errorf("refreshed stats = %+v, want one row with count 1", fresh)
 	}
 	// Old object tombstoned for GC.
-	var tombs []logdb.ParquetTombstone
+	var tombs []ParquetTombstone
 	db := ss.DB()
 	db.Where("shard_id = ?", "sh-rw").Find(&tombs)
 	if len(tombs) != 1 || tombs[0].Path != path || tombs[0].Reason != "rewrite" {
@@ -166,7 +166,7 @@ func TestExecutePurge_Delete(t *testing.T) {
 	if len(*retired) != 1 || (*retired)[0] != "sh-del" {
 		t.Errorf("Retire calls = %v, want [sh-del]", *retired)
 	}
-	var tombs []logdb.ParquetTombstone
+	var tombs []ParquetTombstone
 	ss.DB().Where("shard_id = ?", "sh-del").Find(&tombs)
 	if len(tombs) != 1 || tombs[0].Reason != "retention-delete" || tombs[0].Path != path {
 		t.Errorf("tombstone = %+v, want one retention-delete for %q", tombs, path)

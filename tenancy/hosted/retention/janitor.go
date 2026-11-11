@@ -457,7 +457,7 @@ func (s Store) markPurged(shardID string, now time.Time) error {
 }
 
 func (s Store) recordTombstone(path, shardID, reason string, deleteAfter time.Time) error {
-	return s.DB().Create(&logdb.ParquetTombstone{
+	return s.DB().Create(&ParquetTombstone{
 		Path: path, ShardID: shardID, Reason: reason, DeleteAfter: deleteAfter,
 	}).Error
 }
@@ -485,8 +485,8 @@ func rewriteDestPath(old string, now time.Time) string {
 }
 
 // Janitor is the daily retention sweep: plan over archived shards and execute
-// each disposition. The objects it tombstones are deleted by logdb's
-// tombstone GC. It holds only small collaborators (not the whole Provisioner)
+// each disposition. The objects it tombstones are deleted by this package's
+// tombstone GC (TombstoneSweeper). It holds only small collaborators (not the whole Provisioner)
 // so it's testable with fakes; the coordinator wires Retire/Refresh to the
 // live registry.
 type Janitor struct {

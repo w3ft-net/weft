@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/weft/logdb"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -108,7 +107,7 @@ func TestExecutePurge_RewriteKeepsAKeyedArchiveKeyed(t *testing.T) {
 		t.Errorf("survivors = %v, want just the live row", rows)
 	}
 	// the old glob is what GC deletes: the deleter expands it
-	var tombs []logdb.ParquetTombstone
+	var tombs []ParquetTombstone
 	ss.DB().Where("shard_id = ?", "sh-keyed").Find(&tombs)
 	if len(tombs) != 1 || tombs[0].Path != path {
 		t.Errorf("tombstones = %+v, want one for %q", tombs, path)

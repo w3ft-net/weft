@@ -538,11 +538,11 @@ looks hosted, `tmp_files` relational):
     already-clamped `since`.
 
 **Shard state is core, not hosted-only.** The registry, FSM transitions,
-slot and cron claims and the tombstone GC that follows an archive swap
-are how any operator runs log storage, so the default build implements
-them. Archive stats and the retention janitor are not: the default build
-ships no retention feature, and `logdb.Retention` is the hook hosted
-installs it through (`tenancy/hosted/retention`). Tiers do not reach
+and slot and cron claims are how any operator runs log storage, so the
+default build implements them. Archive stats consumers, the retention
+janitor and the tombstone GC of the parquet it rewrites are not: the
+default build ships no retention feature, and `logdb.Retention` is the
+hook hosted installs it through (`tenancy/hosted/retention`). Tiers do not reach
 `logdb`: a query passes the earliest instant it may read, and the hook
 decides whether an archive may be deleted. Shard heartbeats are part of that state: they're log-storage
 architecture, not telemetry. The relational interface therefore needs

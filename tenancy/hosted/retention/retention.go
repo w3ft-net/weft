@@ -68,6 +68,7 @@ func (r *Retention) Start(ctx context.Context, prov *logdb.Provisioner) {
 	}
 	NewProvisionerJanitor(prov, compactor, 24*time.Hour).Start(ctx)
 	weftsdk.Infof(ctx, "coordinator: retention janitor started (daily)")
+	startTombstoneSweeper(ctx, prov, r.region)
 }
 
 // lambdaSigningCreds loads the credential provider used to SigV4-sign

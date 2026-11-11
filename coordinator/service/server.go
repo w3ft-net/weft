@@ -1147,7 +1147,7 @@ func shardOpStatus(err error) error {
 	switch {
 	case errors.Is(err, logdb.ErrShardNotInRegistry):
 		return status.Error(codes.NotFound, err.Error())
-	case errors.Is(err, logdb.ErrShardWrongState), errors.Is(err, logdb.ErrShardWithinRetention), errors.Is(err, logdb.ErrShardHasResources), errors.Is(err, logdb.ErrArchivePathChanged):
+	case errors.Is(err, logdb.ErrShardWrongState), errors.Is(err, logdb.ErrShardWithinRetention), errors.Is(err, logdb.ErrShardHasResources):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	default:
 		return status.Errorf(codes.Internal, "%v", err)
@@ -1257,22 +1257,6 @@ func (s *Server) ForceRemoveShard(_ context.Context, req *pb.ForceRemoveShardReq
 		return nil, shardOpStatus(err)
 	}
 	return &pb.ForceRemoveShardResponse{}, nil
-}
-
-// SwapShardArchive is the WeftAdmin step that finishes converting an archive by
-// hand: it points an ARCHIVED shard at the converted copy. See
-// Provisioner.SwapArchive.
-func (s *Server) SwapShardArchive(_ context.Context, req *pb.SwapShardArchiveRequest) (*pb.SwapShardArchiveResponse, error) {
-	if req.ShardId == "" || req.OldPath == "" || req.NewPath == "" || req.OldPath == req.NewPath {
-		return nil, status.Errorf(codes.InvalidArgument, "shard_id, old_path and new_path are required, and must differ")
-	}
-	if s.Coord.Provisioner == nil {
-		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
-	}
-	if err := s.Coord.Provisioner.SwapArchive(req.ShardId, req.OldPath, req.NewPath); err != nil {
-		return nil, shardOpStatus(err)
-	}
-	return &pb.SwapShardArchiveResponse{}, nil
 }
 
 func (s *Server) RelaunchShard(ctx context.Context, req *pb.RelaunchShardRequest) (*pb.RelaunchShardResponse, error) {

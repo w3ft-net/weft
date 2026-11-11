@@ -547,12 +547,8 @@ service WeftAdmin {
   // force is set. S3 data is left untouched.
   rpc ForceRemoveShard(ForceRemoveShardRequest) returns (ForceRemoveShardResponse);
 
-  // SwapShardArchive points an ARCHIVED shard at a converted copy of its
-  // archive (docs/plans/per-service-tables.md, "Archive layout"): only if the
-  // shard is still at old_path, with the old objects tombstoned for deletion
-  // after a week. Idempotent: a shard already at new_path succeeds, so it can be
-  // sent to every coordinator. FAILED_PRECONDITION if the shard is elsewhere.
-  rpc SwapShardArchive(SwapShardArchiveRequest) returns (SwapShardArchiveResponse);
+  // The SwapShardArchive rpc and its messages are retired (the one-off archive
+  // conversion of 2026-11-02 is done); do not reuse the name.
 
   // GetShard returns one shard's current row (state + last_heartbeat_at)
   // — what weft-admin's wait-and-verify loop polls after firing a
@@ -928,16 +924,6 @@ message ForceRemoveShardRequest {
 }
 
 message ForceRemoveShardResponse {}
-
-message SwapShardArchiveRequest {
-  string shard_id = 1;
-  // old_path is the archive's parquet path as the shard has it now; the swap is
-  // refused if the shard is at some other path.
-  string old_path = 2;
-  string new_path = 3;
-}
-
-message SwapShardArchiveResponse {}
 
 message GetShardRequest {
   string shard_id = 1;
