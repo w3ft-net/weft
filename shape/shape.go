@@ -208,9 +208,18 @@ func (c Coord) Matches(customer int64, namespace, env, service, kind string) boo
 }
 
 // Matches reports whether any tuple admits the row.
+//
+// This is the live-tail hot path (every ingested row against every
+// subscription, most of them someone else's), so it indexes the tuples rather
+// than copying each one, and tests the required customer column first.
 func (s Set) Matches(customer int64, namespace, env, service, kind string) bool {
-	for _, c := range s {
-		if c.Matches(customer, namespace, env, service, kind) {
+	for i := range s {
+		c := &s[i]
+		if c.Customer == customer &&
+			c.Namespace.Matches(namespace) &&
+			c.Env.Matches(env) &&
+			c.Service.Matches(service) &&
+			c.Kind.Matches(kind) {
 			return true
 		}
 	}
