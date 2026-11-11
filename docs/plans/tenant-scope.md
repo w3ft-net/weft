@@ -565,7 +565,7 @@ are no interim fixes.
 | 3 cron scope | 2 (done for namespaced crons; org-level crons still fire as the system identity until moved) |
 | 4 source endpoints | 2 (filtered by `ReadScope`; done in `f48651e7`) |
 | 5 unauthenticated compute | infra-interfaces plan |
-| 6 un-enrolled tables | 2, alongside `Actor.Partition()` |
+| 6 un-enrolled tables | Deferred until the table-shape question is settled |
 | 7 legacy mixed archives | not fixed by this plan |
 | 8 multi-source product | 3 (tuple sets) |
 | 9, 10 cleanup | 2 (9 done: `mounts.Config.CustomerName` is gone; 10 done: `nsIDCache` entries expire after a minute) |
@@ -602,6 +602,10 @@ are no interim fixes.
 6. **Un-enrolled tenant tables:** `log_groups`, `namespace_permissions`,
    `shard_field_facts` (which uses `customer_id`, not `org_id`), `usage`,
    `cold_scan_daily`, `cron_results`. Each method passes the org by hand.
+   `namespace_permissions` and `cron_results` have no `org_id` column, so
+   enrolling them needs a migration and backfill. **Deferred:** the plan
+   doesn't yet say how tenant tables should be shaped (`org_id` on every row,
+   or reached through a scoped parent), so decide that first.
 7. **Legacy archives mix tenants in one parquet file**, and the S3 prefix
    is per service label (`logdb/shardsm.go:963`). It's correct only
    because of the SQL predicate. It's fine under contract 1, but it means
