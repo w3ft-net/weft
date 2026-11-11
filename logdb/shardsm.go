@@ -86,7 +86,9 @@ type ShardDeps struct {
 	// archive swaps in. Both consumed only by the ARCHIVED-cleanup path.
 	ParquetDir        string
 	LambdaFunctionURL string
-	Clock             func() time.Time
+	// Retention, when set, is told of each archive's stats. Nil: none kept.
+	Retention Retention
+	Clock     func() time.Time
 	// StaleThreshold mirrors heartbeatStaleThreshold; carried in deps so
 	// tests can shrink it without touching the package-level const.
 	StaleThreshold time.Duration
@@ -939,12 +941,14 @@ func (sh *Shard) recordArchive(path string, stats []shard.CustomerStat) error {
 	if err := sh.deps.Store.SetShardParquetPath(sh.ID, path); err != nil {
 		return fmt.Errorf("persist parquet path: %w", err)
 	}
-	// Best-effort: archive stats drive the retention janitor but aren't
-	// load-bearing for the archive itself. A failure here just leaves the shard
-	// without stats; the janitor falls back to scanning that file. Don't fail
-	// the whole archive over metadata.
-	if err := sh.deps.Store.RecordArchiveStats(sh.ID, stats); err != nil {
-		weftsdk.Infof(context.Background(), "shardsm %s: record archive stats: %v", sh.ID, err)
+	// Best-effort: archive stats drive an installed retention feature but
+	// aren't load-bearing for the archive itself. A failure here just leaves the
+	// shard without stats, which retention handles by scanning that file. Don't
+	// fail the whole archive over metadata.
+	if sh.deps.Retention != nil {
+		if err := sh.deps.Retention.ArchiveRecorded(sh.ID, stats); err != nil {
+			weftsdk.Infof(context.Background(), "shardsm %s: record archive stats: %v", sh.ID, err)
+		}
 	}
 	if live != nil {
 		live.Close()

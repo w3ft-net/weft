@@ -6,8 +6,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/graybeardcorp/weft/shard"
 )
 
 // fakeConcurrentShardStore is a minimal, thread-safe shardRowStore fake.
@@ -103,10 +101,6 @@ func (f *fakeConcurrentShardStore) SetShardParquetPath(id, path string) error {
 	if r, ok := f.rows[id]; ok {
 		r.ParquetPath = path
 	}
-	return nil
-}
-
-func (f *fakeConcurrentShardStore) RecordArchiveStats(id string, stats []shard.CustomerStat) error {
 	return nil
 }
 

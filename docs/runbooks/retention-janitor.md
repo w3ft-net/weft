@@ -84,8 +84,8 @@ and deletion lags the advertised retention by a 7-day grace buffer.
 | Setting | Where | Default | Notes |
 |---|---|---|---|
 | `COMPACTOR_FUNCTION_URL` | SSM blob (TF) | — | unset → in-process compactor (dev) |
-| `RetentionGrace` | `logdb/janitor.go` const | 7d | buffer past advertised retention before deleting |
-| `RetentionGCDelay` | `logdb/janitor.go` const | 1h | tombstone lifetime before GC (covers in-flight reads) |
+| `RetentionGrace` | `tenancy/hosted/retention` const | 7d | buffer past advertised retention before deleting |
+| `RetentionGCDelay` | `tenancy/hosted/retention` const | 1h | tombstone lifetime before GC (covers in-flight reads) |
 | interval | `startRetentionJanitor` | 24h | the daily cadence |
 | `compactor_lambda_memory` | TF var | 2048 MB | bump if rewrites OOM |
 

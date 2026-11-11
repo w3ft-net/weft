@@ -112,6 +112,8 @@ type ProvisionerConfig struct {
 	ExportManifests      shard.ManifestReader
 	ExportOutputs        ObjectDeleter
 	MaxConcurrentExports int
+	// Retention expires archived data; nil keeps none (see Retention).
+	Retention Retention
 	// Holder identifies this process for the "shard-fsm-leader" lease (see
 	// docs/plans/coordinator-horizontal-scaling.md #5) — the same holder
 	// id main.go's coordinatorHolder() mints for the NAT/poller/cron

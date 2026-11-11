@@ -15,7 +15,7 @@ import (
 var ErrArchivePathChanged = errors.New("the shard's archive is not at the path given")
 
 // ArchiveSwapGCDelay is how long the archive a swap replaced is kept before the
-// janitor's GC deletes it: a week, long enough to notice a bad conversion and
+// tombstone GC deletes it: a week, long enough to notice a bad conversion and
 // swap back by hand.
 const ArchiveSwapGCDelay = 7 * 24 * time.Hour
 

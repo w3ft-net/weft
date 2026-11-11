@@ -19,10 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-
-	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -60,6 +56,10 @@ type Config struct {
 	// the pre-#5 single-process behavior. See
 	// docs/plans/coordinator-horizontal-scaling.md #5.
 	Holder string
+
+	// Retention is the optional retention feature: told of each archive's
+	// stats and started with the provisioner. Nil: archives are kept forever.
+	Retention Retention
 }
 
 // Start hydrates the shard registry, constructs the Provisioner with
@@ -310,6 +310,7 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 	provConfig.LambdaFunctionURL = lambdaURL
 	provConfig.VolumeSizesGB = parseShardVolumeSizes()
 	provConfig.Holder = cfg.Holder
+	provConfig.Retention = cfg.Retention
 	wireArchiveExport(cfg.Ctx, &provConfig, cfg.AWSRegion, subnets)
 	weftsdk.Infof(context.Background(), "provisioner: per-tier volume sizes (GiB) from env: %v (tiers absent fall back to %d)", provConfig.VolumeSizesGB, defaultShardVolumeGB)
 	prov := NewProvisioner(reg, launcher, provConfig)
@@ -328,7 +329,10 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 	prov.LoadStateMachines()
 
 	prov.Start(cfg.Ctx)
-	startRetentionJanitor(cfg.Ctx, prov, cfg.AWSRegion)
+	if cfg.Retention != nil {
+		cfg.Retention.Start(cfg.Ctx, prov)
+	}
+	startTombstoneSweeper(cfg.Ctx, prov, cfg.AWSRegion)
 	startArchiveSweeper(cfg.Ctx, prov)
 	return prov, nil
 }
@@ -350,49 +354,29 @@ func startArchiveSweeper(ctx context.Context, prov *Provisioner) {
 	weftsdk.Infof(ctx, "coordinator: archive sweeper started (orphan removal=%v, stuck-archive alert after %s)", sw.Resources != nil, archivingStuckAfter)
 }
 
-// startRetentionJanitor wires and starts the daily archive retention
-// janitor. With COMPACTOR_FUNCTION_URL unset it falls back to an in-process
-// compactor (dev).
-func startRetentionJanitor(ctx context.Context, prov *Provisioner, region string) {
+// startTombstoneSweeper starts the daily GC of tombstoned parquet. The
+// objects go from the local disk, or from S3 when the archives live there.
+func startTombstoneSweeper(ctx context.Context, prov *Provisioner, region string) {
 	if prov == nil {
 		return
 	}
-
-	var compactor shard.Compactor
-	if url := os.Getenv("COMPACTOR_FUNCTION_URL"); url != "" {
-		lc := shard.NewLambdaCompactor(url, lambdaSigningCreds(ctx, region), region)
-		lc.Layout = shape.BuildLayout()
-		compactor = lc
-		weftsdk.Infof(ctx, "janitor: compactor Lambda at %s", url)
-	} else {
-		compactor = shard.LocalCompactor{S3: shard.S3ConfigFromEnv(), Layout: shape.BuildLayout()}
-		weftsdk.Infof(ctx, "janitor: in-process compactor (COMPACTOR_FUNCTION_URL unset)")
-	}
-
 	var deleter ObjectDeleter = LocalFileDeleter{}
 	if strings.HasPrefix(prov.config.ParquetDir, "s3://") {
 		d, err := NewS3ObjectDeleter(ctx, region)
 		if err != nil {
-			weftsdk.Infof(ctx, "janitor: S3 deleter unavailable, not starting: %v", err)
+			weftsdk.Infof(ctx, "tombstone GC: S3 deleter unavailable, not starting: %v", err)
 			return
 		}
 		deleter = d
 	}
-
-	NewProvisionerJanitor(prov, compactor, deleter, 24*time.Hour).Start(ctx)
-	weftsdk.Infof(ctx, "coordinator: retention janitor started (daily)")
-}
-
-// lambdaSigningCreds loads the credential provider used to SigV4-sign
-// compactor Function URL calls. Returns nil (unsigned) on failure — the
-// invoke then fails loudly at call time rather than here at boot.
-func lambdaSigningCreds(ctx context.Context, region string) aws.CredentialsProvider {
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
-	if err != nil {
-		weftsdk.Infof(ctx, "janitor: aws creds for compactor signing: %v", err)
-		return nil
-	}
-	return cfg.Credentials
+	(&TombstoneSweeper{
+		Store:    prov.ShardStore(),
+		Deleter:  deleter,
+		Clock:    time.Now,
+		Interval: 24 * time.Hour,
+		IsLeader: prov.IsLeader,
+	}).Start(ctx)
+	weftsdk.Infof(ctx, "coordinator: tombstone GC started (daily)")
 }
 
 // startDev wires the docker-based dev launcher and provisioner. Fatal
@@ -404,6 +388,7 @@ func startDev(cfg Config, reg *ShardRegistry) (*Provisioner, error) {
 	provConfig.ShardSecret = cfg.ShardSecret
 	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 	provConfig.Holder = cfg.Holder
+	provConfig.Retention = cfg.Retention
 	prov := NewProvisioner(reg, launcher, provConfig)
 
 	prov.SetStore(cfg.DB)

@@ -1,4 +1,7 @@
-package logdb
+// Package retention is hosted weft's log retention: per-customer expiry of
+// archived parquet by subscription tier. It plugs into logdb as a
+// logdb.Retention; a build without it keeps archives forever.
+package retention
 
 import (
 	"context"
@@ -7,13 +10,62 @@ import (
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/weft/logdb"
 	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
+	"gorm.io/gorm"
 )
 
+// Store is the shard store the retention reads and rewrites.
+type Store struct{ logdb.ShardStore }
+
+// ShardArchiveStat is one (shard, customer) row of archive metadata: the
+// customer's row count and ts span within an archived shard's parquet.
+// Captured at archive time (from the Archive RPC's customer_stats) and
+// consulted by the janitor to classify archived files (delete / keep /
+// rewrite) without scanning S3. See docs/plans/retention-janitor.md.
+type ShardArchiveStat struct {
+	ShardID  string      `gorm:"primaryKey;column:shard_id"`
+	OrgID    store.OrgID `gorm:"primaryKey;column:org_id"`
+	MinTs    time.Time   `gorm:"not null;column:min_ts"`
+	MaxTs    time.Time   `gorm:"not null;column:max_ts"`
+	RowCount int64       `gorm:"not null;column:row_count"`
+}
+
+func (*ShardArchiveStat) TableName() string { return "shard_archive_stats" }
+
+// RecordArchiveStats replaces the shard_archive_stats rows for a shard
+// with a freshly-captured set. Replace-not-merge so a re-archival (a
+// retry, or a janitor rewrite that drops a customer's rows entirely) leaves
+// no stale per-customer rows behind. A nil/empty set (a shard that archived
+// with zero rows) clears any prior rows and adds none. The whole swap runs
+// in one transaction so a concurrent janitor read never sees the shard
+// mid-delete.
+func (s Store) RecordArchiveStats(id string, stats []shard.CustomerStat) error {
+	return s.DB().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("shard_id = ?", id).Delete(&ShardArchiveStat{}).Error; err != nil {
+			return err
+		}
+		if len(stats) == 0 {
+			return nil
+		}
+		rows := make([]ShardArchiveStat, len(stats))
+		for i, st := range stats {
+			rows[i] = ShardArchiveStat{
+				ShardID:  id,
+				OrgID:    store.OrgID(st.CustomerID),
+				MinTs:    st.MinTs,
+				MaxTs:    st.MaxTs,
+				RowCount: st.RowCount,
+			}
+		}
+		return tx.Create(&rows).Error
+	})
+}
+
 // RetentionGCDelay is how long a superseded/retired parquet object lingers
-// as a tombstone before the GC sweep deletes it — a grace window so an
+// as a tombstone before logdb's GC sweep deletes it — a grace window so an
 // in-flight cold read (which resolved the old path at query start) isn't
 // yanked mid-stream.
 const RetentionGCDelay = time.Hour
@@ -181,7 +233,7 @@ type PlannedShard struct {
 // and the customer→tier map — the actual S3 delete/rewrite is a later
 // step. now and grace are injected for testability; production passes
 // the wall clock and RetentionGrace.
-func (s ShardStore) PlanRetention(now time.Time, grace time.Duration) ([]PlannedShard, error) {
+func (s Store) PlanRetention(now time.Time, grace time.Duration) ([]PlannedShard, error) {
 	tiers, err := s.ActiveCustomerTiers()
 	if err != nil {
 		return nil, err
@@ -214,18 +266,18 @@ func (s ShardStore) PlanRetention(now time.Time, grace time.Duration) ([]Planned
 
 // listArchivedShards returns only the terminal ARCHIVED shards — the ones
 // whose data lives solely in S3 parquet and is the janitor's to manage.
-func (s ShardStore) listArchivedShards() ([]*Shard, error) {
-	var shards []*Shard
-	err := s.db().Where("state = ?", string(StateArchived)).Find(&shards).Error
+func (s Store) listArchivedShards() ([]*logdb.Shard, error) {
+	var shards []*logdb.Shard
+	err := s.DB().Where("state = ?", string(logdb.StateArchived)).Find(&shards).Error
 	return shards, err
 }
 
 // archiveStatsByShard loads all shard_archive_stats rows once and groups
 // them by shard, so PlanRetention does one query instead of one per
 // shard.
-func (s ShardStore) archiveStatsByShard() (map[string][]ShardArchiveStat, error) {
+func (s Store) archiveStatsByShard() (map[string][]ShardArchiveStat, error) {
 	var rows []ShardArchiveStat
-	if err := s.db().Find(&rows).Error; err != nil {
+	if err := s.DB().Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make(map[string][]ShardArchiveStat)
@@ -234,20 +286,6 @@ func (s ShardStore) archiveStatsByShard() (map[string][]ShardArchiveStat, error)
 	}
 	return out, nil
 }
-
-// ParquetTombstone is a superseded or retired parquet object awaiting GC.
-// A separate table (not columns on shard_records) so it outlives the
-// shard row when a fully-expired shard is retired to GONE.
-type ParquetTombstone struct {
-	ID          int64     `gorm:"primaryKey"`
-	Path        string    `gorm:"column:path"`
-	ShardID     string    `gorm:"column:shard_id"`
-	Reason      string    `gorm:"column:reason"`
-	DeleteAfter time.Time `gorm:"column:delete_after"`
-	CreatedAt   time.Time `gorm:"column:created_at"`
-}
-
-func (*ParquetTombstone) TableName() string { return "parquet_tombstones" }
 
 // PurgeDeps carries the finalizer's collaborators. Injected so ExecutePurge
 // is testable without S3 or the live registry.
@@ -300,7 +338,7 @@ type PurgeResult struct {
 //   - Rewrite: rewrite to a new key, swap parquet_path, refresh stats, and
 //     tombstone the old key — unless nothing survives, which collapses to
 //     the Delete path.
-func (s ShardStore) ExecutePurge(p PlannedShard, resolver *RetentionResolver, deps PurgeDeps) (PurgeResult, error) {
+func (s Store) ExecutePurge(p PlannedShard, resolver *RetentionResolver, deps PurgeDeps) (PurgeResult, error) {
 	now := deps.Now()
 	switch p.Disposition {
 	case DispositionUnknown:
@@ -353,7 +391,7 @@ func (s ShardStore) ExecutePurge(p PlannedShard, resolver *RetentionResolver, de
 // triggers; if Retire fails the shard stays ARCHIVED and is replanned
 // next pass (a duplicate tombstone is harmless — GC of a gone object is a
 // no-op).
-func (s ShardStore) retire(p PlannedShard, deps PurgeDeps, now time.Time) error {
+func (s Store) retire(p PlannedShard, deps PurgeDeps, now time.Time) error {
 	if err := s.recordTombstone(p.ParquetPath, p.ShardID, "retention-delete", now.Add(deps.GCDelay)); err != nil {
 		return err
 	}
@@ -364,10 +402,10 @@ func (s ShardStore) retire(p PlannedShard, deps PurgeDeps, now time.Time) error 
 // at the survivors, refresh the stats, then tombstone the old object. The
 // pointer swap precedes the tombstone so a crash between them only leaks
 // the old object (GC never deletes a still-referenced path).
-func (s ShardStore) swap(p PlannedShard, dst string, stats []shard.CustomerStat, deps PurgeDeps, now time.Time) error {
-	if err := s.db().Model(&Shard{}).Where("id = ?", p.ShardID).
+func (s Store) swap(p PlannedShard, dst string, stats []shard.CustomerStat, deps PurgeDeps, now time.Time) error {
+	if err := s.DB().Model(&logdb.Shard{}).Where("id = ?", p.ShardID).
 		Select("ParquetPath", "LastPurgedAt").
-		Updates(&Shard{ParquetPath: dst, LastPurgedAt: &now}).Error; err != nil {
+		Updates(&logdb.Shard{ParquetPath: dst, LastPurgedAt: &now}).Error; err != nil {
 		return fmt.Errorf("swap parquet_path %s: %w", p.ShardID, err)
 	}
 	if err := s.RecordArchiveStats(p.ShardID, stats); err != nil {
@@ -376,20 +414,20 @@ func (s ShardStore) swap(p PlannedShard, dst string, stats []shard.CustomerStat,
 	return s.recordTombstone(p.ParquetPath, p.ShardID, "rewrite", now.Add(deps.GCDelay))
 }
 
-func (s ShardStore) markPurged(shardID string, now time.Time) error {
-	return s.db().Model(&Shard{}).Where("id = ?", shardID).
-		Select("LastPurgedAt").Updates(&Shard{LastPurgedAt: &now}).Error
+func (s Store) markPurged(shardID string, now time.Time) error {
+	return s.DB().Model(&logdb.Shard{}).Where("id = ?", shardID).
+		Select("LastPurgedAt").Updates(&logdb.Shard{LastPurgedAt: &now}).Error
 }
 
-func (s ShardStore) recordTombstone(path, shardID, reason string, deleteAfter time.Time) error {
-	return s.db().Create(&ParquetTombstone{
+func (s Store) recordTombstone(path, shardID, reason string, deleteAfter time.Time) error {
+	return s.DB().Create(&logdb.ParquetTombstone{
 		Path: path, ShardID: shardID, Reason: reason, DeleteAfter: deleteAfter,
 	}).Error
 }
 
-func (s ShardStore) shardArchiveStats(shardID string) ([]ShardArchiveStat, error) {
+func (s Store) shardArchiveStats(shardID string) ([]ShardArchiveStat, error) {
 	var rows []ShardArchiveStat
-	err := s.db().Where("shard_id = ?", shardID).Find(&rows).Error
+	err := s.DB().Where("shard_id = ?", shardID).Find(&rows).Error
 	return rows, err
 }
 
@@ -409,48 +447,14 @@ func rewriteDestPath(old string, now time.Time) string {
 	return fmt.Sprintf("%s.r%d.parquet", base, now.UnixNano())
 }
 
-// ObjectDeleter removes an archived parquet object. path is a single file
-// or a hive glob (.../**/*.parquet); the implementation expands a glob to
-// its underlying objects. Deleting an already-gone object must be a
-// success so the GC sweep is idempotent across retries.
-type ObjectDeleter interface {
-	DeleteParquet(path string) error
-}
-
-// SweepTombstones deletes every parquet object whose grace window has
-// elapsed, then drops its tombstone row. S3 delete precedes the row
-// delete, so a crash between them leaves the tombstone for the next
-// sweep to retry (re-deleting a gone object is a no-op) — never a dropped
-// row pointing at a live object. Per-object failures are logged and left
-// for retry; the sweep continues. Returns the count deleted.
-func (s ShardStore) SweepTombstones(now time.Time, deleter ObjectDeleter) (int, error) {
-	var tombs []ParquetTombstone
-	if err := s.db().Where("delete_after < ?", now).Find(&tombs).Error; err != nil {
-		return 0, err
-	}
-	deleted := 0
-	for _, t := range tombs {
-		if err := deleter.DeleteParquet(t.Path); err != nil {
-			weftsdk.Infof(context.Background(), "janitor GC: delete %s (shard %s): %v", t.Path, t.ShardID, err)
-			continue
-		}
-		if err := s.db().Delete(&ParquetTombstone{}, t.ID).Error; err != nil {
-			weftsdk.Infof(context.Background(), "janitor GC: drop tombstone %d: %v", t.ID, err)
-			continue
-		}
-		deleted++
-	}
-	return deleted, nil
-}
-
-// Janitor is the daily retention sweep: plan over archived shards, execute
-// each disposition, then GC any tombstones past their grace. It holds only
-// small collaborators (not the whole Provisioner) so it's testable with
-// fakes; the coordinator wires Retire/Refresh to the live registry.
+// Janitor is the daily retention sweep: plan over archived shards and execute
+// each disposition. The objects it tombstones are deleted by logdb's
+// tombstone GC. It holds only small collaborators (not the whole Provisioner)
+// so it's testable with fakes; the coordinator wires Retire/Refresh to the
+// live registry.
 type Janitor struct {
-	Store     ShardStore
+	Store     Store
 	Compactor shard.Compactor
-	Deleter   ObjectDeleter
 	// Retire moves a fully-expired shard out of service (fires the SM's
 	// GONE trigger in the coordinator).
 	Retire func(shardID string) error
@@ -474,14 +478,12 @@ type Janitor struct {
 // supersedes DeleteArchived's coarser bucket-tier retention guard. Refresh
 // repoints the in-memory registry entry after a rewrite. Grace, GCDelay,
 // and the clock take the production defaults.
-func NewProvisionerJanitor(prov *Provisioner, compactor shard.Compactor, deleter ObjectDeleter, interval time.Duration) *Janitor {
-	lambdaURL := prov.config.LambdaFunctionURL
+func NewProvisionerJanitor(prov *logdb.Provisioner, compactor shard.Compactor, interval time.Duration) *Janitor {
 	return &Janitor{
-		Store:     ShardStore{prov.store},
+		Store:     Store{prov.ShardStore()},
 		Compactor: compactor,
-		Deleter:   deleter,
 		Retire:    func(id string) error { return prov.DeleteArchived(id, true) },
-		Refresh:   func(id, p string) { prov.registry.RefreshArchivedPath(id, p, lambdaURL) },
+		Refresh:   prov.RefreshArchivedPath,
 		Grace:     RetentionGrace,
 		GCDelay:   RetentionGCDelay,
 		Clock:     time.Now,
@@ -490,9 +492,9 @@ func NewProvisionerJanitor(prov *Provisioner, compactor shard.Compactor, deleter
 	}
 }
 
-// RunOnce executes a single janitor pass: classify every archived shard,
-// purge the ones that need it, then GC due tombstones. Per-shard errors
-// are logged and don't abort the pass.
+// RunOnce executes a single janitor pass: classify every archived shard and
+// purge the ones that need it. Per-shard errors are logged and don't abort
+// the pass.
 func (j *Janitor) RunOnce(ctx context.Context) error {
 	if j.IsLeader != nil && !j.IsLeader() {
 		return nil
@@ -526,9 +528,6 @@ func (j *Janitor) RunOnce(ctx context.Context) error {
 		if res.Outcome == OutcomeRewritten && j.Refresh != nil {
 			j.Refresh(p.ShardID, res.NewPath)
 		}
-	}
-	if _, err := j.Store.SweepTombstones(now, j.Deleter); err != nil {
-		weftsdk.Infof(ctx, "janitor: GC sweep: %v", err)
 	}
 	return nil
 }

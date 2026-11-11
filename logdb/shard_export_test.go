@@ -163,6 +163,7 @@ type exportFixture struct {
 	launcher *fakeLauncher
 	volumes  *fakeVolumeManager
 	live     *fakeArchivableShard
+	told     *recordingRetention
 	clock    time.Time // the fixture's fixed reference time
 	now      time.Time // what the shard's clock reads; tests advance it
 }
@@ -178,6 +179,7 @@ func newExportFixture(t *testing.T, customize ...func(*ShardDeps)) *exportFixtur
 		launcher: &fakeLauncher{},
 		volumes:  &fakeVolumeManager{},
 		live:     &fakeArchivableShard{id: "s-test", archivePath: "s3://in-process-must-not-run"},
+		told:     &recordingRetention{},
 		clock:    time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC),
 	}
 	f.now = f.clock
@@ -190,6 +192,7 @@ func newExportFixture(t *testing.T, customize ...func(*ShardDeps)) *exportFixtur
 		d.Exports = f.ops
 		d.ExportManifests = f.manifest
 		d.ExportOutputs = f.outputs
+		d.Retention = f.told
 		for _, c := range customize {
 			c(d)
 		}
@@ -437,9 +440,8 @@ func TestShardExport_ManifestRecordsArchiveThenRetiresTheShard(t *testing.T) {
 	if row.ParquetPath != "s3://weft/warp/s-test/**/*.parquet" {
 		t.Fatalf("parquet path = %q", row.ParquetPath)
 	}
-	var stats []ShardArchiveStat
-	if err := f.db.DB().Where("shard_id = ?", "s-test").Order("org_id").Find(&stats).Error; err != nil || len(stats) != 2 || stats[0].RowCount != 7 {
-		t.Fatalf("archive stats = %+v err=%v", stats, err)
+	if len(f.told.stats) != 2 || f.told.stats[0].RowCount != 7 {
+		t.Fatalf("retention told of stats = %+v", f.told.stats)
 	}
 	if !f.live.closed {
 		t.Fatal("live shard not closed after the ColdShard swap")

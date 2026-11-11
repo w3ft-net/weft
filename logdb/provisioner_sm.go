@@ -66,6 +66,7 @@ func (p *Provisioner) shardDeps() *ShardDeps {
 			Configurer:        p.configurer,
 			ParquetDir:        p.config.ParquetDir,
 			LambdaFunctionURL: p.config.LambdaFunctionURL,
+			Retention:         p.config.Retention,
 			Clock:             p.clock,
 			VolumeSizesGB:     p.config.VolumeSizesGB,
 

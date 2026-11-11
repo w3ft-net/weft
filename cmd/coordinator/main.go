@@ -32,6 +32,7 @@ import (
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted/retention"
 )
 
 // dumpGoroutines writes a full all-goroutine stack trace to
@@ -246,6 +247,7 @@ func main() {
 		ShardSecret: shardSecret,
 		AWSRegion:   *awsRegion,
 		Holder:      holder,
+		Retention:   retention.New(db, *awsRegion),
 	})
 	if err != nil {
 		log.Fatalf("logdb.Start: %v", err)

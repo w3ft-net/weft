@@ -1,9 +1,10 @@
-package logdb
+package retention
 
 import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/logdb"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -131,9 +132,9 @@ func TestRetentionResolver_Cutoffs(t *testing.T) {
 // shard correctly against live subscription state — exercising
 // ActiveCustomerTiers + RecordArchiveStats + the planner together.
 func TestPlanRetention_EndToEnd(t *testing.T) {
-	db := openSMTestStore(t)
-	bucket := seedBucket(t, db, BucketStasis)
-	ss := ShardStore{db}
+	db := openTestStore(t)
+	bucket := seedBucket(t, db)
+	ss := newStore(db)
 
 	// A paying swatch customer (30d) and a customer with NO subscription.
 	paying := seedPayingCo(t, db)
@@ -149,8 +150,8 @@ func TestPlanRetention_EndToEnd(t *testing.T) {
 	// an unmapped-co shard whose rows are ancient.
 	seedArchived := func(id string, stats []shard.CustomerStat) {
 		t.Helper()
-		if err := ss.SaveShard(&Shard{
-			ID: id, State: StateArchived, BucketID: bucket.ID, Tier: "small",
+		if err := ss.SaveShard(&logdb.Shard{
+			ID: id, State: logdb.StateArchived, BucketID: bucket.ID, Tier: "small",
 			ParquetPath: "s3://weft/x/" + id + ".parquet",
 			WindowStart: janitorNow.Add(-days(60)), WindowEnd: janitorNow.Add(-days(53)),
 			CreatedAt: janitorNow.Add(-days(60)),

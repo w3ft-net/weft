@@ -1,10 +1,11 @@
-package logdb
+package retention
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
@@ -47,11 +48,11 @@ func seedPayingCo(t *testing.T, db *store.Store) *store.Organization {
 // purgeFixture seeds a swatch customer and an ARCHIVED shard pointing at
 // path, optionally recording its archive stats. Returns the bound store,
 // the resolver, and PurgeDeps with a fake Retire that records calls.
-func purgeFixture(t *testing.T, shardID, path string, stats []shard.CustomerStat) (ShardStore, *RetentionResolver, PurgeDeps, *[]string) {
+func purgeFixture(t *testing.T, shardID, path string, stats []shard.CustomerStat) (Store, *RetentionResolver, PurgeDeps, *[]string) {
 	t.Helper()
-	db := openSMTestStore(t)
-	ss := ShardStore{db}
-	bucket := seedBucket(t, db, BucketStasis)
+	db := openTestStore(t)
+	ss := newStore(db)
+	bucket := seedBucket(t, db)
 
 	cust := seedPayingCo(t, db)
 	if err := db.CreateSubscription(&store.Subscription{
@@ -60,8 +61,8 @@ func purgeFixture(t *testing.T, shardID, path string, stats []shard.CustomerStat
 	}); err != nil {
 		t.Fatalf("subscription: %v", err)
 	}
-	if err := ss.SaveShard(&Shard{
-		ID: shardID, State: StateArchived, BucketID: bucket.ID, Tier: "small",
+	if err := ss.SaveShard(&logdb.Shard{
+		ID: shardID, State: logdb.StateArchived, BucketID: bucket.ID, Tier: "small",
 		ParquetPath: path,
 		WindowStart: janitorNow.Add(-days(60)), WindowEnd: janitorNow.Add(-days(53)),
 		CreatedAt: janitorNow.Add(-days(60)),
@@ -138,7 +139,7 @@ func TestExecutePurge_Rewrite(t *testing.T) {
 		t.Errorf("refreshed stats = %+v, want one row with count 1", fresh)
 	}
 	// Old object tombstoned for GC.
-	var tombs []ParquetTombstone
+	var tombs []logdb.ParquetTombstone
 	db := ss.DB()
 	db.Where("shard_id = ?", "sh-rw").Find(&tombs)
 	if len(tombs) != 1 || tombs[0].Path != path || tombs[0].Reason != "rewrite" {
@@ -165,7 +166,7 @@ func TestExecutePurge_Delete(t *testing.T) {
 	if len(*retired) != 1 || (*retired)[0] != "sh-del" {
 		t.Errorf("Retire calls = %v, want [sh-del]", *retired)
 	}
-	var tombs []ParquetTombstone
+	var tombs []logdb.ParquetTombstone
 	ss.DB().Where("shard_id = ?", "sh-del").Find(&tombs)
 	if len(tombs) != 1 || tombs[0].Reason != "retention-delete" || tombs[0].Path != path {
 		t.Errorf("tombstone = %+v, want one retention-delete for %q", tombs, path)

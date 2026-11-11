@@ -25,8 +25,8 @@ func tombstonesFor(t *testing.T, ss ShardStore, id string) []ParquetTombstone {
 }
 
 func TestSwapArchivePath_MovesTheArchiveAndTombstonesTheOldOne(t *testing.T) {
-	ss, _, _, _ := purgeFixture(t, "sh-swap", swapOld, nil)
-	if err := ss.SwapArchivePath("sh-swap", swapOld, swapNew, janitorNow, ArchiveSwapGCDelay); err != nil {
+	ss := archivedShard(t, "sh-swap", swapOld)
+	if err := ss.SwapArchivePath("sh-swap", swapOld, swapNew, swapNow, ArchiveSwapGCDelay); err != nil {
 		t.Fatal(err)
 	}
 	rec, _, _ := ss.GetShard("sh-swap")
@@ -37,7 +37,7 @@ func TestSwapArchivePath_MovesTheArchiveAndTombstonesTheOldOne(t *testing.T) {
 	if len(tombs) != 1 || tombs[0].Path != swapOld || tombs[0].Reason != "swap" {
 		t.Fatalf("tombstones = %+v, want one for the old path with reason swap", tombs)
 	}
-	if want := janitorNow.Add(ArchiveSwapGCDelay); !tombs[0].DeleteAfter.Equal(want) {
+	if want := swapNow.Add(ArchiveSwapGCDelay); !tombs[0].DeleteAfter.Equal(want) {
 		t.Errorf("delete_after = %v, want %v", tombs[0].DeleteAfter, want)
 	}
 }
@@ -45,8 +45,8 @@ func TestSwapArchivePath_MovesTheArchiveAndTombstonesTheOldOne(t *testing.T) {
 // A shard whose archive is somewhere else (a retention pass rewrote it, or the
 // caller has the wrong shard) is left alone, and nothing is tombstoned.
 func TestSwapArchivePath_RefusesWhenTheShardIsNotAtTheOldPath(t *testing.T) {
-	ss, _, _, _ := purgeFixture(t, "sh-elsewhere", "s3://b/other.parquet", nil)
-	err := ss.SwapArchivePath("sh-elsewhere", swapOld, swapNew, janitorNow, ArchiveSwapGCDelay)
+	ss := archivedShard(t, "sh-elsewhere", "s3://b/other.parquet")
+	err := ss.SwapArchivePath("sh-elsewhere", swapOld, swapNew, swapNow, ArchiveSwapGCDelay)
 	if !errors.Is(err, ErrArchivePathChanged) {
 		t.Fatalf("err = %v, want ErrArchivePathChanged", err)
 	}
@@ -62,9 +62,9 @@ func TestSwapArchivePath_RefusesWhenTheShardIsNotAtTheOldPath(t *testing.T) {
 // Every coordinator is told to swap, and only the first finds the old path. The
 // rest find the new one and must succeed without tombstoning anything twice.
 func TestSwapArchivePath_IsIdempotent(t *testing.T) {
-	ss, _, _, _ := purgeFixture(t, "sh-twice", swapOld, nil)
+	ss := archivedShard(t, "sh-twice", swapOld)
 	for i := 0; i < 2; i++ {
-		if err := ss.SwapArchivePath("sh-twice", swapOld, swapNew, janitorNow, ArchiveSwapGCDelay); err != nil {
+		if err := ss.SwapArchivePath("sh-twice", swapOld, swapNew, swapNow, ArchiveSwapGCDelay); err != nil {
 			t.Fatalf("call %d: %v", i+1, err)
 		}
 	}
@@ -74,8 +74,8 @@ func TestSwapArchivePath_IsIdempotent(t *testing.T) {
 }
 
 func TestSwapArchivePath_UnknownShard(t *testing.T) {
-	ss, _, _, _ := purgeFixture(t, "sh-known", swapOld, nil)
-	err := ss.SwapArchivePath("no-such-shard", swapOld, swapNew, janitorNow, ArchiveSwapGCDelay)
+	ss := archivedShard(t, "sh-known", swapOld)
+	err := ss.SwapArchivePath("no-such-shard", swapOld, swapNew, swapNow, ArchiveSwapGCDelay)
 	if err == nil || errors.Is(err, ErrArchivePathChanged) {
 		t.Fatalf("err = %v, want a not-found error", err)
 	}
@@ -85,7 +85,7 @@ func TestSwapArchivePath_UnknownShard(t *testing.T) {
 // the shard as it is in the database.
 func swapProvisioner(t *testing.T, id string) (*Provisioner, ShardStore) {
 	t.Helper()
-	ss, _, _, _ := purgeFixture(t, id, swapOld, nil)
+	ss := archivedShard(t, id, swapOld)
 	reg := NewShardRegistry()
 	p := NewProvisioner(reg, nil, ProvisionerConfig{})
 	p.SetStore(ss.Store)

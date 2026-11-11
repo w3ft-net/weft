@@ -1372,6 +1372,35 @@ func TestShardSM_DialConfigureSurfacesDialFailure(t *testing.T) {
 	}
 }
 
+// With no Retention installed, as in a build without the retention feature, an
+// archive is recorded in full and no archive stats are kept.
+func TestShardSM_ArchiveWithNoRetentionRecordsTheArchiveAndKeepsNoStats(t *testing.T) {
+	live := &fakeArchivableShard{
+		id:           "s-test",
+		archivePath:  "s3://weft/warp/s-test.parquet",
+		archiveStats: []shard.CustomerStat{{CustomerID: 5, RowCount: 7}},
+	}
+	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardDeps) {
+		d.Launcher = &fakeLauncher{}
+		d.Volumes = &fakeVolumeManager{}
+		d.ParquetDir = "s3://weft"
+		d.LambdaFunctionURL = "https://fn.example/"
+	})
+	entry.Live = live
+	entry.Services = []store.ShardService{{NamespaceID: 1, Service: "warp"}}
+	if err := sm.Evaluate(context.Background()); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	rec, _, _ := ShardStore{db}.GetShard("s-test")
+	if rec.ParquetPath != "s3://weft/warp/s-test.parquet" {
+		t.Fatalf("parquet path not persisted: %q", rec.ParquetPath)
+	}
+	var n int64
+	if err := db.DB().Raw("SELECT count(*) FROM shard_archive_stats WHERE shard_id = ?", "s-test").Scan(&n).Error; err != nil || n != 0 {
+		t.Fatalf("shard_archive_stats rows = %d, err = %v; want none", n, err)
+	}
+}
+
 func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testing.T) {
 	fl := &fakeLauncher{}
 	vm := &fakeVolumeManager{}
@@ -1385,11 +1414,13 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 			{CustomerID: 6, MinTs: statMin, MaxTs: statMax, RowCount: 3},
 		},
 	}
+	told := &recordingRetention{}
 	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardDeps) {
 		d.Launcher = fl
 		d.Volumes = vm
 		d.ParquetDir = "s3://weft"
 		d.LambdaFunctionURL = "https://fn.example/" // non-empty → ColdShard skips the duckdb open
+		d.Retention = told
 	})
 	entry.Live = live
 	entry.Services = []store.ShardService{{NamespaceID: 1, Service: "warp"}}
@@ -1414,20 +1445,15 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 	if rec.ParquetPath != "s3://weft/warp/s-test.parquet" {
 		t.Fatalf("parquet path not persisted: %q", rec.ParquetPath)
 	}
-	// The Archive RPC's per-customer stats land in shard_archive_stats for
-	// the retention janitor to consult later.
-	var stats []ShardArchiveStat
-	if err := db.DB().Where("shard_id = ?", "s-test").Order("org_id").Find(&stats).Error; err != nil {
-		t.Fatalf("read archive stats: %v", err)
+	// The Archive RPC's per-customer stats go to the installed retention.
+	if told.shardID != "s-test" || len(told.stats) != 2 {
+		t.Fatalf("retention told of %q with %d stats, want s-test with 2: %+v", told.shardID, len(told.stats), told.stats)
 	}
-	if len(stats) != 2 {
-		t.Fatalf("archive stats: got %d rows, want 2: %+v", len(stats), stats)
+	if told.stats[0].CustomerID != 5 || told.stats[0].RowCount != 7 || !told.stats[0].MaxTs.Equal(statMax) {
+		t.Fatalf("stat[0] = %+v, want customer 5/7/%v", told.stats[0], statMax)
 	}
-	if stats[0].OrgID != 5 || stats[0].RowCount != 7 || !stats[0].MaxTs.Equal(statMax) {
-		t.Fatalf("archive stat[0] = %+v, want org 5/7/%v", stats[0], statMax)
-	}
-	if stats[1].OrgID != 6 || stats[1].RowCount != 3 {
-		t.Fatalf("archive stat[1] = %+v, want org 6/3", stats[1])
+	if told.stats[1].CustomerID != 6 || told.stats[1].RowCount != 3 {
+		t.Fatalf("stat[1] = %+v, want customer 6/3", told.stats[1])
 	}
 	if rec.EBSVolumeID != "" {
 		t.Fatalf("volume not retired/cleared: %q", rec.EBSVolumeID)
