@@ -565,7 +565,7 @@ func sourceTable(customerID int64, src sourceInfo) string {
 	if customerID == 0 || !ok {
 		return ""
 	}
-	return logtable.Name(customerID, ns, svc, kind)
+	return logtable.Name([]any{customerID}, ns, svc, kind)
 }
 
 // single is the one (namespace, service, kind) the pinned coordinates name, when

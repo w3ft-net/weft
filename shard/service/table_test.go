@@ -47,7 +47,7 @@ func TestQuery_ReadsTheTableTheRequestNames(t *testing.T) {
 	srv := NewBlankServer(dir, filepath.Join(dir, "s.duckdb"))
 	srv.shard = ds
 
-	apiTable := logtable.Name(5, "acme", "api", "main")
+	apiTable := logtable.Name([]any{int64(5)}, "acme", "api", "main")
 	for _, c := range []struct {
 		name string
 		req  *pb.QueryRequest

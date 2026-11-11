@@ -144,6 +144,19 @@ func (c *FieldClassifier) Stop() {
 	}
 }
 
+// customerOf is the customer a row's facts are kept under: its batch's one
+// partition value, or, from a coordinator that sends none, the row's own
+// customer_id. Fact keys, their saved form and their wire message still name
+// the customer; generalizing them touches all three.
+func customerOf(partition []any, r *pb.LogRow) int64 {
+	if len(partition) == 1 {
+		if c, ok := partition[0].(int64); ok {
+			return c
+		}
+	}
+	return r.CustomerId
+}
+
 // observed is a committed batch with the partition values it was stored under.
 type observed struct {
 	partition []any

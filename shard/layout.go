@@ -47,16 +47,23 @@ func WithPerKeyTables() Option {
 	return func(o *openOptions) { o.perKey = true }
 }
 
-// tableKey is the key a table holds. kind is already defaulted ("main").
+// tableKey is the part of a table's key that the row supplies: its namespace,
+// service and kind, the last already defaulted ("main"). The rest of the key is
+// the batch's partition. stamped is the customer_id of a row from a coordinator
+// that sends no partition values, which the legacy layout reads in its place.
 type tableKey struct {
-	customerID int64
-	namespace  string
-	service    string
-	kind       string
+	namespace string
+	service   string
+	kind      string
+	stamped   int64
 }
 
-func (k tableKey) table() string {
-	return logtable.Name(k.customerID, k.namespace, k.service, k.kind)
+// table is the key's table for a batch stored under partition.
+func (k tableKey) table(partition []any) string {
+	if partition == nil {
+		partition = []any{k.stamped}
+	}
+	return logtable.Name(partition, k.namespace, k.service, k.kind)
 }
 
 func rowKey(partition []any, r *pb.LogRow) tableKey {
@@ -64,20 +71,11 @@ func rowKey(partition []any, r *pb.LogRow) tableKey {
 	if kind == "" {
 		kind = "main"
 	}
-	return tableKey{customerOf(partition, r), r.Namespace, r.Service, kind}
-}
-
-// customerOf is the customer a row belongs to under the legacy layout: its
-// batch's one partition value, or, from a coordinator that sends none, the
-// row's own customer_id. Namespace, service, kind and env are columns of the
-// row itself, so the customer is the only part of a key the batch supplies.
-func customerOf(partition []any, r *pb.LogRow) int64 {
-	if len(partition) == 1 {
-		if c, ok := partition[0].(int64); ok {
-			return c
-		}
+	k := tableKey{namespace: r.Namespace, service: r.Service, kind: kind}
+	if partition == nil {
+		k.stamped = r.CustomerId
 	}
-	return r.CustomerId
+	return k
 }
 
 // PerKey reports whether the shard keeps a table per key.
@@ -190,9 +188,9 @@ func (s *DuckDBShard) tableNames() []string {
 }
 
 // ensureTables creates the table of each key that lacks one.
-func (s *DuckDBShard) ensureTables(ctx context.Context, keys []tableKey) error {
+func (s *DuckDBShard) ensureTables(ctx context.Context, partition []any, keys []tableKey) error {
 	for _, k := range keys {
-		name := k.table()
+		name := k.table(partition)
 		s.tablesMu.RLock()
 		_, ok := s.tables[name]
 		s.tablesMu.RUnlock()

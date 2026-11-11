@@ -16,9 +16,9 @@ type key struct {
 // deploys, so the function is pinned: if this test needs its expected value
 // changed, tables already on disk and in flight queries stop matching.
 func TestNameIsPinned(t *testing.T) {
-	got := Name(1, "weft", "shard", "stats")
+	got := Name([]any{int64(1)}, "weft", "shard", "stats")
 	if want := "l_1_weft_shard_stats_08120e66cd21ef21ddde3ac8f50dff73"; got != want {
-		t.Fatalf("Name(1, weft, shard, stats) = %q, want %q", got, want)
+		t.Fatalf("Name([]any{int64(1)}, weft, shard, stats) = %q, want %q", got, want)
 	}
 }
 
@@ -26,7 +26,7 @@ func TestNameIsPinned(t *testing.T) {
 // hash after it, because DuckDB compares identifiers without regard to case, so
 // two services that differ only in case read the same.
 func TestNameIsReadableAndStillSeparatesCase(t *testing.T) {
-	lower, upper := Name(1, "acme", "api", "main"), Name(1, "acme", "Api", "main")
+	lower, upper := Name([]any{int64(1)}, "acme", "api", "main"), Name([]any{int64(1)}, "acme", "Api", "main")
 	if !strings.HasPrefix(lower, "l_1_acme_api_main_") || !strings.HasPrefix(upper, "l_1_acme_api_main_") {
 		t.Errorf("names %q and %q do not read as the key", lower, upper)
 	}
@@ -37,7 +37,7 @@ func TestNameIsReadableAndStillSeparatesCase(t *testing.T) {
 
 func TestNameStaysShortForLongKeys(t *testing.T) {
 	long := strings.Repeat("segment/", 40)
-	got := Name(12345, long, long, long)
+	got := Name([]any{int64(12345)}, long, long, long)
 	if len(got) > 2+maxSlug+1+32 {
 		t.Errorf("name is %d bytes: %q", len(got), got)
 	}
@@ -48,10 +48,10 @@ func TestNameStaysShortForLongKeys(t *testing.T) {
 
 func TestIsName(t *testing.T) {
 	for _, n := range []string{
-		Name(1, "weft", "shard", "stats"),
-		Name(-5, "loom", "loom/api", "main"),
-		Name(0, "", "", ""),
-		Name(7, "日本語", `a"b`, "main"),
+		Name([]any{int64(1)}, "weft", "shard", "stats"),
+		Name([]any{int64(-5)}, "loom", "loom/api", "main"),
+		Name([]any{int64(0)}, "", "", ""),
+		Name([]any{int64(7)}, "日本語", `a"b`, "main"),
 	} {
 		if !IsName(n) {
 			t.Errorf("IsName(%q) = false", n)
@@ -76,9 +76,30 @@ func TestNameIsAnIdentifierForAnyInput(t *testing.T) {
 		{7, `a"b`, "x; DROP TABLE logs; --", "k'ind"},
 		{7, "ünï", "日本語", "main"},
 	} {
-		if got := Name(k.customer, k.namespace, k.service, k.kind); !ident.MatchString(got) {
+		if got := Name([]any{k.customer}, k.namespace, k.service, k.kind); !ident.MatchString(got) {
 			t.Errorf("Name(%v) = %q, not a bare identifier", k, got)
 		}
+	}
+}
+
+// A layout with other partition columns names tables too, and a boundary can't
+// move between them or across to the namespace.
+func TestNameSeparatesPartitionValues(t *testing.T) {
+	seen := map[string][]any{}
+	for _, p := range [][]any{
+		nil,
+		{int64(1)},
+		{"1"},
+		{"a", "bc"},
+		{"ab", "c"},
+		{"a", "b", "c"},
+		{int64(1), "a"},
+	} {
+		got := Name(p, "ns", "svc", "main")
+		if prev, dup := seen[got]; dup {
+			t.Errorf("%v and %v share the table %s", prev, p, got)
+		}
+		seen[got] = p
 	}
 }
 
@@ -96,7 +117,7 @@ func TestNameSeparatesEveryField(t *testing.T) {
 		{1, "a", "b", "cmain"},
 		{1, "", "abc", "main"},
 	} {
-		got := Name(k.customer, k.namespace, k.service, k.kind)
+		got := Name([]any{k.customer}, k.namespace, k.service, k.kind)
 		if prev, dup := seen[got]; dup {
 			t.Errorf("%v collides with %v on %s", k, prev, got)
 		}

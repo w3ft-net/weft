@@ -629,7 +629,7 @@ func (s *DuckDBShard) ingestPerKey(ctx context.Context, partition []any, rows []
 		}
 		groups[k] = append(groups[k], r)
 	}
-	if err := s.ensureTables(ctx, order); err != nil {
+	if err := s.ensureTables(ctx, partition, order); err != nil {
 		return err
 	}
 	conn, err := s.db.Conn(ctx)
@@ -642,7 +642,7 @@ func (s *DuckDBShard) ingestPerKey(ctx context.Context, partition []any, rows []
 	}
 	err = conn.Raw(func(dc any) error {
 		for _, k := range order {
-			if err := appendRows(dc.(driver.Conn), k.table(), s.layout, partition, groups[k]); err != nil {
+			if err := appendRows(dc.(driver.Conn), k.table(partition), s.layout, partition, groups[k]); err != nil {
 				return err
 			}
 		}

@@ -60,7 +60,7 @@ func TestPerKeyShard_OverTheWire(t *testing.T) {
 		}
 	}
 
-	api := logtable.Name(5, "acme", "api", "main")
+	api := logtable.Name([]any{int64(5)}, "acme", "api", "main")
 	if got := query(&pb.QueryRequest{Sql: "SELECT raw, ts FROM logs WHERE customer_id = ?", Args: []string{"5"}, Table: api}); len(got) != 3 {
 		t.Errorf("hinted query returned %d rows, want 3", len(got))
 	}

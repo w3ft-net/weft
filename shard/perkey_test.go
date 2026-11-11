@@ -23,7 +23,7 @@ type pkKey struct {
 	kind               string
 }
 
-func (k pkKey) table() string { return logtable.Name(k.customer, k.namespace, k.service, k.kind) }
+func (k pkKey) table() string { return logtable.Name([]any{k.customer}, k.namespace, k.service, k.kind) }
 
 func pkRows(k pkKey, n int, tag string) []*pb.LogRow {
 	rows := make([]*pb.LogRow, n)

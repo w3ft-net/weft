@@ -21,7 +21,7 @@ func planTable(t *testing.T, customer int64, pipeline string) string {
 }
 
 func TestPlanTable_OneSourceNamesItsTable(t *testing.T) {
-	want := logtable.Name(2, "vimgym", "api", "main")
+	want := logtable.Name([]any{int64(2)}, "vimgym", "api", "main")
 	for _, pipeline := range []string{
 		"cat /log/vimgym/api/main.log",
 		"tail /log/vimgym/api/main.log",
@@ -50,7 +50,7 @@ func TestLower_KeepsTheTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := logtable.Name(2, "vimgym", "api", "main"); lp.Table != want {
+	if want := logtable.Name([]any{int64(2)}, "vimgym", "api", "main"); lp.Table != want {
 		t.Errorf("LoweredPlan.Table = %q, want %q", lp.Table, want)
 	}
 }

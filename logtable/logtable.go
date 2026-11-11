@@ -1,9 +1,12 @@
 // Package logtable names the DuckDB table a shard keeps one log source in.
 //
-// A shard stores the rows of each (customer, namespace, service, kind) in a
+// A shard stores the rows of each (partition, namespace, service, kind) in a
 // table of its own, so a query for one log file reads only that file's rows.
 // The planner and the shard derive the name from the same key with the same
-// function, so the name is a pure function of the key and never changes. See
+// function, so the name is a pure function of the key and never changes. The
+// partition is the batch's values typed as the layout declares them: an int64
+// is hashed as eight bytes, a string length-prefixed, so a layout of one int64
+// column names the tables the hosted shape always has. See
 // docs/plans/per-service-tables.md.
 package logtable
 
@@ -11,8 +14,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -41,23 +44,38 @@ var (
 //
 // env is not part of the key. A path without an env reads every env, which the
 // planner can't enumerate, so env stays a column of the table.
-func Name(customerID int64, namespace, service, kind string) string {
+func Name(partition []any, namespace, service, kind string) string {
 	h := sha256.New()
 	var n [8]byte
 	binary.BigEndian.PutUint64(n[:], nameVersion)
 	h.Write(n[:])
-	binary.BigEndian.PutUint64(n[:], uint64(customerID))
-	h.Write(n[:])
+	for _, v := range partition {
+		switch v := v.(type) {
+		case int64:
+			binary.BigEndian.PutUint64(n[:], uint64(v))
+			h.Write(n[:])
+		case string:
+			binary.BigEndian.PutUint64(n[:], uint64(len(v)))
+			h.Write(n[:])
+			h.Write([]byte(v))
+		default:
+			panic(fmt.Sprintf("logtable: partition value of type %T", v))
+		}
+	}
 	for _, s := range []string{namespace, service, kind} {
 		binary.BigEndian.PutUint64(n[:], uint64(len(s)))
 		h.Write(n[:])
 		h.Write([]byte(s))
 	}
-	return "l_" + slug(customerID, namespace, service, kind) + "_" + hex.EncodeToString(h.Sum(nil)[:16])
+	return "l_" + slug(partition, namespace, service, kind) + "_" + hex.EncodeToString(h.Sum(nil)[:16])
 }
 
-func slug(customerID int64, namespace, service, kind string) string {
-	key := strconv.FormatInt(customerID, 10) + "_" + namespace + "_" + service + "_" + kind
+func slug(partition []any, namespace, service, kind string) string {
+	var parts []string
+	for _, v := range partition {
+		parts = append(parts, fmt.Sprint(v))
+	}
+	key := strings.Join(append(parts, namespace, service, kind), "_")
 	s := strings.Trim(notAlnum.ReplaceAllString(strings.ToLower(key), "_"), "_")
 	if len(s) > maxSlug {
 		s = strings.TrimRight(s[:maxSlug], "_")

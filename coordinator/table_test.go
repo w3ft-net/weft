@@ -23,7 +23,7 @@ func TestExecute_SendsTheTableTheSourceNames(t *testing.T) {
 	if len(log.reqs) == 0 {
 		t.Fatal("no request reached compute")
 	}
-	want := logtable.Name(1, "vimgym", "api", "main")
+	want := logtable.Name([]any{int64(1)}, "vimgym", "api", "main")
 	for _, r := range log.reqs {
 		if r.Table != want {
 			t.Errorf("request Table = %q, want %q", r.Table, want)
