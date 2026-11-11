@@ -127,7 +127,7 @@ func TestCoordinateBackendsAgree(t *testing.T) {
 
 		var want []string
 		for _, r := range rows {
-			if source.Matches(r.cust, r.ns, r.env, r.svc, r.kind) && scope.Matches(r.cust, r.ns, r.env, r.svc, r.kind) {
+			if source.Matches(&shape.Key{Customer: r.cust, Namespace: r.ns, Env: r.env, Service: r.svc, Kind: r.kind}) && scope.Matches(&shape.Key{Customer: r.cust, Namespace: r.ns, Env: r.env, Service: r.svc, Kind: r.kind}) {
 				want = append(want, r.id)
 			}
 		}

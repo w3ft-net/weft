@@ -908,7 +908,7 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 	}
 	// A shard whose volume is in another layout than this build's would have
 	// its rows reinterpreted. An older shard sends none: the legacy layout.
-	if want := shape.Legacy().Fingerprint; req.LayoutFingerprint != "" && req.LayoutFingerprint != want {
+	if want := shape.BuildLayout().Fingerprint; req.LayoutFingerprint != "" && req.LayoutFingerprint != want {
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"shard %s stores layout %s, this coordinator's is %s", req.ShardId, req.LayoutFingerprint, want)
 	}

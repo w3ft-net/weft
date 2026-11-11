@@ -2,7 +2,7 @@
 # in `kevcons` (see .kevcons.yaml); this Makefile holds local-dev
 # tasks that don't touch AWS.
 
-.PHONY: hooks docs collapse test test-deploy integration integration-clean
+.PHONY: hooks docs generate generate-check collapse test test-deploy integration integration-clean
 
 # Point git at the committed hooks. Run once per clone.
 hooks:
@@ -14,6 +14,18 @@ hooks:
 # whenever a doc is staged, and CI fails if they are stale.
 docs:
 	go run ./cmd/docgen
+
+# Write the coordinator's coordinate vocabulary (shape/coord_gen.go) from a shape
+# spec. Which columns locate a log row is chosen when the coordinator is built:
+# run this before `go build`. The generated file is committed, and CI runs
+# `make generate-check` to fail on stale output. The in-tree default is the
+# hosted shape until the hosted adapter moves out of this tree.
+SHAPE ?= shape/specs/hosted.yaml
+generate:
+	go run ./cmd/shapegen -spec $(SHAPE) -out shape/coord_gen.go
+
+generate-check:
+	go run ./cmd/shapegen -spec $(SHAPE) -out shape/coord_gen.go -check
 
 # Collapse store/migrations/* into store/schema.sql. Run after a
 # successful production deploy (kevcons will eventually trigger this

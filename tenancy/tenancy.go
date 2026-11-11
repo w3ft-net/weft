@@ -102,7 +102,7 @@ func Readable(ctx context.Context, sc Scoper, a Actor, existing func() ([]string
 	if err != nil {
 		return nil, false, err
 	}
-	names, all, err = set.Namespaces(a.Partition())
+	names, all, err = set.Namespaces(shape.Coord{Customer: a.Partition()})
 	if err != nil || !all {
 		return names, false, err
 	}

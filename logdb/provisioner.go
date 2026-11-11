@@ -461,7 +461,7 @@ func (p *Provisioner) ShardDescriptorsFor(ctx context.Context, tr TimeRange, nam
 			d.ParquetPath = e.ParquetPath
 			// An archive is read in the layout it was written in, which is
 			// this build's: a shape change means new shards and new archives.
-			d.Layout = shard.LayoutToProto(shape.Legacy())
+			d.Layout = shard.LayoutToProto(shape.BuildLayout())
 		} else {
 			d.GrpcAddr = e.Addr
 		}

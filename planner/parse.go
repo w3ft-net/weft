@@ -510,7 +510,7 @@ func (s sourceInfo) traceScope() []string {
 	if len(s.tuples) > 0 {
 		return nil // the trace names its namespace; the summary is unscoped
 	}
-	names, all, err := s.scope.Namespaces(s.coord[0].Customer)
+	names, all, err := s.scope.Namespaces(s.coord[0])
 	if err != nil || all {
 		return nil
 	}

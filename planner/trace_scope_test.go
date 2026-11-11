@@ -62,7 +62,7 @@ func TestPlanScoped_TraceIsRestrictedToReadableNamespaces(t *testing.T) {
 			if !strings.Contains(p.ShardSQL, "namespace IN (?, ?)") || !hasArg(p.Args, "alpha") || !hasArg(p.Args, "gamma") {
 				t.Errorf("shard SQL is not restricted to the readable namespaces:\n%s\nargs=%v", p.ShardSQL, p.Args)
 			}
-			if got, _, _ := p.Coords.Namespaces(1); !slices.Equal(got, []string{"alpha", "gamma"}) {
+			if got, _, _ := p.Coords.Namespaces(coords.Coord{Customer: 1}); !slices.Equal(got, []string{"alpha", "gamma"}) {
 				t.Errorf("Coords namespaces = %v, want [alpha gamma]", got)
 			}
 			// Routing stays on every shard: SourceNamespace routes by the

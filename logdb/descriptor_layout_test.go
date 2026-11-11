@@ -39,7 +39,7 @@ func TestShardDescriptorsFor_ArchivedCarriesTheLayout(t *testing.T) {
 	for _, d := range ds {
 		switch d.ShardId {
 		case "cold":
-			if got := shard.LayoutFromProto(d.Layout); got.Fingerprint != shape.Legacy().Fingerprint || d.Layout == nil {
+			if got := shard.LayoutFromProto(d.Layout); got.Fingerprint != shape.BuildLayout().Fingerprint || d.Layout == nil {
 				t.Errorf("archived descriptor layout = %+v, want the build's", d.Layout)
 			}
 		case "hot":

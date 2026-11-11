@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/saaskit/orgs"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -49,7 +50,7 @@ func TestReadScope(t *testing.T) {
 		if err := set.Validate(); err != nil {
 			t.Fatal(err)
 		}
-		names, all, err := set.Namespaces(int64(org.ID))
+		names, all, err := set.Namespaces(shape.Coord{Customer: int64(org.ID)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,7 +91,7 @@ func TestReadScope_CronUser(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		n, all, err := set.Namespaces(int64(org.ID))
+		n, all, err := set.Namespaces(shape.Coord{Customer: int64(org.ID)})
 		if err != nil || all {
 			t.Fatalf("names=%v all=%v err=%v", n, all, err)
 		}

@@ -182,7 +182,7 @@ func (ss sourceScope) sees(namespace, service string) bool {
 // narrow limits a log-group query to the namespaces the scope touches. The
 // caller still filters each row with sees.
 func (ss sourceScope) narrow(q *gorm.DB) *gorm.DB {
-	names, all := ss.set.NamespaceSuperset(ss.org)
+	names, all := ss.set.NamespaceSuperset(shape.Coord{Customer: ss.org})
 	if all {
 		return q
 	}

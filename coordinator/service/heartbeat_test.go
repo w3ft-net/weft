@@ -65,7 +65,7 @@ func TestHeartbeat_LayoutFingerprint(t *testing.T) {
 		want        codes.Code
 	}{
 		{"none (an older shard)", "", codes.OK},
-		{"this build's layout", shape.Legacy().Fingerprint, codes.OK},
+		{"this build's layout", shape.BuildLayout().Fingerprint, codes.OK},
 		{"another layout", other.Fingerprint, codes.FailedPrecondition},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

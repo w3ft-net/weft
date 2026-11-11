@@ -1,13 +1,17 @@
-// Package shape is the coordinate vocabulary of the hosted build: the columns
-// that locate a log row, and sets of tuples over them. It is hand-written for
-// now; docs/plans/tenant-scope.md Phase 4 turns it into generator output.
+// Package shape is the coordinate vocabulary of a build: the columns that locate
+// a log row, and sets of tuples over them.
+//
+// Which columns a build has is chosen when the coordinator is compiled, from a
+// spec (shape/specs). The generator writes coord_gen.go from it: the tuple
+// (Coord), the key a row is matched by (Key), and the few operations that name
+// columns. This file is the algebra over them, and names none: it is the same
+// in every build. docs/plans/tenant-scope.md, Phase 4.
 package shape
 
 import (
 	"encoding/json"
 	"errors"
 	"slices"
-	"strconv"
 )
 
 type cellKind uint8
@@ -44,63 +48,6 @@ func (c Cell) Matches(v string) bool {
 	return true
 }
 
-// Coord is one tuple. Customer is a required column: it is always a concrete
-// value, never a wildcard, and 0 is not a customer.
-type Coord struct {
-	Customer                      int64
-	Namespace, Env, Service, Kind Cell
-}
-
-// PartitionValues are the tuple's partition column values as text, in the order
-// of Legacy().Columns. A shard types them back per its layout.
-func (c Coord) PartitionValues() []string {
-	return []string{strconv.FormatInt(c.Customer, 10)}
-}
-
-// Set is a union of tuples. The empty set matches nothing.
-type Set []Coord
-
-// ErrNoCustomer is returned for a tuple whose required Customer column is unset.
-var ErrNoCustomer = errors.New("shape: tuple has no customer")
-
-// Validate refuses a set that leaves a required column unset.
-func (s Set) Validate() error {
-	for _, c := range s {
-		if c.Customer == 0 {
-			return ErrNoCustomer
-		}
-	}
-	return nil
-}
-
-// ErrFinerThanNamespace is returned when a tuple narrows below the namespace.
-// Callers that can only enforce namespaces must refuse such a set: dropping
-// the narrowing would widen the grant.
-var ErrFinerThanNamespace = errors.New("shape: scope narrower than a namespace is not supported here")
-
-// Namespaces reports the namespaces the set grants within one customer: all
-// is true when some tuple leaves the namespace unconstrained, otherwise names
-// is the sorted, distinct set of named namespaces. A tuple that also
-// constrains env, service or kind is ErrFinerThanNamespace.
-func (s Set) Namespaces(customer int64) (names []string, all bool, err error) {
-	for _, c := range s {
-		if c.Customer != customer {
-			continue
-		}
-		if !c.Env.IsAny() || !c.Service.IsAny() || !c.Kind.IsAny() {
-			return nil, false, ErrFinerThanNamespace
-		}
-		switch {
-		case c.Namespace.IsAny():
-			all = true
-		case c.Namespace.kind == kindValue:
-			names = append(names, c.Namespace.val)
-		}
-	}
-	slices.Sort(names)
-	return slices.Compact(names), all, nil
-}
-
 // meet is the intersection of two cells; ok is false when nothing satisfies both.
 func (c Cell) meet(o Cell) (Cell, bool) {
 	switch {
@@ -116,6 +63,28 @@ func (c Cell) meet(o Cell) (Cell, bool) {
 	return Cell{}, false
 }
 
+// Set is a union of tuples. The empty set matches nothing.
+type Set []Coord
+
+// ErrRequiredUnset is returned for a tuple that leaves a required column unset:
+// a required column is never a wildcard.
+var ErrRequiredUnset = errors.New("shape: tuple leaves a required column unset")
+
+// Validate refuses a set that leaves a required column unset.
+func (s Set) Validate() error {
+	for i := range s {
+		if err := s[i].validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ErrFinerThanNamespace is returned when a tuple narrows below the namespace.
+// Callers that can only enforce namespaces must refuse such a set: dropping
+// the narrowing would widen the grant.
+var ErrFinerThanNamespace = errors.New("shape: scope narrower than a namespace is not supported here")
+
 // Intersect is what a query may read: the tuples that satisfy both the rows it
 // names (source) and the rows its principal may see (scope). It is a union of
 // pairwise intersections, so the source's tuples stay tuples: `a/api` plus
@@ -123,18 +92,9 @@ func (c Cell) meet(o Cell) (Cell, bool) {
 // routing and indistinguishable from a source that does not exist.
 func Intersect(source, scope Set) Set {
 	var out Set
-	for _, s := range source {
-		for _, p := range scope {
-			if s.Customer != p.Customer {
-				continue
-			}
-			c := Coord{Customer: s.Customer}
-			var ok [4]bool
-			c.Namespace, ok[0] = s.Namespace.meet(p.Namespace)
-			c.Env, ok[1] = s.Env.meet(p.Env)
-			c.Service, ok[2] = s.Service.meet(p.Service)
-			c.Kind, ok[3] = s.Kind.meet(p.Kind)
-			if ok[0] && ok[1] && ok[2] && ok[3] && !slices.Contains(out, c) {
+	for i := range source {
+		for j := range scope {
+			if c, ok := source[i].meet(scope[j]); ok && !slices.Contains(out, c) {
 				out = append(out, c)
 			}
 		}
@@ -197,35 +157,6 @@ func Covers(scope, want Set) bool {
 	return true
 }
 
-// Matches reports whether a row's coordinates fall inside the tuple. The live
-// matcher and the SQL backend must agree on this for every row.
-func (c Coord) Matches(customer int64, namespace, env, service, kind string) bool {
-	return c.Customer == customer &&
-		c.Namespace.Matches(namespace) &&
-		c.Env.Matches(env) &&
-		c.Service.Matches(service) &&
-		c.Kind.Matches(kind)
-}
-
-// Matches reports whether any tuple admits the row.
-//
-// This is the live-tail hot path (every ingested row against every
-// subscription, most of them someone else's), so it indexes the tuples rather
-// than copying each one, and tests the required customer column first.
-func (s Set) Matches(customer int64, namespace, env, service, kind string) bool {
-	for i := range s {
-		c := &s[i]
-		if c.Customer == customer &&
-			c.Namespace.Matches(namespace) &&
-			c.Env.Matches(env) &&
-			c.Service.Matches(service) &&
-			c.Kind.Matches(kind) {
-			return true
-		}
-	}
-	return false
-}
-
 // Shared is the one value every tuple pins in a column, or "" and false when
 // some tuple leaves the column open or they differ. A superset backend such as
 // shard routing narrows only by a shared value.
@@ -245,22 +176,3 @@ func Shared(s Set, col func(Coord) Cell) (string, bool) {
 // intersected with the set is not empty. A source is a coordinate (a namespace
 // and service, across every kind and env), so this is what makes it visible.
 func (s Set) Overlaps(c Coord) bool { return len(Intersect(Set{c}, s)) > 0 }
-
-// NamespaceSuperset is the namespaces some tuple of the customer touches, and
-// whether some tuple leaves the namespace open. Unlike Namespaces it accepts a
-// scope narrower than a namespace, and the answer is a superset: it is for
-// narrowing a lookup that is then filtered exactly, never for granting.
-func (s Set) NamespaceSuperset(customer int64) (names []string, all bool) {
-	for _, c := range s {
-		if c.Customer != customer {
-			continue
-		}
-		if v, ok := c.Namespace.Literal(); ok {
-			names = append(names, v)
-		} else {
-			all = true
-		}
-	}
-	slices.Sort(names)
-	return slices.Compact(names), all
-}

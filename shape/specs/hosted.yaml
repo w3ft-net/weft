@@ -1,0 +1,11 @@
+# The hosted shape: the default four coordinates plus a tenant. The customer is
+# stamped from the ingest token, owns storage (caches, per-key tables, hive
+# paths, metering and retention key on it), and is never a wildcard.
+coordinates: [namespace, env, service, kind]
+added:
+  - name: customer_id
+    type: int64
+    role: partition
+    pinned: true
+    required: true
+    go_name: Customer

@@ -20,7 +20,8 @@ type RowMatcher struct {
 
 // Match returns true if the row passes all filters.
 func (m *RowMatcher) Match(row *pb.LogRow) bool {
-	if !m.Coords.Matches(row.CustomerId, row.Namespace, row.Env, row.Service, row.Kind) {
+	key := shape.Key{Customer: row.CustomerId, Namespace: row.Namespace, Env: row.Env, Service: row.Service, Kind: row.Kind}
+	if !m.Coords.Matches(&key) {
 		return false
 	}
 	for _, p := range m.Patterns {

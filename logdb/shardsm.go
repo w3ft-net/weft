@@ -1074,7 +1074,7 @@ func (sh *Shard) dialConfigure(ctx context.Context, hb store.ShardHeartbeat) (sh
 		WindowStart:    sh.WindowStart.Format(time.RFC3339),
 		WindowEnd:      sh.WindowEnd.Format(time.RFC3339),
 		HeartbeatToken: sh.HeartbeatToken,
-		Layout:         shard.LayoutToProto(shape.Legacy()),
+		Layout:         shard.LayoutToProto(shape.BuildLayout()),
 	}
 	sh.mu.RUnlock()
 
@@ -1198,7 +1198,7 @@ func (sh *Shard) reconnect(ctx context.Context, hb store.ShardHeartbeat) error {
 		WindowStart:    sh.WindowStart.Format(time.RFC3339),
 		WindowEnd:      sh.WindowEnd.Format(time.RFC3339),
 		HeartbeatToken: sh.HeartbeatToken,
-		Layout:         shard.LayoutToProto(shape.Legacy()),
+		Layout:         shard.LayoutToProto(shape.BuildLayout()),
 	}
 	sh.mu.Unlock()
 

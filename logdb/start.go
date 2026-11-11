@@ -361,11 +361,11 @@ func startRetentionJanitor(ctx context.Context, prov *Provisioner, region string
 	var compactor shard.Compactor
 	if url := os.Getenv("COMPACTOR_FUNCTION_URL"); url != "" {
 		lc := shard.NewLambdaCompactor(url, lambdaSigningCreds(ctx, region), region)
-		lc.Layout = shape.Legacy()
+		lc.Layout = shape.BuildLayout()
 		compactor = lc
 		weftsdk.Infof(ctx, "janitor: compactor Lambda at %s", url)
 	} else {
-		compactor = shard.LocalCompactor{S3: shard.S3ConfigFromEnv(), Layout: shape.Legacy()}
+		compactor = shard.LocalCompactor{S3: shard.S3ConfigFromEnv(), Layout: shape.BuildLayout()}
 		weftsdk.Infof(ctx, "janitor: in-process compactor (COMPACTOR_FUNCTION_URL unset)")
 	}
 

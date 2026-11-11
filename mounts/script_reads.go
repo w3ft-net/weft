@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/weft/logreads"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy"
 )
@@ -84,7 +85,7 @@ func (c Config) authorizeHomedCronReads(home, pipeline string) error {
 	if err != nil {
 		return err
 	}
-	allowed, all, err := set.Namespaces(int64(c.OrgID))
+	allowed, all, err := set.Namespaces(shape.Coord{Customer: int64(c.OrgID)})
 	if err != nil {
 		return err
 	}

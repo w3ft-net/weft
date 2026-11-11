@@ -86,11 +86,13 @@ func TestCoversAndMatches(t *testing.T) {
 	if Covers(nil, a) || Covers(a, nil) {
 		t.Error("nothing covers an empty source, and an empty scope covers nothing")
 	}
-	if !a.Matches(1, "a", "prod", "api", "main") || a.Matches(1, "b", "", "", "") || a.Matches(2, "a", "", "", "") {
+	if !a.Matches(&Key{Customer: 1, Namespace: "a", Env: "prod", Service: "api", Kind: "main"}) ||
+		a.Matches(&Key{Customer: 1, Namespace: "b"}) || a.Matches(&Key{Customer: 2, Namespace: "a"}) {
 		t.Error("Matches disagrees with the tuple")
 	}
 	nullEnv := Set{{Customer: 1, Env: Null()}}
-	if !nullEnv.Matches(1, "x", "", "s", "k") || nullEnv.Matches(1, "x", "prod", "s", "k") {
+	if !nullEnv.Matches(&Key{Customer: 1, Namespace: "x", Service: "s", Kind: "k"}) ||
+		nullEnv.Matches(&Key{Customer: 1, Namespace: "x", Env: "prod", Service: "s", Kind: "k"}) {
 		t.Error("Null env matches only a row with no env")
 	}
 	if v, ok := Shared(Set{{Namespace: Value("a")}, {Namespace: Value("a")}}, func(c Coord) Cell { return c.Namespace }); !ok || v != "a" {
@@ -112,11 +114,11 @@ func TestOverlapsAndNamespaceSuperset(t *testing.T) {
 	if !scope.Overlaps(src("a", "api")) || scope.Overlaps(src("a", "web")) || !scope.Overlaps(src("b", "web")) || scope.Overlaps(src("c", "api")) {
 		t.Error("a source is visible exactly when the scope admits some row of it")
 	}
-	names, all := scope.NamespaceSuperset(1)
+	names, all := scope.NamespaceSuperset(Coord{Customer: 1})
 	if all || !reflect.DeepEqual(names, []string{"a", "b"}) {
 		t.Errorf("NamespaceSuperset = %v %v, want [a b] not all", names, all)
 	}
-	if _, all := (Set{{Customer: 1}}).NamespaceSuperset(1); !all {
+	if _, all := (Set{{Customer: 1}}).NamespaceSuperset(Coord{Customer: 1}); !all {
 		t.Error("a tuple with no namespace opens every namespace")
 	}
 }

@@ -95,7 +95,7 @@ func TestColdArchiveOpensOnlyAdmittedKeys(t *testing.T) {
 			for _, svc := range services {
 				for _, kind := range kinds {
 					for _, e := range envs {
-						if source.Matches(1, ns, e, svc, kind) && scope.Matches(1, ns, e, svc, kind) {
+						if source.Matches(&shape.Key{Customer: 1, Namespace: ns, Env: e, Service: svc, Kind: kind}) && scope.Matches(&shape.Key{Customer: 1, Namespace: ns, Env: e, Service: svc, Kind: kind}) {
 							want++
 							break
 						}
