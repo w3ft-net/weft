@@ -97,6 +97,9 @@ jobs:
           go run ./cmd/docgen
           git diff --exit-code -- shell/help_corpus_gen.go frontend/src/generated/docs \
             || { echo "::error::generated docs are stale; run 'make docs' and commit"; exit 1; }
+      - name: Generated shape is current
+        working-directory: weft
+        run: make generate-check
       - name: WASM build check
         working-directory: weft
         run: GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/wasm
