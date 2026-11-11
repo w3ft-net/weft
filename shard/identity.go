@@ -53,7 +53,7 @@ func LoadIdentity(dataDir string) (*Identity, error) {
 	if id.ShardID == "" {
 		return nil, fmt.Errorf("%s: shard_id empty", path)
 	}
-	if len(id.Layout.Columns) == 0 {
+	if id.Layout.IsZero() {
 		id.Layout = shape.Legacy()
 	}
 	return &id, nil

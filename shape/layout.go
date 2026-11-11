@@ -75,6 +75,11 @@ func (l Layout) Parse(values []string) ([]any, error) {
 	return out, nil
 }
 
+// IsZero reports whether no layout was stated. It is not the same as a layout
+// with no partition columns, which is a real one (a build with no tenant) and
+// has a fingerprint. A reader treats a zero layout as the legacy one.
+func (l Layout) IsZero() bool { return l.Fingerprint == "" }
+
 // IsLegacy reports whether the layout is the legacy customer_id one.
 func (l Layout) IsLegacy() bool { return l.Fingerprint == Legacy().Fingerprint }
 

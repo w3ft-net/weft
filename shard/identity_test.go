@@ -25,6 +25,30 @@ func TestLoadIdentity_LegacyVolumeAdoptsCustomerLayout(t *testing.T) {
 	}
 }
 
+// A layout with no partition columns is a real layout (the open-source shape
+// has no tenant), not an absent one: it must survive a reload and a trip over
+// the wire instead of being adopted as the legacy customer_id layout.
+func TestEmptyLayoutIsNotAbsent(t *testing.T) {
+	empty := shape.NewLayout()
+	dir := t.TempDir()
+	if err := SaveIdentity(dir, &Identity{ShardID: "s1", Layout: empty}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := LoadIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(id.Layout.Fingerprint, empty.Fingerprint) || len(id.Layout.Columns) != 0 {
+		t.Errorf("reloaded layout = %+v, want the empty layout %+v", id.Layout, empty)
+	}
+	if got := LayoutFromProto(LayoutToProto(empty)); got.Fingerprint != empty.Fingerprint || len(got.Columns) != 0 {
+		t.Errorf("wire round trip = %+v, want the empty layout", got)
+	}
+	if got := LayoutFromProto(nil); !got.IsLegacy() {
+		t.Errorf("absent wire layout = %+v, want legacy", got)
+	}
+}
+
 func TestSaveLoadIdentity_LayoutRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	lay := shape.NewLayout(

@@ -14,10 +14,11 @@ func LayoutToProto(l shape.Layout) *pb.PartitionLayout {
 	return out
 }
 
-// LayoutFromProto reads a wire layout. A nil or empty one is the legacy layout,
-// which is what a coordinator from before layouts sends by sending nothing.
+// LayoutFromProto reads a wire layout. An absent one is the legacy layout, which
+// is what a coordinator from before layouts sends by sending nothing. One with
+// no columns but a fingerprint is a real layout with no partition columns.
 func LayoutFromProto(p *pb.PartitionLayout) shape.Layout {
-	if len(p.GetColumns()) == 0 {
+	if p.GetFingerprint() == "" {
 		return shape.Legacy()
 	}
 	cols := make([]shape.LayoutColumn, len(p.Columns))
