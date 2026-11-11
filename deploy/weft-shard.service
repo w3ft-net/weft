@@ -11,6 +11,7 @@ ExecStart=/opt/app/bin/weft-shard \
     --grpc-port=9000 \
     --http-port=9001 \
     --data-dir=/opt/app/data \
+    --per-key-tables \
     --coordinator-addr=${COORDINATOR_NLB}
 Restart=always
 RestartSec=5
