@@ -492,23 +492,26 @@ shares. It's behind interfaces, and each implementation owns its schema
 and migrations. Hosted keeps Postgres, goose and the `schema.sql`
 collapse, and the public repo hosts no hosted-only tables.
 
-Two interfaces:
+Two interfaces (usage metering and `tmp_files` are undecided: metering
+looks hosted, `tmp_files` relational):
 
 - **Relational state.** One small interface per domain (crons,
   dashboards, grants, namespaces, tokens, incidents, shards). Every call
   takes a `StorePartition`; the default build ignores it. Hosted's
   implementation wraps today's `store/`, so nothing is rewritten up front.
-- **Time series.** Cron results, rollups, shard heartbeats and usage:
-  append, range query, rollup. The contract says nothing about retention
-  of these. Hosted meets it with partman and pg_cron, and the default
+- **Cron results.** The results table, its hourly, 4-hour and daily
+  rollups, and the `weft::*` functions and alert checks that query them
+  are one unit, keyed by an opaque cron key. The contract is append,
+  range read, windowed stats and series. It says nothing about
+  retention. Hosted meets it with partman and pg_cron, and the default
   build can keep plain rows and leave pruning to the operator.
-  Heartbeats feed shard health, so an implementation must serve their
-  recent window.
 
 **Shard state is core, not hosted-only.** The registry, FSM transitions,
 slot and cron claims, archive stats and the retention janitor are how any
 operator controls how logs age out, so the default build implements them.
-The relational interface therefore needs atomic primitives:
+Shard heartbeats are part of that state: they're log-storage
+architecture, not telemetry. The relational interface therefore needs
+atomic primitives:
 compare-and-set transitions and claim-with-expiry. One coordinator can
 run on a single-node store such as SQLite. More than one needs a store
 with shared atomic claims; Postgres is the one we ship, and the spec says
@@ -516,7 +519,7 @@ so. Launching a shard (`ec2:RunInstances`, Docker) is provisioning and
 belongs to the infra-interfaces plan.
 
 **Two kinds of retention.** Log-data retention (shard archival and the
-janitor) is core. Control-plane time-series retention is the
+janitor) is core. Retention of cron results is the
 implementer's decision.
 
 Consequences:
@@ -812,7 +815,8 @@ for the two shapes we ship.
 **Phase 6: control-plane interfaces (not yet estimated).** Carve the
 interfaces in "The control plane" one domain at a time, after Phase 4.
 Start with what the Authorizer and cron work already touch (crons, grants,
-namespaces), then shard state, then the time-series interface. Each domain
+namespaces), then shard state, then the cron-results unit (first moving the raw SQL
+in `coordinator/` behind it). Each domain
 lands as an interface, a hosted implementation wrapping the current
 `store/` methods, and a conformance test. Then write the default
 implementation. Replace `OrgID` with `StorePartition` in the exposed
@@ -846,5 +850,5 @@ the hosted adapter.
 4. ~~Control-plane tenancy in Postgres.~~ **Resolved:** the control plane
    is behind interfaces, not a shared schema (see "The control plane").
    Still open: the default backend (proposal: embedded SQLite for one
-   coordinator) and whether the time-series interface needs a rollup
+   coordinator) and whether the cron-results contract includes a rollup
    operation or leaves rollups to the implementation.
