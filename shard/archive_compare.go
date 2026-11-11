@@ -32,15 +32,21 @@ func LocalPathOf(s3Path, root string) string {
 	return strings.TrimRight(root, "/") + "/" + rest
 }
 
-// VerifyAgainstManifest and CompareArchives are the operator's checks on the
-// hosted (legacy layout, customer_id) archives; they read no other layout.
+// partitionKey is a comparable form of one group's partition values.
+func partitionKey(values []string) string { return strings.Join(values, "\x1f") }
+
+// partitionLabel is a group's partition values as a person reads them.
+func partitionLabel(key string) string { return strings.ReplaceAll(key, "\x1f", "/") }
+
+// VerifyAgainstManifest and CompareArchives are the operator's checks on an
+// archive written in layout.
 //
 // VerifyAgainstManifest checks an archive against what its export recorded: the
-// total rows, and the rows of each customer (a row with no customer counts under
-// 0, as the export's stats do). An archive missing rows, holding extra ones, or
-// holding a customer the manifest does not list fails. Pass s3cfg for an s3://
-// path, nil for a local one.
-func VerifyAgainstManifest(path string, m ExportManifest, s3cfg *S3Config) error {
+// total rows, and the rows of each partition (a row with no value in a partition
+// column counts as 0, or ” for text, as the export's stats do). An archive
+// missing rows, holding extra ones, or holding a partition the manifest does not
+// list fails. Pass s3cfg for an s3:// path, nil for a local one.
+func VerifyAgainstManifest(path string, m ExportManifest, layout shape.Layout, s3cfg *S3Config) error {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return fmt.Errorf("open duckdb: %w", err)
@@ -51,19 +57,29 @@ func VerifyAgainstManifest(path string, m ExportManifest, s3cfg *S3Config) error
 			return err
 		}
 	}
-	rows, err := db.Query("SELECT COALESCE(customer_id, 0), count(*) FROM " + ParquetReadExpr(path, shape.Legacy()) + " GROUP BY 1")
+	cols, group := partitionColumns(layout)
+	query := "SELECT " + strings.Join(append(cols, ""), ", ") + "count(*) FROM " + ParquetReadExpr(path, layout)
+	if len(group) > 0 {
+		query += " GROUP BY " + strings.Join(group, ", ")
+	}
+	rows, err := db.Query(query)
 	if err != nil {
 		return fmt.Errorf("count %s: %w", path, err)
 	}
 	defer rows.Close()
-	got := map[int64]int64{}
+	got := map[string]int64{}
 	var total int64
 	for rows.Next() {
-		var c, n int64
-		if err := rows.Scan(&c, &n); err != nil {
+		values := make([]string, len(cols))
+		dest := make([]any, 0, len(cols)+1)
+		for i := range values {
+			dest = append(dest, &values[i])
+		}
+		var n int64
+		if err := rows.Scan(append(dest, &n)...); err != nil {
 			return err
 		}
-		got[c], total = n, total+n
+		got[partitionKey(values)], total = n, total+n
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -71,18 +87,18 @@ func VerifyAgainstManifest(path string, m ExportManifest, s3cfg *S3Config) error
 	if total != m.Rows {
 		return fmt.Errorf("%s holds %d rows, the manifest of %s says %d", path, total, m.ShardID, m.Rows)
 	}
-	want := map[int64]int64{}
-	for _, c := range m.Customers {
-		want[c.CustomerID] = c.RowCount
+	want := map[string]int64{}
+	for _, c := range m.Partitions {
+		want[partitionKey(c.PartitionValues)] = c.RowCount
 	}
-	for c, n := range want {
-		if got[c] != n {
-			return fmt.Errorf("%s holds %d rows of customer %d, the manifest of %s says %d", path, got[c], c, m.ShardID, n)
+	for k, n := range want {
+		if got[k] != n {
+			return fmt.Errorf("%s holds %d rows of partition %q, the manifest of %s says %d", path, got[k], partitionLabel(k), m.ShardID, n)
 		}
 	}
-	for c, n := range got {
-		if _, listed := want[c]; !listed {
-			return fmt.Errorf("%s holds %d rows of customer %d, which the manifest of %s does not list", path, n, c, m.ShardID)
+	for k, n := range got {
+		if _, listed := want[k]; !listed {
+			return fmt.Errorf("%s holds %d rows of partition %q, which the manifest of %s does not list", path, n, partitionLabel(k), m.ShardID)
 		}
 	}
 	return nil
@@ -90,12 +106,13 @@ func VerifyAgainstManifest(path string, m ExportManifest, s3cfg *S3Config) error
 
 // CompareArchives checks that the archive at dst holds the rows of the one at
 // src, which is the check between converting an archive and swapping it in. For
-// each log key (customer, namespace, service, kind) the two must agree on the
-// number of rows, a sum of a hash of every line, and the first and last time. A
-// key present in one and not the other, a missing row, an added row and a changed
-// line each make them differ. It returns how many keys src has. Both are archive
-// paths as ParquetReadExpr takes them; pass s3cfg for s3:// paths, nil for local.
-func CompareArchives(src, dst string, s3cfg *S3Config) (keys int, err error) {
+// each log key (partition values, namespace, service, kind) the two must agree
+// on the number of rows, a sum of a hash of every line, and the first and last
+// time. A key present in one and not the other, a missing row, an added row and
+// a changed line each make them differ. It returns how many keys src has. Both
+// are archive paths as ParquetReadExpr takes them, written in layout; pass s3cfg
+// for s3:// paths, nil for local.
+func CompareArchives(src, dst string, layout shape.Layout, s3cfg *S3Config) (keys int, err error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return 0, fmt.Errorf("open duckdb: %w", err)
@@ -107,11 +124,15 @@ func CompareArchives(src, dst string, s3cfg *S3Config) (keys int, err error) {
 		}
 	}
 
+	var names []string
+	for _, c := range layout.Columns {
+		names = append(names, c.Name)
+	}
 	fingerprint := func(from string) string {
-		return `SELECT customer_id, namespace, service, kind, count(*) AS n,
+		return "SELECT " + strings.Join(append(names, "namespace, service, kind"), ", ") + `, count(*) AS n,
 			sum(CAST(hash(raw) AS HUGEINT)) AS h, min(ts) AS lo, max(ts) AS hi FROM ` + from + ` GROUP BY ALL`
 	}
-	a, b := fingerprint(ParquetReadExpr(src, shape.Legacy())), fingerprint(ParquetReadExpr(dst, shape.Legacy()))
+	a, b := fingerprint(ParquetReadExpr(src, layout)), fingerprint(ParquetReadExpr(dst, layout))
 
 	var differ int
 	if err := db.QueryRow(fmt.Sprintf("SELECT count(*) FROM ((%[1]s EXCEPT %[2]s) UNION ALL (%[2]s EXCEPT %[1]s))", a, b)).Scan(&differ); err != nil {

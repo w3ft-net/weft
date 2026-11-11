@@ -232,7 +232,7 @@ func (s *Server) Archive(ctx context.Context, req *pb.ArchiveRequest) (*pb.Archi
 	weftsdk.Infof(ctx, "shard %s: archived to %s", s.id, path)
 	return &pb.ArchiveResponse{
 		ParquetPath:   path,
-		CustomerStats: shard.CustomerStatsToProto(stats),
+		CustomerStats: shard.PartitionStatsToProto(stats),
 	}, nil
 }
 

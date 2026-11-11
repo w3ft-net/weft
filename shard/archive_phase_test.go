@@ -86,7 +86,7 @@ func TestDuckDBShard_ArchiveLogsPhases(t *testing.T) {
 	}
 	for _, want := range []string{
 		"archive attempt=1 start",
-		"archive attempt=1 stats customers=2",
+		"archive attempt=1 stats partitions=2",
 		"archive attempt=1 sizing",
 		"bucket_minutes=",
 		"archive attempt=1 copy start",

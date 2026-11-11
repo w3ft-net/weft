@@ -927,9 +927,9 @@ func (sh *Shard) evaluateArchiving(ctx context.Context) error {
 
 // recordArchive records a finished archive: it swaps the live handle for a
 // ColdShard (so registry walks still see a non-nil pointer), persists the
-// parquet path and the per-customer stats, and closes the live handle. The
+// parquet path and the per-partition stats, and closes the live handle. The
 // ColdShard is built first so a failure there leaves nothing half-recorded.
-func (sh *Shard) recordArchive(path string, stats []shard.CustomerStat) error {
+func (sh *Shard) recordArchive(path string, stats []shard.PartitionStat) error {
 	sh.mu.RLock()
 	services, live := sh.Services, sh.Live
 	sh.mu.RUnlock()

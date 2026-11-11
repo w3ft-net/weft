@@ -197,7 +197,7 @@ func (s *errShard) QueryToSink(_ context.Context, _ string, _ []any, sink shard.
 	sink.SendSentinel(s.id)
 }
 func (s *errShard) Ingest(context.Context, []*pb.LogRow, shard.IngestRecorder) error { return nil }
-func (s *errShard) Archive(_ context.Context, _ string) (string, []shard.CustomerStat, error) {
+func (s *errShard) Archive(_ context.Context, _ string) (string, []shard.PartitionStat, error) {
 	return "", nil, nil
 }
 func (s *errShard) Close() error { return nil }

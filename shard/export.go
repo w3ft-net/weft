@@ -40,14 +40,17 @@ type ExportConfig struct {
 // prefix. Attempt lets the coordinator ignore a stale manifest left by an
 // earlier attempt.
 type ExportManifest struct {
-	ShardID     string         `json:"shard_id"`
-	Attempt     int            `json:"attempt"`
-	ParquetPath string         `json:"parquet_path"`
-	Rows        int64          `json:"rows"`
-	DBBytes     int64          `json:"db_bytes"`
-	Customers   []CustomerStat `json:"customers"`
-	Started     time.Time      `json:"started"`
-	Finished    time.Time      `json:"finished"`
+	ShardID     string `json:"shard_id"`
+	Attempt     int    `json:"attempt"`
+	ParquetPath string `json:"parquet_path"`
+	Rows        int64  `json:"rows"`
+	DBBytes     int64  `json:"db_bytes"`
+	// Partitions keeps the JSON key "customers" the previous build reads and
+	// wrote: an export's manifest crosses the coordinator, which may be of
+	// either build.
+	Partitions []PartitionStat `json:"customers"`
+	Started    time.Time       `json:"started"`
+	Finished   time.Time       `json:"finished"`
 }
 
 // ManifestStore persists a manifest at key (as produced by ManifestKey).
@@ -147,7 +150,7 @@ func RunExport(ctx context.Context, cfg ExportConfig, store ManifestStore) (Expo
 		return ExportManifest{}, err
 	}
 	m.ParquetPath = path
-	m.Customers = stats
+	m.Partitions = stats
 	for _, c := range stats {
 		m.Rows += c.RowCount
 	}

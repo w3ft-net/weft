@@ -8,7 +8,7 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
 
-// TestDuckDBShard_ArchiveCapturesCustomerStats proves Archive returns
+// TestDuckDBShard_ArchiveCapturesPartitionStats proves Archive returns
 // per-customer row counts and ts spans alongside the parquet path. These
 // feed shard_archive_stats, which the retention janitor consults to
 // classify archived files without re-scanning S3 (docs/plans/retention-janitor.md).
@@ -16,7 +16,7 @@ import (
 // Timestamp assertions use spans (MaxTs−MinTs), not absolute instants, to
 // stay independent of how the DuckDB driver localizes the tz-naive
 // TIMESTAMP column on read-back. Row counts are exact.
-func TestDuckDBShard_ArchiveCapturesCustomerStats(t *testing.T) {
+func TestDuckDBShard_ArchiveCapturesPartitionStats(t *testing.T) {
 	s, err := NewDuckDBShard("stats-test", "")
 	if err != nil {
 		t.Fatal(err)
@@ -46,15 +46,15 @@ func TestDuckDBShard_ArchiveCapturesCustomerStats(t *testing.T) {
 		t.Fatal("archive returned empty path")
 	}
 
-	byCustomer := make(map[int64]CustomerStat, len(stats))
+	byCustomer := make(map[string]PartitionStat, len(stats))
 	for _, st := range stats {
-		byCustomer[st.CustomerID] = st
+		byCustomer[st.PartitionValues[0]] = st
 	}
 	if len(byCustomer) != 2 {
 		t.Fatalf("stats: got %d customers, want 2: %+v", len(byCustomer), stats)
 	}
 
-	acme := byCustomer[5]
+	acme := byCustomer["5"]
 	if acme.RowCount != 3 {
 		t.Errorf("acme RowCount = %d, want 3", acme.RowCount)
 	}
@@ -62,7 +62,7 @@ func TestDuckDBShard_ArchiveCapturesCustomerStats(t *testing.T) {
 		t.Errorf("acme span = %v, want 2h", span)
 	}
 
-	globex := byCustomer[6]
+	globex := byCustomer["6"]
 	if globex.RowCount != 2 {
 		t.Errorf("globex RowCount = %d, want 2", globex.RowCount)
 	}

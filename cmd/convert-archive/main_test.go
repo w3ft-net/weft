@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -68,7 +69,7 @@ func downloaded(t *testing.T, root, layout string) shard.ExportManifest {
 	}
 	return shard.ExportManifest{
 		ShardID: "shard-1", ParquetPath: path, Rows: 60,
-		Customers: []shard.CustomerStat{{CustomerID: 1, RowCount: 48}, {CustomerID: 2, RowCount: 12}},
+		Partitions: []shard.PartitionStat{{PartitionValues: []string{"1"}, RowCount: 48}, {PartitionValues: []string{"2"}, RowCount: 12}},
 	}
 }
 
@@ -90,7 +91,7 @@ func TestConvertArchive_ConvertsEachLayout(t *testing.T) {
 			}
 			// the copy is where the upload expects it: out mirrors the bucket
 			local := filepath.Join(out, strings.TrimPrefix(res.NewPath, "s3://bkt/"))
-			if keys, err := shard.CompareArchives(shard.LocalPathOf(m.ParquetPath, root), local, nil); err != nil || keys != 4 {
+			if keys, err := shard.CompareArchives(shard.LocalPathOf(m.ParquetPath, root), local, shape.BuildLayout(), nil); err != nil || keys != 4 {
 				t.Errorf("the copy at %s: %d keys, err %v", local, keys, err)
 			}
 		})

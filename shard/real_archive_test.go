@@ -82,7 +82,7 @@ func TestRealArchive_Conversion(t *testing.T) {
 	defer db.Close()
 
 	// Every key holds the same rows in the copy as in the original.
-	keys, err := CompareArchives(src, dst, nil)
+	keys, err := CompareArchives(src, dst, shape.Legacy(), nil)
 	if err != nil {
 		t.Errorf("the copy differs from the original: %v", err)
 	}

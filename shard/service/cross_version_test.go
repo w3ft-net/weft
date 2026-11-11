@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -127,15 +128,12 @@ func TestCrossVersion_IngestAndArchiveAgree(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Archive: %v", err)
 			}
-			stats := shard.CustomerStatsFromProto(arch.CustomerStats)
-			if len(stats) != 1 || stats[0].CustomerID != customer || stats[0].RowCount != 2 {
+			stats := shard.PartitionStatsFromProto(arch.CustomerStats)
+			if len(stats) != 1 || stats[0].LegacyCustomerID != customer || !reflect.DeepEqual(stats[0].PartitionValues, []string{"42"}) || stats[0].RowCount != 2 {
 				t.Fatalf("archive stats = %+v, want customer 42 with 2 rows", stats)
 			}
-			// What a coordinator can rely on either way is CustomerID; a new
-			// shard also says it positionally.
-			if hasValues := len(stats[0].PartitionValues) > 0; hasValues == tc.oldShard {
-				t.Errorf("partition values present = %v with oldShard = %v", hasValues, tc.oldShard)
-			}
+			// An old shard sends customer_id alone; it reads back with the same
+			// values a new shard sends.
 		})
 	}
 }

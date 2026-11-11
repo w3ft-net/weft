@@ -32,7 +32,7 @@ func New(db *store.Store, region string) *Retention {
 var _ logdb.Retention = (*Retention)(nil)
 
 // ArchiveRecorded stores an archive's stats for the janitor to classify by.
-func (r *Retention) ArchiveRecorded(shardID string, stats []shard.CustomerStat) error {
+func (r *Retention) ArchiveRecorded(shardID string, stats []shard.PartitionStat) error {
 	return Store{logdb.ShardStore{Store: r.db}}.RecordArchiveStats(shardID, stats)
 }
 

@@ -157,7 +157,7 @@ func (s *ColdShard) WithAWSAuth(creds aws.CredentialsProvider, region string) *C
 
 func (s *ColdShard) ID() string { return s.id }
 
-func (s *ColdShard) Archive(_ context.Context, _ string) (string, []CustomerStat, error) {
+func (s *ColdShard) Archive(_ context.Context, _ string) (string, []PartitionStat, error) {
 	return "", nil, fmt.Errorf("cold shard %s is already archived", s.id)
 }
 

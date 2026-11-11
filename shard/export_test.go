@@ -83,8 +83,8 @@ func TestRunExport_WritesParquetThenManifest(t *testing.T) {
 	if m.DBBytes <= 0 {
 		t.Fatalf("manifest db bytes = %d, want >0", m.DBBytes)
 	}
-	if len(m.Customers) != 2 {
-		t.Fatalf("manifest customers = %+v, want 2", m.Customers)
+	if len(m.Partitions) != 2 {
+		t.Fatalf("manifest partitions = %+v, want 2", m.Partitions)
 	}
 	if m.ParquetPath == "" || m.Finished.Before(m.Started) {
 		t.Fatalf("manifest path/timing wrong: %+v", m)
@@ -197,8 +197,8 @@ func TestOpenForExport_RefusesMissingOrEmptyDB(t *testing.T) {
 func TestExportManifest_JSONRoundTrip(t *testing.T) {
 	in := ExportManifest{
 		ShardID: "s", Attempt: 2, ParquetPath: "s3://b/p/s/**/*.parquet", Rows: 7, DBBytes: 99,
-		Customers: []CustomerStat{{CustomerID: 5, RowCount: 7}},
-		Started:   time.Unix(100, 0).UTC(), Finished: time.Unix(200, 0).UTC(),
+		Partitions: []PartitionStat{{PartitionValues: []string{"5"}, RowCount: 7}},
+		Started:    time.Unix(100, 0).UTC(), Finished: time.Unix(200, 0).UTC(),
 	}
 	b, err := json.Marshal(in)
 	if err != nil {
@@ -208,7 +208,7 @@ func TestExportManifest_JSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.ShardID != in.ShardID || out.Attempt != 2 || out.Rows != 7 || len(out.Customers) != 1 || !out.Finished.Equal(in.Finished) {
+	if out.ShardID != in.ShardID || out.Attempt != 2 || out.Rows != 7 || len(out.Partitions) != 1 || !out.Finished.Equal(in.Finished) {
 		t.Fatalf("round trip lost data: %+v", out)
 	}
 }
@@ -222,7 +222,7 @@ func TestLocalManifestStore_GetRoundTripAndMissing(t *testing.T) {
 		t.Fatalf("missing manifest: found=%v err=%v, want not found and no error", found, err)
 	}
 
-	in := ExportManifest{ShardID: "s-1", Attempt: 4, ParquetPath: "p", Rows: 9, Customers: []CustomerStat{{CustomerID: 2, RowCount: 9}}}
+	in := ExportManifest{ShardID: "s-1", Attempt: 4, ParquetPath: "p", Rows: 9, Partitions: []PartitionStat{{PartitionValues: []string{"2"}, RowCount: 9}}}
 	if err := store.Put(context.Background(), key, in); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestLocalManifestStore_GetRoundTripAndMissing(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Get after Put: found=%v err=%v", found, err)
 	}
-	if got.Attempt != 4 || got.Rows != 9 || len(got.Customers) != 1 {
+	if got.Attempt != 4 || got.Rows != 9 || len(got.Partitions) != 1 {
 		t.Fatalf("round trip lost data: %+v", got)
 	}
 

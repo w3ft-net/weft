@@ -451,7 +451,7 @@ func TestPerKey_ExportSeesEveryRow(t *testing.T) {
 			t.Errorf("minutes=%d: export wrote %d rows, want 30", minutes, n)
 		}
 	}
-	stats, err := e.customerStats(context.Background())
+	stats, err := e.archiveStats(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package shard
 
 import (
 	"fmt"
+	"github.com/graybeardcorp/weft/shape"
 	"strings"
 	"testing"
 	"time"
@@ -46,34 +47,34 @@ func TestLocalPathOf(t *testing.T) {
 }
 
 // VerifyAgainstManifest checks an archive against what its export recorded: the
-// total rows, and the rows of each customer.
+// total rows, and the rows of each partition.
 func TestVerifyAgainstManifest(t *testing.T) {
 	ds := legacyShardWith(t, keyedFixture, 6) // customers 1 (5 keys) and 2 (1 key), 6 rows a key
 	_, glob, _ := exportTo(t, ds, 1440)
 	good := ExportManifest{
 		ShardID: "s", Rows: 36,
-		Customers: []CustomerStat{{CustomerID: 1, RowCount: 30}, {CustomerID: 2, RowCount: 6}},
+		Partitions: []PartitionStat{{PartitionValues: []string{"1"}, RowCount: 30}, {PartitionValues: []string{"2"}, RowCount: 6}},
 	}
-	if err := VerifyAgainstManifest(glob, good, nil); err != nil {
+	if err := VerifyAgainstManifest(glob, good, shape.Legacy(), nil); err != nil {
 		t.Fatalf("an archive that matches its manifest failed: %v", err)
 	}
 
 	short := good
 	short.Rows = 37
-	if err := VerifyAgainstManifest(glob, short, nil); err == nil || !strings.Contains(err.Error(), "37") {
+	if err := VerifyAgainstManifest(glob, short, shape.Legacy(), nil); err == nil || !strings.Contains(err.Error(), "37") {
 		t.Errorf("a manifest claiming one more row passed or failed oddly: %v", err)
 	}
 
 	swapped := good
-	swapped.Customers = []CustomerStat{{CustomerID: 1, RowCount: 29}, {CustomerID: 2, RowCount: 7}}
-	if err := VerifyAgainstManifest(glob, swapped, nil); err == nil {
+	swapped.Partitions = []PartitionStat{{PartitionValues: []string{"1"}, RowCount: 29}, {PartitionValues: []string{"2"}, RowCount: 7}}
+	if err := VerifyAgainstManifest(glob, swapped, shape.Legacy(), nil); err == nil {
 		t.Error("a manifest with the right total but the wrong customers passed")
 	}
 
 	missing := good
-	missing.Customers = []CustomerStat{{CustomerID: 1, RowCount: 30}}
+	missing.Partitions = []PartitionStat{{PartitionValues: []string{"1"}, RowCount: 30}}
 	missing.Rows = 30
-	if err := VerifyAgainstManifest(glob, missing, nil); err == nil {
+	if err := VerifyAgainstManifest(glob, missing, shape.Legacy(), nil); err == nil {
 		t.Error("an archive holding a customer the manifest does not list passed")
 	}
 }

@@ -13,7 +13,7 @@ import (
 type Retention interface {
 	// ArchiveRecorded is told of each archive's per-partition stats. It is
 	// best effort: a failure is logged and does not fail the archive.
-	ArchiveRecorded(shardID string, stats []shard.CustomerStat) error
+	ArchiveRecorded(shardID string, stats []shard.PartitionStat) error
 	// CheckDelete is asked before an operator deletes an archived shard
 	// without force. An error wrapping ErrShardWithinRetention refuses it.
 	CheckDelete(shardID string, bucketID int64, windowEnd time.Time) error

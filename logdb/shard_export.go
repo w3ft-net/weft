@@ -302,7 +302,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 		return nil
 	}
 	if found && m.Attempt == attempt {
-		return sh.recordArchive(m.ParquetPath, m.Customers)
+		return sh.recordArchive(m.ParquetPath, m.Partitions)
 	}
 	state, err := d.Exports.InstanceState(ctx, instID)
 	if err != nil {
@@ -320,7 +320,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 		return nil
 	}
 	if found && m.Attempt == attempt {
-		return sh.recordArchive(m.ParquetPath, m.Customers)
+		return sh.recordArchive(m.ParquetPath, m.Partitions)
 	}
 	return sh.failExportAttempt(ctx, fmt.Sprintf("export instance %s ended (%s) without a manifest", instID, state))
 }

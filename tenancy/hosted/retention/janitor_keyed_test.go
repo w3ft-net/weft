@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -73,7 +74,7 @@ func keyedArchive(t *testing.T, rows []string) string {
 
 func TestExecutePurge_RewriteKeepsAKeyedArchiveKeyed(t *testing.T) {
 	path := keyedArchive(t, []string{"old|60", "new|1"})
-	stats := []shard.CustomerStat{{CustomerID: int64(payingCo), MinTs: janitorNow.Add(-days(60)), MaxTs: janitorNow.Add(-days(1)), RowCount: 2}}
+	stats := []shard.PartitionStat{{PartitionValues: []string{strconv.FormatInt(int64(payingCo), 10)}, MinTs: janitorNow.Add(-days(60)), MaxTs: janitorNow.Add(-days(1)), RowCount: 2}}
 	ss, resolver, deps, retired := purgeFixture(t, "sh-keyed", path, stats)
 
 	res, err := ss.ExecutePurge(PlannedShard{ShardID: "sh-keyed", ParquetPath: path, Disposition: DispositionRewrite}, resolver, deps)

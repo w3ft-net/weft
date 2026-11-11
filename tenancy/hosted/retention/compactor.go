@@ -22,7 +22,7 @@ import (
 // route to a Lambda in prod). See docs/plans/retention-janitor.md.
 type Compactor interface {
 	Rewrite(src, dst string, cutoffs []CustomerCutoff) (CompactResult, error)
-	CaptureStats(src string) ([]shard.CustomerStat, error)
+	CaptureStats(src string) ([]shard.PartitionStat, error)
 }
 
 // CompactRequest is the compactor Lambda's JSON request body. Op selects
@@ -54,7 +54,7 @@ func (c LocalCompactor) Rewrite(src, dst string, cutoffs []CustomerCutoff) (Comp
 	return RewriteRetention(src, dst, cutoffs, c.Layout.OrLegacy(), c.S3)
 }
 
-func (c LocalCompactor) CaptureStats(src string) ([]shard.CustomerStat, error) {
+func (c LocalCompactor) CaptureStats(src string) ([]shard.PartitionStat, error) {
 	return CaptureStats(src, c.Layout.OrLegacy(), c.S3)
 }
 
@@ -86,7 +86,7 @@ func (c *LambdaCompactor) Rewrite(src, dst string, cutoffs []CustomerCutoff) (Co
 	return c.invoke(CompactRequest{Op: CompactOpRewrite, Src: src, Dst: dst, Cutoffs: cutoffs, Layout: c.Layout})
 }
 
-func (c *LambdaCompactor) CaptureStats(src string) ([]shard.CustomerStat, error) {
+func (c *LambdaCompactor) CaptureStats(src string) ([]shard.PartitionStat, error) {
 	res, err := c.invoke(CompactRequest{Op: CompactOpCapture, Src: src, Layout: c.Layout})
 	return res.Stats, err
 }

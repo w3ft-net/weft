@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,26 +43,62 @@ func (*ShardArchiveStat) TableName() string { return "shard_archive_stats" }
 // with zero rows) clears any prior rows and adds none. The whole swap runs
 // in one transaction so a concurrent janitor read never sees the shard
 // mid-delete.
-func (s Store) RecordArchiveStats(id string, stats []shard.CustomerStat) error {
+func (s Store) RecordArchiveStats(id string, stats []shard.PartitionStat) error {
+	rows := archiveStatRows(id, stats)
 	return s.DB().Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("shard_id = ?", id).Delete(&ShardArchiveStat{}).Error; err != nil {
 			return err
 		}
-		if len(stats) == 0 {
+		if len(rows) == 0 {
 			return nil
-		}
-		rows := make([]ShardArchiveStat, len(stats))
-		for i, st := range stats {
-			rows[i] = ShardArchiveStat{
-				ShardID:  id,
-				OrgID:    store.OrgID(st.CustomerID),
-				MinTs:    st.MinTs,
-				MaxTs:    st.MaxTs,
-				RowCount: st.RowCount,
-			}
 		}
 		return tx.Create(&rows).Error
 	})
+}
+
+// orgOf is the customer a partition stat belongs to. The hosted layout has one
+// partition column, the customer, so a stat has one value that is a number. A
+// stat with no values is the group of rows an older shard counted under
+// customer 0 (its rows with no customer), which it reported by customer_id
+// alone. Any other shape of stat is not hosted's to read.
+func orgOf(st shard.PartitionStat) (store.OrgID, bool) {
+	switch len(st.PartitionValues) {
+	case 0:
+		return 0, true
+	case 1:
+		n, err := strconv.ParseInt(st.PartitionValues[0], 10, 64)
+		return store.OrgID(n), err == nil
+	}
+	return 0, false
+}
+
+// archiveStatRows are the shard's stats as shard_archive_stats rows, one a
+// customer: stats of a shape hosted can't read are skipped and logged, and two
+// that name the same customer are folded into one so the key holds.
+func archiveStatRows(shardID string, stats []shard.PartitionStat) []ShardArchiveStat {
+	var rows []ShardArchiveStat
+	at := map[store.OrgID]int{}
+	for _, st := range stats {
+		org, ok := orgOf(st)
+		if !ok {
+			weftsdk.Infof(context.Background(), "retention: shard %s: partition stat %v is not a customer's, not recorded", shardID, st.PartitionValues)
+			continue
+		}
+		if i, seen := at[org]; seen {
+			r := &rows[i]
+			r.RowCount += st.RowCount
+			if st.MinTs.Before(r.MinTs) {
+				r.MinTs = st.MinTs
+			}
+			if st.MaxTs.After(r.MaxTs) {
+				r.MaxTs = st.MaxTs
+			}
+			continue
+		}
+		at[org] = len(rows)
+		rows = append(rows, ShardArchiveStat{ShardID: shardID, OrgID: org, MinTs: st.MinTs, MaxTs: st.MaxTs, RowCount: st.RowCount})
+	}
+	return rows
 }
 
 // RetentionGCDelay is how long a superseded/retired parquet object lingers
@@ -402,7 +439,7 @@ func (s Store) retire(p PlannedShard, deps PurgeDeps, now time.Time) error {
 // at the survivors, refresh the stats, then tombstone the old object. The
 // pointer swap precedes the tombstone so a crash between them only leaks
 // the old object (GC never deletes a still-referenced path).
-func (s Store) swap(p PlannedShard, dst string, stats []shard.CustomerStat, deps PurgeDeps, now time.Time) error {
+func (s Store) swap(p PlannedShard, dst string, stats []shard.PartitionStat, deps PurgeDeps, now time.Time) error {
 	if err := s.DB().Model(&logdb.Shard{}).Where("id = ?", p.ShardID).
 		Select("ParquetPath", "LastPurgedAt").
 		Updates(&logdb.Shard{ParquetPath: dst, LastPurgedAt: &now}).Error; err != nil {

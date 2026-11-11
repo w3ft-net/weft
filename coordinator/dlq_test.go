@@ -117,7 +117,7 @@ func (s *dlqFailingShard) Query(context.Context, string, ...any) ([]*pb.ResultRo
 	return nil, nil
 }
 func (s *dlqFailingShard) QueryToSink(context.Context, string, []any, shard.RowSink) {}
-func (s *dlqFailingShard) Archive(_ context.Context, _ string) (string, []shard.CustomerStat, error) {
+func (s *dlqFailingShard) Archive(_ context.Context, _ string) (string, []shard.PartitionStat, error) {
 	return "", nil, nil
 }
 func (s *dlqFailingShard) Close() error { return nil }

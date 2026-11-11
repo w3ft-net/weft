@@ -114,7 +114,7 @@ func (s *GRPCShard) Configure(ctx context.Context, cfg *pb.ConfigureRequest) err
 
 func (s *GRPCShard) ID() string { return s.id }
 
-func (s *GRPCShard) Archive(ctx context.Context, s3Prefix string) (string, []CustomerStat, error) {
+func (s *GRPCShard) Archive(ctx context.Context, s3Prefix string) (string, []PartitionStat, error) {
 	var resp *pb.ArchiveResponse
 	err := s.call(ctx, "Archive", false, func() (bool, error) {
 		var err error
@@ -124,7 +124,7 @@ func (s *GRPCShard) Archive(ctx context.Context, s3Prefix string) (string, []Cus
 	if err != nil {
 		return "", nil, fmt.Errorf("archive shard %s: %w", s.id, err)
 	}
-	return resp.ParquetPath, CustomerStatsFromProto(resp.CustomerStats), nil
+	return resp.ParquetPath, PartitionStatsFromProto(resp.CustomerStats), nil
 }
 
 func (s *GRPCShard) Close() error {

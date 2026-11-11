@@ -86,38 +86,68 @@ type Shard interface {
 	// during export. The coordinator persists the stats to
 	// shard_archive_stats for the retention janitor. See
 	// docs/plans/retention-janitor.md.
-	Archive(ctx context.Context, s3Prefix string) (string, []CustomerStat, error)
+	Archive(ctx context.Context, s3Prefix string) (string, []PartitionStat, error)
 	Close() error
 }
 
-// CustomerStat summarizes one customer's rows within an archived shard:
-// the timestamp span and row count. Captured during Archive (while the
-// DuckDB handle is local on the shard node) and persisted to
-// shard_archive_stats so the retention janitor can classify archived
-// parquet (delete / keep / rewrite) without re-scanning S3.
-type CustomerStat struct {
-	// CustomerID is set only when the layout is the legacy one, whose single
-	// partition column is customer_id.
-	CustomerID int64 `json:"customer_id"`
+// PartitionStat summarizes one partition's rows within an archived shard: the
+// timestamp span and row count of the rows that share one combination of
+// partition column values. Captured during Archive (while the DuckDB handle is
+// local on the shard node), recorded in the export manifest, and handed to the
+// deployment's retention feature, if it has one, so it can classify archived
+// parquet without re-scanning S3.
+type PartitionStat struct {
 	// PartitionValues are the group's partition column values as text, in
-	// layout order. Absent in stats from a shard from before layouts.
-	PartitionValues []string  `json:"partition_values,omitempty"`
-	MinTs           time.Time `json:"min_ts"`
-	MaxTs           time.Time `json:"max_ts"`
-	RowCount        int64     `json:"row_count"`
+	// layout order. A missing value counts as 0 (or '' for text), as the
+	// legacy query always did.
+	PartitionValues []string `json:"partition_values"`
+	// LegacyCustomerID is the legacy layout's one partition value as a number,
+	// for a reader of the previous build, which knows no other. It is set only
+	// under that layout and goes with the tag 26 cut-over.
+	LegacyCustomerID int64     `json:"customer_id,omitempty"`
+	MinTs            time.Time `json:"min_ts"`
+	MaxTs            time.Time `json:"max_ts"`
+	RowCount         int64     `json:"row_count"`
 }
 
-// CustomerStatsToProto / CustomerStatsFromProto bridge the Go struct and
-// the ArchiveResponse wire form. Both return nil for an empty slice so
-// the proto field stays absent rather than an empty list.
-func CustomerStatsToProto(cs []CustomerStat) []*pb.CustomerArchiveStat {
+// normalize gives a stat from a shard that predates partition values, which
+// named the legacy layout's customer_id alone, the values a current one carries.
+// A stat with neither is left as it is: it is what a layout with no partition
+// columns produces, and it is not guessed to be customer 0. (An old shard's rows
+// with no customer were counted under customer 0 and read back as no values; a
+// deployment whose layout has a column treats a stat with no values as the group
+// of missing values.)
+func (s *PartitionStat) normalize() {
+	if len(s.PartitionValues) == 0 && s.LegacyCustomerID != 0 {
+		s.PartitionValues = []string{strconv.FormatInt(s.LegacyCustomerID, 10)}
+	}
+}
+
+// UnmarshalJSON reads a stat written by this build or by the previous one,
+// which carried customer_id and no partition_values.
+func (s *PartitionStat) UnmarshalJSON(b []byte) error {
+	type plain PartitionStat
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*s = PartitionStat(p)
+	s.normalize()
+	return nil
+}
+
+// PartitionStatsToProto / PartitionStatsFromProto bridge the Go struct and
+// the ArchiveResponse wire form (message CustomerArchiveStat, whose name and
+// customer_id field are kept for the previous build). Both return nil for an
+// empty slice so the proto field stays absent rather than an empty list.
+func PartitionStatsToProto(cs []PartitionStat) []*pb.CustomerArchiveStat {
 	if len(cs) == 0 {
 		return nil
 	}
 	out := make([]*pb.CustomerArchiveStat, len(cs))
 	for i, c := range cs {
 		out[i] = &pb.CustomerArchiveStat{
-			CustomerId:      c.CustomerID,
+			CustomerId:      c.LegacyCustomerID,
 			PartitionValues: c.PartitionValues,
 			MinTsUnixNs:     c.MinTs.UnixNano(),
 			MaxTsUnixNs:     c.MaxTs.UnixNano(),
@@ -127,19 +157,20 @@ func CustomerStatsToProto(cs []CustomerStat) []*pb.CustomerArchiveStat {
 	return out
 }
 
-func CustomerStatsFromProto(ps []*pb.CustomerArchiveStat) []CustomerStat {
+func PartitionStatsFromProto(ps []*pb.CustomerArchiveStat) []PartitionStat {
 	if len(ps) == 0 {
 		return nil
 	}
-	out := make([]CustomerStat, len(ps))
+	out := make([]PartitionStat, len(ps))
 	for i, p := range ps {
-		out[i] = CustomerStat{
-			CustomerID:      p.CustomerId,
-			PartitionValues: p.PartitionValues,
-			MinTs:           time.Unix(0, p.MinTsUnixNs).UTC(),
-			MaxTs:           time.Unix(0, p.MaxTsUnixNs).UTC(),
-			RowCount:        p.RowCount,
+		out[i] = PartitionStat{
+			PartitionValues:  p.PartitionValues,
+			LegacyCustomerID: p.CustomerId,
+			MinTs:            time.Unix(0, p.MinTsUnixNs).UTC(),
+			MaxTs:            time.Unix(0, p.MaxTsUnixNs).UTC(),
+			RowCount:         p.RowCount,
 		}
+		out[i].normalize()
 	}
 	return out
 }
@@ -931,7 +962,7 @@ func dirSize(root string) int64 {
 // at most one attempt at a time (ErrArchiveInFlight otherwise), and logs each
 // phase with the shard's native memory state so a stuck export is diagnosable
 // from the shard log alone.
-func (s *DuckDBShard) Archive(ctx context.Context, s3Prefix string) (string, []CustomerStat, error) {
+func (s *DuckDBShard) Archive(ctx context.Context, s3Prefix string) (string, []PartitionStat, error) {
 	return s.archive(ctx, s3Prefix, "", false)
 }
 
@@ -939,7 +970,7 @@ func (s *DuckDBShard) Archive(ctx context.Context, s3Prefix string) (string, []C
 // <prefix>/<id>[.parquet], the in-process layout; the ephemeral export passes
 // ExportOutputSuffix(attempt) so each attempt gets a location of its own. keyed
 // splits a partitioned archive by log key too (see exportParquet).
-func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string, keyed bool) (string, []CustomerStat, error) {
+func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string, keyed bool) (string, []PartitionStat, error) {
 	attempt, end, err := s.beginArchive()
 	if err != nil {
 		return "", nil, err
@@ -947,24 +978,24 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 	defer end()
 
 	start := time.Now()
-	fail := func(phase string, err error) (string, []CustomerStat, error) {
+	fail := func(phase string, err error) (string, []PartitionStat, error) {
 		weftsdk.Errorf(ctx, "archive attempt=%d failed phase=%s after=%s err=%v %s",
 			attempt, phase, time.Since(start).Round(time.Millisecond), err, s.nativeMemoryDiag(context.WithoutCancel(ctx)))
 		return "", nil, err
 	}
 	weftsdk.Infof(ctx, "archive attempt=%d start shard=%s prefix=%s %s", attempt, s.id, s3Prefix, s.nativeMemoryDiag(ctx))
 
-	// Capture per-customer stats first, off the same local handle that's
+	// Capture per-partition stats first, off the same local handle that's
 	// about to be exported. Cheaper here (one GROUP BY over local DuckDB)
 	// than a re-scan of the written parquet over S3/Lambda later.
 	statsStart := time.Now()
 	stopSampling := s.sampleArchiveMemory(attempt, "stats", archiveSampleInterval)
-	stats, err := s.customerStats(ctx)
+	stats, err := s.archiveStats(ctx)
 	stopSampling()
 	if err != nil {
-		return fail("stats", fmt.Errorf("customer stats: %w", err))
+		return fail("stats", fmt.Errorf("partition stats: %w", err))
 	}
-	weftsdk.Infof(ctx, "archive attempt=%d stats customers=%d took=%s %s",
+	weftsdk.Infof(ctx, "archive attempt=%d stats partitions=%d took=%s %s",
 		attempt, len(stats), time.Since(statsStart).Round(time.Millisecond), s.nativeMemoryDiag(ctx))
 
 	stopSampling = s.sampleArchiveMemory(attempt, "copy", archiveSampleInterval)
@@ -978,18 +1009,17 @@ func (s *DuckDBShard) archive(ctx context.Context, s3Prefix, outputSuffix string
 	return path, stats, nil
 }
 
-// customerStats summarizes each customer's row count and ts span in the
-// logs table. Drives the retention janitor's classify-without-scanning
-// pass (see docs/plans/retention-janitor.md).
-func (s *DuckDBShard) customerStats(ctx context.Context) ([]CustomerStat, error) {
+// archiveStats summarizes each partition's row count and ts span in the
+// logs table. Drives a retention feature's classify-without-scanning pass,
+// where the deployment has one (see docs/plans/retention-janitor.md).
+func (s *DuckDBShard) archiveStats(ctx context.Context) ([]PartitionStat, error) {
 	return PartitionStats(ctx, s.db, s.layout, s.source())
 }
 
-// partitionStats summarizes each group of rows in from (a table or a parquet
-// read) by its partition values: one group per combination, a missing value
-// counting as 0 (or ” for text) as the legacy query always did.
-func PartitionStats(ctx context.Context, db *sql.DB, layout shape.Layout, from string) ([]CustomerStat, error) {
-	var cols, group []string
+// partitionColumns are the SELECT expressions of a layout's partition columns,
+// each as text with a missing value counted as 0 (or ” for text), and their
+// GROUP BY positions.
+func partitionColumns(layout shape.Layout) (cols, group []string) {
 	for i, c := range layout.Columns {
 		zero := "''"
 		if c.Type == shape.TypeInt64 {
@@ -998,6 +1028,14 @@ func PartitionStats(ctx context.Context, db *sql.DB, layout shape.Layout, from s
 		cols = append(cols, fmt.Sprintf("COALESCE(CAST(%s AS VARCHAR), %s)", c.Name, zero))
 		group = append(group, fmt.Sprint(i+1))
 	}
+	return cols, group
+}
+
+// PartitionStats summarizes each group of rows in from (a table or a parquet
+// read) by its partition values: one group per combination, a missing value
+// counting as 0 (or ” for text) as the legacy query always did.
+func PartitionStats(ctx context.Context, db *sql.DB, layout shape.Layout, from string) ([]PartitionStat, error) {
+	cols, group := partitionColumns(layout)
 	query := fmt.Sprintf("SELECT %sMIN(ts), MAX(ts), COUNT(*) FROM %s", strings.Join(append(cols, ""), ", "), from)
 	if len(group) > 0 {
 		query += " GROUP BY " + strings.Join(group, ", ")
@@ -1007,9 +1045,9 @@ func PartitionStats(ctx context.Context, db *sql.DB, layout shape.Layout, from s
 		return nil, err
 	}
 	defer rows.Close()
-	var out []CustomerStat
+	var out []PartitionStat
 	for rows.Next() {
-		c := CustomerStat{PartitionValues: make([]string, len(cols))}
+		c := PartitionStat{PartitionValues: make([]string, len(cols))}
 		dest := make([]any, 0, len(cols)+3)
 		for i := range c.PartitionValues {
 			dest = append(dest, &c.PartitionValues[i])
@@ -1018,7 +1056,7 @@ func PartitionStats(ctx context.Context, db *sql.DB, layout shape.Layout, from s
 			return nil, err
 		}
 		if layout.IsLegacy() {
-			c.CustomerID, _ = strconv.ParseInt(c.PartitionValues[0], 10, 64)
+			c.LegacyCustomerID, _ = strconv.ParseInt(c.PartitionValues[0], 10, 64)
 		}
 		out = append(out, c)
 	}

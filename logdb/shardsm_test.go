@@ -1249,7 +1249,7 @@ func (f *fakeConfigurer) Dial(_ context.Context, addr string, req *pb.ConfigureR
 type fakeArchivableShard struct {
 	id           string
 	archivePath  string
-	archiveStats []shard.CustomerStat
+	archiveStats []shard.PartitionStat
 	archiveErr   error
 	archived     bool
 	closed       bool
@@ -1264,7 +1264,7 @@ func (s *fakeArchivableShard) Ingest(context.Context, []*pb.LogRow, shard.Ingest
 	return nil
 }
 func (s *fakeArchivableShard) Close() error { s.closed = true; return nil }
-func (s *fakeArchivableShard) Archive(_ context.Context, _ string) (string, []shard.CustomerStat, error) {
+func (s *fakeArchivableShard) Archive(_ context.Context, _ string) (string, []shard.PartitionStat, error) {
 	s.archived = true
 	if s.archiveErr != nil {
 		return "", nil, s.archiveErr
@@ -1378,7 +1378,7 @@ func TestShardSM_ArchiveWithNoRetentionRecordsTheArchiveAndKeepsNoStats(t *testi
 	live := &fakeArchivableShard{
 		id:           "s-test",
 		archivePath:  "s3://weft/warp/s-test.parquet",
-		archiveStats: []shard.CustomerStat{{CustomerID: 5, RowCount: 7}},
+		archiveStats: []shard.PartitionStat{{PartitionValues: []string{"5"}, RowCount: 7}},
 	}
 	sm, db, entry := makeFixtureShardSM(t, StateArchiving, func(d *ShardDeps) {
 		d.Launcher = &fakeLauncher{}
@@ -1409,9 +1409,9 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 	live := &fakeArchivableShard{
 		id:          "s-test",
 		archivePath: "s3://weft/warp/s-test.parquet",
-		archiveStats: []shard.CustomerStat{
-			{CustomerID: 5, MinTs: statMin, MaxTs: statMax, RowCount: 7},
-			{CustomerID: 6, MinTs: statMin, MaxTs: statMax, RowCount: 3},
+		archiveStats: []shard.PartitionStat{
+			{PartitionValues: []string{"5"}, MinTs: statMin, MaxTs: statMax, RowCount: 7},
+			{PartitionValues: []string{"6"}, MinTs: statMin, MaxTs: statMax, RowCount: 3},
 		},
 	}
 	told := &recordingRetention{}
@@ -1449,10 +1449,10 @@ func TestShardSM_EvaluateArchivingExportsRetiresTerminatesThenCompletes(t *testi
 	if told.shardID != "s-test" || len(told.stats) != 2 {
 		t.Fatalf("retention told of %q with %d stats, want s-test with 2: %+v", told.shardID, len(told.stats), told.stats)
 	}
-	if told.stats[0].CustomerID != 5 || told.stats[0].RowCount != 7 || !told.stats[0].MaxTs.Equal(statMax) {
+	if told.stats[0].PartitionValues[0] != "5" || told.stats[0].RowCount != 7 || !told.stats[0].MaxTs.Equal(statMax) {
 		t.Fatalf("stat[0] = %+v, want customer 5/7/%v", told.stats[0], statMax)
 	}
-	if told.stats[1].CustomerID != 6 || told.stats[1].RowCount != 3 {
+	if told.stats[1].PartitionValues[0] != "6" || told.stats[1].RowCount != 3 {
 		t.Fatalf("stat[1] = %+v, want customer 6/3", told.stats[1])
 	}
 	if rec.EBSVolumeID != "" {

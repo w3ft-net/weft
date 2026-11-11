@@ -91,7 +91,7 @@ func (s *failingShard) Query(_ context.Context, sql string, args ...any) ([]*pb.
 }
 func (s *failingShard) QueryToSink(ctx context.Context, sql string, args []any, sink shard.RowSink) {}
 func (s *failingShard) Close() error                                                                { return nil }
-func (s *failingShard) Archive(_ context.Context, _ string) (string, []shard.CustomerStat, error) {
+func (s *failingShard) Archive(_ context.Context, _ string) (string, []shard.PartitionStat, error) {
 	return "", nil, nil
 }
 

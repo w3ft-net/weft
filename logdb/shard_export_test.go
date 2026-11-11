@@ -289,7 +289,7 @@ func goodManifest(attempt int) shard.ExportManifest {
 	t0 := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	return shard.ExportManifest{
 		ShardID: "s-test", Attempt: attempt, ParquetPath: "s3://weft/warp/s-test/**/*.parquet", Rows: 10,
-		Customers: []shard.CustomerStat{{CustomerID: 5, MinTs: t0, MaxTs: t0.Add(time.Hour), RowCount: 7}, {CustomerID: 6, MinTs: t0, MaxTs: t0, RowCount: 3}},
+		Partitions: []shard.PartitionStat{{PartitionValues: []string{"5"}, MinTs: t0, MaxTs: t0.Add(time.Hour), RowCount: 7}, {PartitionValues: []string{"6"}, MinTs: t0, MaxTs: t0, RowCount: 3}},
 	}
 }
 

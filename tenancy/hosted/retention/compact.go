@@ -19,7 +19,7 @@ import (
 // shard_archive_stats for a shard archived before stats existed (or by an
 // un-rolled old shard binary), so a later pass can classify it without a
 // re-scan. Pass s3cfg for s3:// paths, nil for local.
-func CaptureStats(parquetPath string, layout shape.Layout, s3cfg *shard.S3Config) ([]shard.CustomerStat, error) {
+func CaptureStats(parquetPath string, layout shape.Layout, s3cfg *shard.S3Config) ([]shard.PartitionStat, error) {
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, fmt.Errorf("open duckdb: %w", err)
@@ -72,7 +72,7 @@ type CompactResult struct {
 	// Stats is the per-customer breakdown of the survivors, so the caller
 	// can refresh shard_archive_stats from the rewritten file without a
 	// re-scan. Empty when nothing survived.
-	Stats []shard.CustomerStat `json:"stats,omitempty"`
+	Stats []shard.PartitionStat `json:"stats,omitempty"`
 }
 
 // RewriteRetention reads the Parquet at srcPath, drops each cutoff

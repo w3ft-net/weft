@@ -31,7 +31,7 @@ func TestCompareArchives_PassesAFaithfulCopy(t *testing.T) {
 	if _, err := CopyArchive(src, dst, shape.Legacy(), nil); err != nil {
 		t.Fatal(err)
 	}
-	keys, err := CompareArchives(src, dst, nil)
+	keys, err := CompareArchives(src, dst, shape.Legacy(), nil)
 	if err != nil {
 		t.Fatalf("a faithful copy failed the comparison: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestCompareArchives_FailsACopyThatLostRows(t *testing.T) {
 	if err := os.Remove(files[0]); err != nil {
 		t.Fatal(err)
 	}
-	_, err := CompareArchives(src, dst, nil)
+	_, err := CompareArchives(src, dst, shape.Legacy(), nil)
 	if err == nil || !strings.Contains(err.Error(), "differ") {
 		t.Fatalf("a copy missing a key's rows passed or failed oddly: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestCompareArchives_FailsACopyWithAChangedLine(t *testing.T) {
 	if err := os.Rename(altered, files[0]); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CompareArchives(src, dst, nil); err == nil {
+	if _, err := CompareArchives(src, dst, shape.Legacy(), nil); err == nil {
 		t.Fatal("a copy with a changed line passed the comparison")
 	}
 }

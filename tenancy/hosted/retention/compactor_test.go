@@ -24,7 +24,7 @@ func TestLambdaCompactor_RoundTrip(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(CompactResult{
 			RowsKept: 3, RowsDeleted: 2, OutputPath: got.Dst,
-			Stats: []shard.CustomerStat{{CustomerID: 5, RowCount: 3}},
+			Stats: []shard.PartitionStat{{PartitionValues: []string{"5"}, RowCount: 3}},
 		})
 	}))
 	defer srv.Close()
@@ -47,7 +47,7 @@ func TestLambdaCompactor_RoundTrip(t *testing.T) {
 	if res.RowsKept != 3 || res.RowsDeleted != 2 || res.OutputPath != "s3://b/dst.parquet" {
 		t.Fatalf("res = %+v", res)
 	}
-	if len(res.Stats) != 1 || res.Stats[0].CustomerID != 5 {
+	if len(res.Stats) != 1 || len(res.Stats[0].PartitionValues) != 1 || res.Stats[0].PartitionValues[0] != "5" {
 		t.Fatalf("stats = %+v", res.Stats)
 	}
 }
@@ -57,7 +57,7 @@ func TestLambdaCompactor_CaptureAndErrorStatus(t *testing.T) {
 		var req CompactRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		if req.Op == CompactOpCapture {
-			json.NewEncoder(w).Encode(CompactResult{Stats: []shard.CustomerStat{{CustomerID: 11, RowCount: 9}}})
+			json.NewEncoder(w).Encode(CompactResult{Stats: []shard.PartitionStat{{PartitionValues: []string{"11"}, RowCount: 9}}})
 			return
 		}
 		http.Error(w, "boom", http.StatusInternalServerError)

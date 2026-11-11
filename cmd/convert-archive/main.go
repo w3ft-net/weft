@@ -41,20 +41,20 @@ func convertArchive(m shard.ExportManifest, root, out string, now time.Time) (co
 		return res, nil
 	}
 	src := shard.LocalPathOf(m.ParquetPath, root)
-	if err := shard.VerifyAgainstManifest(src, m, nil); err != nil {
+	if err := shard.VerifyAgainstManifest(src, m, shape.BuildLayout(), nil); err != nil {
 		return res, fmt.Errorf("the download is not the archive the manifest describes: %w", err)
 	}
 
 	newPath := shard.SizedArchivePath(m.ParquetPath, now)
 	dst := shard.LocalPathOf(newPath, out)
-	if _, err := shard.CopyArchive(src, dst, shape.Legacy(), nil); err != nil {
+	if _, err := shard.CopyArchive(src, dst, shape.BuildLayout(), nil); err != nil {
 		return res, fmt.Errorf("convert %s: %w", m.ShardID, err)
 	}
-	keys, err := shard.CompareArchives(src, dst, nil)
+	keys, err := shard.CompareArchives(src, dst, shape.BuildLayout(), nil)
 	if err != nil {
 		return res, fmt.Errorf("the copy differs from the original: %w", err)
 	}
-	if err := shard.VerifyAgainstManifest(dst, m, nil); err != nil {
+	if err := shard.VerifyAgainstManifest(dst, m, shape.BuildLayout(), nil); err != nil {
 		return res, fmt.Errorf("the copy does not match the manifest: %w", err)
 	}
 

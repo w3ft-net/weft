@@ -1,6 +1,7 @@
 package retention
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -148,7 +149,7 @@ func TestPlanRetention_EndToEnd(t *testing.T) {
 
 	// Three archived shards: paying-co fully expired, paying-co live, and
 	// an unmapped-co shard whose rows are ancient.
-	seedArchived := func(id string, stats []shard.CustomerStat) {
+	seedArchived := func(id string, stats []shard.PartitionStat) {
 		t.Helper()
 		if err := ss.SaveShard(&logdb.Shard{
 			ID: id, State: logdb.StateArchived, BucketID: bucket.ID, Tier: "small",
@@ -162,9 +163,9 @@ func TestPlanRetention_EndToEnd(t *testing.T) {
 			t.Fatalf("record stats %s: %v", id, err)
 		}
 	}
-	expired := []shard.CustomerStat{{CustomerID: int64(payingCo), MinTs: janitorNow.Add(-days(60)), MaxTs: janitorNow.Add(-days(50)), RowCount: 9}}
-	live := []shard.CustomerStat{{CustomerID: int64(payingCo), MinTs: janitorNow.Add(-days(5)), MaxTs: janitorNow.Add(-days(1)), RowCount: 9}}
-	unmapped := []shard.CustomerStat{{CustomerID: 13, MinTs: janitorNow.Add(-days(60)), MaxTs: janitorNow.Add(-days(50)), RowCount: 9}}
+	expired := []shard.PartitionStat{{PartitionValues: []string{strconv.FormatInt(int64(payingCo), 10)}, MinTs: janitorNow.Add(-days(60)), MaxTs: janitorNow.Add(-days(50)), RowCount: 9}}
+	live := []shard.PartitionStat{{PartitionValues: []string{strconv.FormatInt(int64(payingCo), 10)}, MinTs: janitorNow.Add(-days(5)), MaxTs: janitorNow.Add(-days(1)), RowCount: 9}}
+	unmapped := []shard.PartitionStat{{PartitionValues: []string{"13"}, MinTs: janitorNow.Add(-days(60)), MaxTs: janitorNow.Add(-days(50)), RowCount: 9}}
 	seedArchived("arch-expired", expired)
 	seedArchived("arch-live", live)
 	seedArchived("arch-unmapped", unmapped)

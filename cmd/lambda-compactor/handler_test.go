@@ -54,7 +54,7 @@ func TestHandleCompact_Rewrite(t *testing.T) {
 	if res.RowsKept != 1 || res.RowsDeleted != 1 || res.OutputPath != dst {
 		t.Fatalf("res = %+v, want kept 1 / deleted 1 / dst %q", res, dst)
 	}
-	if len(res.Stats) != 1 || res.Stats[0].CustomerID != 5 || res.Stats[0].RowCount != 1 {
+	if len(res.Stats) != 1 || res.Stats[0].LegacyCustomerID != 5 || res.Stats[0].RowCount != 1 {
 		t.Errorf("survivor stats = %+v, want acme/1", res.Stats)
 	}
 }

@@ -13,7 +13,7 @@ import (
 
 // archivedParquet ingests rows and archives them to a local temp dir,
 // returning the parquet path and the per-customer stats Archive captured.
-func archivedParquet(t *testing.T, rows []*pb.LogRow) (string, []shard.CustomerStat) {
+func archivedParquet(t *testing.T, rows []*pb.LogRow) (string, []shard.PartitionStat) {
 	t.Helper()
 	s, err := shard.NewDuckDBShard("purge-fix", "")
 	if err != nil {
@@ -48,7 +48,7 @@ func seedPayingCo(t *testing.T, db *store.Store) *store.Organization {
 // purgeFixture seeds a swatch customer and an ARCHIVED shard pointing at
 // path, optionally recording its archive stats. Returns the bound store,
 // the resolver, and PurgeDeps with a fake Retire that records calls.
-func purgeFixture(t *testing.T, shardID, path string, stats []shard.CustomerStat) (Store, *RetentionResolver, PurgeDeps, *[]string) {
+func purgeFixture(t *testing.T, shardID, path string, stats []shard.PartitionStat) (Store, *RetentionResolver, PurgeDeps, *[]string) {
 	t.Helper()
 	db := openTestStore(t)
 	ss := newStore(db)
