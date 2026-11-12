@@ -861,6 +861,13 @@ hosted adapter (~9d).**
   `Identity.ShellRan` (its `tour_advance` event, wire unchanged) and
   `notices.Register` (the graduation notice, `onboarding.RegisterNotice`, called
   by hosted's api and coordinator).
+- ✅ NAT route election is hosted-only (`tenancy/hosted/nat`; hosted shares one
+  NAT instance instead of paying for a gateway). The open tree names NAT
+  nowhere, tests and comments included (`TestOpenTreeIsUnawareOfNAT`). The
+  election starts from `hostedapp`'s `Start` hook, given the holder, leases,
+  region and instance id through `app.Runtime`, and registers its end with
+  `Runtime.AwaitOnExit` so a stopped coordinator gives the lease back before it
+  exits.
 - ⬜ Move the hosted `shape.yaml`, the Scoper and Authorizer, `hostedapp`,
   `hostedapi` and `retention` into the private repo. Held until the
   tenant-agnostic library repo exists; the in-tree default stays hosted until

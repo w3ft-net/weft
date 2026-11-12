@@ -25,9 +25,9 @@ func resetLease(t *testing.T, db *Store, name string) {
 
 func TestAcquireLease_FreshAcquireThenRenewBySameHolder(t *testing.T) {
 	db := testOpen(t)
-	resetLease(t, db, "nat-holder")
+	resetLease(t, db, "test-lease")
 
-	ok, err := db.AcquireLease("nat-holder", "coord-a", time.Minute)
+	ok, err := db.AcquireLease("test-lease", "coord-a", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestAcquireLease_FreshAcquireThenRenewBySameHolder(t *testing.T) {
 	}
 
 	// Same holder renewing must succeed — it already owns the lease.
-	ok, err = db.AcquireLease("nat-holder", "coord-a", time.Minute)
+	ok, err = db.AcquireLease("test-lease", "coord-a", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,13 +47,13 @@ func TestAcquireLease_FreshAcquireThenRenewBySameHolder(t *testing.T) {
 
 func TestAcquireLease_BlockedByOtherNonExpiredHolder(t *testing.T) {
 	db := testOpen(t)
-	resetLease(t, db, "nat-holder")
+	resetLease(t, db, "test-lease")
 
-	if ok, err := db.AcquireLease("nat-holder", "coord-a", time.Minute); err != nil || !ok {
+	if ok, err := db.AcquireLease("test-lease", "coord-a", time.Minute); err != nil || !ok {
 		t.Fatalf("setup acquire failed: ok=%v err=%v", ok, err)
 	}
 
-	ok, err := db.AcquireLease("nat-holder", "coord-b", time.Minute)
+	ok, err := db.AcquireLease("test-lease", "coord-b", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,15 +64,15 @@ func TestAcquireLease_BlockedByOtherNonExpiredHolder(t *testing.T) {
 
 func TestAcquireLease_TakeoverAfterExpiry(t *testing.T) {
 	db := testOpen(t)
-	resetLease(t, db, "nat-holder")
+	resetLease(t, db, "test-lease")
 
 	// Acquire with a TTL that's already in the past — simulates a lease
 	// left behind by a holder that's since died.
-	if ok, err := db.AcquireLease("nat-holder", "coord-a", -time.Second); err != nil || !ok {
+	if ok, err := db.AcquireLease("test-lease", "coord-a", -time.Second); err != nil || !ok {
 		t.Fatalf("setup acquire failed: ok=%v err=%v", ok, err)
 	}
 
-	ok, err := db.AcquireLease("nat-holder", "coord-b", time.Minute)
+	ok, err := db.AcquireLease("test-lease", "coord-b", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestAcquireLease_TakeoverAfterExpiry(t *testing.T) {
 	}
 
 	// The old holder must not be able to renew it back — coord-b owns it now.
-	ok, err = db.AcquireLease("nat-holder", "coord-a", time.Minute)
+	ok, err = db.AcquireLease("test-lease", "coord-a", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,25 +92,25 @@ func TestAcquireLease_TakeoverAfterExpiry(t *testing.T) {
 
 func TestReleaseLease_OnlyByCurrentHolder(t *testing.T) {
 	db := testOpen(t)
-	resetLease(t, db, "nat-holder")
+	resetLease(t, db, "test-lease")
 
-	if ok, err := db.AcquireLease("nat-holder", "coord-a", time.Minute); err != nil || !ok {
+	if ok, err := db.AcquireLease("test-lease", "coord-a", time.Minute); err != nil || !ok {
 		t.Fatalf("setup acquire failed: ok=%v err=%v", ok, err)
 	}
 
 	// Releasing with the wrong holder name must be a no-op — coord-a
 	// still owns it afterward.
-	if err := db.ReleaseLease("nat-holder", "coord-b"); err != nil {
+	if err := db.ReleaseLease("test-lease", "coord-b"); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := db.AcquireLease("nat-holder", "coord-b", time.Minute); err != nil || ok {
+	if ok, err := db.AcquireLease("test-lease", "coord-b", time.Minute); err != nil || ok {
 		t.Fatalf("coord-a's lease should have survived a release by the wrong holder; ok=%v err=%v", ok, err)
 	}
 
-	if err := db.ReleaseLease("nat-holder", "coord-a"); err != nil {
+	if err := db.ReleaseLease("test-lease", "coord-a"); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := db.AcquireLease("nat-holder", "coord-b", time.Minute); err != nil || !ok {
+	if ok, err := db.AcquireLease("test-lease", "coord-b", time.Minute); err != nil || !ok {
 		t.Fatalf("lease should be free after the real holder releases it; ok=%v err=%v", ok, err)
 	}
 }
@@ -201,13 +201,13 @@ func TestHeldLeases(t *testing.T) {
 // measured from, not skew itself.)
 func TestAcquireLease_ExpiryIsMeasuredOnTheDatabaseClock(t *testing.T) {
 	db := testOpen(t)
-	resetLease(t, db, "nat-holder")
+	resetLease(t, db, "test-lease")
 
-	if ok, err := db.AcquireLease("nat-holder", "coord-a", time.Hour); err != nil || !ok {
+	if ok, err := db.AcquireLease("test-lease", "coord-a", time.Hour); err != nil || !ok {
 		t.Fatalf("acquire: ok=%v err=%v", ok, err)
 	}
 	var left float64
-	if err := db.db.Raw(`SELECT EXTRACT(EPOCH FROM expires_at - clock_timestamp()) FROM leases WHERE name = 'nat-holder'`).Scan(&left).Error; err != nil {
+	if err := db.db.Raw(`SELECT EXTRACT(EPOCH FROM expires_at - clock_timestamp()) FROM leases WHERE name = 'test-lease'`).Scan(&left).Error; err != nil {
 		t.Fatal(err)
 	}
 	if left > 3600 || left < 3590 {
@@ -219,16 +219,16 @@ func TestAcquireLease_ExpiryIsMeasuredOnTheDatabaseClock(t *testing.T) {
 // out, and not before.
 func TestAcquireLease_ShortLeaseExpiresAndIsTakenOver(t *testing.T) {
 	db := testOpen(t)
-	resetLease(t, db, "nat-holder")
+	resetLease(t, db, "test-lease")
 
-	if ok, err := db.AcquireLease("nat-holder", "coord-a", 300*time.Millisecond); err != nil || !ok {
+	if ok, err := db.AcquireLease("test-lease", "coord-a", 300*time.Millisecond); err != nil || !ok {
 		t.Fatalf("acquire: ok=%v err=%v", ok, err)
 	}
-	if ok, _ := db.AcquireLease("nat-holder", "coord-b", time.Minute); ok {
+	if ok, _ := db.AcquireLease("test-lease", "coord-b", time.Minute); ok {
 		t.Fatal("coord-b took an unexpired lease")
 	}
 	time.Sleep(400 * time.Millisecond)
-	if ok, err := db.AcquireLease("nat-holder", "coord-b", time.Minute); err != nil || !ok {
+	if ok, err := db.AcquireLease("test-lease", "coord-b", time.Minute); err != nil || !ok {
 		t.Fatalf("coord-b should take the expired lease: ok=%v err=%v", ok, err)
 	}
 }

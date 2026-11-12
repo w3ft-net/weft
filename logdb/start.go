@@ -52,7 +52,7 @@ type Config struct {
 
 	// Holder identifies this process for the "shard-fsm-leader" lease
 	// (ProvisionerConfig.Holder) — the same holder id main.go's
-	// coordinatorHolder() mints for the NAT/poller/cron leases. Empty
+	// coordinatorHolder() mints for its leases. Empty
 	// disables the election: the Provisioner stays leader unconditionally,
 	// the pre-#5 single-process behavior. See
 	// docs/plans/coordinator-horizontal-scaling.md #5.

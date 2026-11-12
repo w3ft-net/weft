@@ -117,7 +117,7 @@ type ProvisionerConfig struct {
 	Retention Retention
 	// Holder identifies this process for the "shard-fsm-leader" lease (see
 	// docs/plans/coordinator-horizontal-scaling.md #5) — the same holder
-	// id main.go's coordinatorHolder() mints for the NAT/poller/cron
+	// id main.go's coordinatorHolder() mints for its other
 	// leases. Start no-ops the election when Holder is empty (or Store is
 	// nil): NewProvisioner defaults IsLeader() to true, so this process
 	// just stays leader unconditionally — the pre-#5 behavior, and the

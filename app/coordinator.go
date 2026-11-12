@@ -17,8 +17,6 @@ import (
 
 	"google.golang.org/grpc"
 
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/google/uuid"
 	weftsdk "github.com/w3ft-net/weft-go"
 
@@ -219,7 +217,7 @@ func Coordinator(a Adapter) {
 	provCtx, provCancel := context.WithCancel(context.Background())
 	defer provCancel()
 
-	// Identifies this process for the lease table (cron/NAT mutual
+	// Identifies this process for the lease table (cron mutual
 	// exclusion, and now the shard-fsm-leader lease — see
 	// docs/plans/coordinator-horizontal-scaling.md #5). Computed before
 	// logdb.Start so the provisioner's own election loop can use it too.
@@ -255,14 +253,21 @@ func Coordinator(a Adapter) {
 	}
 	coord.Provisioner = prov
 	// Stopping the process cancels provCtx, and the election loop releases the
-	// shard-fsm-leader lease in its own goroutine. Wait for that release before
+	// shard-fsm-leader lease in its own goroutine. Wait for that release (and
+	// for whatever the adapter registered through Runtime.AwaitOnExit) before
 	// main returns, or the next coordinator waits out a whole lease TTL as a
-	// follower. Deferred after provCancel, so it runs before it.
+	// follower. Deferred after the cancels it makes, so it runs before them.
+	exitWaits := []<-chan struct{}{prov.LeaderElectionDone()}
 	defer func() {
 		provCancel()
-		select {
-		case <-prov.LeaderElectionDone():
-		case <-time.After(5 * time.Second):
+		drainCancel()
+		deadline := time.After(5 * time.Second)
+		for _, done := range exitWaits {
+			select {
+			case <-done:
+			case <-deadline:
+				return
+			}
 		}
 	}()
 	coord.StartDLQReplay(drainCtx, time.Minute, prov.IsLeader)
@@ -289,7 +294,11 @@ func Coordinator(a Adapter) {
 		// The deployment's own startup work that needs the store and the
 		// running coordinator (hosted: usage metering, dev seeding).
 		if a.Start != nil {
-			a.Start(Runtime{DB: db, Coord: coord, Ctx: drainCtx, Customer: *customer})
+			a.Start(Runtime{
+				DB: db, Coord: coord, Ctx: drainCtx, Customer: *customer,
+				Holder: holder, Leases: coordn, AWSRegion: *awsRegion, InstanceID: imdsInstanceID(),
+				AwaitOnExit: func(done <-chan struct{}) { exitWaits = append(exitWaits, done) },
+			})
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -305,32 +314,6 @@ func Coordinator(a Adapter) {
 		}
 		cronExec.Start(ctx)
 
-		// NAT self-election: exactly one coordinator instance points the
-		// private subnet's 0.0.0.0/0 route at itself, via the same lease
-		// primitive as cron above. Replaces the old boot-time-only
-		// claim in infrastructure-catalog's shared user-data script,
-		// which raced on boot order — see
-		// docs/plans/coordinator-horizontal-scaling.md #1. No-ops
-		// (leaving NAT to that removed boot claim's absence, i.e. doing
-		// nothing) off-EC2 or when NAT_ROUTE_TABLE_ID isn't set — the
-		// expected shape in dev/docker.
-		if instanceID := imdsInstanceID(); instanceID != "" {
-			if routeTableID := os.Getenv("NAT_ROUTE_TABLE_ID"); routeTableID != "" {
-				awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(*awsRegion))
-				if err != nil {
-					weftsdk.Errorf(ctx, "nat: aws config load failed, not running NAT election: %v", err)
-				} else {
-					ec2Client := ec2.NewFromConfig(awsCfg)
-					eniID, err := coordinator.ResolveOwnENI(context.Background(), ec2Client, instanceID)
-					if err != nil {
-						weftsdk.Errorf(ctx, "nat: resolve own ENI failed, not running NAT election: %v", err)
-					} else {
-						elector := coordinator.NewNATElector(coordn, ec2Client, routeTableID, eniID, holder)
-						elector.Start(ctx)
-					}
-				}
-			}
-		}
 	}
 
 	// gRPC server with auth interceptors.

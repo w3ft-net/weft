@@ -20,6 +20,7 @@ import (
 	"github.com/graybeardcorp/weft/tenancy/hosted/alerts"
 	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 	"github.com/graybeardcorp/weft/tenancy/hosted/hostedapi"
+	"github.com/graybeardcorp/weft/tenancy/hosted/nat"
 	"github.com/graybeardcorp/weft/tenancy/hosted/retention"
 )
 
@@ -55,9 +56,13 @@ func Tenancy() coordinator.Adapter {
 	}
 }
 
-// start is the hosted work that needs the running coordinator: usage metering
-// and, with --customer, a dev tenant.
+// start is the hosted work that needs the running coordinator: usage metering,
+// the NAT route election and, with --customer, a dev tenant.
 func start(rt app.Runtime) {
+	// Of the coordinators running, one points the private subnet's default
+	// route at itself.
+	nat.Start(rt)
+
 	// Start usage metering flush (every 30 seconds).
 	rt.Coord.StartUsageFlush(rt.Ctx, rt.DB)
 

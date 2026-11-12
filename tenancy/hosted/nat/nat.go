@@ -1,14 +1,22 @@
-package coordinator
+// Package nat is hosted weft's NAT route election: of the coordinators running,
+// one at a time points the private subnet's default route at its own ENI. It
+// exists because hosted shares one NAT instance among its coordinators instead
+// of paying for a NAT gateway; nothing outside tenancy/hosted knows about it.
+package nat
 
 import (
 	"context"
 	"fmt"
-	weftsdk "github.com/w3ft-net/weft-go"
+	"os"
 	"time"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 
+	"github.com/graybeardcorp/weft/app"
 	"github.com/graybeardcorp/weft/coordination"
 )
 
@@ -17,15 +25,15 @@ import (
 // docs/plans/coordinator-horizontal-scaling.md #1.
 const natLeaseName = "nat-holder"
 
-// natEC2Client is the narrow EC2 surface NATElector needs — narrow so
+// EC2Client is the narrow EC2 surface Elector needs — narrow so
 // tests don't have to stand up a whole EC2 client.
-type natEC2Client interface {
+type EC2Client interface {
 	DescribeInstances(ctx context.Context, in *ec2.DescribeInstancesInput, opts ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 	ReplaceRoute(ctx context.Context, in *ec2.ReplaceRouteInput, opts ...func(*ec2.Options)) (*ec2.ReplaceRouteOutput, error)
 	CreateRoute(ctx context.Context, in *ec2.CreateRouteInput, opts ...func(*ec2.Options)) (*ec2.CreateRouteOutput, error)
 }
 
-// NATElector runs the coordinator side of NAT self-election: exactly one
+// Elector runs the coordinator side of NAT self-election: exactly one
 // coordinator instance holds the "nat-holder" lease at a time, and only
 // the holder points the private subnet's route table at its own ENI.
 //
@@ -44,18 +52,56 @@ type natEC2Client interface {
 // fleet-cycling deploy (the new instance can't out-race a still-healthy
 // old one). So there's no separate anti-flap logic here — the lease
 // primitive already provides it.
-type NATElector struct {
+type Elector struct {
 	leases       coordination.Leases
-	ec2          natEC2Client
+	ec2          EC2Client
 	routeTableID string
 	eniID        string
 	holder       string
+	done         chan struct{}
 }
 
-// NewNATElector builds a NATElector. routeTableID and eniID must both be
+// Start is the hosted coordinator's NAT election, from what the running
+// process gives it. It does nothing off EC2 (no instance id) or when
+// NAT_ROUTE_TABLE_ID is unset, the expected shape in dev and docker. It
+// registers the election's end with the process, so a stopped coordinator
+// gives the lease back before it exits.
+func Start(rt app.Runtime) {
+	routeTableID := os.Getenv("NAT_ROUTE_TABLE_ID")
+	if rt.InstanceID == "" || routeTableID == "" {
+		return
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(rt.AWSRegion))
+	if err != nil {
+		weftsdk.Errorf(rt.Ctx, "nat: aws config load failed, not running NAT election: %v", err)
+		return
+	}
+	ec2Client := ec2.NewFromConfig(awsCfg)
+	eniID, err := ResolveOwnENI(context.Background(), ec2Client, rt.InstanceID)
+	if err != nil {
+		weftsdk.Errorf(rt.Ctx, "nat: resolve own ENI failed, not running NAT election: %v", err)
+		return
+	}
+	e := New(rt.Leases, ec2Client, routeTableID, eniID, rt.Holder)
+	e.Start(rt.Ctx)
+	rt.AwaitOnExit(e.Done())
+}
+
+// Done is closed once the election loop has stopped and given the lease back.
+// It is already closed when no loop runs.
+func (e *Elector) Done() <-chan struct{} {
+	if e.done == nil {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	return e.done
+}
+
+// New builds an Elector. routeTableID and eniID must both be
 // non-empty for Start to actually run the election loop — see Start.
-func NewNATElector(l coordination.Leases, ec2Client natEC2Client, routeTableID, eniID, holder string) *NATElector {
-	return &NATElector{
+func New(l coordination.Leases, ec2Client EC2Client, routeTableID, eniID, holder string) *Elector {
+	return &Elector{
 		leases:       l,
 		ec2:          ec2Client,
 		routeTableID: routeTableID,
@@ -68,15 +114,17 @@ func NewNATElector(l coordination.Leases, ec2Client natEC2Client, routeTableID, 
 // canceled. No-ops (logging why) if routeTableID or eniID is empty —
 // the expected shape off-EC2 (local/docker dev), where there's no real
 // NAT route table to claim.
-func (e *NATElector) Start(ctx context.Context) {
+func (e *Elector) Start(ctx context.Context) {
 	if e.routeTableID == "" || e.eniID == "" {
 		weftsdk.Infof(ctx, "nat: route table id or own ENI id unknown — not running NAT election (expected off-EC2)")
 		return
 	}
+	e.done = make(chan struct{})
 	go e.run(ctx)
 }
 
-func (e *NATElector) run(ctx context.Context) {
+func (e *Elector) run(ctx context.Context) {
+	defer close(e.done)
 	var amHolder bool
 	e.tick(ctx, &amHolder)
 
@@ -109,7 +157,7 @@ func (e *NATElector) run(ctx context.Context) {
 // believing they hold the same lease would be actively harmful), the
 // thing tick guards here is external AWS route state — safe to leave
 // alone and retry next tick rather than react to a single failed DB call.
-func (e *NATElector) tick(ctx context.Context, amHolder *bool) {
+func (e *Elector) tick(ctx context.Context, amHolder *bool) {
 	ok, err := e.leases.AcquireLease(natLeaseName, e.holder, coordination.LeaseTTL)
 	if err != nil {
 		weftsdk.Errorf(ctx, "nat: lease acquire error: %v", err)
@@ -131,7 +179,7 @@ func (e *NATElector) tick(ctx context.Context, amHolder *bool) {
 	}
 }
 
-func (e *NATElector) claimRoute(ctx context.Context) error {
+func (e *Elector) claimRoute(ctx context.Context) error {
 	_, err := e.ec2.ReplaceRoute(ctx, &ec2.ReplaceRouteInput{
 		RouteTableId:         aws.String(e.routeTableID),
 		DestinationCidrBlock: aws.String("0.0.0.0/0"),
@@ -156,7 +204,7 @@ func (e *NATElector) claimRoute(ctx context.Context) error {
 // ResolveOwnENI looks up the primary ENI of the given instance, matching
 // the lookup the old bash boot claim used
 // (NetworkInterfaces[0].NetworkInterfaceId).
-func ResolveOwnENI(ctx context.Context, ec2Client natEC2Client, instanceID string) (string, error) {
+func ResolveOwnENI(ctx context.Context, ec2Client EC2Client, instanceID string) (string, error) {
 	out, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: []string{instanceID},
 	})

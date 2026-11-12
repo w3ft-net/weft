@@ -1,6 +1,6 @@
 //go:build !defaultshape
 
-package coordinator
+package nat
 
 import (
 	"context"
@@ -67,17 +67,17 @@ func (f *fakeNATEC2) calls() (replace, create int) {
 	return f.replaceCall, f.createCall
 }
 
-// TestNATElector_AcquiresLeaseAndClaimsRouteOnce confirms the core
+// TestElector_AcquiresLeaseAndClaimsRouteOnce confirms the core
 // contract: winning the lease claims the route exactly once, and
 // renewing an already-held lease on later ticks does not re-claim it.
-func TestNATElector_AcquiresLeaseAndClaimsRouteOnce(t *testing.T) {
+func TestElector_AcquiresLeaseAndClaimsRouteOnce(t *testing.T) {
 	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
 	resetNATLease(t, db)
 	ec2c := &fakeNATEC2{}
-	e := NewNATElector(db, ec2c, "rtb-123", "eni-abc", "coord-a")
+	e := New(db, ec2c, "rtb-123", "eni-abc", "coord-a")
 
 	var amHolder bool
 	e.tick(context.Background(), &amHolder)
@@ -100,17 +100,17 @@ func TestNATElector_AcquiresLeaseAndClaimsRouteOnce(t *testing.T) {
 	}
 }
 
-// TestNATElector_FallsBackToCreateRoute confirms a ReplaceRoute failure
+// TestElector_FallsBackToCreateRoute confirms a ReplaceRoute failure
 // (fresh route table with no existing 0.0.0.0/0 route) falls back to
 // CreateRoute, matching the old bash claim's behavior.
-func TestNATElector_FallsBackToCreateRoute(t *testing.T) {
+func TestElector_FallsBackToCreateRoute(t *testing.T) {
 	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
 	resetNATLease(t, db)
 	ec2c := &fakeNATEC2{replaceErr: errors.New("InvalidRoute.NotFound")}
-	e := NewNATElector(db, ec2c, "rtb-123", "eni-abc", "coord-a")
+	e := New(db, ec2c, "rtb-123", "eni-abc", "coord-a")
 
 	var amHolder bool
 	e.tick(context.Background(), &amHolder)
@@ -123,10 +123,10 @@ func TestNATElector_FallsBackToCreateRoute(t *testing.T) {
 	}
 }
 
-// TestNATElector_DoesNotChallengeHealthyIncumbent confirms the lease's
+// TestElector_DoesNotChallengeHealthyIncumbent confirms the lease's
 // self-renewal bias — the primitive this design leans on instead of
-// building separate anti-flap logic (see NATElector's doc comment).
-func TestNATElector_DoesNotChallengeHealthyIncumbent(t *testing.T) {
+// building separate anti-flap logic (see Elector's doc comment).
+func TestElector_DoesNotChallengeHealthyIncumbent(t *testing.T) {
 	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
@@ -134,7 +134,7 @@ func TestNATElector_DoesNotChallengeHealthyIncumbent(t *testing.T) {
 
 	resetNATLease(t, db)
 	incumbent := &fakeNATEC2{}
-	a := NewNATElector(db, incumbent, "rtb-123", "eni-incumbent", "coord-a")
+	a := New(db, incumbent, "rtb-123", "eni-incumbent", "coord-a")
 	var aHolds bool
 	a.tick(context.Background(), &aHolds)
 	if !aHolds {
@@ -142,7 +142,7 @@ func TestNATElector_DoesNotChallengeHealthyIncumbent(t *testing.T) {
 	}
 
 	challenger := &fakeNATEC2{}
-	b := NewNATElector(db, challenger, "rtb-123", "eni-challenger", "coord-b")
+	b := New(db, challenger, "rtb-123", "eni-challenger", "coord-b")
 	var bHolds bool
 	b.tick(context.Background(), &bHolds)
 	if bHolds {
@@ -160,10 +160,10 @@ func TestNATElector_DoesNotChallengeHealthyIncumbent(t *testing.T) {
 	}
 }
 
-// TestNATElector_ChallengerTakesOverAfterIncumbentExpiry confirms
+// TestElector_ChallengerTakesOverAfterIncumbentExpiry confirms
 // failover actually happens once the incumbent stops renewing —
 // the flip side of the anti-flap guarantee above.
-func TestNATElector_ChallengerTakesOverAfterIncumbentExpiry(t *testing.T) {
+func TestElector_ChallengerTakesOverAfterIncumbentExpiry(t *testing.T) {
 	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
@@ -177,7 +177,7 @@ func TestNATElector_ChallengerTakesOverAfterIncumbentExpiry(t *testing.T) {
 	}
 
 	challenger := &fakeNATEC2{}
-	b := NewNATElector(db, challenger, "rtb-123", "eni-challenger", "coord-b")
+	b := New(db, challenger, "rtb-123", "eni-challenger", "coord-b")
 	var bHolds bool
 	b.tick(context.Background(), &bHolds)
 	if !bHolds {

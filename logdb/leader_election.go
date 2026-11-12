@@ -12,8 +12,7 @@ import (
 // coordinator instance drives shard/bucket FSM convergence
 // (evaluateStateMachines) and FSM-transition-firing heartbeat handling
 // (promoteOnHeartbeat). See docs/plans/coordinator-horizontal-scaling.md
-// #5 and coordinator/nat.go's natLeaseName for the sibling lease this one
-// is modeled on.
+// #5.
 const shardFSMLeaseName = "shard-fsm-leader"
 
 // progressStaleFactor is how many PollIntervals of no observed convergence
@@ -84,10 +83,10 @@ func (p *Provisioner) LeaderElectionDone() <-chan struct{} {
 	return p.electionDone
 }
 
-// runLeaderElection is the election loop: continuous-retry, same shape as
-// coordinator/nat.go's NATElector.run — not poller/cron's try-once-at-boot
-// AcquireAndHold, since a non-leader has to keep retrying every tick in
-// case the leader dies or gives up the lease (progressStale below).
+// runLeaderElection is the election loop: continuous-retry, not
+// coordination.AcquireAndHold's try-once-at-boot, since a non-leader has to
+// keep retrying every tick in case the leader dies or gives up the lease
+// (progressStale below).
 func (p *Provisioner) runLeaderElection(ctx context.Context) {
 	defer close(p.electionDone)
 	p.leaderTick()

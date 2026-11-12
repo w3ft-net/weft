@@ -129,7 +129,7 @@ func TestIngestStream_NoGoroutineLeak(t *testing.T) {
 
 // abandonedStream models the dominant prod leak: a client opens an
 // ingest stream, ships a batch, then goes silent WITHOUT half-closing
-// (process gone, NAT/idle drop, or a client that opens a fresh stream
+// (process gone, a middlebox dropping an idle connection, or a client that opens a fresh stream
 // per batch and forgets the old one). Recv() returns the seeded rows
 // and then blocks until block is closed — which, in real gRPC, is what
 // happens when the handler returns and the transport tears the stream

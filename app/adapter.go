@@ -66,6 +66,18 @@ type Runtime struct {
 	Ctx context.Context
 	// Customer is the --customer flag: a fallback tenant for dev and docker.
 	Customer string
+
+	// Holder identifies this process in the lease table, and Leases is where
+	// leases are taken. AWSRegion is the --aws-region flag, and InstanceID the
+	// EC2 instance id (empty off EC2).
+	Holder     string
+	Leases     coordination.Leases
+	AWSRegion  string
+	InstanceID string
+	// AwaitOnExit registers background work whose end the process waits for
+	// (for at most a few seconds) when it stops, after Ctx is cancelled: an
+	// election that gives its lease back, say. done is closed when it has ended.
+	AwaitOnExit func(done <-chan struct{})
 }
 
 func (a Adapter) validate() error {

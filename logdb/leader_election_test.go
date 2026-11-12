@@ -52,8 +52,7 @@ func TestLeaderTick_AcquiresLeaseAndBecomesLeader(t *testing.T) {
 	}
 }
 
-// TestLeaderTick_DoesNotChallengeHealthyIncumbent mirrors
-// TestNATElector_DoesNotChallengeHealthyIncumbent: the lease's self-renewal
+// TestLeaderTick_DoesNotChallengeHealthyIncumbent: the lease's self-renewal
 // bias means a challenger doesn't win while the incumbent keeps renewing
 // and making progress.
 func TestLeaderTick_DoesNotChallengeHealthyIncumbent(t *testing.T) {
@@ -84,9 +83,8 @@ func TestLeaderTick_DoesNotChallengeHealthyIncumbent(t *testing.T) {
 	}
 }
 
-// TestLeaderTick_ChallengerTakesOverAfterIncumbentExpiry mirrors
-// TestNATElector_ChallengerTakesOverAfterIncumbentExpiry: failover
-// actually happens once the incumbent stops renewing.
+// TestLeaderTick_ChallengerTakesOverAfterIncumbentExpiry: failover actually
+// happens once the incumbent stops renewing.
 func TestLeaderTick_ChallengerTakesOverAfterIncumbentExpiry(t *testing.T) {
 	db, err := store.Open(store.TestDSN(t))
 	if err != nil {
