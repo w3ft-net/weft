@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -10,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // seedPendingSource creates a namespace and a final-sample (StatusPending,

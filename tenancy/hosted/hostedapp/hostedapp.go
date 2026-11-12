@@ -10,13 +10,15 @@ import (
 	"github.com/graybeardcorp/saaskit/email"
 
 	"github.com/graybeardcorp/weft/app"
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/coordinator"
+	"github.com/graybeardcorp/weft/coordinator/onboarding"
 	"github.com/graybeardcorp/weft/identity"
 	"github.com/graybeardcorp/weft/logdb"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy"
 	"github.com/graybeardcorp/weft/tenancy/hosted"
+	"github.com/graybeardcorp/weft/tenancy/hosted/alerts"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 	"github.com/graybeardcorp/weft/tenancy/hosted/hostedapi"
 	"github.com/graybeardcorp/weft/tenancy/hosted/retention"
 )
@@ -25,11 +27,13 @@ import (
 // teams and permissions decide what they may do, sessions come from the JWT,
 // and archives expire by plan.
 func Coordinator() app.Adapter {
+	// The shell renders the tour's graduation notice like any other.
+	onboarding.RegisterNotice()
 	return app.Adapter{
 		Coordinator: Tenancy(),
 		Identity:    Identity{},
 		Notifier: func(db *store.Store) *coordinator.Notifier {
-			return coordinator.NewNotifier(db, email.ConfigFromEnv())
+			return coordinator.NewNotifier(db, alerts.Targets(db, email.ConfigFromEnv())...)
 		},
 		Retention: func(db *store.Store, region string) logdb.Retention {
 			return retention.New(db, region)

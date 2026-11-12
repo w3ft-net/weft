@@ -40,8 +40,8 @@ func TestLs_RejectOutsideLog(t *testing.T) {
 		"/bin/billing-job",
 		"/cron.d/nightly",
 		"/log/../etc",
-		"etc",        // relative
-		"../../etc",  // dotdot
+		"etc",       // relative
+		"../../etc", // dotdot
 	}
 	for _, p := range cases {
 		t.Run(p, func(t *testing.T) {

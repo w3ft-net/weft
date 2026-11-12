@@ -12,6 +12,7 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/alerting"
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy"
@@ -80,6 +81,12 @@ func WithTenancy(t tenancy.Adapter) Option {
 			c.Actor = t.ActorOf(c.OrgID, "")
 		}
 	}
+}
+
+// WithAlertKinds sets the alert destination kinds /etc/notify.yaml may name
+// when it is saved. Without it, only the core's.
+func WithAlertKinds(r *alerting.Registry) Option {
+	return func(c *mounts.Config) { c.AlertKinds = r }
 }
 
 // WithUser makes the mounts act as a member of the org. What they may read

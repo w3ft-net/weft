@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -8,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // A still-filling sample must be watchable: both the pending list and the

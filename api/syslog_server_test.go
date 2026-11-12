@@ -1,15 +1,18 @@
+//go:build !defaultshape
+
 package api
 
 import (
 	"context"
 	"fmt"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net"
 	"os"
 	"sync"
 	"testing"
 	"time"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

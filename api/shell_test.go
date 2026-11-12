@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -17,9 +19,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/graybeardcorp/weft/auth"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // fakeCoord stands in for the coordinator's Execute RPC. It records the

@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -8,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/internal/logtest"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // TestAccessLogAttributesUser pins the AccessLog identity fix.
@@ -36,7 +38,7 @@ func TestAccessLogAttributesUser(t *testing.T) {
 
 	// Authenticated request → must attribute the user id.
 	buf.Reset()
-	req := httptest.NewRequest("GET", "/api/auth/me", nil)
+	req := httptest.NewRequest("GET", "/api/functions", nil)
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	authedLine := buf.String()
@@ -50,7 +52,7 @@ func TestAccessLogAttributesUser(t *testing.T) {
 
 	// Unauthenticated request → must remain anon.
 	buf.Reset()
-	req = httptest.NewRequest("GET", "/api/auth/me", nil)
+	req = httptest.NewRequest("GET", "/api/functions", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if anonLine := buf.String(); !strings.Contains(anonLine, "user=anon") {
 		t.Errorf("unauthenticated request should log user=anon, got:\n%s", anonLine)

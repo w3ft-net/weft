@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/graybeardcorp/weft/alerting"
 	"io"
 	"slices"
 	"sort"
@@ -1539,7 +1540,7 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		// untouched, so the nil-seed callers (cron/watch, cwd "/") are
 		// unaffected. interp.DirStack().Cwd is read lazily, so an in-line
 		// `cd` within the same pipeline is tracked too.
-		interp.SetFS(bash.NewCwdFS(shellfs.New(c.Store, custID, logServices, append([]shellfs.Option{shellfs.WithTenancy(c.mountTenancy())}, opts...)...), interp.DirStack().Cwd, ""))
+		interp.SetFS(bash.NewCwdFS(shellfs.New(c.Store, custID, logServices, append([]shellfs.Option{shellfs.WithTenancy(c.mountTenancy()), shellfs.WithAlertKinds(c.alertKinds())}, opts...)...), interp.DirStack().Cwd, ""))
 
 		wf := &WeftFuncs{Store: c.Store, OrgID: custID, Ctx: context.WithoutCancel(ctx), Scoper: c.Scoper}
 		RegisterWeftCommands(interp, wf)
@@ -1624,4 +1625,14 @@ func seedDirStack(ds bash.DirStack, stack []string) {
 	for i := len(stack) - 2; i >= 0; i-- {
 		_ = ds.Push(stack[i])
 	}
+}
+
+// alertKinds are the kinds the coordinator's notifier sends, which a save of
+// /etc/notify.yaml from the shell is checked against. Nil (no notifier, or one
+// that isn't the stock Notifier) leaves the mounts to the core's kinds.
+func (c *Coordinator) alertKinds() *alerting.Registry {
+	if n, ok := c.Notifier.(*Notifier); ok {
+		return n.Targets
+	}
+	return nil
 }

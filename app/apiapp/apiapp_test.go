@@ -36,12 +36,17 @@ func TestFlags_ParseIntoTheFields(t *testing.T) {
 	}
 }
 
-// An api that cannot check tokens must not start.
-func TestAdapter_RequiresAJWTSecret(t *testing.T) {
-	if err := (Adapter{}).validate(); err == nil || !strings.Contains(err.Error(), "JWTSecret") {
-		t.Fatalf("validate() = %v, want an error naming JWTSecret", err)
+// With no identity of its own an api runs the open one, which needs its
+// credential: without it the api must not start.
+func TestAdapter_OpenIdentityRefusesToStartUnconfigured(t *testing.T) {
+	t.Setenv("WEFT_BASIC_AUTH_USER", "")
+	t.Setenv("WEFT_BASIC_AUTH_PASSWORD", "")
+	if _, err := (Adapter{}).identity(nil); err == nil || !strings.Contains(err.Error(), "WEFT_BASIC_AUTH_USER") {
+		t.Fatalf("identity() = %v, want an error naming the credential", err)
 	}
-	if err := (Adapter{JWTSecret: func() string { return "s" }}).validate(); err != nil {
-		t.Errorf("an adapter with a secret was refused: %v", err)
+	t.Setenv("WEFT_BASIC_AUTH_USER", "u")
+	t.Setenv("WEFT_BASIC_AUTH_PASSWORD", "p")
+	if _, err := (Adapter{}).identity(nil); err != nil {
+		t.Errorf("a configured open identity was refused: %v", err)
 	}
 }

@@ -307,10 +307,10 @@ func readCustomer(cb js.Value) string {
 // reportCompletions forwards every completed shell line to the host as
 // commandCompleted(line, exitCode). The core publishes CommandCompleted
 // for each line — inline builtins, dispatched pipelines (when their result
-// arrives) and failures alike — so the host can track progress (the
-// onboarding tour) from what the user actually ran and whether it
-// succeeded, rather than inferring it from the pipeline text the server
-// sees. Called once per core, for the single-pane shell and every pane.
+// arrives) and failures alike — so the host can track progress from what
+// the user actually ran and whether it succeeded, rather than inferring it
+// from the pipeline text the server sees. Called once per core, for the
+// single-pane shell and every pane.
 func reportCompletions(core *shellcore.ShellCore, cb js.Value) {
 	ch := shellcore.Subscribe[shellcore.CommandCompleted](core)
 	go func() {

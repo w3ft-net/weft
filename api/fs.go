@@ -11,23 +11,23 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/identity"
 	"github.com/graybeardcorp/weft/mounts"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shellfs"
 	"github.com/graybeardcorp/weft/store"
-	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // shellFS is the filesystem the shell writes through, bound to this request's
 // session: the same mounts, the same group checks, the same plan limits. Every
 // route that changes /bin, /cron.d or /etc goes through it instead of calling
 // the store, so there is one implementation of who may write what.
-func (s *Server) shellFS(r *http.Request, session *auth.Session, logServices []string) *shellfs.ShellFS {
+func (s *Server) shellFS(r *http.Request, session Session, logServices []string) *shellfs.ShellFS {
 	return shellfs.New(s.store, session.Org(), logServices,
-		shellfs.WithTenancy(hosted.NewAdapter(s.store)),
-		shellfs.WithUser(session.UserID),
-		shellfs.WithTier(session.Tier),
+		shellfs.WithTenancy(s.tenancy),
+		shellfs.WithAlertKinds(s.alertKinds),
+		shellfs.WithUser(session.UserID()),
+		shellfs.WithTier(identity.TierOf(session)),
 		shellfs.WithContext(r.Context()))
 }
 

@@ -14,7 +14,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -33,7 +32,7 @@ const explainUsage = "usage: explain <pipeline>\n  say how much of the pipeline 
 // stages return (countRetrieved), as the caller's own query, so a source the
 // caller can't read answers as it does for a run. Returns handled=false for
 // any other line.
-func (s *Server) maybeHandleExplain(r *http.Request, session *auth.Session, line, cwd string, dirStack []string, start, end time.Time) (handled bool, out string, err error) {
+func (s *Server) maybeHandleExplain(r *http.Request, session Session, line, cwd string, dirStack []string, start, end time.Time) (handled bool, out string, err error) {
 	rest, ok := strings.CutPrefix(strings.TrimSpace(line), "explain")
 	if !ok || (rest != "" && rest[0] != ' ' && rest[0] != '\t') {
 		return false, "", nil

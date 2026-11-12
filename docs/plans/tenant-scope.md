@@ -12,10 +12,10 @@ done, and every reader of the session's org goes through `Session.Actor()`
 (`Session.Org()`). Phase 3 is in.
 Phase 4 is mostly in, on branch `worktree-shard-layout-wire` (unpushed, about
 40 commits; weft 0.13.0 and weftd 0.34.0 bump the wire). The generator,
-shape-agnostic shards, planner, coordinator and the `app` split are done and
-build under the default shape (`make test-default-shape`, a CI job). Still
-open: the `api/` route split, the tag 26 cut-over, and moving the hosted
-adapter to its own repo. See "Phase 4: where it stands". Phases 5 and 6 are
+shape-agnostic shards, planner, coordinator, the `app` split and the `api/`
+route split are done and build under the default shape (`make
+test-default-shape`, a CI job). Still open: the tag 26 cut-over, moving the
+hosted adapter to its own repo, and an open-source coordinator main. See "Phase 4: where it stands". Phases 5 and 6 are
 not started.
 
 ## Why
@@ -846,6 +846,21 @@ hosted adapter (~9d).**
 - ✅ `cmd/coordinator` and `cmd/api` are thin mains over `app.Coordinator` and
   `apiapp.API` with hosted adapters (`hostedapp`, `hostedapi`). The flags,
   help output and behavior are unchanged.
+- ✅ The `api/` route split: `api` and `app/apiapp` build and test under the
+  default shape, import no `tenancy/hosted`, and `auth/` moved to
+  `tenancy/hosted/auth`. The core handlers read a `Session`
+  (`identity.Caller`: org, actor, user) and nothing else of who is calling; the
+  plan tier is the optional `identity.Tiered`, the shell's subscription gate is
+  `Identity.Entitled`, the run hook `Identity.ShellRan` (a deployment's extra
+  stream event, an opaque JSON object), and what the coordinator needs to
+  authenticate the caller `Identity.Forward`.
+- ✅ The guided tour is compiled out of core. `api`, `shell`, `shellfs`,
+  `mounts`, `alerting`, `identity`, `app`, `notices`, `tenancy/single` and the
+  CLI/wasm mains carry no tour code or word, and import no
+  `coordinator/onboarding` (`TestCoreCarriesNoTour`). Hosted adds it through
+  `Identity.ShellRan` (its `tour_advance` event, wire unchanged) and
+  `notices.Register` (the graduation notice, `onboarding.RegisterNotice`, called
+  by hosted's api and coordinator).
 - ⬜ Move the hosted `shape.yaml`, the Scoper and Authorizer, `hostedapp`,
   `hostedapi` and `retention` into the private repo. Held until the
   tenant-agnostic library repo exists; the in-tree default stays hosted until
@@ -881,10 +896,26 @@ partition paths. A golden test pins that.
   back to the inline re-plan. A rolled-back coordinator resolves
   `ArgPartition` to an empty string, so the cast fails and it falls back, at
   some latency.
-- `api/` splits by route: query, ingest, sources, scripts, crons and
-  dashboards stay core behind the Identity adapter; signup, billing, teams,
-  integrations, usage, admin and shared links move to hosted and register
-  through a seam in the bootstrap.
+- `api/` splits by route (done). Query, ingest, sources, scripts, crons,
+  dashboards, namespaces, `/api/notify`, webhook secrets
+  (`/api/integrations/webhook-secrets*`, the webhook target's credentials) and
+  namespace tokens (`/api/tokens*`, gated by the core
+  `ActionManageNamespaceTokens`) stay core. Everything a user
+  signs in with is pluggable behind `api.Identity`; billing, admin,
+  integrations, teams, permissions, notices, shared links and the onboarding
+  tour moved to hosted and register through `api.Routes`. A route belongs to
+  core when a core action gates it, to hosted when a hosted one does.
+- The open build ships no login routes. Its identity (`tenancy/single`,
+  `singleapi`) is one HTTP Basic credential from `WEFT_BASIC_AUTH_USER` and
+  `WEFT_BASIC_AUTH_PASSWORD`, one actor, and it **refuses to start** without
+  them. The api forwards the credential to the coordinator, whose open
+  `identity.Identity` (`single.Basic.Open`) checks it itself.
+- Alerting: the contract and the cgo-free core targets (webhook, email over
+  SMTP from `EMAIL_*`) are the new `alerting` package, so the api process can
+  validate `/etc/notify.yaml` on save without importing the coordinator (which
+  links DuckDB through `shard`). Slack and PagerDuty are hosted
+  (`tenancy/hosted/alerts`). A kind with no registered target is an error at
+  send time and at save.
 - Done means: CI generates the default shape, builds, and runs the packages
   that don't need Postgres. `make test-default-shape` is that job's list and
   grows with each step.
@@ -910,18 +941,29 @@ partition paths. A golden test pins that.
 
 **Open:**
 
-- **`api/` route split.** `api`, `app/apiapp` and `auth` still name the tenant
-  and don't build under the default shape. `ingest` stamps tag 26 from
-  `schema.CustomerID`, set in `api/adapter.go`.
+- **Tag 26 stamp.** `ingest` still stamps tag 26 from `schema.CustomerID`,
+  set in `api/adapter.go`; it goes with the cut-over below.
+- **A store row for the open build.** The open identity's org handle is 0 and
+  the store is still keyed by org, so org-scoped store reads (sources, crons,
+  namespaces) find no rows until Phase 6 interfaces the store or the open build
+  seeds a default org.
 - **Tag 26 cut-over.** Delete the stamp in the ingest stream handler and mark
   26 `reserved`, only once every shard and coordinator runs the new build,
   rollbacks included. The compat fields go with it: `FieldFact.Customer`,
   `FieldFactDelta.customer_id`, `PartitionStat.LegacyCustomerID`,
   `tableKey.stamped`, the `appendRows` fallback, and the redis and
   dead-letter legacy reads.
+- **The tour in clients and the store.** The server side is out of core; what
+  remains is not Go-side core: `frontend/src` (`TourOverlay`, `WelcomeModal`,
+  `GraduationBanner`, the `tour_advance` branch in `wasm/network.ts`, the tour
+  fields in `lib/api.ts` and `AuthContext`), `store` (`users.onboarding_step`,
+  `AdvanceOnboardingStep`), `cmd/loom-producer`, `cmd/weft-demo-seed` and
+  `deploy/loom-producer`. An OSS web build excludes the first when the
+  frontend gets a build flag; the store column waits for Phase 6.
 - **The private repo**, then flipping the in-tree default shape.
-- An open-source main with a real open identity. Today `cmd/coordinator` is
-  hosted, and the default adapter has no way to authenticate anyone.
+- An open-source coordinator main. The api has one (the open identity above);
+  `cmd/coordinator` is hosted, and `single.Basic` is the identity it would
+  take, but nothing builds the open coordinator yet.
 - Optional wire-compatible renames: `CustomerArchiveStat`, `customer_stats`.
 
 **Known issues found along the way:** `DeleteArchived`'s hosted guard reads

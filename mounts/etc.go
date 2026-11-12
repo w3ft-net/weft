@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/alerting"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy"
 )
@@ -146,6 +147,14 @@ func (m *EtcMount) WriteFile(rel string, data []byte) error {
 	case rel == "notify.yaml":
 		content := string(data)
 		if err := store.ValidateNotifyAliases(content); err != nil {
+			return fmt.Errorf("/etc/notify.yaml: %w", err)
+		}
+		aliases, _ := store.ParseNotifyAliases(content) // parsed by the validation above
+		kinds := m.cfg.AlertKinds
+		if kinds == nil {
+			kinds = alerting.NewRegistry(nil)
+		}
+		if err := kinds.Validate(aliases); err != nil {
 			return fmt.Errorf("/etc/notify.yaml: %w", err)
 		}
 		return m.cfg.Store.SaveNotifyAliases(m.cfg.OrgID, m.cfg.UserID, content)

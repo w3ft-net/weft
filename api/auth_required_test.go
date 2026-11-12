@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -59,42 +61,21 @@ func TestEndpointsRequireAuth(t *testing.T) {
 	routes := []route{
 		// ── Public: reachable with no credentials ────────────────
 		{"GET", "/health", public},
-		{"POST", "/api/auth/login", public},
-		{"POST", "/api/auth/signup", public},
-		{"POST", "/api/auth/verify", public},
-		{"POST", "/api/auth/device", public},
-		{"POST", "/api/auth/device/poll", public},
-		{"POST", "/api/billing/webhook", public},            // Stripe: own signature auth
-		{"POST", "/api/team/accept", public},                // invite token in body
-		{"GET", "/api/integrations/slack/callback", public}, // OAuth state token
 
 		// ── Path-token authed: bogus token MUST be rejected ──────
 		{"POST", "/api/ingest/heroku/sometoken", pathToken},
 
 		// ── Session-gated: anonymous caller MUST get 401 ─────────
-		{"GET", "/api/auth/me", session},
-		{"POST", "/api/auth/device/approve", session},
-		{"POST", "/api/auth/resend-verification", session},
-		{"POST", "/api/account/welcome-dismiss", session},
-		{"POST", "/api/onboarding/advance", session},
-		{"POST", "/api/onboarding/dismiss", session},
-		{"POST", "/api/onboarding/graduation-seen", session},
-		{"GET", "/api/notices", session},
-		{"POST", "/api/notices/1/seen", session},
 		{"GET", "/api/fs/list", session},
 		{"GET", "/api/fs/read", session},
 		{"PUT", "/api/fs/write", session},
 		{"DELETE", "/api/fs/remove", session},
-		{"POST", "/api/billing/checkout", session},
-		{"POST", "/api/billing/setup-intent", session},
-		{"GET", "/api/billing/usage", session},
 		{"GET", "/api/tokens", session},
 		{"POST", "/api/tokens", session},
 		{"DELETE", "/api/tokens/1", session},
 		{"GET", "/api/apps", session},
 		{"GET", "/api/ingestion-status", session},
 		{"POST", "/api/shell/exec", session},
-		{"POST", "/api/shell/builtin", session},
 		{"GET", "/api/functions", session},
 		{"GET", "/api/functions/myfunc", session},
 		{"PUT", "/api/functions/myfunc", session},
@@ -111,22 +92,11 @@ func TestEndpointsRequireAuth(t *testing.T) {
 		{"DELETE", "/api/dashboards/mydash", session},
 		{"GET", "/api/notify", session},
 		{"PUT", "/api/notify", session},
-		{"GET", "/api/integrations", session},
-		{"POST", "/api/integrations/slack/connect", session},
-		{"DELETE", "/api/integrations/slack", session},
-		{"PUT", "/api/integrations/pagerduty", session},
-		{"DELETE", "/api/integrations/pagerduty", session},
-		{"DELETE", "/api/integrations/pagerduty/myrule", session},
+		{"PUT", "/api/integrations/webhook-secrets", session},
+		{"DELETE", "/api/integrations/webhook-secrets/token", session},
 		{"GET", "/api/namespaces", session},
 		{"POST", "/api/namespaces", session},
 		{"DELETE", "/api/namespaces/ns", session},
-		{"PUT", "/api/namespaces/ns/permissions/user-1", session},
-		{"GET", "/api/permissions", session},
-		{"PUT", "/api/permissions", session},
-		{"GET", "/api/team", session},
-		{"PUT", "/api/team/name", session},
-		{"POST", "/api/team/invite", session},
-		{"DELETE", "/api/team/some-id", session},
 		{"GET", "/api/sources/pending", session},
 		{"GET", "/api/sources/pending/count", session},
 		{"POST", "/api/sources/ns/app/configure", session},

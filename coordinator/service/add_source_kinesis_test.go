@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // TestAddSource_Kinesis covers AddSource's only remaining flow (poll-mode

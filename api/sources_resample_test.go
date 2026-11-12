@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -7,8 +9,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // A pending source can be sent back to sampling over HTTP, and a source that

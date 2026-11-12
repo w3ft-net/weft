@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -10,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // The shell's `chart <cron>` sends its range spec; the server resolves it

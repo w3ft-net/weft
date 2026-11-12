@@ -4,17 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/graybeardcorp/weft/coordinator/onboarding"
 	"github.com/graybeardcorp/weft/internal/timerange"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 )
@@ -51,8 +51,8 @@ var sseKeepaliveInterval = 20 * time.Second
 // Clients ignore comment lines per the SSE spec.
 func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	if sub, _ := s.store.ActiveSubscription(session.Org()); sub == nil {
-		http.Error(w, "no active subscription", http.StatusPaymentRequired)
+	if err := s.ident().Entitled(r.Context(), session); err != nil {
+		http.Error(w, err.Error(), http.StatusPaymentRequired)
 		return
 	}
 
@@ -60,7 +60,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		Pipeline string `json:"pipeline"`
 		Follow   bool   `json:"follow"`
 		// Modal is set by a browser modal fetching its own rows (the trace
-		// view). Its pipeline finishing is not the user finishing the lesson.
+		// view). Its pipeline finishing is not the user running a pipeline.
 		Modal bool `json:"modal"`
 		// Range is an unresolved time-window spec ("1d..", "30m..10m",
 		// "2026-04-01..2026-04-12", "05-14T09:00..05-14T17:00"). The
@@ -103,11 +103,15 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Team-management commands (adduser/deluser/groups/id) are handled
-	// in-process — they need the email sender, seat limits, and owner
-	// session that live here, not on the coordinator. Everything else
-	// forwards to the coordinator below.
-	if handled, out, cmdErr := s.maybeHandleTeamCommand(r.Context(), session, req.Pipeline); handled {
+	// Commands the deployment answers in-process (hosted: the team commands,
+	// which need the email sender, seat limits and owner session that live
+	// here, not on the coordinator). Everything else forwards to the
+	// coordinator below.
+	for _, cmd := range s.shellCommands {
+		handled, out, cmdErr := cmd(r.Context(), session, req.Pipeline)
+		if !handled {
+			continue
+		}
 		if cmdErr != nil {
 			writeSSEEvent(w, map[string]any{"type": "stderr", "text": cmdErr.Error() + "\n"})
 		} else if out != "" {
@@ -151,10 +155,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		ctx = metadata.AppendToOutgoingContext(ctx, "weft-dirstack", d)
 	}
 
-	trigger := onboarding.TriggerExec
-	if req.Modal {
-		trigger = onboarding.TriggerModalFetch
-	}
+	run := ShellRun{Pipeline: req.Pipeline, Modal: req.Modal}
 
 	// Capture the response trailer so the post-run dirstack (weft-final-
 	// dirstack) can be surfaced to the client after the stream ends.
@@ -199,18 +200,12 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			// A tail -f stream is designed to stay open indefinitely —
 			// it only ever ends via client cancellation (this branch),
-			// never a server-side io.EOF. Without this, a follow-mode
-			// lesson (e.g. the tour's shell-tail-f) could never advance:
-			// the client is already gone, so there's no SSE event to
-			// write, but the server-side session state still updates,
-			// and the next action/`/me` poll picks up the advanced
-			// step — same fallback path every other lesson already
-			// relies on. Treats "the user stopped a live tail" as
-			// completion, same permissive bar (syntactic match + clean
-			// execution) every other lesson already uses; there's no
-			// way to distinguish a deliberate stop from an accidental
-			// disconnect, which is an accepted tradeoff here.
-			s.maybeAdvanceShellLesson(r.Context(), session, req.Pipeline, nil, trigger)
+			// never a server-side io.EOF. The client is already gone, so
+			// there is no event to write, but the deployment is still told
+			// the run finished: stopping a live tail counts as finishing
+			// it. There's no way to tell a deliberate stop from an
+			// accidental disconnect, which is an accepted tradeoff.
+			s.ident().ShellRan(r.Context(), session, run)
 			return
 
 		case <-ticker.C:
@@ -226,17 +221,10 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if rr.err == io.EOF {
-				// Pipeline finished cleanly. If the user is in the
-				// shell-* phase of onboarding and the pipeline matches
-				// the current lesson's predicate, advance the step
-				// and emit the next lesson's prompt so the UI banner
-				// can update without waiting for a /me poll.
-				if newStep, prompt, advanced := s.maybeAdvanceShellLesson(r.Context(), session, req.Pipeline, nil, trigger); advanced {
-					writeSSEEvent(w, map[string]any{
-						"type":   "tour_advance",
-						"step":   newStep,
-						"prompt": prompt,
-					})
+				// Pipeline finished cleanly. The deployment may answer with
+				// an event of its own for the client.
+				if ev := s.ident().ShellRan(r.Context(), session, run); ev != nil {
+					writeSSEEvent(w, ev)
 				}
 				if !req.Follow {
 					// Dirstack courier (back to client): the coordinator

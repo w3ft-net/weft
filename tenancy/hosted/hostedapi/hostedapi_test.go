@@ -19,7 +19,7 @@ func TestJWTSecret_IsTheEnvironmentsOrADevDefault(t *testing.T) {
 
 func TestAPI_NeedsASecretAndConfiguresBilling(t *testing.T) {
 	a := hostedapi.API()
-	if a.JWTSecret == nil || a.Configure == nil || a.Start == nil || a.Serving == nil {
+	if a.Identity == nil || a.Tenancy == nil || a.Configure == nil || a.Start == nil || a.Serving == nil {
 		t.Errorf("the hosted api adapter leaves a hook unset: %+v", a)
 	}
 }

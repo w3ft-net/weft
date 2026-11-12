@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -9,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/saaskit/orgs"
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // The source endpoints expose coordinates and real log lines (a pending

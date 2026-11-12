@@ -3,10 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"net/http"
 	"time"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	"google.golang.org/grpc/metadata"
 	"gopkg.in/yaml.v3"

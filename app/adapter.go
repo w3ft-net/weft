@@ -87,7 +87,7 @@ func (a Adapter) notifier(db *store.Store) *coordinator.Notifier {
 	if a.Notifier != nil {
 		return a.Notifier(db)
 	}
-	return coordinator.NewNotifier(db, nil)
+	return coordinator.NewNotifier(db)
 }
 
 func (a Adapter) retention(db *store.Store, region string) logdb.Retention {

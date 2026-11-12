@@ -1,54 +1,37 @@
 package coordinator
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"net"
-	"net/http"
 	"strings"
 	"time"
 
-	"github.com/graybeardcorp/saaskit/email"
+	weftsdk "github.com/w3ft-net/weft-go"
+
+	"github.com/graybeardcorp/weft/alerting"
 	"github.com/graybeardcorp/weft/store"
 )
 
-// pdEventsURL is the PagerDuty Events v2 endpoint. Overridable in tests.
-var pdEventsURL = "https://events.pagerduty.com/v2/enqueue"
-
 // Notifier dispatches alerts through the per-customer alias map stored in
 // /etc/notify.yaml. A cron watch's `notify:` field names an alias; the alias
-// fans out to one or more Slack / PagerDuty targets.
+// fans out to its targets, each handled by the AlertTarget registered for its
+// kind. The core ships webhook and email; a deployment registers the rest.
 type Notifier struct {
 	Store *store.Store
-	Email *email.Config // nil = email notifications disabled (dev mode)
 	// Timeout is how long one target gets to accept a notification, whatever
-	// kind of target it is. Zero means notifyTimeout; tests shrink it.
+	// kind of target it is. Zero means alerting.Timeout; tests shrink it.
 	Timeout time.Duration
-	client  *http.Client
+	// Targets are the kinds this build sends. A save of /etc/notify.yaml is
+	// validated against the same registry.
+	Targets *alerting.Registry
 }
-
-// notifyTimeout is the default per-target delivery budget.
-const notifyTimeout = 10 * time.Second
 
 // ErrDeliveryTimeout marks a Send in which at least one target did not accept
 // the notification in time. A cron whose deliveries keep timing out is benched
 // the same way as one whose runs do (see CronExecutor.executeWatch).
 var ErrDeliveryTimeout = errors.New("delivery timed out")
-
-// scrubbedError reports msg in place of err's text, keeping err for errors.Is.
-type scrubbedError struct {
-	msg string
-	err error
-}
-
-func (e *scrubbedError) Error() string { return e.msg }
-func (e *scrubbedError) Unwrap() error { return e.err }
 
 // deliveryTimeoutError is the first failure of a Send that also timed out,
 // keeping its message while answering errors.Is(err, ErrDeliveryTimeout).
@@ -65,7 +48,7 @@ func (e *deliveryTimeoutError) Is(target error) bool { return target == ErrDeliv
 func (n *Notifier) deliver(ctx context.Context, send func(context.Context) error) error {
 	budget := n.Timeout
 	if budget == 0 {
-		budget = notifyTimeout
+		budget = alerting.Timeout
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
 	defer cancel()
@@ -83,21 +66,18 @@ func (n *Notifier) deliver(ctx context.Context, send func(context.Context) error
 	}
 }
 
-// NewNotifier creates a notifier with a default HTTP client.
-func NewNotifier(s *store.Store, emailCfg *email.Config) *Notifier {
-	return &Notifier{
-		Store:  s,
-		Email:  emailCfg,
-		client: &http.Client{Timeout: notifyTimeout},
-	}
+// NewNotifier creates a notifier over the core's kinds (alerting.NewRegistry)
+// and any others given.
+func NewNotifier(s *store.Store, targets ...alerting.AlertTarget) *Notifier {
+	return &Notifier{Store: s, Targets: alerting.NewRegistry(s, targets...)}
 }
 
 // Send dispatches a notification to the named alias from the customer's
-// /etc/notify.yaml. watchName is used to build the PagerDuty dedup key so
-// a watch firing repeatedly during an outage collapses to one incident —
-// ad-hoc shell invocations should pass a fresh synthetic name (see
+// /etc/notify.yaml. watchName is the cron's identity, which a target may use as
+// a dedup key so a watch firing repeatedly during an outage collapses to one
+// incident — ad-hoc shell invocations should pass a fresh synthetic name (see
 // AlertContext.dispatchIdentity). body is the alert text; individual
-// channels may truncate further to satisfy per-service limits.
+// targets may truncate further to satisfy per-service limits.
 //
 // Targets whose key is in delivered are skipped: they already heard about
 // this incident. Send returns the keys of the targets it reached, even when
@@ -122,276 +102,45 @@ func (n *Notifier) Send(ctx context.Context, orgID store.OrgID, aliasName, watch
 		return nil, fmt.Errorf("alias %q not defined in /etc/notify.yaml", aliasName)
 	}
 
+	alert := alerting.Alert{Org: orgID, Alias: aliasName, Cron: watchName, Body: body}
 	var sent []string
 	var firstErr error
 	timedOut := false
-	try := func(key, kind, name string, send func(context.Context) error) {
-		if delivered[key] {
-			return
+	fail := func(kind, name string, err error) {
+		if errors.Is(err, ErrDeliveryTimeout) {
+			timedOut = true
 		}
-		if err := n.deliver(ctx, send); err != nil {
-			if errors.Is(err, ErrDeliveryTimeout) {
-				timedOut = true
-			}
-			weftsdk.Infof(ctx, "notify[%s]: %s %s: %v", watchName, kind, name, err)
-			if firstErr == nil {
-				firstErr = err
-			}
-			return
+		weftsdk.Infof(ctx, "notify[%s]: %s %s: %v", watchName, kind, name, err)
+		if firstErr == nil {
+			firstErr = err
 		}
-		sent = append(sent, key)
 	}
-	for _, t := range alias.Slack {
-		try("slack:"+t.Channel, "slack", t.Channel, func(ctx context.Context) error { return n.sendSlack(ctx, nc, watchName, t, body) })
-	}
-	for _, t := range alias.PagerDuty {
-		try("pagerduty:"+t.Name, "pagerduty", t.Name, func(ctx context.Context) error { return n.sendPagerDuty(ctx, orgID, watchName, t, body) })
-	}
-	for _, t := range alias.Webhook {
-		// The URL can carry a secret, so the stored key is a digest of it.
-		// It is taken before substitution, from the ${secrets.NAME} text.
-		sum := sha256.Sum256([]byte(t.URL))
-		try("webhook:"+hex.EncodeToString(sum[:6]), "webhook", t.URL, func(ctx context.Context) error {
-			resolved, mask, err := n.Store.ResolveWebhookTarget(orgID, t)
+	for _, k := range alias.Targets() {
+		target, ok := n.Targets.Lookup(k.Kind)
+		if !ok {
+			// A kind this build never sends is a failure, not a skip: the alert
+			// reached nobody it names. The kinds that are registered still go out.
+			fail(k.Kind, "(unregistered)", fmt.Errorf("alias %q has %s targets but this build has no %q alert target", aliasName, k.Kind, k.Kind))
+			continue
+		}
+		for _, entry := range k.Entries {
+			dest, err := target.Open(entry)
 			if err != nil {
-				return err
+				fail(k.Kind, "(invalid)", err)
+				continue
 			}
-			if err := n.sendWebhook(ctx, aliasName, watchName, resolved, body); err != nil {
-				// An HTTP client's error carries the whole URL.
-				return &scrubbedError{msg: mask.Replace(err.Error()), err: err}
+			if delivered[dest.Key] {
+				continue
 			}
-			return nil
-		})
-	}
-	for _, t := range alias.Email {
-		try("email:"+t.Address, "email", t.Address, func(ctx context.Context) error { return n.sendEmail(ctx, watchName, t, body) })
+			if err := n.deliver(ctx, func(ctx context.Context) error { return dest.Send(ctx, alert) }); err != nil {
+				fail(k.Kind, dest.Name, err)
+				continue
+			}
+			sent = append(sent, dest.Key)
+		}
 	}
 	if timedOut && !errors.Is(firstErr, ErrDeliveryTimeout) {
 		firstErr = &deliveryTimeoutError{firstErr}
 	}
 	return sent, firstErr
-}
-
-// ── Slack ─────────────────────────────────────────────
-
-func (n *Notifier) sendSlack(ctx context.Context, nc *store.NotifyConfig, watchName string, target store.SlackTarget, stderr string) error {
-	if len(stderr) > 1000 {
-		stderr = stderr[:1000] + "\n... (truncated)"
-	}
-	text := fmt.Sprintf(":rotating_light: *weft alert: %s*\n```\n%s\n```", watchName, stderr)
-
-	if nc.SlackBotToken != "" {
-		return n.postSlackMessage(ctx, nc.SlackBotToken, target.Channel, text, watchName)
-	}
-	if nc.SlackWebhook != "" {
-		return n.postSlackWebhook(ctx, nc.SlackWebhook, target.Channel, text, watchName)
-	}
-	return fmt.Errorf("no Slack credentials configured (connect Slack under Account → Integrations)")
-}
-
-func (n *Notifier) postSlackMessage(ctx context.Context, botToken, channel, text, watchName string) error {
-	payload, _ := json.Marshal(map[string]string{
-		"channel": channel,
-		"text":    text,
-	})
-
-	req, _ := http.NewRequestWithContext(ctx, "POST", "https://slack.com/api/chat.postMessage", bytes.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	req.Header.Set("Authorization", "Bearer "+botToken)
-
-	resp, err := n.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("slack API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	json.NewDecoder(resp.Body).Decode(&result)
-	if !result.OK {
-		return fmt.Errorf("slack API error: %s", result.Error)
-	}
-
-	weftsdk.Infof(ctx, "notify: sent Slack alert for watch %s to %s", watchName, channel)
-	return nil
-}
-
-func (n *Notifier) postSlackWebhook(ctx context.Context, webhook, channel, text, watchName string) error {
-	payload, _ := json.Marshal(map[string]string{
-		"channel": channel,
-		"text":    text,
-	})
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook, bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("slack webhook: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := n.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("slack webhook: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("slack webhook returned %d", resp.StatusCode)
-	}
-
-	weftsdk.Infof(ctx, "notify: sent Slack alert for watch %s to %s (webhook)", watchName, channel)
-	return nil
-}
-
-// ── PagerDuty ────────────────────────────────────────
-
-// pagerDutyEvent is the Events v2 payload shape. See
-// https://developer.pagerduty.com/docs/events-api-v2/trigger-events/
-type pagerDutyEvent struct {
-	RoutingKey  string           `json:"routing_key"`
-	EventAction string           `json:"event_action"` // "trigger" | "acknowledge" | "resolve"
-	DedupKey    string           `json:"dedup_key,omitempty"`
-	Payload     pagerDutyPayload `json:"payload"`
-	Client      string           `json:"client,omitempty"`
-	ClientURL   string           `json:"client_url,omitempty"`
-}
-
-type pagerDutyPayload struct {
-	Summary   string         `json:"summary"`
-	Source    string         `json:"source"`
-	Severity  string         `json:"severity"`
-	Component string         `json:"component,omitempty"`
-	Group     string         `json:"group,omitempty"`
-	Class     string         `json:"class,omitempty"`
-	Details   map[string]any `json:"custom_details,omitempty"`
-}
-
-func (n *Notifier) sendPagerDuty(ctx context.Context, orgID store.OrgID, watchName string, target store.PDTarget, stderr string) error {
-	integ, err := func() (*store.PagerDutyIntegration, error) {
-		var item store.PagerDutyIntegration
-		err := n.Store.DB().WithContext(store.WithOrg(ctx, orgID)).Where("name = ?", target.Name).First(&item).Error
-		if err != nil {
-			return nil, err
-		}
-		return &item, nil
-	}()
-	if err != nil {
-		return fmt.Errorf("no integration named %q (configure under Account → Integrations)", target.Name)
-	}
-
-	summary := watchName
-	if len(stderr) > 0 {
-		first := stderr
-		if idx := strings.IndexByte(first, '\n'); idx > 0 {
-			first = first[:idx]
-		}
-		if len(first) > 120 {
-			first = first[:120] + "…"
-		}
-		summary = fmt.Sprintf("%s — %s", watchName, first)
-	}
-
-	evt := pagerDutyEvent{
-		RoutingKey:  integ.IntegrationKey,
-		EventAction: "trigger",
-		DedupKey:    fmt.Sprintf("weft:%s:%s", orgID, watchName),
-		Client:      "weft",
-		Payload: pagerDutyPayload{
-			Summary:  summary,
-			Source:   "weft",
-			Severity: target.Severity,
-			Class:    "cron",
-			Details: map[string]any{
-				"cron":   watchName,
-				"stderr": truncate(stderr, 4000),
-			},
-		},
-	}
-
-	body, _ := json.Marshal(evt)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pdEventsURL, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("pagerduty POST: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := n.client.Do(req)
-	if err != nil {
-		n.Store.RecordPagerDutySend(orgID, target.Name, err.Error())
-		return fmt.Errorf("pagerduty POST: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		n.Store.RecordPagerDutySend(orgID, target.Name, fmt.Sprintf("http %d", resp.StatusCode))
-		return fmt.Errorf("pagerduty returned %d", resp.StatusCode)
-	}
-	n.Store.RecordPagerDutySend(orgID, target.Name, "")
-	weftsdk.Infof(ctx, "notify: sent PagerDuty alert for watch %s to integration %s (severity %s)",
-		watchName, target.Name, target.Severity)
-	return nil
-}
-
-// ── Webhook ──────────────────────────────────────────
-
-// webhookPayload is the versioned JSON shape sent to generic webhook targets.
-// v2 renamed `watch` to `cron`.
-type webhookPayload struct {
-	V      int    `json:"v"`
-	Watch  string `json:"cron"`
-	Alias  string `json:"alias"`
-	TsUnix int64  `json:"ts_unix"`
-	Body   string `json:"body"`
-}
-
-func (n *Notifier) sendWebhook(ctx context.Context, aliasName, watchName string, target store.WebhookTarget, body string) error {
-	payload, _ := json.Marshal(webhookPayload{
-		V:      2,
-		Watch:  watchName,
-		Alias:  aliasName,
-		TsUnix: time.Now().Unix(),
-		Body:   truncate(body, 4000),
-	})
-
-	req, err := http.NewRequestWithContext(ctx, "POST", target.URL, bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("webhook: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	for k, v := range target.Headers {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := n.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("webhook POST: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("webhook returned %d", resp.StatusCode)
-	}
-
-	weftsdk.Infof(ctx, "notify: sent webhook alert for watch %s", watchName)
-	return nil
-}
-
-// ── Email ────────────────────────────────────────────
-
-func (n *Notifier) sendEmail(ctx context.Context, watchName string, target store.EmailTarget, body string) error {
-	if n.Email == nil {
-		return fmt.Errorf("no SMTP configuration (set EMAIL_HOST_PASSWORD)")
-	}
-	subject := fmt.Sprintf("weft alert: %s", watchName)
-	if err := email.SendPlain(n.Email, target.Address, subject, truncate(body, 4000)); err != nil {
-		return fmt.Errorf("email send: %w", err)
-	}
-	weftsdk.Infof(ctx, "notify: sent email alert for watch %s to %s", watchName, target.Address)
-	return nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "\n... (truncated)"
 }

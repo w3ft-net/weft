@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -7,7 +9,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/graybeardcorp/weft/auth"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // The sidebar polls every 30s per open tab and only needs a number. It used to

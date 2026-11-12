@@ -4,10 +4,14 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
+	"github.com/graybeardcorp/weft/alerting"
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
@@ -30,6 +34,17 @@ import (
 // fails at credentials with "no Slack credentials configured". If it
 // doesn't work (current bug), dispatch fails earlier at the config
 // lookup with "no notify.yaml configured".
+// noCredsSlack stands in for the hosted slack target, which the core does not
+// ship: it fails the way that target does for an org that never connected Slack.
+type noCredsSlack struct{}
+
+func (noCredsSlack) Kind() string { return "slack" }
+func (noCredsSlack) Open(e *yaml.Node) (alerting.Destination, error) {
+	return alerting.Destination{Key: "slack:" + e.Value, Name: e.Value, Send: func(context.Context, alerting.Alert) error {
+		return errors.New("no Slack credentials configured")
+	}}, nil
+}
+
 func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 	db, custID := testStoreAndCustomer(t)
 
@@ -47,7 +62,7 @@ func TestQuery_InteractiveAlertResolvesCallerCustomer(t *testing.T) {
 	// is zero (it's never set by cmd/coordinator/main.go either).
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
 		Store:    db,
-		Notifier: NewNotifier(db, nil)})
+		Notifier: NewNotifier(db, noCredsSlack{})})
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	result, err := c.Execute(context.Background(), `echo 40 | alert above 30 --notify=foo`, tr, hosted.Actor{Org: cust.ID, User: ""})
@@ -112,7 +127,7 @@ func TestQuery_InteractiveBinExpandResolvesCallerCustomer(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
 		Store:    db,
-		Notifier: NewNotifier(db, nil)}) // OrgID intentionally zero.
+		Notifier: NewNotifier(db)}) // OrgID intentionally zero.
 
 	tr := TimeRange{Start: time.Unix(0, 0), End: time.Now().Add(time.Hour)}
 	result, err := c.Execute(context.Background(), `echo_first disk`, tr, hosted.Actor{Org: cust.ID, User: ""})

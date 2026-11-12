@@ -63,3 +63,9 @@ type Orgs struct{}
 func (Orgs) OrgOf(shape.Added) store.OrgID                    { return 0 }
 func (Orgs) AddedOf(store.OrgID) shape.Added                  { return shape.Added{} }
 func (Orgs) ActorOf(_ store.OrgID, user string) tenancy.Actor { return Actor{User: user} }
+
+// Adapter is the open tenancy as the parts a filesystem mount or an api server
+// acts under.
+func Adapter() tenancy.Adapter {
+	return tenancy.Adapter{ActorOf: Orgs{}.ActorOf, Authz: Authorizer{}, Scope: Scoper{}}
+}

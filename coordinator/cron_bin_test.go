@@ -187,7 +187,7 @@ func TestCronBenchedAfterRepeatedDeliveryTimeouts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n := NewNotifier(db, nil)
+	n := NewNotifier(db)
 	n.Timeout = 100 * time.Millisecond
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, Store: db, Notifier: n})
 	var pages int
@@ -230,7 +230,7 @@ func TestCronBenchedAfterRepeatedDeliveryTimeouts(t *testing.T) {
 }
 
 func TestNotifierDeliverTimesOutAnyTarget(t *testing.T) {
-	n := NewNotifier(nil, nil)
+	n := NewNotifier(nil)
 	n.Timeout = 50 * time.Millisecond
 	err := n.deliver(context.Background(), func(ctx context.Context) error {
 		time.Sleep(time.Second) // a send that ignores its ctx, like SMTP

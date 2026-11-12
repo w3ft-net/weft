@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -8,8 +10,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // A configured weftd source being resampled keeps ingesting, so its row stays

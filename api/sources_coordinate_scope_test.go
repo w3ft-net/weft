@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -10,9 +12,9 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/saaskit/orgs"
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/tenancy"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 type fixedScoper struct{ set shape.Set }
@@ -33,7 +35,7 @@ func TestSourceEndpoints_FilteredByCoordinates(t *testing.T) {
 	seedPendingSource(t, srv, cust.ID, "alpha", "api")
 	seedPendingSource(t, srv, cust.ID, "alpha", "web")
 	seedPendingSource(t, srv, cust.ID, "beta", "api")
-	srv.scoper = fixedScoper{shape.Set{{Customer: int64(cust.ID), Namespace: shape.Value("alpha"), Service: shape.Value("api")}}}
+	srv.tenancy.Scope = fixedScoper{shape.Set{{Customer: int64(cust.ID), Namespace: shape.Value("alpha"), Service: shape.Value("api")}}}
 	handler := srv.Handler()
 	jwt, _ := auth.Generate(member, "test-secret")
 

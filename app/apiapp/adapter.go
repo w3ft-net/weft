@@ -1,26 +1,43 @@
 // Package apiapp is the HTTP api process, split from cmd/api the way package app
 // is split from cmd/coordinator: flags, the store, the coordinator connection,
 // the syslog listener and the server are the same everywhere, and what differs
-// (the identity secret and the product's own configuration) comes from an
-// Adapter. It imports package api, which is still the hosted product's, so
-// unlike package app it does not build under the default shape yet; the next
-// step splits the api's routes. docs/plans/tenant-scope.md, Phase 4.
+// (who the users are and the product's own configuration) comes from an
+// Adapter. docs/plans/tenant-scope.md, Phase 4.
 package apiapp
 
 import (
 	"context"
-	"errors"
 	"flag"
 
+	"github.com/graybeardcorp/weft/alerting"
 	weftapi "github.com/graybeardcorp/weft/api"
+	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
+	"github.com/graybeardcorp/weft/tenancy/single/singleapi"
 )
 
 // Adapter is what a deployment supplies. A nil field does nothing.
 type Adapter struct {
-	// JWTSecret is the secret the api signs and checks tokens with. Required.
-	// It is called once, where the process reads its secrets, so a missing one
-	// is reported at the same point on every start.
-	JWTSecret func() string
+	// Identity authenticates the api's users and registers its own sign-in and
+	// account routes. It is called once the store is open, and an error stops
+	// the process. Nil: the open identity, one HTTP Basic credential from
+	// WEFT_BASIC_AUTH_USER and WEFT_BASIC_AUTH_PASSWORD, which refuses to start
+	// when they are not set.
+	Identity func(db *store.Store) (weftapi.Identity, error)
+
+	// Tenancy is who acts, what they may do and what they may read, over the
+	// store. Nil: the open one, which refuses everything under a shape that
+	// has a tenant.
+	Tenancy func(db *store.Store) tenancy.Adapter
+
+	// AlertTargets are the alert destination kinds the deployment sends beyond
+	// the core's (webhook, email). The api only checks /etc/notify.yaml
+	// against them when it is saved; the coordinator sends. Nil: the core's.
+	AlertTargets func(db *store.Store) []alerting.AlertTarget
+
+	// Routes adds the deployment's own routes to the api's mux (hosted:
+	// billing, the operator's admin, integrations).
+	Routes func(*weftapi.Routes)
 
 	// Configure sets the deployment's own configuration on the server, once it
 	// is connected to the coordinator (hosted: Stripe prices and keys, Slack
@@ -36,11 +53,12 @@ type Adapter struct {
 	Serving func(ctx context.Context, srv *weftapi.Server)
 }
 
-func (a Adapter) validate() error {
-	if a.JWTSecret == nil {
-		return errors.New("the adapter has no JWTSecret: an api that cannot check tokens does not start")
+// identity is the adapter's Identity over db, or the open one.
+func (a Adapter) identity(db *store.Store) (weftapi.Identity, error) {
+	if a.Identity != nil {
+		return a.Identity(db)
 	}
-	return nil
+	return singleapi.FromEnv()
 }
 
 // Flags are the api's command-line flags. Their names, defaults and usage text

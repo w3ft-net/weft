@@ -38,7 +38,7 @@ generate-check:
 # `//go:build !defaultshape` and runs only in the unit job, which is hosted.
 # Packages in DEFAULT_SHAPE_BUILD_ONLY are built here but not tested: they are
 # the store-backed mounts the hosted adapter drives.
-DEFAULT_SHAPE_PKGS ?= ./shape/... ./internal/shapegen/... ./planner/... ./app/ ./coordinator/ ./tenancy/ ./tenancy/single/ ./mounts/ ./shell/
+DEFAULT_SHAPE_PKGS ?= ./shape/... ./internal/shapegen/... ./planner/... ./app/ ./app/apiapp/ ./api/ ./alerting/ ./coordinator/ ./tenancy/ ./tenancy/single/... ./mounts/ ./shell/
 DEFAULT_SHAPE_BUILD_ONLY ?= ./shellfs/ ./witrepo/ ./coordinator/service/ ./identity/
 test-default-shape:
 	@trap '$(MAKE) --no-print-directory generate SHAPE=shape/specs/hosted.yaml' EXIT; \

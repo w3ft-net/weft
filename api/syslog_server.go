@@ -5,10 +5,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"net"
 	"sync"
 	"time"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	"google.golang.org/grpc/metadata"
 

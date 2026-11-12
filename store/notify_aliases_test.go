@@ -190,3 +190,54 @@ hook:
 		t.Fatalf("want 1 webhook target, got %d", len(m["hook"].Webhook))
 	}
 }
+
+// A key the store does not know is an alias's target kind for an adapter to
+// handle: it is kept as nodes, counts as a target, and comes after the
+// built-in kinds in a fixed order.
+func TestParseNotifyAliases_UnknownKindsAreKeptAsEntries(t *testing.T) {
+	m, err := ParseNotifyAliases("a:\n  zulu: [one, {k: v}]\n  email: [x@example.test]\n  alpha: single\n  pagerduty: [p]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	counts := map[string]int{}
+	for _, k := range m["a"].Targets() {
+		kinds = append(kinds, k.Kind)
+		counts[k.Kind] = len(k.Entries)
+	}
+	if got, want := strings.Join(kinds, ","), "pagerduty,email,alpha,zulu"; got != want {
+		t.Errorf("kinds = %s, want %s", got, want)
+	}
+	if counts["zulu"] != 2 || counts["alpha"] != 1 {
+		t.Errorf("entry counts = %v", counts)
+	}
+	if _, err := ParseNotifyAliases("a:\n  zulu: [one]\n"); err != nil {
+		t.Errorf("an alias with only a plugged-in kind has targets: %v", err)
+	}
+	if _, err := ParseNotifyAliases("a: {}\n"); err == nil {
+		t.Error("an alias with no kind at all parsed")
+	}
+}
+
+// Targets re-encodes the typed built-in kinds: the PagerDuty severity default
+// is applied, and each entry decodes back to the same target.
+func TestAliasTargets_BuiltInsRoundTrip(t *testing.T) {
+	m, err := ParseNotifyAliases("a:\n  pagerduty: [p]\n  webhook:\n    - url: https://x.test\n      headers: {H: v}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range m["a"].Targets() {
+		switch k.Kind {
+		case "pagerduty":
+			var p PDTarget
+			if err := k.Entries[0].Decode(&p); err != nil || p != (PDTarget{Name: "p", Severity: "error"}) {
+				t.Errorf("pagerduty entry = %+v, %v", p, err)
+			}
+		case "webhook":
+			var w WebhookTarget
+			if err := k.Entries[0].Decode(&w); err != nil || w.URL != "https://x.test" || w.Headers["H"] != "v" {
+				t.Errorf("webhook entry = %+v, %v", w, err)
+			}
+		}
+	}
+}

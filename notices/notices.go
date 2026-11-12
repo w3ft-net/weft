@@ -1,7 +1,7 @@
 // Package notices is the registry and delivery queue for one-time
 // user notices. Emitters are spread across the system — mounts signals
 // /tmp expiry, migration 072's membership trigger writes rows straight
-// from Postgres, api emits the onboarding graduation — and three
+// from Postgres, a deployment adds its own with Register — and three
 // surfaces render them: the HTTP API, the gRPC query response, and the
 // shell.
 //
@@ -49,13 +49,6 @@ type Notice struct {
 // demoted them is told exactly what was kept.
 const KeyMemberRetainedGrants = "member_retained_grants"
 
-// KeyOnboardingGraduated is emitted when a user finishes the Loom
-// tour. The browser renders it as the graduation banner; the shell
-// renders it as a notice like any other. Whichever surface the user
-// reaches first delivers it — it is one notice with two renderers, not
-// a browser feature that happens to live in this table.
-const KeyOnboardingGraduated = "onboarding_graduated"
-
 // template is a registry entry: the presentation half of a notice.
 // The database row carries only params — the facts — because the browser
 // and the TUI render differently and a trigger has no business writing
@@ -75,13 +68,6 @@ var registry = map[string]template{
 		render: func(map[string]any) (string, string) {
 			return "/tmp files expire after 48 hours",
 				"Files in /tmp are deleted 48 hours after their last edit. Touching a file (or writing to it) resets the clock. Save anything you want to keep as a cron entry under /cron.d."
-		},
-	},
-	KeyOnboardingGraduated: {
-		kind: KindSuccess,
-		render: func(map[string]any) (string, string) {
-			return "You've finished the tour",
-				"You've seen the whole shell against Loom Inc's data. Your own org is ready when you are — connect a log source and the same pipelines work on your logs."
 		},
 	},
 	KeyMemberRetainedGrants: {
@@ -109,6 +95,27 @@ var registry = map[string]template{
 	},
 }
 
+var registryMu sync.RWMutex
+
+// Register adds a notice a deployment emits itself. Call it at startup, in
+// every process that renders notices, before any is rendered; a key registered
+// twice is a wiring mistake and panics.
+func Register(key string, kind Kind, render func(params map[string]any) (title, body string)) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	if _, dup := registry[key]; dup {
+		panic(fmt.Sprintf("notices: key %q registered twice", key))
+	}
+	registry[key] = template{kind: kind, render: render}
+}
+
+func lookup(key string) (template, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	t, ok := registry[key]
+	return t, ok
+}
+
 // paramString reads a string param, tolerating absence — a missing fact
 // renders as an empty slot, not a panic in a response path.
 func paramString(p map[string]any, key string) string {
@@ -134,7 +141,7 @@ func paramStrings(p map[string]any, key string) []string {
 // a blank card in front of a user, and the row stays pending so the
 // notice survives a deploy that adds the entry.
 func Render(p store.PendingNotice) (Notice, bool) {
-	tmpl, ok := registry[p.Key]
+	tmpl, ok := lookup(p.Key)
 	if !ok {
 		return Notice{}, false
 	}
@@ -190,7 +197,7 @@ func (q *Queue) Maybe(ctx context.Context, key string) {
 	if q.signaled[key] {
 		return
 	}
-	tmpl, ok := registry[key]
+	tmpl, ok := lookup(key)
 	if !ok {
 		return
 	}

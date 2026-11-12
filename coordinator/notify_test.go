@@ -4,94 +4,106 @@ package coordinator
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
-	"github.com/graybeardcorp/weft/store"
+	"gopkg.in/yaml.v3"
+
+	"github.com/graybeardcorp/weft/alerting"
 )
 
-func TestSendWebhook(t *testing.T) {
-	var received webhookPayload
-	var receivedHeaders http.Header
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedHeaders = r.Header
-		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		w.WriteHeader(200)
-	}))
-	defer srv.Close()
-
-	n := NewNotifier(nil, nil)
-
-	target := store.WebhookTarget{
-		URL:     srv.URL,
-		Headers: map[string]string{"X-Signing-Secret": "test-secret"},
-	}
-
-	if err := n.sendWebhook(context.Background(), "ops", "error-rate", target, "error-rate: 127 (above 50)"); err != nil {
-		t.Fatalf("sendWebhook: %v", err)
-	}
-
-	if received.V != 2 {
-		t.Errorf("want v=2, got %d", received.V)
-	}
-	if received.Watch != "error-rate" {
-		t.Errorf("want cron=error-rate, got %q", received.Watch)
-	}
-	if received.Alias != "ops" {
-		t.Errorf("want alias=ops, got %q", received.Alias)
-	}
-	if received.Body != "error-rate: 127 (above 50)" {
-		t.Errorf("body wrong: %q", received.Body)
-	}
-	if receivedHeaders.Get("Content-Type") != "application/json" {
-		t.Errorf("content-type wrong: %q", receivedHeaders.Get("Content-Type"))
-	}
-	if receivedHeaders.Get("X-Signing-Secret") != "test-secret" {
-		t.Errorf("custom header missing: %q", receivedHeaders.Get("X-Signing-Secret"))
-	}
+// fakeTarget is a kind the core has never heard of, added through the registry.
+type fakeTarget struct {
+	got  []alerting.Alert
+	fail error
 }
 
-func TestSendWebhookNon2xx(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
-	}))
-	defer srv.Close()
+func (*fakeTarget) Kind() string { return "carrier-pigeon" }
 
-	n := NewNotifier(nil, nil)
-
-	target := store.WebhookTarget{URL: srv.URL}
-	err := n.sendWebhook(context.Background(), "ops", "error-rate", target, "test")
-	if err == nil {
-		t.Fatal("expected error for non-2xx response")
+func (f *fakeTarget) Open(entry *yaml.Node) (alerting.Destination, error) {
+	var t struct {
+		Coop string `yaml:"coop"`
 	}
+	if entry.Kind == yaml.ScalarNode {
+		t.Coop = entry.Value
+	} else if err := entry.Decode(&t); err != nil {
+		return alerting.Destination{}, err
+	}
+	if t.Coop == "" {
+		return alerting.Destination{}, errors.New("carrier-pigeon target missing `coop`")
+	}
+	return alerting.Destination{
+		Key:  "carrier-pigeon:" + t.Coop,
+		Name: t.Coop,
+		Send: func(_ context.Context, a alerting.Alert) error {
+			f.got = append(f.got, a)
+			return f.fail
+		},
+	}, nil
 }
 
-func TestSendEmailNoConfig(t *testing.T) {
-	n := NewNotifier(nil, nil)
-	target := store.EmailTarget{Address: "test@example.com"}
-	err := n.sendEmail(context.Background(), "error-rate", target, "test body")
-	if err == nil {
-		t.Fatal("expected error when no email config")
-	}
-}
-
-// v2 of the webhook payload names the cron `cron` (v1 called it `watch`).
-// The wire key is what consumers read, so pin the JSON itself.
-func TestWebhookPayload_CronKeyAndVersion(t *testing.T) {
-	b, err := json.Marshal(webhookPayload{V: 2, Watch: "error-rate", Alias: "ops"})
-	if err != nil {
+// An adapter adds a kind with Register alone: the alias key is parsed by the
+// store without knowing it, the notifier hands each entry (bare or mapping) to
+// the target, and the delivered map skips a destination already reached.
+func TestNotifier_RegisteredKindIsDispatched(t *testing.T) {
+	db, org := testStoreAndCustomer(t)
+	yaml := "system:\n  email:\n    - ops@example.test\nflock:\n  carrier-pigeon:\n    - north\n    - coop: south\n"
+	if err := db.SaveNotifyAliases(org, "", yaml); err != nil {
 		t.Fatal(err)
 	}
-	got := string(b)
-	if !strings.Contains(got, `"cron":"error-rate"`) || strings.Contains(got, `"watch"`) || !strings.Contains(got, `"v":2`) {
-		t.Errorf("payload = %s, want v=2 with a cron key and no watch key", got)
+	f := &fakeTarget{}
+	n := NewNotifier(db, f)
+
+	sent, err := n.Send(context.Background(), org, "flock", "disk", "boom", nil)
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if want := []string{"carrier-pigeon:north", "carrier-pigeon:south"}; !slices.Equal(sent, want) {
+		t.Errorf("sent = %v, want %v", sent, want)
+	}
+	if len(f.got) != 2 || f.got[0] != (alerting.Alert{Org: org, Alias: "flock", Cron: "disk", Body: "boom"}) {
+		t.Errorf("target saw %+v", f.got)
+	}
+
+	f.got = nil
+	sent, err = n.Send(context.Background(), org, "flock", "disk", "boom", map[string]bool{"carrier-pigeon:north": true})
+	if err != nil || !slices.Equal(sent, []string{"carrier-pigeon:south"}) || len(f.got) != 1 {
+		t.Errorf("retry: sent = %v, err = %v, sends = %d; want only south", sent, err, len(f.got))
+	}
+}
+
+// A destination that fails is reported and the others still go out.
+func TestNotifier_OneTargetFailingDoesNotStopTheRest(t *testing.T) {
+	db, org := testStoreAndCustomer(t)
+	if err := db.SaveNotifyAliases(org, "", "system:\n  carrier-pigeon: [a]\nflock:\n  carrier-pigeon: [a, b]\n"); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTarget{fail: errors.New("storm")}
+	sent, err := NewNotifier(db, f).Send(context.Background(), org, "flock", "disk", "boom", nil)
+	if err == nil || err.Error() != "storm" || len(sent) != 0 || len(f.got) != 2 {
+		t.Errorf("sent = %v, err = %v, sends = %d; want both tried and the first error", sent, err, len(f.got))
+	}
+}
+
+// A kind with no registered target is an error: the alert reached nobody it
+// names there. The kinds that are registered still go out, and their delivered
+// keys come back so the retry skips them.
+func TestNotifier_UnregisteredKindIsAnError(t *testing.T) {
+	db, org := testStoreAndCustomer(t)
+	if err := db.SaveNotifyAliases(org, "", "system:\n  email: [a@example.test]\nflock:\n  slack: ['#ops']\n  carrier-pigeon: [north]\n"); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTarget{}
+	sent, err := NewNotifier(db, f).Send(context.Background(), org, "flock", "disk", "boom", nil)
+	if err == nil || !strings.Contains(err.Error(), `"slack"`) {
+		t.Errorf("err = %v, want one naming the missing slack target", err)
+	}
+	if !slices.Equal(sent, []string{"carrier-pigeon:north"}) {
+		t.Errorf("sent = %v, want the registered kind still delivered", sent)
 	}
 }
 
@@ -120,7 +132,7 @@ func TestSendWebhookInterpolatesSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n := NewNotifier(db, nil)
+	n := NewNotifier(db)
 	if _, err := n.Send(context.Background(), custID, "hook", "disk", "boom", nil); err != nil {
 		t.Fatalf("Send: %v", err)
 	}

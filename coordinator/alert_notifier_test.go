@@ -32,7 +32,7 @@ func TestQuery_InteractiveAlertUsesCoordinatorNotifier(t *testing.T) {
 
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{},
 		Store:    db,
-		Notifier: NewNotifier(db, nil)})
+		Notifier: NewNotifier(db)})
 
 	// No alias is defined in /etc/notify.yaml, so Notifier.Send returns
 	// "no notify.yaml configured". The point is that Send is REACHED —

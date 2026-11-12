@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/graybeardcorp/weft/alerting"
 	weftapi "github.com/graybeardcorp/weft/api"
 	"github.com/graybeardcorp/weft/config"
 	"github.com/graybeardcorp/weft/ingest"
@@ -21,15 +22,10 @@ import (
 // cmd/api always has.
 func API(a Adapter) {
 	weftsdk.InitLogging("", os.Stderr).CaptureStdio()
-	if err := a.validate(); err != nil {
-		log.Fatalf("api: %v", err)
-	}
 	fl := DefineFlags(flag.CommandLine)
 	flag.Parse()
 	port, dbDSN, coordAddr, baseURL := &fl.Port, &fl.DBDSN, &fl.CoordinatorAddr, &fl.BaseURL
 	renderSyslogPort, redisAddr, redisTLS := &fl.RenderSyslogPort, &fl.RedisAddr, &fl.RedisTLS
-
-	jwtSecret := a.JWTSecret()
 
 	dsn := *dbDSN
 	if dsn == "" {
@@ -66,11 +62,23 @@ func API(a Adapter) {
 		s.SetSchemaCache(store.NewSchemaCache(*redisAddr, *redisTLS))
 	}
 
-	srv := weftapi.NewServer(s, jwtSecret, *coordAddr, *baseURL)
+	ident, err := a.identity(s)
+	if err != nil {
+		log.Fatalf("api: %v", err)
+	}
+	srv := weftapi.NewServer(s, *coordAddr, *baseURL)
+	srv.SetIdentity(ident)
 	if err := srv.Connect(); err != nil {
 		log.Fatalf("connect to coordinator: %v", err)
 	}
 	defer srv.Close()
+
+	if a.Tenancy != nil {
+		srv.SetTenancy(a.Tenancy(s))
+	}
+	if a.AlertTargets != nil {
+		srv.SetAlertKinds(alerting.NewRegistry(s, a.AlertTargets(s)...))
+	}
 
 	// LLM-based schema-field classification for pending sources — see
 	// ingest/llmdetect.go. Disabled (classifier stays nil) unless
@@ -87,6 +95,9 @@ func API(a Adapter) {
 	// and keys, Slack client).
 	if a.Configure != nil {
 		a.Configure(srv)
+	}
+	if a.Routes != nil {
+		srv.Extend(a.Routes)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

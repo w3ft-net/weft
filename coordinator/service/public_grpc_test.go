@@ -8,8 +8,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/graybeardcorp/weft/auth"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // The public port serves only the ingest/infra RPCs; every other

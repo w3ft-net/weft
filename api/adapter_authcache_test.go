@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -7,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // ingestControl posts a Firehose CONTROL_MESSAGE, which authenticates and

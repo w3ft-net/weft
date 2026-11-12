@@ -19,7 +19,6 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/internal/release"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -180,7 +179,7 @@ func (s *Server) handlePendingSourcesCount(w http.ResponseWriter, r *http.Reques
 
 // pendingSourcesQuery is the sources awaiting a schema in the namespaces the
 // scope touches. Callers filter each row with scope.sees.
-func (s *Server) pendingSourcesQuery(session *auth.Session, scope sourceScope) *gorm.DB {
+func (s *Server) pendingSourcesQuery(session Session, scope sourceScope) *gorm.DB {
 	q := s.store.DB().
 		Table("log_groups").
 		Joins("JOIN namespaces ON log_groups.namespace_id = namespaces.id").
@@ -392,7 +391,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	customer, err := s.store.GetOrgByName(session.ActiveCustomerName)
+	customer, err := s.store.GetOrgByID(session.Org())
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -489,7 +488,7 @@ func (s *Server) handleConfigureSource(w http.ResponseWriter, r *http.Request) {
 // level is trivial.
 func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
-	customer, err := s.store.GetOrgByName(session.ActiveCustomerName)
+	customer, err := s.store.GetOrgByID(session.Org())
 	if err != nil {
 		http.Error(w, "customer not found", http.StatusNotFound)
 		return
@@ -930,8 +929,8 @@ func (s *Server) recentLines(r *http.Request, userID string, namespace, app stri
 // addLivePreview adds "preview" (the stored schema applied to recent live
 // lines) to resp, or "preview_note" saying why there is none. It never fails
 // the caller's response.
-func (s *Server) addLivePreview(r *http.Request, session *auth.Session, resp map[string]any, namespace, app, schemaYAML string) {
-	lines, err := s.recentLines(r, session.UserID, namespace, app, schemaPreviewLines)
+func (s *Server) addLivePreview(r *http.Request, session Session, resp map[string]any, namespace, app, schemaYAML string) {
+	lines, err := s.recentLines(r, session.UserID(), namespace, app, schemaPreviewLines)
 	if err != nil && len(lines) == 0 {
 		weftsdk.Infof(r.Context(), "source schema %s/%s: live preview fetch: %v", namespace, app, err)
 		resp["preview_note"] = "recent lines unavailable: " + err.Error()

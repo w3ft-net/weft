@@ -10,6 +10,7 @@ import (
 	"io/fs"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/alerting"
 	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy"
@@ -62,6 +63,9 @@ type Config struct {
 	Scope       tenancy.Scoper
 	LogServices []string
 	NoticeQueue NoticeSink
+	// AlertKinds are the alert destination kinds /etc/notify.yaml may name,
+	// checked when it is saved. Nil is the core's kinds alone.
+	AlertKinds *alerting.Registry
 	// Ctx is the request context the mounts run under. warp's Mount
 	// interface is ctx-less, so the per-request Config carries it
 	// (detached from cancellation by the embedder) to keep the trace

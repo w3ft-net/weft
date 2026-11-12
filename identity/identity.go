@@ -77,3 +77,17 @@ type Identity interface {
 type Server interface {
 	Interceptors(skip SkipMethods) ([]grpc.UnaryServerInterceptor, []grpc.StreamServerInterceptor)
 }
+
+// Tiered is implemented by a Caller whose plan limits apply to what it does
+// (hosted: the subscription tier). A Caller that is not Tiered has none.
+type Tiered interface {
+	Tier() store.Tier
+}
+
+// TierOf is the plan tier c is subject to, or "" when it has none.
+func TierOf(c Caller) store.Tier {
+	if t, ok := c.(Tiered); ok {
+		return t.Tier()
+	}
+	return ""
+}

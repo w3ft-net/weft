@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -67,8 +69,8 @@ func newGroupedOrg(t *testing.T, tier store.Tier) *groupedOrg {
 			all[email] = p
 		}
 	}
-	if w := g.do(ownerJWT, "PUT", "/api/permissions", mustJSON(t, all)); w.Code != 204 {
-		t.Fatalf("grant permissions: %d %s", w.Code, w.Body.String())
+	if err := s.ApplyTeamPerms(org.ID, all); err != nil {
+		t.Fatalf("grant permissions: %v", err)
 	}
 	return g
 }

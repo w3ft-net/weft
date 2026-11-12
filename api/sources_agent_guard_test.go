@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -9,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/ingest"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // weftd parses on the agent, so a schema is only as good as the oldest agent

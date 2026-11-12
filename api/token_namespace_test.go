@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package api
 
 import (
@@ -9,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/graybeardcorp/weft/auth"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted/auth"
 )
 
 // setUpTokenCreator returns a ready owner JWT for a fresh org with a
@@ -126,19 +128,3 @@ func TestCreateNamespace_RejectsNamesThatCannotBeOne(t *testing.T) {
 // Granting a permission on a namespace that doesn't exist is a 404, not a
 // silent creation. The handler already answered "namespace not found", but
 // got there through FindOrCreateNamespace, which creates it.
-func TestSetNamespacePermission_UnknownNamespaceIsNotCreated(t *testing.T) {
-	srv, s := testServer(t)
-	jwt := setUpTokenCreator(t, s, "ns-perm-missing")
-
-	req := httptest.NewRequest("PUT", "/api/namespaces/typo/permissions/some-user", strings.NewReader(`{"can_read":true}`))
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
-
-	if w.Code != 404 {
-		t.Fatalf("status %d, want 404: %s", w.Code, w.Body.String())
-	}
-	if got := namespaceNames(t, srv, jwt); got["typo"] {
-		t.Errorf("the permission call created namespace typo: %v", got)
-	}
-}

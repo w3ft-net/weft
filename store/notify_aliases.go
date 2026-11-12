@@ -28,6 +28,56 @@ type Alias struct {
 	PagerDuty []PDTarget      `yaml:"pagerduty,omitempty"`
 	Webhook   []WebhookTarget `yaml:"webhook,omitempty"`
 	Email     []EmailTarget   `yaml:"email,omitempty"`
+
+	// Extra holds every other key of the alias: the target kinds an adapter
+	// adds. The store does not interpret them; the notifier hands each entry
+	// to the AlertTarget registered for its kind.
+	Extra map[string]yaml.Node `yaml:",inline"`
+}
+
+// AliasEntries is one kind's target entries of an alias, as YAML nodes.
+type AliasEntries struct {
+	Kind    string
+	Entries []*yaml.Node
+}
+
+// Targets lists the alias's entries by kind: the built-in kinds in the order
+// slack, pagerduty, webhook, email, then the others by name. A kind whose value
+// is a sequence has one entry per element; any other value is a single entry.
+func (a *Alias) Targets() []AliasEntries {
+	var out []AliasEntries
+	add := func(kind string, v any, n int) {
+		if n == 0 {
+			return
+		}
+		var seq yaml.Node
+		if err := seq.Encode(v); err != nil {
+			return
+		}
+		e := AliasEntries{Kind: kind}
+		for _, c := range seq.Content {
+			e.Entries = append(e.Entries, c)
+		}
+		out = append(out, e)
+	}
+	add("slack", a.Slack, len(a.Slack))
+	add("pagerduty", a.PagerDuty, len(a.PagerDuty))
+	add("webhook", a.Webhook, len(a.Webhook))
+	add("email", a.Email, len(a.Email))
+	kinds := make([]string, 0, len(a.Extra))
+	for k := range a.Extra {
+		kinds = append(kinds, k)
+	}
+	sort.Strings(kinds)
+	for _, k := range kinds {
+		n := a.Extra[k]
+		if n.Kind == yaml.SequenceNode {
+			out = append(out, AliasEntries{Kind: k, Entries: n.Content})
+		} else {
+			out = append(out, AliasEntries{Kind: k, Entries: []*yaml.Node{&n}})
+		}
+	}
+	return out
 }
 
 // SlackTarget is a single Slack destination. Accepts either a bare string
@@ -197,7 +247,7 @@ func ParseNotifyAliases(raw string) (AliasMap, error) {
 			return nil, fmt.Errorf("notify.yaml: alias %q is empty", name)
 		}
 		if len(alias.Slack) == 0 && len(alias.PagerDuty) == 0 &&
-			len(alias.Webhook) == 0 && len(alias.Email) == 0 {
+			len(alias.Webhook) == 0 && len(alias.Email) == 0 && len(alias.Extra) == 0 {
 			return nil, fmt.Errorf("notify.yaml: alias %q has no targets", name)
 		}
 		for i, t := range alias.PagerDuty {

@@ -5,7 +5,9 @@ import (
 
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/coordinator"
+	"github.com/graybeardcorp/weft/coordinator/onboarding"
 	"github.com/graybeardcorp/weft/identity"
+	"github.com/graybeardcorp/weft/notices"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy/hosted"
 	"github.com/graybeardcorp/weft/tenancy/hosted/hostedapp"
@@ -45,5 +47,16 @@ func TestIdentity_YieldsAnInterceptorOfEachKind(t *testing.T) {
 	unary, stream := hostedapp.Identity{}.Open(db).Interceptors(identity.SkipMethods{"/x/Y": true})
 	if len(unary) != 1 || len(stream) != 1 {
 		t.Fatalf("got %d unary and %d stream interceptors, want one of each", len(unary), len(stream))
+	}
+}
+
+// The shell renders the tour's graduation notice, and the registry has no such
+// entry of its own: a hosted coordinator that forgot to register it would leave
+// the row pending forever.
+func TestCoordinator_RendersTheGraduationNotice(t *testing.T) {
+	hostedapp.Coordinator()
+	n, ok := notices.Render(store.PendingNotice{Key: onboarding.GraduatedKey})
+	if !ok || n.Title == "" {
+		t.Fatalf("graduation notice did not render: %+v, %v", n, ok)
 	}
 }

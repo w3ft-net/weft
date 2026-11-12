@@ -2,8 +2,9 @@ package api
 
 import (
 	"encoding/json"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"net/http"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/graybeardcorp/weft/ingest"
 )
