@@ -11,6 +11,7 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
+	"github.com/graybeardcorp/weft/coordination"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -72,7 +73,7 @@ type CronExecutor struct {
 	Execute func(ctx context.Context, w store.CronWatch, tr TimeRange)
 	// Claims is the slot-claim backend. Nil means Store; tests substitute it
 	// for fault injection.
-	Claims slotClaimer
+	Claims coordination.Claims
 	// RunTimeout is the budget for one run. Zero means cronRunTimeout;
 	// tests shrink it.
 	RunTimeout time.Duration

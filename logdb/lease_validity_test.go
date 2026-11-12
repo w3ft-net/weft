@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/coordination"
 )
 
 // A leader that was stopped for longer than its lease lasts still has its
@@ -18,7 +18,7 @@ func TestLeaseValid_ExpiresWithoutATick(t *testing.T) {
 	p := &Provisioner{}
 	p.electing.Store(true)
 	p.leading.Store(true)
-	p.leaseUntil.Store(time.Now().Add(store.LeaseTTL).UnixNano())
+	p.leaseUntil.Store(time.Now().Add(coordination.LeaseTTL).UnixNano())
 	if !p.leaseValid() {
 		t.Fatal("a freshly renewed lease reads as expired")
 	}
@@ -35,7 +35,7 @@ func TestLeaseValid_ExpiresWithoutATick(t *testing.T) {
 		t.Fatal("a lease within the safety margin of its expiry reads as valid")
 	}
 
-	p.leaseUntil.Store(time.Now().Add(store.LeaseTTL).UnixNano())
+	p.leaseUntil.Store(time.Now().Add(coordination.LeaseTTL).UnixNano())
 	p.leading.Store(false)
 	if p.leaseValid() {
 		t.Fatal("a process that lost the lease reads as leading")

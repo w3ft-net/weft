@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/graybeardcorp/weft/coordination"
 	"github.com/graybeardcorp/weft/coordinator"
 	"github.com/graybeardcorp/weft/identity"
 	"github.com/graybeardcorp/weft/logdb"
@@ -29,6 +30,14 @@ type Adapter struct {
 
 	// Identity authenticates the callers of the gRPC servers. Required.
 	Identity identity.Identity
+
+	// Coordination is how this coordinator knows it may act: the leases that
+	// elect its leaders and the claims that keep a cron slot from running
+	// twice. Nil: the store itself, the hosted Postgres tables. The
+	// coordinator still needs that store for every other domain until Phase 6
+	// carves them out, so the open build has no non-Postgres coordinator yet;
+	// coordination/local is what it will hand in. docs/plans/tenant-scope.md.
+	Coordination func(db *store.Store) coordination.Coordination
 
 	// Notifier builds the alert notifier over the store. Nil: a notifier that
 	// sends no email.
@@ -81,6 +90,13 @@ func (a Adapter) WithTenancy(db *store.Store, cfg coordinator.CoordinatorConfig)
 		cfg.Authz = a.Coordinator.Authorizer(db)
 	}
 	return cfg
+}
+
+func (a Adapter) coordination(db *store.Store) coordination.Coordination {
+	if a.Coordination != nil {
+		return a.Coordination(db)
+	}
+	return db
 }
 
 func (a Adapter) notifier(db *store.Store) *coordinator.Notifier {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/coordination"
 )
 
 // ARCHIVED and GONE shards have no instance and nothing to converge: the
@@ -38,8 +38,8 @@ func TestProgressStale_HasAFloorUnderFastTicks(t *testing.T) {
 	if !p.progressStale() {
 		t.Fatal("not stale past the floor")
 	}
-	if progressStaleFloor >= store.LeaseTTL {
-		t.Fatalf("deadman floor %s is no faster than the lease TTL %s", progressStaleFloor, store.LeaseTTL)
+	if progressStaleFloor >= coordination.LeaseTTL {
+		t.Fatalf("deadman floor %s is no faster than the lease TTL %s", progressStaleFloor, coordination.LeaseTTL)
 	}
 }
 

@@ -30,8 +30,9 @@ func Coordinator() app.Adapter {
 	// The shell renders the tour's graduation notice like any other.
 	onboarding.RegisterNotice()
 	return app.Adapter{
-		Coordinator: Tenancy(),
-		Identity:    Identity{},
+		Coordinator:  Tenancy(),
+		Identity:     Identity{},
+		Coordination: hosted.Coordination,
 		Notifier: func(db *store.Store) *coordinator.Notifier {
 			return coordinator.NewNotifier(db, alerts.Targets(db, email.ConfigFromEnv())...)
 		},

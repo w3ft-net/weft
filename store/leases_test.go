@@ -2,11 +2,10 @@ package store
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/weft/internal/logtest"
+	"github.com/graybeardcorp/weft/coordination"
 )
 
 // resetLease clears any row left behind for name by an earlier test.
@@ -126,7 +125,7 @@ func TestAcquireAndHold_RenewsUntilContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	leaseCtx, ok := AcquireAndHold(ctx, db, "poller:acme", "coord-a")
+	leaseCtx, ok := coordination.AcquireAndHold(ctx, db, "poller:acme", "coord-a")
 	if !ok {
 		t.Fatal("AcquireAndHold should succeed on an unheld lease")
 	}
@@ -158,7 +157,7 @@ func TestAcquireAndHold_FailsWhenAlreadyHeld(t *testing.T) {
 		t.Fatalf("setup acquire failed: ok=%v err=%v", ok, err)
 	}
 
-	leaseCtx, ok := AcquireAndHold(context.Background(), db, "cron:watch-1", "coord-b")
+	leaseCtx, ok := coordination.AcquireAndHold(context.Background(), db, "cron:watch-1", "coord-b")
 	if ok {
 		t.Fatal("AcquireAndHold should fail when another holder already owns the lease")
 	}
@@ -167,10 +166,9 @@ func TestAcquireAndHold_FailsWhenAlreadyHeld(t *testing.T) {
 	}
 }
 
-// TestLogHeldLeases logs one lease_state line per lease the holder holds now,
-// skipping leases it let expire and leases someone else holds, so a cron can
-// read who holds what without a lease having changed hands in its window.
-func TestLogHeldLeases(t *testing.T) {
+// TestHeldLeases lists the leases the holder holds now, skipping leases it let
+// expire and leases someone else holds.
+func TestHeldLeases(t *testing.T) {
 	db := testOpen(t)
 	for _, n := range []string{"state-held", "state-expired", "state-other"} {
 		resetLease(t, db, n)
@@ -188,13 +186,49 @@ func TestLogHeldLeases(t *testing.T) {
 		}
 	}
 
-	out := logtest.Capture(func() { db.logHeldLeases(context.Background(), "coord-a") })
-	if !strings.Contains(out, "lease_state lease=state-held holder=coord-a") {
-		t.Errorf("log = %q, want a lease_state line for state-held", out)
+	got, err := db.HeldLeases(context.Background(), "coord-a")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, n := range []string{"state-expired", "state-other"} {
-		if strings.Contains(out, "lease="+n) {
-			t.Errorf("log = %q, want no line for %s", out, n)
-		}
+	if len(got) != 1 || got[0] != "state-held" {
+		t.Errorf("HeldLeases = %v, want [state-held]", got)
+	}
+}
+
+// A lease runs out by the database's clock: its expiry is the database's
+// current time plus the ttl, however the caller's own clock reads. (This host
+// shares a clock with the test database, so the test pins where the expiry is
+// measured from, not skew itself.)
+func TestAcquireLease_ExpiryIsMeasuredOnTheDatabaseClock(t *testing.T) {
+	db := testOpen(t)
+	resetLease(t, db, "nat-holder")
+
+	if ok, err := db.AcquireLease("nat-holder", "coord-a", time.Hour); err != nil || !ok {
+		t.Fatalf("acquire: ok=%v err=%v", ok, err)
+	}
+	var left float64
+	if err := db.db.Raw(`SELECT EXTRACT(EPOCH FROM expires_at - clock_timestamp()) FROM leases WHERE name = 'nat-holder'`).Scan(&left).Error; err != nil {
+		t.Fatal(err)
+	}
+	if left > 3600 || left < 3590 {
+		t.Errorf("expiry is %.1fs after the database's now, want about 3600", left)
+	}
+}
+
+// A short lease expires on its own: another holder takes it once it has run
+// out, and not before.
+func TestAcquireLease_ShortLeaseExpiresAndIsTakenOver(t *testing.T) {
+	db := testOpen(t)
+	resetLease(t, db, "nat-holder")
+
+	if ok, err := db.AcquireLease("nat-holder", "coord-a", 300*time.Millisecond); err != nil || !ok {
+		t.Fatalf("acquire: ok=%v err=%v", ok, err)
+	}
+	if ok, _ := db.AcquireLease("nat-holder", "coord-b", time.Minute); ok {
+		t.Fatal("coord-b took an unexpired lease")
+	}
+	time.Sleep(400 * time.Millisecond)
+	if ok, err := db.AcquireLease("nat-holder", "coord-b", time.Minute); err != nil || !ok {
+		t.Fatalf("coord-b should take the expired lease: ok=%v err=%v", ok, err)
 	}
 }

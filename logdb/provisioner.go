@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/graybeardcorp/weft/coordination"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
@@ -123,6 +124,9 @@ type ProvisionerConfig struct {
 	// expected shape for every test that constructs a Provisioner directly
 	// without going through Start.
 	Holder string
+	// Leases grants that lease. Nil uses the store, the hosted Postgres
+	// table (see coordination).
+	Leases coordination.Leases
 	// MaxConcurrentEvaluate is the number of concurrent Evaluate slots:
 	// the bucket pass fans out over it per tick, and shard Evaluates
 	// share it across ticks as a worker pool (see enqueueShardEvaluations).

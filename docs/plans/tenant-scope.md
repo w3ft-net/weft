@@ -1001,6 +1001,54 @@ signatures as each domain moves. Hosted-only tables (subscriptions,
 billing, Stripe, org/team membership) move out of the public `store/` with
 the hosted adapter.
 
+#### Phase 6: where it stands
+
+**Decisions** (2026-11-12):
+
+- The default backend is embedded single-node SQLite, via a cgo-free driver
+  (`modernc.org/sqlite`, BSD-3-Clause) so `cmd/api` stays cgo-free.
+- The api reaches the control plane through the coordinator over gRPC, not by
+  opening the database itself. The coordinator is the single writer.
+- Contract structs live in cgo-free packages that `store/` aliases, so an
+  interface never returns a GORM model.
+- The core triggers (history capture, `deleted_at`, `authored_by`, the
+  `shard_operations` audit) become Go-side writes, not SQLite triggers.
+- Cron-results rollups are not in core. Aggregates are an optional hosted
+  capability; `weft::*` computes from raw rows.
+- Leases are ownership, not state: the open build holds every lease (no
+  record, instant takeover). Claims are state with claim semantics and are
+  persisted in every build. A single atomic statement is the atomicity; no
+  lock is added.
+- A lease's expiry is decided by the backend's clock, not a caller's.
+  Hosted uses `clock_timestamp()` (it used the caller's clock until then, so
+  skew between coordinators shifted expiry). Holders still stop acting a
+  margin before their own deadline (`logdb.leaseValid`, fenced through every
+  external call); a fencing token is not in the interface, since the targets
+  (EC2, AWS APIs) cannot check one and Postgres writes are already
+  compare-and-set.
+- The open build ships no export-concurrency cap. `BeginExportAttempt`'s
+  `maxActive` is hosted-only, applied through a hook when the shard-state
+  domain lands. That makes the open claim one
+  `UPDATE ... WHERE export_attempt = ?`, with no advisory lock.
+
+**Slice 1, coordination (done):** `coordination` defines `Leases`
+(`AcquireLease`, `ReleaseLease`, `HeldLeases`), `Claims` (`ClaimCronSlot`,
+`DeleteCronClaimsBefore`) and the helpers built on them (`AcquireAndHold`,
+`LogLeaseStates`, `LogLeaseEvent`, the TTL constants). None is tenant-scoped, so
+no call takes a partition. `coordination/local` is the open implementation
+(always-held leases; claims in SQLite). Hosted is the store's own methods,
+unchanged (`hosted.Coordination`). `coordination/coordtest` is the shared
+suite, run against both; it is the pattern for Phase 5's harness. The NAT
+elector, the shard-fsm-leader election and the cron executor take the
+interfaces; `app.Adapter.Coordination` supplies them. Its nil default is still
+the store, since the coordinator needs Postgres for every other domain until
+they land.
+
+**Next:** shard state (the registry in `logdb` plus the `store.DB()` callers
+that bypass `store/`), then namespaces/grants/tokens, then crons. The
+`store.DB()` call sites outside hosted code (about 27) move behind methods
+first.
+
 ## Non-goals
 
 - GCP/k8s/other infra. Those are a separate infra-interfaces plan

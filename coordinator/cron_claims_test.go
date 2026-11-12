@@ -13,7 +13,7 @@ import (
 	"github.com/graybeardcorp/weft/store"
 )
 
-// fakeClaimer is an in-memory slotClaimer shared by several simulated
+// fakeClaimer is an in-memory coordination.Claims shared by several simulated
 // coordinators. err, when set, fails every claim.
 type fakeClaimer struct {
 	mu     sync.Mutex
@@ -36,6 +36,9 @@ func (f *fakeClaimer) ClaimCronSlot(key, holder string) (bool, error) {
 	f.owners[key] = holder
 	return true, nil
 }
+
+// DeleteCronClaimsBefore removes nothing: the fake keeps no claim times.
+func (f *fakeClaimer) DeleteCronClaimsBefore(time.Time) (int64, error) { return 0, nil }
 
 type firedRun struct {
 	holder string

@@ -5,10 +5,10 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 	"time"
 
-	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/coordination"
 )
 
-// shardFSMLeaseName is the store.AcquireLease name guarding which
+// shardFSMLeaseName is the coordination.Leases name guarding which
 // coordinator instance drives shard/bucket FSM convergence
 // (evaluateStateMachines) and FSM-transition-firing heartbeat handling
 // (promoteOnHeartbeat). See docs/plans/coordinator-horizontal-scaling.md
@@ -30,9 +30,22 @@ const progressStaleFactor = 2
 // switch tolerates, however fast the tick: the tick itself waits on AWS
 // only in the warm pool's reconcile (reconcileSparesTimeout), so that plus
 // two ticks. Shard Evaluates that wait longer (a swap, an attach) run on
-// workers and don't hold the tick up. Kept under store.LeaseTTL, so a
+// workers and don't hold the tick up. Kept under coordination.LeaseTTL, so a
 // stuck leader gives way about as fast as a dead one.
 const progressStaleFloor = reconcileSparesTimeout + 10*time.Second
+
+// leases is who grants the shard-fsm-leader lease: config.Leases, else the
+// store (which implements coordination.Leases over the hosted Postgres table),
+// else nobody.
+func (p *Provisioner) leases() coordination.Leases {
+	if p.config.Leases != nil {
+		return p.config.Leases
+	}
+	if p.store != nil {
+		return p.store
+	}
+	return nil
+}
 
 // startLeaderElection starts the shard-fsm-leader election loop in a
 // background goroutine, unless Holder or the store is unset — the
@@ -42,8 +55,8 @@ const progressStaleFloor = reconcileSparesTimeout + 10*time.Second
 // NewProvisioner's default of true: this process behaves as the sole,
 // permanent leader, matching every pre-#5 caller's expectations.
 func (p *Provisioner) startLeaderElection(ctx context.Context) {
-	if p.config.Holder == "" || p.store == nil {
-		weftsdk.Infof(ctx, "provisioner: no holder id or store configured — not running shard-fsm-leader election (this process stays leader unconditionally)")
+	if p.config.Holder == "" || p.leases() == nil {
+		weftsdk.Infof(ctx, "provisioner: no holder id or leases configured — not running shard-fsm-leader election (this process stays leader unconditionally)")
 		return
 	}
 	// Seed the progress clock so a freshly-elected leader gets a full
@@ -62,7 +75,7 @@ func (p *Provisioner) startLeaderElection(ctx context.Context) {
 func (p *Provisioner) runLeaderElection(ctx context.Context) {
 	p.leaderTick()
 
-	ticker := time.NewTicker(store.LeaseRenewInterval)
+	ticker := time.NewTicker(coordination.LeaseRenewInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -71,10 +84,10 @@ func (p *Provisioner) runLeaderElection(ctx context.Context) {
 				// Best-effort — an unreleased lease just expires on its own
 				// (LeaseTTL later), so skipping this on a crash is never a
 				// correctness problem, only a slower handoff.
-				if err := p.store.ReleaseLease(shardFSMLeaseName, p.config.Holder); err != nil {
+				if err := p.leases().ReleaseLease(shardFSMLeaseName, p.config.Holder); err != nil {
 					weftsdk.Infof(ctx, "provisioner: release shard-fsm-leader lease on shutdown: %v", err)
 				} else {
-					store.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "released")
+					coordination.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "released")
 				}
 			}
 			return
@@ -93,10 +106,10 @@ func (p *Provisioner) runLeaderElection(ctx context.Context) {
 func (p *Provisioner) leaderTick() {
 	if p.IsLeader() && p.progressStale() {
 		weftsdk.Infof(context.Background(), "provisioner: shard-fsm-leader progress stale (no convergence in %s) — releasing lease rather than renewing", time.Since(p.lastProgressTime()))
-		if err := p.store.ReleaseLease(shardFSMLeaseName, p.config.Holder); err != nil {
+		if err := p.leases().ReleaseLease(shardFSMLeaseName, p.config.Holder); err != nil {
 			weftsdk.Infof(context.Background(), "provisioner: release stale shard-fsm-leader lease: %v", err)
 		} else {
-			store.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "deadman_released")
+			coordination.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "deadman_released")
 		}
 		p.leading.Store(false)
 		return
@@ -105,9 +118,9 @@ func (p *Provisioner) leaderTick() {
 	// Taken before the call, so the expiry it implies is never later than the
 	// lease row's own.
 	asked := time.Now()
-	ok, err := p.store.AcquireLease(shardFSMLeaseName, p.config.Holder, store.LeaseTTL)
+	ok, err := p.leases().AcquireLease(shardFSMLeaseName, p.config.Holder, coordination.LeaseTTL)
 	if ok && err == nil {
-		p.leaseUntil.Store(asked.Add(store.LeaseTTL).UnixNano())
+		p.leaseUntil.Store(asked.Add(coordination.LeaseTTL).UnixNano())
 	}
 	if err != nil {
 		weftsdk.Errorf(context.Background(), "provisioner: shard-fsm-leader lease acquire error: %v", err)
@@ -116,7 +129,7 @@ func (p *Provisioner) leaderTick() {
 	switch {
 	case ok && !p.IsLeader():
 		weftsdk.Infof(context.Background(), "provisioner: acquired shard-fsm-leader lease")
-		store.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "acquired")
+		coordination.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "acquired")
 		// Reset the progress window on a fresh acquire so a just-elected
 		// leader isn't immediately judged stale before its first tick has
 		// had a chance to run.
@@ -124,7 +137,7 @@ func (p *Provisioner) leaderTick() {
 		p.leading.Store(true)
 	case !ok && p.IsLeader():
 		weftsdk.Infof(context.Background(), "provisioner: lost shard-fsm-leader lease")
-		store.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "lost")
+		coordination.LogLeaseEvent(shardFSMLeaseName, p.config.Holder, "lost")
 		p.leading.Store(false)
 	}
 }

@@ -9,10 +9,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 
-	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/coordination"
 )
 
-// natLeaseName is the store.AcquireLease name guarding which coordinator
+// natLeaseName is the coordination.Leases name guarding which coordinator
 // instance owns the private subnet's 0.0.0.0/0 NAT route. See
 // docs/plans/coordinator-horizontal-scaling.md #1.
 const natLeaseName = "nat-holder"
@@ -45,7 +45,7 @@ type natEC2Client interface {
 // old one). So there's no separate anti-flap logic here — the lease
 // primitive already provides it.
 type NATElector struct {
-	store        *store.Store
+	leases       coordination.Leases
 	ec2          natEC2Client
 	routeTableID string
 	eniID        string
@@ -54,9 +54,9 @@ type NATElector struct {
 
 // NewNATElector builds a NATElector. routeTableID and eniID must both be
 // non-empty for Start to actually run the election loop — see Start.
-func NewNATElector(s *store.Store, ec2Client natEC2Client, routeTableID, eniID, holder string) *NATElector {
+func NewNATElector(l coordination.Leases, ec2Client natEC2Client, routeTableID, eniID, holder string) *NATElector {
 	return &NATElector{
-		store:        s,
+		leases:       l,
 		ec2:          ec2Client,
 		routeTableID: routeTableID,
 		eniID:        eniID,
@@ -80,7 +80,7 @@ func (e *NATElector) run(ctx context.Context) {
 	var amHolder bool
 	e.tick(ctx, &amHolder)
 
-	ticker := time.NewTicker(store.LeaseRenewInterval)
+	ticker := time.NewTicker(coordination.LeaseRenewInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -89,10 +89,10 @@ func (e *NATElector) run(ctx context.Context) {
 				// Best-effort — an unreleased lease just expires on its
 				// own (LeaseTTL later), so skipping this on a crash is
 				// never a correctness problem, only a slower handoff.
-				if err := e.store.ReleaseLease(natLeaseName, e.holder); err != nil {
+				if err := e.leases.ReleaseLease(natLeaseName, e.holder); err != nil {
 					weftsdk.Infof(ctx, "nat: release lease on shutdown: %v", err)
 				} else {
-					store.LogLeaseEvent(natLeaseName, e.holder, "released")
+					coordination.LogLeaseEvent(natLeaseName, e.holder, "released")
 				}
 			}
 			return
@@ -110,7 +110,7 @@ func (e *NATElector) run(ctx context.Context) {
 // thing tick guards here is external AWS route state — safe to leave
 // alone and retry next tick rather than react to a single failed DB call.
 func (e *NATElector) tick(ctx context.Context, amHolder *bool) {
-	ok, err := e.store.AcquireLease(natLeaseName, e.holder, store.LeaseTTL)
+	ok, err := e.leases.AcquireLease(natLeaseName, e.holder, coordination.LeaseTTL)
 	if err != nil {
 		weftsdk.Errorf(ctx, "nat: lease acquire error: %v", err)
 		return
@@ -118,7 +118,7 @@ func (e *NATElector) tick(ctx context.Context, amHolder *bool) {
 	switch {
 	case ok && !*amHolder:
 		weftsdk.Infof(ctx, "nat: acquired nat-holder lease, claiming route table %s → %s", e.routeTableID, e.eniID)
-		store.LogLeaseEvent(natLeaseName, e.holder, "acquired")
+		coordination.LogLeaseEvent(natLeaseName, e.holder, "acquired")
 		if err := e.claimRoute(ctx); err != nil {
 			weftsdk.Errorf(ctx, "nat: claim route failed, will retry next tick: %v", err)
 			return
@@ -126,7 +126,7 @@ func (e *NATElector) tick(ctx context.Context, amHolder *bool) {
 		*amHolder = true
 	case !ok && *amHolder:
 		weftsdk.Infof(ctx, "nat: lost nat-holder lease")
-		store.LogLeaseEvent(natLeaseName, e.holder, "lost")
+		coordination.LogLeaseEvent(natLeaseName, e.holder, "lost")
 		*amHolder = false
 	}
 }

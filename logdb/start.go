@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/weft/coordination"
 	"github.com/graybeardcorp/weft/shard"
 	"github.com/graybeardcorp/weft/store"
 )
@@ -56,6 +57,10 @@ type Config struct {
 	// the pre-#5 single-process behavior. See
 	// docs/plans/coordinator-horizontal-scaling.md #5.
 	Holder string
+
+	// Leases grants that lease (ProvisionerConfig.Leases). Nil: the DB, the
+	// hosted Postgres table.
+	Leases coordination.Leases
 
 	// Retention is the optional retention feature: told of each archive's
 	// stats and started with the provisioner. Nil: archives are kept forever.
@@ -316,6 +321,7 @@ func startProd(cfg Config, reg *ShardRegistry, lambdaURL string, subnets map[str
 	provConfig.LambdaFunctionURL = lambdaURL
 	provConfig.VolumeSizesGB = parseShardVolumeSizes()
 	provConfig.Holder = cfg.Holder
+	provConfig.Leases = cfg.Leases
 	provConfig.Retention = cfg.Retention
 	wireArchiveExport(cfg.Ctx, &provConfig, cfg.AWSRegion, subnets)
 	weftsdk.Infof(context.Background(), "provisioner: per-tier volume sizes (GiB) from env: %v (tiers absent fall back to %d)", provConfig.VolumeSizesGB, defaultShardVolumeGB)
@@ -368,6 +374,7 @@ func startDev(cfg Config, reg *ShardRegistry) (*Provisioner, error) {
 	provConfig.ShardSecret = cfg.ShardSecret
 	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 	provConfig.Holder = cfg.Holder
+	provConfig.Leases = cfg.Leases
 	provConfig.Retention = cfg.Retention
 	prov := NewProvisioner(reg, launcher, provConfig)
 

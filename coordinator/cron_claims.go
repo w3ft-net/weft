@@ -6,6 +6,7 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
+	"github.com/graybeardcorp/weft/coordination"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -25,13 +26,9 @@ const (
 	cronClaimRetention = 24 * time.Hour
 )
 
-// slotClaimer is the exactly-once primitive claim mode runs on.
-// *store.Store implements it.
-type slotClaimer interface {
-	ClaimCronSlot(key, holder string) (won bool, err error)
-}
-
-func (ce *CronExecutor) claimer() slotClaimer {
+// claimer is the exactly-once primitive claim mode runs on: Claims, else the
+// store (which implements coordination.Claims over the hosted Postgres table).
+func (ce *CronExecutor) claimer() coordination.Claims {
 	if ce.Claims != nil {
 		return ce.Claims
 	}
@@ -131,7 +128,7 @@ func (ce *CronExecutor) claimTick(ctx context.Context, st *cronClaimState, now t
 
 // pruneClaims drops claim rows past cronClaimRetention.
 func (ce *CronExecutor) pruneClaims(ctx context.Context) {
-	n, err := ce.Store.DeleteCronClaimsBefore(time.Now().Add(-cronClaimRetention))
+	n, err := ce.claimer().DeleteCronClaimsBefore(time.Now().Add(-cronClaimRetention))
 	if err != nil {
 		weftsdk.Errorf(ctx, "cron: claim cleanup failed: %v", err)
 		return

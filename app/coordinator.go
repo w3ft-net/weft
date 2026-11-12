@@ -24,6 +24,7 @@ import (
 
 	"github.com/graybeardcorp/weft/compute"
 	weftcfg "github.com/graybeardcorp/weft/config"
+	"github.com/graybeardcorp/weft/coordination"
 	"github.com/graybeardcorp/weft/coordinator"
 	coordsvc "github.com/graybeardcorp/weft/coordinator/service"
 	"github.com/graybeardcorp/weft/identity"
@@ -223,6 +224,7 @@ func Coordinator(a Adapter) {
 	// docs/plans/coordinator-horizontal-scaling.md #5). Computed before
 	// logdb.Start so the provisioner's own election loop can use it too.
 	holder := coordinatorHolder()
+	coordn := a.coordination(db)
 
 	// Tag every query-audit line with the same identity, so a query-
 	// routing imbalance across coordinator_desired>1 instances is
@@ -243,6 +245,7 @@ func Coordinator(a Adapter) {
 		ShardSecret: shardSecret,
 		AWSRegion:   *awsRegion,
 		Holder:      holder,
+		Leases:      coordn,
 		Retention:   a.retention(db, *awsRegion),
 
 		LegacyFactTable: a.LegacyFactTable,
@@ -287,6 +290,7 @@ func Coordinator(a Adapter) {
 			Coord:    coord,
 			Notifier: notifier,
 			Holder:   holder,
+			Claims:   coordn,
 		}
 		cronExec.Start(ctx)
 
@@ -310,7 +314,7 @@ func Coordinator(a Adapter) {
 					if err != nil {
 						weftsdk.Errorf(ctx, "nat: resolve own ENI failed, not running NAT election: %v", err)
 					} else {
-						elector := coordinator.NewNATElector(db, ec2Client, routeTableID, eniID, holder)
+						elector := coordinator.NewNATElector(coordn, ec2Client, routeTableID, eniID, holder)
 						elector.Start(ctx)
 					}
 				}
@@ -473,7 +477,7 @@ func Coordinator(a Adapter) {
 	go wc.HeartbeatWithFields(cfgCtx, "coordinator", weftsdk.DefaultHeartbeatInterval, telemetryFields)
 	go wc.RuntimeStatsWithFields(cfgCtx, "coordinator", weftsdk.DefaultRuntimeStatsInterval, telemetryFields)
 	// Every minute, so a cron on any schedule sees who holds each lease.
-	go db.LogLeaseStates(cfgCtx, holder, time.Minute)
+	go coordination.LogLeaseStates(cfgCtx, coordn, holder, time.Minute)
 
 	// Signal handling. Needed so `go build -cover` binaries flush
 	// coverage counters on `docker compose down` — SIGKILL skips the
