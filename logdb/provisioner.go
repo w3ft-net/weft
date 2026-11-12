@@ -299,8 +299,11 @@ type Provisioner struct {
 	// tests) this process is the permanent leader and its lease never
 	// expires. leaseUntil is the earliest moment the lease this process last
 	// won could expire (see leaderTick), in unix nanos.
-	electing   atomic.Bool
-	leaseUntil atomic.Int64
+	electing atomic.Bool
+	// electionDone is closed when the election loop has returned (see
+	// LeaderElectionDone). Nil when no election runs.
+	electionDone chan struct{}
+	leaseUntil   atomic.Int64
 	// lastProgress is the unix-nanos timestamp of the last observed
 	// convergence progress — stamped inside evaluateStateMachines, once
 	// per tick and again after each individual bucket/shard Evaluate call

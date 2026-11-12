@@ -254,6 +254,17 @@ func Coordinator(a Adapter) {
 		log.Fatalf("logdb.Start: %v", err)
 	}
 	coord.Provisioner = prov
+	// Stopping the process cancels provCtx, and the election loop releases the
+	// shard-fsm-leader lease in its own goroutine. Wait for that release before
+	// main returns, or the next coordinator waits out a whole lease TTL as a
+	// follower. Deferred after provCancel, so it runs before it.
+	defer func() {
+		provCancel()
+		select {
+		case <-prov.LeaderElectionDone():
+		case <-time.After(5 * time.Second):
+		}
+	}()
 	coord.StartDLQReplay(drainCtx, time.Minute, prov.IsLeader)
 
 	// Runtime config watcher — powers IngestStream's per-stream byte

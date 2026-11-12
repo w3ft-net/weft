@@ -65,7 +65,23 @@ func (p *Provisioner) startLeaderElection(ctx context.Context) {
 	// time.Since would read as "ancient" and trip the switch immediately).
 	p.lastProgress.Store(time.Now().UnixNano())
 	p.electing.Store(true)
+	p.electionDone = make(chan struct{})
 	go p.runLeaderElection(ctx)
+}
+
+// LeaderElectionDone is closed once the election loop has stopped and, if this
+// process led, given the lease back. A process that exits right after
+// cancelling the context waits on it first: the release runs in the loop's
+// goroutine, and without the wait a leader that is stopped (a deploy, a
+// restart) usually exits before the release lands, so its successor sits out a
+// whole LeaseTTL as a follower. It is already closed when no election runs.
+func (p *Provisioner) LeaderElectionDone() <-chan struct{} {
+	if p.electionDone == nil {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	return p.electionDone
 }
 
 // runLeaderElection is the election loop: continuous-retry, same shape as
@@ -73,6 +89,7 @@ func (p *Provisioner) startLeaderElection(ctx context.Context) {
 // AcquireAndHold, since a non-leader has to keep retrying every tick in
 // case the leader dies or gives up the lease (progressStale below).
 func (p *Provisioner) runLeaderElection(ctx context.Context) {
+	defer close(p.electionDone)
 	p.leaderTick()
 
 	ticker := time.NewTicker(coordination.LeaseRenewInterval)

@@ -261,6 +261,9 @@ jobs:
           # for healthy services.
           sleep 5
           docker compose up -d
+      - name: Wait for the coordinator to lead
+        working-directory: weft
+        run: scripts/wait-coordinator-leader.sh
       - name: Run -tags integration
         working-directory: weft
         run: gotestsum --junitfile integration-report.xml -- -tags integration,test -count=1 -timeout 10m -v ./integration/
@@ -334,6 +337,9 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml up -d --build
           sleep 5
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml up -d
+      - name: Wait for the coordinator to lead
+        working-directory: weft
+        run: scripts/wait-coordinator-leader.sh -f docker-compose.yml -f docker-compose.localstack.yml
       - name: Run -tags integration,localstack
         working-directory: weft
         run: gotestsum --junitfile localstack-report.xml -- -tags integration,localstack,test -count=1 -timeout 10m -v ./integration/
@@ -418,6 +424,9 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml up -d --build
           sleep 5
           docker compose -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml up -d
+      - name: Wait for the coordinator to lead
+        working-directory: weft
+        run: scripts/wait-coordinator-leader.sh -f docker-compose.yml -f docker-compose.localstack.yml -f docker-compose.cover.yml
       - name: Run generic suite under coverage
         working-directory: weft
         run: gotestsum --junitfile coverage-generic-report.xml -- -tags integration,test -count=1 -timeout 10m -v ./integration/
