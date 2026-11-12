@@ -204,6 +204,48 @@ func CoordFromPartition(values []string) (Coord, error) {
 	return c, c.validate()
 }
 
+// AddedFromPartition is the added columns of one partition, typed from
+// PartitionValues text. It does not insist that a required column be set,
+// which CoordFromPartition does: a stored row of the zero tenant is still a row
+// the coordinator carries.
+func AddedFromPartition(values []string) (Added, error) {
+	var a Added
+	if len(values) != {{len .Partition}} {
+		return a, fmt.Errorf("shape: a partition has {{len .Partition}} values, got %d", len(values))
+	}
+{{- range $i, $c := .Partition}}
+{{- if eq $c.Type "int64"}}
+	n{{$i}}, err := strconv.ParseInt(values[{{$i}}], 10, 64)
+	if err != nil {
+		return a, fmt.Errorf("shape: partition column {{$c.Name}}: %w", err)
+	}
+	a.{{$c.GoName}} = n{{$i}}
+{{- else}}
+	a.{{$c.GoName}} = values[{{$i}}]
+{{- end}}
+{{- end}}
+	return a, nil
+}
+
+// Coord is the whole-partition tuple of the added columns: they are the
+// tuple's required columns and every other column is open.
+func (a Added) Coord() Coord {
+	return Coord{
+{{- range .Cols}}{{if .Added}}
+		{{.GoName}}: a.{{.GoName}},
+{{- end}}{{end}}
+	}
+}
+
+// Added is the added columns a tuple names.
+func (c Coord) Added() Added {
+	return Added{
+{{- range .Cols}}{{if .Added}}
+		{{.GoName}}: c.{{.GoName}},
+{{- end}}{{end}}
+	}
+}
+
 // WithPartition is the tuple with the partition p names: the required columns
 // are p's, and every other column is the tuple's own.
 func (c Coord) WithPartition(p Coord) Coord {

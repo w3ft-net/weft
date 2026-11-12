@@ -9,7 +9,6 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
-	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -76,13 +75,15 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 				byKey := make(map[drainKey][]*pb.LogRow)
 				var order []drainKey
 				for _, row := range batch {
-					k := drainKey{row.Customer, row.Namespace, row.Service}
+					k := drainKey{row.Added, row.Namespace, row.Service}
 					if _, seen := byKey[k]; !seen {
 						order = append(order, k)
 					}
 					byKey[k] = append(byKey[k], row.LogRow)
-					if c.Usage != nil && row.Customer != 0 {
-						c.Usage.Record(row.Customer, int64(len(row.Raw)))
+					if c.Usage != nil {
+						if org := c.Mapper().OrgOf(row.Added); org != 0 {
+							c.Usage.Record(int64(org), int64(len(row.Raw)))
+						}
 					}
 				}
 
@@ -91,7 +92,7 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					// Route by (namespace_id, service). namespace_id is
 					// resolved through a (customer, namespace) cache so the
 					// per-batch grouping keeps the DB off the hot path.
-					nsID := c.ingestNamespaceID(k.customerID, k.namespace)
+					nsID := c.ingestNamespaceID(k.added, k.namespace)
 					// Strict service-scoped routing only — no whole-registry
 					// fallback, which would commingle a different tenant's
 					// rows onto the wrong shard. A service onboarded after
@@ -101,8 +102,8 @@ func (c *Coordinator) StartDrain(ctx context.Context) {
 					// scanner re-ingests once a shard serves them.
 					sh := c.Provisioner.IngestingShard(nsID, k.service)
 					if sh == nil {
-						dlqPath := c.DLQ.Write(k.added(), rows)
-						c.Errors.Record("none", "no shard serves "+k.namespace+"/"+k.service, k.added(), rows, dlqPath)
+						dlqPath := c.DLQ.Write(k.added, rows)
+						c.Errors.Record("none", "no shard serves "+k.namespace+"/"+k.service, k.added, rows, dlqPath)
 						weftsdk.Infof(ctx, "drain: DLQ'd %d rows for %s (no shard serves this service)", len(rows), k.namespace+"/"+k.service)
 						continue
 					}
@@ -140,9 +141,9 @@ func (c *Coordinator) enqueue(ctx context.Context, b drainBatch) {
 		if s.rows+len(b.rows) > maxQueuedRowsPerShard {
 			backlog := s.rows
 			s.mu.Unlock()
-			dlqPath := c.DLQ.Write(b.key.added(), b.rows)
+			dlqPath := c.DLQ.Write(b.key.added, b.rows)
 			err := fmt.Errorf("shard %s send queue full (%d rows waiting)", id, backlog)
-			c.Errors.Record(id, err.Error(), b.key.added(), b.rows, dlqPath)
+			c.Errors.Record(id, err.Error(), b.key.added, b.rows, dlqPath)
 			weftsdk.Errorf(ctx, "drain: DLQ'd %d rows for %s: %v", len(b.rows), b.key.namespace+"/"+b.key.service, err)
 			return
 		}
@@ -213,7 +214,7 @@ func (c *Coordinator) ingestBatch(ctx context.Context, b drainBatch) {
 	// (N/M) for the log line. (Routing exclusion is the FSM's job now, not
 	// a per-failure ingest latch.)
 	// A batch is one customer's rows (drainKey), so it is one partition.
-	batch := shard.Batch{Rows: b.rows, PartitionValues: shape.Coord{Customer: b.key.customerID}.PartitionValues()}
+	batch := shard.Batch{Rows: b.rows, PartitionValues: b.key.added.Coord().PartitionValues()}
 	err := b.sh.IngestBatch(ctx, batch, c.Provisioner)
 	if err == nil {
 		c.Provisioner.Stats().Record(app, int64(len(b.rows)))
@@ -232,8 +233,8 @@ func (c *Coordinator) ingestBatch(ctx context.Context, b drainBatch) {
 	}
 
 	// All retries exhausted — DLQ.
-	dlqPath := c.DLQ.Write(b.key.added(), b.rows)
-	c.Errors.Record(b.sh.ID(), err.Error(), b.key.added(), b.rows, dlqPath)
+	dlqPath := c.DLQ.Write(b.key.added, b.rows)
+	c.Errors.Record(b.sh.ID(), err.Error(), b.key.added, b.rows, dlqPath)
 	weftsdk.Errorf(ctx, "drain: DLQ'd %d rows for %s (shard %s failed, no fallback)", len(b.rows), app, b.sh.ID())
 }
 

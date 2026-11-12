@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"testing"
 
 	"github.com/graybeardcorp/weft/logtable"
 	"github.com/graybeardcorp/weft/shape"
@@ -75,4 +76,33 @@ func Args(n int64) []any {
 		out = append(out, v)
 	}
 	return out
+}
+
+// Added is tenant n's added columns: n in every partition column. A shape
+// without a tenant has the zero value.
+func Added(n int64) shape.Added {
+	a, err := shape.AddedFromPartition(Partition(n))
+	if err != nil {
+		panic(fmt.Sprintf("shapetest.Added(%d): %v", n, err))
+	}
+	return a
+}
+
+// In is the tuple c within tenant n's partition: c's other columns, n in the
+// partition columns.
+func In(n int64, c shape.Coord) shape.Coord { return c.WithPartition(Added(n).Coord()) }
+
+// KeyIn is the key k of a row of tenant n.
+func KeyIn(n int64, k shape.Key) shape.Key { return k.InPartition(Added(n).Coord()) }
+
+// KeyInPtr is KeyIn, addressable: Set.Matches takes a *Key.
+func KeyInPtr(n int64, k shape.Key) *shape.Key { kk := KeyIn(n, k); return &kk }
+
+// NeedsTenant skips a test that keeps one tenant's data from another's under a
+// shape that has no tenant: there every row is in the one partition.
+func NeedsTenant(t testing.TB) {
+	t.Helper()
+	if len(shape.BuildLayout().Columns) == 0 {
+		t.Skip("this shape has no tenant to keep apart from another")
+	}
 }

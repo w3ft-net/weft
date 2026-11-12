@@ -45,7 +45,7 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 	// tests that build a Coordinator without a store.
 	var binFS bash.FS
 	if custID != 0 && c != nil && c.Store != nil {
-		binFS = shellfs.New(c.Store, custID, nil)
+		binFS = shellfs.New(c.Store, custID, nil, shellfs.WithTenancy(c.mountTenancy()))
 	}
 	bash.Walk(script, func(n bash.Node) bool {
 		pipe, ok := n.(*bash.Pipeline)

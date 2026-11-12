@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package witrepo
 
 import (
@@ -11,6 +13,7 @@ import (
 
 	"github.com/graybeardcorp/saaskit/orgs"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 type fixture struct {
@@ -78,7 +81,7 @@ func newFixture(t *testing.T) *fixture {
 }
 
 func (f *fixture) repo(user *store.User, cwd string) *Repo {
-	return New(Config{Store: f.db, OrgID: f.org, UserID: user.ID, Cwd: func() string { return cwd }})
+	return New(Config{Store: f.db, OrgID: f.org, UserID: user.ID, Cwd: func() string { return cwd }, Tenancy: hosted.NewAdapter(f.db)})
 }
 
 func (f *fixture) saveBin(t *testing.T, u *store.User, name, src string) {

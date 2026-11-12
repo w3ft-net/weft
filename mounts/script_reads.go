@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/weft/logreads"
-	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy"
 )
@@ -81,11 +80,11 @@ func (c Config) authorizeHomedCronReads(home, pipeline string) error {
 	if !ok {
 		return errors.New("mounts: the scope can't say what a namespace's crons may read")
 	}
-	set, err := scoper.NamespaceScope(c.ctx(), int64(c.OrgID), home)
+	set, err := scoper.NamespaceScope(c.ctx(), c.partition(), home)
 	if err != nil {
 		return err
 	}
-	allowed, all, err := set.Namespaces(shape.Coord{Customer: int64(c.OrgID)})
+	allowed, all, err := set.Namespaces(c.partition().Coord())
 	if err != nil {
 		return err
 	}

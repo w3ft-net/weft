@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package coordinator
 
 import (

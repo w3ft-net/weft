@@ -2,7 +2,8 @@ package coordinator
 
 import (
 	"context"
-	"reflect"
+	"github.com/graybeardcorp/weft/shape/shapetest"
+	"slices"
 	"sync"
 	"testing"
 
@@ -33,7 +34,7 @@ func TestIngestBatch_CarriesThePartitionValues(t *testing.T) {
 	seedIngesting(c, sh.id, sh)
 
 	c.ingestBatch(context.Background(), drainBatch{
-		key:  drainKey{customerID: 42, namespace: "weft", service: "coordinator"},
+		key:  drainKey{added: shapetest.Added(42), namespace: "weft", service: "coordinator"},
 		sh:   sh,
 		rows: dlqTestRows("weft/coordinator", 2),
 	})
@@ -41,7 +42,7 @@ func TestIngestBatch_CarriesThePartitionValues(t *testing.T) {
 	if len(sh.batches) != 1 {
 		t.Fatalf("shard got %d batches, want 1", len(sh.batches))
 	}
-	if got, want := sh.batches[0].PartitionValues, []string{"42"}; !reflect.DeepEqual(got, want) {
+	if got, want := sh.batches[0].PartitionValues, shapetest.Partition(42); !slices.Equal(got, want) {
 		t.Errorf("PartitionValues = %v, want %v", got, want)
 	}
 }

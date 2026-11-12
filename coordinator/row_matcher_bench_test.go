@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"fmt"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"testing"
 
 	"github.com/graybeardcorp/weft/planner"
@@ -20,7 +21,7 @@ func liveRows() []Row {
 			Kind:      "main",
 			Env:       "prod",
 			Raw:       "2026-11-11T10:00:00Z INFO request path=/api/v1/items status=200",
-		}, Added: shape.Added{Customer: int64(1 + i%50)}})
+		}, Added: shapetest.Added(int64(1 + i%50))})
 	}
 	return rows
 }
@@ -31,10 +32,10 @@ var grepError = []planner.GrepPattern{{Pattern: "status=500"}}
 // to every subscription, and most belong to someone else.
 func BenchmarkRowMatcher(b *testing.B) {
 	rows := liveRows()
-	one := shape.Set{{Customer: 7, Namespace: shape.Value("ns1"), Service: shape.Value("svc3"), Kind: shape.Value("main"), Env: shape.Any()}}
+	one := shape.Set{shapetest.In(7, shape.Coord{Namespace: shape.Value("ns1"), Service: shape.Value("svc3"), Kind: shape.Value("main"), Env: shape.Any()})}
 	var many shape.Set
 	for i := 0; i < 20; i++ {
-		many = append(many, shape.Coord{Customer: 7, Namespace: shape.Value(fmt.Sprintf("ns%d", i%4)), Service: shape.Value(fmt.Sprintf("svc%d", i)), Kind: shape.Value("main")})
+		many = append(many, shapetest.In(7, shape.Coord{Namespace: shape.Value(fmt.Sprintf("ns%d", i%4)), Service: shape.Value(fmt.Sprintf("svc%d", i)), Kind: shape.Value("main")}))
 	}
 	for _, tc := range []struct {
 		name string

@@ -19,32 +19,32 @@ import (
 type TailBroker struct {
 	mu          sync.RWMutex
 	subscribers map[uint64]*tailSubscription
-	byCustomer  map[int64][]*tailSubscription
+	byPartition map[shape.Added][]*tailSubscription
 	nextID      atomic.Uint64
 }
 
 type tailSubscription struct {
-	id        uint64
-	matcher   *RowMatcher
-	ch        chan Row
-	ctx       context.Context
-	customers []int64 // the distinct customers matcher.Coords names
+	id         uint64
+	matcher    *RowMatcher
+	ch         chan Row
+	ctx        context.Context
+	partitions []shape.Added // the distinct partitions matcher.Coords names
 }
 
 // NewTailBroker creates a broker ready to accept subscriptions.
 func NewTailBroker() *TailBroker {
 	return &TailBroker{
 		subscribers: make(map[uint64]*tailSubscription),
-		byCustomer:  make(map[int64][]*tailSubscription),
+		byPartition: make(map[shape.Added][]*tailSubscription),
 	}
 }
 
-// customersOf is the distinct customers a set names.
-func customersOf(s shape.Set) []int64 {
-	var out []int64
+// partitionsOf is the distinct partitions a set names.
+func partitionsOf(s shape.Set) []shape.Added {
+	var out []shape.Added
 	for i := range s {
-		if !slices.Contains(out, s[i].Customer) {
-			out = append(out, s[i].Customer)
+		if a := s[i].Added(); !slices.Contains(out, a) {
+			out = append(out, a)
 		}
 	}
 	return out
@@ -57,11 +57,11 @@ func (b *TailBroker) Subscribe(ctx context.Context, matcher *RowMatcher) (uint64
 	id := b.nextID.Add(1)
 	ch := make(chan Row, 1000)
 
-	sub := &tailSubscription{id: id, matcher: matcher, ch: ch, ctx: ctx, customers: customersOf(matcher.Coords)}
+	sub := &tailSubscription{id: id, matcher: matcher, ch: ch, ctx: ctx, partitions: partitionsOf(matcher.Coords)}
 	b.mu.Lock()
 	b.subscribers[id] = sub
-	for _, c := range sub.customers {
-		b.byCustomer[c] = append(b.byCustomer[c], sub)
+	for _, c := range sub.partitions {
+		b.byPartition[c] = append(b.byPartition[c], sub)
 	}
 	b.mu.Unlock()
 
@@ -74,10 +74,10 @@ func (b *TailBroker) Unsubscribe(id uint64) {
 	if sub, ok := b.subscribers[id]; ok {
 		close(sub.ch)
 		delete(b.subscribers, id)
-		for _, c := range sub.customers {
-			b.byCustomer[c] = slices.DeleteFunc(b.byCustomer[c], func(s *tailSubscription) bool { return s.id == id })
-			if len(b.byCustomer[c]) == 0 {
-				delete(b.byCustomer, c)
+		for _, c := range sub.partitions {
+			b.byPartition[c] = slices.DeleteFunc(b.byPartition[c], func(s *tailSubscription) bool { return s.id == id })
+			if len(b.byPartition[c]) == 0 {
+				delete(b.byPartition, c)
 			}
 		}
 	}
@@ -92,7 +92,7 @@ func (b *TailBroker) HasSubscriber(row Row) bool {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	for _, sub := range b.byCustomer[row.Customer] {
+	for _, sub := range b.byPartition[row.Added] {
 		if sub.ctx.Err() != nil {
 			continue // subscriber disconnected, skip
 		}
@@ -111,7 +111,7 @@ func (b *TailBroker) Broadcast(rows []Row) {
 	defer b.mu.RUnlock()
 
 	for _, row := range rows {
-		for _, sub := range b.byCustomer[row.Customer] {
+		for _, sub := range b.byPartition[row.Added] {
 			if sub.ctx.Err() != nil {
 				continue // subscriber disconnected, skip
 			}

@@ -238,6 +238,38 @@ func TestConformance_PartitionRefusesADifferentOrUnsetPartition(t *testing.T) {
 }
 {{- end}}
 
+func TestConformance_AddedAndCoordRoundTrip(t *testing.T) {
+	r := rand.New(rand.NewSource(8))
+	for i := 0; i < 200; i++ {
+		a := randCoord(r)
+		add := a.Added()
+		if add.Coord().Added() != add {
+			t.Fatalf("Added does not survive a trip through Coord: %+v", add)
+		}
+		if !slices.Equal(add.Coord().PartitionValues(), a.PartitionValues()) {
+			t.Fatalf("the whole-partition tuple of %+v names another partition than %+v", add, a)
+		}
+		back, err := AddedFromPartition(a.PartitionValues())
+		if err != nil || !slices.Equal(back.Coord().PartitionValues(), a.PartitionValues()) {
+			t.Fatalf("AddedFromPartition(%v) = %+v, %v", a.PartitionValues(), back, err)
+		}
+	}
+	// a zero partition is still a partition a stored row can name
+	l := BuildLayout()
+	zero := make([]string, len(l.Columns))
+	for i, c := range l.Columns {
+		if c.Type == TypeInt64 {
+			zero[i] = "0"
+		}
+	}
+	if _, err := AddedFromPartition(zero); err != nil {
+		t.Errorf("the zero partition was refused: %v", err)
+	}
+	if _, err := AddedFromPartition(append(zero, "extra")); err == nil {
+		t.Error("a partition with too many values was accepted")
+	}
+}
+
 func TestConformance_NamespacesOfOnePartition(t *testing.T) {
 	within := base(Any())
 	scope := Set{base(Value("n1")), base(Value("n2")), base(Value("n1"))}

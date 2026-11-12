@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"reflect"
 	"testing"
 	"time"
@@ -10,14 +11,14 @@ import (
 
 	"github.com/graybeardcorp/weft/compute"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
-	"github.com/graybeardcorp/weft/shape"
 )
 
 // The customer of a row in the coordinator is its added column, never the
 // LogRow's customer_id: a row whose tag 26 is unset still belongs to customer 7.
 
 func TestRow_CustomerIsTheAddedColumnNotTag26(t *testing.T) {
-	row := Row{LogRow: &pb.LogRow{Namespace: "ns", Service: "svc", Kind: "main", Raw: "x"}, Added: shape.Added{Customer: 7}}
+	shapetest.NeedsTenant(t)
+	row := Row{LogRow: &pb.LogRow{Namespace: "ns", Service: "svc", Kind: "main", Raw: "x"}, Added: shapetest.Added(7)}
 	b := NewTailBroker()
 	ctx := context.Background()
 	_, ch7 := b.Subscribe(ctx, tailSet(7))
@@ -41,6 +42,7 @@ func TestRow_CustomerIsTheAddedColumnNotTag26(t *testing.T) {
 }
 
 func TestDrain_GroupsAndPartitionsByTheAddedColumn(t *testing.T) {
+	shapetest.NeedsTenant(t)
 	dlq, putter := testDLQ()
 	c := NewCoordinator(CoordinatorConfig{Compute: &compute.Engine{}, DLQ: dlq})
 	sh := &recordingShard{countingShard: countingShard{dlqFailingShard: dlqFailingShard{id: "shard-rec"}}}
@@ -50,8 +52,8 @@ func TestDrain_GroupsAndPartitionsByTheAddedColumn(t *testing.T) {
 	defer cancel()
 	c.StartDrain(ctx)
 
-	rows := RowsOf(shape.Added{Customer: 7}, dlqTestRows("weft/coordinator", 3))
-	rows = append(rows, RowsOf(shape.Added{Customer: 8}, dlqTestRows("weft/coordinator", 2))...)
+	rows := RowsOf(shapetest.Added(7), dlqTestRows("weft/coordinator", 3))
+	rows = append(rows, RowsOf(shapetest.Added(8), dlqTestRows("weft/coordinator", 2))...)
 	for _, r := range rows {
 		if r.CustomerId != 0 {
 			t.Fatal("the fixture stamps tag 26")
@@ -84,7 +86,7 @@ func TestDrain_GroupsAndPartitionsByTheAddedColumn(t *testing.T) {
 func TestDLQ_EnvelopeRestoresTheAddedColumnsWithoutTag26(t *testing.T) {
 	d, _ := testDLQ()
 	rows := dlqTestRows("weft/coordinator", 2)
-	if d.Write(shape.Added{Customer: 7}, rows) == "" {
+	if d.Write(shapetest.Added(7), rows) == "" {
 		t.Fatal("Write failed")
 	}
 	var got []Row
@@ -95,8 +97,8 @@ func TestDLQ_EnvelopeRestoresTheAddedColumnsWithoutTag26(t *testing.T) {
 		t.Fatalf("replayed %d rows, want 2", len(got))
 	}
 	for i, r := range got {
-		if r.Customer != 7 || r.CustomerId != 0 {
-			t.Errorf("row %d replayed as customer %d with customer_id %d, want 7 and 0", i, r.Customer, r.CustomerId)
+		if r.Added != shapetest.Added(7) || r.CustomerId != 0 {
+			t.Errorf("row %d replayed as %+v with customer_id %d, want tenant 7 and 0", i, r.Added, r.CustomerId)
 		}
 	}
 }
@@ -112,10 +114,10 @@ func TestDLQ_ReadsALineWrittenBeforeTheEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Customer != 12 || r.Raw != "old" {
-		t.Errorf("legacy line decoded as customer %d row %q, want 12 and old", r.Customer, r.Raw)
+	if r.Raw != "old" {
+		t.Errorf("legacy line decoded as row %q, want old", r.Raw)
 	}
-	if want := (shape.Added{Customer: 12}); !reflect.DeepEqual(r.Added, want) {
+	if want := (shapetest.Added(12)); !reflect.DeepEqual(r.Added, want) {
 		t.Errorf("Added = %+v, want %+v", r.Added, want)
 	}
 }

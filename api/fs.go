@@ -16,6 +16,7 @@ import (
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/shellfs"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // shellFS is the filesystem the shell writes through, bound to this request's
@@ -24,6 +25,7 @@ import (
 // the store, so there is one implementation of who may write what.
 func (s *Server) shellFS(r *http.Request, session *auth.Session, logServices []string) *shellfs.ShellFS {
 	return shellfs.New(s.store, session.Org(), logServices,
+		shellfs.WithTenancy(hosted.NewAdapter(s.store)),
 		shellfs.WithUser(session.UserID),
 		shellfs.WithTier(session.Tier),
 		shellfs.WithContext(r.Context()))

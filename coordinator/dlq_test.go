@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"io"
 	"strings"
 	"sync"
@@ -19,7 +20,6 @@ import (
 	"github.com/graybeardcorp/weft/compute"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
-	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shard"
 )
 
@@ -127,7 +127,7 @@ func (s *dlqFailingShard) Ingest(_ context.Context, _ []*pb.LogRow, _ shard.Inge
 
 // dlqAdded is the added columns of the rows dlqTestRows makes: customer 1. The
 // LogRows themselves carry no customer_id.
-var dlqAdded = shape.Added{Customer: 1}
+var dlqAdded = shapetest.Added(1)
 
 // dlqIngestRows is dlqTestRows as the coordinator holds them.
 func dlqIngestRows(app string, n int) []Row { return RowsOf(dlqAdded, dlqTestRows(app, n)) }
@@ -192,8 +192,9 @@ func TestDLQ_Write_PayloadShape(t *testing.T) {
 	if len(decoded) != len(rows) {
 		t.Fatalf("expected %d records, got %d", len(rows), len(decoded))
 	}
-	if decoded[0]["added"].(map[string]any)["Customer"] != float64(1) {
-		t.Errorf("record carries the wrong added columns: %v", decoded[0])
+	wantAdded, _ := json.Marshal(shapetest.Added(1))
+	if gotAdded, _ := json.Marshal(decoded[0]["added"]); string(gotAdded) != string(wantAdded) {
+		t.Errorf("record carries the added columns %s, want %s", gotAdded, wantAdded)
 	}
 	if row, _ := decoded[0]["row"].(map[string]any); row["namespace"] != "weft" || row["service"] != "coordinator" {
 		t.Errorf("record fields wrong: %v", decoded[0])
@@ -261,7 +262,6 @@ func TestDrain_PrimaryAndFallbackFail_RoutesToDLQ(t *testing.T) {
 		Live:  &dlqFailingShard{id: "shard-down"}, CreatedAt: time.Now(),
 	}
 	logdb.SeedShard(c.Provisioner, e)
-	stampShardServicesFromApps(t, c, e, []string{"weft/coordinator"})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -8,14 +8,12 @@ import (
 	"io"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/tenancy"
-	"github.com/graybeardcorp/weft/tenancy/hosted"
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
@@ -168,7 +166,9 @@ type Coordinator struct {
 	Provisioner  *logdb.Provisioner      // shard lifecycle + registry. Never nil after NewCoordinator; main.go swaps in the real one once logdb.Start completes.
 	Usage        *CustomerUsageStats     // nil = no per-customer byte metering
 	ColdScans    *ColdScanLedger         // nil = no cold scan metering (docs/plans/cold-scan-cap.md)
-	Scoper       tenancy.Scoper          // decides what an actor may read; NewCoordinator defaults it to the hosted org/team Scoper over Store
+	Scoper       tenancy.Scoper          // decides what an actor may read; NewCoordinator defaults it to DefaultAdapter's over Store
+	Authz        tenancy.Authorizer      // decides what an actor may change; defaults to DefaultAdapter's over Store
+	Orgs         Orgs                    // maps the store's org handle to and from the shape's added columns; defaults to DefaultAdapter's
 	Store        *store.Store            // nil = no tenant-scoped features (/bin, alert dispatch); test-only
 	SeenServices *SeenServices           // ingest-stream app discovery; constructor always installs
 	DLQ          *DLQ                    // S3 dead-letter queue for failed ingests
@@ -225,8 +225,12 @@ type CoordinatorConfig struct {
 	Compute compute.Executor
 
 	Store *store.Store
-	// Scoper overrides the hosted default (a Scoper over Store).
-	Scoper   tenancy.Scoper
+	// Scoper overrides DefaultAdapter's (a Scoper over Store).
+	Scoper tenancy.Scoper
+	// Authz overrides DefaultAdapter's (an Authorizer over Store).
+	Authz tenancy.Authorizer
+	// Orgs overrides DefaultAdapter's.
+	Orgs     Orgs
 	Notifier NotifyDispatcher
 	Tail     *TailBroker
 	Ingest   *RingBuffer
@@ -369,6 +373,8 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		Usage:                  cfg.Usage,
 		Store:                  cfg.Store,
 		Scoper:                 cfg.Scoper,
+		Orgs:                   cfg.Orgs,
+		Authz:                  cfg.Authz,
 		SeenServices:           NewSeenServices(),
 		DLQ:                    cfg.DLQ,
 		Errors:                 cfg.Errors,
@@ -376,8 +382,14 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		ScriptExecutionTimeout: cfg.ScriptExecutionTimeout,
 		ShareURLBase:           cfg.ShareURLBase,
 	}
+	if c.Orgs == nil {
+		c.Orgs = DefaultAdapter.Orgs
+	}
+	if c.Authz == nil {
+		c.Authz = DefaultAdapter.Authorizer(cfg.Store)
+	}
 	if c.Scoper == nil {
-		c.Scoper = hosted.Scoper{Store: cfg.Store}
+		c.Scoper = DefaultAdapter.Scoper(cfg.Store)
 	}
 	if cfg.Store != nil {
 		c.ColdScans = NewColdScanLedger(cfg.Store)
@@ -452,31 +464,33 @@ func (c *Coordinator) IngestingShard(namespaceID uint, service string) shard.Sha
 // namespace resolution (two customers can share a composite app), and
 // the app is the composite the row carries.
 type drainKey struct {
-	customerID int64
-	namespace  string
-	service    string
+	added     shape.Added
+	namespace string
+	service   string
 }
-
-// added is the added columns every row under the key shares.
-func (k drainKey) added() shape.Added { return shape.Added{Customer: k.customerID} }
 
 // ingestNamespaceID resolves (customer, namespace) to namespaces.id for
 // the ingest hot path, memoizing in nsIDCache so the per-batch drain
 // grouping keeps the DB lookup off the per-row path. Only non-zero
 // results are cached, so a namespace that doesn't exist yet (race with
 // its creation) is retried rather than pinned to 0.
-func (c *Coordinator) ingestNamespaceID(customerID int64, namespace string) uint {
-	key := strconv.FormatInt(customerID, 10) + "\x00" + namespace
+func (c *Coordinator) ingestNamespaceID(added shape.Added, namespace string) uint {
+	key := nsIDKey{added, namespace}
 	if v, ok := c.nsIDCache.Load(key); ok {
 		if e := v.(nsIDEntry); time.Now().Before(e.expires) {
 			return e.id
 		}
 	}
-	id := c.resolveNamespaceID(store.OrgID(customerID), namespace)
+	id := c.resolveNamespaceID(c.Mapper().OrgOf(added), namespace)
 	if id != 0 {
 		c.nsIDCache.Store(key, nsIDEntry{id: id, expires: time.Now().Add(nsIDTTL)})
 	}
 	return id
+}
+
+type nsIDKey struct {
+	added     shape.Added
+	namespace string
 }
 
 type nsIDEntry struct {
@@ -562,7 +576,7 @@ func (c *Coordinator) clampTimeRange(tr TimeRange, custID store.OrgID) TimeRange
 // processors) drain the stream into a buffered DrainedResult via
 // res.Drain(ctx).
 func (c *Coordinator) Execute(ctx context.Context, pipeline string, tr TimeRange, a tenancy.Actor) (*ExecuteResult, error) {
-	ctx, org, userID, err := enter(ctx, a)
+	ctx, org, userID, err := c.enter(ctx, a)
 	if err != nil {
 		return nil, err
 	}
@@ -571,11 +585,11 @@ func (c *Coordinator) Execute(ctx context.Context, pipeline string, tr TimeRange
 
 // enter binds the actor to ctx, where the Scoper is asked about it, and
 // returns the org and user the rest of the query path works in.
-func enter(ctx context.Context, a tenancy.Actor) (context.Context, store.OrgID, string, error) {
+func (c *Coordinator) enter(ctx context.Context, a tenancy.Actor) (context.Context, store.OrgID, string, error) {
 	if a == nil {
 		return ctx, 0, "", errNoOrg
 	}
-	return tenancy.WithActor(ctx, a), store.OrgID(a.Partition()), a.Subject(), nil
+	return tenancy.WithActor(ctx, a), c.Mapper().OrgOf(a.Partition()), a.Subject(), nil
 }
 
 // ExecuteWithDir is Execute plus the dirstack courier: dirStack (index
@@ -585,7 +599,7 @@ func enter(ctx context.Context, a tenancy.Actor) (context.Context, store.OrgID, 
 // result's FinalDirStack (read after the stream exhausts) for the caller
 // to cache. dirStack nil/empty behaves exactly like Execute (cwd "/").
 func (c *Coordinator) ExecuteWithDir(ctx context.Context, pipeline string, tr TimeRange, a tenancy.Actor, dirStack []string) (*ExecuteResult, error) {
-	ctx, org, userID, err := enter(ctx, a)
+	ctx, org, userID, err := c.enter(ctx, a)
 	if err != nil {
 		return nil, err
 	}
@@ -609,7 +623,7 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 	if c.TailFanout == nil {
 		return nil, fmt.Errorf("ExecuteFollow: coordinator has no tail broker")
 	}
-	ctx, org, userID, err := enter(ctx, a)
+	ctx, org, userID, err := c.enter(ctx, a)
 	if err != nil {
 		return nil, err
 	}
@@ -626,7 +640,7 @@ func (c *Coordinator) ExecuteFollow(ctx context.Context, pipeline string, tr Tim
 	if len(dirStack) > 0 {
 		cwd = dirStack[0]
 	}
-	if org == 0 {
+	if noTenant(a.Partition()) {
 		return nil, errNoOrg
 	}
 	scope, err := c.queryScope(ctx, org)
@@ -679,7 +693,7 @@ func (c *Coordinator) ExecuteForWatch(ctx context.Context, pipeline string, tr T
 	if watch.NamespaceID != nil {
 		cronUser = store.CronUserID(*watch.NamespaceID)
 	}
-	ctx = tenancy.WithActor(ctx, hosted.Actor{Org: watch.OrgID, User: cronUser})
+	ctx = tenancy.WithActor(ctx, c.Mapper().ActorOf(watch.OrgID, cronUser))
 	// c.Notifier is the NotifyDispatcher interface, so a nil-Notifier
 	// coordinator threads true-nil into AlertContext (no typed-nil-
 	// via-concrete-pointer trap).
@@ -791,7 +805,7 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *store.CronWatch
 // than wrong), and skips the per-fire TierForOrg lookup (tier
 // is baked into LoweredPlan at save time).
 func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.LoweredPlan, args []any, tr TimeRange, tier store.Tier, alertCtx *AlertContext) (*ExecuteResult, error) {
-	nsID := c.resolveNamespaceID(loweredOrg(lp), lp.SourceNamespace)
+	nsID := c.resolveNamespaceID(c.loweredOrg(lp), lp.SourceNamespace)
 	descs, err := c.Provisioner.ShardDescriptorsFor(ctx, tr, nsID, lp.SourceService, retentionHorizon(tier))
 	if err != nil {
 		return nil, err
@@ -807,7 +821,7 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 			argStrs[i] = fmt.Sprintf("%v", a)
 		}
 	}
-	stream, err := c.executeCompute(ctx, loweredOrg(lp), tier, &pb.ExecuteQueryRequest{
+	stream, err := c.executeCompute(ctx, c.loweredOrg(lp), tier, &pb.ExecuteQueryRequest{
 		Sql:               lp.DirectShardSQL,
 		FieldSql:          lp.FieldSQL,
 		Table:             lp.Table,
@@ -888,7 +902,7 @@ func (c *Coordinator) refreshLoweredSync(ctx context.Context, watch *store.CronW
 	}
 	resolver := watchBinResolver{store: c.Store, orgID: watch.OrgID}
 	tier := string(c.Store.TierForOrg(watch.OrgID))
-	loweredJSON := planner.LowerForStorage(ctx, watch.Pipeline, wholeOrg(watch.OrgID), tier, resolver)
+	loweredJSON := planner.LowerForStorage(ctx, watch.Pipeline, c.wholeOrg(watch.OrgID), tier, resolver)
 	if loweredJSON == nil {
 		return
 	}
@@ -1081,11 +1095,11 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 // are expanded later, per query pipeline, in runQuery: this sees only
 // the line's first command, which for `cd X && tail *.log` is the cd.
 func (c *Coordinator) preflight(pipeline string, custID store.OrgID) (store.OrgID, string, error) {
-	if custID == 0 {
+	if noTenant(c.Mapper().AddedOf(custID)) {
 		return 0, "", errNoOrg
 	}
 	{
-		fs := shellfs.New(c.Store, custID, nil)
+		fs := shellfs.New(c.Store, custID, nil, shellfs.WithTenancy(c.mountTenancy()))
 		// Reject `tail -f ... | <bin-script>` before inlining. Bash
 		// bodies get spliced by expandBinPipeline below, so if we
 		// waited until after expansion, a follow pipeline calling a
@@ -1156,7 +1170,7 @@ func (c *Coordinator) sourcesExist(custID store.OrgID, plan *planner.QueryPlan) 
 // to ask, so it reads the whole customer.
 func (c *Coordinator) queryScope(ctx context.Context, custID store.OrgID) (shape.Set, error) {
 	if c.Store == nil {
-		return wholeOrg(custID), nil
+		return c.wholeOrg(custID), nil
 	}
 	scope, err := c.actorScope(ctx)
 	if err != nil {
@@ -1164,8 +1178,9 @@ func (c *Coordinator) queryScope(ctx context.Context, custID store.OrgID) (shape
 	}
 	// The planner takes its tenant from the scope, so the scope must be the
 	// caller's own: one that reaches another customer is refused here.
+	own := c.Mapper().AddedOf(custID)
 	for _, t := range scope {
-		if t.Customer != int64(custID) {
+		if t.Added() != own {
 			return nil, errors.New("scope reaches another customer")
 		}
 	}
@@ -1174,17 +1189,19 @@ func (c *Coordinator) queryScope(ctx context.Context, custID store.OrgID) (shape
 
 // wholeOrg is everything one org may read: the set a query, a stored plan or a
 // cron is planned against when no narrower scope applies.
-func wholeOrg(org store.OrgID) shape.Set { return shape.Set{{Customer: int64(org)}} }
+func (c *Coordinator) wholeOrg(org store.OrgID) shape.Set {
+	return shape.Set{c.Mapper().AddedOf(org).Coord()}
+}
 
 // loweredOrg is the org a stored plan was lowered for: its one partition value.
 // A plan whose partition is not one number never reaches here, because the
 // hosted build rejects it when it decodes (planner.LoweredPlan.UnmarshalJSON).
-func loweredOrg(lp *planner.LoweredPlan) store.OrgID {
-	if len(lp.Partition) != 1 {
+func (c *Coordinator) loweredOrg(lp *planner.LoweredPlan) store.OrgID {
+	added, err := shape.AddedFromPartition(lp.Partition)
+	if err != nil {
 		return 0
 	}
-	n, _ := strconv.ParseInt(lp.Partition[0], 10, 64)
-	return store.OrgID(n)
+	return c.Mapper().OrgOf(added)
 }
 
 func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan, tr TimeRange, custID store.OrgID, userID string, alertCtx *AlertContext) (*ExecuteResult, error) {
@@ -1522,7 +1539,7 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		// untouched, so the nil-seed callers (cron/watch, cwd "/") are
 		// unaffected. interp.DirStack().Cwd is read lazily, so an in-line
 		// `cd` within the same pipeline is tracked too.
-		interp.SetFS(bash.NewCwdFS(shellfs.New(c.Store, custID, logServices, opts...), interp.DirStack().Cwd, ""))
+		interp.SetFS(bash.NewCwdFS(shellfs.New(c.Store, custID, logServices, append([]shellfs.Option{shellfs.WithTenancy(c.mountTenancy())}, opts...)...), interp.DirStack().Cwd, ""))
 
 		wf := &WeftFuncs{Store: c.Store, OrgID: custID, Ctx: context.WithoutCancel(ctx), Scoper: c.Scoper}
 		RegisterWeftCommands(interp, wf)
@@ -1534,7 +1551,8 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		// as the weft.* helpers; the config carries the acting user.
 		RegisterGitCommand(interp, witrepo.Config{
 			Store: c.Store, OrgID: custID, UserID: userID,
-			Cwd: interp.DirStack().Cwd,
+			Cwd:     interp.DirStack().Cwd,
+			Tenancy: c.mountTenancy(),
 		})
 
 		RegisterClipboardCommand(interp, c.Store, custID, userID, c.ShareURLBase, tr.Start, tr.End)

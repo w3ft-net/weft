@@ -1,8 +1,11 @@
+//go:build !defaultshape
+
 package coordinator
 
 import (
 	"context"
 	"errors"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"strings"
 	"testing"
 	"time"
@@ -82,14 +85,14 @@ func TestQuery_ScopeFinerThanNamespaceIsEnforcedExactly(t *testing.T) {
 // otherActor is an identity the hosted adapter has never heard of.
 type otherActor struct{ tenant int64 }
 
-func (a otherActor) Partition() int64 { return a.tenant }
-func (otherActor) Subject() string    { return "svc-account" }
+func (a otherActor) Partition() shape.Added { return shapetest.Added(a.tenant) }
+func (otherActor) Subject() string          { return "svc-account" }
 
 type recordingScoper struct{ got []tenancy.Actor }
 
 func (r *recordingScoper) ReadScope(_ context.Context, a tenancy.Actor) (shape.Set, error) {
 	r.got = append(r.got, a)
-	return shape.Set{{Customer: a.Partition()}}, nil
+	return shape.Set{a.Partition().Coord()}, nil
 }
 
 // The Scoper sees the actor the caller authenticated as, whatever its type.

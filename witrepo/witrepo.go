@@ -27,7 +27,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/store"
-	"github.com/graybeardcorp/weft/tenancy/hosted"
+	"github.com/graybeardcorp/weft/tenancy"
 )
 
 // Config is the request-scoped state a Repo needs.
@@ -36,6 +36,9 @@ type Config struct {
 	OrgID  store.OrgID
 	UserID string        // the acting user; empty = system call (read-only paths)
 	Cwd    func() string // the shell's current directory; nil means "/"
+	// Tenancy is who the acting user is and what they may do; without it the
+	// mounts deny every write.
+	Tenancy tenancy.Adapter
 }
 
 // Repo implements gitcore.Repository, gitcore.AutoCommitter and
@@ -364,18 +367,22 @@ func (r *Repo) amendMessage(kind, name, authorID, message string) error {
 }
 
 // mountFS builds the mounts the acting user's writes go through, under the
-// hosted adapter's answer for that user (no org_permissions row = read-only).
+// adapter's answer for that user (hosted: no org_permissions row = read-only).
 func (r *Repo) mountFS() *shellcore.MountFS {
-	st := r.cfg.Store
-	return mounts.New(mounts.Config{
-		Store:  st,
-		OrgID:  r.cfg.OrgID,
-		Tier:   st.TierForOrg(r.cfg.OrgID),
-		UserID: r.cfg.UserID,
-		Actor:  hosted.Actor{Org: r.cfg.OrgID, User: r.cfg.UserID},
-		Authz:  hosted.Authorizer{Store: st},
-		Scope:  hosted.Scoper{Store: st},
-	})
+	st, t := r.cfg.Store, r.cfg.Tenancy
+	cfg := mounts.Config{
+		Store:   st,
+		OrgID:   r.cfg.OrgID,
+		Tier:    st.TierForOrg(r.cfg.OrgID),
+		UserID:  r.cfg.UserID,
+		ActorOf: t.ActorOf,
+		Authz:   t.Authz,
+		Scope:   t.Scope,
+	}
+	if t.ActorOf != nil {
+		cfg.Actor = t.ActorOf(r.cfg.OrgID, r.cfg.UserID)
+	}
+	return mounts.New(cfg)
 }
 
 // latestFor returns the ID of the newest non-tombstone (or tombstone) commit

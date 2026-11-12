@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"slices"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 func tailSet(customers ...int64) *RowMatcher {
 	var s shape.Set
 	for _, c := range customers {
-		s = append(s, shape.Coord{Customer: c})
+		s = append(s, shapetest.In(c, shape.Coord{}))
 	}
 	return &RowMatcher{Coords: s}
 }
@@ -20,7 +21,7 @@ func tailSet(customers ...int64) *RowMatcher {
 // tailRow is customer's row. The customer is an added column: the LogRow does
 // not carry it.
 func tailRow(customer int64, raw string) Row {
-	return Row{LogRow: &pb.LogRow{Namespace: "ns", Service: "svc", Kind: "main", Raw: raw}, Added: shape.Added{Customer: customer}}
+	return Row{LogRow: &pb.LogRow{Namespace: "ns", Service: "svc", Kind: "main", Raw: raw}, Added: shapetest.Added(customer)}
 }
 
 // received is what a subscription's channel holds now.
@@ -42,6 +43,7 @@ func received(ch <-chan Row) []string {
 // Each subscription gets exactly the rows its coordinates admit, in order, no
 // matter how many other customers' subscriptions and rows are in the stream.
 func TestTailBroker_DeliversOnlyWhatEachSubscriptionAdmits(t *testing.T) {
+	shapetest.NeedsTenant(t)
 	b := NewTailBroker()
 	ctx := context.Background()
 	_, ch1 := b.Subscribe(ctx, tailSet(1))
@@ -73,11 +75,11 @@ func TestTailBroker_DeliversOnlyWhatEachSubscriptionAdmits(t *testing.T) {
 func TestTailBroker_AdmitsByTheWholeTupleOnceEach(t *testing.T) {
 	b := NewTailBroker()
 	_, ch := b.Subscribe(context.Background(), &RowMatcher{Coords: shape.Set{
-		{Customer: 3, Service: shape.Value("a")},
-		{Customer: 3, Service: shape.Value("b")},
+		shapetest.In(3, shape.Coord{Service: shape.Value("a")}),
+		shapetest.In(3, shape.Coord{Service: shape.Value("b")}),
 	}})
 	row := func(svc, raw string) Row {
-		return Row{LogRow: &pb.LogRow{Service: svc, Raw: raw}, Added: shape.Added{Customer: 3}}
+		return Row{LogRow: &pb.LogRow{Service: svc, Raw: raw}, Added: shapetest.Added(3)}
 	}
 	b.Broadcast([]Row{row("a", "1"), row("c", "2"), row("b", "3")})
 	if got := received(ch); !slices.Equal(got, []string{"1", "3"}) {
@@ -101,6 +103,7 @@ func TestTailBroker_UnsubscribeStopsDelivery(t *testing.T) {
 }
 
 func TestTailBroker_HasSubscriber(t *testing.T) {
+	shapetest.NeedsTenant(t)
 	b := NewTailBroker()
 	ctx, cancel := context.WithCancel(context.Background())
 	b.Subscribe(ctx, tailSet(1))

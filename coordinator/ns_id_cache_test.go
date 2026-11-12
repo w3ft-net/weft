@@ -1,7 +1,10 @@
+//go:build !defaultshape
+
 package coordinator
 
 import (
 	"context"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"testing"
 	"time"
 )
@@ -20,7 +23,7 @@ func TestIngestNamespaceID_DeletedNamespaceIsNotPinned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.ingestNamespaceID(int64(org), "alpha"); got != old.ID {
+	if got := c.ingestNamespaceID(shapetest.Added(int64(org)), "alpha"); got != old.ID {
 		t.Fatalf("first resolve = %d, want %d", got, old.ID)
 	}
 	if err := db.DeleteNamespace(context.Background(), org, "alpha"); err != nil {
@@ -34,7 +37,7 @@ func TestIngestNamespaceID_DeletedNamespaceIsNotPinned(t *testing.T) {
 		t.Skip("namespace id reused")
 	}
 	time.Sleep(2 * nsIDTTL)
-	if got := c.ingestNamespaceID(int64(org), "alpha"); got != fresh.ID {
+	if got := c.ingestNamespaceID(shapetest.Added(int64(org)), "alpha"); got != fresh.ID {
 		t.Fatalf("after recreate resolve = %d, want %d (stale id %d)", got, fresh.ID, old.ID)
 	}
 }

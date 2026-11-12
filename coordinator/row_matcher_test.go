@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"testing"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -12,25 +13,27 @@ import (
 // multi-source read, not only the first.
 func TestRowMatcher_HonoursEnvAndEveryNamespace(t *testing.T) {
 	m := &RowMatcher{Coords: shape.Set{
-		{Customer: 1, Namespace: shape.Value("a"), Env: shape.Value("prod")},
-		{Customer: 1, Namespace: shape.Value("b"), Env: shape.Value("prod")},
+		shapetest.In(1, shape.Coord{Namespace: shape.Value("a"), Env: shape.Value("prod")}),
+		shapetest.In(1, shape.Coord{Namespace: shape.Value("b"), Env: shape.Value("prod")}),
 	}}
 	for _, tc := range []struct {
 		row  Row
 		want bool
 	}{
-		{Row{LogRow: &pb.LogRow{Namespace: "a", Env: "prod"}, Added: shape.Added{Customer: 1}}, true},
-		{Row{LogRow: &pb.LogRow{Namespace: "b", Env: "prod"}, Added: shape.Added{Customer: 1}}, true},
-		{Row{LogRow: &pb.LogRow{Namespace: "a", Env: "staging"}, Added: shape.Added{Customer: 1}}, false},
-		{Row{LogRow: &pb.LogRow{Namespace: "b", Env: ""}, Added: shape.Added{Customer: 1}}, false},
-		{Row{LogRow: &pb.LogRow{Namespace: "c", Env: "prod"}, Added: shape.Added{Customer: 1}}, false},
-		{Row{LogRow: &pb.LogRow{Namespace: "a", Env: "prod"}, Added: shape.Added{Customer: 2}}, false},
+		{Row{LogRow: &pb.LogRow{Namespace: "a", Env: "prod"}, Added: shapetest.Added(1)}, true},
+		{Row{LogRow: &pb.LogRow{Namespace: "b", Env: "prod"}, Added: shapetest.Added(1)}, true},
+		{Row{LogRow: &pb.LogRow{Namespace: "a", Env: "staging"}, Added: shapetest.Added(1)}, false},
+		{Row{LogRow: &pb.LogRow{Namespace: "b", Env: ""}, Added: shapetest.Added(1)}, false},
+		{Row{LogRow: &pb.LogRow{Namespace: "c", Env: "prod"}, Added: shapetest.Added(1)}, false},
 	} {
 		if got := m.Match(tc.row); got != tc.want {
 			t.Errorf("Match(%+v) = %v, want %v", tc.row, got, tc.want)
 		}
 	}
-	if (&RowMatcher{}).Match(Row{LogRow: &pb.LogRow{}, Added: shape.Added{Customer: 1}}) {
+	if len(shape.BuildLayout().Columns) > 0 && m.Match(Row{LogRow: &pb.LogRow{Namespace: "a", Env: "prod"}, Added: shapetest.Added(2)}) {
+		t.Error("a row of another tenant was admitted")
+	}
+	if (&RowMatcher{}).Match(Row{LogRow: &pb.LogRow{}, Added: shapetest.Added(1)}) {
 		t.Error("a matcher with no coordinates admits nothing")
 	}
 }

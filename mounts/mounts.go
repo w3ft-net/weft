@@ -10,6 +10,7 @@ import (
 	"io/fs"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
+	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy"
 )
@@ -53,7 +54,10 @@ type Config struct {
 	// Actor is who the mounts act as; Authz decides their writes and Scope
 	// what they read. Each is asked on every operation. A Config missing any
 	// of them denies everything.
-	Actor       tenancy.Actor
+	Actor tenancy.Actor
+	// ActorOf names the actor for a user of the org, so a Config can be
+	// re-bound to one (shellfs.WithUser).
+	ActorOf     func(org store.OrgID, user string) tenancy.Actor
 	Authz       tenancy.Authorizer
 	Scope       tenancy.Scoper
 	LogServices []string
@@ -117,4 +121,13 @@ func New(cfg Config) *shellcore.MountFS {
 	mfs.Register(&LogMount{cfg: cfg})
 	mfs.Register(&TmpMount{cfg: cfg})
 	return mfs
+}
+
+// partition is the added columns of the tenant the mounts act in; a Config with
+// no actor names none (and the Config denies everything anyway).
+func (c Config) partition() shape.Added {
+	if c.Actor == nil {
+		return shape.Added{}
+	}
+	return c.Actor.Partition()
 }

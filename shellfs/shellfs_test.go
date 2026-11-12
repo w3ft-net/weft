@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package shellfs
 
 import (
@@ -42,7 +44,7 @@ func logFS(t *testing.T, services []string) *ShellFS {
 			t.Fatal(err)
 		}
 	}
-	return New(db, org.ID, services)
+	return newHosted(db, org.ID, services)
 }
 
 func TestReadFile_EtcUsage(t *testing.T) {
@@ -53,7 +55,7 @@ func TestReadFile_EtcUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs := New(db, cust.ID, []string{"api"}, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, []string{"api"}, WithTier("swatch"))
 
 	data, err := fs.ReadFile("/etc/usage")
 	if err != nil {
@@ -98,7 +100,7 @@ func TestReadFile_EtcUsage_WithMetricsForecast(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs := New(db, cust.ID, []string{"api"}, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, []string{"api"}, WithTier("swatch"))
 
 	data, err := fs.ReadFile("/etc/usage")
 	if err != nil {
@@ -133,7 +135,7 @@ func TestReadDir_CronD_ShowsSavedWatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs := New(db, cust.ID, []string{"api"}, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, []string{"api"}, WithTier("swatch"))
 
 	// ls /cron.d/ should show the watch.
 	entries, err := fs.ReadDir("/cron.d")
@@ -177,7 +179,7 @@ func TestReadDir_Etc_IncludesUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs := New(db, cust.ID, nil, WithTier("trial"))
+	fs := newHosted(db, cust.ID, nil, WithTier("trial"))
 
 	entries, err := fs.ReadDir("/etc")
 	if err != nil {
@@ -224,7 +226,7 @@ func TestReadFile_LogNamespace_UnreadableIsHidden(t *testing.T) {
 		CanRead:     false,
 	})
 
-	fs := New(db, cust.ID, []string{"secret/app"},
+	fs := newHosted(db, cust.ID, []string{"secret/app"},
 		WithTier("swatch"),
 		WithUser(user.ID))
 
@@ -258,7 +260,7 @@ func TestReadDir_Log_FiltersNamespaces(t *testing.T) {
 	})
 	// No permission row for nsB = no access.
 
-	fs := New(db, cust.ID, []string{"allowed/web", "blocked/api"},
+	fs := newHosted(db, cust.ID, []string{"allowed/web", "blocked/api"},
 		WithTier("swatch"),
 		WithUser(user.ID))
 
@@ -287,7 +289,7 @@ func TestReadFile_LogNamespace_OwnerBypass(t *testing.T) {
 	db.FindOrCreateNamespace(cust.ID, "private")
 	// No NamespacePermission row — but the user is owner.
 
-	fs := New(db, cust.ID, []string{"private/app"},
+	fs := newHosted(db, cust.ID, []string{"private/app"},
 		WithTier("swatch"),
 		WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 
@@ -306,7 +308,7 @@ func TestStat_EtcUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs := New(db, cust.ID, nil, WithTier("trial"))
+	fs := newHosted(db, cust.ID, nil, WithTier("trial"))
 
 	info, err := fs.Stat("/etc/usage")
 	if err != nil {

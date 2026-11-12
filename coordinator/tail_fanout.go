@@ -4,6 +4,8 @@ import (
 	"context"
 	"slices"
 	"sync"
+
+	"github.com/graybeardcorp/weft/shape"
 )
 
 // tailTopic is the routing key for optional cross-coordinator fan-out: the
@@ -12,7 +14,7 @@ import (
 // benchmark code (docs/plans/coordinator-horizontal-scaling.md item 4);
 // production must not depend on it.
 type tailTopic struct {
-	Customer                 int64
+	Added                    shape.Added
 	Namespace, Service, Kind string
 	Wildcard                 bool
 }
@@ -23,7 +25,7 @@ type tailTopic struct {
 func topicsFor(m *RowMatcher) []tailTopic {
 	var out []tailTopic
 	for _, t := range m.Coords {
-		topic := tailTopic{Customer: t.Customer}
+		topic := tailTopic{Added: t.Added()}
 		if ns, ok := t.Namespace.Literal(); !ok {
 			topic.Wildcard = true
 		} else {

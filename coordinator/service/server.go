@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/graybeardcorp/weft/tenancy"
-	"github.com/graybeardcorp/weft/tenancy/hosted"
 	"io"
 	"strings"
 	"sync"
@@ -108,7 +107,7 @@ type Server struct {
 	pb.UnimplementedWeftAdminServer
 	Coord *coordinator.Coordinator
 	Store *store.Store
-	// Authz decides action gates; nil means the hosted Authorizer over Store.
+	// Authz decides action gates; nil means DefaultAdapter's Authorizer over Store.
 	Authz tenancy.Authorizer
 
 	// ShardSecret is the fleet secret every shard boots with. A heartbeat
@@ -145,7 +144,7 @@ type Server struct {
 
 func (s *Server) authorizer() tenancy.Authorizer {
 	if s.Authz == nil {
-		return hosted.Authorizer{Store: s.Store}
+		return s.Coord.Authz
 	}
 	return s.Authz
 }
@@ -229,9 +228,9 @@ func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordi
 	var lineCount int
 	var result *coordinator.ExecuteResult
 	if req.Follow && s.Coord.Tail != nil {
-		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, hosted.Actor{Org: org, User: userID}, dirStack)
+		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, s.Coord.Mapper().ActorOf(org, userID), dirStack)
 	} else {
-		result, err = s.Coord.ExecuteWithDir(ctx, req.Pipeline, tr, hosted.Actor{Org: org, User: userID}, dirStack)
+		result, err = s.Coord.ExecuteWithDir(ctx, req.Pipeline, tr, s.Coord.Mapper().ActorOf(org, userID), dirStack)
 	}
 	if err != nil {
 		span.RecordError(err)
@@ -546,7 +545,8 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	}
 	authCustomer := auth.Organization.Name
 	authCustomerID := int64(auth.Organization.ID)
-	added := shape.Added{Customer: authCustomerID}
+	added := s.Coord.Mapper().AddedOf(auth.Organization.ID)
+	stampLegacy := shape.BuildLayout().IsLegacy()
 	authNamespace := auth.Namespace
 	authEnv := auth.Env
 
@@ -699,8 +699,13 @@ recvLoop:
 			return err
 		}
 
-		// Force the authoritative customer on every row.
-		row.CustomerId = authCustomerID
+		// The coordinator carries the tenant beside the row (added). Tag 26
+		// is stamped only for a shard or coordinator of the previous build,
+		// which reads the legacy layout's customer there; the cut-over
+		// deletes this.
+		if stampLegacy {
+			row.CustomerId = authCustomerID
+		}
 
 		// Token-derived env: stamp it on every row. The agent has no
 		// say in the env value — it's bound to the token at mint time.

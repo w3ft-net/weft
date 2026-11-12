@@ -29,5 +29,5 @@ func RowsOf(added shape.Added, rows []*pb.LogRow) []Row {
 
 // key is the coordinates a subscription's tuples are matched against.
 func (r Row) key() shape.Key {
-	return shape.Key{Customer: r.Customer, Namespace: r.Namespace, Env: r.Env, Service: r.Service, Kind: r.Kind}
+	return shape.Key{Namespace: r.Namespace, Env: r.Env, Service: r.Service, Kind: r.Kind}.InPartition(r.Added.Coord())
 }

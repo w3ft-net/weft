@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package mounts
 
 import (
@@ -7,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/graybeardcorp/weft/shape"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy"
 	"github.com/graybeardcorp/weft/tenancy/hosted"
@@ -71,11 +75,11 @@ func (g grants) Authorize(_ context.Context, _ tenancy.Actor, act tenancy.Action
 // nobody is an Actor with no identity of its own.
 type nobody struct{}
 
-func (nobody) Partition() int64 { return 1 }
-func (nobody) Subject() string  { return "" }
+func (nobody) Partition() shape.Added { return shapetest.Added(1) }
+func (nobody) Subject() string        { return "" }
 
 // tenantActor is an Actor with no identity of its own, in the given org.
 type tenantActor int64
 
-func (t tenantActor) Partition() int64 { return int64(t) }
-func (tenantActor) Subject() string    { return "" }
+func (t tenantActor) Partition() shape.Added { return shapetest.Added(int64(t)) }
+func (tenantActor) Subject() string          { return "" }

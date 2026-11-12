@@ -3,6 +3,7 @@ package coordinator
 import (
 	"database/sql"
 	"fmt"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"math/rand"
 	"regexp"
 	"strconv"
@@ -63,8 +64,8 @@ func TestColdArchiveOpensOnlyAdmittedKeys(t *testing.T) {
 	for i := 0; i < 800; i++ {
 		var scope shape.Set
 		for n := 1 + rng.Intn(2); n > 0; n-- {
-			scope = append(scope, shape.Coord{Customer: 1, Namespace: cell(namespaces), Service: cell(services), Kind: cell(kinds),
-				Env: cell(envs)})
+			scope = append(scope, shapetest.In(1, shape.Coord{Namespace: cell(namespaces), Service: cell(services), Kind: cell(kinds),
+				Env: cell(envs)}))
 		}
 		env := ""
 		if rng.Intn(2) == 0 {
@@ -74,7 +75,7 @@ func TestColdArchiveOpensOnlyAdmittedKeys(t *testing.T) {
 		var source shape.Set
 		for n := 1 + rng.Intn(3); n > 0; n-- {
 			ns, svc, kind := pick(namespaces), pick(services), pick(kinds)
-			tup := shape.Coord{Customer: 1, Namespace: shape.Value(ns), Service: shape.Value(svc), Kind: shape.Value(kind)}
+			tup := shapetest.In(1, shape.Coord{Namespace: shape.Value(ns), Service: shape.Value(svc), Kind: shape.Value(kind)})
 			if env != "" {
 				paths = append(paths, fmt.Sprintf("/log/%s/%s/%s/%s.log", ns, env, svc, kind))
 				tup.Env = shape.Value(env)
@@ -95,7 +96,7 @@ func TestColdArchiveOpensOnlyAdmittedKeys(t *testing.T) {
 			for _, svc := range services {
 				for _, kind := range kinds {
 					for _, e := range envs {
-						if source.Matches(&shape.Key{Customer: 1, Namespace: ns, Env: e, Service: svc, Kind: kind}) && scope.Matches(&shape.Key{Customer: 1, Namespace: ns, Env: e, Service: svc, Kind: kind}) {
+						if source.Matches(shapetest.KeyInPtr(1, shape.Key{Namespace: ns, Env: e, Service: svc, Kind: kind})) && scope.Matches(shapetest.KeyInPtr(1, shape.Key{Namespace: ns, Env: e, Service: svc, Kind: kind})) {
 							want++
 							break
 						}

@@ -7,14 +7,24 @@ import (
 	"errors"
 
 	"github.com/graybeardcorp/weft/shape"
+	"github.com/graybeardcorp/weft/store"
 )
+
+// Adapter is what the filesystem mounts act under: how an org's user becomes an
+// Actor, what that Actor may do, and what it may read. The mounts hold no
+// default; one that is missing denies everything.
+type Adapter struct {
+	ActorOf func(org store.OrgID, user string) Actor
+	Authz   Authorizer
+	Scope   Scoper
+}
 
 // Actor is a user acting within a partition. The Scoper that issued it is the
 // only code that looks inside.
 type Actor interface {
 	// Partition is the tenant whose data the actor is working in. It is the
 	// value of the required customer column in every shape.Coord.
-	Partition() int64
+	Partition() shape.Added
 	// Subject names who is acting, for attribution. Empty is the system
 	// identity: crons and internal callers.
 	Subject() string
@@ -82,7 +92,7 @@ func Denied(msg string) error { return denied(msg) }
 // what they may read right now, which is the namespace itself plus whatever has
 // been opened to them. Called when a cron is saved, and at every fire.
 type NamespaceScoper interface {
-	NamespaceScope(ctx context.Context, partition int64, namespace string) (shape.Set, error)
+	NamespaceScope(ctx context.Context, partition shape.Added, namespace string) (shape.Set, error)
 }
 
 // Authorizer decides actions (writes and administration). Any error means
@@ -102,7 +112,7 @@ func Readable(ctx context.Context, sc Scoper, a Actor, existing func() ([]string
 	if err != nil {
 		return nil, false, err
 	}
-	names, all, err = set.Namespaces(shape.Coord{Customer: a.Partition()})
+	names, all, err = set.Namespaces(a.Partition().Coord())
 	if err != nil || !all {
 		return names, false, err
 	}

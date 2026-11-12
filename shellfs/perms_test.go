@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package shellfs
 
 import (
@@ -79,9 +81,9 @@ func TestOrgPerms_BinMount_WriteFile(t *testing.T) {
 		fs       *ShellFS
 		wantDeny bool
 	}{
-		"member": {New(db, cust.ID, nil, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "binmember", orgPerms{}))), false},
-		"owner":  {New(db, cust.ID, nil, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "binowner", orgPerms{Owner: true}))), false},
-		"system": {New(db, cust.ID, nil, WithTier("swatch")), true},
+		"member": {newHosted(db, cust.ID, nil, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "binmember", orgPerms{}))), false},
+		"owner":  {newHosted(db, cust.ID, nil, WithTier("swatch"), WithUser(addMember(t, db, cust.ID, "binowner", orgPerms{Owner: true}))), false},
+		"system": {newHosted(db, cust.ID, nil, WithTier("swatch")), true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			assertGate(t, tc.fs.WriteFile("/bin/probe-"+name, []byte("echo probe\n")), tc.wantDeny)
@@ -114,7 +116,7 @@ func TestOrgPerms_CronMount_WriteFile(t *testing.T) {
 			if err := db.UpsertNamespacePermission(&store.NamespacePermission{UserID: user, NamespaceID: ns.ID, CanRead: true, CanWrite: tc.write}); err != nil {
 				t.Fatal(err)
 			}
-			fs := New(db, cust.ID, nil, WithTier("swatch"), WithUser(user))
+			fs := newHosted(db, cust.ID, nil, WithTier("swatch"), WithUser(user))
 			err := fs.WriteFile(tc.path, []byte(cronYAML()))
 			assertGate(t, err, tc.wantDeny)
 		})
@@ -133,7 +135,7 @@ func TestOrgPerms_EtcMount_WriteFile(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fs := New(db, cust.ID, nil, WithTier("swatch"),
+			fs := newHosted(db, cust.ID, nil, WithTier("swatch"),
 				WithUser(addMember(t, db, cust.ID, tc.name, tc.perms)))
 			err := fs.WriteFile("/etc/notify.yaml", []byte("system:\n  email:\n    - \"owner@perms.test\"\n"))
 			assertGate(t, err, tc.wantDeny)

@@ -204,6 +204,8 @@ func main() {
 		Compute:           computeClient,
 		Store:             db,
 		Notifier:          notifier,
+		Orgs:              hosted.Orgs{},
+		Scoper:            hosted.Scoper{Store: db},
 		Tail:              coordinator.NewTailBroker(),
 		Ingest:            coordinator.NewRingBuffer(1_000_000),
 		DLQ:               coordinator.NewDLQ(*awsRegion, os.Getenv("DLQ_BUCKET")),
@@ -427,6 +429,7 @@ func main() {
 	coordSvc := &coordsvc.Server{
 		Coord:      coord,
 		Store:      db,
+		Authz:      hosted.Authorizer{Store: db},
 		CfgPtr:     cfgPtr,
 		Classifier: classifier,
 		AgentSeen:  agentSeen,

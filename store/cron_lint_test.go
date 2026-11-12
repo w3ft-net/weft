@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/weft/planner"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
 type noBinResolver struct{}
@@ -23,7 +24,7 @@ func TestSaveCronWatch_TruncationWarning(t *testing.T) {
 	user, _ := db.CreateUser("bob-lint@example.test")
 
 	pipeline := `tail -n 1000 /log/x/y/main.log | grep -c "boom"`
-	lowered := planner.LowerForStorage(context.Background(), pipeline, int64(cust.ID), "bolt", noBinResolver{})
+	lowered := planner.LowerForStorage(context.Background(), pipeline, shapetest.Tenant(int64(cust.ID)), "bolt", noBinResolver{})
 	if lowered == nil {
 		t.Fatal("LowerForStorage returned nil — fixture pipeline should lower cleanly")
 	}
@@ -58,7 +59,7 @@ func TestSaveCronWatch_NoWarningForSafePipeline(t *testing.T) {
 	user, _ := db.CreateUser("alice-lint@example.test")
 
 	pipeline := `cat /log/x/y/main.log | grep ERROR`
-	lowered := planner.LowerForStorage(context.Background(), pipeline, int64(cust.ID), "bolt", noBinResolver{})
+	lowered := planner.LowerForStorage(context.Background(), pipeline, shapetest.Tenant(int64(cust.ID)), "bolt", noBinResolver{})
 
 	err := db.SaveCronWatch(cust.ID, 0, user.ID, "safe-cron", "*/5 * * * *", pipeline, true, lowered)
 	blocking, warnings := Split(err)
@@ -94,7 +95,7 @@ func TestSaveCronWatch_ExplainsStagePostRetrieval(t *testing.T) {
 	user, _ := db.CreateUser("dave-lint@example.test")
 
 	pipeline := `cat /log/x/y/main.log | awk '{ printf "%s\n", $0 }' | alert above 5`
-	lowered := planner.LowerForStorage(context.Background(), pipeline, int64(cust.ID), "bolt", noBinResolver{})
+	lowered := planner.LowerForStorage(context.Background(), pipeline, shapetest.Tenant(int64(cust.ID)), "bolt", noBinResolver{})
 
 	err := db.SaveCronWatch(cust.ID, 0, user.ID, "explain-cron", "*/5 * * * *", pipeline, true, lowered)
 	blocking, warnings := Split(err)

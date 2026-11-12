@@ -46,7 +46,7 @@ func (s *Session) Actor() hosted.Actor {
 }
 
 // Org is the partition the session's store calls are scoped by: the actor's.
-func (s *Session) Org() store.OrgID { return store.OrgID(s.Actor().Partition()) }
+func (s *Session) Org() store.OrgID { return s.ActiveOrgID }
 
 type sessionContextKey struct{}
 

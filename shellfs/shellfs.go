@@ -15,7 +15,6 @@ import (
 	"github.com/graybeardcorp/weft/mounts"
 	"github.com/graybeardcorp/weft/store"
 	"github.com/graybeardcorp/weft/tenancy"
-	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
 // Compile-time interface checks.
@@ -44,9 +43,6 @@ func New(s *store.Store, orgID store.OrgID, logServices []string, opts ...Option
 		OrgID:       orgID,
 		Tier:        store.TierTrial,
 		LogServices: logServices,
-		Actor:       hosted.Actor{Org: orgID},
-		Authz:       hosted.Authorizer{Store: s},
-		Scope:       hosted.Scoper{Store: s},
 	}
 	for _, o := range opts {
 		o(&cfg)
@@ -74,14 +70,28 @@ func WithTier(tier store.Tier) Option {
 	return func(c *mounts.Config) { c.Tier = tier }
 }
 
+// WithTenancy sets who the mounts act as, and what that actor may read and
+// write. It comes first: without it the mounts deny everything. The actor is
+// the system identity until WithUser names a member.
+func WithTenancy(t tenancy.Adapter) Option {
+	return func(c *mounts.Config) {
+		c.ActorOf, c.Authz, c.Scope = t.ActorOf, t.Authz, t.Scope
+		if t.ActorOf != nil {
+			c.Actor = t.ActorOf(c.OrgID, "")
+		}
+	}
+}
+
 // WithUser makes the mounts act as a member of the org. What they may read
-// and write is the hosted adapter's answer for that member on each operation.
+// and write is the adapter's answer for that member on each operation.
 // Without it they act as the system identity, which reads everything and
 // writes nothing.
 func WithUser(userID string) Option {
 	return func(c *mounts.Config) {
 		c.UserID = userID
-		c.Actor = hosted.Actor{Org: c.OrgID, User: userID}
+		if c.ActorOf != nil {
+			c.Actor = c.ActorOf(c.OrgID, userID)
+		}
 	}
 }
 

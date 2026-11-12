@@ -1,3 +1,5 @@
+//go:build !defaultshape
+
 package shellfs
 
 import (
@@ -32,7 +34,7 @@ func runShell(t *testing.T, fs *ShellFS, script string) (string, string) {
 func TestTmp_WriteReadThroughShell(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-rw")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	_, errOut := runShell(t, fs, `echo hello > /tmp/greeting`)
 	if errOut != "" {
@@ -48,7 +50,7 @@ func TestTmp_WriteReadThroughShell(t *testing.T) {
 func TestTmp_AppendViaDoubleRedirect(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-ap")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fs, `echo first > /tmp/log`)
 	runShell(t, fs, `echo second >> /tmp/log`)
@@ -64,7 +66,7 @@ func TestTmp_AppendViaDoubleRedirect(t *testing.T) {
 func TestTmp_MkdirAndNestedWrite(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-mk")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fs, `mkdir /tmp/inc`)
 	runShell(t, fs, `echo trace > /tmp/inc/details`)
@@ -84,7 +86,7 @@ func TestTmp_MkdirAndNestedWrite(t *testing.T) {
 func TestTmp_RmRfSubtree(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-rm")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fs, `mkdir /tmp/cleanup`)
 	runShell(t, fs, `echo a > /tmp/cleanup/a`)
@@ -103,7 +105,7 @@ func TestTmp_RmRfSubtree(t *testing.T) {
 func TestTmp_PipelineRedirectIntoFile(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-pipe")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	// Simulate a filter-save pattern: prepare a file, read it, filter,
 	// redirect to /tmp. This is the shape the plan promises:
@@ -127,7 +129,7 @@ func TestTmp_PipelineRedirectIntoFile(t *testing.T) {
 func TestTmp_FilesAreNotExecutable(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-nox")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	// Put something that LOOKS like a script in /tmp.
 	runShell(t, fs, `echo "echo pwned" > /tmp/evil`)
@@ -145,7 +147,7 @@ func TestTmp_FilesAreNotExecutable(t *testing.T) {
 func TestTmp_LsLongShowsTmpFiles(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-lsl")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fs, `echo data > /tmp/report`)
 	out, _ := runShell(t, fs, `ls -l /tmp`)
@@ -165,7 +167,7 @@ func TestTmp_LsLongShowsTmpFiles(t *testing.T) {
 func TestTmp_CpThroughShell(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-cp")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fs, `echo source-data > /tmp/src`)
 	_, errOut := runShell(t, fs, `cp /tmp/src /tmp/dst`)
@@ -181,7 +183,7 @@ func TestTmp_CpThroughShell(t *testing.T) {
 func TestTmp_MvThroughShell(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-mv")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fs, `echo moveme > /tmp/old`)
 	runShell(t, fs, `mv /tmp/old /tmp/new`)
@@ -202,7 +204,7 @@ func TestTmp_MvThroughShell(t *testing.T) {
 func TestTmp_TouchThroughShell(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-touch")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	// touch on a missing path creates an empty file.
 	_, errOut := runShell(t, fs, `touch /tmp/empty`)
@@ -223,7 +225,7 @@ func TestTmp_TouchThroughShell(t *testing.T) {
 func TestTmp_CpCrossMountWrites(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-xns")
-	fs := New(db, cust.ID, nil, WithTier("swatch"),
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"),
 		WithUser(addMember(t, db, cust.ID, "owner", ownerPerms())))
 
 	runShell(t, fs, `echo notascript > /tmp/x`)
@@ -248,7 +250,7 @@ func TestTmp_CpCrossMountWrites(t *testing.T) {
 func TestTmp_DiffOverPostgres(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-diff")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fs, `echo old-value > /tmp/a`)
 	runShell(t, fs, `echo new-value > /tmp/b`)
@@ -264,7 +266,7 @@ func TestTmp_DiffOverPostgres(t *testing.T) {
 func TestTmp_CommOverPostgres(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-comm")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	// Both sorted. Lines unique to A, unique to B, shared.
 	runShell(t, fs, `printf 'alpha\nbeta\ngamma\n' > /tmp/a`)
@@ -284,7 +286,7 @@ func TestTmp_CommOverPostgres(t *testing.T) {
 func TestTmp_JoinOverPostgres(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-join")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fs, `printf '1 widget\n2 sprocket\n' > /tmp/orders`)
 	runShell(t, fs, `printf '1 10\n2 20\n' > /tmp/prices`)
@@ -297,7 +299,7 @@ func TestTmp_JoinOverPostgres(t *testing.T) {
 func TestTmp_PasteOverPostgres(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-paste")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fs, `printf '1\n2\n3\n' > /tmp/nums`)
 	runShell(t, fs, `printf 'a\nb\nc\n' > /tmp/letters`)
@@ -311,7 +313,7 @@ func TestTmp_PasteOverPostgres(t *testing.T) {
 func TestTmp_WcOverPostgres(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-wc")
-	fs := New(db, cust.ID, nil, WithTier("swatch"))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fs, `printf 'one\ntwo\nthree\n' > /tmp/x`)
 	out, _ := runShell(t, fs, `wc -l /tmp/x`)
@@ -353,7 +355,7 @@ func TestTmp_WriteRecordsCreatorViaShell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fs := New(db, cust.ID, nil, WithTier("swatch"), WithUser(user.ID))
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"), WithUser(user.ID))
 
 	runShell(t, fs, `echo hi > /tmp/note`)
 
@@ -392,7 +394,7 @@ func TestTmp_FirstFileSignalsTmpExpiryNotice(t *testing.T) {
 	user, _ := db.CreateUser("alice-warn@example.test")
 
 	sink := &stubNoticeSink{}
-	fs := New(db, cust.ID, nil, WithTier("swatch"),
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"),
 		WithUser(user.ID), WithNoticeQueue(sink))
 	runShell(t, fs, `echo hello > /tmp/x`)
 
@@ -417,7 +419,7 @@ func TestTmp_NoSignalWhenWriteFails(t *testing.T) {
 	user, _ := db.CreateUser("alice-warn-fail@example.test")
 
 	sink := &stubNoticeSink{}
-	fs := New(db, cust.ID, nil, WithTier("trial"),
+	fs := newHosted(db, cust.ID, nil, WithTier("trial"),
 		WithUser(user.ID), WithNoticeQueue(sink))
 
 	// Trial cap is 500 KB. Writing 600 KB fails.
@@ -437,7 +439,7 @@ func TestTmp_MkdirDoesNotSignal(t *testing.T) {
 	user, _ := db.CreateUser("alice-warn-mk@example.test")
 
 	sink := &stubNoticeSink{}
-	fs := New(db, cust.ID, nil, WithTier("swatch"),
+	fs := newHosted(db, cust.ID, nil, WithTier("swatch"),
 		WithUser(user.ID), WithNoticeQueue(sink))
 	runShell(t, fs, `mkdir /tmp/scratch`)
 	if len(sink.signaled) != 0 {
@@ -467,10 +469,10 @@ func TestTmp_LsLongShowsOwner(t *testing.T) {
 	bob, _ := db.CreateUser("bob-lsl@example.test")
 	// Bob has no Name set — should render as the email local-part.
 
-	fsAlice := New(db, cust.ID, nil, WithTier("swatch"), WithUser(alice.ID))
-	fsBob := New(db, cust.ID, nil, WithTier("swatch"), WithUser(bob.ID))
+	fsAlice := newHosted(db, cust.ID, nil, WithTier("swatch"), WithUser(alice.ID))
+	fsBob := newHosted(db, cust.ID, nil, WithTier("swatch"), WithUser(bob.ID))
 	// System write — no userID — should render as "-".
-	fsSystem := New(db, cust.ID, nil, WithTier("swatch"))
+	fsSystem := newHosted(db, cust.ID, nil, WithTier("swatch"))
 
 	runShell(t, fsAlice, `echo a > /tmp/byalice`)
 	runShell(t, fsBob, `echo b > /tmp/bybob`)
@@ -496,7 +498,7 @@ func TestTmp_LsLongShowsOwner(t *testing.T) {
 func TestTmp_TrialQuotaEnforcedViaShell(t *testing.T) {
 	db := testStore(t)
 	cust, _ := db.FindOrCreateOrg("tmp-shell-trial")
-	fs := New(db, cust.ID, nil, WithTier("trial"))
+	fs := newHosted(db, cust.ID, nil, WithTier("trial"))
 
 	// Trial cap is 500 KB. Write two ~200 KB files, then attempt a
 	// third — the last should fail with a quota error on stderr.

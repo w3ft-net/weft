@@ -3,7 +3,6 @@ package coordinator
 import (
 	"context"
 	weftsdk "github.com/w3ft-net/weft-go"
-	"strconv"
 	"strings"
 
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
@@ -48,7 +47,7 @@ func (r *IngestionErrorRecorder) Record(shardID, errMsg string, added shape.Adde
 	}
 
 	apps := distinctStrings(rows, func(r *pb.LogRow) string { return shard.JoinApp(r.Namespace, r.Service, r.Kind) })
-	customers := []string{strconv.FormatInt(added.Customer, 10)}
+	customers := []string{strings.Join(added.Coord().PartitionValues(), ",")}
 
 	select {
 	case r.ch <- ingestionError{

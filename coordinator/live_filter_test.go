@@ -7,7 +7,6 @@ import (
 
 	"github.com/graybeardcorp/weft/planner"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
-	"github.com/graybeardcorp/weft/shape"
 	"github.com/graybeardcorp/weft/shape/shapetest"
 )
 
@@ -83,7 +82,7 @@ func runFilterCase(t *testing.T, pipeline string, row *pb.LogRow, want []string)
 		t.Fatalf("Plan(%q): %v", pipeline, err)
 	}
 	filter := BuildLiveFilter(plan)
-	got := filter(Row{LogRow: row, Added: shape.Added{Customer: 1}})
+	got := filter(Row{LogRow: row, Added: shapetest.Added(1)})
 	if len(got) != len(want) {
 		t.Fatalf("filter(%q on %q):\n  got:  %v\n  want: %v",
 			pipeline, row.Raw, got, want)

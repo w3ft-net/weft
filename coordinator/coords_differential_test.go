@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/graybeardcorp/weft/shape/shapetest"
 	"math/rand"
 	"slices"
 	"strings"
@@ -80,13 +81,12 @@ func TestCoordinateBackendsAgree(t *testing.T) {
 		// The scope: one to three tuples of customer 1.
 		var scope shape.Set
 		for n := 1 + rng.Intn(3); n > 0; n-- {
-			scope = append(scope, shape.Coord{
-				Customer:  1,
+			scope = append(scope, shapetest.In(1, shape.Coord{
 				Namespace: cell(namespaces, false),
 				Env:       cell(envs[1:], true),
 				Service:   cell(services, false),
 				Kind:      cell(kinds, false),
-			})
+			}))
 		}
 		// The source: one to three files. A pipeline has one env, so the files
 		// share it, as the parser requires.
@@ -96,7 +96,7 @@ func TestCoordinateBackendsAgree(t *testing.T) {
 		for n := 1 + rng.Intn(3); n > 0; n-- {
 			ns, svc, kind := pick(namespaces), pick(services), pick(kinds)
 			p := fmt.Sprintf("/log/%s/%s/%s.log", ns, svc, kind)
-			t := shape.Coord{Customer: 1, Namespace: shape.Value(ns), Env: shape.Any(), Service: shape.Value(svc), Kind: shape.Value(kind)}
+			t := shapetest.In(1, shape.Coord{Namespace: shape.Value(ns), Env: shape.Any(), Service: shape.Value(svc), Kind: shape.Value(kind)})
 			if env != "" {
 				p = fmt.Sprintf("/log/%s/%s/%s/%s.log", ns, env, svc, kind)
 				t.Env = shape.Value(env)
@@ -127,7 +127,7 @@ func TestCoordinateBackendsAgree(t *testing.T) {
 
 		var want []string
 		for _, r := range rows {
-			if source.Matches(&shape.Key{Customer: r.cust, Namespace: r.ns, Env: r.env, Service: r.svc, Kind: r.kind}) && scope.Matches(&shape.Key{Customer: r.cust, Namespace: r.ns, Env: r.env, Service: r.svc, Kind: r.kind}) {
+			if source.Matches(shapetest.KeyInPtr(r.cust, shape.Key{Namespace: r.ns, Env: r.env, Service: r.svc, Kind: r.kind})) && scope.Matches(shapetest.KeyInPtr(r.cust, shape.Key{Namespace: r.ns, Env: r.env, Service: r.svc, Kind: r.kind})) {
 				want = append(want, r.id)
 			}
 		}
@@ -156,7 +156,7 @@ func TestCoordinateBackendsAgree(t *testing.T) {
 		m := &RowMatcher{Coords: plan.Coords}
 		var gotLive []string
 		for _, r := range rows {
-			if m.Match(Row{LogRow: &pb.LogRow{Namespace: r.ns, Env: r.env, Service: r.svc, Kind: r.kind}, Added: shape.Added{Customer: r.cust}}) {
+			if m.Match(Row{LogRow: &pb.LogRow{Namespace: r.ns, Env: r.env, Service: r.svc, Kind: r.kind}, Added: shapetest.Added(r.cust)}) {
 				gotLive = append(gotLive, r.id)
 			}
 		}

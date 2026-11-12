@@ -3,8 +3,8 @@ package coordinator
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
+	"strings"
 	"sync"
 
 	"github.com/redis/go-redis/v9"
@@ -70,7 +70,7 @@ func (r *redisFanout) recvLoop(deliver func(rows []Row)) {
 		// previous build publishes the customer only there, and this build
 		// stamps it for that reason. Read the channel name instead, or carry the
 		// added columns in the payload, once no such peer remains.
-		deliver([]Row{{row, shape.Added{Customer: row.CustomerId}}})
+		deliver([]Row{{row, legacyAdded(row)}})
 	}
 }
 
@@ -78,16 +78,30 @@ func (r *redisFanout) recvLoop(deliver func(rows []Row)) {
 // PSUBSCRIBE, even for a fully-specified topic, to keep one code path
 // instead of branching between SUBSCRIBE/PSUBSCRIBE.
 func pattern(t tailTopic) string {
+	p := "tail:" + channelPrefix(t.Added)
 	switch {
 	case t.Wildcard:
-		return fmt.Sprintf("tail:%d:*", t.Customer)
+		return p + "*"
 	case t.Service == "":
-		return fmt.Sprintf("tail:%d:%s:*", t.Customer, t.Namespace)
+		return p + t.Namespace + ":*"
 	case t.Kind == "":
-		return fmt.Sprintf("tail:%d:%s:%s:*", t.Customer, t.Namespace, t.Service)
+		return p + t.Namespace + ":" + t.Service + ":*"
 	default:
-		return fmt.Sprintf("tail:%d:%s:%s:%s*", t.Customer, t.Namespace, t.Service, t.Kind)
+		return p + t.Namespace + ":" + t.Service + ":" + t.Kind + "*"
 	}
+}
+
+// channelPrefix is the partition's part of a channel name: its values, each
+// followed by a colon, or nothing for a build with no partition columns. For
+// the hosted shape it is "7:", so a channel is named as the previous build's
+// peers name it.
+func channelPrefix(a shape.Added) string {
+	var b strings.Builder
+	for _, v := range a.Coord().PartitionValues() {
+		b.WriteString(v)
+		b.WriteByte(':')
+	}
+	return b.String()
 }
 
 // channelFor is the concrete publish-side channel name for a row. Kind
@@ -98,7 +112,7 @@ func channelFor(row Row) string {
 	if kind == "" {
 		kind = "main"
 	}
-	return fmt.Sprintf("tail:%d:%s:%s:%s", row.Customer, row.Namespace, row.Service, kind)
+	return "tail:" + channelPrefix(row.Added) + row.Namespace + ":" + row.Service + ":" + kind
 }
 
 func (r *redisFanout) announceInterest(ctx context.Context, t tailTopic, add bool) {

@@ -197,7 +197,7 @@ func decodeDLQLine(raw json.RawMessage) (Row, error) {
 		if err := protojson.Unmarshal(raw, lr); err != nil {
 			return Row{}, err
 		}
-		return Row{lr, shape.Added{Customer: lr.CustomerId}}, nil
+		return Row{lr, legacyAdded(lr)}, nil
 	}
 	if err := protojson.Unmarshal(env.Row, lr); err != nil {
 		return Row{}, err

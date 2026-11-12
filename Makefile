@@ -32,12 +32,19 @@ generate-check:
 # back whatever happened. A package joins DEFAULT_SHAPE_PKGS when its extraction
 # step lands; CI runs this as 'Default shape builds' so a tenant column cannot
 # creep back into them.
-DEFAULT_SHAPE_PKGS ?= ./shape/... ./internal/shapegen/... ./planner/...
+#
+# The tests run with the `defaultshape` tag. A test file that needs the hosted
+# adapter, the org tables in Postgres, or a tenant column carries
+# `//go:build !defaultshape` and runs only in the unit job, which is hosted.
+# Packages in DEFAULT_SHAPE_BUILD_ONLY are built here but not tested: they are
+# the store-backed mounts the hosted adapter drives.
+DEFAULT_SHAPE_PKGS ?= ./shape/... ./internal/shapegen/... ./planner/... ./coordinator/ ./tenancy/ ./tenancy/single/ ./mounts/ ./shell/
+DEFAULT_SHAPE_BUILD_ONLY ?= ./shellfs/ ./witrepo/
 test-default-shape:
 	@trap '$(MAKE) --no-print-directory generate SHAPE=shape/specs/hosted.yaml' EXIT; \
 	$(MAKE) --no-print-directory generate SHAPE=shape/specs/default.yaml && \
-	go build $(DEFAULT_SHAPE_PKGS) && \
-	go test -tags test -count=1 $(DEFAULT_SHAPE_PKGS)
+	go build $(DEFAULT_SHAPE_PKGS) $(DEFAULT_SHAPE_BUILD_ONLY) && \
+	go test -tags test,defaultshape -count=1 $(DEFAULT_SHAPE_PKGS)
 
 # Collapse store/migrations/* into store/schema.sql. Run after a
 # successful production deploy (kevcons will eventually trigger this
