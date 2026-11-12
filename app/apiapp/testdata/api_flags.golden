@@ -1,0 +1,14 @@
+  -base-url string
+    	base URL for magic links (default "https://w3ft.net")
+  -coordinator string
+    	coordinator gRPC address (its --local-addr; the public port serves only ingest RPCs) (default "localhost:9025")
+  -db-dsn string
+    	PostgreSQL DSN
+  -port string
+    	HTTP listen port (default "8080")
+  -redis-addr string
+    	Redis/Valkey address for the shared ingest-schema cache (host:port); empty disables it, every schema lookup falls through to Postgres directly
+  -redis-tls
+    	use TLS for the Redis connection (required for ElastiCache in-transit encryption)
+  -render-syslog-port int
+    	TCP port for the Render TLS syslog listener (see docs/ingestion-syslog.md); the NLB terminates TLS and forwards plaintext here (default 9023)

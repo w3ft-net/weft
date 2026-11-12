@@ -8,6 +8,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	"github.com/graybeardcorp/weft/identity"
 )
 
 // SessionBuilder resolves a user ID + active-org selector into a
@@ -26,7 +28,7 @@ const activeOrgMetadataKey = "x-active-org"
 // SkipMethods is the set of gRPC full method names the interceptors pass
 // through without requiring a JWT. Populated with methods that authenticate
 // by some other means (agent tokens, unauthenticated bootstrap).
-type SkipMethods map[string]bool
+type SkipMethods = identity.SkipMethods
 
 // extractActiveOrg returns the X-Active-Org metadata value if present,
 // or "" if absent. Empty selector triggers BuildSession's default

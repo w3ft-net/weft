@@ -1,0 +1,28 @@
+  -admin-port int
+    	gRPC listen port for the localhost-only WeftAdmin surface (weft-admin CLI) (default 9022)
+  -compute string
+    	compute worker address (host:port)
+  -customer string
+    	fallback customer for dev/docker (queries pass customer per-request)
+  -db-dsn string
+    	PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)
+  -debug-port int
+    	localhost-only HTTP port for net/http/pprof (goroutine/heap profiling); 0 disables (default 6060)
+  -health-port int
+    	HTTP liveness listen port (default 9021)
+  -internal-addr string
+    	listen address for the VPC-internal Heartbeat port shards report to; reachable only through the internal NLB and its security group rule (default ":9026")
+  -local-addr string
+    	listen address for the full WeftCoordinator service, which the co-located api connects to (the public --port serves only the ingest/infra RPCs) (default "127.0.0.1:9025")
+  -port int
+    	gRPC listen port (default 9020)
+  -query-log string
+    	path for the query-audit log; falls back to stderr if unwritable (default "/var/log/weft/queries.log")
+  -redis-addr string
+    	Redis address for cross-coordinator tail -f fan-out (host:port); empty disables cross-coordinator fan-out, tail stays local to this process
+  -redis-tls
+    	use TLS for the Redis connection (required for ElastiCache in-transit encryption)
+  -region string
+    	AWS region for shard EC2 launches + volume management (default "us-east-2")
+  -share-url-base clipboard
+    	origin clipboard short links are built on (default "https://w3ft.net")

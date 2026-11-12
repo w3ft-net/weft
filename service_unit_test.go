@@ -180,6 +180,59 @@ func goPackageForBinary(bin string) string {
 // names — dynamic / computed names aren't worth the parser
 // complexity, and our codebase doesn't use them.
 func goFlagsDefinedIn(pkgDir string) (map[string]struct{}, error) {
+	flagNames, err := flagsDefinedInDir(pkgDir, false)
+	if err != nil {
+		return nil, err
+	}
+	// A thin main hands its process to a bootstrap package (app, app/apiapp)
+	// that defines the flags on a *flag.FlagSet it is given.
+	dirs, err := bootstrapDirs(pkgDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, dir := range dirs {
+		more, err := flagsDefinedInDir(dir, true)
+		if err != nil {
+			return nil, err
+		}
+		for name := range more {
+			flagNames[name] = struct{}{}
+		}
+	}
+	return flagNames, nil
+}
+
+// bootstrapDirs are the directories of the app/... packages pkgDir imports.
+func bootstrapDirs(pkgDir string) ([]string, error) {
+	const prefix = "github.com/graybeardcorp/weft/"
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, pkgDir, nil, parser.ImportsOnly)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var dirs []string
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, imp := range file.Imports {
+				path, err := strconv.Unquote(imp.Path.Value)
+				if err != nil || !strings.HasPrefix(path, prefix+"app") {
+					continue
+				}
+				if dir := strings.TrimPrefix(path, prefix); !seen[dir] {
+					seen[dir] = true
+					dirs = append(dirs, dir)
+				}
+			}
+		}
+	}
+	return dirs, nil
+}
+
+// flagsDefinedInDir walks one directory. anyReceiver also accepts a flag
+// registered on any variable (a *flag.FlagSet parameter), not just the flag
+// package's own functions.
+func flagsDefinedInDir(pkgDir string, anyReceiver bool) (map[string]struct{}, error) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, pkgDir, nil, 0)
 	if err != nil {
@@ -198,7 +251,7 @@ func goFlagsDefinedIn(pkgDir string) (map[string]struct{}, error) {
 					return true
 				}
 				ident, ok := sel.X.(*ast.Ident)
-				if !ok || ident.Name != "flag" {
+				if !ok || (ident.Name != "flag" && !(anyReceiver && flagDefiningMethods[sel.Sel.Name])) {
 					return true
 				}
 				// flag.X("name", ...)        → name lives at args[0].

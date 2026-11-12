@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/saaskit/jwtauth"
+	"github.com/graybeardcorp/weft/identity"
 	"github.com/graybeardcorp/weft/store"
 )
 
@@ -55,6 +56,9 @@ var claimsKey = contextKey{}
 // (auth/grpc.go) so downstream handlers retrieve via FromContext
 // regardless of protocol.
 func WithClaims(ctx context.Context, c *Claims) context.Context {
+	if c != nil {
+		ctx = identity.WithUserID(ctx, c.UserID)
+	}
 	return context.WithValue(ctx, claimsKey, c)
 }
 

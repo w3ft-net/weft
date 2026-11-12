@@ -8,7 +8,9 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/graybeardcorp/saaskit/orgs"
+	"github.com/graybeardcorp/weft/identity"
 	"github.com/graybeardcorp/weft/store"
+	"github.com/graybeardcorp/weft/tenancy"
 	"github.com/graybeardcorp/weft/tenancy/hosted"
 )
 
@@ -52,10 +54,17 @@ type sessionContextKey struct{}
 
 var sessionKey = sessionContextKey{}
 
-// WithSession returns a context carrying the resolved session.
+// WithSession returns a context carrying the resolved session, and the same
+// session as the caller the coordinator's service asks about.
 func WithSession(ctx context.Context, s *Session) context.Context {
-	return context.WithValue(ctx, sessionKey, s)
+	return identity.WithCaller(context.WithValue(ctx, sessionKey, s), sessionCaller{s})
 }
+
+// sessionCaller is a session as the party identity.CallerFrom reports.
+type sessionCaller struct{ *Session }
+
+func (c sessionCaller) Actor() tenancy.Actor { return c.Session.Actor() }
+func (c sessionCaller) UserID() string       { return c.Session.UserID }
 
 // SessionFromContext pulls the session previously injected by
 // WithSession. Returns nil if no session was attached.

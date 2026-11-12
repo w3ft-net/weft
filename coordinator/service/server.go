@@ -21,9 +21,9 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/graybeardcorp/weft/auth"
 	weftcfg "github.com/graybeardcorp/weft/config"
 	"github.com/graybeardcorp/weft/coordinator"
+	"github.com/graybeardcorp/weft/identity"
 	"github.com/graybeardcorp/weft/ingest"
 	"github.com/graybeardcorp/weft/logdb"
 	"github.com/graybeardcorp/weft/notices"
@@ -60,14 +60,14 @@ func convertNotices(in []notices.Notice) []*pb.Notice {
 // called without an interceptor-populated context (shouldn't happen in
 // production because the interceptor gates every JWT-protected RPC).
 func callerOrg(ctx context.Context) (store.OrgID, error) {
-	s := auth.SessionFromContext(ctx)
-	if s == nil {
+	c := identity.CallerFrom(ctx)
+	if c == nil {
 		return 0, status.Errorf(codes.Unauthenticated, "no authenticated caller")
 	}
-	if s.Org() == 0 {
+	if c.Org() == 0 {
 		return 0, status.Errorf(codes.PermissionDenied, "authenticated user has no customer")
 	}
-	return s.Org(), nil
+	return c.Org(), nil
 }
 
 // callerUserID returns the authenticated user's ID, or "" when no
@@ -75,22 +75,18 @@ func callerOrg(ctx context.Context) (store.OrgID, error) {
 // that record creator/displacing user. Empty string is acceptable
 // upstream: the store path treats it as "system" attribution.
 func callerUserID(ctx context.Context) string {
-	c := auth.FromContext(ctx)
-	if c == nil {
-		return ""
-	}
-	return c.UserID
+	return identity.UserIDFrom(ctx)
 }
 
 // authorizeNamespace is the namespace rule the REST handlers apply
 // (the Authorizer's manage-namespace-tokens action), answered as a gRPC status. The
 // session is the one the interceptor built from the caller's forwarded JWT.
 func (s *Server) authorizeNamespace(ctx context.Context, namespace string) error {
-	sess := auth.SessionFromContext(ctx)
-	if sess == nil {
+	caller := identity.CallerFrom(ctx)
+	if caller == nil {
 		return status.Errorf(codes.Unauthenticated, "no authenticated caller")
 	}
-	actor := sess.Actor()
+	actor := caller.Actor()
 	if err := s.authorizer().Authorize(ctx, actor, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: namespace}); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
