@@ -46,9 +46,27 @@ func TestScoper_ReadsTheActorsWholePartition(t *testing.T) {
 	}
 }
 
+// Under a shape that has a tenant this adapter's actors name none, so a build
+// that reached it forgot its own: every action, core or not, is denied rather
+// than allowed without the gates the real authorizer applies.
+func TestAuthorizer_UnderATenantShapeDeniesEverything(t *testing.T) {
+	shapetest.NeedsTenant(t)
+	for _, act := range []tenancy.Action{
+		tenancy.ActionCreateNamespace, tenancy.ActionManageBin, tenancy.ActionManageCron, tenancy.ActionManageEtc,
+	} {
+		err := Authorizer{}.Authorize(context.Background(), Actor{}, act, tenancy.Resource{})
+		if !errors.Is(err, tenancy.ErrDenied) {
+			t.Errorf("%s under a tenant shape: err = %v, want a denial", act, err)
+		}
+	}
+}
+
 // It allows the closed set of actions the core defines, and any action it has
 // never heard of is denied: a build without a product surface has no other.
 func TestAuthorizer_AllowsTheCoreAndDeniesTheRest(t *testing.T) {
+	if len(shape.BuildLayout().Columns) > 0 {
+		t.Skip("a shape with a tenant denies everything; see the test above")
+	}
 	for _, act := range []tenancy.Action{
 		tenancy.ActionCreateNamespace, tenancy.ActionDeleteNamespace, tenancy.ActionManageNamespaceTokens,
 		tenancy.ActionManageBin, tenancy.ActionManageEtc, tenancy.ActionManageCron,

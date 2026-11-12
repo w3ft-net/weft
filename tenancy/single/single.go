@@ -37,10 +37,16 @@ func (Scoper) NamespaceScope(_ context.Context, partition shape.Added, _ string)
 }
 
 // Authorizer allows the actions the core defines and denies any other: a
-// build without a product surface has nothing else to allow.
+// build without a product surface has nothing else to allow. Under a shape
+// that has a tenant it denies everything. Its actors name no tenant, so
+// reaching it there means the build forgot its own adapter, and an open
+// authorizer would then allow writes the real one gates.
 type Authorizer struct{}
 
 func (Authorizer) Authorize(_ context.Context, _ tenancy.Actor, act tenancy.Action, _ tenancy.Resource) error {
+	if len(shape.BuildLayout().Columns) > 0 {
+		return tenancy.Denied("this build has tenants and no adapter that knows them")
+	}
 	switch act {
 	case tenancy.ActionCreateNamespace, tenancy.ActionDeleteNamespace, tenancy.ActionManageNamespaceTokens,
 		tenancy.ActionManageBin, tenancy.ActionManageEtc, tenancy.ActionManageCron,
