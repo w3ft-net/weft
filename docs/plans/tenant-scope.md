@@ -10,7 +10,13 @@ are in (`1091269b`, `45f4f4e5`, `8b466a3b`, `7d287b05`, `e0eefc74`,
 tiles, and the `/bin` dependency rule. The action sweep and the lint test are
 done, and every reader of the session's org goes through `Session.Actor()`
 (`Session.Org()`). Phase 3 is in.
-Phases 4-6 are not started.
+Phase 4 is mostly in, on branch `worktree-shard-layout-wire` (unpushed, about
+40 commits; weft 0.13.0 and weftd 0.34.0 bump the wire). The generator,
+shape-agnostic shards, planner, coordinator and the `app` split are done and
+build under the default shape (`make test-default-shape`, a CI job). Still
+open: the `api/` route split, the tag 26 cut-over, and moving the hosted
+adapter to its own repo. See "Phase 4: where it stands". Phases 5 and 6 are
+not started.
 
 ## Why
 
@@ -398,7 +404,8 @@ the new coordinator with new shards, for both ingest and archive.
 Only the **coordinator** is built from the generated tree. The **API**
 also gets a custom `main`, but only to wire the Identity adapter, which
 is a separate seam from the shape. Everything else is a stock release
-binary.
+binary. Each main is one line over a bootstrap package: `app.Coordinator`
+and `apiapp.API` take an adapter (hosted: `hostedapp`, `hostedapi`).
 
 A third party:
 
@@ -818,31 +825,34 @@ Each gap fix starts with a failing test.
 **Phase 4: shape generator, shape-agnostic shards, and extract the
 hosted adapter (~9d).**
 
-- Write the generator and the `shape/` output (the hand-written
-  `Coord`/`Set` from Phase 2 become its output), for the hosted and
-  default shapes.
-
-- `Configure` carries `Layout` and `Fingerprint` into `shard.json`.
-  Volumes with no layout are adopted as the legacy `customer_id BIGINT`
-  layout.
-- Ingest batches carry `table_key` + `partition_values`. The shard
-  appender writes typed per-batch constants. `logtable.Name` moves to
-  the coordinator's `shape.TableKey`, with a golden test for
-  byte-identical hosted names.
-- Export, archive stats, compaction and field facts take their columns
-  from `shard.json`, the hive path, or the coordinator's request, per
-  the "Shards are shape-agnostic" table.
-- Run the wire transition in three steps: additive, cut over, drain the
-  dead-letter queue. Add the cross-version test (new coordinator ↔
-  old/new shards, for ingest and archive).
-- Benchmark shard ingest throughput before and after.
-- Split `cmd/coordinator` and `cmd/api` into `app.Main(adapter, ...)`
-  plus thin default `main`s.
-- Move the hosted `shape.yaml` and the org/team Scoper and Authorizer
-  into the private hosted repo. Its CI checks out weft at a tag,
-  generates, and builds before the AMI step.
-- Commit the default shape's generated output and `tenancy/single`. CI
-  fails if the generated output is stale.
+- ✅ The generator and the `shape/` output (the hand-written `Coord`/`Set`
+  became its output), for the hosted and default shapes. A conformance test
+  builds the algebra with the hosted, default, odd and namespace-only shapes.
+  `make generate-check` runs in CI.
+- ✅ `Configure` carries `Layout` and `Fingerprint` into `shard.json`; volumes
+  with none are adopted as the legacy layout. Shards heartbeat the
+  fingerprint and the coordinator rejects a mismatch.
+- ✅ Ingest batches carry `partition_values`. There is no `table_key`: the
+  shard builds a key from the partition plus the row's namespace, service and
+  kind, and `logtable.Name` takes the typed partition values, byte-identical
+  for hosted (pinned by `TestNameIsPinned`).
+- ✅ Export, archive stats, compaction and field facts read the layout from
+  `shard.json`, the hive path or the request. Field facts are keyed by
+  `(table, env, locator)`; archive stats are `PartitionStat`.
+- 🟡 Wire transition: the additive step and the dead-letter envelope
+  (`{added, row}`, legacy rows still read) are in, with the cross-version test.
+  The cut-over is not: see below.
+- ✅ Ingest benchmark before and after: no regression.
+- ✅ `cmd/coordinator` and `cmd/api` are thin mains over `app.Coordinator` and
+  `apiapp.API` with hosted adapters (`hostedapp`, `hostedapi`). The flags,
+  help output and behavior are unchanged.
+- ⬜ Move the hosted `shape.yaml`, the Scoper and Authorizer, `hostedapp`,
+  `hostedapi` and `retention` into the private repo. Held until the
+  tenant-agnostic library repo exists; the in-tree default stays hosted until
+  then.
+- 🟡 `tenancy/single` and the default shape's generated output are in and
+  built by CI ("Default shape builds"). The committed `shape/coord_gen.go` is
+  still the hosted one.
 
 After this, the public tree has no tenant field or column, and no code
 outside the adapter reads org or permission tables. `planner/`,
@@ -850,6 +860,76 @@ outside the adapter reads org or permission tables. `planner/`,
 the coordinator is built per shape. Existing hosted data is unaffected:
 the hosted shape produces today's column names, table names and
 partition paths. A golden test pins that.
+
+#### Phase 4: where it stands
+
+**Decisions** (2026-11-11):
+
+- The coordinator keeps its `*store.Store` and `store.OrgID`. Phase 4 removes
+  the tenant *vocabulary* only; the "no saaskit imports" criterion above moves
+  to Phase 6, which interfaces the store.
+- The planner takes a `shape.Set`, not a customer id (`Plan`, `Lower`,
+  `LowerForStorage`). The tenant predicate is generated from the layout's
+  columns. Hosted SQL is byte-identical, pinned by `planner/testdata/tenant_sql.golden`.
+  The default shape emits no tenant predicate.
+- The data path carries `shape.Added` (rows, drain, dead-letter queue, tail,
+  scope). One mapper, `coordinator.Orgs` (`OrgOf`, `AddedOf`, `ActorOf`),
+  converts to the store's org handle; hosted is the only place that names
+  `Customer`.
+- Stored `LoweredPlan` JSON keeps its old `customer_id` and `ArgCustomer` on
+  read and writes `partition` and `ArgPartition`; anything unreadable falls
+  back to the inline re-plan. A rolled-back coordinator resolves
+  `ArgPartition` to an empty string, so the cast fails and it falls back, at
+  some latency.
+- `api/` splits by route: query, ingest, sources, scripts, crons and
+  dashboards stay core behind the Identity adapter; signup, billing, teams,
+  integrations, usage, admin and shared links move to hosted and register
+  through a seam in the bootstrap.
+- Done means: CI generates the default shape, builds, and runs the packages
+  that don't need Postgres. `make test-default-shape` is that job's list and
+  grows with each step.
+
+**Added beyond the plan:**
+
+- `logdb.Retention`, an optional hook (`ArchiveRecorded`, `CheckDelete`,
+  `Start`). The open-source build ships no retention. The janitor, compactor,
+  cutoffs, `shard_archive_stats` and tombstone cleanup are in
+  `tenancy/hosted/retention`. Billing tiers no longer reach `logdb`: a query
+  passes the earliest instant it may read.
+- The one-off archive conversion and the swap RPC are deleted (their gates in
+  `per-service-tables.md` closed).
+- `tenancy.Adapter`, `app.Adapter` (`Coordinator`, `Identity`, `Notifier`,
+  `Retention`, `LegacyFactTable`, `Start`) and the neutral `identity` and
+  `grpctoken` packages, which keep `auth` out of the bootstrap and out of the
+  cgo-free `cmd/api` graph.
+- `shape/shapetest`, so tests name a tenant without naming the column.
+- The open authorizer and scoper fail closed under a shape that has a
+  tenant. This matters: a hosted binary built without its adapter would
+  otherwise run with the open one (`cmd/coordinator` did, briefly, before
+  `app.Adapter.WithTenancy`; a test now pins the hosted gates).
+
+**Open:**
+
+- **`api/` route split.** `api`, `app/apiapp` and `auth` still name the tenant
+  and don't build under the default shape. `ingest` stamps tag 26 from
+  `schema.CustomerID`, set in `api/adapter.go`.
+- **Tag 26 cut-over.** Delete the stamp in the ingest stream handler and mark
+  26 `reserved`, only once every shard and coordinator runs the new build,
+  rollbacks included. The compat fields go with it: `FieldFact.Customer`,
+  `FieldFactDelta.customer_id`, `PartitionStat.LegacyCustomerID`,
+  `tableKey.stamped`, the `appendRows` fallback, and the redis and
+  dead-letter legacy reads.
+- **The private repo**, then flipping the in-tree default shape.
+- An open-source main with a real open identity. Today `cmd/coordinator` is
+  hosted, and the default adapter has no way to authenticate anyone.
+- Optional wire-compatible renames: `CustomerArchiveStat`, `customer_stats`.
+
+**Known issues found along the way:** `DeleteArchived`'s hosted guard reads
+a bucket's `Tier` (an instance size) as a billing tier, so it is a flat 24
+hours; it is unchanged. `integration/lambda_test.go` doesn't compile
+(`undefined: t0`). `store`'s `TestRollup_4hCombinesHourly` fails on this
+branch, whose `store/` code is otherwise unchanged from main; it has not been
+run on main.
 
 **Phase 5: spec + conformance suite (~2d).** `docs/tenancy-spec.md` (the
 contract above, written for an outside implementer) plus
