@@ -182,8 +182,10 @@ func (d *DLQ) readObject(ctx context.Context, key string) ([]Row, error) {
 	}
 }
 
-// decodeDLQLine reads one stored row, in the envelope or, for an object written
-// before it, as a bare LogRow.
+// decodeDLQLine reads one stored row from its envelope, which carries the
+// tenant beside the row. A bare LogRow, written before the envelope, names its
+// tenant nowhere a replay can read, so it is an error: its object stays in the
+// bucket and is reported, and is never replayed as the zero tenant's.
 func decodeDLQLine(raw json.RawMessage) (Row, error) {
 	var env struct {
 		Added *shape.Added    `json:"added"`
@@ -192,13 +194,10 @@ func decodeDLQLine(raw json.RawMessage) (Row, error) {
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return Row{}, err
 	}
-	lr := &pb.LogRow{}
 	if env.Row == nil {
-		if err := protojson.Unmarshal(raw, lr); err != nil {
-			return Row{}, err
-		}
-		return Row{lr, legacyAdded(lr)}, nil
+		return Row{}, errors.New("line has no envelope: written before the dead-letter envelope, so its tenant is unknown")
 	}
+	lr := &pb.LogRow{}
 	if err := protojson.Unmarshal(env.Row, lr); err != nil {
 		return Row{}, err
 	}

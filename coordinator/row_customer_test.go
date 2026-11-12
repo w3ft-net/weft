@@ -3,7 +3,6 @@ package coordinator
 import (
 	"context"
 	"github.com/graybeardcorp/weft/shape/shapetest"
-	"reflect"
 	"testing"
 	"time"
 
@@ -103,21 +102,14 @@ func TestDLQ_EnvelopeRestoresTheAddedColumnsWithoutTag26(t *testing.T) {
 	}
 }
 
-// An object written before the envelope holds bare LogRows; their customer is
-// the row's customer_id.
-func TestDLQ_ReadsALineWrittenBeforeTheEnvelope(t *testing.T) {
+// A line written before the envelope is a bare LogRow, and nothing a replay can
+// read says whose it is: it is refused, not replayed as the zero tenant's.
+func TestDLQ_RefusesALineWrittenBeforeTheEnvelope(t *testing.T) {
 	line, err := protojson.Marshal(&pb.LogRow{Namespace: "weft", Service: "coordinator", Raw: "old", CustomerId: 12})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := decodeDLQLine(line)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Raw != "old" {
-		t.Errorf("legacy line decoded as row %q, want old", r.Raw)
-	}
-	if want := (shapetest.Added(12)); !reflect.DeepEqual(r.Added, want) {
-		t.Errorf("Added = %+v, want %+v", r.Added, want)
+	if r, err := decodeDLQLine(line); err == nil {
+		t.Fatalf("a line with no envelope decoded as %+v, want an error", r)
 	}
 }

@@ -63,22 +63,6 @@ func TestAdded_SurvivesTheTailTheDLQAndTheKey(t *testing.T) {
 	}
 }
 
-// A line from before the envelope has no added columns of its own. Under the
-// legacy layout its customer_id is the partition; under any other it is read
-// as the empty value, never as a guess.
-func TestLegacyAdded_IsReadOnlyUnderTheLegacyLayout(t *testing.T) {
-	got := legacyAdded(&pb.LogRow{CustomerId: 12})
-	if shape.BuildLayout().IsLegacy() {
-		if got != shapetest.Added(12) {
-			t.Errorf("legacy row read as %+v, want customer 12's columns", got)
-		}
-		return
-	}
-	if got != (shape.Added{}) {
-		t.Errorf("a layout that is not the legacy one read customer_id as %+v", got)
-	}
-}
-
 // A shape with a required column has no tenant until they are set.
 func TestNoTenant_FollowsTheShapesRequiredColumns(t *testing.T) {
 	if got, want := noTenant(shape.Added{}), len(shape.BuildLayout().Columns) > 0; got != want {

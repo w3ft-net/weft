@@ -954,12 +954,15 @@ partition paths. A golden test pins that.
   the store is still keyed by org, so org-scoped store reads (sources, crons,
   namespaces) find no rows until Phase 6 interfaces the store or the open build
   seeds a default org.
-- **Tag 26 cut-over.** Delete the stamp in the ingest stream handler and mark
-  26 `reserved`, only once every shard and coordinator runs the new build,
-  rollbacks included. The compat fields go with it: `FieldFact.Customer`,
-  `FieldFactDelta.customer_id`, `PartitionStat.LegacyCustomerID`,
-  `tableKey.stamped`, the `appendRows` fallback, and the redis and
-  dead-letter legacy reads.
+- **Tag 26 cut-over.** Two deploys. Step 1 (done, undeployed): a coordinator
+  reads a tail row's tenant from its redis channel name (`rowFromMessage`),
+  never from tag 26, and the dead-letter replay refuses a line with no
+  envelope (the bucket was empty). Step 2, once step 1 is deployed everywhere
+  and is the rollback target: delete the stamp in the ingest stream handler
+  and mark 26 `reserved`. The compat fields go with it: `FieldFact.Customer`,
+  `FieldFactDelta.customer_id`, `CustomerArchiveStat.customer_id`,
+  `PartitionStat.LegacyCustomerID`, `tableKey.stamped`, the parser's
+  `schema.CustomerID`, and the `appendRows` and field-fact fallbacks.
 - **The tour in clients and the store.** The server side is out of core; what
   remains is not Go-side core: `frontend/src` (`TourOverlay`, `WelcomeModal`,
   `GraduationBanner`, the `tour_advance` branch in `wasm/network.ts`, the tour

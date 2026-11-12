@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"strings"
 	"sync"
@@ -60,18 +61,45 @@ func newRedisFanout(addr string, tlsEnabled bool, deliver func(rows []Row)) *red
 
 func (r *redisFanout) recvLoop(deliver func(rows []Row)) {
 	for msg := range r.ps.Channel() {
-		row := &pb.LogRow{}
-		if err := proto.Unmarshal([]byte(msg.Payload), row); err != nil {
-			weftsdk.Infof(context.Background(), "tailfanout: redis unmarshal row: %v", err)
+		row, err := rowFromMessage(msg.Channel, []byte(msg.Payload))
+		if err != nil {
+			weftsdk.Infof(context.Background(), "tailfanout: redis message on %q: %v", msg.Channel, err)
 			store.LogTailFanoutEvent(context.Background(), "unmarshal", err)
 			continue
 		}
-		// The one place the coordinator still reads tag 26: a peer of the
-		// previous build publishes the customer only there, and this build
-		// stamps it for that reason. Read the channel name instead, or carry the
-		// added columns in the payload, once no such peer remains.
-		deliver([]Row{{row, legacyAdded(row)}})
+		deliver([]Row{row})
 	}
+}
+
+// rowFromMessage reads one published tail row. Its tenant is the added columns
+// the publisher named its channel by (see channelFor), never anything in the
+// payload: the coordinator carries the tenant beside the row, not inside it.
+// A channel that names no tenant is refused rather than read as the zero one.
+func rowFromMessage(channel string, payload []byte) (Row, error) {
+	added, err := addedFromChannel(channel)
+	if err != nil {
+		return Row{}, err
+	}
+	row := &pb.LogRow{}
+	if err := proto.Unmarshal(payload, row); err != nil {
+		return Row{}, err
+	}
+	return Row{row, added}, nil
+}
+
+// addedFromChannel is the inverse of channelPrefix: the partition values that
+// follow "tail:" in a channel name, as many as the build's added columns.
+func addedFromChannel(channel string) (shape.Added, error) {
+	rest, ok := strings.CutPrefix(channel, "tail:")
+	if !ok {
+		return shape.Added{}, fmt.Errorf("not a tail channel")
+	}
+	n := len(shape.Added{}.Coord().PartitionValues())
+	parts := strings.SplitN(rest, ":", n+1)
+	if len(parts) < n+1 {
+		return shape.Added{}, fmt.Errorf("channel names %d partition values, want %d", len(parts)-1, n)
+	}
+	return shape.AddedFromPartition(parts[:n])
 }
 
 // pattern builds the PSUBSCRIBE glob for a topic. Always goes through

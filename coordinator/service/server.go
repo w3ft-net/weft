@@ -695,10 +695,11 @@ recvLoop:
 			return err
 		}
 
-		// The coordinator carries the tenant beside the row (added). Tag 26
-		// is stamped only for a shard or coordinator of the previous build,
-		// which reads the legacy layout's customer there; the cut-over
-		// deletes this.
+		// The coordinator carries the tenant beside the row (added), and a
+		// coordinator reads a peer's tail row's tenant from its channel name.
+		// Tag 26 is stamped only for a shard or coordinator of the previous
+		// build, which reads the legacy layout's customer there; the cut-over
+		// deletes this once none can be rolled back to.
 		if stampLegacy {
 			row.CustomerId = authCustomerID
 		}
