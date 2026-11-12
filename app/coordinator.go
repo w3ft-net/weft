@@ -27,6 +27,7 @@ import (
 	coordsvc "github.com/graybeardcorp/weft/coordinator/service"
 	"github.com/graybeardcorp/weft/identity"
 	"github.com/graybeardcorp/weft/ingest"
+	"github.com/graybeardcorp/weft/internal/grpckeepalive"
 	"github.com/graybeardcorp/weft/logdb"
 	pb "github.com/graybeardcorp/weft/proto/weftpb"
 	"github.com/graybeardcorp/weft/store"
@@ -381,6 +382,10 @@ func Coordinator(a Adapter) {
 		authUnary, authStream := ids.Interceptors(noJWT)
 		return grpc.NewServer(
 			grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
+			// Accept the keepalive pings weftd sends to notice a dead
+			// connection; the default refuses anything faster than every five
+			// minutes with GOAWAY too_many_pings.
+			grpc.KeepaliveEnforcementPolicy(grpckeepalive.ServerEnforcement),
 			grpc.ChainUnaryInterceptor(append(unary, authUnary...)...),
 			grpc.ChainStreamInterceptor(append(stream, authStream...)...),
 		)

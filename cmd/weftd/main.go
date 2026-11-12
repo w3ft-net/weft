@@ -214,9 +214,7 @@ func main() {
 	// Connect to coordinator. The bearer token is attached to every RPC
 	// via PerRPCCredentials — IngestStream reads it from metadata.
 	coordConn, err := grpc.NewClient(cfg.endpoint(),
-		grpc.WithTransportCredentials(transportCreds(cfg.tlsEnabled())),
-		grpc.WithPerRPCCredentials(bearerToken{token: cfg.Token, clientID: ClientID(), secure: cfg.tlsEnabled()}),
-	)
+		coordDialOptions(cfg.tlsEnabled(), bearerToken{token: cfg.Token, clientID: ClientID(), secure: cfg.tlsEnabled()})...)
 	if err != nil {
 		log.Fatalf("connect to coordinator: %v", err)
 	}
