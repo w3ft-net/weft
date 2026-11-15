@@ -1,0 +1,124 @@
+━━━ /aws/vimgym/web ━━━
+[2026-03-23 21:04:10] [i-00d3871ba2b1dbe47] Fetching secrets from Secrets Manager (/vimgym/)...
+  Secret: mailgun-api-key -> MAILGUN_API_KEY
+  Secret: sentry-dsn -> SENTRY_DSN
+[2026-03-23 21:04:10] [i-00d3871ba2b1dbe47] 2026/03/24 01:04:10 Warning: could not init corpus DB, using fallback: corpus: create temp dir: mkdir /tmp/vimgym-corpus-2782355283: read-only file system
+[2026-03-23 21:04:10] [i-00d3871ba2b1dbe47] 2026/03/24 01:04:10 Database connected, auth enabled
+[2026-03-23 21:04:10] [i-00d3871ba2b1dbe47] Config written to /opt/app/.env
+[2026-03-23 21:04:10] [i-00d3871ba2b1dbe47] 2026/03/24 01:04:10 Sentry initialized
+[2026-03-23 21:04:10] [i-00d3871ba2b1dbe47] 2026/03/24 01:04:10 Loaded training with 42 levels
+[2026-03-23 21:04:10] [i-00d3871ba2b1dbe47] 2026/03/24 01:04:10 Loaded onboarding config with 4 challenges
+[2026-03-23 21:04:14] [i-00d3871ba2b1dbe47] Vim Gym server listening on :8070
+[2026-03-24 13:21:25] [i-00d3871ba2b1dbe47] 2026/03/24 17:21:21 bot: created phantom.cpp (id=1e2de191) for tool=vim level=8
+[2026-03-24 13:21:25] [i-00d3871ba2b1dbe47] 2026/03/24 17:21:24 bot: launching goroutine for phantom.cpp (id=1e2de191)
+[2026-03-24 13:21:29] [i-00d3871ba2b1dbe47] 2026/03/24 17:21:24 bot: runBot started for phantom.cpp tool=vim
+[2026-03-24 14:25:38] [i-00d3871ba2b1dbe47] 2026/03/24 18:25:35 bot: created phantom.cpp (id=58cfef9b) for tool=vim level=8
+[2026-03-24 14:25:38] [i-00d3871ba2b1dbe47] 2026/03/24 18:25:38 bot: launching goroutine for phantom.cpp (id=58cfef9b)
+[2026-03-24 14:25:42] [i-00d3871ba2b1dbe47] 2026/03/24 18:25:38 bot: runBot started for phantom.cpp tool=vim
+[2026-03-24 14:25:50] [i-00d3871ba2b1dbe47] 2026/03/24 18:25:46 [bot phantom.cpp] working on lap 0 (headStart=5000ms)
+[2026-03-24 14:26:01] [i-00d3871ba2b1dbe47] 2026/03/24 18:26:01 read error: websocket: close 1005 (no status)
+[2026-03-24 14:26:01] [i-00d3871ba2b1dbe47] 2026/03/24 18:26:01 [disconnect] player aff4dee3 disconnected, keeping session for reconnect
+[2026-03-24 14:26:05] [i-00d3871ba2b1dbe47] 2026/03/24 18:26:01 [failover] host aff4dee3 disconnected from lobby 9152ba14, broadcasting to 2 members
+[2026-03-24 14:26:15] [i-00d3871ba2b1dbe47] 2026/03/24 18:26:11 [failover] promoted new owner for lobby 9152ba14 (old owner: aff4dee3, new: 58cfef9b)
+[2026-03-24 14:26:35] [i-00d3871ba2b1dbe47] 2026/03/24 18:26:31 [cleanup] removed stale session aff4dee3
+[2026-03-24 15:49:23] [i-00d3871ba2b1dbe47] 2026/03/24 19:49:22 [disconnect] player d60e699f disconnected, keeping session for reconnect
+[2026-03-24 15:49:27] [i-00d3871ba2b1dbe47] 2026/03/24 19:49:22 [failover] host d60e699f disconnected from lobby 3dd70b1b, broadcasting to 2 members
+[2026-03-24 15:49:37] [i-00d3871ba2b1dbe47] 2026/03/24 19:49:32 [failover] promoted new owner for lobby 3dd70b1b (old owner: d60e699f, new: 1e2de191)
+[2026-03-24 15:49:57] [i-00d3871ba2b1dbe47] 2026/03/24 19:49:52 [cleanup] removed stale session d60e699f
+[2026-03-24 22:19:07] [i-00d3871ba2b1dbe47] 2026/03/25 02:19:04 bot: created phantom.cpp (id=6d53f0f0) for tool=vim level=8
+[2026-03-24 22:19:07] [i-00d3871ba2b1dbe47] 2026/03/25 02:19:07 bot: launching goroutine for phantom.cpp (id=6d53f0f0)
+[2026-03-24 22:19:11] [i-00d3871ba2b1dbe47] 2026/03/25 02:19:07 bot: runBot started for phantom.cpp tool=vim
+[2026-03-24 22:19:19] [i-00d3871ba2b1dbe47] 2026/03/25 02:19:15 [bot phantom.cpp] working on lap 0 (headStart=5000ms)
+[2026-03-25 13:25:49] [i-065ee81c73c4448e0] 2026/03/25 17:25:34 Sentry initialized
+[2026-03-25 13:25:49] [i-065ee81c73c4448e0] Fetching config from SSM /vimgym/config/app...
+[2026-03-25 13:25:49] [i-065ee81c73c4448e0] 2026/03/25 17:25:35 Database connected, auth enabled
+[2026-03-25 13:25:49] [i-065ee81c73c4448e0] 2026/03/25 17:25:34 Loaded onboarding config with 4 challenges
+[2026-03-25 13:25:49] [i-065ee81c73c4448e0] 2026/03/25 17:25:34 Loaded training with 42 levels
+[2026-03-25 13:25:49] [i-065ee81c73c4448e0] 2026/03/25 17:25:34 Warning: could not init corpus DB, using fallback: corpus: create temp dir: mkdir /tmp/vimgym-corpus-449583569: read-only file system
+[2026-03-25 13:25:49] [i-065ee81c73c4448e0] Config written to /opt/app/.env
+[2026-03-25 13:25:49] [i-065ee81c73c4448e0] Fetching secrets from Secrets Manager (/vimgym/)...
+  Secret: mailgun-api-key -> MAILGUN_API_KEY
+  Secret: sentry-dsn -> SENTRY_DSN
+[2026-03-25 13:25:54] [i-065ee81c73c4448e0] Vim Gym server listening on :8070
+[2026-03-25 14:02:54] [i-07d172e3e399f7fb1] 2026/03/25 18:02:46 Loaded training with 42 levels
+[2026-03-25 14:02:54] [i-07d172e3e399f7fb1] Fetching config from SSM /vimgym/config/app...
+[2026-03-25 14:02:54] [i-07d172e3e399f7fb1] Config written to /opt/app/.env
+[2026-03-25 14:02:54] [i-07d172e3e399f7fb1] Fetching config from SSM /vimgym/config/app...
+[2026-03-25 14:02:54] [i-07d172e3e399f7fb1] Fetching secrets from Secrets Manager (/vimgym/)...
+  Secret: mailgun-api-key -> MAILGUN_API_KEY
+  Secret: sentry-dsn -> SENTRY_DSN
+[2026-03-25 14:02:54] [i-07d172e3e399f7fb1] Config written to /opt/app/.env
+[2026-03-25 14:02:54] [i-07d172e3e399f7fb1] 2026/03/25 18:02:46 Sentry initialized
+[2026-03-25 14:02:54] [i-07d172e3e399f7fb1] 2026/03/25 18:02:46 Warning: could not init corpus DB, using fallback: corpus: create temp dir: mkdir /tmp/vimgym-corpus-2769497530: read-only file system
+[2026-03-25 14:02:54] [i-07d172e3e399f7fb1] 2026/03/25 18:02:46 Database connected, auth enabled
+[2026-03-25 14:02:54] [i-07d172e3e399f7fb1] Fetching secrets from Secrets Manager (/vimgym/)...
+  Secret: mailgun-api-key -> MAILGUN_API_KEY
+  Secret: sentry-dsn -> SENTRY_DSN
+[2026-03-25 14:02:54] [i-07d172e3e399f7fb1] 2026/03/25 18:02:46 Loaded onboarding config with 4 challenges
+[2026-03-25 14:02:57] [i-07d172e3e399f7fb1] Vim Gym server listening on :8070
+[2026-03-25 14:02:57] [i-07d172e3e399f7fb1] 2026/03/25 18:02:57 shutting down gracefully...
+[2026-03-25 14:02:57] [i-07d172e3e399f7fb1] 2026/03/25 18:02:57 server stopped
+[2026-03-25 14:03:00] [i-07d172e3e399f7fb1] Fetching config from SSM /vimgym/config/app...
+[2026-03-25 14:03:04] [i-07d172e3e399f7fb1] Fetching secrets from Secrets Manager (/vimgym/)...
+  Secret: mailgun-api-key -> MAILGUN_API_KEY
+  Secret: sentry-dsn -> SENTRY_DSN
+[2026-03-25 14:03:04] [i-07d172e3e399f7fb1] Config written to /opt/app/.env
+[2026-03-25 14:03:04] [i-07d172e3e399f7fb1] 2026/03/25 18:03:04 Sentry initialized
+[2026-03-25 14:03:04] [i-07d172e3e399f7fb1] 2026/03/25 18:03:04 Warning: could not init corpus DB, using fallback: corpus: create temp dir: mkdir /tmp/vimgym-corpus-465326039: read-only file system
+[2026-03-25 14:03:04] [i-07d172e3e399f7fb1] 2026/03/25 18:03:04 Loaded training with 42 levels
+[2026-03-25 14:03:04] [i-07d172e3e399f7fb1] 2026/03/25 18:03:04 Loaded onboarding config with 4 challenges
+[2026-03-25 14:03:04] [i-07d172e3e399f7fb1] 2026/03/25 18:03:04 Database connected, auth enabled
+[2026-03-25 14:03:08] [i-07d172e3e399f7fb1] Vim Gym server listening on :8070
+[2026-03-25 14:03:57] [i-07d172e3e399f7fb1] 2026/03/25 18:03:57 shutting down gracefully...
+[2026-03-25 14:03:57] [i-07d172e3e399f7fb1] 2026/03/25 18:03:57 server stopped
+[2026-03-25 14:03:59] [i-07d172e3e399f7fb1] Fetching config from SSM /vimgym/config/app...
+[2026-03-25 14:04:02] [i-07d172e3e399f7fb1] 2026/03/25 18:04:02 Sentry initialized
+[2026-03-25 14:04:02] [i-07d172e3e399f7fb1] Fetching secrets from Secrets Manager (/vimgym/)...
+  Secret: mailgun-api-key -> MAILGUN_API_KEY
+  Secret: sentry-dsn -> SENTRY_DSN
+[2026-03-25 14:04:02] [i-07d172e3e399f7fb1] Config written to /opt/app/.env
+[2026-03-25 14:04:02] [i-07d172e3e399f7fb1] 2026/03/25 18:04:02 Warning: could not init corpus DB, using fallback: corpus: create temp dir: mkdir /tmp/vimgym-corpus-2032736212: read-only file system
+[2026-03-25 14:04:02] [i-07d172e3e399f7fb1] 2026/03/25 18:04:02 Loaded training with 42 levels
+[2026-03-25 14:04:02] [i-07d172e3e399f7fb1] 2026/03/25 18:04:02 Loaded onboarding config with 4 challenges
+[2026-03-25 14:04:02] [i-07d172e3e399f7fb1] 2026/03/25 18:04:02 Database connected, auth enabled
+[2026-03-25 14:04:07] [i-07d172e3e399f7fb1] Vim Gym server listening on :8070
+[2026-03-25 14:04:14] [i-07d172e3e399f7fb1] 2026/03/25 18:04:14 shutting down gracefully...
+[2026-03-25 14:04:14] [i-07d172e3e399f7fb1] 2026/03/25 18:04:14 server stopped
+[2026-03-25 14:04:17] [i-07d172e3e399f7fb1] Fetching config from SSM /vimgym/config/app...
+[2026-03-26 12:16:29] [i-0a7f6ea11339e3f5d] Fetching secrets from Secrets Manager (/vimgym/)...
+  Secret: mailgun-api-key -> MAILGUN_API_KEY
+  Secret: sentry-dsn -> SENTRY_DSN
+[2026-03-26 12:16:29] [i-0a7f6ea11339e3f5d] Fetching config from SSM /vimgym/config/app...
+[2026-03-26 12:16:29] [i-0a7f6ea11339e3f5d] Fetching config from SSM /vimgym/config/app...
+[2026-03-26 12:16:29] [i-0a7f6ea11339e3f5d] Config written to /opt/app/.env
+[2026-03-26 12:16:29] [i-0a7f6ea11339e3f5d] Fetching secrets from Secrets Manager (/vimgym/)...
+  Secret: mailgun-api-key -> MAILGUN_API_KEY
+  Secret: sentry-dsn -> SENTRY_DSN
+[2026-03-26 12:16:30] [i-0a7f6ea11339e3f5d] 2026/03/26 16:16:29 Sentry initialized
+[2026-03-26 12:16:30] [i-0a7f6ea11339e3f5d] Config written to /opt/app/.env
+[2026-03-26 12:16:30] [i-0a7f6ea11339e3f5d] 2026/03/26 16:16:30 Database connected, auth enabled
+[2026-03-26 12:16:30] [i-0a7f6ea11339e3f5d] 2026/03/26 16:16:30 Loaded onboarding config with 4 challenges
+[2026-03-26 12:16:30] [i-0a7f6ea11339e3f5d] 2026/03/26 16:16:30 Loaded training with 60 levels
+[2026-03-26 12:16:30] [i-0a7f6ea11339e3f5d] 2026/03/26 16:16:29 Warning: could not init corpus DB, using fallback: corpus: create temp dir: mkdir /tmp/vimgym-corpus-764725109: read-only file system
+[2026-03-26 12:16:35] [i-0a7f6ea11339e3f5d] Vim Gym server listening on :8070
+[2026-03-27 10:09:48] [i-01d57cbc5501b2ab7] 2026/03/27 14:09:44 Loaded training with 60 levels
+[2026-03-27 10:09:48] [i-01d57cbc5501b2ab7] Config written to /opt/app/.env
+[2026-03-27 10:09:48] [i-01d57cbc5501b2ab7] Fetching secrets from Secrets Manager (/vimgym/)...
+  Secret: mailgun-api-key -> MAILGUN_API_KEY
+  Secret: sentry-dsn -> SENTRY_DSN
+  Secret: stripe-secret-key -> STRIPE_SECRET_KEY
+[2026-03-27 10:09:48] [i-01d57cbc5501b2ab7] Fetching config from SSM /vimgym/config/app...
+[2026-03-27 10:09:48] [i-01d57cbc5501b2ab7] Fetching secrets from Secrets Manager (/vimgym/)...
+  Secret: mailgun-api-key -> MAILGUN_API_KEY
+  Secret: sentry-dsn -> SENTRY_DSN
+  Secret: stripe-secret-key -> STRIPE_SECRET_KEY
+  Secret: stripe-webhook-secret -> STRIPE_WEBHOOK_SECRET
+[2026-03-27 10:09:48] [i-01d57cbc5501b2ab7] 2026/03/27 14:09:44 Database connected, auth enabled
+[2026-03-27 10:09:48] [i-01d57cbc5501b2ab7] 2026/03/27 14:09:44 Loaded onboarding config with 4 challenges
+[2026-03-27 10:09:48] [i-01d57cbc5501b2ab7] Fetching config from SSM /vimgym/config/app...
+[2026-03-27 10:09:48] [i-01d57cbc5501b2ab7] 2026/03/27 14:09:44 Warning: could not init corpus DB, using fallback: corpus: create temp dir: mkdir /tmp/vimgym-corpus-2337809910: read-only file system
+[2026-03-27 10:09:48] [i-01d57cbc5501b2ab7] 2026/03/27 14:09:44 Sentry initialized
+[2026-03-27 10:09:53] [i-01d57cbc5501b2ab7] Vim Gym server listening on :8070
+[2026-03-27 10:10:07] [i-01d57cbc5501b2ab7] 2026/03/27 14:10:07 read error: websocket: close 1006 (abnormal closure): unexpected EOF
+[2026-03-27 10:10:12] [i-01d57cbc5501b2ab7] 2026/03/27 14:10:07 [disconnect] player 2840f326 disconnected, keeping session for reconnect
+[2026-03-27 10:10:42] [i-01d57cbc5501b2ab7] 2026/03/27 14:10:37 [cleanup] removed stale session 2840f326

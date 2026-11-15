@@ -1,0 +1,1366 @@
+package service
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/w3ft-net/weft/backends/shardstore"
+	"github.com/w3ft-net/weft/tenancy"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+
+	weftsdk "github.com/w3ft-net/weft-go"
+
+	"github.com/w3ft-net/weft/backends/source"
+	"github.com/w3ft-net/weft/backends/token"
+	weftcfg "github.com/w3ft-net/weft/config"
+	"github.com/w3ft-net/weft/coordinator"
+	"github.com/w3ft-net/weft/identity"
+	"github.com/w3ft-net/weft/ingest"
+	"github.com/w3ft-net/weft/logdb"
+	"github.com/w3ft-net/weft/notices"
+	pb "github.com/w3ft-net/weft/proto/weftpb"
+	"github.com/w3ft-net/weft/shape"
+	"github.com/w3ft-net/weft/sources"
+)
+
+// convertNotices maps coordinator-side Notice values to their
+// protobuf wire shape. The two types carry the same fields; the
+// indirection exists so coordinator/notices.go doesn't need to
+// import the proto package.
+func convertNotices(in []notices.Notice) []*pb.Notice {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*pb.Notice, len(in))
+	for i, n := range in {
+		out[i] = &pb.Notice{
+			Key:   n.Key,
+			Kind:  string(n.Kind),
+			Title: n.Title,
+			Body:  n.Body,
+		}
+	}
+	return out
+}
+
+// callerOwner returns the home customer name of the authenticated
+// caller, derived from the Session the auth interceptor materialized.
+// Any non-empty `Customer` field on the request proto is IGNORED —
+// clients don't get to declare which tenant they are; the verified
+// principal is authoritative. Returns an Unauthenticated error when
+// called without an interceptor-populated context (shouldn't happen in
+// production because the interceptor gates every JWT-protected RPC).
+func (s *Server) callerOwner(ctx context.Context) (shape.Added, error) {
+	c := identity.CallerFrom(ctx)
+	if c == nil {
+		return shape.Added{}, status.Errorf(codes.Unauthenticated, "no authenticated caller")
+	}
+	owner := c.Actor().Partition()
+	if coordinator.NoTenant(owner) {
+		return shape.Added{}, status.Errorf(codes.PermissionDenied, "authenticated user has no customer")
+	}
+	return owner, nil
+}
+
+// callerUserID returns the authenticated user's ID, or "" when no
+// claims are present. Used as the userID argument to store writes
+// that record creator/displacing user. Empty string is acceptable
+// upstream: the store path treats it as "system" attribution.
+func callerUserID(ctx context.Context) string {
+	return identity.UserIDFrom(ctx)
+}
+
+// authorizeNamespace is the namespace rule the REST handlers apply
+// (the Authorizer's manage-namespace-tokens action), answered as a gRPC status. The
+// session is the one the interceptor built from the caller's forwarded JWT.
+func (s *Server) authorizeNamespace(ctx context.Context, namespace string) error {
+	caller := identity.CallerFrom(ctx)
+	if caller == nil {
+		return status.Errorf(codes.Unauthenticated, "no authenticated caller")
+	}
+	actor := caller.Actor()
+	if err := s.authorizer().Authorize(ctx, actor, tenancy.ActionManageNamespaceTokens, tenancy.Resource{Namespace: namespace}); err != nil {
+		return status.Error(codes.PermissionDenied, err.Error())
+	}
+	return nil
+}
+
+// Server implements both the WeftCoordinator (external, JWT-auth) and
+// WeftAdmin (localhost-only, shared-token-auth) gRPC services. The same Go
+// struct backs both because Go satisfies interfaces structurally; gRPC
+// routes calls by service descriptor, so registering Server on each server
+// only exposes that service's methods on that listener.
+type Server struct {
+	pb.UnimplementedWeftCoordinatorServer
+	pb.UnimplementedWeftAdminServer
+	Coord *coordinator.Coordinator
+	// Authz decides action gates; nil means the coordinator's.
+	Authz tenancy.Authorizer
+	// Tokens is where agent tokens live and Sources where namespaces and
+	// sources do.
+	Tokens  token.Store
+	Sources source.Store
+
+	// Admit says whether the tenant may stream, and on what plan: a deployment
+	// that sells plans refuses a tenant without a paid one. Nil admits everyone.
+	Admit func(owner shape.Added) (plan string, err error)
+	// Usage is the bytes the tenant ingested in [start, end) that have been
+	// flushed, for the usage the service reports. Nil: none.
+	Usage func(owner shape.Added, start, end time.Time) (int64, error)
+	// OrgName names a tenant for a log line and the weftd handshake. Nil: no
+	// names, as in a build with no org table.
+	OrgName func(owner shape.Added) string
+	// RecordAgentSeen notes that an agent of that version polled a source. Nil
+	// drops it.
+	RecordAgentSeen func(sourceID uint, instance, version string) error
+	// orgNames caches orgName, so a warm stream open reads nothing.
+	orgNames sync.Map // shape.Added -> orgNameEntry
+
+	// ShardSecret is the fleet secret every shard boots with. A heartbeat
+	// from a shard with no identity yet (empty ShardId) presents it as its
+	// bearer, since it has no per-shard token until it is christened. Empty
+	// refuses every such heartbeat.
+	ShardSecret string
+
+	// CfgPtr holds the live runtime config. Today only IngestStream
+	// consults it (for the per-stream byte budget); nil is fine in
+	// tests and non-production callers — handlers fall through to
+	// compile-time defaults via runtimeCfg().
+	CfgPtr *atomic.Pointer[weftcfg.Runtime]
+
+	// ingestLimiterOnce/ingestLimiterPtr back tokenLimiter(): lazily
+	// constructed so callers building Server{} literals (every test in
+	// this package) don't need a constructor, and shared across every
+	// IngestStream call on this process so a token's rate-limit bucket
+	// persists across reconnects — see docs/ingestion-syslog.md, "Rate limiting".
+	ingestLimiterOnce sync.Once
+	ingestLimiterPtr  *ingestLimiter
+
+	// Classifier drives LLM-based schema-field classification for
+	// pending sources (SubmitSample — see ingest/llmdetect.go). Nil is
+	// fine (every test in this package builds Server{} literals without
+	// one): ClassifyAsync falls back to deterministic envelope/JSON
+	// detection only, same as before this existed.
+	Classifier ingest.Classifier
+
+	// AgentSeen batches the token last-seen stamps written on every
+	// IngestStream open. Nil is fine (tests): stamps are dropped.
+	AgentSeen interface {
+		Touch(tokenID uint, clientID string, at time.Time)
+	}
+}
+
+func (s *Server) authorizer() tenancy.Authorizer {
+	if s.Authz == nil {
+		return s.Coord.Authz
+	}
+	return s.Authz
+}
+
+func (s *Server) tokenLimiter() *ingestLimiter {
+	s.ingestLimiterOnce.Do(func() { s.ingestLimiterPtr = newIngestLimiter() })
+	return s.ingestLimiterPtr
+}
+
+func (s *Server) runtimeCfg() *weftcfg.Runtime {
+	if s.CfgPtr == nil {
+		return weftcfg.Defaults()
+	}
+	return s.CfgPtr.Load()
+}
+
+func (s *Server) Execute(req *pb.CoordinatorExecuteRequest, stream pb.WeftCoordinator_ExecuteServer) error {
+	start := time.Now()
+	owner, err := s.callerOwner(stream.Context())
+	if err != nil {
+		return err
+	}
+	// Who is asking comes from the authenticated session, not the request.
+	userID := callerUserID(stream.Context())
+
+	tr := coordinator.TimeRange{
+		Start: time.Unix(0, req.TimeStartNs),
+		End:   time.Unix(0, req.TimeEndNs),
+	}
+	if req.TimeStartNs == 0 && req.TimeEndNs == 0 {
+		tr.Start = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+		tr.End = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+
+	// Pipeline can be any user-typed shape — log query, plain bash,
+	// /bin script, or a mix. Execute is the dispatch layer that
+	// classifies and routes; ExecuteFollow is the variant that splices
+	// a live broker subscription onto the end of the historical batch.
+	parent := stream.Context()
+	ctx := parent
+	// Dirstack courier (in): the delegated client ferries its cached
+	// cwd/pushd stack as repeated `weft-dirstack` metadata (index 0 ==
+	// cwd) so the server resolves cd/relative paths against the client's
+	// live directory. Absent on the follow path and for non-shell callers
+	// — ExecuteWithDir treats an empty stack exactly like Execute.
+	var dirStack []string
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		dirStack = md.Get("weft-dirstack")
+	}
+	// "coordinator.Execute" bookends this RPC with weftsdk's own "span
+	// start"/"span done" lines when traced (no-op otherwise), parented
+	// off whatever span api's own AccessLog started — the ctx it
+	// returns carries that parenting forward into ExecuteFollow/
+	// ExecuteWithDir, so compute's own span (compute/service/server.go)
+	// parents off this one in turn. See api/compute/shard for the
+	// matching span at each of those layers.
+	//
+	// defer span.End() alone, unconditionally, right here — no
+	// end-of-function branching on err. RecordError is called at each
+	// point below an error is actually discovered, which is what marks
+	// the eventual "span done" line's status, not whatever this
+	// function's own return value happens to be by the time it exits.
+	//
+	// The one query deadline starts here, so planning, shard fan-out, compute
+	// and the stream out to the caller all count against it. Follow lives as
+	// long as its client, so it is exempt.
+	limit := time.Duration(s.runtimeCfg().QueryDeadlineSeconds) * time.Second
+	if limit > 0 && !req.Follow {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, limit)
+		defer cancel()
+	}
+	ctx, span := weftsdk.StartSpan(ctx, "coordinator.Execute")
+	defer span.End()
+	_, traced := weftsdk.TraceIDFromContext(ctx)
+	// expired is whether the deadline ended the query, as opposed to the
+	// caller going away.
+	expired := func() bool {
+		return parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded)
+	}
+	var lineCount int
+	var result *coordinator.ExecuteResult
+	if req.Follow && s.Coord.Tail != nil {
+		result, err = s.Coord.ExecuteFollow(ctx, req.Pipeline, tr, s.Coord.Mapper().ActorOf(owner, userID), dirStack)
+	} else {
+		result, err = s.Coord.ExecuteWithDir(ctx, req.Pipeline, tr, s.Coord.Mapper().ActorOf(owner, userID), dirStack)
+	}
+	if err != nil {
+		span.RecordError(err)
+		if expired() {
+			return s.queryDeadlineError(ctx, parent, owner, req.Pipeline, dirStack, limit)
+		}
+		weftsdk.Errorf(ctx, "query rpc: error for owner=%+v pipeline=%q: %v", owner, req.Pipeline, err)
+		return err
+	}
+
+	// Pump ExecuteResult.Stream onto the wire. Lines arrive batched
+	// (500 max) to stay under the gRPC message-size limit; notices
+	// ride on the FINAL batch and stderr also on the last. With the
+	// streaming-runLocal change, result.Notices is populated by the
+	// runLocal goroutine AFTER warp finishes (right before the pipe
+	// writers close). The consumer sees its terminal Next return
+	// ok=false BEFORE the writers close has propagated, but the
+	// happens-before relationship (Notices write → pipe close →
+	// scanner EOF → channel close → consumer Next) guarantees the
+	// read past EOF sees the populated value.
+	//
+	// Follow mode collapses into the same loop: ExecuteFollow returns
+	// a stream that splices historical → broker, so Next exits only
+	// when ctx cancels (client disconnect) or, rarely, the broker
+	// channel closes. Notices from follow's historical phase are not
+	// surfaced today (no /tmp writes happen during a read-only
+	// historical batch).
+	//
+	// Once the historical phase gives way to live broker rows, batching
+	// up to batchSize would sit on a single live row indefinitely — a
+	// follow session rarely produces 500 rows in a reasonable window and
+	// the stream itself never naturally ends. inLivePhase (nil for a
+	// non-follow/non-concat stream) lets that phase flush every row
+	// immediately instead, while the historical phase — however large,
+	// e.g. an explicit `tail -n <big> -f` — still batches normally.
+	const batchSize = 500
+	var batch []*pb.Line
+	var stderrAcc strings.Builder
+	firstBatchSent := false
+
+	var inLivePhase func() bool
+	if ls, ok := result.Stream.(coordinator.LiveStream); ok {
+		inLivePhase = ls.InLivePhase
+	}
+
+	flush := func(final bool, notices []*pb.Notice) error {
+		if !final && len(batch) == 0 {
+			return nil
+		}
+		if final && len(batch) == 0 && stderrAcc.Len() == 0 && len(notices) == 0 && firstBatchSent {
+			return nil
+		}
+		resp := &pb.CoordinatorExecuteResponse{Lines: batch}
+		if final {
+			resp.Notices = notices
+			resp.Stderr = stderrAcc.String()
+		}
+		if err := stream.Send(resp); err != nil {
+			return err
+		}
+		batch = nil
+		firstBatchSent = true
+		return nil
+	}
+
+	for {
+		line, ok, err := result.Stream.Next(ctx)
+		if err != nil {
+			// Client disconnect / ctx cancel surfaces here in follow
+			// mode; treat it as a clean stream end so the rpc returns
+			// nil instead of context.Canceled bubbling to the wire —
+			// not a real error, so no RecordError.
+			if parent.Err() != nil {
+				return nil
+			}
+			span.RecordError(err)
+			if expired() {
+				return s.queryDeadlineError(ctx, parent, owner, req.Pipeline, dirStack, limit)
+			}
+			return err
+		}
+		if !ok {
+			break
+		}
+		if line.Stderr {
+			stderrAcc.WriteString(line.Raw)
+			stderrAcc.WriteByte('\n')
+			continue
+		}
+		batch = append(batch, &pb.Line{Raw: line.Raw})
+		lineCount++
+		if len(batch) >= batchSize || (inLivePhase != nil && inLivePhase()) {
+			if err := flush(false, nil); err != nil {
+				span.RecordError(err)
+				return err
+			}
+		}
+	}
+	// Stream done — Notices and FinalDirStack are now populated by the
+	// runLocal goroutine (same happens-before edge as the stream EOF we
+	// just observed). Dirstack courier (out): return the post-run stack
+	// as a trailer so the client can cache the cwd the pipeline left
+	// behind. Echo the seeded stack when the pipeline left it untouched
+	// so every response carries cwd (the cache must never drift).
+	finalDir := result.FinalDirStack
+	if len(finalDir) == 0 {
+		finalDir = dirStack
+	}
+	if len(finalDir) > 0 {
+		md := metadata.MD{}
+		for _, d := range finalDir {
+			md.Append("weft-final-dirstack", d)
+		}
+		stream.SetTrailer(md)
+	}
+	err = flush(true, convertNotices(result.Notices))
+	if err != nil {
+		span.RecordError(err)
+		return err
+	}
+	if traced {
+		weftsdk.Infof(ctx, "query rpc: done owner=%+v pipeline=%q lines=%d duration=%s", owner, req.Pipeline, lineCount, time.Since(start))
+	}
+	return nil
+}
+
+// queryDeadlineError is what the caller gets when QueryDeadlineSeconds ends
+// their query: what happened, the explain of their pipeline where there is
+// one, and what to change. Nothing in it names our internals; the code is
+// DeadlineExceeded so the API can tell it from a failure. Lines already sent
+// stay sent, and the error says the query didn't finish.
+func (s *Server) queryDeadlineError(ctx, parent context.Context, owner shape.Added, pipeline string, dirStack []string, limit time.Duration) error {
+	weftsdk.Warnf(ctx, "query rpc: deadline owner=%+v pipeline=%q limit=%s", owner, pipeline, limit)
+	unit := "seconds"
+	if limit == time.Second {
+		unit = "second"
+	}
+	msg := fmt.Sprintf("This query did not finish in the time allowed (%d %s).\n", int(limit.Seconds()), unit)
+	cwd := "/"
+	if len(dirStack) > 0 {
+		cwd = dirStack[0]
+	}
+	if owner, err := s.callerOwner(parent); err == nil {
+		if summary := s.Coord.ExplainSummary(pipeline, cwd, owner); summary != "" {
+			msg += "\n" + summary
+		}
+	}
+	msg += "\nNarrow the time range, or filter earlier in the pipeline."
+	return status.Error(codes.DeadlineExceeded, msg)
+}
+
+func (s *Server) ListServices(ctx context.Context, _ *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {
+	owner, err := s.callerOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Return app names observed from ingest for this customer.
+	if s.Coord.SeenServices != nil {
+		if names := s.Coord.SeenServices.Names(owner); len(names) > 0 {
+			return &pb.ListServicesResponse{Services: names}, nil
+		}
+	}
+
+	// Fall back to DB namespaces for this customer.
+	nss, err := s.Sources.ListNamespaces(owner)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list namespaces: %v", err)
+	}
+	names := make([]string, len(nss))
+	for i, ns := range nss {
+		names[i] = ns.Name
+	}
+	return &pb.ListServicesResponse{Services: names}, nil
+}
+
+func (s *Server) AddSource(ctx context.Context, req *pb.AddSourceRequest) (*pb.AddSourceResponse, error) {
+	if req.Namespace == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
+	}
+	if req.LogGroup == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "log_group required")
+	}
+
+	owner, err := s.callerOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.authorizeNamespace(ctx, req.Namespace); err != nil {
+		return nil, err
+	}
+
+	ns, err := s.namespace(owner, req.Namespace)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.Namespace)
+	}
+
+	// Registers the AWS-log-group→service mapping CloudWatchAdapter routes
+	// against. The source starts the way every push source does (configured,
+	// collecting a sample from the customer's real Firehose deliveries) and is
+	// given a schema later via `weft source configure`
+	// (docs/plans/cloudwatch-kinesis-subscription.md).
+	spec := source.SourceSpec{Locator: req.LogGroup, Params: map[string]string{"region": req.Region}}
+	if err := s.Sources.RegisterSource(ns.ID, "kinesis", req.Service, spec); err != nil {
+		return nil, fmt.Errorf("log group: %w", err)
+	}
+
+	// Attach the new app to its bucket and fan out to INGESTING
+	// shards so queries for this app route correctly from the next
+	// row onward. Best-effort: a failure here leaves the log_group
+	// persisted but the bucket un-updated — the ingest path's
+	// SeenServices trigger (below) will retry on first row. Don't fail
+	// the client's AddSource on bucket trouble.
+	if s.Coord.Provisioner != nil {
+		if err := s.Coord.Provisioner.OnboardService(ns.ID, req.Service); err != nil {
+			weftsdk.Infof(ctx, "AddSource: OnboardService %d/%q: %v", ns.ID, req.Service, err)
+		}
+	}
+
+	return &pb.AddSourceResponse{}, nil
+}
+
+func (s *Server) RemoveSource(ctx context.Context, req *pb.RemoveSourceRequest) (*pb.RemoveSourceResponse, error) {
+	if req.Namespace == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "namespace required")
+	}
+	owner, err := s.callerOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.authorizeNamespace(ctx, req.Namespace); err != nil {
+		return nil, err
+	}
+	ns, err := s.namespace(owner, req.Namespace)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "namespace %q not found", req.Namespace)
+	}
+	if err := s.Sources.DeleteSource(ns.ID, req.Service); err != nil {
+		return nil, err
+	}
+	return &pb.RemoveSourceResponse{}, nil
+}
+
+// Authenticate validates an agent token. Agents stream through the
+// coordinator via IngestStream — they never connect to shards directly.
+func (s *Server) Authenticate(ctx context.Context, req *pb.AuthenticateRequest) (*pb.AuthenticateResponse, error) {
+	auth, err := s.authenticateToken(req.Token)
+	if err != nil {
+		return nil, err
+	}
+	customer := s.orgName(auth.Owner)
+
+	// Check for an active subscription.
+	var plan string
+	if s.Admit != nil {
+		var err error
+		if plan, err = s.Admit(auth.Owner); err != nil {
+			weftsdk.Infof(ctx, "auth: customer=%s denied (%v)", customer, err)
+			return nil, status.Errorf(codes.PermissionDenied, "%v", err)
+		}
+	}
+
+	weftsdk.Infof(ctx, "auth: customer=%s namespace=%s tier=%s", customer, auth.Namespace, plan)
+
+	// If the agent reported a metrics config, persist it.
+	if mc := req.MetricsConfig; mc != nil {
+		cfg := token.MetricsConfig{Enabled: mc.Enabled, Interval: mc.Interval, Collectors: mc.Collectors}
+		if err := s.Tokens.SetMetricsConfig(req.Token, cfg); err != nil {
+			weftsdk.Errorf(ctx, "auth: failed to save metrics config for %s: %v", customer, err)
+		}
+	}
+
+	return &pb.AuthenticateResponse{
+		Customer:  customer,
+		Namespace: auth.Namespace,
+	}, nil
+}
+
+func (s *Server) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
+	owner, err := s.callerOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.authorizeNamespace(ctx, req.Namespace); err != nil {
+		return nil, err
+	}
+	ns, err := s.namespace(owner, req.Namespace)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "namespace %q not found — create it first", req.Namespace)
+	}
+	raw, _, err := s.Tokens.CreateToken(owner, ns.ID, req.Label, req.Env)
+	if err != nil {
+		return nil, fmt.Errorf("create token: %w", err)
+	}
+	return &pb.CreateTokenResponse{Token: raw}, nil
+}
+
+// IngestStream accepts a stream of LogRows from weftd agents and forwards
+// them to the active shard in batches. Flushes every 2 seconds, at 100
+// rows, or immediately when a row matches an active local tail -f
+// subscriber.
+//
+// The stream requires an `authorization: Bearer <token>` gRPC metadata
+// header. The token's customer is authoritative: the coordinator carries it
+// beside each row whatever the client sends. This prevents
+// a weftd whose customer has been deleted from continuing to push rows
+// against that customer, and prevents a compromised agent from claiming
+// to be someone else.
+func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) error {
+	auth, err := s.authenticateStream(stream.Context())
+	if err != nil {
+		return err
+	}
+	authCustomer := s.orgName(auth.Owner)
+	added := auth.Owner
+	authNamespace := auth.Namespace
+	authEnv := auth.Env
+
+	// Read the agent's reported client identity from gRPC metadata and
+	// (a) record it for the operator dashboard and the
+	// deprecation-window query, and (b) enforce the hard floor — an
+	// agent below WEFTD_HARD_FLOOR is refused outright. Soft tolerance
+	// for old wire shapes happens per-row inside the parse path, keyed
+	// on the recorded version.
+	clientID := readClientID(stream.Context())
+	if clientID != "" {
+		// Batched in memory and flushed by AgentSeen.Run: a per-open UPDATE
+		// would multiply by hosts x files under ack cycling.
+		if s.AgentSeen != nil {
+			s.AgentSeen.Touch(auth.TokenID, clientID, time.Now())
+		}
+	}
+	if floor := s.runtimeCfg().WeftdHardFloor; floor != "" {
+		if clientBelow(clientID, floor) {
+			return status.Errorf(codes.FailedPrecondition,
+				"weftd version %q is below the hard floor %q — upgrade weftd; see https://releases.w3ft.net/weftd/latest/",
+				clientID, floor)
+		}
+	}
+
+	// Per-stream byte budget — caps a hostile agent's ability to OOM
+	// the coordinator by holding a stream open and firing rows forever.
+	// Read once at accept time; an operator tightening the budget mid-
+	// stream doesn't retroactively evict an in-flight stream, but every
+	// agent reconnect picks up the new value.
+	budget := s.runtimeCfg().IngestStreamBudgetBytes
+	var bytesThisStream int64
+
+	var mu sync.Mutex
+	var rows []*pb.LogRow
+	var count int64
+	var firstService string
+
+	// Periodic flush for sparse streams. The flush goroutine must exit
+	// when the stream ends: ticker.Stop() halts the ticker but does NOT
+	// close ticker.C, so a bare `for range ticker.C` blocks forever and
+	// leaks one goroutine (plus the closure state it pins) per stream —
+	// the coordinator's linear memory growth under agent reconnect churn.
+	// The done channel, closed on return, releases it deterministically.
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				mu.Lock()
+				if len(rows) > 0 {
+					s.ingestBatch(stream.Context(), added, rows)
+					rows = rows[:0]
+				}
+				mu.Unlock()
+			}
+		}
+	}()
+
+	// Run stream.Recv() in its own goroutine so the main loop can also
+	// wake on an idle deadline. An abandoned stream (client shipped a
+	// batch then went silent without half-closing) would otherwise block
+	// the handler in Recv() forever — pinning this goroutine and the
+	// flush goroutine above, the dominant coordinator leak. The
+	// done-guarded send guarantees this reader exits when the handler
+	// returns (close(done) above) even if it's mid-send on an
+	// unread row.
+	type recvResult struct {
+		row *pb.LogRow
+		err error
+	}
+	recvCh := make(chan recvResult, 1)
+	go func() {
+		for {
+			row, err := stream.Recv()
+			select {
+			case recvCh <- recvResult{row, err}:
+			case <-done:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Idle reaper: if no row arrives within the window, close the stream.
+	// Zero disables (pre-fix behavior). nil channel blocks forever, so the
+	// select's idle case is inert when disabled.
+	idleTimeout := time.Duration(s.runtimeCfg().IngestStreamIdleTimeoutSeconds) * time.Second
+	var idleC <-chan time.Time
+	var idle *time.Timer
+	if idleTimeout > 0 {
+		idle = time.NewTimer(idleTimeout)
+		defer idle.Stop()
+		idleC = idle.C
+	}
+
+recvLoop:
+	for {
+		var row *pb.LogRow
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case <-idleC:
+			weftsdk.Infof(stream.Context(), "ingest-stream: customer=%s idle for %s, closing stream (agent should reconnect)",
+				authCustomer, idleTimeout)
+			return status.Errorf(codes.DeadlineExceeded,
+				"ingest stream idle for %s; reconnect", idleTimeout)
+		case r := <-recvCh:
+			if r.err == io.EOF {
+				break recvLoop
+			}
+			if r.err != nil {
+				return r.err
+			}
+			if idle != nil {
+				if !idle.Stop() {
+					select {
+					case <-idle.C:
+					default:
+					}
+				}
+				idle.Reset(idleTimeout)
+			}
+			row = r.row
+		}
+
+		rowSize := int64(proto.Size(row))
+
+		if budget > 0 {
+			bytesThisStream += rowSize
+			if bytesThisStream > budget {
+				weftsdk.Infof(stream.Context(), "ingest-stream: customer=%s exceeded %d-byte budget, closing stream (agent should reconnect)",
+					authCustomer, budget)
+				return status.Errorf(codes.ResourceExhausted,
+					"ingest stream budget of %d bytes exceeded; reconnect", budget)
+			}
+		}
+
+		// Per-token sustained rate limit (render.md Component 6). Read
+		// live so an operator's config edit applies to in-flight
+		// streams immediately, unlike the accept-time budget above.
+		liveCfg := s.runtimeCfg()
+		if err := s.tokenLimiter().wait(stream.Context(), auth.TokenID, rowSize,
+			liveCfg.IngestTokenBytesPerSec, liveCfg.IngestTokenBurstBytes); err != nil {
+			return err
+		}
+
+		// Token-derived env: stamp it on every row. The agent has no
+		// say in the env value — it's bound to the token at mint time.
+		// See docs/plans/ingest-dimensions.md.
+		if authEnv != "" {
+			row.Env = authEnv
+		}
+
+		// The token's namespace is authoritative: stamp it on every row,
+		// overwriting whatever the agent claimed. An agent with a token
+		// for namespace A therefore cannot label rows with namespace B of
+		// the same customer and contaminate B's queries — the wire no
+		// longer carries the namespace as a trusted, agent-supplied field.
+		row.Namespace = authNamespace
+		// The coordinator mints event ids when it splits an event into
+		// lines; a sender's are never trusted (docs/plans/line-storage.md).
+		row.EventId, row.LineNo = "", 0
+		// kind defaults to "main" (the canonical single-stream source).
+		if row.Kind == "" {
+			row.Kind = "main"
+		}
+
+		// svcPath is the namespace/service[/kind] index key the pseudofile
+		// tree (SeenServices) and bucket onboarding use. Reassembled from
+		// the now-split row fields; routing itself keys on the dedicated
+		// namespace/service columns, not this string.
+		svcPath := row.Namespace
+		if row.Service != "" {
+			svcPath = row.Namespace + "/" + row.Service
+			if row.Kind != "" {
+				svcPath += "/" + row.Kind
+			}
+		}
+
+		mu.Lock()
+		if count == 0 {
+			firstService = svcPath
+			weftsdk.Infof(stream.Context(), "ingest-stream: first row from customer=%s service=%s", authCustomer, svcPath)
+		}
+		if s.Coord.SeenServices != nil && row.Service != "" {
+			if s.Coord.SeenServices.Add(added, svcPath, row.Env) {
+				weftsdk.Infof(stream.Context(), "ingest-stream: new service discovered: customer=%s service=%s", authCustomer, svcPath)
+				// Auto-onboard: raw producers (Heroku, custom POSTs, bare
+				// IngestStream) never sample, so there's no log_group until
+				// we make one here. OnboardService records the canonical
+				// (namespace, service) mapping and stamps the INGESTING
+				// shards so routing picks it up from the next row. Idempotent;
+				// SeenServices.Add returns true only once per (customer,
+				// service) over the coordinator's lifetime.
+				if s.Coord.Provisioner != nil {
+					if ns, err := s.namespace(auth.Owner, auth.Namespace); err != nil {
+						weftsdk.Infof(stream.Context(), "ingest-stream: onboard %q: namespace %s/%s: %v", row.Service, authCustomer, auth.Namespace, err)
+					} else if err := s.Coord.Provisioner.OnboardService(ns.ID, row.Service); err != nil {
+						weftsdk.Infof(stream.Context(), "ingest-stream: OnboardService %d/%q: %v", ns.ID, row.Service, err)
+					}
+				}
+			}
+		}
+		rows = append(rows, row)
+		count++
+		// Flush early, ahead of the 100-row/2s batch, when a local tail -f
+		// subscriber is interested in this row — otherwise a sparse
+		// producer's rows sit buffered for up to the ticker interval
+		// before a live tail session sees them (docs/known-issues.md).
+		flushNow := len(rows) >= 100
+		if !flushNow && s.Coord.TailFanout != nil {
+			flushNow = s.Coord.TailFanout.HasSubscriber(coordinator.Row{LogRow: row, Added: added})
+		}
+		if flushNow {
+			s.ingestBatch(stream.Context(), added, rows)
+			rows = rows[:0]
+		}
+		mu.Unlock()
+	}
+
+	_ = firstService
+
+	mu.Lock()
+	if len(rows) > 0 {
+		s.ingestBatch(stream.Context(), added, rows)
+	}
+	mu.Unlock()
+
+	weftsdk.Infof(stream.Context(), "ingest-stream: received %d rows from customer=%s", count, authCustomer)
+	return stream.SendAndClose(&pb.IngestStreamResponse{RowsReceived: count})
+}
+
+// authenticateStream validates the bearer token in incoming gRPC metadata
+// and returns the resolved customer/namespace. Used by streaming RPCs
+// where the token isn't part of the request body.
+func (s *Server) authenticateStream(ctx context.Context) (*agentAuth, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	values := md.Get("authorization")
+	if len(values) == 0 {
+		return nil, status.Errorf(codes.Unauthenticated, "missing authorization metadata")
+	}
+	token := strings.TrimPrefix(values[0], "Bearer ")
+	if token == "" {
+		return nil, status.Errorf(codes.Unauthenticated, "empty bearer token")
+	}
+	auth, err := s.validateToken(token)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "validate token: %v", err)
+	}
+	// auth is nil when the token doesn't exist (e.g. after customer deletion
+	// cascaded the token away). Org may be 0: a build with no tenants maps every
+	// owner to it.
+	if auth == nil {
+		return nil, status.Errorf(codes.Unauthenticated, "invalid or revoked token")
+	}
+	return auth, nil
+}
+
+func (s *Server) ingestBatch(ctx context.Context, added shape.Added, lines []*pb.LogRow) {
+	// A JSON line is its own payload, so jq reads its fields; a filled
+	// row is never split. Then store a multi-line text event as one row
+	// per line, here, so the shards' buffer and live tail see the same rows.
+	ingest.FillJSONPayload(lines)
+	rows := coordinator.RowsOf(added, ingest.SplitLines(lines))
+
+	// Write to ring buffer (non-blocking). Background drain pushes to
+	// shards. NewCoordinator always installs a buffer, so no nil-check.
+	s.Coord.Ingest.Write(rows)
+	pct := s.Coord.Ingest.UsagePct()
+	if pct > 80 && s.Coord.Provisioner.TotalIngesting() == 0 {
+		weftsdk.Infof(ctx, "CRITICAL: ring buffer at %d%% with no ingesting shards — data will be lost", pct)
+	}
+
+	// Fan out to tail -f subscribers (local, plus any other coordinators
+	// with interested subscribers if Redis fan-out is configured).
+	if s.Coord.TailFanout != nil {
+		s.Coord.TailFanout.Publish(rows)
+	}
+}
+
+// GetUsage returns bytes ingested for a customer in a billing period.
+// Combines PostgreSQL (everything flushed as of the last ~30s tick,
+// including partial current-hour rows now that flushUsage appends every
+// tick rather than only on hour rollover) with memBytes, the delta
+// accumulated on *this* instance since its own last flush. On a
+// multi-coordinator fleet a customer's traffic can be split across
+// instances, so the number this RPC returns can lag the true total by up
+// to one flush interval — bounded staleness, not bounded correctness;
+// nothing enforcement-critical reads this path (see
+// docs/plans/coordinator-horizontal-scaling.md).
+func (s *Server) GetUsage(ctx context.Context, req *pb.GetUsageRequest) (*pb.GetUsageResponse, error) {
+	owner, err := s.callerOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	period := req.Period
+	if period == "" {
+		period = time.Now().UTC().Format("2006-01")
+	}
+
+	t, err := time.Parse("2006-01", period)
+	if err != nil {
+		return nil, fmt.Errorf("invalid period %q: expected YYYY-MM", period)
+	}
+	periodStart := t
+	periodEnd := t.AddDate(0, 1, 0)
+
+	var dbBytes int64
+	if s.Usage != nil {
+		dbBytes, err = s.Usage(owner, periodStart, periodEnd)
+		if err != nil {
+			weftsdk.Errorf(ctx, "GetUsage DB query error: %v", err)
+			// Continue with in-memory only.
+		}
+	}
+
+	// Add the current (not-yet-flushed) hour.
+	var memBytes int64
+	if s.Coord.Usage != nil {
+		memBytes = s.Coord.Usage.CurrentHour(owner)
+	}
+
+	return &pb.GetUsageResponse{
+		BytesIngested: dbBytes + memBytes,
+		PeriodStart:   periodStart.Format(time.RFC3339),
+		PeriodEnd:     periodEnd.Format(time.RFC3339),
+	}, nil
+}
+
+// ── Shell functions (/bin/) ─────────────────────────────────
+
+// ── Cron watches (/cron.d/) ─────────────────────────────────
+
+// Heartbeat receives a shard's periodic status report. Persists the
+// heartbeat for the provisioner's tick-based reconciliation pass,
+// and also drives christen / rebind / adopt directly so state
+// transitions don't wait up to PollInterval for the next tick.
+//
+// Empty ShardId heartbeats are the christen bootstrap: the shard has
+// no identity yet, so it cannot yet hold a heartbeat token. These pass
+// through without auth so the provisioner can mint an id + token and
+// hand them back via Configure. For known shards, the heartbeat's
+// authorization metadata must carry the per-shard token the coordinator
+// minted at christen, validated here in constant time.
+func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	if req.ShardId != "" {
+		if err := s.authenticateHeartbeat(ctx, req.ShardId); err != nil {
+			return nil, err
+		}
+	} else if err := s.authenticateFleetHeartbeat(ctx); err != nil {
+		return nil, err
+	}
+	// A shard whose volume is in another layout than this build's would have
+	// its rows reinterpreted. An older shard sends none: the legacy layout.
+	if want := shape.BuildLayout().Fingerprint; req.LayoutFingerprint != "" && req.LayoutFingerprint != want {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"shard %s stores layout %s, this coordinator's is %s", req.ShardId, req.LayoutFingerprint, want)
+	}
+
+	hb := shardstore.ShardHeartbeat{
+		ShardID:    req.ShardId,
+		Addr:       req.Addr,
+		InstanceID: req.InstanceId,
+		State:      req.State,
+		RowCount:   req.RowCount,
+		DiskBytes:  req.DiskBytes,
+		BinarySHA:  req.BinarySha,
+		Standby:    req.Spare,
+	}
+	// Persistence is opt-in: a Server with no shard store still validates and
+	// dispatches, it just doesn't keep a row. A warm-pool spare's beat is
+	// kept on its shard_spares row instead (ProcessHeartbeat), never here:
+	// the catch-up sweep replays this table as shard heartbeats.
+	if sh := s.shardStore(); sh != nil && !hb.Standby {
+		if err := sh.RecordHeartbeat(&hb); err != nil {
+			weftsdk.Errorf(ctx, "heartbeat: failed to persist for %s: %v", req.ShardId, err)
+		}
+	}
+	// Runs in a goroutine so the RPC returns within the shard's 5s
+	// timeout even when christen has to CreateVolume + Configure
+	// over gRPC.
+	if s.Coord.Provisioner != nil {
+		go s.Coord.Provisioner.ProcessHeartbeat(hb)
+	}
+	// Facts are folded here, not in the goroutine above: the ack tells the
+	// shard what it may stop resending.
+	var acked uint64
+	if req.ShardId != "" && !hb.Standby && s.Coord.Provisioner != nil {
+		acked = s.Coord.Provisioner.FoldFieldFacts(req.ShardId, req.FieldFacts)
+	}
+	return &pb.HeartbeatResponse{FieldFactsAcked: acked}, nil
+}
+
+// authenticateFleetHeartbeat admits a heartbeat from a shard that has no
+// identity yet: the christen, adopt and warm-pool-spare paths, which all name
+// a shard by instance id and addr. The bearer must be the fleet secret.
+func (s *Server) authenticateFleetHeartbeat(ctx context.Context) error {
+	md, _ := metadata.FromIncomingContext(ctx)
+	values := md.Get("authorization")
+	if len(values) == 0 || !shardstore.ConstantTimeTokenEqual(s.ShardSecret, strings.TrimPrefix(values[0], "Bearer ")) {
+		return status.Error(codes.Unauthenticated, "heartbeat without a shard id needs the fleet secret")
+	}
+	return nil
+}
+
+// authenticateHeartbeat extracts the bearer from the incoming gRPC
+// metadata and hands the verdict to the provisioner. The split keeps
+// transport concerns (metadata, status codes) in the server and the
+// registry→store token lookup behind the provisioner boundary.
+func (s *Server) authenticateHeartbeat(ctx context.Context, shardID string) error {
+	md, _ := metadata.FromIncomingContext(ctx)
+	values := md.Get("authorization")
+	if len(values) == 0 {
+		return status.Errorf(codes.Unauthenticated, "heartbeat missing authorization bearer for %s", shardID)
+	}
+	presented := strings.TrimPrefix(values[0], "Bearer ")
+	if err := s.Coord.Provisioner.AuthenticateShard(shardID, presented); err != nil {
+		if errors.Is(err, logdb.ErrShardAuthFailed) {
+			return status.Errorf(codes.Unauthenticated, "%v", err)
+		}
+		return status.Errorf(codes.Internal, "%v", err)
+	}
+	return nil
+}
+
+// ── Source onboarding ──────────────────────────────────────
+
+// authenticateToken is a helper that validates an agent token and returns auth info.
+func (s *Server) authenticateToken(token string) (*agentAuth, error) {
+	auth, err := s.validateToken(token)
+	if err != nil {
+		return nil, fmt.Errorf("validate token: %w", err)
+	}
+	if auth == nil {
+		return nil, fmt.Errorf("invalid or revoked token")
+	}
+	return auth, nil
+}
+
+// agentAuth is what a validated token stands for, in the store's terms: the
+// contract says whose token it is as the tenant's added columns, and the rest of
+// the service still names a tenant by its store handle.
+type agentAuth struct {
+	TokenID   uint
+	Owner     shape.Added
+	Namespace string
+	Env       string
+}
+
+// validateToken is the contract's ValidateToken with the owner as a store handle;
+// nil for a token that is unknown or revoked.
+func (s *Server) validateToken(token string) (*agentAuth, error) {
+	a, err := s.Tokens.ValidateToken(token)
+	if err != nil || a == nil {
+		return nil, err
+	}
+	return &agentAuth{TokenID: a.TokenID, Owner: a.Owner, Namespace: a.Namespace, Env: a.Env}, nil
+}
+
+// namespace is the org's namespace of that name, or source.ErrNotFound.
+func (s *Server) namespace(owner shape.Added, name string) (*source.Namespace, error) {
+	ns, ok, err := s.Sources.GetNamespace(owner, name)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, source.ErrNotFound
+	}
+	return ns, nil
+}
+
+type orgNameEntry struct {
+	name string
+	at   time.Time
+}
+
+// orgNameTTL is how long a resolved org name is kept. A name is the org's handle
+// and does not change in practice; the bound only keeps a rename from outliving
+// the process.
+const orgNameTTL = 10 * time.Minute
+
+// orgName is the name of an org for a log line or the weftd handshake; empty if
+// it cannot be read. The token contract says whose token it is, not what they
+// are called, so the name is looked up once and kept: a stream open that
+// authenticates from the token cache must read nothing.
+func (s *Server) orgName(owner shape.Added) string {
+	if s.OrgName == nil {
+		return "" // a build with no org table has no names
+	}
+	if v, ok := s.orgNames.Load(owner); ok {
+		if e := v.(orgNameEntry); time.Since(e.at) < orgNameTTL {
+			return e.name
+		}
+	}
+	name := s.OrgName(owner)
+	if name == "" {
+		return ""
+	}
+	s.orgNames.Store(owner, orgNameEntry{name: name, at: time.Now()})
+	return name
+}
+
+// SubmitSample receives sample log lines from weftd for a source. A partial
+// submit is a progress ping while the agent is still accumulating (the
+// source surfaces as "sampling (N/target)"); the final non-partial submit
+// carries the complete sample and makes the source configurable.
+func (s *Server) SubmitSample(ctx context.Context, req *pb.SubmitSampleRequest) (*pb.SubmitSampleResponse, error) {
+	auth, err := s.authenticateToken(req.Token)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
+	}
+
+	if req.Service == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "app required")
+	}
+	if !req.Partial && len(req.Lines) == 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "lines required for a final sample")
+	}
+
+	ns, err := s.namespace(auth.Owner, auth.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("namespace: %w", err)
+	}
+	// Store the bare service in log_groups.app — the namespace is already
+	// carried by ns.ID. Routing keys on the bare service (the shard rows'
+	// service column and the planner's WHERE service=?), so the old
+	// namespace-prefixed form ("weft/api") broke service-level shard
+	// routing for weftd sources. weftd sends a bare service on onboard
+	// and "service/kind" on resample; take the first segment for both.
+	service := req.Service
+	if i := strings.IndexByte(service, '/'); i >= 0 {
+		service = service[:i]
+	}
+
+	// ClassifyAsync computes envelope/JSON detection inline and, only for
+	// the final (non-partial) sample, starts LLM classification in the
+	// background — this RPC returns as soon as the sample is stored,
+	// never blocked on Bedrock. See ingest/llmdetect.go.
+	namespaceID := ns.ID
+	sampleJSON, _ := json.Marshal(req.Lines)
+	detection := ingest.ClassifyAsync(ctx, s.Classifier, req.Lines, !req.Partial, func(d *ingest.Detection) {
+		detectionJSON, err := json.Marshal(d)
+		if err != nil {
+			return
+		}
+		if err := s.Sources.UpdateDetection(namespaceID, service, string(sampleJSON), string(detectionJSON)); err != nil {
+			weftsdk.Infof(ctx, "classify: update detection for %s/%s: %v", auth.Namespace, service, err)
+		}
+	})
+	detectionJSON, _ := json.Marshal(detection)
+
+	// A source written by the weft SDK needs no wizard: its lines carry the
+	// values a schema would extract, so the final sample configures it with
+	// a synthesized schema. A source that is already configured keeps its
+	// schema (it may have been tuned since).
+	sdkSetup := false
+	if req.SdkFed && !req.Partial {
+		prior, err := s.Sources.FindSource(auth.Owner, auth.Namespace, service)
+		if err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
+		sdkSetup = prior == nil || prior.Status != sources.Configured
+	}
+
+	if err := s.Sources.SubmitSample(ns.ID, service, source.SampleSubmission{
+		Instance: req.Instance, Deployment: req.Deployment,
+		SampleJSON: string(sampleJSON), DetectionJSON: string(detectionJSON),
+		Collected: len(req.Lines), Partial: req.Partial,
+	}); err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+
+	respStatus := "pending"
+	if req.Partial {
+		respStatus = "sampling"
+	}
+	if sdkSetup {
+		schemaYAML, err := ingest.SDKSchema(service, req.SdkFormat)
+		if err != nil {
+			return nil, fmt.Errorf("sdk schema: %w", err)
+		}
+		if err := s.Sources.ConfigureSource(ctx, ns.ID, service, schemaYAML); err != nil {
+			return nil, fmt.Errorf("configure sdk source: %w", err)
+		}
+		respStatus = "configured"
+	}
+	weftsdk.Infof(ctx, "sample: customer=%s namespace=%s app=%s lines=%d partial=%t", s.orgName(auth.Owner), auth.Namespace, req.Service, len(req.Lines), req.Partial)
+	return &pb.SubmitSampleResponse{Status: respStatus}, nil
+}
+
+// GetSourceStatus returns the configuration status of a source.
+func (s *Server) GetSourceStatus(ctx context.Context, req *pb.GetSourceStatusRequest) (*pb.GetSourceStatusResponse, error) {
+	auth, err := s.authenticateToken(req.Token)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
+	}
+
+	if req.Service == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "app required")
+	}
+
+	lg, err := s.Sources.FindSource(auth.Owner, auth.Namespace, req.Service)
+	if err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	if lg == nil {
+		return &pb.GetSourceStatusResponse{Status: "unknown"}, nil
+	}
+
+	// Note which agent is asking, so the API knows what is reading this
+	// source's schema. An agent from before the field reports nothing.
+	if req.AgentVersion != "" && s.RecordAgentSeen != nil {
+		if err := s.RecordAgentSeen(lg.ID, req.Instance, req.AgentVersion); err != nil {
+			weftsdk.Infof(ctx, "source status: record agent %s@%s for %s: %v", req.AgentVersion, req.Instance, req.Service, err)
+		}
+	}
+
+	switch lg.Status {
+	case sources.Configured:
+		sum := sha256.Sum256([]byte(lg.SchemaYAML))
+		return &pb.GetSourceStatusResponse{
+			Status:            "configured",
+			SchemaYaml:        lg.SchemaYAML,
+			SchemaHash:        hex.EncodeToString(sum[:]),
+			ResampleRequested: lg.ResampleRequestedAt != nil,
+			// The size a resample was asked for, so the agent collects that many.
+			SampleTarget: int32(lg.Target()),
+		}, nil
+	case sources.Sampling:
+		return &pb.GetSourceStatusResponse{
+			Status:            "sampling",
+			SampleCollected:   int32(lg.SampleCollected),
+			SampleTarget:      int32(lg.Target()),
+			ResampleRequested: lg.ResampleRequestedAt != nil,
+		}, nil
+	case sources.Pending:
+		return &pb.GetSourceStatusResponse{
+			Status:            "pending",
+			SampleCollected:   int32(lg.SampleCollected),
+			SampleTarget:      int32(lg.Target()),
+			ResampleRequested: lg.ResampleRequestedAt != nil,
+		}, nil
+	default:
+		return &pb.GetSourceStatusResponse{Status: "unknown"}, nil
+	}
+}
+
+// shardOpStatus maps a provisioner admin-op error to a gRPC status the
+// API server can turn into a meaningful HTTP code (404/409) instead of a
+// blanket 500.
+func shardOpStatus(err error) error {
+	switch {
+	case errors.Is(err, logdb.ErrShardNotInRegistry):
+		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, logdb.ErrShardWrongState), errors.Is(err, logdb.ErrShardWithinRetention), errors.Is(err, logdb.ErrShardHasResources):
+		return status.Error(codes.FailedPrecondition, err.Error())
+	default:
+		return status.Errorf(codes.Internal, "%v", err)
+	}
+}
+
+// shardStore is where shard state lives: the provisioner's, nil when it has none.
+func (s *Server) shardStore() logdb.ShardStore {
+	if s.Coord != nil && s.Coord.Provisioner != nil {
+		if sh := s.Coord.Provisioner.Shards(); sh != nil {
+			return sh
+		}
+	}
+	return nil
+}
+
+func (s *Server) ListShards(_ context.Context, req *pb.ListShardsRequest) (*pb.ListShardsResponse, error) {
+	shards := s.shardStore()
+	if shards == nil {
+		return nil, status.Errorf(codes.Unavailable, "store not configured")
+	}
+	rows, err := shards.ListShardsByBucket(req.BucketId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list shards: %v", err)
+	}
+	out := make([]*pb.ShardInfo, 0, len(rows))
+	for _, sh := range rows {
+		out = append(out, shardInfoFrom(sh))
+	}
+	return &pb.ListShardsResponse{Shards: out}, nil
+}
+
+// shardInfoFrom marshals a persisted shard row into the ShardInfo wire
+// shape — shared between ListShards and GetShard.
+func shardInfoFrom(sh *logdb.ShardRow) *pb.ShardInfo {
+	info := &pb.ShardInfo{
+		Id:          sh.ID,
+		WindowStart: sh.WindowStart.Format(time.RFC3339Nano),
+		WindowEnd:   sh.WindowEnd.Format(time.RFC3339Nano),
+		State:       string(sh.State),
+		Addr:        sh.Addr,
+		InstanceId:  sh.InstanceID,
+		ParquetPath: sh.ParquetPath,
+		Tier:        sh.Tier,
+		RowCount:    sh.RowCount,
+		CreatedAt:   sh.CreatedAt.Format(time.RFC3339Nano),
+		BucketId:    sh.BucketID,
+	}
+	if !sh.LastHeartbeatAt.IsZero() {
+		info.LastHeartbeatAt = sh.LastHeartbeatAt.Format(time.RFC3339Nano)
+	}
+	info.BinarySha = sh.BinarySHA
+	return info
+}
+
+func (s *Server) GetShard(_ context.Context, req *pb.GetShardRequest) (*pb.GetShardResponse, error) {
+	shards := s.shardStore()
+	if shards == nil {
+		return nil, status.Errorf(codes.Unavailable, "store not configured")
+	}
+	rec, found, err := shards.GetShard(req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get shard: %v", err)
+	}
+	if !found {
+		return nil, status.Errorf(codes.NotFound, "shard %s not found", req.ShardId)
+	}
+	return &pb.GetShardResponse{Shard: shardInfoFrom(rec)}, nil
+}
+
+func (s *Server) ListBuckets(_ context.Context, _ *pb.ListBucketsRequest) (*pb.ListBucketsResponse, error) {
+	shards := s.shardStore()
+	if shards == nil {
+		return nil, status.Errorf(codes.Unavailable, "store not configured")
+	}
+	rows, err := shards.ListBuckets()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list buckets: %v", err)
+	}
+	out := make([]*pb.BucketInfo, 0, len(rows))
+	for _, b := range rows {
+		out = append(out, &pb.BucketInfo{
+			Id:                   b.ID,
+			Label:                b.Label,
+			TargetIngestingCount: int32(b.TargetIngestingCount),
+			Tier:                 b.Tier,
+			State:                b.State,
+		})
+	}
+	return &pb.ListBucketsResponse{Buckets: out}, nil
+}
+
+func (s *Server) ForceArchiveShard(_ context.Context, req *pb.ForceArchiveShardRequest) (*pb.ForceArchiveShardResponse, error) {
+	if s.Coord.Provisioner == nil {
+		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
+	}
+	if err := s.Coord.Provisioner.ForceArchive(req.ShardId); err != nil {
+		return nil, shardOpStatus(err)
+	}
+	return &pb.ForceArchiveShardResponse{}, nil
+}
+
+func (s *Server) DeleteArchivedShard(_ context.Context, req *pb.DeleteArchivedShardRequest) (*pb.DeleteArchivedShardResponse, error) {
+	if s.Coord.Provisioner == nil {
+		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
+	}
+	if err := s.Coord.Provisioner.DeleteArchived(req.ShardId, req.Force); err != nil {
+		return nil, shardOpStatus(err)
+	}
+	return &pb.DeleteArchivedShardResponse{}, nil
+}
+
+// ForceRemoveShard is the WeftAdmin escape hatch for a shard stuck in
+// ARCHIVING whose archive can never complete. See Provisioner.ForceRemove.
+func (s *Server) ForceRemoveShard(_ context.Context, req *pb.ForceRemoveShardRequest) (*pb.ForceRemoveShardResponse, error) {
+	if s.Coord.Provisioner == nil {
+		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
+	}
+	if err := s.Coord.Provisioner.ForceRemove(req.ShardId, req.Force); err != nil {
+		return nil, shardOpStatus(err)
+	}
+	return &pb.ForceRemoveShardResponse{}, nil
+}
+
+func (s *Server) RelaunchShard(ctx context.Context, req *pb.RelaunchShardRequest) (*pb.RelaunchShardResponse, error) {
+	if s.Coord.Provisioner == nil {
+		return nil, status.Errorf(codes.Unavailable, "provisioner not running")
+	}
+	if err := s.Coord.Provisioner.RelaunchShard(ctx, req.ShardId); err != nil {
+		return nil, shardOpStatus(err)
+	}
+	return &pb.RelaunchShardResponse{}, nil
+}

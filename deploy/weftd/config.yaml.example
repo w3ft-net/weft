@@ -1,0 +1,72 @@
+# /etc/weftd/config.yaml — weftd agent configuration.
+#
+# This file is the single source of truth for weftd. Copy it to
+# /etc/weftd/config.yaml, edit, then: systemctl start weftd
+#
+# The package never generates, overwrites, or merges this file. Your
+# edits are permanent. weftd refuses to start without it.
+#
+# The auth token may instead come from the WEFTD_TOKEN environment
+# variable (set in /etc/default/weftd). Env wins over the token: below
+# (AWS-shaped credential chain) — use that if a secret injector supplies
+# the token out of band; otherwise just set token: here.
+
+token: wft_REPLACE_ME
+
+# Optional host-wide values stamped on every row.
+deployment: api                 # fleet / scaling-unit (k8s Deployment, ASG)
+region: us-east-2               # optional; auto-detected from cloud metadata
+
+# Metavariables take their value from the environment (env:), a file
+# (file:), or a field of a JSON file (json: <path>:.<field>). Files are
+# watched, so a deploy that rewrites one changes later rows without a
+# restart; env: is read once at startup. Columns: deployment, version,
+# region, cluster, node.
+metavariables:
+  version:
+    env: APP_VERSION
+  # node:
+  #   json: /opt/app/data/shard.json:.shard_id
+
+# Optional host metrics (cpu, memory, disk, load, network), one collector
+# per host. The block turns them on; delete it to turn them off. They need
+# `deployment:` (above): the rows are written under it, to
+# /log/<ns>/<deployment>/{host,disk,network}.log.
+metrics:
+  interval: 30s
+
+# Self-update: when a newer weftd is published, the agent downloads,
+# verifies, swaps its own binary and restarts into it. On by default;
+# set false to pin this host (e.g. while investigating an issue).
+# auto_update: true
+
+# --- Anchor holder ---------------------------------------------------
+# weftd ignores unknown top-level keys, so this block only exists to
+# declare reusable fragments. Merge them into sources with `<<: *name`
+# to avoid repeating shared fields. (Standard YAML anchors/merge keys —
+# there is no file-include mechanism; this is intra-file DRY only.)
+x-anchors:
+  json_app: &json_app
+    schema: json
+
+sources:
+  # Ordinary application log. kind defaults to "main" if omitted; shown
+  # explicitly here for clarity. Lands at /log/<ns>/api/main.log.
+  - service: api
+    kind: main
+    path: /var/log/api/*.log
+    <<: *json_app
+
+  # A second stream from the same host under a distinct kind, so it
+  # lands at its own pseudofile /log/<ns>/api/audit.log instead of
+  # folding into api/main.log. If a glob source above also matched this
+  # file, weftd's deconfliction lets this explicit source win (no
+  # double-ingest).
+  - service: api
+    kind: audit
+    path: /var/log/api/audit.log
+    <<: *json_app
+
+  # systemd journal source (no path:; tails the unit's journal).
+  - service: worker
+    unit: worker.service

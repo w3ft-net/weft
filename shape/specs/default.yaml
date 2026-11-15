@@ -1,0 +1,3 @@
+# The open-source default: four coordinates and no tenant. There is no tenant
+# column, partition, or code path in a build with this shape.
+coordinates: [namespace, env, service, kind]

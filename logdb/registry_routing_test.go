@@ -1,0 +1,201 @@
+package logdb
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/w3ft-net/weft/backends/shardstore"
+
+	pb "github.com/w3ft-net/weft/proto/weftpb"
+	"github.com/w3ft-net/weft/shard"
+)
+
+// mustMatch is MatchingEntries for a registry whose every shard can be
+// queried: an *UnavailableShardsError fails the test.
+func mustMatch(t *testing.T, reg *ShardRegistry, tr TimeRange, serving map[string]struct{}, tier string) []*Shard {
+	t.Helper()
+	out, err := reg.MatchingEntries(tr, serving, time.Now().Add(-tierRetention(tier)))
+	if err != nil {
+		t.Fatalf("MatchingEntries: %v", err)
+	}
+	return out
+}
+
+// servingFor builds the serving set a query for app would resolve to,
+// mirroring the per-entry hasApp match that MatchingEntries used to do
+// internally. Tests whose real subject is staleness / suspension /
+// retention / archived-inclusion (not service routing) use this to keep
+// expressing "a query scoped to app X" now that the serving-set lookup
+// lives upstream of the pure registry filter. "" yields nil (no filter).
+func servingFor(reg *ShardRegistry, app string) map[string]struct{} {
+	if app == "" {
+		return nil
+	}
+	out := map[string]struct{}{}
+	for _, e := range reg.Entries() {
+		if e.serves(1, app) {
+			out[e.ID] = struct{}{}
+		}
+	}
+	return out
+}
+
+// TestRegistry_ServingSetQueryRouting — MatchingEntries narrows to the
+// shard-ID set the caller passes (resolved upstream from shard_services),
+// a nil set hits every entry in the window, and an empty (non-nil) set
+// matches nothing. Two shards in the same window; the test drives the
+// serving filter directly, DB-free — the registry no longer does app
+// matching itself.
+func TestRegistry_ServingSetQueryRouting(t *testing.T) {
+	sVim, err := shard.NewDuckDBShard("shard-vimgym", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sVim.Close() })
+
+	sCb, err := shard.NewDuckDBShard("shard-callbox", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sCb.Close() })
+
+	// Ingest one row each so the entries are non-empty; MatchingEntries
+	// drops ShardRowCount==0 archived entries but ingesting entries are
+	// returned regardless. A row each keeps the test honest if that
+	// guard ever tightens.
+	if err := sVim.Ingest(context.Background(), []*pb.LogRow{{Namespace: "vimgym", CustomerId: 1, TsUnixNs: t0.UnixNano()}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := sCb.Ingest(context.Background(), []*pb.LogRow{{Namespace: "callbox", CustomerId: 1, TsUnixNs: t0.UnixNano()}}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := NewShardRegistry()
+	reg.Add(&Shard{
+		ShardRow: ShardRow{
+			ID:          "shard-vimgym",
+			WindowStart: t0,
+			WindowEnd:   t2,
+			State:       StateIngesting,
+		},
+		Services: []shardstore.ShardService{{NamespaceID: 1, Service: "vimgym"}},
+		Live:     sVim,
+	})
+	reg.Add(&Shard{
+		ShardRow: ShardRow{
+			ID:          "shard-callbox",
+			WindowStart: t0,
+			WindowEnd:   t2,
+			State:       StateIngesting,
+		},
+		Services: []shardstore.ShardService{{NamespaceID: 1, Service: "callbox"}},
+		Live:     sCb,
+	})
+
+	serving := func(ids ...string) map[string]struct{} {
+		s := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			s[id] = struct{}{}
+		}
+		return s
+	}
+
+	matching := mustMatch(t, reg, fullRange, serving("shard-vimgym"), "bolt")
+	if len(matching) != 1 {
+		t.Fatalf("expected 1 shard for the vimgym serving set, got %d", len(matching))
+	}
+	if matching[0].ID != "shard-vimgym" {
+		t.Fatalf("expected shard-vimgym, got %s", matching[0].ID)
+	}
+
+	matching = mustMatch(t, reg, fullRange, serving("shard-callbox"), "bolt")
+	if len(matching) != 1 || matching[0].ID != "shard-callbox" {
+		t.Fatalf("expected only shard-callbox, got %v", matching)
+	}
+
+	// Nil serving set = no service filter = all shards in the window.
+	matching = mustMatch(t, reg, fullRange, nil, "bolt")
+	if len(matching) != 2 {
+		t.Fatalf("expected 2 shards for the nil (all-services) set, got %d", len(matching))
+	}
+
+	// Empty (non-nil) serving set = a service no shard serves = nothing.
+	matching = mustMatch(t, reg, fullRange, serving(), "bolt")
+	if len(matching) != 0 {
+		t.Fatalf("expected 0 shards for the empty serving set, got %d", len(matching))
+	}
+}
+
+// TestRegistry_DegradedExcludedFromWritesButQueryable pins the
+// circuit-breaker routing contract: a DEGRADED shard is pulled from write
+// routing (IngestingShard skips it) but stays read-queryable
+// (MatchingEntries still returns it — its data is intact on a live
+// instance).
+func TestRegistry_DegradedExcludedFromWritesButQueryable(t *testing.T) {
+	s, err := shard.NewDuckDBShard("shard-degraded", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if err := s.Ingest(context.Background(), []*pb.LogRow{{Namespace: "vimgym", CustomerId: 1, TsUnixNs: t0.UnixNano()}}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := NewShardRegistry()
+	reg.Add(&Shard{
+		ShardRow: ShardRow{
+			ID:          "shard-degraded",
+			WindowStart: t0,
+			WindowEnd:   t2,
+			State:       StateDegraded,
+			RowCount:    1,
+		},
+		Services: []shardstore.ShardService{{NamespaceID: 1, Service: "vimgym"}},
+		Live:     s,
+	})
+
+	// Write routing skips it — no INGESTING candidate for vimgym.
+	if got := reg.IngestingShard(1, "vimgym"); got != nil {
+		t.Fatalf("IngestingShard returned a DEGRADED shard; want nil (excluded from writes)")
+	}
+
+	// Read routing still includes it.
+	matching := mustMatch(t, reg, fullRange, servingFor(reg, "vimgym"), "bolt")
+	if len(matching) != 1 || matching[0].ID != "shard-degraded" {
+		t.Fatalf("DEGRADED shard not read-queryable: got %v", matching)
+	}
+}
+
+// TestRegistry_IngestingShard — IngestingShard looks up the entry by
+// app, with a per-shard Apps list. An app that no entry owns returns
+// nil; multi-app entries serve all their apps.
+func TestRegistry_IngestingShard(t *testing.T) {
+	s0, err := shard.NewDuckDBShard("s0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s0.Close() })
+
+	reg := NewShardRegistry()
+	reg.Add(&Shard{
+		ShardRow: ShardRow{
+			ID:          "s0",
+			WindowStart: t0,
+			WindowEnd:   t2,
+			State:       StateIngesting,
+		},
+		Services: []shardstore.ShardService{{NamespaceID: 1, Service: "vimgym"}, {NamespaceID: 1, Service: "grantcentral"}},
+		Live:     s0,
+	})
+
+	if sh := reg.IngestingShard(1, "vimgym"); sh == nil {
+		t.Fatal("expected ingesting shard for vimgym")
+	}
+	if sh := reg.IngestingShard(1, "grantcentral"); sh == nil {
+		t.Fatal("expected ingesting shard for grantcentral")
+	}
+	if sh := reg.IngestingShard(1, "unknown"); sh != nil {
+		t.Fatal("expected nil for unknown app")
+	}
+}

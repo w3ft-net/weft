@@ -1,0 +1,96 @@
+package compute
+
+import (
+	"context"
+	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
+	"sync"
+
+	pb "github.com/w3ft-net/weft/proto/weftpb"
+	"github.com/w3ft-net/weft/shard"
+)
+
+// ComputeMessage is sent from shards to a compute job. Either Row is set
+// (a data row) or Sentinel is true (indicating the shard has finished).
+type ComputeMessage struct {
+	Row      *pb.ResultRow
+	ShardID  string
+	Sentinel bool
+}
+
+// MissingRowsError fails a query one of whose shards didn't return all its
+// rows (unreachable, failed, or cut off mid-stream). The answer from the
+// remaining shards would be wrong while looking right, so there is none.
+type MissingRowsError struct {
+	ShardID string
+	Err     error
+}
+
+func (e *MissingRowsError) Error() string {
+	return fmt.Sprintf("can't answer without shard %s: %v", e.ShardID, e.Err)
+}
+
+func (e *MissingRowsError) Unwrap() error { return e.Err }
+
+// Executor is what the coordinator dispatches every query through.
+// Production uses Client (gRPC to the remote compute worker, which
+// runs an Engine); tests use Engine directly, in-process.
+type Executor interface {
+	// ExecuteQuery fans out SQL to the given shards, merges results,
+	// applies pipeline stages, and streams output lines back. ctx
+	// carries the ambient trace ID (if any) across the gRPC boundary
+	// to a remote compute worker/shard — see weftsdk.ContextWithTraceID.
+	ExecuteQuery(ctx context.Context, req *pb.ExecuteQueryRequest) (LineStream, error)
+}
+
+// ResolveShardFunc materializes a shard.Shard handle for a descriptor.
+// Implementations decide whether to dial fresh, return a cached
+// handle, or consult a registered Resolver override. FanOutToShards
+// is otherwise oblivious to where the handle came from — the boundary
+// is "give me something I can call QueryToSink on."
+type ResolveShardFunc func(ctx context.Context, d *pb.ShardDescriptor) (shard.Shard, error)
+
+// FanOutToShards turns each descriptor into a handle (via resolve),
+// runs QueryToSink concurrently, and waits. The resolver owns
+// connection caching and rebind invalidation; FanOut is intentionally
+// dumb about lifecycle — it does not Close the handle on return,
+// because the engine's cache may keep it for the next query.
+func FanOutToShards(ctx context.Context, req *pb.ExecuteQueryRequest, job shard.RowSink, resolve ResolveShardFunc) {
+	var wg sync.WaitGroup
+	wg.Add(len(req.Shards))
+	for _, desc := range req.Shards {
+		go func(d *pb.ShardDescriptor) {
+			defer wg.Done()
+			sh, err := resolve(ctx, d)
+			if err != nil {
+				weftsdk.Infof(ctx, "execute-query: resolve shard %s: %v", d.ShardId, err)
+				job.Fail(d.ShardId, err)
+				job.SendSentinel(d.ShardId)
+				return
+			}
+			sql, strArgs, fieldSQL := req.Sql, req.Args, req.FieldSql
+			if d.Sql != "" {
+				sql, strArgs, fieldSQL = d.Sql, d.Args, d.FieldSql
+			}
+			args := make([]any, len(strArgs))
+			for i, a := range strArgs {
+				args[i] = a
+			}
+			// A plan that names the table holding its rows has it passed to a
+			// shard that can use it; the others run sql as written.
+			if tq, ok := sh.(shard.TableQuerier); ok && req.Table != "" {
+				tq.QueryTableToSink(ctx, req.Table, sql, fieldSQL, args, job)
+				return
+			}
+			// A shard that has the field form gets it; one that doesn't (a
+			// cold shard, one from before it) runs sql, whose rows carry the
+			// same fields as a line.
+			if fq, ok := sh.(shard.FieldQuerier); ok && fieldSQL != "" {
+				fq.QueryFieldsToSink(ctx, sql, fieldSQL, args, job)
+				return
+			}
+			sh.QueryToSink(ctx, sql, args, job)
+		}(desc)
+	}
+	wg.Wait()
+}

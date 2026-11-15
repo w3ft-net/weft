@@ -1,0 +1,919 @@
+syntax = "proto3";
+
+package weft;
+
+option go_package = "github.com/w3ft-net/weft/proto/weftpb";
+
+// ---------------------------------------------------------------------------
+// Shard service — runs on each shard node
+// ---------------------------------------------------------------------------
+
+service ShardQuery {
+  // Query executes pushed-down SQL and streams result rows (raw, ts).
+  rpc Query(QueryRequest) returns (stream ResultRow);
+
+  // Ingest accepts a batch of rows for insertion into the shard.
+  rpc Ingest(IngestRequest) returns (IngestResponse);
+
+  // IngestStream accepts a long-lived stream of log rows from weftd agents.
+  // The agent authenticates via metadata (shard token from coordinator).
+  rpc IngestStream(stream LogRow) returns (IngestStreamResponse);
+
+  // Configure assigns an identity and time window to a blank shard.
+  // Called by the coordinator after discovering a new instance.
+  rpc Configure(ConfigureRequest) returns (ConfigureResponse);
+
+  // Archive exports the shard's data to Parquet on S3 and returns the
+  // path written. Called by the coordinator when a READ_ONLY shard
+  // exceeds its retention window.
+  rpc Archive(ArchiveRequest) returns (ArchiveResponse);
+
+  // Pause stops the shard admitting calls so its volume can move to a
+  // successor instance (docs/plans/shard-seamless-upgrade.md). Every new
+  // call is refused with a SHARD_PAUSED status naming successor_addr;
+  // in-flight calls finish. Returns once they have, DuckDB is checkpointed
+  // and closed, and the volume is unmounted. Idempotent.
+  rpc Pause(PauseRequest) returns (PauseResponse);
+
+  // Resume undoes Pause (an upgrade's rollback): remount the volume, reopen
+  // DuckDB, and admit calls again. A no-op on a shard that is serving.
+  rpc Resume(ResumeRequest) returns (ResumeResponse);
+}
+
+message PauseRequest {
+  string successor_addr = 1; // host:port the refusals redirect callers to
+}
+
+message PauseResponse {}
+
+message ResumeRequest {}
+
+message ResumeResponse {}
+
+message ConfigureRequest {
+  string shard_id = 1;
+  repeated string services = 2;
+  string window_start = 3; // RFC3339
+  string window_end = 4;   // RFC3339
+  // heartbeat_token is the per-shard bearer the coordinator minted at
+  // christen. The shard persists it in shard.json and sends it as
+  // authorization metadata on every Heartbeat RPC; the coordinator
+  // compares to the stored value and rejects mismatches. Closes the
+  // rogue-shard-registration attack in the pre-launch audit.
+  string heartbeat_token = 5;
+  // layout is the partition columns the shard stores rows under, from the
+  // coordinator's build. The shard records it in shard.json. Absent from an
+  // older coordinator: the shard then keeps (or adopts) the legacy
+  // customer_id BIGINT layout.
+  PartitionLayout layout = 6;
+}
+
+message ConfigureResponse {}
+
+// PartitionLayout describes a build's partition columns (the columns that own
+// storage) and a fingerprint of them. Values arrive per ingest batch,
+// positionally, in column order.
+message PartitionLayout {
+  repeated PartitionColumn columns = 1;
+  string fingerprint = 2;
+}
+
+message PartitionColumn {
+  string name = 1;
+  string type = 2; // "int64" or "string"
+  string role = 3; // "partition"
+}
+
+message ArchiveRequest {
+  string s3_prefix = 1; // e.g. "s3://bucket/apps" — shard appends /<shard_id>.parquet
+}
+
+message ArchiveResponse {
+  string parquet_path = 1; // full S3 path written
+  // customer_stats reports, per customer, the row count and ts span of
+  // that customer's data in the archived parquet. Captured during export
+  // while the DuckDB handle is local on the shard node. The coordinator
+  // persists these to shard_archive_stats so the retention janitor can
+  // classify archived files (delete / keep / rewrite) without re-scanning
+  // S3. See docs/plans/retention-janitor.md.
+  repeated CustomerArchiveStat customer_stats = 2;
+}
+
+message CustomerArchiveStat {
+  reserved 1, 5;
+  reserved "customer", "customer_id";
+  // partition_values are the group's partition column values as text, in the
+  // shard's layout order. Empty for a layout with no partition columns.
+  repeated string partition_values = 6;
+  int64 min_ts_unix_ns = 2;
+  int64 max_ts_unix_ns = 3;
+  int64 row_count = 4;
+}
+
+message IngestStreamResponse {
+  int64 rows_received = 1;
+}
+
+message QueryRequest {
+  string sql = 1;
+  // Positional placeholder values for `?` markers in sql, in render
+  // order. See ExecuteQueryRequest.args for the binding contract.
+  repeated string args = 2;
+  // field_sql, when set, is what a shard that understands it runs instead
+  // of sql; it binds the same args. It returns the values of just some of
+  // each row's fields as `field_<N>` columns (and `field_last`, `nf`) in
+  // place of a built-up line; see ResultRow.fields. A shard from before it
+  // ignores the field and runs sql, so sql must stay correct on its own.
+  string field_sql = 3;
+  // table is ExecuteQueryRequest.table, passed through to the shard.
+  string table = 4;
+}
+
+// ResultRow is the query result type — shards return (raw, ts).
+// The planner bakes projections into the SQL so raw contains exactly what
+// the consumer needs (full log line, JSON payload, projected fields, etc.).
+message ResultRow {
+  int64 line_num = 1 [deprecated = true];
+  string raw = 2;
+  int64 ts_unix_ns = 3;
+  // meta_vars carries weft's reserved dimension columns (namespace,
+  // service, kind, level, instance, deployment, env, version, region,
+  // cluster, k8s_namespace, pod, container — see
+  // planner.JQMetaVars/MetaVarColumns), keyed by column name. Only
+  // populated when the planner projected them because a remaining jq
+  // compute stage might read a bare "._"-prefixed meta-variable for
+  // output (not just inside a pushed-down select()) — the common case
+  // (no such stage) selects and carries nothing extra. See
+  // compute.mergeMetaVars, which splices these into each row's JSON
+  // body before it reaches the jq stage.
+  map<string, string> meta_vars = 4;
+  // event_id/line_no are the stored row's event grouping (empty/0 for a
+  // one-line event). They break ts ties in the k-way merge so an event's
+  // lines stay together and in order: (ts, event_id, line_no), empty
+  // event_id first. See docs/plans/line-storage.md.
+  string event_id = 5;
+  int32 line_no = 6;
+  // fields and field_count are a row in field form, from a shard that ran
+  // a query's field_sql: the values of the fields the request's field_spec
+  // names, in order (its positions ascending, then the last field if the
+  // spec asks), and the row's real field count. raw is empty, except when
+  // the row has no fields and the spec reads the last one, where it is the
+  // line itself. Compute rebuilds the line a stage reads from them
+  // (compute.RebuildRecord). field_count has presence so a row of no
+  // fields is told apart from a row in raw form.
+  repeated string fields = 7;
+  optional int32 field_count = 8;
+}
+
+// FieldSpec says which fields of a row a compute stage reads, so the shards
+// send only those. It is the fields' positions ($1, $3, ...), whether the
+// stage reads the last field ($NF) and whether it reads the count (NF).
+message FieldSpec {
+  repeated int32 positions = 1;
+  bool last = 2;
+  bool nf = 3;
+}
+
+// LogRow is the ingestion type — weftd agents and CloudWatch poller send
+// structured rows to the coordinator for insertion into shards.
+message LogRow {
+  int64 line_num = 1 [deprecated = true];
+  string raw = 2;
+  // Bare service name within the sender's namespace (e.g. "coordinator").
+  // The coordinator derives the namespace from the agent/poller token —
+  // this is NOT a "namespace/service" composite.
+  string service = 3;
+  string level = 4;
+  int64 ts_unix_ns = 5;
+  string instance = 6;       // hostname of the emitting machine
+  bytes payload_json = 7;
+  // fields was the sender's positional split; shards now split raw the
+  // way awk does at ingest (shard.awkFields), so senders don't send it.
+  reserved 8, 9;
+  reserved "fields", "customer";
+  // customer_id is the owning org's id, stamped by the coordinator from the
+  // authenticated token (row-level security). Senders never set it. Only
+  // peers that predate IngestRequest.partition_values read it: the coordinator
+  // itself carries the customer beside the row, and stops stamping this once
+  // every shard and coordinator runs a build that does.
+  int64 customer_id = 26;
+  string deployment = 10;    // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+  string env = 11;            // deployment environment (token-derived)
+  string version = 12;        // service version (agent version_file)
+  string region = 13;         // cloud region (agent cloud-metadata probe)
+  string cluster = 14;        // k8s cluster name (k8s mode only)
+  string k8s_namespace = 15;  // k8s namespace (k8s mode only)
+  string pod = 16;            // k8s pod name (k8s mode only)
+  string container = 17;      // k8s container name (k8s mode only)
+  string node = 18;           // stable workload identity (file-sourced; see docs/plans/dimensions-from-files.md)
+  // namespace + kind complete the (namespace, service, kind) source
+  // coordinates that used to travel joined inside the old composite app
+  // string. The coordinator authoritatively overwrites namespace from
+  // the sender's token (row-level security); kind defaults to "main".
+  string namespace = 19;
+  string kind = 20;
+  // trace_id correlates this row with other log lines across services
+  // belonging to the same logical request. Populated either by
+  // ingest.Parser's trace_id_field schema extraction, or structurally by
+  // an SDK via weftd's socket envelope. Empty means uncorrelated — not
+  // every row will have one. See docs/plans/request-tracing.md.
+  string trace_id = 21;
+  // span_name/span_id/parent_span_id/duration_ns extract weft-go's own
+  // "span start"/"span done"/"span error" lines (see span.go) into
+  // reserved columns, mirroring trace_id's own promotion — populated by
+  // ingest.Parser's span_*_field/span_*_pattern schema extraction. Only
+  // "span done" lines populate duration_ns; empty/zero on every other
+  // row. See docs/plans/span-display.md.
+  string span_name = 22;
+  string span_id = 23;
+  string parent_span_id = 24;
+  int64 duration_ns = 25;
+  // event_id/line_no tie together the rows of one multi-line text event.
+  // The coordinator mints event_id (a UUIDv7, as text) when it splits an
+  // event into one row per line and never trusts a sender's; both are
+  // empty/zero on a one-line event and on a JSON-payload row, which is
+  // never split. See docs/plans/line-storage.md.
+  string event_id = 27;
+  int32 line_no = 28;
+}
+
+message IngestRequest {
+  repeated LogRow rows = 1;
+  // partition_values are the one partition every row in the batch belongs to:
+  // one value per column of the shard's PartitionLayout, in order, as text.
+  // The shard types them once and stores them on every row. Absent from an
+  // older coordinator: the shard then reads LogRow.customer_id (tag 26).
+  repeated string partition_values = 2;
+}
+
+message IngestResponse {
+  int64 rows_ingested = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Compute service — runs on compute worker nodes
+// ---------------------------------------------------------------------------
+
+service WeftCompute {
+  // ExecuteQueryStream fans out SQL to shards, merges results, applies
+  // pipeline stages, and streams the output back in line batches. The
+  // coordinator sends the full plan; compute does all shard I/O.
+  rpc ExecuteQueryStream(ExecuteQueryRequest) returns (stream ExecuteQueryStreamResponse);
+}
+
+// ShardDescriptor tells compute how to reach a shard.
+// Exactly one of grpc_addr or lambda_url is set.
+message ShardDescriptor {
+  string shard_id = 1;
+  // Hot shard: gRPC address (ip:port).
+  string grpc_addr = 2;
+  // Cold shard: Lambda function URL for parquet queries.
+  string lambda_url = 3;
+  // Parquet path in S3 (cold shards only).
+  string parquet_path = 4;
+  // Services this shard covers (cold shards need this for ColdShard construction).
+  repeated string services = 5;
+  // sql and args, when sql is set, are what this shard runs instead of the
+  // request's sql and args (the placeholders in sql bind to this args, not
+  // the request's). The coordinator sets them to give a shard whose field
+  // facts allow it a plan the other shards can't run exactly; see
+  // docs/plans/field-types.md. Empty = the request's sql and args.
+  string sql = 6;
+  repeated string args = 7;
+  // field_sql is what this shard runs, in place of the request's field_sql,
+  // when sql is set: the same override for the field form.
+  string field_sql = 8;
+  // layout is the partition layout a cold shard's archive was written in,
+  // which compute forwards to the cold-scan Lambda to type the archive's hive
+  // columns. Absent from an older coordinator: the legacy layout.
+  PartitionLayout layout = 9;
+}
+
+message ExecuteQueryRequest {
+  string sql = 1;
+  repeated ShardDescriptor shards = 2;
+  repeated string stages = 3;
+  // Ordering key for compute's k-way merge across shard input
+  // streams. One of:
+  //   ""             → concat (rows emitted in arrival order).
+  //   "ts"           → merge by ts_unix_ns ascending.
+  //   "ts DESC"      → merge by ts_unix_ns descending.
+  //   "raw"          → merge by raw ascending.
+  //   "raw DESC"     → merge by raw descending.
+  // Shards bake the same ORDER BY into their SQL so their per-shard
+  // output is already sorted; merge_key tells compute which column
+  // to walk through the heap on. Empty = "don't merge, just concat"
+  // — matches the old coordinator-side buffered path.
+  string merge_key = 4;
+
+  // Global limit applied to the merged stream BEFORE the stages run.
+  // 0 = no limit. Mirrors planner.QueryPlan.Limit (the user-visible
+  // head/tail count). Without this, per-shard LIMIT N gets multiplied
+  // by shard count when downstream stages see the union — a bare
+  // `tail -n N | wc -l` would return N×num_shards.
+  int32 limit = 5;
+  // Tag 6 was string shard_secret; the bearer token now lives on the
+  // compute worker (SHARD_SECRET env var, read in cmd/compute/main.go)
+  // so the coordinator no longer needs to know the shard credential.
+  reserved 6;
+  reserved "shard_secret";
+  // keep_last switches the limit semantic: false (default) trims after
+  // N emitted (head); true retains a ring buffer of the LAST N rows
+  // seen across the merged stream and emits at EOF (tail). Set by the
+  // coordinator when planner.QueryPlan.TailMode is true — tail's
+  // subquery flip lands rows in ts ASC, so the global last N can't be
+  // resolved by stopping early. See compute/engine.go::consume.
+  bool keep_last = 7;
+  // Positional placeholder values for `?` markers in sql, in render
+  // order. Today the planner ships values as strings (customer id,
+  // namespace name, ISO-formatted timestamps for CAST(? AS TIMESTAMP));
+  // DuckDB binds them as VARCHAR and casts where needed. If the cast
+  // path ever turns out unreliable in practice we promote to typed
+  // args via a `repeated google.protobuf.Value`. See
+  // planner/sql.go::Query.ToSQL for the source of args.
+  repeated string args = 8;
+  // trace_tag is set by the coordinator when planner.QueryPlan.SourceCmd ==
+  // "trace", there are no downstream compute stages, and the dispatch is
+  // interactive (not a cron/watch/dashboard fire — see AlertContext gating
+  // in coordinator.go). Tells compute/engine.go::consume to buffer the
+  // merged stream, emit a synthetic summary line, and prefix each row with
+  // a colored [namespace/service] badge. See docs/plans/request-tracing.md.
+  bool trace_tag = 9;
+  // row_stages run on each merged row after the limit and before
+  // stages: stages that pass rows through unchanged (filters,
+  // head/tail -n N), run per row so the rows reach the next stage whole,
+  // payload and meta-variables included. See
+  // planner.QueryPlan.RowStages and docs/plans/planner-ir.md, "Row
+  // identity".
+  repeated string row_stages = 10;
+  // stages_read_payload feeds the first stage, a jq, each row's payload
+  // (the `payload` column) instead of its raw line.
+  bool stages_read_payload = 11;
+  // aggregate, when set, names a trace or span source's own aggregate (see
+  // planner.QueryPlan.Aggregate). Grouping a pipeline's lines is group.
+  string aggregate = 12;
+  // group, when set, says the sql groups each shard's rows: every row is a
+  // distinct line with its count (the `count` column), merged on merge_key.
+  // Compute sums the counts across shards and prints what the render says
+  // (wc -l, sort -u, sort | uniq -c, ...). Set only one of aggregate and
+  // group. Before this existed, aggregate carried "lines", "distinct" and
+  // "count_distinct"; compute no longer accepts them.
+  GroupSpec group = 13;
+  // field_sql and field_spec, when set, are the field form of sql for a
+  // stage that stays in compute and reads only some fields: shards that
+  // understand it send those fields in ResultRow.fields, and compute
+  // rebuilds the record the stage reads. sql stays the plain query for
+  // shards that don't (cold shards, shards from before this), and compute
+  // takes each row in the form it arrives. See docs/plans/field-row-spec.md.
+  string field_sql = 14;
+  FieldSpec field_spec = 15;
+  // table, when set, names the table on a shard with a table per log source
+  // that holds every row this query reads (planner.QueryPlan.Table). A shard
+  // from before the layout, or a cold shard, ignores it and runs sql, so sql
+  // must stay correct on its own. Empty = no hint. See
+  // docs/plans/per-service-tables.md.
+  string table = 16;
+}
+
+// GroupRender is what compute prints for each group it merged.
+enum GroupRender {
+  GROUP_RENDER_UNSPECIFIED = 0;
+  // GROUP_RENDER_TOTAL: one bare total of every count (wc -l).
+  GROUP_RENDER_TOTAL = 1;
+  // GROUP_RENDER_LINE: each distinct line once (sort -u, sort | uniq).
+  GROUP_RENDER_LINE = 2;
+  // GROUP_RENDER_COUNT_LINE: each distinct line with its count, as uniq -c
+  // prints it (sort | uniq -c).
+  GROUP_RENDER_COUNT_LINE = 3;
+  // GROUP_RENDER_DISTINCT_TOTAL: one bare number, how many distinct lines
+  // there are (sort -u | wc -l).
+  GROUP_RENDER_DISTINCT_TOTAL = 4;
+  // GROUP_RENDER_KEY_COUNT: each distinct line, a space, then its count
+  // (awk '{ c[$1]++ } END { for (k in c) print k, c[k] }').
+  GROUP_RENDER_KEY_COUNT = 5;
+  // GROUP_RENDER_BYTES: one bare number, the bytes of every line with a
+  // newline after each (wc -c).
+  GROUP_RENDER_BYTES = 6;
+  // GROUP_RENDER_NUMERIC_MAX: the one line sort -n puts last (or sort -rn
+  // puts first): the greatest leading number, ties to the greater line.
+  GROUP_RENDER_NUMERIC_MAX = 7;
+  // GROUP_RENDER_NUMERIC_MIN: the one line sort -n puts first (or sort -rn
+  // puts last): the least leading number, ties to the lesser line.
+  GROUP_RENDER_NUMERIC_MIN = 8;
+  // GROUP_RENDER_KEY_SUM, GROUP_RENDER_KEY_MAX and GROUP_RENDER_KEY_MIN: each
+  // distinct line, a space, then the sum, greatest or least of a field over
+  // its rows (awk '{ s[$1] += $2 } END { for (k in s) print k, s[k] }').
+  // Each shard row carries the value beside the key (planner.SumColumn and
+  // the columns after it) and compute merges them. A compute that does not know
+  // these fails the request, as it must: ignoring one would print counts.
+  GROUP_RENDER_KEY_SUM = 9;
+  GROUP_RENDER_KEY_MAX = 10;
+  GROUP_RENDER_KEY_MIN = 11;
+}
+
+// GroupOrder is how compute orders the merged groups before printing them.
+enum GroupOrder {
+  // GROUP_ORDER_UNSPECIFIED prints groups in merge-key order, as they merge.
+  GROUP_ORDER_UNSPECIFIED = 0;
+  // GROUP_ORDER_COUNT_DESC is `sort -rn` over the uniq -c text: highest count
+  // first, equal counts in the order that sort leaves them. Only with
+  // GROUP_RENDER_COUNT_LINE.
+  GROUP_ORDER_COUNT_DESC = 1;
+  // GROUP_ORDER_VALUE is `sort -k2 -n` (or -rn, or -k2,2nr) over the lines an awk
+  // aggregate prints, `key value`: the lines ordered as warp's sort orders them
+  // by the number leading field 2. order_reverse and order_tie_reverse say how.
+  // Only with GROUP_RENDER_KEY_*.
+  GROUP_ORDER_VALUE = 2;
+}
+
+// GroupSpec says the shard sql groups each shard's rows (see group).
+message GroupSpec {
+  GroupRender render = 1;
+  GroupOrder order = 2;
+  // limit keeps the first limit groups after order is applied (`head -n`);
+  // 0 keeps all. Only with an order.
+  int64 limit = 3;
+  // For GROUP_ORDER_VALUE, the sort's key is field 2, the value. order_reverse
+  // reverses the key's order; order_tie_reverse reverses the comparison of whole
+  // lines that breaks ties, which is not the same thing: `sort -k2,2nr`
+  // reverses the first but not the second, `sort -r -n -k2` both.
+  bool order_reverse = 4;
+  bool order_tie_reverse = 5;
+}
+
+message ExecuteQueryStreamResponse {
+  repeated string lines = 1;
+  string error = 2;
+  // missing_shard names the shard whose rows the answer is missing when
+  // error is that shard's failure; the query then has no answer.
+  string missing_shard = 3;
+  // 4 was inexact, for an aggregate compute could not show exact. A plan is
+  // now sent only to shards whose facts make it exact, and nothing is retried.
+  reserved 4;
+  reserved "inexact";
+  // rows_scanned is the lines the query's cold shards scanned (see
+  // docs/plans/cold-scan-cap.md), sent on the stream's last message. Zero when
+  // none were cold or the shard predates the count. An older receiver ignores it.
+  int64 rows_scanned = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Coordinator service — the shell talks to this
+// ---------------------------------------------------------------------------
+
+service WeftCoordinator {
+  // Execute runs a user-typed weft pipeline (any shape — log query,
+  // plain bash, /bin script, or a mix) and streams results back. The
+  // coordinator's Execute method classifies and dispatches: log
+  // queries go to the strict planner; non-log work runs through warp.
+  rpc Execute(CoordinatorExecuteRequest) returns (stream CoordinatorExecuteResponse);
+
+  // ListServices returns the available service names (pseudofiles).
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+
+  // AddSource registers a push-based CloudWatch log source (customer's
+  // own Kinesis Data Firehose stream posting to
+  // POST /api/ingest/cloudwatch — see
+  // docs/plans/cloudwatch-kinesis-subscription.md). No cross-account
+  // role and no schema up front: it registers the AWS-log-group→service
+  // mapping CloudWatchAdapter routes against, StatusPending, finished
+  // later via `weft source configure` once a sample has accumulated
+  // from real traffic.
+  rpc AddSource(AddSourceRequest) returns (AddSourceResponse);
+
+  // RemoveSource deletes a log source.
+  rpc RemoveSource(RemoveSourceRequest) returns (RemoveSourceResponse);
+
+  // Authenticate validates an agent token. Agents stream logs through
+  // the coordinator via IngestStream — they never connect to shards directly.
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+
+  // IngestStream accepts a stream of log rows from weftd agents. The
+  // coordinator forwards batches to the active shard.
+  rpc IngestStream(stream LogRow) returns (IngestStreamResponse);
+
+  // CreateToken mints an agent token (the load-test and integration tools
+  // use it; the CLI and web go through REST).
+  rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
+
+  // Usage metering.
+  rpc GetUsage(GetUsageRequest) returns (GetUsageResponse);
+
+  // Source onboarding — weftd submits samples and polls for schema config.
+  rpc SubmitSample(SubmitSampleRequest) returns (SubmitSampleResponse);
+  rpc GetSourceStatus(GetSourceStatusRequest) returns (GetSourceStatusResponse);
+
+  // Shard heartbeat — shards push their state to the coordinator every 60s.
+  rpc Heartbeat(ShardHeartbeatRequest) returns (HeartbeatResponse);
+
+  // Admin: list a bucket's shards (metadata only, read from shard_records).
+  rpc ListShards(ListShardsRequest) returns (ListShardsResponse);
+
+  // Admin: force-archive a READ_ONLY shard.
+  rpc ForceArchiveShard(ForceArchiveShardRequest) returns (ForceArchiveShardResponse);
+
+  // Admin: delete an ARCHIVED shard and its data.
+  rpc DeleteArchivedShard(DeleteArchivedShardRequest) returns (DeleteArchivedShardResponse);
+
+}
+
+// WeftAdmin is the coordinator-resident admin surface called by the
+// weft-admin CLI (via `kevcons ssh --command 'weft-admin …'`). It lives on
+// a separate gRPC listener bound to 127.0.0.1, gated by a SharedToken
+// (WEFT_ADMIN_TOKEN env), so it is reachable ONLY from inside the
+// coordinator instance with the right token — JWT-holders of WeftCoordinator
+// (e.g. a logged-in web admin user) cannot reach these methods, and a
+// weftd-style bearer-token connection cannot forge the admin token.
+//
+// Methods that the api server also needs (e.g. ListShards) intentionally
+// exist on BOTH services: api calls WeftCoordinator with its forwarded
+// user JWT, weft-admin calls WeftAdmin with the shared token. The Go
+// handlers are shared on the Server struct so the implementations stay
+// in one place.
+service WeftAdmin {
+  // RelaunchShard drives a shard through SUSPENDED → reap → LAUNCHING;
+  // the surviving EBS volume is reattached to a fresh instance on the
+  // current launch template, so the shard comes back with the same
+  // id/window/data on the new binary. The in-place binary-upgrade
+  // primitive for `weft-admin roll-*`.
+  rpc RelaunchShard(RelaunchShardRequest) returns (RelaunchShardResponse);
+
+  // ForceRemoveShard discards a shard stuck in ARCHIVING whose archive can
+  // never complete (host + volume gone, no export recorded): fires
+  // AdminDelete → GONE, dropping the registry entry and the shard_records
+  // row. Refused if the shard still owns an instance or volume unless
+  // force is set. S3 data is left untouched.
+  rpc ForceRemoveShard(ForceRemoveShardRequest) returns (ForceRemoveShardResponse);
+
+  // The SwapShardArchive rpc and its messages are retired (the one-off archive
+  // conversion of 2026-11-02 is done); do not reuse the name.
+
+  // GetShard returns one shard's current row (state + last_heartbeat_at)
+  // — what weft-admin's wait-and-verify loop polls after firing a
+  // relaunch.
+  rpc GetShard(GetShardRequest) returns (GetShardResponse);
+
+  // ListShards returns a bucket's shard rows for `weft-admin roll-cohort`
+  // iteration. Sibling of WeftCoordinator.ListShards (same handler shape;
+  // different auth surface).
+  rpc ListShards(ListShardsRequest) returns (ListShardsResponse);
+
+  // ListBuckets returns every bucket (id/label/tier/target/state) for
+  // `weft-admin roll-all` iteration.
+  rpc ListBuckets(ListBucketsRequest) returns (ListBucketsResponse);
+}
+
+message ShardHeartbeatRequest {
+  string shard_id = 1;
+  string addr = 2;              // gRPC address (ip:port)
+  string instance_id = 3;       // EC2 instance ID
+  string state = 7;             // INGESTING, READ_ONLY
+  int64 row_count = 8;
+  int64 disk_bytes = 9;
+  // binary_sha is the shard binary's compile-time GitSHA (set via -ldflags
+  // by the AMI build). The coordinator persists it on shard_records so
+  // weft-admin can skip rolling a shard that's already on the target SHA.
+  // Empty when an older shard binary is in service — weft-admin treats
+  // empty as "unknown" and rolls it.
+  string binary_sha = 10;
+  // spare is set by a warm-pool instance that holds no volume yet: its
+  // heartbeat only keeps the pool's record of it fresh and never promotes
+  // a shard. shard_id is empty on a spare.
+  bool spare = 11;
+  // field_facts are the shard's field facts the coordinator has not yet
+  // acknowledged (see HeartbeatResponse.field_facts_acked). Absent from an
+  // older shard, which the coordinator reads as "nothing known".
+  repeated FieldFactDelta field_facts = 12;
+  // layout_fingerprint is the fingerprint of the partition layout the shard's
+  // volume records (PartitionLayout.fingerprint). The coordinator refuses a
+  // shard whose layout is not its own build's, so a shape change means new
+  // shards and never reinterprets data. Absent from an older shard, which is
+  // the legacy layout.
+  string layout_fingerprint = 13;
+}
+
+// FieldFactState is what a shard has learned about a locator's values.
+enum FieldFactState {
+  FIELD_FACT_STATE_UNSPECIFIED = 0;
+  // TYPED: every row the shard has seen held a number there, and enough rows
+  // were seen to believe it.
+  FIELD_FACT_STATE_TYPED = 1;
+  // DIRTY: a row did not. Permanent for this shard. Sent only to retract a
+  // TYPED the coordinator may hold; a locator that was never typed is not
+  // reported at all.
+  FIELD_FACT_STATE_DIRTY = 2;
+}
+
+// FieldFactDelta is one transition of a locator's fact. See
+// docs/plans/field-types.md.
+message FieldFactDelta {
+  int64 customer_id = 1;
+  string namespace = 2;
+  string service = 3;
+  string kind = 4;
+  string env = 5;
+  // locator is "$N" for awk field N.
+  string locator = 6;
+  FieldFactState state = 7;
+  // epoch increases with every transition across the shard's facts, so the
+  // coordinator can order them and acknowledge them.
+  uint64 epoch = 8;
+  // table is the source's logical table (logtable.Name of its partition,
+  // namespace, service and kind), the fact's identity with env and locator.
+  // Absent from a shard that predates it, which identifies a source by
+  // customer_id, namespace, service and kind; customer_id is still sent for
+  // a coordinator that does.
+  string table = 9;
+}
+
+message HeartbeatResponse {
+  // field_facts_acked is the highest epoch of field_facts the coordinator
+  // has recorded. The shard resends anything newer, so a lost retraction is
+  // sent again. 0 from a coordinator that predates facts, which makes the
+  // shard resend each beat; that coordinator drops them.
+  uint64 field_facts_acked = 1;
+}
+
+message GetUsageRequest {
+  reserved 1;
+  reserved "customer";
+  string period = 2;  // "2026-04" format; empty = current month
+}
+
+message GetUsageResponse {
+  int64 bytes_ingested = 1;
+  string period_start = 2;  // RFC3339, first of month
+  string period_end = 3;    // RFC3339, first of next month
+}
+
+message CreateTokenRequest {
+  reserved 1;
+  reserved "customer";
+  string label = 2;     // human-readable label (e.g., "vimgym-prod")
+  string namespace = 3; // namespace this token authorizes (e.g., "vimgym")
+  string env = 4;       // optional deployment-environment dimension stamped on every row
+}
+
+message CreateTokenResponse {
+  string token = 1;  // the generated wft_xxx token
+}
+
+message AuthenticateRequest {
+  string token = 1;
+  MetricsConfig metrics_config = 5;  // agent reports its metrics config on connect
+}
+
+message MetricsConfig {
+  bool enabled = 1;
+  string interval = 2;            // e.g., "30s"
+  repeated string collectors = 3; // e.g., ["cpu", "memory", "disk"]
+}
+
+message AuthenticateResponse {
+  string customer = 1;
+  reserved 2, 3, 4;           // was shard_addr, shard_token, expires_at_ns — removed with direct-shard path
+  reserved "shard_addr", "shard_token", "expires_at_ns";
+  string namespace = 5;       // namespace name from the token
+}
+
+message CoordinatorExecuteRequest {
+  string pipeline = 1;
+  int64 time_start_ns = 2;  // 0 = use default
+  int64 time_end_ns = 3;    // 0 = use default
+  bool follow = 4;          // if true, stream stays open for live tail
+  // The invoking user is the authenticated caller, never a field of the
+  // request: a caller that could name its own user could name "" (the system
+  // identity, which reads every namespace) or someone else.
+  reserved 5, 6;
+  reserved "customer", "user_id";
+}
+
+message CoordinatorExecuteResponse {
+  // Streamed in batches as the producer emits. Multiple responses
+  // may be sent over a single Execute call; clients append lines in
+  // arrival order. Replaces the old rows/text duality — every
+  // pipeline shape (log query, compute output, /bin script, follow)
+  // now produces lines uniformly.
+  repeated Line lines = 1;
+
+  // One-time per-user notices to surface in the UI / CLI. Typically
+  // sent on the first response in a stream; empty for subsequent
+  // batches and follow-mode rows.
+  repeated Notice notices = 2;
+
+  // Stderr accumulator (alert output, error messages). Sent on the
+  // response carrying the alert result; empty otherwise. Clients
+  // render in red.
+  string stderr = 3;
+}
+
+// Line is one row of output from an Execute call.
+message Line {
+  string raw      = 1;
+  int64  line_num = 2 [deprecated = true];
+}
+
+// Notice is a one-time message attached to a Query response — the
+// first time anyone on a user account writes to /tmp produces a
+// `tmp_48h_expiry` warning, for example. Frontend renders by `kind`
+// (success → toast, warning → banner, error → modal). Body may be
+// multi-line; CLI prepends as a labeled block.
+message Notice {
+  string key   = 1;  // stable identifier (e.g. "tmp_48h_expiry")
+  string kind  = 2;  // "success" | "warning" | "error"
+  string title = 3;
+  string body  = 4;
+}
+
+message ListServicesRequest {
+  reserved 1;
+  reserved "customer";
+}
+
+message ListServicesResponse {
+  repeated string services = 1;
+}
+
+// Source management messages
+message AddSourceRequest {
+  reserved 5, 6, 7, 8, 9, 11; // schema_yaml, poll_interval, aws_account_id, role_arn, external_id, source_type — poll-mode-only fields, retired with coordinator/poller
+  string service = 1;
+  reserved 2;
+  reserved "customer";
+  string log_group = 3;
+  string region = 4;
+  string namespace = 10;    // owner namespace (must already exist for this customer)
+}
+
+message AddSourceResponse {}
+
+message RemoveSourceRequest {
+  string service = 1;
+  reserved 2;
+  reserved "customer";
+  string namespace = 3;
+}
+
+message RemoveSourceResponse {}
+
+// ---------------------------------------------------------------------------
+// Shard health — HTTP, not gRPC, but defining the message for consistency
+// ---------------------------------------------------------------------------
+
+message ShardHealth {
+  string state = 1;          // LAUNCHING, INGESTING, READ_ONLY, EXPIRING
+  string window_start = 2;   // RFC3339
+  string window_end = 3;     // RFC3339
+  int64 row_count = 4;
+  int64 disk_bytes = 5;
+  string last_write = 6;     // RFC3339
+}
+
+// ---------------------------------------------------------------------------
+// Source onboarding — weftd submits samples and polls for schema config.
+// Customer and namespace are derived from the agent token on the server side.
+// ---------------------------------------------------------------------------
+
+message SubmitSampleRequest {
+  string token = 1;             // agent token (wft_...) for auth
+  string service = 2;               // bare service name within namespace
+  string instance = 3;          // hostname of agent
+  string deployment = 4;        // fleet/scaling-unit (was host_group)
+  repeated string lines = 5;    // sample log lines
+  // partial=true is a progress ping sent while the agent is still
+  // accumulating toward the full sample target; the source stays in
+  // "sampling" state and is not yet configurable. The agent sends one
+  // final submit with partial=false once it has the full sample.
+  bool partial = 6;
+  // sdk_fed marks a source whose lines carry the weft SDK's line header
+  // (docs/plans/sdk-line-header.md). The agent has already stripped the
+  // headers from lines and reads timestamp, level, trace and span values
+  // from them, so a final sample with sdk_fed set needs no extraction wizard:
+  // the coordinator configures the source with a synthesized schema.
+  bool sdk_fed = 7;
+  // sdk_format is the body format the SDK declared in its header, "json" or
+  // "text". Meaningful only when sdk_fed is set; empty reads as "text".
+  string sdk_format = 8;
+}
+
+message SubmitSampleResponse {
+  string status = 1; // "sampling", "pending"
+}
+
+message GetSourceStatusRequest {
+  string token = 1; // agent token (wft_...) for auth
+  string service = 2;   // bare service name within namespace
+  // The polling agent's own version (e.g. "0.28.0") and host. The coordinator
+  // records them per source so the API can tell, before storing a schema, whether
+  // every agent reading it can interpret it. Agents that predate these fields send
+  // neither, which reads as "unknown".
+  string agent_version = 3;
+  string instance = 4;
+}
+
+message GetSourceStatusResponse {
+  string status = 1;       // "unknown", "sampling", "pending", "configured"
+  string schema_yaml = 2;  // populated when status = "configured"
+  // schema_hash is the SHA-256 (hex) of the schema_yaml bytes.
+  // Agents poll GetSourceStatus on a 60s ticker after onboarding;
+  // an unchanged hash means no parser-rebuild is needed. Empty for
+  // status != "configured".
+  string schema_hash = 3;
+  // resample_requested is set when a user has asked for a fresh sample
+  // of an already-configured source. The agent re-runs the sampler
+  // concurrently with its tailer (ingestion is not interrupted) and
+  // resubmits via SubmitSample; the server clears the flag on the
+  // final (non-partial) submit.
+  bool resample_requested = 4;
+  // sample_collected / sample_target report accumulation progress while
+  // status == "sampling", so callers can surface
+  // "<source> hasn't emitted enough lines to sample yet (N/50)".
+  int32 sample_collected = 5;
+  int32 sample_target = 6;
+}
+
+// ── Admin RPCs ──────────────────────────────────────────────────────
+
+message ListShardsRequest {
+  int64 bucket_id = 1;
+}
+
+// ShardInfo mirrors the persisted shard_records columns the admin UI
+// shows. Timestamps are RFC3339 strings so the API can pass them through
+// to the existing AdminShard JSON contract without reformatting.
+message ShardInfo {
+  string id = 1;
+  string window_start = 2;
+  string window_end = 3;
+  string state = 4;
+  string addr = 5;
+  string instance_id = 6;
+  string parquet_path = 7;
+  string tier = 8;
+  int64 row_count = 9;
+  string created_at = 10;
+  int64 bucket_id = 11;
+  // last_heartbeat_at is what weft-admin's wait-and-verify polls after a
+  // RelaunchShard: the row briefly reads INGESTING mid-transition (with
+  // the pre-relaunch heartbeat), so the freshness check tells the poll
+  // whether we're looking at the POST-relaunch shard or the old row.
+  // RFC3339Nano, empty when never observed.
+  string last_heartbeat_at = 12;
+  // binary_sha is the shard binary's compile-time GitSHA reported on its
+  // heartbeat. weft-admin uses it to skip rolling shards already on the
+  // target binary; the post-roll wait-and-verify also confirms the new
+  // shard reports the expected SHA before marking the roll successful.
+  string binary_sha = 13;
+}
+
+message ListShardsResponse {
+  repeated ShardInfo shards = 1;
+}
+
+message ForceArchiveShardRequest {
+  string shard_id = 1;
+}
+
+message ForceArchiveShardResponse {}
+
+message DeleteArchivedShardRequest {
+  string shard_id = 1;
+  bool force = 2;
+}
+
+message DeleteArchivedShardResponse {}
+
+message RelaunchShardRequest {
+  string shard_id = 1;
+}
+
+message RelaunchShardResponse {}
+
+message ForceRemoveShardRequest {
+  string shard_id = 1;
+  bool force = 2;
+}
+
+message ForceRemoveShardResponse {}
+
+message GetShardRequest {
+  string shard_id = 1;
+}
+
+message GetShardResponse {
+  ShardInfo shard = 1;
+}
+
+message ListBucketsRequest {}
+
+message BucketInfo {
+  int64 id = 1;
+  string label = 2;
+  int32 target_ingesting_count = 3;
+  string tier = 4;
+  string state = 5;
+}
+
+message ListBucketsResponse {
+  repeated BucketInfo buckets = 1;
+}

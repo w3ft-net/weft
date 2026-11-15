@@ -1,0 +1,6 @@
+Package: weftd
+Version: {{VERSION}}
+Architecture: amd64
+Maintainer: Kevlar <ops@kevlarcon.com>
+Description: weftd log agent
+ Streams application logs to the weft coordinator via gRPC.
