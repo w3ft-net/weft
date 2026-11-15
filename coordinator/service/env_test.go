@@ -74,6 +74,12 @@ func (e *svcEnv) coord(cfg coordinator.CoordinatorConfig) *coordinator.Coordinat
 	if cfg.Authz == nil {
 		cfg.Authz = allowAll{}
 	}
+	if cfg.Scoper == nil {
+		cfg.Scoper = defaults.OpenScoper{}
+	}
+	if cfg.Orgs == nil {
+		cfg.Orgs = defaults.OpenOrgs{}
+	}
 	return coordinator.NewCoordinator(cfg)
 }
 

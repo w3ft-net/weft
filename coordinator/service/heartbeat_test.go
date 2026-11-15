@@ -209,9 +209,16 @@ func TestHeartbeat_UnknownInRegistry_LoadFromStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bucket := shardstore.Bucket{Label: "default", TargetIngestingCount: 1}
-	if err := env.st.Shards.SaveBucket(&bucket); err != nil {
+	// The store seeds the default bucket; use it rather than inserting a second.
+	bucket, ok, err := env.st.Shards.GetBucketByLabel("default")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !ok {
+		bucket = shardstore.Bucket{Label: "default", TargetIngestingCount: 1}
+		if err := env.st.Shards.SaveBucket(&bucket); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := env.st.Shards.SaveShard(&logdb.ShardRow{
 		ID:             shardID,

@@ -50,6 +50,7 @@ func localSubject(t *testing.T) coordtest.Subject {
 				}
 			}
 			cfg.Shards = st.Shards
+			cfg.Orgs, cfg.Scoper, cfg.Authz = defaults.OpenOrgs{}, defaults.OpenScoper{}, defaults.OpenAuthorizer{}
 			return coordinator.NewCoordinator(cfg)
 		},
 		ActorOf: func(user string) tenancy.Actor { return defaults.OpenActor{User: user} },
