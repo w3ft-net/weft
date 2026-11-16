@@ -37,7 +37,7 @@ func TestPerKeyShard_OverTheWire(t *testing.T) {
 	if _, err := c.Ingest(ctx, &pb.IngestRequest{Rows: rows}); err != nil {
 		t.Fatal(err)
 	}
-	if !srv.Shard().PerKey() {
+	if !srv.Shard().(*shard.DuckDBShard).PerKey() {
 		t.Fatal("the shard is not per-key")
 	}
 

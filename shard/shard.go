@@ -7,31 +7,42 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	weftsdk "github.com/w3ft-net/weft-go"
+
 	duckdb "github.com/duckdb/duckdb-go/v2"
 	"github.com/google/uuid"
 
+	"github.com/w3ft-net/weft/backends/logs/live"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shape"
 )
 
-// Batch is rows bound for one shard that all belong to one partition.
-// PartitionValues are the partition's values, positional per the shard's
-// layout. nil means the batch names none, and the legacy layout then reads each
-// row's customer_id.
-type Batch struct {
-	Rows            []*pb.LogRow
-	PartitionValues []string
-}
+// The types the live-store contract defines (backends/logs/live), under the names
+// this package has always used.
+type (
+	Batch              = live.Batch
+	IngestRecorder     = live.IngestRecorder
+	DiskUsage          = live.DiskUsage
+	QueryStatsSnapshot = live.QueryStatsSnapshot
+	PartitionStat      = live.PartitionStat
+	FactState          = live.FactState
+	FactKey            = live.FactKey
+	FieldFact          = live.FieldFact
+)
+
+const (
+	FactUnknown = live.FactUnknown
+	FactTyped   = live.FactTyped
+	FactDirty   = live.FactDirty
+)
 
 // RowSink receives result rows streamed from a shard query. compute.Job satisfies this.
 type RowSink interface {
@@ -89,52 +100,6 @@ type Shard interface {
 	Close() error
 }
 
-// PartitionStat summarizes one partition's rows within an archived shard: the
-// timestamp span and row count of the rows that share one combination of
-// partition column values. Captured during Archive (while the DuckDB handle is
-// local on the shard node), recorded in the export manifest, and handed to the
-// deployment's retention feature, if it has one, so it can classify archived
-// parquet without re-scanning S3.
-type PartitionStat struct {
-	// PartitionValues are the group's partition column values as text, in
-	// layout order. A missing value counts as 0 (or '' for text), as the
-	// legacy query always did.
-	PartitionValues []string `json:"partition_values"`
-	// LegacyCustomerID is read from a stat written before partition values,
-	// which named the legacy layout's customer_id alone: an export manifest in S3
-	// or a compactor result from an older build. It is never written.
-	LegacyCustomerID int64     `json:"customer_id,omitempty"`
-	MinTs            time.Time `json:"min_ts"`
-	MaxTs            time.Time `json:"max_ts"`
-	RowCount         int64     `json:"row_count"`
-}
-
-// normalize gives a stat from a shard that predates partition values, which
-// named the legacy layout's customer_id alone, the values a current one carries.
-// A stat with neither is left as it is: it is what a layout with no partition
-// columns produces, and it is not guessed to be customer 0. (An old shard's rows
-// with no customer were counted under customer 0 and read back as no values; a
-// deployment whose layout has a column treats a stat with no values as the group
-// of missing values.)
-func (s *PartitionStat) normalize() {
-	if len(s.PartitionValues) == 0 && s.LegacyCustomerID != 0 {
-		s.PartitionValues = []string{strconv.FormatInt(s.LegacyCustomerID, 10)}
-	}
-}
-
-// UnmarshalJSON reads a stat written by this build or by an older one,
-// which carried customer_id and no partition_values.
-func (s *PartitionStat) UnmarshalJSON(b []byte) error {
-	type plain PartitionStat
-	var p plain
-	if err := json.Unmarshal(b, &p); err != nil {
-		return err
-	}
-	*s = PartitionStat(p)
-	s.normalize()
-	return nil
-}
-
 // PartitionStatsToProto / PartitionStatsFromProto bridge the Go struct and
 // the ArchiveResponse wire form (message CustomerArchiveStat, whose name is
 // kept). Both return nil for an empty slice so the proto field stays absent
@@ -171,23 +136,11 @@ func PartitionStatsFromProto(ps []*pb.CustomerArchiveStat) []PartitionStat {
 	return out
 }
 
-// IngestRecorder is the surface a Shard.Ingest implementation uses
-// to report its own outcome back to the failure-count / suspension
-// tracker (the provisioner). The Shard formats the error string from
-// (count, threshold) so the caller only needs one log.Printf to
-// surface the full state transition.
-//
-// Nil-safe: callers that don't care about routing failover (tests,
-// in-process server paths) pass nil and Ingest behaves like the old
-// bare-error form.
-type IngestRecorder interface {
-	// RecordIngestFailure increments the consecutive-failure counter
-	// for shardID and returns the new count plus the threshold at
-	// which the recorder considers the shard suspended.
-	RecordIngestFailure(shardID string) (count, threshold int)
-	// ResetIngestFailures clears the counter on a successful ingest.
-	ResetIngestFailures(shardID string)
-}
+// DuckDBShard is the live store of the open build.
+var (
+	_ live.Store           = (*DuckDBShard)(nil)
+	_ live.FieldFactSource = (*DuckDBShard)(nil)
+)
 
 // DuckDBShard is an in-process shard backed by a local DuckDB database.
 type DuckDBShard struct {
@@ -250,15 +203,6 @@ func (q *queryStats) record(d time.Duration, rows int, err error) {
 		q.errs++
 	}
 	q.mu.Unlock()
-}
-
-// QueryStatsSnapshot is one telemetry interval's query-latency aggregate.
-type QueryStatsSnapshot struct {
-	Count  int64   // queries executed in the interval
-	Errors int64   // of which failed
-	Rows   int64   // total rows returned
-	MeanMs float64 // mean execution time (ms)
-	MaxMs  float64 // slowest single query (ms) — the spill-sensitive tail
 }
 
 func (q *queryStats) snapshot() QueryStatsSnapshot {
@@ -911,7 +855,7 @@ func (s *DuckDBShard) DiskUsage() DiskUsage {
 		return u
 	}
 	if fi, err := os.Stat(s.dbPath); err == nil {
-		u.DuckDBBytes = fi.Size()
+		u.DataBytes = fi.Size()
 	}
 	// Writes land in the WAL first and only fold into the .duckdb file at
 	// checkpoint, so between checkpoints the WAL holds real, un-reflected bytes
@@ -922,17 +866,6 @@ func (s *DuckDBShard) DiskUsage() DiskUsage {
 	u.SpillTmpBytes = dirSize(s.dbPath + ".tmp")
 	return u
 }
-
-// DiskUsage is a shard's data-volume footprint. TotalBytes() is what to compare
-// against the volume size for the ≤50%-co-located-spill rule.
-type DiskUsage struct {
-	DuckDBBytes   int64 // size of the .duckdb file (checkpointed data)
-	WALBytes      int64 // size of <db>.wal (writes not yet folded into the main file)
-	SpillTmpBytes int64 // total bytes under <db>.tmp (DuckDB's spill directory)
-}
-
-// TotalBytes is the combined .duckdb + WAL + spill footprint on the data volume.
-func (u DiskUsage) TotalBytes() int64 { return u.DuckDBBytes + u.WALBytes + u.SpillTmpBytes }
 
 // dirSize sums the sizes of all regular files under root, returning 0 when root
 // is absent — the common case, since DuckDB only materializes `<db>.tmp` once a

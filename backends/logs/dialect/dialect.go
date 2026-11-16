@@ -87,6 +87,9 @@ const (
 
 // Dialect spells the SQL that differs between engines.
 type Dialect interface {
+	// Name is the name a deployment's configuration gives the dialect, and a
+	// stored plan records it by.
+	Name() string
 	// Supports reports whether the engine has f.
 	Supports(f Feature) bool
 
@@ -201,6 +204,8 @@ type Dialect interface {
 var DuckDB Dialect = duckDB{}
 
 type duckDB struct{}
+
+func (duckDB) Name() string { return "duckdb" }
 
 func (duckDB) Supports(Feature) bool { return true }
 

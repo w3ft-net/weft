@@ -1,10 +1,10 @@
 package planner
 
 import (
+	"reflect"
 	"strconv"
 
 	"github.com/graybeardcorp/warp/pkg/awk"
-	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // aggOp is what a keyed aggregate does with the rows of each key.
@@ -24,7 +24,7 @@ const (
 // key is the SQL for KEY; field is N of the `$N` a sum, max or min reads.
 type keyedAgg struct {
 	op    aggOp
-	key   string
+	key   sqlExpr
 	field int
 }
 
@@ -101,8 +101,7 @@ func awkKeyed(prog *awk.Program) (keyedAgg, bool) {
 	if !ok {
 		return keyedAgg{}, false
 	}
-	// Until aggregates move behind the dialect.
-	return keyedAgg{op: op, key: render(keyExpr, dialect.DuckDB), field: field}, true
+	return keyedAgg{op: op, key: keyExpr, field: field}, true
 }
 
 // keyedAction is whether action is one of the aggregating statements, which
@@ -167,7 +166,7 @@ func extremeAction(st *awk.IfStmt) (array string, key awk.Expr, field int, op ag
 	// The key is read twice; both must be the same SQL.
 	a, aok := awkPrintArgToSQL(best.Index)
 	b, bok := awkPrintArgToSQL(target.Index)
-	if !aok || !bok || render(a, dialect.DuckDB) != render(b, dialect.DuckDB) {
+	if !aok || !bok || !reflect.DeepEqual(a, b) {
 		return "", nil, 0, 0, false
 	}
 	return best.Name, best.Index, n, op, true

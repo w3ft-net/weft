@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/w3ft-net/weft/backends/logs/live"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shard"
 )
@@ -279,12 +280,14 @@ func (s *Server) Pause(ctx context.Context, req *pb.PauseRequest) (*pb.PauseResp
 		if err := inSpan(ctx, "pause.checkpoint", func(ctx context.Context) error {
 			// Ingest has stopped: let the classifier finish, so the facts
 			// it kept on the volume are current when the successor opens it.
-			ds.FlushFieldFacts()
+			if f, ok := ds.(live.FieldFactSource); ok {
+				f.FlushFieldFacts()
+			}
 			if err := ds.Checkpoint(ctx); err != nil {
 				return fmt.Errorf("checkpoint: %w", err)
 			}
 			if err := ds.Close(); err != nil {
-				return fmt.Errorf("close duckdb: %w", err)
+				return fmt.Errorf("close store: %w", err)
 			}
 			return nil
 		}); err != nil {

@@ -48,11 +48,11 @@ func TestDiskUsage_CountsFileAndWAL(t *testing.T) {
 	if u.TotalBytes() <= 0 {
 		t.Fatalf("post-ingest DiskUsage.TotalBytes: want > 0, got %+v", u)
 	}
-	// The main file should exist on disk and match the reported DuckDBBytes.
+	// The main file should exist on disk and match the reported DataBytes.
 	if fi, serr := os.Stat(path); serr != nil {
 		t.Fatalf("stat db: %v", serr)
-	} else if fi.Size() != u.DuckDBBytes {
-		t.Fatalf("DuckDBBytes %d != stat size %d", u.DuckDBBytes, fi.Size())
+	} else if fi.Size() != u.DataBytes {
+		t.Fatalf("DataBytes %d != stat size %d", u.DataBytes, fi.Size())
 	}
 }
 

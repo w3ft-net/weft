@@ -22,9 +22,12 @@ const (
 
 // TraceStatsQuery is the second step of the trace list.
 type TraceStatsQuery struct {
-	SQL       string
-	Args      []any // the placeholders before the trace IDs
-	Aggregate string
+	SQL string
+	// ArchiveSQL is SQL spelled for the archive tier when it is written in a
+	// different dialect than the live stores; empty otherwise.
+	ArchiveSQL string
+	Args       []any // the placeholders before the trace IDs
+	Aggregate  string
 }
 
 // WithIDs is the step's args for these trace IDs. The SQL has room for

@@ -10,6 +10,7 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
+	"github.com/w3ft-net/weft/backends/logs/live"
 	weftcfg "github.com/w3ft-net/weft/config"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shape"
@@ -30,7 +31,7 @@ type Server struct {
 	pb.UnimplementedShardQueryServer
 
 	mu             sync.RWMutex
-	shard          *shard.DuckDBShard
+	shard          live.Store
 	id             string
 	apps           []string
 	heartbeatToken string // per-shard bearer for Heartbeat RPC; populated by Configure or loaded from shard.json
@@ -132,14 +133,14 @@ func (s *Server) Identity() string {
 
 // Shard returns the underlying DuckDBShard, or nil if the server hasn't
 // been configured yet. The heartbeat loop uses this to report row count.
-func (s *Server) Shard() *shard.DuckDBShard {
+func (s *Server) Shard() live.Store {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.shard
 }
 
 // getShard returns the shard, or an error if not yet configured.
-func (s *Server) getShard() (*shard.DuckDBShard, error) {
+func (s *Server) getShard() (live.Store, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.shard == nil {

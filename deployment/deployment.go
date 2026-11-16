@@ -23,6 +23,7 @@ import (
 	"github.com/w3ft-net/weft/identity"
 	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/notifycfg"
+	"github.com/w3ft-net/weft/planner"
 )
 
 // Deployment is everything the api and the coordinator read the same way.
@@ -44,6 +45,12 @@ type Deployment struct {
 	// the core's. The api checks /etc/notify.yaml against them when it is
 	// saved; the coordinator sends.
 	AlertTargets []alerting.AlertTarget
+	// Dialects are the SQL dialects of the deployment's live stores and of its
+	// archive, which the api and the coordinator plan queries in. A tier left
+	// nil is DuckDB, so a deployment on the open build's stores says nothing.
+	// Each must be the dialect of what the shard nodes run and the archive
+	// reads: a plan is written for one.
+	Dialects planner.Dialects
 }
 
 // Authn is the one credential's two faces.

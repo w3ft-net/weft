@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/w3ft-net/weft/mounts"
 	"io"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/w3ft-net/weft/mounts"
 
 	"github.com/w3ft-net/weft/backends/notice"
 
@@ -721,6 +722,13 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *cron.Watch, tr 
 		c.loweredCache.Delete(watch.ID)
 		return nil, false
 	}
+	// The baked SQL is written for the stores it was lowered under.
+	if !lp.FitsDialects() {
+		weftsdk.Infof(ctx, "watch %d: lowered_plan is written for other stores (live %q, archive %q) than this deployment's (%q, %q) — recompiling",
+			watch.ID, lp.LiveDialect, lp.ArchiveDialect, planner.LiveDialect(), planner.ArchiveDialect())
+		c.loweredCache.Delete(watch.ID)
+		return nil, false
+	}
 	// Check every recorded /bin dep against the current source hash.
 	// A drift (someone edited /bin/foo) invalidates the lowered plan
 	// for every watch that referenced it. The slow path re-lowers.
@@ -779,6 +787,7 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 			argStrs[i] = fmt.Sprintf("%v", a)
 		}
 	}
+	applyArchiveSQL(lp.ArchiveDirectShardSQL, argStrs, descs)
 	stream, err := c.executeCompute(ctx, loweredOwner(lp), limits, &pb.ExecuteQueryRequest{
 		Sql:               lp.DirectShardSQL,
 		FieldSql:          lp.FieldSQL,
@@ -1208,6 +1217,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	} else if n := c.applyTypedVariant(plan, argStrs, descs); n > 0 {
 		logQuery(ctx, "query: %d of %d shards run the typed variant (%s)", n, len(descs), strings.Join(plan.Typed.Requires, ","))
 	}
+	applyArchiveSQL(plan.ArchiveDirectShardSQL, argStrs, descs)
 	stream, err := c.executeCompute(ctx, owner, limits, &pb.ExecuteQueryRequest{
 		Sql:               directSQL,
 		FieldSql:          run.FieldSQL,
@@ -1237,6 +1247,22 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 		return nil, err
 	}
 	return &ExecuteResult{Stream: stream}, nil
+}
+
+// applyArchiveSQL sends the archived shards the plan spelled for the archive
+// tier: sql, when the archive is written in a different dialect than the live
+// stores (empty otherwise, which leaves every shard on the request's SQL). An
+// archived shard has no field facts, so it takes neither a typed variant nor the
+// field form.
+func applyArchiveSQL(sql string, args []string, descs []*pb.ShardDescriptor) {
+	if sql == "" {
+		return
+	}
+	for _, d := range descs {
+		if d.ParquetPath != "" && d.Sql == "" {
+			d.Sql, d.Args, d.FieldSql = sql, args, ""
+		}
+	}
 }
 
 // exactPlan is the typed plan's exact form if every shard the query reads has
@@ -1299,6 +1325,7 @@ func queryArgStrings(ctx context.Context, args []any) []string {
 // then those traces' summaries from every shard, since a trace's lines sit on
 // whichever shards its services write to and the summary covers all of them.
 func (c *Coordinator) executeTraceList(ctx context.Context, plan *planner.QueryPlan, argStrs []string, descs []*pb.ShardDescriptor, tr TimeRange, owner shape.Added, limits identity.Limits) (*ExecuteResult, error) {
+	applyArchiveSQL(plan.ArchiveDirectShardSQL, argStrs, descs)
 	idStream, err := c.executeCompute(ctx, owner, limits, &pb.ExecuteQueryRequest{
 		Sql:       plan.DirectShardSQL,
 		Args:      argStrs,
@@ -1338,9 +1365,11 @@ func (c *Coordinator) executeTraceList(ctx context.Context, plan *planner.QueryP
 		return nil, err
 	}
 	logQuery(ctx, "query: trace list stats: traces=%d shards=%d sql=%s", len(ids), len(all), plan.TraceStats.SQL)
+	statsArgs := queryArgStrings(ctx, plan.TraceStats.WithIDs(ids))
+	applyArchiveSQL(plan.TraceStats.ArchiveSQL, statsArgs, all)
 	stream, err := c.executeCompute(ctx, owner, limits, &pb.ExecuteQueryRequest{
 		Sql:       plan.TraceStats.SQL,
-		Args:      queryArgStrings(ctx, plan.TraceStats.WithIDs(ids)),
+		Args:      statsArgs,
 		Shards:    all,
 		Stages:    plan.ComputeStages,
 		MergeKey:  plan.ShardOrderBy,

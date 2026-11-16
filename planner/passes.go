@@ -36,7 +36,7 @@ type compiled struct {
 	// stages, if any; aggregated is those stages' nodes. aggregate is a
 	// trace or span source's own aggregate (spans.go).
 	group    *GroupBySpec
-	groupKey string    // the SQL an awk aggregate groups by, in place of raw
+	groupKey sqlExpr   // what an awk aggregate groups by, in place of raw
 	groupAgg *keyedAgg // the awk aggregate the group is, if it is one
 	// aggNotes is what Explain says of an aggregated node that isn't itself
 	// the GROUP BY.
@@ -384,7 +384,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 	var reverse bool
 	var ordered bool
 	var limit int
-	var key string
+	var key sqlExpr
 	var agg *keyedAgg
 	var order *ValueOrder
 	var first node = c.aboveShard(c.compute[0])
@@ -464,7 +464,7 @@ func (c *compiled) fuseAggregate(limited bool) {
 	case c.source.follow:
 		c.logf(pass, "skipped %s: follow runs the stages on live rows", label)
 		return
-	case key != "" && c.selected != nil:
+	case key != nil && c.selected != nil:
 		c.logf(pass, "skipped %s: the key reads the text %s projected, not the row", label, c.label(c.selected))
 		return
 	case c.source.cmd == "trace" || c.source.cmd == "trace_spans" || c.source.cmd == "trace_list":

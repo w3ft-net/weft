@@ -18,6 +18,7 @@ import (
 	"github.com/w3ft-net/weft/deployment"
 	"github.com/w3ft-net/weft/ingest"
 	ingsyslog "github.com/w3ft-net/weft/ingest/syslog"
+	"github.com/w3ft-net/weft/planner"
 	"github.com/w3ft-net/weft/sources"
 )
 
@@ -53,6 +54,7 @@ func Run(fl *Flags, dep *deployment.Deployment, own *Own) {
 	if err := validate(dep); err != nil {
 		log.Fatalf("api: %v", err)
 	}
+	planner.SetDialects(dep.Dialects)
 	if own == nil {
 		own = &Own{}
 	}

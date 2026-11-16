@@ -106,3 +106,48 @@ func TestDuckDB_RenderSpans(t *testing.T) {
 		}
 	}
 }
+
+type noFeature struct {
+	dialect.Dialect
+	name string
+	no   dialect.Feature
+}
+
+func (n noFeature) Name() string                    { return n.name }
+func (n noFeature) Supports(f dialect.Feature) bool { return f != n.no }
+
+func TestRegistry(t *testing.T) {
+	if d, err := dialect.Lookup("duckdb"); err != nil || d.Name() != "duckdb" {
+		t.Fatalf("duckdb: %v, %v", d, err)
+	}
+	if _, err := dialect.Lookup("nope"); err == nil || !strings.Contains(err.Error(), "duckdb") {
+		t.Errorf("an unknown name: %v", err)
+	}
+	if dialect.Register(dialect.DuckDB) == nil {
+		t.Error("a name registered twice")
+	}
+	if err := dialect.Register(noFeature{dialect.DuckDB, "no-regex", dialect.Regex}); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := dialect.Lookup("no-regex"); err != nil || d.Supports(dialect.Regex) {
+		t.Errorf("no-regex: %v, %v", d, err)
+	}
+}
+
+func TestMeet_HasOnlyWhatBothHave_AndSpellsAsTheFirst(t *testing.T) {
+	a := dialect.DuckDB
+	b := noFeature{dialect.DuckDB, "b", dialect.Regex}
+	m := dialect.Meet(a, b)
+	if m.Supports(dialect.Regex) {
+		t.Error("the meet has what only one dialect has")
+	}
+	if !m.Supports(dialect.JSON) {
+		t.Error("the meet lost what both have")
+	}
+	if m.Name() != "duckdb" || m.StringLit("x") != "'x'" {
+		t.Errorf("the meet is not spelled by the first: %s", m.Name())
+	}
+	if dialect.Meet(a, a) != a {
+		t.Error("the meet of a dialect with itself is not itself")
+	}
+}

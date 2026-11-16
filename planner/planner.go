@@ -127,6 +127,10 @@ type QueryPlan struct {
 	// RPC (no compute stages, backward-compat tests) see the old
 	// behavior in ShardSQL.
 	DirectShardSQL string
+	// ArchiveDirectShardSQL is DirectShardSQL spelled for the archive tier, when
+	// that is written in a different dialect than the live stores; empty
+	// otherwise. It is the same plan: the same args and compute stages.
+	ArchiveDirectShardSQL string
 
 	// RedirectTarget is the destination of a trailing `> /tmp/...`
 	// (or other shellfs namespace) redirect on the source-query
@@ -219,8 +223,15 @@ var ErrNotPlannable = errors.New("not a plannable log query")
 // gets. A trace that names no namespace is restricted to scope, because its
 // rows, counts and per-trace service lists come only from the SQL.
 func Plan(pipeline string, scope coords.Set, cwd string, start, end time.Time) (*QueryPlan, error) {
-	plan, _, err := compile(dialect.DuckDB, pipeline, scope, cwd, start, end)
-	return plan, err
+	ds := configuredDialects()
+	plan, _, err := compile(ds.liveSpelling(), pipeline, scope, cwd, start, end)
+	if err != nil || !ds.split() {
+		return plan, err
+	}
+	if err := archivePlan(plan, ds, pipeline, scope, cwd, start, end); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 // ErrNoSpans is the refusal of a trace or span query on a store that can't run
@@ -428,8 +439,8 @@ func compileFor(d dialect.Dialect, pipeline string, tn group, cwd string, start,
 
 	orderDesc := sql.orderBy == "ts DESC"
 	c.fuseAggregate(sql.limit > 0 || sql.offset > 0)
-	if c.groupKey != "" {
-		sql.setSelect(c.groupKey)
+	if c.groupKey != nil {
+		sql.setSelect(render(c.groupKey, d))
 	}
 	if c.group == nil {
 		c.projectFields(sql.limit > 0 || sql.offset > 0)

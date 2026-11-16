@@ -11,6 +11,7 @@ import (
 	"time"
 
 	weftsdk "github.com/w3ft-net/weft-go"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 	coords "github.com/w3ft-net/weft/shape"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
@@ -122,6 +123,30 @@ type LoweredPlan struct {
 	// neither and sends its DirectShardSQL, which still works.
 	FieldSQL  string     `json:"field_sql,omitempty"`
 	FieldSpec *FieldSpec `json:"field_spec,omitempty"`
+	// ArchiveDirectShardSQL is DirectShardSQL spelled for the archive tier when
+	// it is written in a different dialect than the live stores (QueryPlan).
+	ArchiveDirectShardSQL string `json:"archive_direct_shard_sql,omitempty"`
+	// LiveDialect and ArchiveDialect name the dialects the SQL is written in. A
+	// plan stored before they were recorded was written for DuckDB.
+	LiveDialect    string `json:"live_dialect,omitempty"`
+	ArchiveDialect string `json:"archive_dialect,omitempty"`
+}
+
+// FitsDialects reports whether the plan's SQL is written in the dialects this
+// process plans for. One that isn't was lowered under another configuration of
+// the stores, and runs only after it is planned again.
+func (lp *LoweredPlan) FitsDialects() bool {
+	return storedDialect(LiveDialect()) == lp.LiveDialect && storedDialect(ArchiveDialect()) == lp.ArchiveDialect
+}
+
+// storedDialect is a dialect's name as a stored plan records it: a plan that
+// records none was written for DuckDB, so DuckDB's is left out, and the plans
+// stored before the names existed read the same as the ones stored after.
+func storedDialect(name string) string {
+	if name == dialect.DuckDB.Name() {
+		return ""
+	}
+	return name
 }
 
 // BinDep is one /bin/ script the lowered pipeline inlines. Hash is
@@ -247,6 +272,10 @@ func Lower(pipeline string, scope coords.Set, resolveBin BinResolver) (*LoweredP
 		PlannerVersion:    PlannerVersion,
 		FieldSQL:          plan.FieldSQL,
 		FieldSpec:         plan.FieldSpec,
+
+		ArchiveDirectShardSQL: plan.ArchiveDirectShardSQL,
+		LiveDialect:           storedDialect(LiveDialect()),
+		ArchiveDialect:        storedDialect(ArchiveDialect()),
 	}, nil
 }
 

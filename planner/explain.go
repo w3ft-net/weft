@@ -6,8 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // Explain runs the planner on a pipeline and returns a human-readable
@@ -21,7 +19,7 @@ import (
 // The shard SQL is split at keyword boundaries, and the bound args are
 // listed in render order so readers can correlate placeholders to args.
 func Explain(pipeline string) string {
-	plan, c, err := compileBare(dialect.DuckDB, pipeline, "", time.Time{}, time.Time{})
+	plan, c, err := compileBare(configuredDialects().liveSpelling(), pipeline, "", time.Time{}, time.Time{})
 	if err != nil {
 		return fmt.Sprintf("Error: %v\n", err)
 	}
@@ -95,12 +93,12 @@ func (c *compiled) explainNodes(b *strings.Builder) {
 		switch n := n.(type) {
 		case *filterNode:
 			if n.exact {
-				l.desc = "exact      " + render(n.pred, dialect.DuckDB)
+				l.desc = "exact      " + render(n.pred, c.d)
 				if n.hoisted {
 					l.note = "on each line"
 				}
 			} else {
-				l.desc = "prefilter  " + render(n.pred, dialect.DuckDB)
+				l.desc = "prefilter  " + render(n.pred, c.d)
 				l.note = "not exact: " + n.why.String()
 			}
 		case *limitNode:
@@ -116,7 +114,7 @@ func (c *compiled) explainNodes(b *strings.Builder) {
 				l.note = note
 			}
 		case *projectNode:
-			l.desc = render(n.expr, dialect.DuckDB)
+			l.desc = render(n.expr, c.d)
 			if n == c.selected {
 				l.note = "the SELECT"
 			}

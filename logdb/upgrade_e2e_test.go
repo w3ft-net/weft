@@ -348,7 +348,7 @@ func TestUpgradeEndToEnd_ARollUnderLoadLosesNoRowAndFailsNoQuery(t *testing.T) {
 	if sh.Addr != standbyAddr || sh.InstanceID != "i-spare" {
 		t.Fatalf("shard on %s at %s after the roll, want i-spare at %s", sh.InstanceID, sh.Addr, standbyAddr)
 	}
-	ds := standbySrv.Shard()
+	ds, _ := standbySrv.Shard().(*shard.DuckDBShard)
 	if ds == nil {
 		t.Fatal("the spare never opened the shard")
 	}

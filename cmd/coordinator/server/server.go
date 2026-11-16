@@ -32,6 +32,7 @@ import (
 	"github.com/w3ft-net/weft/identity"
 	"github.com/w3ft-net/weft/ingest"
 	"github.com/w3ft-net/weft/logdb"
+	"github.com/w3ft-net/weft/planner"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 )
 
@@ -141,6 +142,7 @@ func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 	if err := validate(dep, own); err != nil {
 		log.Fatalf("coordinator: %v", err)
 	}
+	planner.SetDialects(dep.Dialects)
 	port, healthPort, localAddr, internalAddr := &fl.Port, &fl.HealthPort, &fl.LocalAddr, &fl.InternalAddr
 	adminPort, debugPort, computeAddr := &fl.AdminPort, &fl.DebugPort, &fl.ComputeAddr
 	redisAddr, redisTLS, awsRegion := &fl.RedisAddr, &fl.RedisTLS, &fl.AWSRegion

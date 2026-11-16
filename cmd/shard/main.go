@@ -244,7 +244,7 @@ func runShardStats(ctx context.Context, wc *weftsdk.Client, srv *shardsvc.Server
 			"ts":       time.Now().UTC().Format(time.RFC3339Nano),
 			"shard_id": srv.Identity(),
 			// disk footprint (instantaneous)
-			"duckdb_bytes":    u.DuckDBBytes,
+			"duckdb_bytes":    u.DataBytes,
 			"wal_bytes":       u.WALBytes,
 			"spill_tmp_bytes": u.SpillTmpBytes,
 			"total_bytes":     u.TotalBytes(),

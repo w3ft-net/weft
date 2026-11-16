@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // Placement is where a stage runs, in the terms a user sees: as part of
@@ -76,7 +74,7 @@ func Analyze(pipeline, cwd string, resolveBin BinResolver) (*Analysis, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, c, err := compileBare(dialect.DuckDB, pipeline, cwd, time.Time{}, time.Time{})
+	_, c, err := compileBare(configuredDialects().liveSpelling(), pipeline, cwd, time.Time{}, time.Time{})
 	if err != nil {
 		return nil, err
 	}

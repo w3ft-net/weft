@@ -27,10 +27,11 @@ func TestServer_ConfigureOpensPerKeyWhenAsked(t *testing.T) {
 		if _, err := srv.Configure(context.Background(), &pb.ConfigureRequest{ShardId: "opt-test"}); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
-		ds, err := srv.getShard()
+		got, err := srv.getShard()
 		if err != nil {
 			t.Fatal(err)
 		}
+		ds := got.(*shard.DuckDBShard)
 		if ds.PerKey() != c.want {
 			t.Errorf("%s: PerKey = %v, want %v", c.name, ds.PerKey(), c.want)
 		}
@@ -50,7 +51,7 @@ func TestServer_ReopenFromIdentityOpensPerKeyWhenAsked(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer srv.Shard().Close()
-	if !srv.Shard().PerKey() {
+	if !srv.Shard().(*shard.DuckDBShard).PerKey() {
 		t.Error("an empty database reopened from its identity is not per-key")
 	}
 }
@@ -66,7 +67,7 @@ func TestServer_OpenFromDiskOpensPerKeyWhenAsked(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer srv.Shard().Close()
-	if !srv.Shard().PerKey() {
+	if !srv.Shard().(*shard.DuckDBShard).PerKey() {
 		t.Error("a spare's database is not per-key")
 	}
 }

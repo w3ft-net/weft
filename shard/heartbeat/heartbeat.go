@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	weftsdk "github.com/w3ft-net/weft-go"
+	"github.com/w3ft-net/weft/backends/logs/live"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shard"
 	shardsvc "github.com/w3ft-net/weft/shard/service"
@@ -52,7 +53,9 @@ func For(srv *shardsvc.Server, addr, instanceID, binarySHA string) (*pb.ShardHea
 	}
 	req := Build(shardID, addr, instanceID, state, binarySHA, rowCount, diskBytes)
 	if ds := srv.Shard(); ds != nil && !srv.Spare() {
-		req.FieldFacts = FieldFactDeltas(ds.FieldFacts())
+		if f, ok := ds.(live.FieldFactSource); ok {
+			req.FieldFacts = FieldFactDeltas(f.FieldFacts())
+		}
 		req.LayoutFingerprint = ds.Layout().Fingerprint
 	}
 	if srv.Spare() {
@@ -90,7 +93,9 @@ func Send(client pb.WeftCoordinatorClient, addr, instanceID, binarySHA string, s
 		return false
 	}
 	if ds := srv.Shard(); ds != nil {
-		ds.AckFieldFacts(resp.FieldFactsAcked)
+		if f, ok := ds.(live.FieldFactSource); ok {
+			f.AckFieldFacts(resp.FieldFactsAcked)
+		}
 	}
 	return true
 }
