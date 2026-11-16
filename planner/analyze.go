@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // Placement is where a stage runs, in the terms a user sees: as part of
@@ -74,7 +76,7 @@ func Analyze(pipeline, cwd string, resolveBin BinResolver) (*Analysis, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, c, err := compileBare(pipeline, cwd, time.Time{}, time.Time{})
+	_, c, err := compileBare(dialect.DuckDB, pipeline, cwd, time.Time{}, time.Time{})
 	if err != nil {
 		return nil, err
 	}
@@ -252,6 +254,8 @@ func adviceFor(r reason, cmd string) *Advice {
 		return &Advice{Because: "Field list must be N, N-M or N- items."}
 	case reasonCutDelimiter:
 		return &Advice{Because: "Empty delimiter splits into characters."}
+	case reasonDialect:
+		return &Advice{Because: "The store can't run this filter itself, so it runs after retrieval."}
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 	"github.com/w3ft-net/weft/shape/shapetest"
 )
 
@@ -648,7 +649,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select then string interpolation",
 			pipeline:    `cat vimgym.log | jq 'select(.type == "disk") | "\(.host) \(.used_gb)"'`,
-			wantSQL:     "SELECT " + narrowedPayloadSQL([]string{"host", "type", "used_gb"}) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk'))`,
+			wantSQL:     "SELECT " + render(narrowedPayloadSQL([]string{"host", "type", "used_gb"}), dialect.DuckDB) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk'))`,
 			wantCompute: []string{`jq 'select(.type == "disk") | "\(.host) \(.used_gb)"'`},
 		},
 		// -r flag must not prevent predicate pushdown, and must be preserved
@@ -662,7 +663,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:        "select with -r then string interpolation",
 			pipeline:    `cat vimgym.log | jq -r 'select(.type == "disk") | "\(.host) \(.used_gb)"'`,
-			wantSQL:     "SELECT " + narrowedPayloadSQL([]string{"host", "type", "used_gb"}) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk'))`,
+			wantSQL:     "SELECT " + render(narrowedPayloadSQL([]string{"host", "type", "used_gb"}), dialect.DuckDB) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.type'), 'NULL') IN ('VARCHAR') AND json_extract_string(payload, '$.type') = 'disk'))`,
 			wantCompute: []string{`jq -r 'select(.type == "disk") | "\(.host) \(.used_gb)"'`},
 		},
 		// --raw-output (long spelling) with a field projection: a string
@@ -670,7 +671,7 @@ func TestEdge_Jq_PartialPushdown(t *testing.T) {
 		{
 			name:     "select with --raw-output long spelling",
 			pipeline: `cat vimgym.log | jq --raw-output 'select(.status == 500) | .payload'`,
-			wantSQL:  "SELECT " + jqPrintPathSQL(jqPath{".payload"}, true) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
+			wantSQL:  "SELECT " + render(jqPrintPathSQL(jqPath{".payload"}, true), dialect.DuckDB) + ` as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs WHERE namespace = ? AND COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$'), 'NULL') IN ('NULL', 'OBJECT') AND (COALESCE(json_type(payload, '$.status'), 'NULL') IN ('BIGINT', 'UBIGINT', 'DOUBLE', 'HUGEINT') AND CAST(json_extract(payload, '$.status') AS DOUBLE) = 500))`,
 		},
 	}
 

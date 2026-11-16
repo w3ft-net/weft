@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // rowStage.nodes is the one rule by which awk and jq fold a filter and a
@@ -15,10 +17,10 @@ func TestRowStageNodes(t *testing.T) {
 		rs   rowStage
 		want string
 	}{
-		{"filter", rowStage{pred: "p", predExact: true}, "filter(p,exact)"},
-		{"filter and project", rowStage{pred: "p", predExact: true, proj: "e"}, "filter(p,exact) project(e)"},
-		{"project", rowStage{proj: "e"}, "project(e)"},
-		{"prefilter runs the stage", rowStage{pred: "p", opaque: true, why: why}, "filter(p,prefilter) opaque"},
+		{"filter", rowStage{pred: colRef("p"), predExact: true}, "filter(p,exact)"},
+		{"filter and project", rowStage{pred: colRef("p"), predExact: true, proj: colRef("e")}, "filter(p,exact) project(e)"},
+		{"project", rowStage{proj: colRef("e")}, "project(e)"},
+		{"prefilter runs the stage", rowStage{pred: colRef("p"), opaque: true, why: why}, "filter(p,prefilter) opaque"},
 		{"nothing lowers", rowStage{opaque: true, why: why}, "opaque"},
 	}
 	for _, tt := range tests {
@@ -31,9 +33,9 @@ func TestRowStageNodes(t *testing.T) {
 					if n.exact {
 						kind = "exact"
 					}
-					got = append(got, fmt.Sprintf("filter(%s,%s)", n.pred, kind))
+					got = append(got, fmt.Sprintf("filter(%s,%s)", render(n.pred, dialect.DuckDB), kind))
 				case *projectNode:
-					got = append(got, fmt.Sprintf("project(%s)", n.expr))
+					got = append(got, fmt.Sprintf("project(%s)", render(n.expr, dialect.DuckDB)))
 				case *opaqueNode:
 					got = append(got, "opaque")
 				}

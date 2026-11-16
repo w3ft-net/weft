@@ -9,6 +9,7 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 	"github.com/w3ft-net/weft/logtable"
 	coords "github.com/w3ft-net/weft/shape"
 )
@@ -218,9 +219,13 @@ var ErrNotPlannable = errors.New("not a plannable log query")
 // gets. A trace that names no namespace is restricted to scope, because its
 // rows, counts and per-trace service lists come only from the SQL.
 func Plan(pipeline string, scope coords.Set, cwd string, start, end time.Time) (*QueryPlan, error) {
-	plan, _, err := compile(pipeline, scope, cwd, start, end)
+	plan, _, err := compile(dialect.DuckDB, pipeline, scope, cwd, start, end)
 	return plan, err
 }
+
+// ErrNoSpans is the refusal of a trace or span query on a store that can't run
+// them: unlike a stage, a source has no compute to leave it to.
+var ErrNoSpans = errors.New("this store can't answer trace queries")
 
 // ErrNoSource is the deny for a query whose source, intersected with what the
 // principal may read, is empty. It never says whether the source exists.
@@ -241,29 +246,29 @@ func noSource(named coords.Set) error {
 // compile plans a pipeline and also returns its IR, which Explain shows.
 // The IR is nil for an alert-only pipeline. scope also scopes trace commands
 // (see Plan).
-func compile(pipeline string, scope coords.Set, cwd string, start, end time.Time) (*QueryPlan, *compiled, error) {
+func compile(d dialect.Dialect, pipeline string, scope coords.Set, cwd string, start, end time.Time) (*QueryPlan, *compiled, error) {
 	tn, err := groupOf(scope)
 	if err != nil {
 		return nil, nil, err
 	}
-	return compileGroup(pipeline, tn, scope, cwd, start, end)
+	return compileGroup(d, pipeline, tn, scope, cwd, start, end)
 }
 
 // compileBare plans with no group and no scope limit: how Explain and analyze
 // show a pipeline. The plan it returns reads nothing for anyone.
-func compileBare(pipeline, cwd string, start, end time.Time) (*QueryPlan, *compiled, error) {
-	return compileGroup(pipeline, group{}, coords.Set{coords.Coord{}}, cwd, start, end)
+func compileBare(d dialect.Dialect, pipeline, cwd string, start, end time.Time) (*QueryPlan, *compiled, error) {
+	return compileGroup(d, pipeline, group{}, coords.Set{coords.Coord{}}, cwd, start, end)
 }
 
-func compileGroup(pipeline string, tn group, scope coords.Set, cwd string, start, end time.Time) (*QueryPlan, *compiled, error) {
-	plan, c, err := compileFor(pipeline, tn, cwd, start, end, scope, false)
+func compileGroup(d dialect.Dialect, pipeline string, tn group, scope coords.Set, cwd string, start, end time.Time) (*QueryPlan, *compiled, error) {
+	plan, c, err := compileFor(d, pipeline, tn, cwd, start, end, scope, false)
 	if err != nil || plan.Typed == nil {
 		return plan, c, err
 	}
 	// The same pipeline planned for shards that have said every field it
 	// compares is a finite decimal: the comparison is then exact, so SQL can
 	// compute all of the stage and compute has less (or nothing) to run.
-	exact, _, err := compileFor(pipeline, tn, cwd, start, end, scope, true)
+	exact, _, err := compileFor(d, pipeline, tn, cwd, start, end, scope, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -273,7 +278,7 @@ func compileGroup(pipeline string, tn group, scope coords.Set, cwd string, start
 
 // compileFor is compile for one reading of the facts: assumeTyped says every
 // field the pipeline compares with a number holds a finite decimal.
-func compileFor(pipeline string, tn group, cwd string, start, end time.Time, scope coords.Set, assumeTyped bool) (*QueryPlan, *compiled, error) {
+func compileFor(d dialect.Dialect, pipeline string, tn group, cwd string, start, end time.Time, scope coords.Set, assumeTyped bool) (*QueryPlan, *compiled, error) {
 	queryPart, alertArgs := SplitAlertStage(pipeline)
 
 	// Alert-only pipeline (`alert ...` with nothing in front). Return
@@ -338,7 +343,7 @@ func compileFor(pipeline string, tn group, cwd string, start, end time.Time, sco
 
 	// Frontends: every stage lowers to IR nodes, after the source's own
 	// head/tail line count.
-	c := &compiled{source: info.source}
+	c := &compiled{d: d, source: info.source}
 	switch info.source.cmd {
 	case "head":
 		c.nodes = append(c.nodes, &limitNode{n: info.source.limit, order: "ts ASC"})
@@ -346,12 +351,15 @@ func compileFor(pipeline string, tn group, cwd string, start, end time.Time, sco
 		c.nodes = append(c.nodes, &limitNode{n: info.source.limit, order: "ts DESC"})
 	}
 	for i, st := range info.stages {
-		ls := lowerStage(st, i+1, assumeTyped)
+		ls := lowerStage(st, i+1, lowering{typed: assumeTyped, d: d})
 		c.stages = append(c.stages, ls)
 		c.nodes = append(c.nodes, ls.nodes...)
 	}
 
 	if agg := spanAggregateOf(info.source); agg != "" {
+		if !d.Supports(dialect.Spans) {
+			return nil, nil, ErrNoSpans
+		}
 		return planSpans(c, info.source, agg, tn, start, end, alertArgs, redirTarget, redirAppend)
 	}
 
@@ -369,7 +377,7 @@ func compileFor(pipeline string, tn group, cwd string, start, end time.Time, sco
 	}
 
 	// SQL backend: the source, then every node the shard runs.
-	sql := newSQLBuilder()
+	sql := newSQLBuilder(d)
 	// Group + time bounds first so they sit at the head of the
 	// WHERE clause regardless of subsequent app/source/stage pushdowns.
 	// addGroup/addTimeBounds are no-ops on empty/zero values.
@@ -383,10 +391,10 @@ func compileFor(pipeline string, tn group, cwd string, start, end time.Time, sco
 		switch n := n.(type) {
 		case *filterNode:
 			if n.hoisted {
-				linePreds = append(linePreds, Predicate{SQL: n.pred})
+				linePreds = append(linePreds, Predicate{SQL: render(n.pred, d)})
 				continue
 			}
-			sql.addPredicate(n.pred)
+			sql.addPredicate(render(n.pred, d))
 			if n.follow != nil {
 				grepPatterns = append(grepPatterns, *n.follow)
 			}
@@ -401,14 +409,14 @@ func compileFor(pipeline string, tn group, cwd string, start, end time.Time, sco
 
 	switch {
 	case c.selected != nil:
-		sql.setSelect(c.selected.expr)
+		sql.setSelect(render(c.selected.expr, d))
 	case len(c.rowStages) > 0:
 		sql.includePayload = c.readsPayload
 		for _, rs := range c.rowStages {
 			sql.includePayload = sql.includePayload || rs.cmd == "jq"
 		}
 	case c.readsPayload:
-		sql.setSelect("CAST(payload AS VARCHAR)")
+		sql.setSelect(render(castText{colRef(payloadCol)}, d))
 	}
 	// A compute stage reading a meta-variable (`jq -r '$host'`, awk's
 	// `HOST`) gets it from the row: the shard projects every
@@ -426,8 +434,8 @@ func compileFor(pipeline string, tn group, cwd string, start, end time.Time, sco
 	if c.group == nil {
 		c.projectFields(sql.limit > 0 || sql.offset > 0)
 		c.projectPayload()
-		if c.payloadSelect != "" {
-			sql.setSelect(c.payloadSelect)
+		if c.payloadSelect != nil {
+			sql.setSelect(render(c.payloadSelect, d))
 		}
 	}
 	if c.aggregate == "" && c.group == nil {
@@ -501,7 +509,7 @@ func compileFor(pipeline string, tn group, cwd string, start, end time.Time, sco
 		fieldSpec = c.fieldSpec.spec()
 	}
 
-	typed := typedVariant(c, info.source, tn, shardSQL, directShardSQL, fieldSQL)
+	typed := typedVariant(d, c, info.source, tn, shardSQL, directShardSQL, fieldSQL)
 	if assumeTyped {
 		// What the facts leave to swap (a jq key) is swapped in this plan,
 		// which is only ever used where they all hold.

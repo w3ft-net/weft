@@ -3,6 +3,8 @@ package planner
 import (
 	"testing"
 	"time"
+
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // TestGroupOrder (and the distinct count): `sort -rn | head -n N` right after sort | uniq -c is the
@@ -84,7 +86,7 @@ func TestGroupOrder(t *testing.T) {
 		{`cat vimgym.log | sort -u | sort -rn | head -n 5`, GroupBySpec{Render: RenderLine}, 2},
 	} {
 		t.Run(tt.pipeline, func(t *testing.T) {
-			_, c, err := compileBare(tt.pipeline, "", time.Time{}, time.Time{})
+			_, c, err := compileBare(dialect.DuckDB, tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -107,7 +109,7 @@ func TestGroupOrder(t *testing.T) {
 // pipeline literal in these files, doesn't compare the arrival-order case.)
 func TestNumericEndNeedsPlainSort(t *testing.T) {
 	for _, tail := range []string{"sort -nu | tail -n 1", "sort -nru | head -n 1"} {
-		_, c, err := compileBare("cat vimgym.log | "+tail, "", time.Time{}, time.Time{})
+		_, c, err := compileBare(dialect.DuckDB, "cat vimgym.log | "+tail, "", time.Time{}, time.Time{})
 		if err != nil {
 			t.Fatal(err)
 		}

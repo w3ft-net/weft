@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/jq"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // TestJqRootKeys: a program is sent an object of just its keys only when
@@ -119,11 +120,11 @@ func TestProjectPayload_Plan(t *testing.T) {
 		{`cat vimgym.log | jq 'select(.status == 500)'`, false},
 	} {
 		t.Run(tt.pipeline, func(t *testing.T) {
-			_, c, err := compileBare(tt.pipeline, "", time.Time{}, time.Time{})
+			_, c, err := compileBare(dialect.DuckDB, tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := c != nil && c.payloadSelect != ""; got != tt.narrowed {
+			if got := c != nil && c.payloadSelect != nil; got != tt.narrowed {
 				t.Errorf("narrowed = %v, want %v\n%s", got, tt.narrowed, Explain(tt.pipeline))
 			}
 		})

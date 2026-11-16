@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/jq"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // jqKeyName is a payload key a narrowed payload can name in a JSON path
@@ -238,18 +239,18 @@ func jqContains(root any, match func(any) bool) bool {
 // bracket or comma, before a comma, bracket or brace), which the JSON functions
 // would write back as 0. A string that merely looks like one costs only the
 // bytes.
-func narrowedPayloadSQL(keys []string) string {
-	const whole = "CAST(payload AS VARCHAR)"
-	const narrowable = `json_type(payload) = 'OBJECT' AND NOT regexp_matches(` + whole + `, '[:\[,]\s*-0\s*[,\]}]')`
-	object := "'{}'"
+func narrowedPayloadSQL(keys []string) sqlExpr {
+	whole := castText{colRef(payloadCol)}
+	narrowable := andExpr{jsonIsObject{}, notExpr{regexExpr{col: whole, pattern: `[:\[,]\s*-0\s*[,\]}]`}}}
+	var object sqlExpr = strLit("{}")
 	if len(keys) > 0 {
-		pairs := make([]string, len(keys))
-		for i, k := range keys {
-			pairs[i] = fmt.Sprintf("'%s', json_extract(payload, '$.%s')", k, k)
+		pairs := make(jsonObject, 0, 2*len(keys))
+		for _, k := range keys {
+			pairs = append(pairs, strLit(k), jsonExtract{"$." + k})
 		}
-		object = fmt.Sprintf("CAST(json_object(%s) AS VARCHAR)", strings.Join(pairs, ", "))
+		object = castText{pairs}
 	}
-	return fmt.Sprintf("CASE WHEN %s THEN %s ELSE %s END", narrowable, object, whole)
+	return caseExpr{whens: [][2]sqlExpr{{narrowable, object}}, els: whole}
 }
 
 // projectPayload is field projection for a first jq stage that reads the
@@ -263,6 +264,10 @@ func (c *compiled) projectPayload() {
 	}
 	stage := c.compute[0]
 	label := c.label(stage.nodes[0])
+	if !c.d.Supports(dialect.JSON) {
+		c.logf(pass, "skipped %s: the store can't read a JSON payload", label)
+		return
+	}
 	if c.source.follow || c.source.cmd == "trace" || c.source.cmd == "trace_spans" || c.source.cmd == "trace_list" {
 		return
 	}

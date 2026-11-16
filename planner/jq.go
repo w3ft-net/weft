@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/jq"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // metaVar is one row meta-variable: its lower-case name, the shard column it
@@ -141,59 +142,58 @@ func (p jqPath) then(q jqPath) jqPath {
 	return append(append(jqPath{}, p...), q...)
 }
 
-// jsonPath is the path as a quoted SQL JSONPath literal.
+// jsonPath is the path as JSONPath text.
 func (p jqPath) jsonPath() string {
-	return "'$" + escapeSQLString(strings.Join(p, "")) + "'"
+	return "$" + strings.Join(p, "")
 }
 
-// guards are the SQL conditions under which jq can read the path
-// without an error. A step through the wrong type (.a.b with .a a
-// string, .a[0] with .a an object, .a with the payload itself an array
-// or a string) is an error, which drops the row; null and missing read as
-// null. json_extract reads all of them as NULL, so each step's parent,
-// the payload included, must have the type the step needs.
-func (p jqPath) guards() []string {
-	var guards []string
+// guards are the conditions under which jq can read the path without an
+// error. A step through the wrong type (.a.b with .a a string, .a[0] with .a
+// an object, .a with the payload itself an array or a string) is an error,
+// which drops the row; null and missing read as null. The JSON functions read
+// all of them as NULL, so each step's parent, the payload included, must have
+// the type the step needs.
+func (p jqPath) guards() []sqlExpr {
+	var guards []sqlExpr
 	for i := 0; i < len(p); i++ {
-		parent := jqPath(p[:i]).jsonPath()
-		want := "OBJECT"
+		want := dialect.KindObject
 		if strings.HasPrefix(p[i], "[") {
-			want = "ARRAY"
+			want = dialect.KindArray
 		}
-		guards = append(guards, fmt.Sprintf("COALESCE(json_type(payload, %s), 'NULL') IN ('NULL', '%s')", parent, want))
+		guards = append(guards, jsonKindIs{path: jqPath(p[:i]).jsonPath(), kinds: []dialect.JSONKind{dialect.KindNull, want}})
 	}
 	return guards
 }
 
 // guarded is cond, true only where the path is readable.
-func (p jqPath) guarded(cond string) string {
+func (p jqPath) guarded(cond sqlExpr) sqlExpr {
 	guards := p.guards()
 	if len(guards) == 0 {
 		return cond
 	}
-	return "(" + strings.Join(guards, " AND ") + " AND " + cond + ")"
+	return groupExpr{and(append(guards, cond)...)}
 }
 
-// jqCondToSQL converts a jq comparison condition to a SQL fragment. The
-// condition reads the value at subject, the path the program has
-// navigated to by the time it runs (`.a | select(.b > 1)` compares
-// $.a.b).
-func jqCondToSQL(subject jqPath, cond jq.Expr) string {
+// jqCondToSQL converts a jq comparison condition to a SQL expression, nil for
+// one that doesn't lower. The condition reads the value at subject, the path
+// the program has navigated to by the time it runs (`.a | select(.b > 1)`
+// compares $.a.b).
+func jqCondToSQL(subject jqPath, cond jq.Expr) sqlExpr {
 	switch e := cond.(type) {
 	case jq.EqExpr:
-		return jqComparisonToSQL(subject, e.Left, e.Right, "=")
+		return jqComparisonToSQL(subject, e.Left, e.Right, dialect.EQ)
 	case jq.NeExpr:
-		return jqComparisonToSQL(subject, e.Left, e.Right, "!=")
+		return jqComparisonToSQL(subject, e.Left, e.Right, dialect.NE)
 	case jq.LtExpr:
-		return jqComparisonToSQL(subject, e.Left, e.Right, "<")
+		return jqComparisonToSQL(subject, e.Left, e.Right, dialect.LT)
 	case jq.GtExpr:
-		return jqComparisonToSQL(subject, e.Left, e.Right, ">")
+		return jqComparisonToSQL(subject, e.Left, e.Right, dialect.GT)
 	case jq.LeExpr:
-		return jqComparisonToSQL(subject, e.Left, e.Right, "<=")
+		return jqComparisonToSQL(subject, e.Left, e.Right, dialect.LE)
 	case jq.GeExpr:
-		return jqComparisonToSQL(subject, e.Left, e.Right, ">=")
+		return jqComparisonToSQL(subject, e.Left, e.Right, dialect.GE)
 	}
-	return ""
+	return nil
 }
 
 // jqTypedLeaf is the simpler form of a select on a top-level key against a
@@ -201,26 +201,26 @@ func jqCondToSQL(subject jqPath, cond jq.Expr) string {
 // puts every number below every string and null below both, so the general
 // SQL branches on the value's JSON type and on whether the key is there;
 // where it is always a number none of that matters and the comparison is the
-// cast alone. base is the predicate text jqCondToSQL gave this condition.
-func jqTypedLeaf(subject jqPath, cond jq.Expr, base string) []typedLeaf {
+// cast alone. base is the predicate jqCondToSQL gave this condition.
+func jqTypedLeaf(subject jqPath, cond jq.Expr, base sqlExpr) []typedLeaf {
 	if len(subject) != 0 {
 		return nil
 	}
 	var left, right jq.Expr
-	var op string
+	var op dialect.CmpOp
 	switch e := cond.(type) {
 	case jq.EqExpr:
-		left, right, op = e.Left, e.Right, "="
+		left, right, op = e.Left, e.Right, dialect.EQ
 	case jq.NeExpr:
-		left, right, op = e.Left, e.Right, "!="
+		left, right, op = e.Left, e.Right, dialect.NE
 	case jq.LtExpr:
-		left, right, op = e.Left, e.Right, "<"
+		left, right, op = e.Left, e.Right, dialect.LT
 	case jq.GtExpr:
-		left, right, op = e.Left, e.Right, ">"
+		left, right, op = e.Left, e.Right, dialect.GT
 	case jq.LeExpr:
-		left, right, op = e.Left, e.Right, "<="
+		left, right, op = e.Left, e.Right, dialect.LE
 	case jq.GeExpr:
-		left, right, op = e.Left, e.Right, ">="
+		left, right, op = e.Left, e.Right, dialect.GE
 	default:
 		return nil
 	}
@@ -236,7 +236,7 @@ func jqTypedLeaf(subject jqPath, cond jq.Expr, base string) []typedLeaf {
 	return []typedLeaf{{
 		locator: "." + field.Name,
 		base:    base,
-		typed:   fmt.Sprintf("TRY_CAST(json_extract(payload, %s) AS DOUBLE) %s %s", key.jsonPath(), op, typedNumber(lit.Value.Num)),
+		typed:   cmpExpr{op, tryCastDouble{jsonExtract{key.jsonPath()}}, numLit(typedNumber(lit.Value.Num))},
 	}}
 }
 
@@ -247,176 +247,150 @@ func jqTypedLeaf(subject jqPath, cond jq.Expr, base string) []typedLeaf {
 // `.n == 500` doesn't for the string "500". Both sides here are
 // literal-typed except the field, so the SQL picks the branch by the
 // field's JSON type.
-func jqComparisonToSQL(subject jqPath, left, right jq.Expr, op string) string {
+func jqComparisonToSQL(subject jqPath, left, right jq.Expr, op dialect.CmpOp) sqlExpr {
 	lit, ok := right.(jq.LiteralExpr)
 	if !ok {
-		return ""
+		return nil
 	}
 	if ref, ok := left.(jq.VarRef); ok {
 		if col, isMeta := JQMetaVars[ref.Name]; isMeta {
 			return jqMetaComparisonToSQL(col, lit.Value, op)
 		}
-		return ""
+		return nil
 	}
 	rel, ok := jqPathOf(left)
 	if !ok {
-		return ""
+		return nil
 	}
 	path := subject.then(rel)
 	if len(path) == 0 || !strings.HasPrefix(path[0], ".") {
-		return "" // the payload itself, or an index into it
+		return nil // the payload itself, or an index into it
 	}
 	cmp := jqPathComparisonToSQL(path, lit.Value, op)
-	if cmp == "" {
-		return ""
+	if cmp == nil {
+		return nil
 	}
 	return path.guarded(cmp)
 }
 
 // jqPathComparisonToSQL lowers `path op literal` for a path the caller
 // guards (see jqComparisonToSQL).
-func jqPathComparisonToSQL(p jqPath, lit jq.Value, op string) string {
+func jqPathComparisonToSQL(p jqPath, lit jq.Value, op dialect.CmpOp) sqlExpr {
 	path := p.jsonPath()
-	var rank int
-	var value, sqlLit string
+	var rank dialect.JSONKind
+	var value, sqlLit sqlExpr
 	switch lit.Type {
 	case jq.TypeNull:
-		rank = jqRankNull
+		rank = dialect.KindNull
 	case jq.TypeBool:
-		rank = jqRankBool
-		value = fmt.Sprintf("CAST(json_extract(payload, %s) AS BOOLEAN)", path)
-		sqlLit = strconv.FormatBool(lit.Bool)
+		rank = dialect.KindBool
+		value = jsonAsBool{path}
+		sqlLit = boolLit(lit.Bool)
 	case jq.TypeNumber:
-		rank = jqRankNumber
-		value = fmt.Sprintf("CAST(json_extract(payload, %s) AS DOUBLE)", path)
-		sqlLit = strconv.FormatFloat(lit.Num, 'g', -1, 64)
+		rank = dialect.KindNumber
+		value = jsonAsNumber{path}
+		sqlLit = numLit(strconv.FormatFloat(lit.Num, 'g', -1, 64))
 	case jq.TypeString:
-		rank = jqRankString
-		value = fmt.Sprintf("json_extract_string(payload, %s)", path)
-		sqlLit = "'" + escapeSQLString(lit.Str) + "'"
+		rank = dialect.KindString
+		value = jsonAsString{path}
+		sqlLit = strLit(lit.Str)
 	default:
-		return ""
+		return nil
 	}
 
-	typ := fmt.Sprintf("COALESCE(json_type(payload, %s), 'NULL')", path)
-	in := func(ranks []int) string {
-		var names []string
-		for _, r := range ranks {
-			names = append(names, jqRankTypes[r]...)
-		}
-		return fmt.Sprintf("%s IN ('%s')", typ, strings.Join(names, "', '"))
-	}
-	same := in([]int{rank})
-	if value != "" {
+	in := func(ranks ...dialect.JSONKind) sqlExpr { return jsonKindIs{path: path, kinds: ranks} }
+	same := in(rank)
+	if value != nil {
 		// Null has one value, so the type test alone decides equality.
-		same = fmt.Sprintf("(%s AND %s %s %s)", same, value, "=", sqlLit)
+		same = groupExpr{andExpr{same, cmpExpr{dialect.EQ, value, sqlLit}}}
 	}
-	var lower, higher []int
-	for r := range jqRankTypes {
+	var lower, higher []dialect.JSONKind
+	for r := dialect.KindNull; r <= dialect.KindObject; r++ {
 		if r < rank {
 			lower = append(lower, r)
 		} else if r > rank {
 			higher = append(higher, r)
 		}
 	}
-	sameCmp := func(cmp string) string {
-		if value == "" {
+	sameCmp := func(cmp dialect.CmpOp) sqlExpr {
+		if value == nil {
 			// Null only equals null, so < and > within the rank are false.
-			if cmp == "<=" || cmp == ">=" {
-				return in([]int{rank})
+			if cmp == dialect.LE || cmp == dialect.GE {
+				return in(rank)
 			}
-			return ""
+			return nil
 		}
-		return fmt.Sprintf("(%s AND %s %s %s)", in([]int{rank}), value, cmp, sqlLit)
+		return groupExpr{andExpr{in(rank), cmpExpr{cmp, value, sqlLit}}}
 	}
-	or := func(parts ...string) string {
-		var keep []string
+	or := func(parts ...sqlExpr) sqlExpr {
+		var keep []sqlExpr
 		for _, p := range parts {
-			if p != "" {
+			if p != nil {
 				keep = append(keep, p)
 			}
 		}
 		switch len(keep) {
 		case 0:
-			return "false" // nothing sorts below null
+			return boolLit(false) // nothing sorts below null
 		case 1:
 			return keep[0]
 		}
-		return "(" + strings.Join(keep, " OR ") + ")"
+		return orExpr{terms: keep}
 	}
-	orIn := func(ranks []int) string {
+	orIn := func(ranks []dialect.JSONKind) sqlExpr {
 		if len(ranks) == 0 {
-			return ""
+			return nil
 		}
-		return in(ranks)
+		return in(ranks...)
 	}
 	switch op {
-	case "=":
+	case dialect.EQ:
 		return same
-	case "!=":
-		return "NOT " + same
-	case "<", "<=":
+	case dialect.NE:
+		return notExpr{same}
+	case dialect.LT, dialect.LE:
 		return or(orIn(lower), sameCmp(op))
-	case ">", ">=":
+	case dialect.GT, dialect.GE:
 		return or(orIn(higher), sameCmp(op))
 	}
-	return ""
+	return nil
 }
 
-// jq's cross-type order, and the DuckDB json_type names of each rank.
-const (
-	jqRankNull = iota
-	jqRankBool
-	jqRankNumber
-	jqRankString
-	jqRankArray
-	jqRankObject
-)
-
-var jqRankTypes = [][]string{
-	jqRankNull:   {"NULL"},
-	jqRankBool:   {"BOOLEAN"},
-	jqRankNumber: {"BIGINT", "UBIGINT", "DOUBLE", "HUGEINT"},
-	jqRankString: {"VARCHAR"},
-	jqRankArray:  {"ARRAY"},
-	jqRankObject: {"OBJECT"},
-}
-
-// jqMetaSQL is the SQL value of a meta-variable column as jq reads it: a
+// jqMetaSQL is the value of a meta-variable column as jq reads it: a
 // string, or for the numeric columns a number. A one-line event has an
 // empty event_id and is line 0.
-func jqMetaSQL(col string) string {
+func jqMetaSQL(col string) sqlExpr {
 	switch col {
 	case "event_id":
-		return "COALESCE(CAST(event_id AS VARCHAR), '')"
+		return coalesce{castText{colRef("event_id")}, strLit("")}
 	case "line_no":
-		return "COALESCE(line_no, 0)"
+		return coalesce{colRef("line_no"), numLit("0")}
 	case "ts":
-		return "CAST(ts AS VARCHAR)"
+		return castText{colRef("ts")}
 	}
-	return col
+	return colRef(col)
 }
 
 // jqMetaComparisonToSQL lowers a meta-variable comparison. jq reads a
 // string column as its text and a numeric one as a number, and null when
 // the column is NULL. Only a literal of the column's own type lowers: jq
 // orders every number below every string, which SQL doesn't.
-func jqMetaComparisonToSQL(col string, lit jq.Value, op string) string {
-	var rhs string
+func jqMetaComparisonToSQL(col string, lit jq.Value, op dialect.CmpOp) sqlExpr {
+	var rhs sqlExpr
 	switch {
 	case JQNumericMetaColumn(col) && lit.Type == jq.TypeNumber:
-		rhs = formatAwkNumber(lit.Num)
+		rhs = numLit(formatAwkNumber(lit.Num))
 	case !JQNumericMetaColumn(col) && lit.Type == jq.TypeString:
-		rhs = "'" + escapeSQLString(lit.Str) + "'"
+		rhs = strLit(lit.Str)
 	default:
-		return ""
+		return nil
 	}
 	val := jqMetaSQL(col)
-	cmp := fmt.Sprintf("%s %s %s", val, op, rhs)
+	cmp := cmpExpr{op, val, rhs}
 	switch op {
-	case "!=", "<", "<=":
+	case dialect.NE, dialect.LT, dialect.LE:
 		// null sorts below every number and string.
-		return fmt.Sprintf("(%s IS NULL OR %s)", val, cmp)
+		return orExpr{terms: []sqlExpr{isNull{val}, cmp}}
 	}
 	return cmp
 }
@@ -435,7 +409,7 @@ type jqProgram struct {
 	src string // the expression argument, as written
 	// selects is the SQL for each select in the head that lowers,
 	// stopping at the first that doesn't.
-	selects []string
+	selects []sqlExpr
 	// typed are the comparisons in selects with a simpler typed form.
 	typed []typedLeaf
 	// allLower is true when every select in the head lowered.
@@ -488,7 +462,7 @@ head:
 		switch node := nodes[n].(type) {
 		case jq.SelectExpr:
 			if p.allLower {
-				if pred := jqCondToSQL(p.subject, node.Cond); pred != "" {
+				if pred := jqCondToSQL(p.subject, node.Cond); pred != nil {
 					p.selects = append(p.selects, pred)
 					p.typed = append(p.typed, jqTypedLeaf(p.subject, node.Cond, pred)...)
 				} else {

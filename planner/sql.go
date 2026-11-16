@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 	coords "github.com/w3ft-net/weft/shape"
 )
 
@@ -26,6 +27,8 @@ import (
 // sqlBuilder — the 252 pinned wantSQL assertions across the planner
 // tests are the parity gate.
 type Query struct {
+	// d spells the engine-specific parts of the SQL.
+	d          dialect.Dialect
 	rawExpr    string
 	from       From
 	predicates []Predicate
@@ -127,15 +130,6 @@ const (
 // the value sort -n compares the line by.
 const SortKeyColumn = "sortkey"
 
-// sortNumberSQL is the number sort -n compares col by, as warp reads it: the
-// leading sign, digits and at most one dot after any spaces and tabs, 0 when
-// there is no number in them or it doesn't fit a float64. Adding 0.0 turns -0
-// into 0, which sort -n treats as equal.
-func sortNumberSQL(col string) string {
-	k := `TRY_CAST(regexp_extract(` + col + `, '^[ \t]*([+-]?[0-9]*[.]?[0-9]*)', 1) AS DOUBLE)`
-	return `CASE WHEN isfinite(` + k + `) THEN ` + k + ` + 0.0 ELSE 0.0 END`
-}
-
 // From identifies the SELECT's source — either a base table ("logs")
 // or a nested *Query rendered as a subquery with an alias. Exactly
 // one of Table / Subquery is set.
@@ -198,8 +192,9 @@ type ArgSource struct {
 // newSQLBuilder returns a fresh Query rooted at the logs table with
 // the default raw-column projection. The name matches the old
 // sqlBuilder constructor so planner.go's call site is a drop-in.
-func newSQLBuilder() *Query {
+func newSQLBuilder(d dialect.Dialect) *Query {
 	return &Query{
+		d:       d,
 		rawExpr: "raw",
 		from:    From{Table: "logs"},
 	}
@@ -236,7 +231,7 @@ func (q *Query) addGroup(tn group) {
 	}
 	for i, c := range cols {
 		q.predicates = append(q.predicates, Predicate{
-			SQL:  c.Name + " = CAST(? AS " + c.Type.SQL() + ")",
+			SQL:  c.Name + " = " + q.d.TypedParam(paramType(c.Type)),
 			Args: []ArgSource{{Kind: ArgPartition, Value: tn.values[i], Part: i}},
 		})
 	}
@@ -250,13 +245,13 @@ func (q *Query) addGroup(tn group) {
 func (q *Query) addTimeBounds(start, end time.Time) {
 	if !start.IsZero() {
 		q.predicates = append(q.predicates, Predicate{
-			SQL:  "ts >= CAST(? AS TIMESTAMP)",
+			SQL:  "ts >= " + q.d.TimestampParam(),
 			Args: []ArgSource{{Kind: ArgTimeStart, Value: formatTS(start)}},
 		})
 	}
 	if !end.IsZero() {
 		q.predicates = append(q.predicates, Predicate{
-			SQL:  "ts <= CAST(? AS TIMESTAMP)",
+			SQL:  "ts <= " + q.d.TimestampParam(),
 			Args: []ArgSource{{Kind: ArgTimeEnd, Value: formatTS(end)}},
 		})
 	}
@@ -289,6 +284,7 @@ func (q *Query) setLimitOffset(limit, offset int) {
 // and arbitrary.
 func (q *Query) Wrap(orderBy string) *Query {
 	return &Query{
+		d:              q.d,
 		rawExpr:        "raw",
 		from:           From{Subquery: q, Alias: "t"},
 		orderBy:        orderBy,
@@ -303,6 +299,7 @@ func (q *Query) Wrap(orderBy string) *Query {
 // q must have no limit.
 func (q *Query) Lines(preds []Predicate) *Query {
 	return &Query{
+		d:              q.d,
 		rawExpr:        "raw",
 		from:           From{Subquery: q.lineSplit(), Alias: "t"},
 		predicates:     preds,
@@ -318,9 +315,12 @@ func (q *Query) Lines(preds []Predicate) *Query {
 // plain query on the table (no Lines or Wrap).
 func (q *Query) fieldForm(spec *fieldReads) *Query {
 	clone := *q
-	clone.rawExpr = "''"
+	clone.rawExpr = render(strLit(""), q.d)
 	if spec.last {
-		clone.rawExpr = "CASE WHEN COALESCE(len(fields), 0) = 0 THEN raw ELSE '' END"
+		clone.rawExpr = render(caseExpr{
+			whens: [][2]sqlExpr{{cmpExpr{dialect.EQ, fieldCount, numLit("0")}, colRef("raw")}},
+			els:   strLit(""),
+		}, q.d)
 	}
 	clone.fieldSpec = spec
 	return &clone
@@ -341,6 +341,7 @@ func (q *Query) Group(render GroupRender, orderBy string, preds []Predicate, agg
 		inner.agg = agg
 	}
 	return &Query{
+		d:          q.d,
 		from:       From{Subquery: inner, Alias: "t"},
 		predicates: preds,
 		orderBy:    orderBy,
@@ -352,7 +353,7 @@ func (q *Query) Group(render GroupRender, orderBy string, preds []Predicate, agg
 // lineSplit is q selecting one row per line of its raw.
 func (q *Query) lineSplit() *Query {
 	inner := *q
-	inner.rawExpr = "unnest(string_split(" + q.rawExpr + ", chr(10)))"
+	inner.rawExpr = q.d.SplitLines(q.rawExpr)
 	return &inner
 }
 
@@ -441,7 +442,7 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 		if q.group == RenderNumericMin {
 			dir = "ASC"
 		}
-		fmt.Fprintf(b, "raw, ts, %s AS %s FROM (", sortNumberSQL("raw"), SortKeyColumn)
+		fmt.Fprintf(b, "raw, ts, %s AS %s FROM (", q.d.NumericSortKey("raw"), SortKeyColumn)
 		q.from.Subquery.renderInto(b, onArg)
 		b.WriteString(") AS " + q.from.Alias)
 		q.renderWhere(b, onArg)
@@ -455,10 +456,10 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 		}
 		extra := ""
 		if q.group == RenderBytes {
-			extra = fmt.Sprintf(", CAST(sum(strlen(raw) + 1) AS BIGINT) AS %s", BytesColumn)
+			extra = fmt.Sprintf(", %s AS %s", q.d.CastInt64("sum("+q.d.ByteLen("raw")+" + 1)"), BytesColumn)
 		}
 		if q.agg != nil {
-			extra += q.agg.groupColumns()
+			extra += q.agg.groupColumns(q.d)
 		}
 		fmt.Fprintf(b, "%s, min(ts) AS ts, count(*) AS %s%s FROM (", key, CountColumn, extra)
 		q.from.Subquery.renderInto(b, onArg)
@@ -485,7 +486,7 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 	if q.from.Subquery != nil {
 		b.WriteString(", " + EventIDColumn + ", " + LineNoColumn)
 	} else {
-		b.WriteString(", CAST(event_id AS VARCHAR) AS " + EventIDColumn + ", " + LineNoColumn)
+		b.WriteString(", " + q.d.CastText("event_id") + " AS " + EventIDColumn + ", " + LineNoColumn)
 	}
 	for _, col := range q.metaCols {
 		b.WriteString(", ")
@@ -495,20 +496,20 @@ func (q *Query) renderInto(b *strings.Builder, onArg func(ArgSource)) {
 		if q.from.Subquery != nil {
 			b.WriteString(", " + PayloadColumn)
 		} else {
-			b.WriteString(", CAST(payload AS VARCHAR) AS " + PayloadColumn)
+			b.WriteString(", " + q.d.CastText("payload") + " AS " + PayloadColumn)
 		}
 	}
 	if q.agg != nil && q.group == "" {
-		b.WriteString(q.agg.valueColumns())
+		b.WriteString(q.agg.valueColumns(q.d))
 	}
 	if q.fieldSpec != nil {
 		for _, p := range q.fieldSpec.positions {
-			fmt.Fprintf(b, ", list_extract(fields, %d) AS %s%d", p, FieldColumnPrefix, p)
+			fmt.Fprintf(b, ", %s AS %s%d", q.d.ListIndex("fields", p), FieldColumnPrefix, p)
 		}
 		if q.fieldSpec.last {
-			b.WriteString(", list_extract(fields, -1) AS " + FieldLastColumn)
+			b.WriteString(", " + q.d.ListIndex("fields", -1) + " AS " + FieldLastColumn)
 		}
-		b.WriteString(", COALESCE(len(fields), 0) AS " + FieldCountColumn)
+		b.WriteString(", " + render(fieldCount, q.d) + " AS " + FieldCountColumn)
 	}
 	b.WriteString(" FROM ")
 	if q.from.Subquery != nil {
@@ -550,18 +551,19 @@ func (q *Query) renderWhere(b *strings.Builder, onArg func(ArgSource)) {
 // valueColumns are the columns a keyed aggregate's subquery adds to each line:
 // the field's number (a whole number for a sum, exactly), and for a max or min its
 // text.
-func (a *keyedAgg) valueColumns() string {
+func (a *keyedAgg) valueColumns(d dialect.Dialect) string {
+	field := d.ListIndex("fields", a.field)
 	if a.op == aggSum {
-		return fmt.Sprintf(", TRY_CAST(list_extract(fields, %d) AS BIGINT) AS %s", a.field, ValColumn)
+		return fmt.Sprintf(", %s AS %s", d.TryCastInt64(field), ValColumn)
 	}
-	return fmt.Sprintf(", TRY_CAST(list_extract(fields, %[1]d) AS DOUBLE) AS %[2]s, list_extract(fields, %[1]d) AS %[3]s", a.field, ValColumn, TxtColumn)
+	return fmt.Sprintf(", %s AS %s, %s AS %s", d.TryCastDouble(field), ValColumn, field, TxtColumn)
 }
 
 // groupColumns are the columns a keyed aggregate's group returns per key
 // beyond the count.
-func (a *keyedAgg) groupColumns() string {
+func (a *keyedAgg) groupColumns(d dialect.Dialect) string {
 	if a.op == aggSum {
-		return fmt.Sprintf(", COALESCE(CAST(sum(%s) AS VARCHAR), '0') AS %s", ValColumn, SumColumn)
+		return fmt.Sprintf(", %s AS %s", d.Coalesce(d.CastText("sum("+ValColumn+")"), d.StringLit("0")), SumColumn)
 	}
 	// The first row, in the order awk meets them, holding the best value: awk
 	// replaces only for a strictly better one.
@@ -570,6 +572,20 @@ func (a *keyedAgg) groupColumns() string {
 		dir, best = "ASC", "min"
 	}
 	first := fmt.Sprintf("ORDER BY %s %s, t.ts, t.%s NULLS FIRST, t.%s", ValColumn, dir, EventIDColumn, LineNoColumn)
-	return fmt.Sprintf(", %[1]s(%[2]s) AS %[3]s, first(%[4]s %[5]s) AS %[6]s, CAST(epoch_ns(first(t.ts %[5]s)) AS BIGINT) AS %[7]s",
-		best, ValColumn, BestColumn, TxtColumn, first, BestTxtColumn, BestNsColumn)
+	return fmt.Sprintf(", %s(%s) AS %s, %s AS %s, %s AS %s",
+		best, ValColumn, BestColumn,
+		d.FirstBy(TxtColumn, first), BestTxtColumn,
+		d.CastInt64(d.EpochNs(d.FirstBy("t.ts", first))), BestNsColumn)
+}
+
+// fieldCount is how many fields a row has: the fields column is NULL on a row
+// that was never split.
+var fieldCount sqlExpr = coalesce{listLen{colRef("fields")}, numLit("0")}
+
+// paramType is the dialect's type for a partition column's bound parameter.
+func paramType(t coords.ColumnType) dialect.ParamType {
+	if t == coords.TypeInt64 {
+		return dialect.ParamInt64
+	}
+	return dialect.ParamText
 }

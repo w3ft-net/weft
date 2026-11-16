@@ -3,13 +3,14 @@ package planner
 import (
 	"time"
 
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 	"github.com/w3ft-net/weft/shape/shapetest"
 )
 
 // planBare plans with no group: no row-level-security predicate and no table
 // hint. It is how the tests that look at everything but the group plan.
 func planBare(pipeline, cwd string, start, end time.Time) (*QueryPlan, error) {
-	plan, _, err := compileBare(pipeline, cwd, start, end)
+	plan, _, err := compileBare(dialect.DuckDB, pipeline, cwd, start, end)
 	return plan, err
 }
 

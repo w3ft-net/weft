@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // shape renders a stage's nodes compactly: Filter= is exact, Filter~ a
@@ -38,7 +39,7 @@ func lowerText(t *testing.T, stage string) *loweredStage {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return lowerStage(parseStage(script.Commands[0].First.Commands[0].(*bash.SimpleCommand)), 1, false)
+	return lowerStage(parseStage(script.Commands[0].First.Commands[0].(*bash.SimpleCommand)), 1, lowering{d: dialect.DuckDB})
 }
 
 // TestFrontends pins what each frontend lowers a stage to, and the
@@ -188,7 +189,7 @@ func TestPasses(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.pipeline, func(t *testing.T) {
-			_, c, err := compileBare(tt.pipeline, "", time.Time{}, time.Time{})
+			_, c, err := compileBare(dialect.DuckDB, tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatal(err)
 			}

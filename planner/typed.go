@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 	"github.com/w3ft-net/weft/logtable"
 )
 
@@ -15,9 +16,9 @@ import (
 // facts allow it. The coordinator picks per shard; a fact flipping never
 // forces a relowering.
 type typedLeaf struct {
-	locator string // "$N" for awk field N, ".key" for a top-level payload key
-	base    string // the predicate text in the plan
-	typed   string // what replaces it on a shard where locator is typed
+	locator string  // "$N" for awk field N, ".key" for a top-level payload key
+	base    sqlExpr // the predicate in the plan
+	typed   sqlExpr // what replaces it on a shard where locator is typed
 }
 
 // TypedPlan is the QueryPlan's shard SQL for a shard whose facts say every
@@ -44,7 +45,7 @@ type TypedPlan struct {
 // typed leaf's predicate for its typed form. It declines (nil) unless the
 // source is one stream, and unless every leaf's text occurs exactly once in
 // both SQL strings, so a swap can't land on the wrong text.
-func typedVariant(c *compiled, src sourceInfo, tn group, shardSQL, directSQL, fieldSQL string) *TypedPlan {
+func typedVariant(d dialect.Dialect, c *compiled, src sourceInfo, tn group, shardSQL, directSQL, fieldSQL string) *TypedPlan {
 	ns, svc, kind, ok := src.single()
 	if !ok || src.follow {
 		return nil
@@ -66,12 +67,12 @@ func typedVariant(c *compiled, src sourceInfo, tn group, shardSQL, directSQL, fi
 	}
 	swap := func(sql string) (string, bool) {
 		for _, l := range leaves {
-			if strings.Count(sql, l.base) != 1 {
+			if strings.Count(sql, render(l.base, d)) != 1 {
 				return "", false
 			}
 		}
 		for _, l := range leaves {
-			sql = strings.Replace(sql, l.base, l.typed, 1)
+			sql = strings.Replace(sql, render(l.base, d), render(l.typed, d), 1)
 		}
 		return sql, true
 	}

@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/graybeardcorp/warp/pkg/awk"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // MetaRead is which of a row's meta-variables a stage reads (an awk's HOST, a
@@ -82,5 +83,5 @@ func StageMetaRead(stage string) MetaRead {
 	if !ok {
 		return MetaRead{}
 	}
-	return lowerStage(parseStage(sc), 1, false).meta
+	return lowerStage(parseStage(sc), 1, lowering{d: dialect.DuckDB}).meta
 }

@@ -12,128 +12,123 @@ import (
 // awkProjection reports whether an awk program is exactly a per-row
 // projection SQL computes, a single unpatterned `{ print ... }`, and if
 // so returns the SQL expression for the raw column.
-func awkProjection(prog *awk.Program) (string, bool) {
+func awkProjection(prog *awk.Program) (sqlExpr, bool) {
 	if len(prog.Functions) > 0 || len(prog.Rules) != 1 {
-		return "", false
+		return nil, false
 	}
 	rule := &prog.Rules[0]
 	// A pattern is a filter (or BEGIN/END scope), which a projection
 	// would silently drop.
 	if rule.Pattern != nil || rule.Action == nil {
-		return "", false
+		return nil, false
 	}
 	return awkActionProjection(rule.Action)
 }
 
 // awkActionProjection is the SQL for an action that is a single print.
-func awkActionProjection(action *awk.Block) (string, bool) {
+func awkActionProjection(action *awk.Block) (sqlExpr, bool) {
 	if len(action.Stmts) != 1 {
-		return "", false
+		return nil, false
 	}
 	ps, ok := action.Stmts[0].(*awk.PrintStmt)
 	if !ok {
-		return "", false
+		return nil, false
 	}
 	return awkPrintToSQL(ps)
 }
 
 // awkPrintToSQL converts an awk print statement to a SQL expression.
 // Arguments join with OFS, which is " " (no flags, no BEGIN).
-func awkPrintToSQL(ps *awk.PrintStmt) (string, bool) {
+func awkPrintToSQL(ps *awk.PrintStmt) (sqlExpr, bool) {
 	if len(ps.Args) == 0 {
-		return "raw", true
+		return colRef("raw"), true
 	}
-	var parts []string
+	var parts []sqlExpr
 	for _, arg := range ps.Args {
 		sql, ok := awkPrintArgToSQL(arg)
 		if !ok {
-			return "", false
+			return nil, false
 		}
 		parts = append(parts, sql)
 	}
 	if len(parts) == 1 {
 		return parts[0], true
 	}
-	return "concat_ws(' ', " + strings.Join(parts, ", ") + ")", true
+	return concatWS{sep: strLit(" "), terms: parts}, true
 }
 
 // awkPrintArgToSQL converts a single awk print argument to a non-NULL
 // SQL string expression with the text awk would print.
-func awkPrintArgToSQL(expr awk.Expr) (string, bool) {
+func awkPrintArgToSQL(expr awk.Expr) (sqlExpr, bool) {
 	switch e := expr.(type) {
 	case *awk.FieldExpr:
 		// $0 is raw and $N is fields[N], which prints as "" when the
 		// line has fewer fields; see awkColumnToSQL.
 		c, ok := awkColumnToSQL(e)
 		if !ok {
-			return "", false
+			return nil, false
 		}
 		if c.nullable {
-			return fmt.Sprintf("COALESCE(%s, '')", c.sql), true
+			return coalesce{c.expr, strLit("")}, true
 		}
-		return c.sql, true
+		return c.expr, true
 
 	case *awk.StringLit:
-		return fmt.Sprintf("'%s'", escapeSQLString(e.Value)), true
+		return strLit(e.Value), true
 
 	case *awk.NumberLit:
 		// awk prints integers as integers and everything else via
 		// OFMT, which defaults to %.6g.
 		if e.Value == float64(int64(e.Value)) {
-			return fmt.Sprintf("'%d'", int64(e.Value)), true
+			return strLit(fmt.Sprintf("%d", int64(e.Value))), true
 		}
-		return fmt.Sprintf("'%.6g'", e.Value), true
+		return strLit(fmt.Sprintf("%.6g", e.Value)), true
 
 	case *awk.ConcatExpr:
 		left, lok := awkPrintArgToSQL(e.Left)
 		right, rok := awkPrintArgToSQL(e.Right)
 		if !lok || !rok {
-			return "", false
+			return nil, false
 		}
-		return fmt.Sprintf("concat(%s, %s)", left, right), true
+		return concatExpr{left, right}, true
 
 	case *awk.CallExpr:
 		// length prints as the integer it is.
 		c, ok := awkColumnToSQL(e)
 		if !ok {
-			return "", false
+			return nil, false
 		}
-		return "CAST(" + c.sql + " AS VARCHAR)", true
+		return castText{c.expr}, true
 
 	case *awk.IdentExpr:
 		if e.Name == "length" {
-			return "CAST(strlen(raw) AS VARCHAR)", true
+			return castText{byteLen{colRef("raw")}}, true
 		}
 		// A NULL column reaches awk as an unset variable, which prints
 		// as "". TS doesn't lower: awk sees its text form.
 		switch col := AwkMetaVars[e.Name]; col {
 		case "", "ts":
-			return "", false
+			return nil, false
 		case "line_no":
 			// A one-line event is line 0.
-			return "CAST(COALESCE(line_no, 0) AS VARCHAR)", true
+			return castText{coalesce{colRef("line_no"), numLit("0")}}, true
 		default:
-			return fmt.Sprintf("COALESCE(CAST(%s AS VARCHAR), '')", col), true
+			return coalesce{castText{colRef(col)}, strLit("")}, true
 		}
 	}
-	return "", false
+	return nil, false
 }
 
 // jqPrintPathSQL is the text jq prints for the value at a payload path. With
 // -r a string prints as its unescaped text.
-func jqPrintPathSQL(path jqPath, raw bool) string {
-	leaf := jqLeafSQL(path)
-	if !raw {
-		return leaf
-	}
-	p := path.jsonPath()
-	return fmt.Sprintf("CASE WHEN json_type(payload, %s) = 'VARCHAR' THEN json_extract_string(payload, %s) ELSE %s END", p, p, leaf)
+func jqPrintPathSQL(path jqPath, raw bool) sqlExpr {
+	return jsonText{path: path.jsonPath(), raw: raw}
 }
 
 // jqPrintTailSQL is the text jq prints for a lowered tail whose value is sql
 // (from jqValueToSQL). Only -r changes it, for a tail that is a bare string: a
 // payload path, or a string literal.
-func jqPrintTailSQL(tail jq.Expr, sql string, raw bool) string {
+func jqPrintTailSQL(tail jq.Expr, sql sqlExpr, raw bool) sqlExpr {
 	if !raw {
 		return sql
 	}
@@ -144,12 +139,12 @@ func jqPrintTailSQL(tail jq.Expr, sql string, raw bool) string {
 		}
 	case jq.LiteralExpr:
 		if e.Value.Type == jq.TypeString {
-			return "'" + escapeSQLString(e.Value.Str) + "'"
+			return strLit(e.Value.Str)
 		}
 	case jq.VarRef:
 		// A string meta-variable prints as its text, null as null.
 		if col, ok := JQMetaVars[e.Name]; ok && !JQNumericMetaColumn(col) {
-			return fmt.Sprintf("COALESCE(CAST(%s AS VARCHAR), 'null')", jqMetaSQL(col))
+			return coalesce{castText{jqMetaSQL(col)}, strLit("null")}
 		}
 	}
 	return sql
@@ -159,19 +154,19 @@ func jqPrintTailSQL(tail jq.Expr, sql string, raw bool) string {
 // value (compact JSON), IF the whole expression is fully expressible in SQL
 // (no leftover compute work). Returns ok=false otherwise. Arrays and objects
 // are written out as text rather than built with json_array and json_object,
-// so each number in them is written the way jq writes it (jqLeafSQL).
-func jqValueToSQL(expr jq.Expr) (string, bool) {
+// so each number in them is written the way jq writes it (jsonText).
+func jqValueToSQL(expr jq.Expr) (sqlExpr, bool) {
 	switch e := expr.(type) {
 	case jq.VarRef:
 		col, isMeta := JQMetaVars[e.Name]
 		if !isMeta {
-			return "", false
+			return nil, false
 		}
 		// A string column is its text, a numeric one a number; NULL is null.
-		return fmt.Sprintf("COALESCE(CAST(to_json(%s) AS VARCHAR), 'null')", jqMetaSQL(col)), true
+		return coalesce{castText{jsonOf{jqMetaSQL(col)}}, strLit("null")}, true
 
 	case jq.FieldExpr:
-		return jqLeafSQL(jqPath{"." + e.Name}), true
+		return jsonText{path: jqPath{"." + e.Name}.jsonPath()}, true
 
 	case jq.LiteralExpr:
 		return jqLiteralToSQL(e.Value)
@@ -179,52 +174,64 @@ func jqValueToSQL(expr jq.Expr) (string, bool) {
 	case jq.PipeExpr:
 		// Pure path chain like .a.b[0] / .a | .b.
 		if path, ok := jqPathOf(expr); ok && len(path) > 0 {
-			return jqLeafSQL(path), true
+			return jsonText{path: path.jsonPath()}, true
 		}
-		return "", false
+		return nil, false
 
 	case jq.IndexExpr:
 		// Standalone .[n] would need a chained subject — not pushable on its own.
-		return "", false
+		return nil, false
 
 	case jq.ObjectExpr:
-		var parts []string
+		var parts []sqlExpr
 		for _, p := range e.Pairs {
 			keyStr, ok := jqObjKeyAsString(p.Key)
 			if !ok {
-				return "", false
+				return nil, false
 			}
 			val, ok := jqValueToSQL(p.Value)
 			if !ok {
-				return "", false
+				return nil, false
 			}
-			parts = append(parts, fmt.Sprintf("'%s:' || %s", escapeSQLString(jqStringJSON(keyStr)), val))
+			parts = append(parts, appendExpr{strLit(jqStringJSON(keyStr) + ":"), val})
 		}
 		if len(parts) == 0 {
-			return "'{}'", true
+			return strLit("{}"), true
 		}
-		return "'{' || " + strings.Join(parts, " || ',' || ") + " || '}'", true
+		return appendAround("{", parts, "}"), true
 
 	case jq.ArrayExpr:
 		elems := jqFlattenComma(e.Elems)
-		var parts []string
+		var parts []sqlExpr
 		for _, elem := range elems {
 			val, ok := jqValueToSQL(elem)
 			if !ok {
-				return "", false
+				return nil, false
 			}
 			parts = append(parts, val)
 		}
-		return "'[' || " + strings.Join(parts, " || ',' || ") + " || ']'", true
+		return appendAround("[", parts, "]"), true
 	}
-	return "", false
+	return nil, false
+}
+
+// appendAround is parts joined by commas between open and close, as text.
+func appendAround(open string, parts []sqlExpr, close string) sqlExpr {
+	out := appendExpr{strLit(open)}
+	for i, p := range parts {
+		if i > 0 {
+			out = append(out, strLit(","))
+		}
+		out = append(out, p)
+	}
+	return append(out, strLit(close))
 }
 
 // jqValueGuards are the conditions under which every payload path a
 // jqValueToSQL expression reads is readable: where one isn't, jq errors and
 // the row prints nothing. Each condition once.
-func jqValueGuards(expr jq.Expr) []string {
-	var guards []string
+func jqValueGuards(expr jq.Expr) []sqlExpr {
+	var guards []sqlExpr
 	seen := map[string]bool{}
 	var walk func(e jq.Expr)
 	walk = func(e jq.Expr) {
@@ -232,8 +239,8 @@ func jqValueGuards(expr jq.Expr) []string {
 		case jq.FieldExpr, jq.PipeExpr:
 			if path, ok := jqPathOf(e); ok {
 				for _, g := range path.guards() {
-					if !seen[g] {
-						seen[g] = true
+					if key := fmt.Sprint(g); !seen[key] {
+						seen[key] = true
 						guards = append(guards, g)
 					}
 				}
@@ -253,21 +260,21 @@ func jqValueGuards(expr jq.Expr) []string {
 }
 
 // jqLiteralToSQL emits the SQL text jq prints for a literal value.
-func jqLiteralToSQL(v jq.Value) (string, bool) {
+func jqLiteralToSQL(v jq.Value) (sqlExpr, bool) {
 	switch v.Type {
 	case jq.TypeString:
-		return "'" + escapeSQLString(jqStringJSON(v.Str)) + "'", true
+		return strLit(jqStringJSON(v.Str)), true
 	case jq.TypeNumber:
-		return "'" + jqNumberText(v.Num) + "'", true
+		return strLit(jqNumberText(v.Num)), true
 	case jq.TypeBool:
 		if v.Bool {
-			return "'true'", true
+			return strLit("true"), true
 		}
-		return "'false'", true
+		return strLit("false"), true
 	case jq.TypeNull:
-		return "'null'", true
+		return strLit("null"), true
 	}
-	return "", false
+	return nil, false
 }
 
 // jqObjKeyAsString returns the literal string for a jq object key. Both
@@ -294,7 +301,7 @@ func jqFlattenComma(expr jq.Expr) []jq.Expr {
 // tab by default), print the listed fields, in list order and repeats
 // included, joined by D, skipping fields past the last. A line without
 // D is one field. Any other flag stays opaque.
-func cutProjection(args []string) (string, reason) {
+func cutProjection(args []string) (sqlExpr, reason) {
 	delim, spec := "\t", ""
 	for i := 0; i < len(args); i++ {
 		switch arg := args[i]; {
@@ -310,43 +317,43 @@ func cutProjection(args []string) (string, reason) {
 		case strings.HasPrefix(arg, "-f") && len(arg) > 2:
 			spec = arg[2:]
 		default:
-			return "", because(reasonCutArgs)
+			return nil, because(reasonCutArgs)
 		}
 	}
 	if spec == "" {
-		return "", because(reasonCutArgs)
+		return nil, because(reasonCutArgs)
 	}
 	if delim == "" {
-		return "", because(reasonCutDelimiter)
+		return nil, because(reasonCutDelimiter)
 	}
-	d := "'" + escapeSQLString(delim) + "'"
-	parts := "string_split(raw, " + d + ")"
-	var lists []string
+	d := strLit(delim)
+	parts := splitExpr{colRef("raw"), d}
+	var lists []sqlExpr
 	for _, item := range strings.Split(spec, ",") {
 		from, to, isRange := strings.Cut(item, "-")
 		lo, err := strconv.Atoi(from)
 		if err != nil || lo < 1 {
-			return "", because(reasonCutFields)
+			return nil, because(reasonCutFields)
 		}
 		switch {
 		case !isRange:
-			lists = append(lists, fmt.Sprintf("[%s[%d]]", parts, lo))
+			lists = append(lists, listElement{parts, lo})
 		case to == "":
-			lists = append(lists, fmt.Sprintf("%s[%d:]", parts, lo))
+			lists = append(lists, listFrom{parts, lo})
 		default:
 			// N-M with N > M lists nothing, in warp and in the slice.
 			hi, err := strconv.Atoi(to)
 			if err != nil {
-				return "", because(reasonCutFields)
+				return nil, because(reasonCutFields)
 			}
-			lists = append(lists, fmt.Sprintf("%s[%d:%d]", parts, lo, hi))
+			lists = append(lists, listRange{parts, lo, hi})
 		}
 	}
 	list := lists[0]
 	if len(lists) > 1 {
-		list = "flatten([" + strings.Join(lists, ", ") + "])"
+		list = listFlatten(lists)
 	}
-	// array_to_string skips the NULLs a field past the last reads as,
-	// and returns NULL when every field is past it.
-	return "COALESCE(array_to_string(" + list + ", " + d + "), '')", reason{}
+	// ListJoin skips the NULLs a field past the last reads as, and returns NULL
+	// when every field is past it.
+	return coalesce{listJoin{list, d}, strLit("")}, reason{}
 }

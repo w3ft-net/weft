@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/warp/pkg/jq"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // TestJqFrontend_StringInterp pins that a select(...) prefix lowers to
@@ -44,7 +45,7 @@ func TestJqFrontend_StringInterp(t *testing.T) {
 			} else {
 				t.Logf("parsed as %T", expr)
 			}
-			ls := lowerStage(stageInfo{cmd: "jq", args: []string{tt.expression}}, 1, false)
+			ls := lowerStage(stageInfo{cmd: "jq", args: []string{tt.expression}}, 1, lowering{d: dialect.DuckDB})
 			if len(ls.nodes) != 2 {
 				t.Fatalf("want a prefilter and an opaque stage, got %#v", ls.nodes)
 			}
@@ -52,8 +53,8 @@ func TestJqFrontend_StringInterp(t *testing.T) {
 			if !ok || f.exact {
 				t.Fatalf("a jq select before a tail is a prefilter, got %#v", ls.nodes[0])
 			}
-			if f.pred != tt.wantPredicate {
-				t.Errorf("predicate\n got: %s\nwant: %s", f.pred, tt.wantPredicate)
+			if got := render(f.pred, dialect.DuckDB); got != tt.wantPredicate {
+				t.Errorf("predicate\n got: %s\nwant: %s", got, tt.wantPredicate)
 			}
 			if op, ok := ls.nodes[1].(*opaqueNode); !ok || op.why.code != reasonJqTail {
 				t.Errorf("the stage must still run, opaque for its tail: %#v", ls.nodes[1])

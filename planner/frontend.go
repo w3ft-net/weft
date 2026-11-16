@@ -4,17 +4,27 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/awk"
+
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // lowerStage runs a stage's frontend: it lowers the stage, from its own
 // syntax tree, into IR nodes. Unknown commands, flags and constructs
 // become an opaqueNode with the reason.
-func lowerStage(s stageInfo, index int, typed bool) *loweredStage {
+// lowering is what a frontend lowers against: whether every field a pipeline
+// compares with a number holds a finite decimal (see typed.go), and the
+// dialect the SQL it writes is in.
+type lowering struct {
+	typed bool
+	d     dialect.Dialect
+}
+
+func lowerStage(s stageInfo, index int, lw lowering) *loweredStage {
 	ls := &loweredStage{stageInfo: s, index: index}
 	a := at(index)
 	switch s.cmd {
 	case "awk":
-		ls.nodes = lowerAwk(ls, a, typed)
+		ls.nodes = lowerAwk(ls, a, lw)
 	case "jq":
 		ls.nodes = lowerJq(ls, a)
 	case "grep":
@@ -22,7 +32,7 @@ func lowerStage(s stageInfo, index int, typed bool) *loweredStage {
 		args, count := grepCount(s.args)
 		pred, pat, why := grepFilter(args)
 		switch {
-		case pred == "":
+		case pred == nil:
 			ls.nodes = []node{&opaqueNode{at: a, why: why}}
 		case count:
 			// grep -c counts the lines that match, not the rows that do
@@ -37,7 +47,7 @@ func lowerStage(s stageInfo, index int, typed bool) *loweredStage {
 		}
 	case "sed":
 		_, _, ls.rowwise = sedAddressFilter(s.args)
-		if pred := trySedPushdown(s.args); pred != "" {
+		if pred := trySedPushdown(s.args); pred != nil {
 			ls.nodes = []node{&filterNode{at: a, pred: pred, exact: true, lineWise: true}}
 		} else {
 			ls.nodes = []node{&opaqueNode{at: a, why: because(reasonSedProgram)}}
@@ -102,12 +112,33 @@ func lowerStage(s stageInfo, index int, typed bool) *loweredStage {
 	default:
 		ls.nodes = []node{&opaqueNode{at: a, why: reason{code: reasonNoFrontend, detail: s.cmd}}}
 	}
+	// A filter the store's dialect can't spell runs in compute with the rest of
+	// the stage. So does a jq stage, when the store can't read a payload.
+	if s.cmd == "jq" && !lw.d.Supports(dialect.JSON) {
+		ls.nodes = []node{&opaqueNode{at: a, why: because(reasonDialect)}}
+		return ls
+	}
+	for _, n := range ls.nodes {
+		var e sqlExpr
+		unsupported := false
+		switch n := n.(type) {
+		case *filterNode:
+			e = n.pred
+			unsupported = n.hoisted && !lw.d.Supports(dialect.Lines)
+		case *projectNode:
+			e = n.expr
+		}
+		if unsupported || !supported(e, lw.d) {
+			ls.nodes = []node{&opaqueNode{at: a, why: because(reasonDialect)}}
+			break
+		}
+	}
 	return ls
 }
 
 // lowerAwk is awk's frontend. Flags (-F, -v) change how awk splits and
 // what its variables hold, so only a bare program lowers.
-func lowerAwk(ls *loweredStage, a at, typed bool) []node {
+func lowerAwk(ls *loweredStage, a at, lw lowering) []node {
 	src, ok := awkProgramArg(ls.args)
 	if !ok {
 		// -f: the program isn't on the command line, so assume it reads
@@ -141,14 +172,14 @@ func lowerAwk(ls *loweredStage, a at, typed bool) []node {
 		ls.fieldsWhy = why
 	}
 
-	pd, why := tryAwkPushdown(prog, typed)
+	pd, why := tryAwkPushdown(prog, lw)
 	if pd != nil && (pd.limit > 0 || pd.offset > 0) {
 		return []node{&limitNode{at: a, n: pd.limit, offset: pd.offset}}
 	}
-	nodes := awkRowStage(prog, pd, why, typed).nodes(a)
+	nodes := awkRowStage(prog, pd, why, lw).nodes(a)
 	if agg, ok := awkKeyed(prog); ok && len(nodes) == 1 {
 		if o, ok := nodes[0].(*opaqueNode); ok {
-			return []node{&aggregateNode{at: a, agg: agg, typed: typed, why: o.why}}
+			return []node{&aggregateNode{at: a, agg: agg, typed: lw.typed, why: o.why}}
 		}
 	}
 	return nodes
@@ -156,7 +187,7 @@ func lowerAwk(ls *loweredStage, a at, typed bool) []node {
 
 // awkRowStage says what an awk program does to a row in the terms every
 // row stage shares: pd is tryAwkPushdown's predicate and why its reason.
-func awkRowStage(prog *awk.Program, pd *awkPushdown, why reason, typed bool) rowStage {
+func awkRowStage(prog *awk.Program, pd *awkPushdown, why reason, lw lowering) rowStage {
 	if pd == nil {
 		if expr, ok := awkProjection(prog); ok {
 			return rowStage{proj: expr}
@@ -176,7 +207,7 @@ func awkRowStage(prog *awk.Program, pd *awkPushdown, why reason, typed bool) row
 	}
 	// A pattern SQL evaluates exactly, over an action it can print.
 	if len(prog.Rules) == 1 {
-		if pat := extractAwkPattern(prog.Rules[0].Pattern, typed); pat != nil && pat.exact {
+		if pat := extractAwkPattern(prog.Rules[0].Pattern, lw); pat != nil && pat.exact {
 			if expr, ok := awkActionProjection(prog.Rules[0].Action); ok {
 				rs.predExact, rs.proj = true, expr
 				return rs
@@ -254,24 +285,24 @@ func lowerJq(ls *loweredStage, a at) []node {
 // jqRowStage says what a jq program does to a row in the terms every row
 // stage shares.
 func jqRowStage(p *jqProgram) rowStage {
-	pred := strings.Join(p.selects, " AND ")
+	pred := and(p.selects...)
 	if p.allLower && p.tail == nil && len(p.subject) == 0 {
 		return rowStage{pred: pred, predExact: true, typed: p.typed}
 	}
 	if p.allLower {
 		// The subject is what the program holds. A tail reads its own
 		// paths from the payload, so it only lowers with no subject.
-		var sql string
+		var sql sqlExpr
 		ok := false
 		switch {
 		case p.tail == nil:
-			pred = strings.Join(append(p.subject.guards(), p.selects...), " AND ")
+			pred = and(append(p.subject.guards(), p.selects...)...)
 			sql, ok = jqPrintPathSQL(p.subject, p.raw), true
 		case len(p.subject) == 0:
 			if sql, ok = jqValueToSQL(p.tail); ok {
 				// Every path it reads must be readable, or jq errors and
 				// drops the row.
-				pred = strings.Join(append(jqValueGuards(p.tail), p.selects...), " AND ")
+				pred = and(append(jqValueGuards(p.tail), p.selects...)...)
 				sql = jqPrintTailSQL(p.tail, sql, p.raw)
 			}
 		}
@@ -291,9 +322,9 @@ func jqRowStage(p *jqProgram) rowStage {
 // becomes IR, so every language folds a filter and a projection the same
 // way.
 type rowStage struct {
-	pred      string      // SQL predicate on the row, or "" for none
+	pred      sqlExpr     // SQL predicate on the row, or nil for none
 	predExact bool        // pred is exactly the stage's filter, not just a prefilter
-	proj      string      // SQL for the text the stage prints, or "" if rows pass through
+	proj      sqlExpr     // SQL for the text the stage prints, or nil if rows pass through
 	opaque    bool        // the stage does more than pred and proj, so it still runs
 	why       reason      // why the stage still runs
 	predWhy   reason      // why pred is only a prefilter; why if unset
@@ -302,7 +333,7 @@ type rowStage struct {
 
 func (rs rowStage) nodes(a at) []node {
 	if rs.opaque {
-		if rs.pred == "" {
+		if rs.pred == nil {
 			return []node{&opaqueNode{at: a, why: rs.why}}
 		}
 		return []node{
@@ -311,10 +342,10 @@ func (rs rowStage) nodes(a at) []node {
 		}
 	}
 	var nodes []node
-	if rs.pred != "" || rs.proj == "" {
+	if rs.pred != nil || rs.proj == nil {
 		nodes = append(nodes, &filterNode{at: a, pred: rs.pred, exact: true, typed: rs.typed})
 	}
-	if rs.proj != "" {
+	if rs.proj != nil {
 		nodes = append(nodes, &projectNode{at: a, expr: rs.proj})
 	}
 	return nodes

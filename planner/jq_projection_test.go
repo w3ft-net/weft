@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // These tests describe jq projection optimizations: object construction,
@@ -21,7 +23,9 @@ func jqProj(inner string) string { return inner + " as raw" }
 
 // leaf is the SQL for the text jq prints for the value at a payload path,
 // given as its steps (".foo", ".bar", "[0]").
-func leaf(steps ...string) string { return jqLeafSQL(jqPath(steps)) }
+func leaf(steps ...string) string {
+	return render(jsonText{path: jqPath(steps).jsonPath()}, dialect.DuckDB)
+}
 
 // jqObj and jqArr are the SQL that writes an object or array out as text,
 // from the SQL for each value (an object's as key, value pairs).
@@ -198,7 +202,7 @@ func TestRawExpr_JqInternalPipeBreak(t *testing.T) {
 				t.Fatalf("Plan: %v", err)
 			}
 			// The stage reads the payload, not raw: just the key it reads.
-			if want := "SELECT " + narrowedPayloadSQL([]string{key}) + " as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs"; !strings.HasPrefix(plan.ShardSQL, want) {
+			if want := "SELECT " + render(narrowedPayloadSQL([]string{key}), dialect.DuckDB) + " as raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs"; !strings.HasPrefix(plan.ShardSQL, want) {
 				t.Errorf("expected the payload's %q as the stage's input, got: %s", key, plan.ShardSQL)
 			}
 			stage := strings.TrimPrefix(pipeline, "cat vimgym.log | ")

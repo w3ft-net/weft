@@ -1,6 +1,10 @@
 package planner
 
-import "time"
+import (
+	"time"
+
+	"github.com/w3ft-net/weft/backends/logs/dialect"
+)
 
 // The aggregates behind a bare `trace`, the list of recent traces. A trace's
 // lines sit on several shards (shards are per service), so the list takes two
@@ -10,14 +14,11 @@ import "time"
 // newest traces' summaries in one step would leave out the lines that sit on
 // a shard where a trace is not among the newest.
 const (
-	AggregateTraceIDs  = "trace_ids"
-	AggregateTraceList = "trace_list"
+	AggregateTraceIDs  = dialect.AggTraceIDs
+	AggregateTraceList = dialect.AggTraceList
 
 	TraceListLimit = 50
 )
-
-// traceRootRow selects the rows of a trace's root span: a span with no parent.
-const traceRootRow = "span_name IS NOT NULL AND span_name <> '' AND (parent_span_id IS NULL OR parent_span_id = '')"
 
 // TraceStatsQuery is the second step of the trace list.
 type TraceStatsQuery struct {
@@ -47,8 +48,8 @@ func (t *TraceStatsQuery) WithIDs(ids []string) []any {
 // A user who may read only some namespaces (scope) is the exception: the
 // summary then describes the trace as far as they can see it, or its service
 // list and counts would reveal the namespaces they can't.
-func planTraceStats(tn group, start, end time.Time, scope []string) *TraceStatsQuery {
-	sql := newSQLBuilder()
+func planTraceStats(d dialect.Dialect, tn group, start, end time.Time, scope []string) *TraceStatsQuery {
+	sql := newSQLBuilder(d)
 	sql.addGroup(tn)
 	sql.addTimeBounds(start, end)
 	addInPredicate(sql, "namespace", scope)

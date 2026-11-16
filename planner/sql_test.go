@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 	"github.com/w3ft-net/weft/shape/shapetest"
 )
 
@@ -12,7 +13,7 @@ import (
 // Pins that the empty builder emits a valid query rather than a
 // half-formed string.
 func TestQueryBuilder_BareSelect(t *testing.T) {
-	q := newSQLBuilder()
+	q := newSQLBuilder(dialect.DuckDB)
 	got := q.build()
 	want := "SELECT raw, ts, CAST(event_id AS VARCHAR) AS event_id, line_no FROM logs"
 	if got != want {
@@ -26,7 +27,7 @@ func TestQueryBuilder_BareSelect(t *testing.T) {
 // emit them in standard SQL order regardless of the order setters
 // were called in.
 func TestQueryBuilder_AllClauses(t *testing.T) {
-	q := newSQLBuilder()
+	q := newSQLBuilder(dialect.DuckDB)
 	q.addPredicate("namespace = 'vimgym'")
 	q.addPredicate("level = 'ERROR'")
 	q.setOrderLimit("ts ASC", 100)
@@ -46,7 +47,7 @@ func TestQueryBuilder_AllClauses(t *testing.T) {
 // WHERE clause — see customer_predicate_test.go for the security-
 // boundary rationale). Args appear in render order.
 func TestQueryBuilder_GroupAndBoundsOrder(t *testing.T) {
-	q := newSQLBuilder()
+	q := newSQLBuilder(dialect.DuckDB)
 	q.addGroup(groupOfTest(1))
 	q.addTimeBounds(
 		time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC),
@@ -77,7 +78,7 @@ func TestQueryBuilder_GroupAndBoundsOrder(t *testing.T) {
 // shape Step 3 hands tail: inner does ts-DESC + LIMIT N, outer
 // flips to ts-ASC for chronological display.
 func TestQueryBuilder_Wrap(t *testing.T) {
-	inner := newSQLBuilder()
+	inner := newSQLBuilder(dialect.DuckDB)
 	inner.addPredicate("namespace = 'vimgym'")
 	inner.setOrderLimit("ts DESC", 50)
 
@@ -94,7 +95,7 @@ func TestQueryBuilder_Wrap(t *testing.T) {
 // able to reason about the inner after wrapping (e.g. for the merge-key
 // classification in shard_mode.go which inspects orderBy).
 func TestQueryBuilder_WrapPreservesInner(t *testing.T) {
-	inner := newSQLBuilder()
+	inner := newSQLBuilder(dialect.DuckDB)
 	inner.addPredicate("namespace = 'vimgym'")
 	inner.setOrderLimit("ts DESC", 50)
 
@@ -115,7 +116,7 @@ func TestQueryBuilder_WrapPreservesInner(t *testing.T) {
 // matches positional binding semantics — once Predicate emitters
 // switch to ? + Args, the binding order Just Works.
 func TestQueryBuilder_ToSQLArgs(t *testing.T) {
-	inner := newSQLBuilder()
+	inner := newSQLBuilder(dialect.DuckDB)
 	inner.predicates = append(inner.predicates, Predicate{
 		SQL: "namespace = ?", Args: []ArgSource{{Kind: ArgLiteral, Value: "vimgym"}},
 	})
@@ -151,7 +152,7 @@ func TestQueryBuilder_ToSQLArgs(t *testing.T) {
 // and buildWith() must leave the builder's stored fields untouched
 // so a subsequent build() with no override behaves as expected.
 func TestQueryBuilder_BuildWithOverride(t *testing.T) {
-	q := newSQLBuilder()
+	q := newSQLBuilder(dialect.DuckDB)
 	q.addPredicate("namespace = 'vimgym'")
 	q.setOrderLimit("ts DESC", 50)
 

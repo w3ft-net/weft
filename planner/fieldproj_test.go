@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/awk"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // TestAwkFieldReads: a program is cut down to its fields only when nothing it
@@ -102,7 +103,7 @@ func TestProjectFields_Plan(t *testing.T) {
 		{`cat vimgym.log | awk '{ c[$1]++ } END { for (k in c) print k, c[k] }'`, false},
 	} {
 		t.Run(tt.pipeline, func(t *testing.T) {
-			plan, c, err := compileBare(tt.pipeline, "", time.Time{}, time.Time{})
+			plan, c, err := compileBare(dialect.DuckDB, tt.pipeline, "", time.Time{}, time.Time{})
 			if err != nil {
 				t.Fatal(err)
 			}

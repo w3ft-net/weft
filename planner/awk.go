@@ -9,11 +9,12 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/awk"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // awkPushdown holds the result of analyzing an awk program for pushdown.
 type awkPushdown struct {
-	predicate string // SQL WHERE fragment, or "" if not pushable
+	predicate sqlExpr // SQL WHERE fragment, or nil if not pushable
 	// exact is true when the predicate is exactly the awk expression it
 	// came from (or, for a whole program, when SQL computes the stage's
 	// output, so the stage is dropped from compute). Otherwise the
@@ -61,7 +62,7 @@ var AwkMetaVars = metaVarNames(strings.ToUpper)
 //
 // The reason says why nothing pushed, or why the stage still runs; the
 // pushdown's own why says why its predicate is only a prefilter.
-func tryAwkPushdown(prog *awk.Program, typed bool) (*awkPushdown, reason) {
+func tryAwkPushdown(prog *awk.Program, lw lowering) (*awkPushdown, reason) {
 	if len(prog.Functions) > 0 {
 		return nil, because(reasonAwkFunction)
 	}
@@ -94,7 +95,7 @@ func tryAwkPushdown(prog *awk.Program, typed bool) (*awkPushdown, reason) {
 
 	// NR window: only as the whole program, where it's a LIMIT/OFFSET.
 	if exact {
-		if pd := extractAwkPattern(main[0].Pattern, typed); pd != nil && !pd.nrSentinel && pd.limit > 0 {
+		if pd := extractAwkPattern(main[0].Pattern, lw); pd != nil && !pd.nrSentinel && pd.limit > 0 {
 			return pd, reason{}
 		}
 	}
@@ -115,10 +116,10 @@ func tryAwkPushdown(prog *awk.Program, typed bool) (*awkPushdown, reason) {
 	// patternWhy is the predicate's reason to be only a prefilter: part
 	// of a pattern doesn't lower.
 	var patternWhy reason
-	var preds []string
+	var preds []sqlExpr
 	var leaves []typedLeaf
 	for _, r := range main {
-		pd := extractAwkPattern(r.Pattern, typed)
+		pd := extractAwkPattern(r.Pattern, lw)
 		if pd == nil {
 			return nil, awkPatternReason(r.Pattern)
 		}
@@ -138,10 +139,7 @@ func tryAwkPushdown(prog *awk.Program, typed bool) (*awkPushdown, reason) {
 	if len(preds) == 1 {
 		return &awkPushdown{predicate: preds[0], exact: exact, why: patternWhy, typed: leaves}, why
 	}
-	for i, p := range preds {
-		preds[i] = parenthesizeIfCompound(p)
-	}
-	return &awkPushdown{predicate: "(" + strings.Join(preds, " OR ") + ")", why: patternWhy, typed: leaves}, why
+	return &awkPushdown{predicate: orExpr{terms: preds, wrap: true}, why: patternWhy, typed: leaves}, why
 }
 
 // actionLowers is whether a rule's action is something SQL computes, so a
@@ -184,17 +182,17 @@ func isAwkComputedField(n any) bool {
 }
 
 // extractAwkPattern lowers one main rule's pattern.
-func extractAwkPattern(p awk.Pattern, typed bool) *awkPushdown {
+func extractAwkPattern(p awk.Pattern, lw lowering) *awkPushdown {
 	switch pat := p.(type) {
 	case *awk.ExprPattern:
-		return extractAwkExpr(pat.Expr, typed)
+		return extractAwkExpr(pat.Expr, lw)
 	case *awk.RegexPattern:
 		// Defensive: current warp parsers represent a bare-regex pattern
 		// (awk '/pat/') as an ExprPattern wrapping a RegexLit, which
 		// extractAwkRegexLit handles. This branch stays for any warp
 		// version/path that still emits a dedicated RegexPattern.
 		return &awkPushdown{
-			predicate: fmt.Sprintf("regexp_matches(raw, '%s')", escapeSQLString(pat.Pattern)),
+			predicate: regexExpr{col: colRef("raw"), pattern: pat.Pattern},
 			exact:     true,
 		}
 	}
@@ -286,10 +284,10 @@ func isDefaultPrintAction(block *awk.Block) bool {
 }
 
 // extractAwkExpr recursively extracts a SQL predicate from an awk expression.
-func extractAwkExpr(expr awk.Expr, typed bool) *awkPushdown {
+func extractAwkExpr(expr awk.Expr, lw lowering) *awkPushdown {
 	switch e := expr.(type) {
 	case *awk.BinaryExpr:
-		return extractAwkBinary(e, typed)
+		return extractAwkBinary(e, lw)
 	case *awk.MatchExpr:
 		return extractAwkMatch(e)
 	case *awk.RegexLit:
@@ -307,19 +305,19 @@ func extractAwkExpr(expr awk.Expr, typed bool) *awkPushdown {
 // regexp_matches(raw, 'pat') is DuckDB's substring/find form.
 func extractAwkRegexLit(e *awk.RegexLit) *awkPushdown {
 	return &awkPushdown{
-		predicate: fmt.Sprintf("regexp_matches(raw, '%s')", escapeSQLString(e.Pattern)),
+		predicate: regexExpr{col: colRef("raw"), pattern: e.Pattern},
 		exact:     true,
 	}
 }
 
-func extractAwkBinary(e *awk.BinaryExpr, typed bool) *awkPushdown {
+func extractAwkBinary(e *awk.BinaryExpr, lw lowering) *awkPushdown {
 	switch e.Op {
 	case "&&":
-		return extractAwkLogical(e, "AND", typed)
+		return extractAwkLogical(e, "AND", lw)
 	case "||":
-		return extractAwkLogical(e, "OR", typed)
+		return extractAwkLogical(e, "OR", lw)
 	case "==", "!=", "<", ">", "<=", ">=":
-		return extractAwkComparison(e, typed)
+		return extractAwkComparison(e, lw)
 	}
 	return nil
 }
@@ -328,9 +326,9 @@ func extractAwkBinary(e *awk.BinaryExpr, typed bool) *awkPushdown {
 // keeps the side that does, as a prefilter: dropping a conjunct only
 // widens the match. An OR needs both sides. There's no NOT over a
 // compound for the same reason: negating a prefilter would narrow it.
-func extractAwkLogical(e *awk.BinaryExpr, sqlOp string, typed bool) *awkPushdown {
-	left := extractAwkExpr(e.Left, typed)
-	right := extractAwkExpr(e.Right, typed)
+func extractAwkLogical(e *awk.BinaryExpr, sqlOp string, lw lowering) *awkPushdown {
+	left := extractAwkExpr(e.Left, lw)
+	right := extractAwkExpr(e.Right, lw)
 	if sqlOp == "AND" && (left == nil) != (right == nil) {
 		side := left
 		if side == nil {
@@ -364,13 +362,11 @@ func extractAwkLogical(e *awk.BinaryExpr, sqlOp string, typed bool) *awkPushdown
 		why = right.why
 	}
 	if sqlOp == "OR" {
-		lp := parenthesizeIfCompound(left.predicate)
-		rp := parenthesizeIfCompound(right.predicate)
-		return &awkPushdown{predicate: fmt.Sprintf("(%s OR %s)", lp, rp), exact: exact, why: why,
+		return &awkPushdown{predicate: orExpr{terms: []sqlExpr{left.predicate, right.predicate}, wrap: true}, exact: exact, why: why,
 			typed: append(slices.Clone(left.typed), right.typed...)}
 	}
 	return &awkPushdown{
-		predicate: fmt.Sprintf("%s AND %s", left.predicate, right.predicate),
+		predicate: andExpr{left.predicate, right.predicate},
 		exact:     exact,
 		why:       why,
 		typed:     append(slices.Clone(left.typed), right.typed...),
@@ -400,7 +396,7 @@ func combineNRBounds(a, b *awkPushdown) *awkPushdown {
 	}
 }
 
-func extractAwkComparison(e *awk.BinaryExpr, typed bool) *awkPushdown {
+func extractAwkComparison(e *awk.BinaryExpr, lw lowering) *awkPushdown {
 	if nr := tryNRComparison(e); nr != nil {
 		return nr
 	}
@@ -418,9 +414,9 @@ func extractAwkComparison(e *awk.BinaryExpr, typed bool) *awkPushdown {
 	if !ok {
 		return nil
 	}
-	sqlOp := op
+	cmp := dialect.CmpOp(op)
 	if op == "==" {
-		sqlOp = "="
+		cmp = dialect.EQ
 	}
 
 	if c.number {
@@ -429,11 +425,11 @@ func extractAwkComparison(e *awk.BinaryExpr, typed bool) *awkPushdown {
 		if !ok {
 			return nil
 		}
-		sql := c.sql
+		col := c.expr
 		if compareNumbers(0, l.Value, op) {
-			sql = fmt.Sprintf("COALESCE(%s, 0)", sql)
+			col = coalesce{col, numLit("0")}
 		}
-		return &awkPushdown{predicate: fmt.Sprintf("%s %s %s", sql, sqlOp, formatAwkNumber(l.Value)), exact: true}
+		return &awkPushdown{predicate: cmpExpr{cmp, col, numLit(formatAwkNumber(l.Value))}, exact: true}
 	}
 
 	// A string column: awk compares as numbers when both sides look
@@ -441,32 +437,32 @@ func extractAwkComparison(e *awk.BinaryExpr, typed bool) *awkPushdown {
 	// unset variable or a missing field: 0 as a number, "" as a string.
 	text, n, numeric := awkLiteral(lit)
 	if !numeric {
-		sql := c.sql
+		col := c.expr
 		if c.nullable && compareStrings("", text, op) {
-			sql = fmt.Sprintf("COALESCE(%s, '')", sql)
+			col = coalesce{col, strLit("")}
 		}
-		return &awkPushdown{predicate: fmt.Sprintf("%s %s '%s'", sql, sqlOp, escapeSQLString(text)), exact: true}
+		return &awkPushdown{predicate: cmpExpr{cmp, col, strLit(text)}, exact: true}
 	}
 	// A field the shard has said holds a finite decimal in every row is a
 	// number whatever the row, so the cast alone is awk's comparison.
-	if typed && c.field > 0 {
-		return &awkPushdown{predicate: typedComparison(c.sql, sqlOp, n), exact: true}
+	if lw.typed && c.field > 0 {
+		return &awkPushdown{predicate: typedComparison(c.expr, cmp, n), exact: true}
 	}
 	// Which comparison applies depends on whether the value looks
 	// numeric to awk (Go's strconv.ParseFloat), which SQL can't decide
 	// exactly. A prefilter that holds under either reading is safe;
 	// the forms DuckDB doesn't parse as a number (inf, nan, hex) are
 	// kept for awk to decide.
-	parts := []string{
-		fmt.Sprintf("TRY_CAST(%s AS DOUBLE) %s %s", c.sql, sqlOp, strconv.FormatFloat(n, 'g', -1, 64)),
-		fmt.Sprintf("%s %s '%s'", c.sql, sqlOp, escapeSQLString(text)),
-		fmt.Sprintf("regexp_matches(%s, '^[+-]?(?i:inf|nan|0x)')", c.sql),
+	parts := []sqlExpr{
+		cmpExpr{cmp, tryCastDouble{c.expr}, numLit(strconv.FormatFloat(n, 'g', -1, 64))},
+		cmpExpr{cmp, c.expr, strLit(text)},
+		regexExpr{col: c.expr, pattern: `^[+-]?(?i:inf|nan|0x)`},
 	}
 	if c.nullable && compareNumbers(0, n, op) {
-		parts = append([]string{c.sql + " IS NULL"}, parts...)
+		parts = append([]sqlExpr{isNull{c.expr}}, parts...)
 	}
 	pd := &awkPushdown{
-		predicate: "(" + strings.Join(parts, " OR ") + ")",
+		predicate: orExpr{terms: parts},
 		why:       because(reasonAwkStrnum),
 	}
 	if c.field > 0 {
@@ -476,7 +472,7 @@ func extractAwkComparison(e *awk.BinaryExpr, typed bool) *awkPushdown {
 		pd.typed = []typedLeaf{{
 			locator: "$" + strconv.Itoa(c.field),
 			base:    pd.predicate,
-			typed:   typedComparison(c.sql, sqlOp, n),
+			typed:   typedComparison(c.expr, cmp, n),
 		}}
 	}
 	return pd
@@ -484,8 +480,8 @@ func extractAwkComparison(e *awk.BinaryExpr, typed bool) *awkPushdown {
 
 // typedComparison is a field compared with a number when the field is known
 // to hold a finite decimal in every row.
-func typedComparison(col, sqlOp string, n float64) string {
-	return fmt.Sprintf("TRY_CAST(%s AS DOUBLE) %s %s", col, sqlOp, typedNumber(n))
+func typedComparison(col sqlExpr, op dialect.CmpOp, n float64) sqlExpr {
+	return cmpExpr{op, tryCastDouble{col}, numLit(typedNumber(n))}
 }
 
 // awkLiteral is a constant as awk compares it: its text, and its value
@@ -599,7 +595,7 @@ func tryNRComparison(e *awk.BinaryExpr) *awkPushdown {
 
 // awkColumn is what an awk expression reads, as a shard column.
 type awkColumn struct {
-	sql      string
+	expr     sqlExpr
 	nullable bool // NULL reaches awk as unset: 0, or ""
 	number   bool // compared as a number (DURATION_NS, LINE_NO)
 	field    int  // N for the awk field $N, else 0
@@ -615,46 +611,47 @@ type awkColumn struct {
 // SQL as a TIMESTAMP.
 // awkLastField is $NF: the last of the fields (a negative index counts from
 // the end), which is $0 when there are none: NF is 0 on a blank line.
-const awkLastField = "COALESCE(list_extract(fields, -1), raw)"
+var awkLastField sqlExpr = coalesce{listIdx{colRef("fields"), -1}, colRef("raw")}
 
 func awkColumnToSQL(expr awk.Expr) (awkColumn, bool) {
 	switch e := expr.(type) {
 	case *awk.CallExpr:
 		if e.Name == "length" && len(e.Args) <= 1 {
-			operand := "raw"
+			var operand sqlExpr = colRef("raw")
 			if len(e.Args) == 1 {
-				var ok bool
-				if operand, ok = awkPrintArgToSQL(e.Args[0]); !ok {
+				sql, ok := awkPrintArgToSQL(e.Args[0])
+				if !ok {
 					return awkColumn{}, false
 				}
+				operand = sql
 			}
-			return awkColumn{sql: "strlen(" + operand + ")", number: true}, true
+			return awkColumn{expr: byteLen{operand}, number: true}, true
 		}
 	case *awk.FieldExpr:
 		if id, ok := e.Index.(*awk.IdentExpr); ok && id.Name == "NF" {
-			return awkColumn{sql: awkLastField}, true
+			return awkColumn{expr: awkLastField}, true
 		}
 		idx, ok := e.Index.(*awk.NumberLit)
 		switch {
 		case !ok || idx.Value != float64(int(idx.Value)) || idx.Value < 0:
 		case idx.Value == 0:
-			return awkColumn{sql: "raw"}, true
+			return awkColumn{expr: colRef("raw")}, true
 		default:
-			return awkColumn{sql: fmt.Sprintf("list_extract(fields, %d)", int(idx.Value)), nullable: true, field: int(idx.Value)}, true
+			return awkColumn{expr: listIdx{colRef("fields"), int(idx.Value)}, nullable: true, field: int(idx.Value)}, true
 		}
 	case *awk.IdentExpr:
 		if e.Name == "length" {
-			return awkColumn{sql: "strlen(raw)", number: true}, true
+			return awkColumn{expr: byteLen{colRef("raw")}, number: true}, true
 		}
 		switch col := AwkMetaVars[e.Name]; col {
 		case "", "ts":
 		case "duration_ns", "line_no":
-			return awkColumn{sql: col, nullable: true, number: true}, true
+			return awkColumn{expr: colRef(col), nullable: true, number: true}, true
 		case "event_id":
 			// A UUID column; awk sees its text.
-			return awkColumn{sql: "CAST(event_id AS VARCHAR)", nullable: true}, true
+			return awkColumn{expr: castText{colRef("event_id")}, nullable: true}, true
 		default:
-			return awkColumn{sql: col, nullable: true}, true
+			return awkColumn{expr: colRef(col), nullable: true}, true
 		}
 	}
 	return awkColumn{}, false
@@ -671,47 +668,13 @@ func extractAwkMatch(e *awk.MatchExpr) *awkPushdown {
 	if !ok || c.number {
 		return nil
 	}
-	sql := c.sql
+	col := c.expr
 	if c.nullable {
-		sql = fmt.Sprintf("COALESCE(%s, '')", sql)
+		col = coalesce{col, strLit("")}
 	}
-	// regexp_matches is DuckDB's substring/find form — the equivalent
-	// of PostgreSQL's `~`. DuckDB's own `~` operator is whole-string
-	// match (SIMILAR TO semantics), which silently returns no rows for
-	// typical user patterns.
-	predicate := fmt.Sprintf("regexp_matches(%s, '%s')", sql, escapeSQLString(regex.Pattern))
+	var predicate sqlExpr = regexExpr{col: col, pattern: regex.Pattern}
 	if e.Negated {
-		predicate = "NOT " + predicate
+		predicate = notExpr{predicate}
 	}
 	return &awkPushdown{predicate: predicate, exact: true}
-}
-
-// parenthesizeIfCompound wraps a SQL predicate in parens if it contains AND or OR.
-func parenthesizeIfCompound(pred string) string {
-	if strings.Contains(pred, " AND ") || strings.Contains(pred, " OR ") {
-		return "(" + pred + ")"
-	}
-	return pred
-}
-
-// escapeSQLString doubles single quotes for safe embedding in a SQL
-// '...' string literal. Regex-pushdown callers (DuckDB's `~` operator)
-// use this — the pattern goes in as a plain string literal, with
-// regex specials (`^`, `$`, `.`, `*`, `+`, `?`, `(`, `)`, `[`, `]`,
-// `{`, `}`, `|`, `\`) preserved so the predicate actually means
-// what the user wrote.
-func escapeSQLString(s string) string {
-	return strings.ReplaceAll(s, "'", "''")
-}
-
-// escapeSQLLike escapes characters that are special in SQL LIKE patterns
-// and also doubles single quotes so the result is safe to embed in a '...'
-// string literal — every caller wraps the output in '%...%' and a stray
-// quote in user-supplied input (grep/sed/awk pattern) would otherwise
-// terminate the literal and let the rest of the pattern run as SQL.
-func escapeSQLLike(s string) string {
-	s = strings.ReplaceAll(s, "%", "\\%")
-	s = strings.ReplaceAll(s, "_", "\\_")
-	s = strings.ReplaceAll(s, "'", "''")
-	return s
 }

@@ -3,12 +3,17 @@ package planner
 import (
 	"fmt"
 	"slices"
+
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // compiled is a pipeline's IR after the passes ran: which nodes the
 // shard computes, which stages run in compute and how, and the log of
 // what each pass did. Plan renders it; Explain shows it.
 type compiled struct {
+	// d is the dialect the plan's SQL is in; a pass that pushes SQL the dialect
+	// can't run leaves the stage to compute.
+	d      dialect.Dialect
 	source sourceInfo
 	stages []*loweredStage // stages[i-1] is stage i
 	// nodes is every stage's nodes in pipeline order, after the source's
@@ -42,7 +47,7 @@ type compiled struct {
 	fieldSpec *fieldReads
 	// payloadSelect, when set, is the SQL for a payload of just the keys the
 	// first compute stage (a jq) reads (projectPayload), in place of all of it.
-	payloadSelect string
+	payloadSelect sqlExpr
 	aggregate     string
 	aggregated    []node
 	passes        []passStep
@@ -196,6 +201,10 @@ run:
 		}
 	}
 	if len(filters) == 0 {
+		return
+	}
+	if !c.d.Supports(dialect.Lines) {
+		c.logf(pass, "skipped %s: the store can't split rows into lines", c.label(filters[0]))
 		return
 	}
 	below := c.nodes[c.shard] // the sort, or else the selected projection
@@ -364,6 +373,10 @@ func (c *compiled) fuseSort(orderDesc bool, limit int) {
 func (c *compiled) fuseAggregate(limited bool) {
 	const pass = "aggregate"
 	if len(c.compute) == 0 {
+		return
+	}
+	if !c.d.Supports(dialect.Aggregates) {
+		c.logf(pass, "skipped %s: the store can't group rows", c.label(c.compute[0].nodes[0]))
 		return
 	}
 	var render GroupRender

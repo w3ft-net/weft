@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/awk"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // maxProjectedField bounds how many positions the field form selects: each
@@ -219,6 +220,9 @@ func (c *compiled) projectFields(limited bool) {
 	stage := c.compute[0]
 	label := c.label(stage.nodes[0])
 	switch {
+	case !c.d.Supports(dialect.ListIndex):
+		c.logf(pass, "skipped %s: the store can't pick a field out of a line", label)
+		return
 	case limited:
 		c.logf(pass, "skipped %s: a pushed line count is applied to rows, not the lines it reads", label)
 		return

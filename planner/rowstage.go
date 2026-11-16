@@ -7,6 +7,7 @@ import (
 	"github.com/graybeardcorp/warp/pkg/awk"
 	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/warp/pkg/sed"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // A row stage passes rows through unchanged: it keeps or drops each
@@ -160,7 +161,7 @@ func splitRowStages(stages []*loweredStage) (rows, rest []*loweredStage) {
 // unchanged. The differential harness builds its reference plan from it.
 func IsRowStage(stage string) bool {
 	sc, ok := parseOneStage(stage)
-	return ok && lowerStage(parseStage(sc), 1, false).rowwise
+	return ok && lowerStage(parseStage(sc), 1, lowering{d: dialect.DuckDB}).rowwise
 }
 
 // parseOneStage parses a stage's text as the one command it is.

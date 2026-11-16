@@ -35,7 +35,7 @@ func (a at) stageIndex() int { return int(a) }
 // keeps a row, so it's safe in the shard as long as the stage still runs.
 type filterNode struct {
 	at
-	pred  string
+	pred  sqlExpr
 	exact bool
 	why   reason // why a prefilter isn't exact
 	// typed are the comparisons in pred that have a simpler form on a shard
@@ -62,7 +62,7 @@ type limitNode struct {
 // exactly. It's always the last node of its stage.
 type projectNode struct {
 	at
-	expr string
+	expr sqlExpr
 }
 
 // sortNode is a sort stage. The shard pre-orders its rows by it
@@ -175,6 +175,7 @@ const (
 	reasonCutArgs
 	reasonCutFields
 	reasonCutDelimiter
+	reasonDialect
 
 	// reasonCodeCount ends the list: every code below it needs advice
 	// (see adviceFor).
@@ -244,6 +245,8 @@ func (r reason) String() string {
 		return "the field list isn't N, N-M or N- items"
 	case reasonCutDelimiter:
 		return "an empty delimiter splits into characters"
+	case reasonDialect:
+		return "the store can't express its filter in SQL"
 	}
 	return ""
 }
