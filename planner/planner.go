@@ -391,10 +391,10 @@ func compileFor(d dialect.Dialect, pipeline string, tn group, cwd string, start,
 		switch n := n.(type) {
 		case *filterNode:
 			if n.hoisted {
-				linePreds = append(linePreds, Predicate{SQL: render(n.pred, d)})
+				linePreds = append(linePreds, Predicate{expr: n.pred})
 				continue
 			}
-			sql.addPredicate(render(n.pred, d))
+			sql.addExpr(n.pred)
 			if n.follow != nil {
 				grepPatterns = append(grepPatterns, *n.follow)
 			}
@@ -504,12 +504,14 @@ func compileFor(d dialect.Dialect, pipeline string, tn group, cwd string, start,
 	// fields as columns.
 	var fieldSQL string
 	var fieldSpec *FieldSpec
+	var fieldQuery *Query
 	if c.fieldSpec != nil && len(linePreds) == 0 {
-		fieldSQL, _ = sql.fieldForm(c.fieldSpec).WithOrderLimit(c.shardOrderBy, c.shardLimit).ToSQL()
+		fieldQuery = sql.fieldForm(c.fieldSpec).WithOrderLimit(c.shardOrderBy, c.shardLimit)
+		fieldSQL, _ = fieldQuery.ToSQL()
 		fieldSpec = c.fieldSpec.spec()
 	}
 
-	typed := typedVariant(d, c, info.source, tn, shardSQL, directShardSQL, fieldSQL)
+	typed := typedVariant(d, c, info.source, tn, shardQuery, directQuery, fieldQuery)
 	if assumeTyped {
 		// What the facts leave to swap (a jq key) is swapped in this plan,
 		// which is only ever used where they all hold.

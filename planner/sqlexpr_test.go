@@ -147,3 +147,84 @@ func TestSpans_RefusedWhereTheStoreCannotRunThem(t *testing.T) {
 		t.Errorf("a trace's own lines: %v", err)
 	}
 }
+
+func TestRender_ATypedChoiceIsItsBaseUnlessTyped(t *testing.T) {
+	e := andExpr{
+		typedChoice{locator: "$3", base: colRef("slow"), typed: colRef("fast")},
+		colRef("other"),
+	}
+	if got := render(e, dialect.DuckDB); got != "slow AND other" {
+		t.Errorf("base: %s", got)
+	}
+	if got := renderIn(e, dialect.DuckDB, true); got != "fast AND other" {
+		t.Errorf("typed: %s", got)
+	}
+	if got := typedChoices(e); len(got) != 1 || got[0].locator != "$3" {
+		t.Errorf("choices = %v", got)
+	}
+	// Features are what the base form needs: the typed form is only read
+	// where the facts hold, and typedVariant checks it then.
+	if len(features(typedChoice{base: colRef("a"), typed: tryCastDouble{colRef("a")}})) != 0 {
+		t.Error("a choice reported the features of its typed form")
+	}
+}
+
+func TestTypedVariant_SwapsEveryChoiceInEveryQuery(t *testing.T) {
+	plan, _ := planFor(t, dialect.DuckDB, "cat /log/acme/api/main.log | awk '$3 > 5'")
+	if plan.Typed == nil {
+		t.Fatal("no typed variant")
+	}
+	if want := []string{"$3"}; !slices.Equal(plan.Typed.Requires, want) {
+		t.Errorf("requires = %v, want %v", plan.Typed.Requires, want)
+	}
+	const typed = "TRY_CAST(list_extract(fields, 3) AS DOUBLE) > 5"
+	for name, sql := range map[string]string{"shard": plan.Typed.ShardSQL, "direct": plan.Typed.DirectShardSQL} {
+		if !strings.Contains(sql, typed) || strings.Contains(sql, "regexp_matches") {
+			t.Errorf("%s SQL is not the typed form:\n%s", name, sql)
+		}
+	}
+	if !strings.Contains(plan.ShardSQL, "regexp_matches") {
+		t.Errorf("the base plan lost its general form:\n%s", plan.ShardSQL)
+	}
+}
+
+// The same comparison twice in one pattern is the same text twice in the SQL.
+// Matching rendered text could not tell the two apart and declined; a choice is
+// its own site, so both swap.
+func TestTypedVariant_ARepeatedComparisonStillSwaps(t *testing.T) {
+	plan, _ := planFor(t, dialect.DuckDB, "cat /log/acme/api/main.log | awk '$3 > 5 || $3 > 5'")
+	if plan.Typed == nil {
+		t.Fatal("a repeated comparison lost its typed variant")
+	}
+	if n := strings.Count(plan.Typed.ShardSQL, "TRY_CAST(list_extract(fields, 3) AS DOUBLE) > 5"); n != 2 {
+		t.Errorf("typed comparisons = %d, want 2:\n%s", n, plan.Typed.ShardSQL)
+	}
+	if strings.Contains(plan.Typed.ShardSQL, "regexp_matches") {
+		t.Errorf("a base form is left:\n%s", plan.Typed.ShardSQL)
+	}
+	if n := strings.Count(plan.ShardSQL, "regexp_matches"); n != 2 {
+		t.Errorf("the base plan has %d general forms, want 2:\n%s", n, plan.ShardSQL)
+	}
+}
+
+// A typed form the dialect can't spell is not offered: the shard would be sent
+// SQL it can't run.
+func TestTypedVariant_DeclinedWhereTheTypedFormCannotBeSpelled(t *testing.T) {
+	plan, _ := planFor(t, without(dialect.TryCast), "cat /log/acme/api/main.log | awk '$3 > 5'")
+	if plan.Typed != nil {
+		t.Errorf("typed variant offered without TryCast: %s", plan.Typed.ShardSQL)
+	}
+	if strings.Contains(plan.ShardSQL, "TRY_CAST") {
+		t.Errorf("the base plan needs TryCast:\n%s", plan.ShardSQL)
+	}
+}
+
+func TestTypedVariant_JqKeyComparison(t *testing.T) {
+	plan, _ := planFor(t, dialect.DuckDB, "cat /log/acme/api/main.log | jq 'select(.n > 5)'")
+	if plan.Typed == nil || !slices.Equal(plan.Typed.Requires, []string{".n"}) {
+		t.Fatalf("typed = %+v", plan.Typed)
+	}
+	if want := "TRY_CAST(json_extract(payload, '$.n') AS DOUBLE) > 5"; !strings.Contains(plan.Typed.ShardSQL, want) {
+		t.Errorf("typed SQL lacks %q:\n%s", want, plan.Typed.ShardSQL)
+	}
+}

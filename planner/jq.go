@@ -196,15 +196,15 @@ func jqCondToSQL(subject jqPath, cond jq.Expr) sqlExpr {
 	return nil
 }
 
-// jqTypedLeaf is the simpler form of a select on a top-level key against a
-// number, for a shard where that key is a number in every row. jq's order
-// puts every number below every string and null below both, so the general
-// SQL branches on the value's JSON type and on whether the key is there;
+// withTypedForm is base, a select on a top-level key against a number, with the
+// simpler form it has for a shard where that key is a number in every row. jq's
+// order puts every number below every string and null below both, so the
+// general SQL branches on the value's JSON type and on whether the key is there;
 // where it is always a number none of that matters and the comparison is the
 // cast alone. base is the predicate jqCondToSQL gave this condition.
-func jqTypedLeaf(subject jqPath, cond jq.Expr, base sqlExpr) []typedLeaf {
+func withTypedForm(subject jqPath, cond jq.Expr, base sqlExpr) sqlExpr {
 	if len(subject) != 0 {
-		return nil
+		return base
 	}
 	var left, right jq.Expr
 	var op dialect.CmpOp
@@ -222,22 +222,22 @@ func jqTypedLeaf(subject jqPath, cond jq.Expr, base sqlExpr) []typedLeaf {
 	case jq.GeExpr:
 		left, right, op = e.Left, e.Right, dialect.GE
 	default:
-		return nil
+		return base
 	}
 	field, ok := left.(jq.FieldExpr)
 	if !ok {
-		return nil
+		return base
 	}
 	lit, ok := right.(jq.LiteralExpr)
 	if !ok || lit.Value.Type != jq.TypeNumber {
-		return nil
+		return base
 	}
 	key := jqPath{"." + field.Name}
-	return []typedLeaf{{
+	return typedChoice{
 		locator: "." + field.Name,
 		base:    base,
-		typed:   cmpExpr{op, tryCastDouble{jsonExtract{key.jsonPath()}}, numLit(typedNumber(lit.Value.Num))},
-	}}
+		typed:   typedComparison(jsonExtract{key.jsonPath()}, op, lit.Value.Num),
+	}
 }
 
 // jqComparisonToSQL lowers `field op literal` exactly as jq evaluates
@@ -410,8 +410,6 @@ type jqProgram struct {
 	// selects is the SQL for each select in the head that lowers,
 	// stopping at the first that doesn't.
 	selects []sqlExpr
-	// typed are the comparisons in selects with a simpler typed form.
-	typed []typedLeaf
 	// allLower is true when every select in the head lowered.
 	allLower bool
 	// subject is the path the head's steps navigate to; empty when it
@@ -463,8 +461,7 @@ head:
 		case jq.SelectExpr:
 			if p.allLower {
 				if pred := jqCondToSQL(p.subject, node.Cond); pred != nil {
-					p.selects = append(p.selects, pred)
-					p.typed = append(p.typed, jqTypedLeaf(p.subject, node.Cond, pred)...)
+					p.selects = append(p.selects, withTypedForm(p.subject, node.Cond, pred))
 				} else {
 					p.allLower = false
 				}

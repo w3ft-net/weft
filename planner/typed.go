@@ -3,23 +3,16 @@ package planner
 import (
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/w3ft-net/weft/backends/logs/dialect"
 	"github.com/w3ft-net/weft/logtable"
 )
 
-// A typed leaf is a comparison whose SQL gets simpler, and tighter, if the
-// shard has said every row of the source holds a number at its locator. The
-// planner stays pure: it emits the plan it
-// can prove from the text alone, and beside it a variant for shards whose
-// facts allow it. The coordinator picks per shard; a fact flipping never
-// forces a relowering.
-type typedLeaf struct {
-	locator string  // "$N" for awk field N, ".key" for a top-level payload key
-	base    sqlExpr // the predicate in the plan
-	typed   sqlExpr // what replaces it on a shard where locator is typed
-}
+// A typed choice (sqlExpr) is a comparison whose SQL gets simpler, and tighter,
+// if the shard has said every row of the source holds a number at its locator.
+// The planner stays pure: it emits the plan it can prove from the text alone,
+// and beside it a variant for shards whose facts allow it. The coordinator picks
+// per shard; a fact flipping never forces a relowering.
 
 // TypedPlan is the QueryPlan's shard SQL for a shard whose facts say every
 // locator in Requires is all numbers in the one stream below. Its args, stages
@@ -34,77 +27,59 @@ type TypedPlan struct {
 	Env            string
 	ShardSQL       string
 	DirectShardSQL string
-	FieldSQL       string // the plan's FieldSQL with the same swap; empty if it has none
+	FieldSQL       string // the plan's FieldSQL in its typed form; empty if it has none
 	// Exact is the whole plan for a query whose every shard has the facts
 	// Requires: the typed comparisons are exact there, so it needs no more
 	// compute than the pipeline's other stages do. Its Typed is nil.
 	Exact *QueryPlan
 }
 
-// typedVariant derives the typed plan from the base SQL by swapping each
-// typed leaf's predicate for its typed form. It declines (nil) unless the
-// source is one stream, and unless every leaf's text occurs exactly once in
-// both SQL strings, so a swap can't land on the wrong text.
-func typedVariant(d dialect.Dialect, c *compiled, src sourceInfo, tn group, shardSQL, directSQL, fieldSQL string) *TypedPlan {
+// typedVariant is the typed plan: the plan's queries with every typed choice in
+// their typed form. It declines (nil) unless the source is one stream, and
+// when the dialect can't spell a typed form. fieldQ is nil when the plan has
+// no field form.
+func typedVariant(d dialect.Dialect, c *compiled, src sourceInfo, tn group, shardQ, directQ, fieldQ *Query) *TypedPlan {
 	ns, svc, kind, ok := src.single()
 	if !ok || src.follow {
 		return nil
 	}
-	var leaves []typedLeaf
+	var requires []string
 	for _, n := range c.nodes[:c.shard] {
-		if f, ok := n.(*filterNode); ok && !f.hoisted {
-			leaves = append(leaves, f.typed...)
+		f, ok := n.(*filterNode)
+		if !ok || f.hoisted {
+			continue
+		}
+		for _, ch := range typedChoices(f.pred) {
+			if !supported(ch.typed, d) {
+				return nil
+			}
+			requires = append(requires, ch.locator)
 		}
 	}
 	// An awk aggregate that stays in compute becomes the shard's GROUP BY on
 	// shards with its facts. It swaps no SQL: its plan is the Exact one.
-	var aggFacts []string
 	if a, _ := leadingAggregate(c.compute); a != nil {
-		aggFacts = a.agg.facts()
+		requires = append(requires, a.agg.facts()...)
 	}
-	if len(leaves) == 0 && len(aggFacts) == 0 {
+	if len(requires) == 0 {
 		return nil
-	}
-	swap := func(sql string) (string, bool) {
-		for _, l := range leaves {
-			if strings.Count(sql, render(l.base, d)) != 1 {
-				return "", false
-			}
-		}
-		for _, l := range leaves {
-			sql = strings.Replace(sql, render(l.base, d), render(l.typed, d), 1)
-		}
-		return sql, true
-	}
-	shard, ok := swap(shardSQL)
-	if !ok {
-		return nil
-	}
-	direct, ok := swap(directSQL)
-	if !ok {
-		return nil
-	}
-	if fieldSQL != "" {
-		if fieldSQL, ok = swap(fieldSQL); !ok {
-			return nil
-		}
-	}
-	var requires []string
-	for _, l := range leaves {
-		if !slices.Contains(requires, l.locator) {
-			requires = append(requires, l.locator)
-		}
-	}
-	for _, loc := range aggFacts {
-		if !slices.Contains(requires, loc) {
-			requires = append(requires, loc)
-		}
 	}
 	slices.Sort(requires)
-	return &TypedPlan{
-		Requires: requires, Table: logtable.Name(tn.typed, ns, svc, kind), Env: src.envValue(),
-		ShardSQL: shard, DirectShardSQL: direct, FieldSQL: fieldSQL,
+	requires = slices.Compact(requires)
+
+	plan := &TypedPlan{Requires: requires, Table: logtable.Name(tn.typed, ns, svc, kind), Env: src.envValue()}
+	plan.ShardSQL, _ = shardQ.typedForm().ToSQL()
+	plan.DirectShardSQL, _ = directQ.typedForm().ToSQL()
+	if fieldQ != nil {
+		plan.FieldSQL, _ = fieldQ.typedForm().ToSQL()
 	}
+	return plan
+}
+
+// typedComparison is col compared with a number, for a shard where col is known
+// to hold a finite decimal in every row: the cast alone is the comparison.
+func typedComparison(col sqlExpr, op dialect.CmpOp, n float64) sqlExpr {
+	return cmpExpr{op, tryCastDouble{col}, numLit(typedNumber(n))}
 }
 
 // typedNumber is a float as a SQL literal.

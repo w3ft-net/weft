@@ -28,7 +28,10 @@ import (
 // tests are the parity gate.
 type Query struct {
 	// d spells the engine-specific parts of the SQL.
-	d          dialect.Dialect
+	d dialect.Dialect
+	// typed renders every typed choice in a predicate as its typed form (see
+	// typedForm).
+	typed      bool
 	rawExpr    string
 	from       From
 	predicates []Predicate
@@ -147,6 +150,10 @@ type From struct {
 type Predicate struct {
 	SQL  string
 	Args []ArgSource
+	// expr, when set, is the predicate before it is spelled, and SQL is unused:
+	// it renders in the dialect of the query that holds it, in the typed form
+	// when that query is.
+	expr sqlExpr
 }
 
 // ArgKind tags how a positional `?` placeholder gets resolved. The
@@ -201,6 +208,23 @@ func newSQLBuilder(d dialect.Dialect) *Query {
 }
 
 func (q *Query) setSelect(rawExpr string) { q.rawExpr = rawExpr }
+
+// addExpr appends a WHERE expression, spelled when the query renders.
+func (q *Query) addExpr(pred sqlExpr) {
+	q.predicates = append(q.predicates, Predicate{expr: pred})
+}
+
+// typedForm is q with every typed choice in its predicates, and its subqueries',
+// rendered as its typed form: the query for a shard whose facts say every
+// choice's locator holds a number in every row.
+func (q *Query) typedForm() *Query {
+	c := *q
+	c.typed = true
+	if q.from.Subquery != nil {
+		c.from.Subquery = q.from.Subquery.typedForm()
+	}
+	return &c
+}
 
 // addPredicate appends a WHERE fragment whose `?` placeholders are
 // literal values from the pipeline (namespace name, service name,
@@ -541,7 +565,11 @@ func (q *Query) renderWhere(b *strings.Builder, onArg func(ArgSource)) {
 		if i > 0 {
 			b.WriteString(" AND ")
 		}
-		b.WriteString(p.SQL)
+		if p.expr != nil {
+			b.WriteString(renderIn(p.expr, q.d, q.typed))
+		} else {
+			b.WriteString(p.SQL)
+		}
 		for _, a := range p.Args {
 			onArg(a)
 		}
