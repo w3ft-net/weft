@@ -17,13 +17,13 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	duckdb "github.com/duckdb/duckdb-go/v2"
 	"github.com/google/uuid"
 
 	"github.com/w3ft-net/weft/backends/logs/archive/parquet"
 	"github.com/w3ft-net/weft/backends/logs/live"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shape"
+	"github.com/w3ft-net/weft/shard/duckbind"
 )
 
 // The types the live-store contract defines (backends/logs/live), under the names
@@ -361,6 +361,9 @@ func schemaIsCurrent(db *sql.DB, layout shape.Layout) bool {
 // logs table. Use "" or ":memory:" for an in-memory database. The database
 // keeps the layout it already has; see Option for how a new one is laid out.
 func NewDuckDBShard(id, path string, opts ...Option) (*DuckDBShard, error) {
+	if !duckbind.Linked() {
+		return nil, errNoDuckDB
+	}
 	cfg := openOptions{layout: shape.Legacy()}
 	for _, o := range opts {
 		o(&cfg)
@@ -638,7 +641,7 @@ func appendRows(dc driver.Conn, table string, layout shape.Layout, partition []a
 	for _, v := range partition {
 		constants = append(constants, v)
 	}
-	appender, aerr := duckdb.NewAppenderWithColumns(dc, "", "", table, logColumns(layout))
+	appender, aerr := duckbind.NewAppender(dc, table, logColumns(layout))
 	if aerr != nil {
 		return fmt.Errorf("new appender: %w", aerr)
 	}
@@ -663,7 +666,7 @@ func appendRows(dc driver.Conn, table string, layout shape.Layout, partition []a
 				appender.Close()
 				return fmt.Errorf("event_id %q: %w", r.EventId, perr)
 			}
-			eventID, lineNo = duckdb.UUID(id), r.LineNo
+			eventID, lineNo = duckbind.UUID(id), r.LineNo
 		}
 		base := [...]driver.Value{
 			r.Raw,

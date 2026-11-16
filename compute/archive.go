@@ -12,12 +12,19 @@ import (
 	"github.com/w3ft-net/weft/backends/logs/live"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shard"
+	"github.com/w3ft-net/weft/shard/duckbind"
 )
 
 // ArchiveReaderLambda is the name configuration gives the Lambda reader: the
 // archive reader of the open build, which runs DuckDB over the Parquet in a
 // Lambda function and is reached at the URL in each archived shard's descriptor.
 const ArchiveReaderLambda = "duckdb-lambda"
+
+// ArchiveReaderLocal is the name configuration gives the in-process reader: it
+// runs DuckDB in the compute process over the Parquet, at a local path or in S3
+// (S3_* environment, see shard.S3ConfigFromEnv). It exists only in a build that
+// links DuckDB (weft-compute -tags localreader), where it is the default.
+const ArchiveReaderLocal = "duckdb-local"
 
 // NewArchiveRouter builds what a compute process reads archives through: the
 // formats and readers this build links, and the configured choice of reader for
@@ -35,6 +42,11 @@ func NewArchiveRouter(readers map[string]string, creds aws.CredentialsProvider, 
 	}
 	if err := reg.AddReader(ArchiveReaderLambda, shard.LambdaReader(creds, region)); err != nil {
 		return nil, err
+	}
+	if duckbind.Linked() {
+		if err := reg.AddReader(ArchiveReaderLocal, shard.LocalReader(shard.S3ConfigFromEnv())); err != nil {
+			return nil, err
+		}
 	}
 	return reg.Readers(readers)
 }

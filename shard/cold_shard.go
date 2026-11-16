@@ -15,12 +15,12 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4signer "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	_ "github.com/duckdb/duckdb-go/v2"
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shape"
+	"github.com/w3ft-net/weft/shard/duckbind"
 )
 
 // ColdShard implements the Shard interface for archived data in Parquet.
@@ -132,6 +132,9 @@ func NewColdShard(id string, apps []string, parquetPath, functionURL string, s3c
 		return cs, nil
 	}
 
+	if !duckbind.Linked() {
+		return nil, errNoDuckDB
+	}
 	db, err := sql.Open("duckdb", "")
 	if err != nil {
 		return nil, fmt.Errorf("open in-memory duckdb: %w", err)

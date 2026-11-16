@@ -1,6 +1,8 @@
 package shard
 
 import (
+	"errors"
+
 	"github.com/w3ft-net/weft/backends/logs/dialect"
 	"github.com/w3ft-net/weft/backends/logs/live"
 )
@@ -25,3 +27,7 @@ func (d duckDriver) Open(p live.OpenParams) (live.Store, error) {
 	}
 	return ds, nil
 }
+
+// errNoDuckDB is what opening a DuckDB database says in a binary that did not
+// link the driver.
+var errNoDuckDB = errors.New("this binary does not link DuckDB: import github.com/w3ft-net/weft/shard/duckdbdrv (weft-compute: build with -tags localreader)")

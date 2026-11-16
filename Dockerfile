@@ -20,7 +20,9 @@ RUN rm -f go.work go.work.sum \
  && go run ./cmd/shapegen -spec shape/specs/default.yaml -out shape/coord_gen.go
 
 RUN CGO_ENABLED=1 go build -o /bin/weft-shard ./cmd/shard
-RUN CGO_ENABLED=1 go build -o /bin/weft-compute ./cmd/compute
+# localreader links DuckDB so compute reads archives itself, with no Lambda. A
+# build without it is cgo-free and reads them only through a Lambda.
+RUN CGO_ENABLED=1 go build -tags localreader -o /bin/weft-compute ./cmd/compute
 RUN CGO_ENABLED=1 go build -o /bin/weft-coordinator ./cmd/coordinator
 RUN CGO_ENABLED=0 go build -o /bin/weft-api ./cmd/api
 RUN CGO_ENABLED=0 go build -o /bin/weftd ./cmd/weftd

@@ -35,7 +35,7 @@ func main() {
 	// archived shard, and would find out on the first query that reached one.
 	readers := readerFlag{}
 	flag.Var(readers, "archive-reader", "FORMAT=NAME: the reader of the archives written in FORMAT (repeatable)")
-	readerDefault := flag.String("archive-reader-default", "", "the reader of every archive format with no -archive-reader of its own (the open build has "+compute.ArchiveReaderLambda+")")
+	readerDefault := flag.String("archive-reader-default", "", "the reader of every archive format with no -archive-reader of its own ("+compute.ArchiveReaderLambda+", or "+compute.ArchiveReaderLocal+" in a -tags localreader build, where it is the default)")
 	cfgPath := cluster.DefineFlag(flag.CommandLine)
 	flag.Parse()
 	if err := cluster.Overlay(flag.CommandLine, cluster.Compute, *cfgPath); err != nil {
@@ -64,7 +64,11 @@ func main() {
 	} else {
 		creds = awsCfg.Credentials
 	}
-	archives, err := compute.NewArchiveRouter(archiveReaders(readers, *readerDefault), creds, region)
+	def := *readerDefault
+	if def == "" && len(readers) == 0 {
+		def = defaultArchiveReader
+	}
+	archives, err := compute.NewArchiveRouter(archiveReaders(readers, def), creds, region)
 	if err != nil {
 		log.Fatalf("compute: archive readers: %v (give -archive-reader-default %s, or -archive-reader FORMAT=NAME)", err, compute.ArchiveReaderLambda)
 	}

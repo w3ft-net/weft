@@ -22,10 +22,13 @@ case "$ROLE" in
     ;;
 
   compute)
-    # The binary starts with no archive reader only if told which one to use. The
-    # open build's reader is the Lambda one; a build that links another names it
-    # in ARCHIVE_READER.
-    exec weft-compute --port="${COMPUTE_PORT:-9010}" --archive-reader-default="${ARCHIVE_READER:-duckdb-lambda}"
+    # The open image's compute is built with -tags localreader: with no
+    # ARCHIVE_READER it reads archives in-process with DuckDB (duckdb-local), which
+    # takes compute's CPU and memory on a large scan. Set ARCHIVE_READER=duckdb-lambda
+    # to read them through a Lambda instead.
+    ARGS=(--port="${COMPUTE_PORT:-9010}")
+    [ -n "${ARCHIVE_READER:-}" ] && ARGS+=(--archive-reader-default="$ARCHIVE_READER")
+    exec weft-compute "${ARGS[@]}"
     ;;
 
   api)
