@@ -12,10 +12,6 @@ import (
 // no limit, so a build with no plans (the open one) runs on the zero Limits and
 // the code that reads them never has to know whether there are any.
 type Limits struct {
-	// Plan names the group's plan. The core treats it as an opaque label: it is
-	// stamped on a lowered plan when a cron is saved and handed back to
-	// Entitlements.LimitsOfPlan when the cron fires.
-	Plan string
 	// Retention is how far back the group may read, in logs and in a cron's
 	// history. Zero reads everything there is.
 	Retention time.Duration
@@ -67,10 +63,6 @@ func (l Limits) Clamp(since time.Time) time.Time {
 type Entitlements interface {
 	// LimitsFor is the limits of the group the columns name, as they stand now.
 	LimitsFor(owner shape.Added) Limits
-	// LimitsOfPlan is the limits of a plan label as a Limits carried it earlier,
-	// without asking about any group: a lowered plan caches its group's plan so
-	// that firing it costs no lookup.
-	LimitsOfPlan(plan string) Limits
 	// CronRunTimeout is the group's own budget for one cron run, when it has
 	// one: zero means the default applies. Asked once per fire, not per query.
 	CronRunTimeout(owner shape.Added) time.Duration

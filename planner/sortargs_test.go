@@ -80,7 +80,7 @@ func TestKeyedAggregate_ExplainShowsTheFoldedSorts(t *testing.T) {
 
 // A saved count with an ordering carries the order: a cron fire sends it too.
 func TestKeyedAggregate_ASavedCountKeepsItsOrder(t *testing.T) {
-	lp, err := Lower("cat /log/ns/svc/main.log | awk '{ c[$1]++ } END { for (k in c) print k, c[k] }' | sort -k2 -rn | head -n 2", shapetest.Group(1), "bolt", noResolver{})
+	lp, err := Lower("cat /log/ns/svc/main.log | awk '{ c[$1]++ } END { for (k in c) print k, c[k] }' | sort -k2 -rn | head -n 2", shapetest.Group(1), noResolver{})
 	if err != nil {
 		t.Fatal(err)
 	}

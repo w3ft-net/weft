@@ -119,7 +119,7 @@ func TestPlanTraceList_StagesRunInCompute(t *testing.T) {
 }
 
 func TestLower_RejectsTheTraceList(t *testing.T) {
-	if _, err := Lower("trace", shapetest.Group(1), "", nil); err == nil || !strings.Contains(err.Error(), "two steps") {
+	if _, err := Lower("trace", shapetest.Group(1), nil); err == nil || !strings.Contains(err.Error(), "two steps") {
 		t.Errorf("Lower(trace) = %v, want a two-step refusal", err)
 	}
 }

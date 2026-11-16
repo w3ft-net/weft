@@ -68,7 +68,7 @@ func Run(fl *Flags, deps *Deps) {
 	srv.SetBins(b.Bins)
 	srv.SetNotify(b.Notify)
 	srv.SetIngestFailures(b.IngestFailures)
-	srv.SetMounts(deps.Mounts.Config)
+	srv.SetMounts(deps.Mounts)
 	if b.AgentFleet != nil {
 		srv.SetAgentFleet(b.AgentFleet)
 	}

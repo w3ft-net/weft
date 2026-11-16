@@ -85,16 +85,12 @@ func newOpenAPI(t *testing.T) *openAPI {
 	srv.SetBins(st.Bins)
 	srv.SetNotify(st.Notify)
 	srv.SetIngestFailures(st.Ingest)
-	srv.SetMounts(func(s Session, logServices []string) mounts.Config {
-		return mounts.Config{
-			Owner:       s.Principal().Partition(),
-			LogServices: logServices,
-			Sources:     st.Sources,
-			BinService:  binscript.Service{Bins: st.Bins, Crons: st.Crons, Sources: st.Sources},
-			Notify:      st.Notify,
-			CronAuthor:  cronauthor.Service{Crons: st.Crons, Sources: st.Sources, Bins: st.Bins},
-			Tmp:         st.Tmp,
-		}
+	srv.SetMounts(&mounts.Backends{
+		Sources:    st.Sources,
+		BinService: binscript.Service{Bins: st.Bins, Crons: st.Crons, Sources: st.Sources},
+		Notify:     st.Notify,
+		CronAuthor: cronauthor.Service{Crons: st.Crons, Sources: st.Sources, Bins: st.Bins},
+		Tmp:        st.Tmp,
 	})
 	srv.SetAlertKinds(alerting.NewRegistry(st.Notify))
 	return &openAPI{t: t, srv: srv, st: st, h: srv.Handler()}

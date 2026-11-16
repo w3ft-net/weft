@@ -38,16 +38,12 @@ func localSubject(t *testing.T) coordtest.Subject {
 				t.Skip("the open build has no group under a shape with required columns")
 			}
 			cfg.Crons, cfg.Bins, cfg.Sources, cfg.Notices = st.Crons, st.Bins, st.Sources, st.Notices
-			cfg.Mounts = func(owner shape.Added, _ string, services []string) mounts.Config {
-				return mounts.Config{
-					Owner:       owner,
-					LogServices: services,
-					Sources:     st.Sources,
-					BinService:  binscript.Service{Bins: st.Bins, Crons: st.Crons, Sources: st.Sources},
-					Notify:      st.Notify,
-					CronAuthor:  cronauthor.Service{Crons: st.Crons, Sources: st.Sources, Bins: st.Bins},
-					Tmp:         st.Tmp,
-				}
+			cfg.Mounts = &mounts.Backends{
+				Sources:    st.Sources,
+				BinService: binscript.Service{Bins: st.Bins, Crons: st.Crons, Sources: st.Sources},
+				Notify:     st.Notify,
+				CronAuthor: cronauthor.Service{Crons: st.Crons, Sources: st.Sources, Bins: st.Bins},
+				Tmp:        st.Tmp,
 			}
 			cfg.Shards = st.Shards
 			cfg.Orgs, cfg.Scoper, cfg.Authz = defaults.OpenOrgs{}, defaults.OpenScoper{}, defaults.OpenAuthorizer{}

@@ -24,7 +24,6 @@ import (
 type limits struct{ identity.Limits }
 
 func (l limits) LimitsFor(shape.Added) identity.Limits  { return l.Limits }
-func (l limits) LimitsOfPlan(string) identity.Limits    { return l.Limits }
 func (limits) CronRunTimeout(shape.Added) time.Duration { return 0 }
 
 type fixture struct {
@@ -124,15 +123,15 @@ func TestSave_TextCronsAndTheirNumericReaders(t *testing.T) {
 
 func TestSave_PlanLimits(t *testing.T) {
 	f := newFixture(t)
-	f.svc.Entitlements = limits{identity.Limits{Plan: "swatch", MaxCrons: 2, MinCronInterval: 5 * time.Minute}}
+	f.svc.Entitlements = limits{identity.Limits{MaxCrons: 2, MinCronInterval: 5 * time.Minute}}
 
 	var limit *identity.PlanLimitError
-	if err := f.save("fast", "every 1m", "echo 1", true); !errors.As(err, &limit) || !strings.Contains(err.Error(), "minimum schedule interval for swatch plan is 5m0s") {
+	if err := f.save("fast", "every 1m", "echo 1", true); !errors.As(err, &limit) || !strings.Contains(err.Error(), "minimum schedule interval is 5m0s") {
 		t.Fatalf("a schedule under the minimum: %v", err)
 	}
 	f.mustSave(t, "a", "echo 1")
 	f.mustSave(t, "b", "echo 1")
-	if err := f.save("c", "every 5m", "echo 1", true); !errors.As(err, &limit) || !strings.Contains(err.Error(), "cron limit reached (2 crons on swatch plan)") {
+	if err := f.save("c", "every 5m", "echo 1", true); !errors.As(err, &limit) || !strings.Contains(err.Error(), "cron limit reached (2 crons)") {
 		t.Fatalf("a third enabled cron: %v", err)
 	}
 	// An edit of a cron that already holds a slot is not a new one.
@@ -166,7 +165,7 @@ func TestSave_NoEntitlementsIsNoLimits(t *testing.T) {
 // compiled, and a refusal writes nothing.
 func TestSave_AuthorizeRunsBetweenLimitsAndCompile(t *testing.T) {
 	f := newFixture(t)
-	f.svc.Entitlements = limits{identity.Limits{Plan: "p", MinCronInterval: 5 * time.Minute}}
+	f.svc.Entitlements = limits{identity.Limits{MinCronInterval: 5 * time.Minute}}
 	denied := errors.New("reads what you may not")
 	req := cronauthor.Request{Owner: f.owner, Home: f.ns, Name: "x", Schedule: "every 5m", Pipeline: "# type: number\necho a", Enabled: true,
 		Authorize: func(string) error { return denied }}
@@ -193,7 +192,7 @@ func TestSave_AuthorizeRunsBetweenLimitsAndCompile(t *testing.T) {
 
 func TestSave_StampsTheSchemaAndLowersThePipeline(t *testing.T) {
 	f := newFixture(t)
-	f.svc.Entitlements = limits{identity.Limits{Plan: "bolt"}}
+	f.svc.Entitlements = limits{identity.Limits{}}
 	f.mustSave(t, "disk", "cat /log/x/y/main.log | awk '{print $3}' | alert above 80")
 
 	w, err := f.svc.Crons.GetWatch(f.owner, f.ns, "disk")

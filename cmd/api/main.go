@@ -7,7 +7,6 @@ package main
 import (
 	"log"
 
-	weftapi "github.com/w3ft-net/weft/api"
 	"github.com/w3ft-net/weft/backends/defaults"
 	"github.com/w3ft-net/weft/backends/history/gitrepo"
 	"github.com/w3ft-net/weft/binscript"
@@ -21,36 +20,34 @@ import (
 // empty.
 const defaultDBPath = "weft.db"
 
-// open opens the SQLite database at --db-dsn and the repository at that path +
-// ".history", and returns the open deployment over them. The returned func
-// closes both. The credential is read here so a build without one does not
-// start. The
-// coordinator opens the same files; the repository serialises their commits
-// across processes.
-func open(fl *server.Flags) (*server.Deps, func(), error) {
+func main() {
+	fl := server.ParseFlags()
+	// The credential is read first so a build without one does not start.
 	basic, err := defaults.BasicFromEnv()
 	if err != nil {
-		return nil, nil, err
+		log.Fatalf("open database: %v", err)
 	}
+	// The coordinator opens the same files; the repository serialises their
+	// commits across processes.
 	path := fl.DBDSN
 	if path == "" {
 		path = defaultDBPath
 	}
 	sdb, err := sqlitedb.Open(path)
 	if err != nil {
-		return nil, nil, err
+		log.Fatalf("open database: %v", err)
 	}
+	defer sdb.Close()
 	stores, err := defaults.Open(sdb)
 	if err != nil {
-		sdb.Close()
-		return nil, nil, err
+		log.Fatalf("open database: %v", err)
 	}
 	hist, err := gitrepo.Open(gitrepo.Config{Dir: path + ".history"})
 	if err != nil {
-		sdb.Close()
-		return nil, nil, err
+		log.Fatalf("open database: %v", err)
 	}
-	return &server.Deps{
+	defer hist.Close()
+	server.Run(fl, &server.Deps{
 		Identity: server.Identity{
 			Authn:  &Identity{Basic: basic},
 			Access: defaults.OpenAccess(),
@@ -63,37 +60,13 @@ func open(fl *server.Flags) (*server.Deps, func(), error) {
 			Notify:         stores.Notify,
 			IngestFailures: stores.Ingest,
 		},
-		Mounts: openMounts{stores: stores, history: hist},
-	}, func() { hist.Close(); sdb.Close() }, nil
-}
-
-// openMounts is the mounts the open api builds a session's filesystem over:
-// the one database's stores and the git repository that records tracked files.
-type openMounts struct {
-	stores  *defaults.Stores
-	history *gitrepo.Store
-}
-
-func (m openMounts) Config(session weftapi.Session, services []string) mounts.Config {
-	s := m.stores
-	return mounts.Config{
-		Owner:       session.Principal().Partition(),
-		LogServices: services,
-		Sources:     s.Sources,
-		BinService:  binscript.Service{Bins: s.Bins, Crons: s.Crons, Sources: s.Sources},
-		Notify:      s.Notify,
-		CronAuthor:  cronauthor.Service{Crons: s.Crons, Sources: s.Sources, Bins: s.Bins},
-		Tmp:         s.Tmp,
-		History:     m.history,
-	}
-}
-
-func main() {
-	fl := server.ParseFlags()
-	deps, closeDB, err := open(fl)
-	if err != nil {
-		log.Fatalf("open database: %v", err)
-	}
-	defer closeDB()
-	server.Run(fl, deps)
+		Mounts: &mounts.Backends{
+			Sources:    stores.Sources,
+			BinService: binscript.Service{Bins: stores.Bins, Crons: stores.Crons, Sources: stores.Sources},
+			Notify:     stores.Notify,
+			CronAuthor: cronauthor.Service{Crons: stores.Crons, Sources: stores.Sources, Bins: stores.Bins},
+			Tmp:        stores.Tmp,
+			History:    hist,
+		},
+	})
 }

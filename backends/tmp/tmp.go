@@ -79,6 +79,9 @@ func (f File) Name() string {
 // Store is the persistence contract of the /tmp domain. Every path argument is
 // normalized first (NormalizePath), and a bad one is ErrInvalidPath.
 type Store interface {
+	// Limits is what the owner's writes are held to, as they stand now. A store
+	// with no limits answers the zero Limits.
+	Limits(owner shape.Added) Limits
 	// Stat is the file or directory at the path, ErrNotFound if none.
 	Stat(owner shape.Added, path string) (*File, error)
 	// List is the direct children of a directory, by path; dir "" is the top. A

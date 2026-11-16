@@ -13,16 +13,17 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
+	"github.com/w3ft-net/weft/mounts"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shellfs"
 )
 
 // shellFS is the filesystem the shell writes through, bound to this request's
-// session: the same mounts, the same group checks, the same plan limits. Every
+// session: the same mounts, the same group checks, the same limits. Every
 // route that changes /bin, /cron.d or /etc goes through it instead of calling
 // the store, so there is one implementation of who may write what.
 func (s *Server) shellFS(r *http.Request, session Session, logServices []string) *shellfs.ShellFS {
-	return shellfs.New(s.mounts(session, logServices),
+	return shellfs.New(s.mounts.Config(mounts.Session{Owner: session.Principal().Partition(), LogServices: logServices}),
 		shellfs.WithAccess(s.access),
 		shellfs.WithAlertKinds(s.alertKinds),
 		shellfs.WithUser(session.UserID()),

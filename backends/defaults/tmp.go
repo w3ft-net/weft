@@ -19,6 +19,9 @@ type TmpBackend struct {
 
 var _ tmp.Store = (*TmpBackend)(nil)
 
+// Limits is none: the open build holds nobody to a quota.
+func (s *TmpBackend) Limits(shape.Added) tmp.Limits { return tmp.Limits{} }
+
 const tmpSchema = `
 CREATE TABLE IF NOT EXISTS tmp_files (
 	path TEXT PRIMARY KEY,

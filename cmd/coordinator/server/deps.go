@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/w3ft-net/weft/mounts"
 	"strings"
 	"time"
 
@@ -41,8 +42,8 @@ type Deps struct {
 	// Notifier is the alert notifier, built over the store so it can
 	// pre-resolve aliases. Required.
 	Notifier *coordinator.Notifier
-	// Mounts is the shell's mounts for a group on a plan. Required.
-	Mounts coordinator.MountsFunc
+	// Mounts is what the shell's mounts read and write through. Required.
+	Mounts *mounts.Backends
 	// ColdScans meters cold-storage reads against the plan's cap. Optional:
 	// they are not metered.
 	ColdScans *coordinator.ColdScanLedger

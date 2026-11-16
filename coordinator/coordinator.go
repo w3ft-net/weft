@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/w3ft-net/weft/mounts"
 	"io"
 	"slices"
 	"sort"
@@ -176,7 +177,7 @@ type Coordinator struct {
 	Scoper       identity.Scoper         // decides what a principal may read
 	Authz        identity.Authorizer     // decides what a principal may change
 	Entitlements identity.Entitlements   // what each group is limited to; nil = nothing is
-	Mounts       MountsFunc              // the shell's mounts for a group on a plan; defaults to DefaultAdapter's
+	Mounts       *mounts.Backends        // the backends the shell's mounts read and write through
 	Commands     CommandsFunc            // the deployment's own shell commands; defaults to DefaultAdapter's
 	Orgs         Orgs                    // maps the store's org handle to and from the shape's added columns
 	Bins         bin.Store               // where /bin scripts live
@@ -247,9 +248,9 @@ type CoordinatorConfig struct {
 	Authz  identity.Authorizer
 	// Orgs maps the store's org handle to the shape's added columns.
 	Orgs Orgs
-	// Mounts is the shell's mounts for a group on a plan, and Commands the
+	// Mounts is what the shell's mounts read and write through, and Commands the
 	// deployment's own shell commands. Without Mounts no query can run.
-	Mounts   MountsFunc
+	Mounts   *mounts.Backends
 	Commands CommandsFunc
 	// ColdScans meters cold-storage reads against the plan's cap. Nil: they are
 	// not metered.
@@ -740,12 +741,8 @@ func (c *Coordinator) executeLowered(ctx context.Context, watch *cron.Watch, tr 
 	if len(lp.AlertArgs) > 0 || lp.Follow {
 		return nil, false
 	}
-	// Clamp time range using lp.Tier — baked at save time so we skip
-	// the per-fire lookup of the group's limits. A plan change between save and
-	// fire stays on the old retention until the watch is re-saved
-	// (or another path triggers re-lowering). Acceptable tradeoff
-	// for the perf win on the hot path; documented on LoweredPlan.Tier.
-	limits := c.entitlements().LimitsOfPlan(lp.Tier)
+	// Clamp the time range to the group's limits as they stand now.
+	limits := c.limits(watch.Owner)
 	tr.Start = limits.Clamp(tr.Start)
 	resolveCtx := planner.ResolveCtx{Partition: lp.Partition, Start: tr.Start, End: tr.End}
 	args := lp.Hydrate(resolveCtx)
@@ -861,8 +858,7 @@ func (c *Coordinator) refreshLoweredSync(ctx context.Context, watch *cron.Watch)
 		return
 	}
 	resolver := watchBinResolver{bins: c.Bins, owner: watch.Owner}
-	tier := c.limits(watch.Owner).Plan
-	loweredJSON := planner.LowerForStorage(ctx, watch.Pipeline, c.wholeOrg(watch.Owner), tier, resolver)
+	loweredJSON := planner.LowerForStorage(ctx, watch.Pipeline, c.wholeOrg(watch.Owner), resolver)
 	if loweredJSON == nil {
 		return
 	}
@@ -1054,7 +1050,7 @@ func (c *Coordinator) preflight(pipeline string, owner shape.Added) (shape.Added
 		return shape.Added{}, "", errNoOrg
 	}
 	{
-		fs := shellfs.New(c.Mounts(owner, "", nil), shellfs.WithAccess(c.mountAccess()))
+		fs := shellfs.New(c.Mounts.Config(mounts.Session{Owner: owner}), shellfs.WithAccess(c.mountAccess()))
 		// Reject `tail -f ... | <bin-script>` before inlining. Bash
 		// bodies get spliced by expandBinPipeline below, so if we
 		// waited until after expansion, a follow pipeline calling a
@@ -1492,7 +1488,7 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		// untouched, so the nil-seed callers (cron/watch, cwd "/") are
 		// unaffected. interp.DirStack().Cwd is read lazily, so an in-line
 		// `cd` within the same pipeline is tracked too.
-		interp.SetFS(bash.NewCwdFS(shellfs.New(c.Mounts(owner, c.limits(owner).Plan, logServices), append([]shellfs.Option{shellfs.WithAccess(c.mountAccess()), shellfs.WithAlertKinds(c.alertKinds())}, opts...)...), interp.DirStack().Cwd, ""))
+		interp.SetFS(bash.NewCwdFS(shellfs.New(c.Mounts.Config(mounts.Session{Owner: owner, LogServices: logServices}), append([]shellfs.Option{shellfs.WithAccess(c.mountAccess()), shellfs.WithAlertKinds(c.alertKinds())}, opts...)...), interp.DirStack().Cwd, ""))
 
 		wf := &WeftFuncs{Crons: c.Crons, Sources: c.Sources, Limits: c.limits(owner), Owner: owner, Ctx: context.WithoutCancel(ctx), Scoper: c.Scoper}
 		RegisterWeftCommands(interp, wf)

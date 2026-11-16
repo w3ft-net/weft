@@ -149,7 +149,7 @@ func TestKeyedAggregate_ExplainSaysWhatItWaitsFor(t *testing.T) {
 // A saved cron or dashboard carries the base plan only: it never waits on facts
 // a later run might not find.
 func TestKeyedAggregate_ASavedPlanKeepsTheStage(t *testing.T) {
-	lp, err := Lower("cat /log/ns/svc/main.log | awk '"+keyedSum+"'", shapetest.Group(1), "bolt", noResolver{})
+	lp, err := Lower("cat /log/ns/svc/main.log | awk '"+keyedSum+"'", shapetest.Group(1), noResolver{})
 	if err != nil {
 		t.Fatal(err)
 	}

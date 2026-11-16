@@ -9,7 +9,6 @@ import (
 	"github.com/w3ft-net/weft/coordinator"
 	"github.com/w3ft-net/weft/identity"
 	"github.com/w3ft-net/weft/mounts"
-	"github.com/w3ft-net/weft/shape"
 	"github.com/w3ft-net/weft/sqlitedb"
 )
 
@@ -69,7 +68,7 @@ func testDeps(t *testing.T) *Deps {
 			Services:       st.Sources,
 		},
 		Notifier: coordinator.NewNotifier(st.Notify, alerting.EmailTarget{}),
-		Mounts:   func(shape.Added, string, []string) mounts.Config { return mounts.Config{} },
+		Mounts:   &mounts.Backends{},
 	}
 }
 

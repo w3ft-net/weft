@@ -201,21 +201,20 @@ func (ce *CronExecutor) stopAll() {
 }
 
 // intervalBelowMin reports whether interval is under the minimum for the
-// watch's tier, with the tier and minimum for the message. Saves are
-// validated, so this is belt-and-suspenders.
-func (ce *CronExecutor) intervalBelowMin(watch cron.Watch, interval time.Duration) (plan string, min time.Duration, below bool) {
-	l := ce.limitsOf(watch)
-	min = l.MinCronInterval
-	return l.Plan, min, min > 0 && interval < min
+// watch's limits, with the minimum for the message. Saves are validated, so
+// this is belt-and-suspenders.
+func (ce *CronExecutor) intervalBelowMin(watch cron.Watch, interval time.Duration) (min time.Duration, below bool) {
+	min = ce.limitsOf(watch).MinCronInterval
+	return min, min > 0 && interval < min
 }
 
 // intervalAllowed reports whether interval meets the minimum for the watch's
-// tier, logging when it does not. It is checked before any lease or claim is
+// limits, logging when it does not. It is checked before any lease or claim is
 // taken, since there is no point squatting on a watch that will never run.
 func (ce *CronExecutor) intervalAllowed(ctx context.Context, watch cron.Watch, interval time.Duration) bool {
-	if tier, min, below := ce.intervalBelowMin(watch, interval); below {
-		weftsdk.Infof(ctx, "cron[%s]: skipping — interval %s is below minimum %s for tier %s",
-			watch.Name, interval, min, tier)
+	if min, below := ce.intervalBelowMin(watch, interval); below {
+		weftsdk.Infof(ctx, "cron[%s]: skipping — interval %s is below minimum %s",
+			watch.Name, interval, min)
 		return false
 	}
 	return true

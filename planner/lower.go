@@ -86,17 +86,7 @@ type LoweredPlan struct {
 	// the bake-in is worth the saved DB hit. A plan stored before the group
 	// came from the shape has customer_id instead; UnmarshalJSON reads it as
 	// the one partition value.
-	Partition []string `json:"partition,omitempty"`
-	// Tier is the customer's tier at save time. Cached here so the
-	// fire path can clamp the time-range retention + select shards
-	// (both tier-dependent) without two DB roundtrips per fire. A
-	// tier change between save and fire causes the watch to use the
-	// stale tier until re-lowering — acceptable since tier changes
-	// are rare and a user upgrading their plan can re-save watches
-	// to pick up extended retention immediately. The fire path
-	// could instead invalidate on tier change via subscription
-	// hooks, but that's wider scope than this commit.
-	Tier              string        `json:"tier"`
+	Partition         []string      `json:"partition,omitempty"`
 	ShardSQL          string        `json:"shard_sql"`
 	DirectShardSQL    string        `json:"direct_shard_sql"`
 	ArgSources        []ArgSource   `json:"args,omitempty"`
@@ -196,9 +186,6 @@ func (a ArgSource) Resolve(ctx ResolveCtx) string {
 // level-security boundary for the duration of this lowering call;
 // the resulting LoweredPlan carries the group's partition as ArgPartition
 // (re-resolved at each fire from the watch's stored partition).
-// tier is captured so the fire path can clamp retention + select
-// shards without a DB lookup; pass "" if the caller doesn't have
-// it (the fire path falls back to looking it up).
 //
 // resolveBin reads /bin/<name> source for top-level bash inlining.
 // Pass a no-op resolver if the caller doesn't need /bin expansion.
@@ -207,7 +194,7 @@ func (a ArgSource) Resolve(ctx ResolveCtx) string {
 // range into Plan() so the ts predicates get emitted with
 // ArgTimeStart / ArgTimeEnd sources; Hydrate replaces the Values
 // at fire time.
-func Lower(pipeline string, scope coords.Set, tier string, resolveBin BinResolver) (*LoweredPlan, error) {
+func Lower(pipeline string, scope coords.Set, resolveBin BinResolver) (*LoweredPlan, error) {
 	expanded, deps, err := expandForLowering(pipeline, resolveBin)
 	if err != nil {
 		return nil, fmt.Errorf("lower: expand /bin: %w", err)
@@ -231,7 +218,6 @@ func Lower(pipeline string, scope coords.Set, tier string, resolveBin BinResolve
 
 	return &LoweredPlan{
 		Partition:         plan.SourcePartition,
-		Tier:              tier,
 		ShardSQL:          plan.ShardSQL,
 		DirectShardSQL:    plan.DirectShardSQL,
 		ArgSources:        plan.ArgSources,
@@ -290,8 +276,8 @@ func HashBinSource(source string) string {
 // lowered_plan into SaveCronWatch — the watch saves cleanly and the
 // fire path falls back to inline Plan(). This is the canonical entry
 // point for save handlers; do NOT call Lower + Marshal directly.
-func LowerForStorage(ctx context.Context, pipeline string, scope coords.Set, tier string, resolveBin BinResolver) []byte {
-	lp, err := Lower(pipeline, scope, tier, resolveBin)
+func LowerForStorage(ctx context.Context, pipeline string, scope coords.Set, resolveBin BinResolver) []byte {
+	lp, err := Lower(pipeline, scope, resolveBin)
 	if err != nil {
 		weftsdk.Infof(ctx, "lower: skip save-time lowering for pipeline (partition=%v): %v", scopePartition(scope), err)
 		return nil

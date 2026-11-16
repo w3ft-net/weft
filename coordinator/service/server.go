@@ -113,9 +113,9 @@ type Server struct {
 	Tokens  token.Store
 	Sources source.Store
 
-	// Admit says whether the group may stream, and on what plan: a deployment
-	// that sells plans refuses a group without a paid one. Nil admits everyone.
-	Admit func(owner shape.Added) (plan string, err error)
+	// Admit says whether the group may stream: a deployment that sells access
+	// refuses a group without it. Nil admits everyone.
+	Admit func(owner shape.Added) error
 	// Usage is the bytes the group ingested in [start, end) that have been
 	// flushed, for the usage the service reports. Nil: none.
 	Usage func(owner shape.Added, start, end time.Time) (int64, error)
@@ -503,16 +503,14 @@ func (s *Server) Authenticate(ctx context.Context, req *pb.AuthenticateRequest) 
 	customer := s.orgName(auth.Owner)
 
 	// Check for an active subscription.
-	var plan string
 	if s.Admit != nil {
-		var err error
-		if plan, err = s.Admit(auth.Owner); err != nil {
+		if err := s.Admit(auth.Owner); err != nil {
 			weftsdk.Infof(ctx, "auth: customer=%s denied (%v)", customer, err)
 			return nil, status.Errorf(codes.PermissionDenied, "%v", err)
 		}
 	}
 
-	weftsdk.Infof(ctx, "auth: customer=%s namespace=%s tier=%s", customer, auth.Namespace, plan)
+	weftsdk.Infof(ctx, "auth: customer=%s namespace=%s", customer, auth.Namespace)
 
 	// If the agent reported a metrics config, persist it.
 	if mc := req.MetricsConfig; mc != nil {

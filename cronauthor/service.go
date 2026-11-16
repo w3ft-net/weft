@@ -63,7 +63,7 @@ func (s Service) Save(ctx context.Context, r Request) error {
 				return fmt.Errorf("failed to check cron count: %w", err)
 			}
 			if count >= limits.MaxCrons {
-				return &identity.PlanLimitError{Msg: fmt.Sprintf("cron limit reached (%d crons on %s plan)", limits.MaxCrons, limits.Plan)}
+				return &identity.PlanLimitError{Msg: fmt.Sprintf("cron limit reached (%d crons)", limits.MaxCrons)}
 			}
 		}
 	}
@@ -72,7 +72,7 @@ func (s Service) Save(ctx context.Context, r Request) error {
 		return err
 	}
 	if interval < limits.MinCronInterval {
-		return &identity.PlanLimitError{Msg: fmt.Sprintf("minimum schedule interval for %s plan is %s", limits.Plan, limits.MinCronInterval)}
+		return &identity.PlanLimitError{Msg: fmt.Sprintf("minimum schedule interval is %s", limits.MinCronInterval)}
 	}
 	if r.Authorize != nil {
 		if err := r.Authorize(r.Pipeline); err != nil {
@@ -91,7 +91,7 @@ func (s Service) Save(ctx context.Context, r Request) error {
 	// Lower at save time so the fire path can skip preflight and planning. It
 	// returns nil on any failure (an unsupported /bin pipeline, say): the save
 	// still succeeds, and the fire path falls back to planning inline.
-	lowered := planner.LowerForStorage(ctx, r.Pipeline, shape.Set{r.Owner.Coord()}, limits.Plan, binResolver{s.Bins, r.Owner})
+	lowered := planner.LowerForStorage(ctx, r.Pipeline, shape.Set{r.Owner.Coord()}, binResolver{s.Bins, r.Owner})
 
 	spec := cron.WatchSpec{
 		Schedule: r.Schedule, Pipeline: r.Pipeline, Enabled: r.Enabled,

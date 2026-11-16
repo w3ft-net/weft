@@ -5,7 +5,6 @@ import (
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/w3ft-net/weft/identity"
-	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/shape"
 )
 
@@ -25,9 +24,6 @@ type Orgs interface {
 // access its mounts act under, the base URL of share links and the query's
 // window.
 type CommandsFunc func(interp *bash.Interpreter, owner shape.Added, userID string, cwd func() string, t identity.Access, shareBase string, start, end time.Time)
-
-// MountsFunc is the mounts a query's shell filesystem is built over.
-type MountsFunc func(owner shape.Added, plan string, logServices []string) mounts.Config
 
 // Mapper is the coordinator's Orgs.
 func (c *Coordinator) Mapper() Orgs { return c.Orgs }

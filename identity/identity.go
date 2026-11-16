@@ -65,18 +65,3 @@ func UserIDFrom(ctx context.Context) string {
 type Server interface {
 	Interceptors(skip SkipMethods) ([]grpc.UnaryServerInterceptor, []grpc.StreamServerInterceptor)
 }
-
-// Planned is implemented by a Caller whose plan limits apply to what it does
-// (hosted: the subscription tier). A Caller that is not Planned has none. A plan
-// is an opaque label: only the deployment that names it knows what it allows.
-type Planned interface {
-	Plan() string
-}
-
-// PlanOf is the plan c is subject to, or "" when it has none.
-func PlanOf(c Caller) string {
-	if p, ok := c.(Planned); ok {
-		return p.Plan()
-	}
-	return ""
-}

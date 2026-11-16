@@ -11,7 +11,6 @@ import (
 type unlimited struct{}
 
 func (unlimited) LimitsFor(shape.Added) identity.Limits    { return identity.Limits{} }
-func (unlimited) LimitsOfPlan(string) identity.Limits      { return identity.Limits{} }
 func (unlimited) CronRunTimeout(shape.Added) time.Duration { return 0 }
 
 // entitlements is what this coordinator holds its groups to.
@@ -23,10 +22,7 @@ func (c *Coordinator) entitlements() identity.Entitlements {
 }
 
 // limits is the limits of the group the owner names. An owner that names none
-// is held to the lowest plan's limits.
+// is held to whatever the deployment's Entitlements says of it.
 func (c *Coordinator) limits(owner shape.Added) identity.Limits {
-	if NoGroup(owner) {
-		return c.entitlements().LimitsOfPlan("")
-	}
 	return c.entitlements().LimitsFor(owner)
 }

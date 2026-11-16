@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/w3ft-net/weft/mounts"
 	"io"
 	"strings"
 
@@ -47,7 +48,7 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 	// tests that build a Coordinator without a store.
 	var binFS bash.FS
 	if !NoGroup(owner) && c != nil && c.Mounts != nil {
-		binFS = shellfs.New(c.Mounts(owner, "", nil), shellfs.WithAccess(c.mountAccess()))
+		binFS = shellfs.New(c.Mounts.Config(mounts.Session{Owner: owner}), shellfs.WithAccess(c.mountAccess()))
 	}
 	bash.Walk(script, func(n bash.Node) bool {
 		pipe, ok := n.(*bash.Pipeline)

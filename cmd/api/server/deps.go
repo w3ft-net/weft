@@ -33,9 +33,8 @@ type Deps struct {
 	// Backends is where the api keeps what it serves. Required, except where
 	// a member says otherwise.
 	Backends Backends
-	// Mounts is what the shell's filesystem is built over for a session.
-	// Required.
-	Mounts MountsFactory
+	// Mounts is what the shell's filesystem is built over. Required.
+	Mounts *mounts.Backends
 	// Extension is the deployment's own behaviour beside the core's. Nil: none.
 	Extension Extension
 }
@@ -68,12 +67,6 @@ type Backends struct {
 	// AgentFleet is where the agents reading each source are recorded. Optional:
 	// nil, and no source reports agents.
 	AgentFleet sources.AgentFleet
-}
-
-// MountsFactory is the mounts the shell's filesystem is built over for one
-// session, given the services its logs are read from.
-type MountsFactory interface {
-	Config(session weftapi.Session, logServices []string) mounts.Config
 }
 
 // Extension is the deployment's own behaviour on the server (hosted: billing,

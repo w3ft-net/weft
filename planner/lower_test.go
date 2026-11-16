@@ -35,7 +35,7 @@ func TestLower_RoundTrip(t *testing.T) {
 
 	// Lower at save time (customer matters for the row-level
 	// boundary; time bounds are sentinels and don't matter here).
-	lp, err := Lower(pipeline, shapetest.Group(customer), "bolt", noResolver{})
+	lp, err := Lower(pipeline, shapetest.Group(customer), noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestLower_RoundTrip(t *testing.T) {
 // windows.
 func TestLower_HydrateUsesFireTimeBounds(t *testing.T) {
 	pipeline := `cat /log/loom/api/prod.log | grep ERROR`
-	lp, err := Lower(pipeline, shapetest.Group(1), "bolt", noResolver{})
+	lp, err := Lower(pipeline, shapetest.Group(1), noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestLower_HydrateUsesFireTimeBounds(t *testing.T) {
 // must carry the current PlannerVersion. Consumers compare against
 // PlannerVersion to detect stale plans after a planner-breaking change.
 func TestLower_PlannerVersion(t *testing.T) {
-	lp, err := Lower(`cat /log/foo.log`, shapetest.Group(1), "bolt", noResolver{})
+	lp, err := Lower(`cat /log/foo.log`, shapetest.Group(1), noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestLower_InlinesBinScript(t *testing.T) {
 		binByName: map[string]string{"find-errors": binBody},
 	}
 
-	lp, err := Lower(`find-errors ERROR | wc -l`, shapetest.Group(1), "bolt", resolver)
+	lp, err := Lower(`find-errors ERROR | wc -l`, shapetest.Group(1), resolver)
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
@@ -208,11 +208,11 @@ func TestLower_InlinesBinScript(t *testing.T) {
 // quietly carries no group predicate for a watch that needs one.
 func TestLower_RefusesAScopeWithNoGroup(t *testing.T) {
 	if len(coords.BuildLayout().Columns) > 0 {
-		if _, err := Lower(`cat /log/foo.log`, coords.Set{{}}, "bolt", noResolver{}); !errors.Is(err, coords.ErrRequiredUnset) {
+		if _, err := Lower(`cat /log/foo.log`, coords.Set{{}}, noResolver{}); !errors.Is(err, coords.ErrRequiredUnset) {
 			t.Errorf("Lower with an unset group = %v, want ErrRequiredUnset", err)
 		}
 	}
-	if _, err := Lower(`cat /log/foo.log`, coords.Set{}, "bolt", noResolver{}); !errors.Is(err, ErrNoSource) {
+	if _, err := Lower(`cat /log/foo.log`, coords.Set{}, noResolver{}); !errors.Is(err, ErrNoSource) {
 		t.Errorf("Lower with an empty scope = %v, want ErrNoSource", err)
 	}
 }
@@ -222,7 +222,7 @@ func TestLower_RefusesAScopeWithNoGroup(t *testing.T) {
 // for both. Without it a cron's awk stage would be sent whole lines.
 func TestLower_KeepsTheFieldForm(t *testing.T) {
 	pipeline := `cat /log/weft/coordinator/main.log | awk '{ s += $3 } END { print s }'`
-	lp, err := Lower(pipeline, shapetest.Group(1), "bolt", noResolver{})
+	lp, err := Lower(pipeline, shapetest.Group(1), noResolver{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}

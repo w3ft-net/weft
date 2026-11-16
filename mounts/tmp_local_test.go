@@ -3,6 +3,7 @@ package mounts
 import (
 	"context"
 	"errors"
+	"github.com/w3ft-net/weft/shape"
 	"io/fs"
 	"testing"
 
@@ -75,9 +76,17 @@ func TestTmpMount_OverTheLocalStore(t *testing.T) {
 		t.Errorf("notices = %v, want one %s", notices.keys, NoticeKeyTmpExpiry)
 	}
 
-	// Limits are the Config's: a cap of 4 bytes refuses a bigger write.
-	small := &TmpMount{cfg: Config{Tmp: st, TmpLimits: tmp.Limits{MaxFileBytes: 4}}}
+	// Limits are the store's: a cap of 4 bytes refuses a bigger write.
+	small := &TmpMount{cfg: Config{Tmp: limitedTmp{st, tmp.Limits{MaxFileBytes: 4}}}}
 	if err := small.WriteFile("big", []byte("12345")); !errors.Is(err, tmp.ErrFileTooLarge) {
-		t.Errorf("a write over the Config's limit: %v", err)
+		t.Errorf("a write over the store's limit: %v", err)
 	}
 }
+
+// limitedTmp is a tmp.Store that holds every owner to lim.
+type limitedTmp struct {
+	tmp.Store
+	lim tmp.Limits
+}
+
+func (l limitedTmp) Limits(shape.Added) tmp.Limits { return l.lim }

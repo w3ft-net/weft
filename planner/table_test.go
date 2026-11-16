@@ -49,7 +49,7 @@ func TestPlanTable_TheCustomerIsPartOfTheName(t *testing.T) {
 
 // A cron runs the lowered form of a plan, so the table must survive lowering.
 func TestLower_KeepsTheTable(t *testing.T) {
-	lp, err := Lower("cat /log/vimgym/api/main.log | grep error", shapetest.Group(2), "bolt", noResolver{})
+	lp, err := Lower("cat /log/vimgym/api/main.log | grep error", shapetest.Group(2), noResolver{})
 	if err != nil {
 		t.Fatal(err)
 	}

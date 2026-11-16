@@ -52,14 +52,14 @@ type Server struct {
 	sources          source.Store // namespaces and sources
 	bins             bin.Store    // /bin scripts
 	namespaceCreated func(ctx context.Context, session Session, namespace uint)
-	fleet            sources.AgentFleet                                        // who reads the agent-sampled sources; nil is none
-	crons            cron.Store                                                // crons, their results and series
-	limits           identity.Entitlements                                     // what each plan allows; nil is no limits
-	ingest           ingestfail.Store                                          // ingestion failures
-	notify           notifycfg.Service                                         // notification config and secrets
-	group            func(shape.Added) bool                                    // whether a partition names a group; nil: every one does
-	mounts           func(session Session, logServices []string) mounts.Config // the shell's mounts for a session
-	producers        *sources.Registry                                         // the log producers; the HTTPS ones mount themselves in Handler
+	fleet            sources.AgentFleet     // who reads the agent-sampled sources; nil is none
+	crons            cron.Store             // crons, their results and series
+	limits           identity.Entitlements  // what each plan allows; nil is no limits
+	ingest           ingestfail.Store       // ingestion failures
+	notify           notifycfg.Service      // notification config and secrets
+	group            func(shape.Added) bool // whether a partition names a group; nil: every one does
+	mounts           *mounts.Backends       // what the shell's mounts read and write through
+	producers        *sources.Registry      // the log producers; the HTTPS ones mount themselves in Handler
 	kindsOnce        sync.Once
 	kinds            *sources.Registry  // the rules of each kind of source: the core's, and the producers' own
 	access           identity.Access    // who acts, what they may do (Authz) and read (Scope); the open one until SetAccess
@@ -121,9 +121,9 @@ func (s *Server) SetIngestFailures(st ingestfail.Store) { s.ingest = st }
 // SetBins is where /bin scripts live.
 func (s *Server) SetBins(st bin.Store) { s.bins = st }
 
-// SetMounts is the mounts the shell's filesystem is built over for a session
-// (hosted: the Postgres registries, held to the limits of the session's plan).
-func (s *Server) SetMounts(m func(session Session, logServices []string) mounts.Config) { s.mounts = m }
+// SetMounts is what the shell's filesystem is built over (hosted: the Postgres
+// registries, which hold each group to its own limits).
+func (s *Server) SetMounts(b *mounts.Backends) { s.mounts = b }
 
 // SetAgentFleet is where the agents reading each source are recorded. It must
 // be set before the first request. Without it no source reports agents, and a

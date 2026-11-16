@@ -70,14 +70,12 @@ type Config struct {
 	//
 	// Sources holds the namespaces; BinService judges and stores /bin scripts,
 	// Notify the notification config, CronAuthor crons (and holds a group to its
-	// plan limits); Tmp is where /tmp lives, and TmpLimits what writes to it are
-	// held to (zero is none).
+	// plan limits); Tmp is where /tmp lives, and holds its own writes to limits.
 	Sources    source.Store
 	BinService binscript.Service
 	Notify     notifycfg.Service
 	CronAuthor cronauthor.Service
 	Tmp        tmp.Store
-	TmpLimits  tmp.Limits
 
 	NoticeQueue NoticeSink
 	// History is where writes to tracked files are recorded; nil records nothing
@@ -102,6 +100,59 @@ type Config struct {
 	// ID on store calls, logs and notice emission. Nil means no request
 	// (tests, boot) and falls back to context.Background().
 	Ctx context.Context
+}
+
+// Backends is what a deployment's mounts read and write through, built once
+// when the process starts. Every call a mount makes names the owner, so one
+// Backends serves every group; what differs between groups (their limits, their
+// org) is the backends' own business. A mount that needs a backend it was not
+// given fails when it is used.
+type Backends struct {
+	// Sources holds the namespaces; BinService judges and stores /bin scripts,
+	// Notify the notification config, CronAuthor crons (and holds a group to its
+	// limits); Tmp is where /tmp lives and holds its own writes to limits.
+	Sources    source.Store
+	BinService binscript.Service
+	Notify     notifycfg.Service
+	CronAuthor cronauthor.Service
+	Tmp        tmp.Store
+	// History is where writes to tracked files are recorded; nil records nothing
+	// (the hosted build, whose history is its version rows). Identity names a
+	// user for attribution there; nil is the user id.
+	History  history.Store
+	Identity func(userID string) history.Identity
+	// EtcExtensions, UserNames and CronRenamed are the Config fields of the same
+	// names.
+	EtcExtensions EtcExtensions
+	UserNames     func(ids []string) map[string]string
+	CronRenamed   func(c Config, name, newRel string) error
+}
+
+// Session is what one request's filesystem differs by: the group it acts in and
+// the services whose logs it reads.
+type Session struct {
+	Owner       shape.Added
+	LogServices []string
+}
+
+// Config is the Config of a filesystem over these backends for the session.
+// Who acts is still to be set: the Config denies everything until it has a
+// Principal, an Authz and a Scope.
+func (b Backends) Config(s Session) Config {
+	return Config{
+		Owner:         s.Owner,
+		LogServices:   s.LogServices,
+		Sources:       b.Sources,
+		BinService:    b.BinService,
+		Notify:        b.Notify,
+		CronAuthor:    b.CronAuthor,
+		Tmp:           b.Tmp,
+		History:       b.History,
+		Identity:      b.Identity,
+		EtcExtensions: b.EtcExtensions,
+		UserNames:     b.UserNames,
+		CronRenamed:   b.CronRenamed,
+	}
 }
 
 // ctx returns the request context, or Background when none was bound.

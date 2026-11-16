@@ -59,16 +59,12 @@ func (e *svcEnv) coord(cfg coordinator.CoordinatorConfig) *coordinator.Coordinat
 	}
 	cfg.Crons, cfg.Bins, cfg.Sources, cfg.Notices = e.st.Crons, e.st.Bins, e.st.Sources, e.st.Notices
 	cfg.Shards = e.st.Shards
-	cfg.Mounts = func(owner shape.Added, _ string, services []string) mounts.Config {
-		return mounts.Config{
-			Owner:       owner,
-			LogServices: services,
-			Sources:     e.st.Sources,
-			BinService:  binscript.Service{Bins: e.st.Bins, Crons: e.st.Crons, Sources: e.st.Sources},
-			Notify:      e.st.Notify,
-			CronAuthor:  cronauthor.Service{Crons: e.st.Crons, Sources: e.st.Sources, Bins: e.st.Bins},
-			Tmp:         e.st.Tmp,
-		}
+	cfg.Mounts = &mounts.Backends{
+		Sources:    e.st.Sources,
+		BinService: binscript.Service{Bins: e.st.Bins, Crons: e.st.Crons, Sources: e.st.Sources},
+		Notify:     e.st.Notify,
+		CronAuthor: cronauthor.Service{Crons: e.st.Crons, Sources: e.st.Sources, Bins: e.st.Bins},
+		Tmp:        e.st.Tmp,
 	}
 	if cfg.Authz == nil {
 		cfg.Authz = allowAll{}

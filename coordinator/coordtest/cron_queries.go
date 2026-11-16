@@ -79,7 +79,7 @@ func cronMissingShardFailsTheRun(t *testing.T, f *queryFixture) {
 // have stored for it.
 func (f *queryFixture) loweredWatch(t *testing.T, name, pipeline string, mutate func(*planner.LoweredPlan)) cron.Watch {
 	t.Helper()
-	lp, err := planner.Lower(pipeline, shape.Set{f.s.Owner.Coord()}, "bolt", noBins{})
+	lp, err := planner.Lower(pipeline, shape.Set{f.s.Owner.Coord()}, noBins{})
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
