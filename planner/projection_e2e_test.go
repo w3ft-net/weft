@@ -10,6 +10,7 @@ import (
 
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shard"
+	_ "github.com/w3ft-net/weft/shard/duckdbdrv"
 )
 
 // TestProjection_E2E runs the planner's projection-folded SQL through a
@@ -20,7 +21,6 @@ import (
 func TestProjection_E2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_ = ctx
 
 	sh, err := shard.NewDuckDBShard("e2e", "")
 	if err != nil {
@@ -36,7 +36,8 @@ func TestProjection_E2E(t *testing.T) {
 			TsUnixNs:    now.UnixNano(),
 			Level:       "ERROR",
 			Namespace:   "vimgym",
-			Customer:    "kevlar",
+			Service:     "api",
+			Kind:        "main",
 			PayloadJson: []byte(`{"status":500,"user_id":"u1","action":"click","foo":{"bar":42},"items":[10,20,30],"users":[{"name":"b"},{"name":"a"}]}`),
 		},
 		{
@@ -45,7 +46,8 @@ func TestProjection_E2E(t *testing.T) {
 			TsUnixNs:    now.Add(time.Second).UnixNano(),
 			Level:       "INFO",
 			Namespace:   "vimgym",
-			Customer:    "kevlar",
+			Service:     "api",
+			Kind:        "main",
 			PayloadJson: []byte(`{"status":200,"user_id":"u2","action":"view","foo":{"bar":7},"items":[1],"users":[{"name":"z"}]}`),
 		},
 	}
@@ -63,17 +65,17 @@ func TestProjection_E2E(t *testing.T) {
 	}{
 		{
 			name:     "single field projection",
-			pipeline: `cat vimgym.log | jq '.status'`,
+			pipeline: `cat /log/vimgym/api/main.log | jq '.status'`,
 			wantRaws: []string{"500", "200"},
 		},
 		{
 			name:     "nested path",
-			pipeline: `cat vimgym.log | jq '.foo.bar'`,
+			pipeline: `cat /log/vimgym/api/main.log | jq '.foo.bar'`,
 			wantRaws: []string{"42", "7"},
 		},
 		{
 			name:     "object construction",
-			pipeline: `cat vimgym.log | jq '{user: .user_id, action: .action}'`,
+			pipeline: `cat /log/vimgym/api/main.log | jq '{user: .user_id, action: .action}'`,
 			wantRaws: []string{
 				`{"user":"u1","action":"click"}`,
 				`{"user":"u2","action":"view"}`,
@@ -81,7 +83,7 @@ func TestProjection_E2E(t *testing.T) {
 		},
 		{
 			name:     "array construction",
-			pipeline: `cat vimgym.log | jq '[.user_id, .action]'`,
+			pipeline: `cat /log/vimgym/api/main.log | jq '[.user_id, .action]'`,
 			wantRaws: []string{
 				`["u1","click"]`,
 				`["u2","view"]`,
@@ -89,25 +91,26 @@ func TestProjection_E2E(t *testing.T) {
 		},
 		{
 			name:     "select + projection",
-			pipeline: `cat vimgym.log | jq 'select(.status == 500) | .user_id'`,
+			pipeline: `cat /log/vimgym/api/main.log | jq 'select(.status == 500) | .user_id'`,
 			wantRaws: []string{`"u1"`},
 		},
 		{
 			name:     "select + object projection (with metavar)",
-			pipeline: `cat vimgym.log | jq 'select(.status == 500) | {who: .user_id, lvl: $level}'`,
+			pipeline: `cat /log/vimgym/api/main.log | jq 'select(.status == 500) | {who: .user_id, lvl: $level}'`,
 			wantRaws: []string{`{"who":"u1","lvl":"ERROR"}`},
 		},
 		{
-			name: "internal pipe: project prefix, residual ships to compute",
-			// .users projects; sort_by stays in compute. We only verify that
-			// the SQL emits the array (the compute step isn't part of this test).
-			pipeline: `cat vimgym.log | jq 'select(.status == 500) | .users | sort_by(.name)'`,
-			wantRaws: []string{`[{"name":"b"},{"name":"a"}]`},
+			name: "internal pipe: the shard sends only the fields jq reads",
+			// jq runs in compute; the shard narrows each payload to the keys the
+			// program reads (.status, .users). The compute step isn't part of
+			// this test.
+			pipeline: `cat /log/vimgym/api/main.log | jq 'select(.status == 500) | .users | sort_by(.name)'`,
+			wantRaws: []string{`{"status":500,"users":[{"name":"b"},{"name":"a"}]}`},
 		},
 		{
-			name:     "iter: array projects, .[] runs in compute",
-			pipeline: `cat vimgym.log | jq 'select(.status == 500) | .items[]'`,
-			wantRaws: []string{`[10,20,30]`},
+			name:     "iter: the shard sends the fields, .[] runs in compute",
+			pipeline: `cat /log/vimgym/api/main.log | jq 'select(.status == 500) | .items[]'`,
+			wantRaws: []string{`{"items":[10,20,30],"status":500}`},
 		},
 	}
 
@@ -117,12 +120,12 @@ func TestProjection_E2E(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
-			sql := InjectCustomer(plan.ShardSQL, "kevlar")
-			// Sort by line_num for deterministic row order (no ORDER BY in cat).
+			sql := plan.ShardSQL
+			// Sort by ts for deterministic row order (no ORDER BY in cat).
 			if !strings.Contains(sql, "ORDER BY") {
-				sql += " ORDER BY line_num"
+				sql += " ORDER BY ts"
 			}
-			result, err := sh.Query(sql)
+			result, err := sh.Query(ctx, sql, plan.Args...)
 			if err != nil {
 				t.Fatalf("Query: %v\n  sql: %s", err, sql)
 			}

@@ -81,7 +81,7 @@ func TestExplain_JqPctExtraction(t *testing.T) {
 
 func TestExplain_PlannerOutput(t *testing.T) {
 	t.Run("jq select with field access splits correctly", func(t *testing.T) {
-		plan, err := planBare(`tail log/weft/metrics.log | jq 'select(.type == "memory") | .pct'`, "", time.Time{}, time.Time{})
+		plan, err := planBare(`tail /log/weft/metrics/main.log | jq 'select(.type == "memory") | .pct'`, "", time.Time{}, time.Time{})
 		if err != nil {
 			t.Fatalf("Plan: %v", err)
 		}
@@ -89,33 +89,31 @@ func TestExplain_PlannerOutput(t *testing.T) {
 		if plan.SourceCmd != "tail" {
 			t.Errorf("SourceCmd = %q, want %q", plan.SourceCmd, "tail")
 		}
-		if plan.SourceApp != "weft/metrics" {
-			t.Errorf("SourceApp = %q, want %q", plan.SourceApp, "weft/metrics")
+		if plan.SourceNamespace != "weft" || plan.SourceService != "metrics" {
+			t.Errorf("source = %q/%q, want weft/metrics", plan.SourceNamespace, plan.SourceService)
 		}
 
-		if !strings.Contains(plan.ShardSQL, "CAST(json_extract(payload, '$.pct') AS VARCHAR) as raw") {
-			t.Errorf("ShardSQL missing .pct projection\n got: %s", plan.ShardSQL)
+		// tail's line count ends predicate pushdown, so jq stays in compute and
+		// the shard narrows each payload to the keys it reads.
+		if !strings.Contains(plan.ShardSQL, "json_object('pct', json_extract(payload, '$.pct'), 'type', json_extract(payload, '$.type'))") {
+			t.Errorf("ShardSQL does not narrow the payload to .pct and .type\n got: %s", plan.ShardSQL)
 		}
-		if !strings.Contains(plan.ShardSQL, "json_extract_string(payload, '$.type') = 'memory'") {
-			t.Errorf("ShardSQL missing jq select predicate\n got: %s", plan.ShardSQL)
-		}
-
-		if len(plan.ComputeStages) != 0 {
-			t.Errorf("ComputeStages = %v, want empty (jq fully folded into SELECT)", plan.ComputeStages)
+		if len(plan.ComputeStages) != 1 || !strings.HasPrefix(plan.ComputeStages[0], "jq ") {
+			t.Errorf("ComputeStages = %v, want the one jq stage", plan.ComputeStages)
 		}
 	})
 
 	t.Run("explain output includes all sections", func(t *testing.T) {
-		output := Explain(`tail log/weft/metrics.log | jq 'select(.type == "memory") | .pct'`)
+		output := Explain(`tail /log/weft/metrics/main.log | jq 'select(.type == "memory") | .pct'`)
 
 		for _, want := range []string{
-			"Source:",
-			"command:  tail",
-			"app:      weft/metrics",
+			"Scan     namespace=weft service=metrics kind=main",
+			"Limit    10  ts DESC",
+			"Filter   exact",
+			"Passes:",
+			"field-projection     Filter[1: jq] reads only .pct, .type",
 			"Shard SQL:",
-			"json_extract_string(payload, '$.type') = 'memory'",
-			"CAST(json_extract(payload, '$.pct') AS VARCHAR) as raw",
-			"Compute stages: (none — fully pushed down)",
+			"json_object('pct', json_extract(payload, '$.pct'), 'type', json_extract(payload, '$.type'))",
 		} {
 			if !strings.Contains(output, want) {
 				t.Errorf("explain output missing %q\n\nfull output:\n%s", want, output)
