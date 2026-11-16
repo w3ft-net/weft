@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/w3ft-net/weft/cluster"
 	"log"
 	"net"
 	"net/http"
@@ -40,7 +41,11 @@ func main() {
 	hbInterval := flag.Duration("heartbeat-interval", 10*time.Second, "heartbeat interval")
 	volumeHelper := flag.String("volume-helper", defaultVolumeHelper, "root helper (run via sudo) that mounts and unmounts the data volume; absent = no volume management (dev/container)")
 	perKeyTables := flag.Bool("per-key-tables", false, "keep each log source in a table of its own in a new, empty shard database; a database that already holds rows keeps its layout")
+	cfgPath := cluster.DefineFlag(flag.CommandLine)
 	flag.Parse()
+	if err := cluster.Overlay(flag.CommandLine, cluster.Shard, *cfgPath); err != nil {
+		log.Fatalf("shard: %v", err)
+	}
 
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {
 		log.Fatalf("mkdir data dir %s: %v", *dataDir, err)

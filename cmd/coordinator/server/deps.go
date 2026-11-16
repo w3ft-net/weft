@@ -1,49 +1,37 @@
 // Package server is the coordinator process: flags, listeners, the store, the
 // shard control plane, the gRPC servers and their shutdown. It is everything
 // that is the same in every deployment, and it names none of the things that
-// differ. A deployment's main supplies those as the Deps its open function
-// returns:
+// differ. A deployment's main supplies those as the deployment.Deployment its
+// open function returns, which the api reads too, and the Own it adds to it:
 //
-//	func main() { server.Run(open) }
+//	func main() { server.Run(flags, dep, own) }
 package server
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/w3ft-net/weft/mounts"
 	"strings"
 	"time"
 
-	"github.com/w3ft-net/weft/backends/bin"
 	"github.com/w3ft-net/weft/backends/coordination"
-	"github.com/w3ft-net/weft/backends/cron"
 	"github.com/w3ft-net/weft/backends/dlq"
-	"github.com/w3ft-net/weft/backends/ingestfail"
 	"github.com/w3ft-net/weft/backends/notice"
-	"github.com/w3ft-net/weft/backends/source"
-	"github.com/w3ft-net/weft/backends/token"
 	"github.com/w3ft-net/weft/coordinator"
 	coordsvc "github.com/w3ft-net/weft/coordinator/service"
-	"github.com/w3ft-net/weft/identity"
+	"github.com/w3ft-net/weft/deployment"
 	"github.com/w3ft-net/weft/logdb"
 )
 
-// Deps is everything a deployment supplies, already built over an open
-// database. A field marked optional left nil is the open
-// default: no feature, or the one-group behaviour.
-type Deps struct {
-	// Identity is who the groups are, who calls, and what each may read and
-	// change. Required.
-	Identity Identity
-	// Backends is where the coordinator's data lives. Required, except where a
-	// member says otherwise.
+// Own is what only the coordinator asks of a deployment, beside the
+// deployment.Deployment every process shares. A field marked optional left nil
+// is the open default: no feature, or the one-group behaviour.
+type Own struct {
+	// Orgs maps a group's org handle to the shape. Required.
+	Orgs coordinator.Orgs
+	// Backends is where the coordinator's own data lives. Required, except
+	// where a member says otherwise.
 	Backends Backends
-	// Notifier is the alert notifier, built over the store so it can
-	// pre-resolve aliases. Required.
-	Notifier *coordinator.Notifier
-	// Mounts is what the shell's mounts read and write through. Required.
-	Mounts *mounts.Backends
 	// ColdScans meters cold-storage reads against the plan's cap. Optional:
 	// they are not metered.
 	ColdScans *coordinator.ColdScanLedger
@@ -59,39 +47,11 @@ type Deps struct {
 	Extension Extension
 }
 
-// Identity is everything the deployment says about who acts.
-type Identity struct {
-	// Authn opens, once and where the process reads its secrets, the server
-	// that authenticates the callers of the gRPC servers, so a missing secret is
-	// reported once and at the same point on every start. A coordinator with no
-	// way to authenticate its callers must not start. Required.
-	Authn identity.Server
-	// Orgs maps a group's org handle to the shape. Required.
-	Orgs coordinator.Orgs
-	// Scope is what a principal may read and Authz what it may change. The gRPC
-	// service takes its Authorizer from the same config, so a gate the service
-	// applies is never looser than one the coordinator applies. Required.
-	Scope identity.Scoper
-	Authz identity.Authorizer
-	// Entitlements is what each group's plan allows. Optional: no limits.
-	Entitlements identity.Entitlements
-}
-
-// Backends is where the coordinator's data lives.
+// Backends is where the coordinator keeps what the api does not read: the
+// shared stores are in the deployment.
 type Backends struct {
-	// Tokens is where agent tokens live, Sources where namespaces and sources
-	// do and Notices where user notices do.
-	Tokens  token.Store
-	Sources source.Store
+	// Notices is where user notices live.
 	Notices notice.Store
-	// Crons is where the crons the coordinator runs live: watches, what they
-	// recorded and their alert incidents. Bins is where /bin scripts live.
-	Crons cron.Store
-	Bins  bin.Store
-	// IngestFailures is where the drain records the batches it could not place,
-	// which the api reads back as the services a group should look at. A
-	// coordinator without it drops every failure it reports.
-	IngestFailures ingestfail.Store
 	// Coordination is how this coordinator knows it may act: the leases that
 	// elect its leaders and the claims that keep a cron slot from running twice.
 	Coordination coordination.Coordination
@@ -157,33 +117,27 @@ type Runtime struct {
 	AwaitOnExit func(done <-chan struct{})
 }
 
-// Validate is why a process whose deployment lacks a required part does not
+// validate is why a process whose deployment lacks a required part does not
 // start: the coordinator has no default for any of them.
-func (d *Deps) Validate() error {
-	if d == nil {
-		return errors.New("the deployment supplied no Deps")
+func validate(dep *deployment.Deployment, own *Own) error {
+	if err := dep.Validate(); err != nil {
+		return err
 	}
-	b := d.Backends
+	if own == nil {
+		return errors.New("the deployment supplied no coordinator Own")
+	}
+	b := own.Backends
 	var missing []string
 	for _, p := range []struct {
 		name string
 		set  bool
 	}{
-		{"Identity.Authn", d.Identity.Authn != nil},
-		{"Identity.Orgs", d.Identity.Orgs != nil},
-		{"Identity.Scope", d.Identity.Scope != nil},
-		{"Identity.Authz", d.Identity.Authz != nil},
-		{"Backends.Tokens", b.Tokens != nil},
-		{"Backends.Sources", b.Sources != nil},
-		{"Backends.Notices", b.Notices != nil},
-		{"Backends.Crons", b.Crons != nil},
-		{"Backends.Bins", b.Bins != nil},
-		{"Backends.IngestFailures", b.IngestFailures != nil},
-		{"Backends.Coordination", b.Coordination != nil},
-		{"Backends.Shards", b.Shards != nil},
-		{"Backends.Services", b.Services != nil},
-		{"Notifier", d.Notifier != nil},
-		{"Mounts", d.Mounts != nil},
+		{"Authn.GRPC", dep.Authn.GRPC != nil},
+		{"Own.Orgs", own.Orgs != nil},
+		{"Own.Backends.Notices", b.Notices != nil},
+		{"Own.Backends.Coordination", b.Coordination != nil},
+		{"Own.Backends.Shards", b.Shards != nil},
+		{"Own.Backends.Services", b.Services != nil},
 	} {
 		if !p.set {
 			missing = append(missing, p.name)
@@ -197,21 +151,21 @@ func (d *Deps) Validate() error {
 
 // CoordinatorConfig fills cfg with what the deployment says about its groups,
 // over its backends.
-func (d *Deps) CoordinatorConfig(cfg coordinator.CoordinatorConfig) coordinator.CoordinatorConfig {
-	b := d.Backends
-	cfg.Orgs = d.Identity.Orgs
-	cfg.Scoper = d.Identity.Scope
-	cfg.Authz = d.Identity.Authz
-	cfg.Entitlements = d.Identity.Entitlements
+func CoordinatorConfig(dep *deployment.Deployment, own *Own, cfg coordinator.CoordinatorConfig) coordinator.CoordinatorConfig {
+	b := dep.Backends
+	cfg.Orgs = own.Orgs
+	cfg.Scoper = dep.Access.Scope
+	cfg.Authz = dep.Access.Authz
+	cfg.Entitlements = dep.Entitlements
 	cfg.Crons = b.Crons
 	cfg.Bins = b.Bins
 	cfg.Sources = b.Sources
-	cfg.Notices = b.Notices
-	cfg.Shards = b.Shards
-	cfg.Services = b.Services
+	cfg.Notices = own.Backends.Notices
+	cfg.Shards = own.Backends.Shards
+	cfg.Services = own.Backends.Services
 	cfg.Errors = coordinator.NewIngestionErrorRecorder(b.IngestFailures)
-	cfg.Mounts = d.Mounts
-	cfg.ColdScans = d.ColdScans
-	cfg.Commands = d.Commands
+	cfg.Mounts = dep.Mounts
+	cfg.ColdScans = own.ColdScans
+	cfg.Commands = own.Commands
 	return cfg
 }

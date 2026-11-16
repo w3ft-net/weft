@@ -12,8 +12,10 @@ import (
 
 	"github.com/w3ft-net/weft/alerting"
 	weftapi "github.com/w3ft-net/weft/api"
+	"github.com/w3ft-net/weft/cluster"
 	"github.com/w3ft-net/weft/cmd/api/server/options"
 	"github.com/w3ft-net/weft/config"
+	"github.com/w3ft-net/weft/deployment"
 	"github.com/w3ft-net/weft/ingest"
 	ingsyslog "github.com/w3ft-net/weft/ingest/syslog"
 	"github.com/w3ft-net/weft/sources"
@@ -22,13 +24,18 @@ import (
 // Flags are the api's command-line flags, parsed.
 type Flags = options.Flags
 
-// ParseFlags starts logging, then defines and parses the api's flags. An empty
+// ParseFlags starts logging, then defines and parses the api's flags, over the
+// cluster file if there is one (--config, or $WEFT_CONFIG). An empty
 // --db-dsn is filled from DB_DSN, so Flags.DBDSN is the DSN to open (empty: the
 // deployment's own default). Call it before opening anything that logs.
 func ParseFlags() *Flags {
 	weftsdk.InitLogging("", os.Stderr).CaptureStdio()
 	fl := options.Define(flag.CommandLine)
+	cfgPath := cluster.DefineFlag(flag.CommandLine)
 	flag.Parse()
+	if err := cluster.Overlay(flag.CommandLine, cluster.API, *cfgPath); err != nil {
+		log.Fatalf("api: %v", err)
+	}
 	if fl.DBDSN == "" {
 		fl.DBDSN = os.Getenv("DB_DSN")
 	}
@@ -39,45 +46,48 @@ func ParseFlags() *Flags {
 // caller has opened (and will close when Run returns). It returns only if the
 // server stops; a start that cannot proceed exits the process, as cmd/api
 // always has.
-func Run(fl *Flags, deps *Deps) {
+func Run(fl *Flags, dep *deployment.Deployment, own *Own) {
 	port, coordAddr, baseURL := &fl.Port, &fl.CoordinatorAddr, &fl.BaseURL
 	renderSyslogPort := &fl.RenderSyslogPort
 
-	if err := deps.Validate(); err != nil {
+	if err := validate(dep); err != nil {
 		log.Fatalf("api: %v", err)
+	}
+	if own == nil {
+		own = &Own{}
 	}
 
 	srv := weftapi.NewServer(*coordAddr, *baseURL)
-	srv.SetIdentity(deps.Identity.Authn)
+	srv.SetIdentity(dep.Authn.API)
 	if err := srv.Connect(); err != nil {
 		log.Fatalf("connect to coordinator: %v", err)
 	}
 	defer srv.Close()
 
-	srv.SetAccess(deps.Identity.Access)
-	if deps.Identity.Groups != nil {
-		srv.SetGroups(deps.Identity.Groups)
+	srv.SetAccess(dep.Access)
+	if own.Groups != nil {
+		srv.SetGroups(own.Groups)
 	}
-	if deps.Identity.Entitlements != nil {
-		srv.SetEntitlements(deps.Identity.Entitlements)
+	if dep.Entitlements != nil {
+		srv.SetEntitlements(dep.Entitlements)
 	}
-	b := deps.Backends
+	b := dep.Backends
 	srv.SetTokens(b.Tokens)
 	srv.SetSources(b.Sources)
 	srv.SetCrons(b.Crons)
 	srv.SetBins(b.Bins)
 	srv.SetNotify(b.Notify)
 	srv.SetIngestFailures(b.IngestFailures)
-	srv.SetMounts(deps.Mounts)
-	if b.AgentFleet != nil {
-		srv.SetAgentFleet(b.AgentFleet)
+	srv.SetMounts(dep.Mounts)
+	if own.AgentFleet != nil {
+		srv.SetAgentFleet(own.AgentFleet)
 	}
-	ext := deps.Extension
+	ext := own.Extension
 	if ext == nil {
 		ext = NopExtension{}
 	}
-	if targets := ext.AlertTargets(); targets != nil {
-		srv.SetAlertKinds(alerting.NewRegistry(srv.NotifyService(), targets...))
+	if dep.AlertTargets != nil {
+		srv.SetAlertKinds(alerting.NewRegistry(srv.NotifyService(), dep.AlertTargets...))
 	}
 
 	// LLM-based schema-field classification for pending sources — see

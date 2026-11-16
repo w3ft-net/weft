@@ -2,7 +2,7 @@
 // environment, one principal, no sign-in routes. It is package api's Identity for a
 // deployment that has no users of its own.
 
-package main
+package local
 
 import (
 	"context"

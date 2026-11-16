@@ -17,16 +17,16 @@ import (
 // be constructed by nobody, so every failure the drain reported was dropped and
 // /api/ingestion-status always answered that nothing was wrong.
 //
-// The coordinator the process runs is built from the Deps, so that is where
-// the test starts: the failure must reach the backend the Deps supply.
+// The coordinator the process runs is built from the deployment, so that is where
+// the test starts: the failure must reach the backend the deployment supplies.
 func TestCoordinatorConfig_AnUnplaceableBatchIsRecordedAsAnIngestionFailure(t *testing.T) {
 	if coordinator.NoGroup(shape.Added{}) {
 		t.Skip("the open build has no group under a shape with required columns")
 	}
-	d := testDeps(t)
+	d, own := testDeployment(t, nil)
 	st := d.Backends
 
-	cfg := d.CoordinatorConfig(coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Ingest: coordinator.NewRingBuffer(1000)})
+	cfg := CoordinatorConfig(d, own, coordinator.CoordinatorConfig{Compute: &compute.Engine{}, Ingest: coordinator.NewRingBuffer(1000)})
 	c := coordinator.NewCoordinator(cfg)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

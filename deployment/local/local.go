@@ -1,0 +1,80 @@
+// Package local is the open build's deployment: one group, one HTTP Basic
+// credential, SQLite for every store, and git for the record of tracked files,
+// all on this machine. It is one way to fill a deployment.Deployment, not the
+// way: a deployment that keeps its data elsewhere builds its own.
+package local
+
+import (
+	"github.com/w3ft-net/weft/alerting"
+	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/history/gitrepo"
+	"github.com/w3ft-net/weft/binscript"
+	"github.com/w3ft-net/weft/cronauthor"
+	"github.com/w3ft-net/weft/deployment"
+	"github.com/w3ft-net/weft/mounts"
+	"github.com/w3ft-net/weft/sqlitedb"
+)
+
+// DefaultPath is the SQLite database opened when no path is given.
+const DefaultPath = "weft.db"
+
+// Local is the open deployment, with the parts of it the coordinator's own
+// backends and commands are built over.
+type Local struct {
+	*deployment.Deployment
+	// Stores is every store the one database holds.
+	Stores *defaults.Stores
+	// History is the git repository that records tracked files.
+	History *gitrepo.Store
+}
+
+// Open opens the SQLite database at path (DefaultPath when empty) and the git
+// repository at path + ".history", and returns the deployment over them. The
+// returned func closes both. The credential is read first, so a build without
+// one does not start. The api and the coordinator open the same files; the
+// repository serialises their commits across processes.
+func Open(path string) (*Local, func(), error) {
+	basic, err := defaults.BasicFromEnv()
+	if err != nil {
+		return nil, nil, err
+	}
+	if path == "" {
+		path = DefaultPath
+	}
+	sdb, err := sqlitedb.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	stores, err := defaults.Open(sdb)
+	if err != nil {
+		sdb.Close()
+		return nil, nil, err
+	}
+	hist, err := gitrepo.Open(gitrepo.Config{Dir: path + ".history"})
+	if err != nil {
+		sdb.Close()
+		return nil, nil, err
+	}
+	d := &deployment.Deployment{
+		Authn:  deployment.Authn{API: &Identity{Basic: basic}, GRPC: basic.Server()},
+		Access: defaults.OpenAccess(),
+		Backends: deployment.Backends{
+			Tokens:         stores.Tokens,
+			Sources:        stores.Sources,
+			Crons:          stores.Crons,
+			Bins:           stores.Bins,
+			Notify:         stores.Notify,
+			IngestFailures: stores.Ingest,
+		},
+		Mounts: &mounts.Backends{
+			Sources:    stores.Sources,
+			BinService: binscript.Service{Bins: stores.Bins, Crons: stores.Crons, Sources: stores.Sources},
+			Notify:     stores.Notify,
+			CronAuthor: cronauthor.Service{Crons: stores.Crons, Sources: stores.Sources, Bins: stores.Bins},
+			Tmp:        stores.Tmp,
+			History:    hist,
+		},
+		AlertTargets: []alerting.AlertTarget{alerting.EmailTarget{SMTP: alerting.SMTPFromEnv()}},
+	}
+	return &Local{Deployment: d, Stores: stores, History: hist}, func() { hist.Close(); sdb.Close() }, nil
+}

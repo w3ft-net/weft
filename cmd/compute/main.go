@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/w3ft-net/weft/cluster"
 	"log"
 	"net"
 	"os"
@@ -27,7 +28,11 @@ func main() {
 	// parallelism lands. The systemd unit passes --parallelism=4 today; without
 	// this stub flag.Parse rejects the binary on boot.
 	_ = flag.Int("parallelism", 0, "(reserved) intra-stage parallelism")
+	cfgPath := cluster.DefineFlag(flag.CommandLine)
 	flag.Parse()
+	if err := cluster.Overlay(flag.CommandLine, cluster.Compute, *cfgPath); err != nil {
+		log.Fatalf("compute: %v", err)
+	}
 
 	// Region must be threaded explicitly: the SDK default chain does
 	// not reliably resolve it from IMDS, and signing Lambda cold-shard

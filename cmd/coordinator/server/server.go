@@ -21,11 +21,13 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/w3ft-net/weft/backends/coordination"
+	"github.com/w3ft-net/weft/cluster"
 	"github.com/w3ft-net/weft/cmd/coordinator/server/options"
 	"github.com/w3ft-net/weft/compute"
 	weftcfg "github.com/w3ft-net/weft/config"
 	"github.com/w3ft-net/weft/coordinator"
 	coordsvc "github.com/w3ft-net/weft/coordinator/service"
+	"github.com/w3ft-net/weft/deployment"
 	"github.com/w3ft-net/weft/grpckeepalive"
 	"github.com/w3ft-net/weft/identity"
 	"github.com/w3ft-net/weft/ingest"
@@ -111,14 +113,18 @@ type Flags struct {
 	logFile *weftsdk.LogFile
 }
 
-// ParseFlags starts logging, then defines and parses the coordinator's flags.
-// An empty --db-dsn is filled from DB_DSN, so DBDSN is the DSN to open (empty:
+// ParseFlags starts logging, then defines and parses the coordinator's flags,
+// over the cluster file if there is one (--config, or $WEFT_CONFIG). An empty --db-dsn is filled from DB_DSN, so DBDSN is the DSN to open (empty:
 // the deployment's own default). Call it before opening anything that logs.
 func ParseFlags() *Flags {
 	logFile := weftsdk.InitLogging("", os.Stderr)
 	logFile.CaptureStdio()
 	fl := options.Define(flag.CommandLine)
+	cfgPath := cluster.DefineFlag(flag.CommandLine)
 	flag.Parse()
+	if err := cluster.Overlay(flag.CommandLine, cluster.Coordinator, *cfgPath); err != nil {
+		log.Fatalf("coordinator: %v", err)
+	}
 	if fl.DBDSN == "" {
 		fl.DBDSN = os.Getenv("DB_DSN")
 	}
@@ -129,10 +135,10 @@ func ParseFlags() *Flags {
 // the caller has opened (and will close when Run returns). Run returns when the
 // server stops; a start that cannot proceed exits the process, as
 // cmd/coordinator always has.
-func Run(flags *Flags, deps *Deps) {
+func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 	logFile := flags.logFile
 	fl := &flags.Flags
-	if err := deps.Validate(); err != nil {
+	if err := validate(dep, own); err != nil {
 		log.Fatalf("coordinator: %v", err)
 	}
 	port, healthPort, localAddr, internalAddr := &fl.Port, &fl.HealthPort, &fl.LocalAddr, &fl.InternalAddr
@@ -177,8 +183,8 @@ func Run(flags *Flags, deps *Deps) {
 	// alert dispatch, and weft.* all have a group-scoped backend from
 	// the first request. Without this ordering, per-request customer
 	// resolution in query() silently no-ops.
-	b := deps.Backends
-	ext := deps.Extension
+	b := own.Backends
+	ext := own.Extension
 	if ext == nil {
 		ext = NopExtension{}
 	}
@@ -203,9 +209,9 @@ func Run(flags *Flags, deps *Deps) {
 	// alert stage. Sharing one instance between Coordinator and
 	// CronExecutor below keeps interactive `alert --notify=foo` and
 	// scheduled-watch dispatch on the same path.
-	notifier := deps.Notifier
+	notifier := coordinator.NewNotifier(dep.Backends.Notify, dep.AlertTargets...)
 
-	coordCfg := deps.CoordinatorConfig(coordinator.CoordinatorConfig{
+	coordCfg := CoordinatorConfig(dep, own, coordinator.CoordinatorConfig{
 		Compute:           computeClient,
 		Notifier:          notifier,
 		Tail:              coordinator.NewTailBroker(),
@@ -255,9 +261,9 @@ func Run(flags *Flags, deps *Deps) {
 		AWSRegion:   *awsRegion,
 		Holder:      holder,
 		Leases:      coordn,
-		Retention:   deps.Retention,
+		Retention:   own.Retention,
 
-		LegacyFactTable: deps.LegacyFactTable,
+		LegacyFactTable: own.LegacyFactTable,
 	})
 	if err != nil {
 		log.Fatalf("logdb.Start: %v", err)
@@ -335,7 +341,7 @@ func Run(flags *Flags, deps *Deps) {
 	//     is how weftd converts a wft_... into a customer/namespace.
 	//   - Heartbeat: unauthenticated today; separate follow-up will
 	//     require per-shard credentials.
-	ids := deps.Identity.Authn
+	ids := dep.Authn.GRPC
 	skip := coordsvc.PublicMethods
 
 	// HTTP readiness endpoint: 503 until the gRPC server is about to serve
@@ -421,8 +427,8 @@ func Run(flags *Flags, deps *Deps) {
 
 	coordSvc := &coordsvc.Server{
 		Coord:      coord,
-		Tokens:     b.Tokens,
-		Sources:    b.Sources,
+		Tokens:     dep.Backends.Tokens,
+		Sources:    dep.Backends.Sources,
 		Authz:      coordCfg.Authz,
 		CfgPtr:     cfgPtr,
 		Classifier: classifier,
