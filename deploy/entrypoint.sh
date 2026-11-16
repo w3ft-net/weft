@@ -22,7 +22,10 @@ case "$ROLE" in
     ;;
 
   compute)
-    exec weft-compute --port="${COMPUTE_PORT:-9010}"
+    # The binary starts with no archive reader only if told which one to use. The
+    # open build's reader is the Lambda one; a build that links another names it
+    # in ARCHIVE_READER.
+    exec weft-compute --port="${COMPUTE_PORT:-9010}" --archive-reader-default="${ARCHIVE_READER:-duckdb-lambda}"
     ;;
 
   api)

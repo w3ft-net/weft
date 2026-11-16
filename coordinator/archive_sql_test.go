@@ -12,12 +12,18 @@ func TestApplyArchiveSQL(t *testing.T) {
 	archived := &pb.ShardDescriptor{ShardId: "archived", LambdaUrl: "https://l", ParquetPath: "s3://b/a/**/*.parquet", FieldSql: "stale"}
 	descs := []*pb.ShardDescriptor{live, typed, archived}
 
-	applyArchiveSQL("", []string{"x"}, descs)
+	applyArchiveTier("", []string{"x"}, descs)
 	if live.Sql != "" || archived.Sql != "" {
-		t.Fatalf("no archive SQL changed a descriptor: %+v %+v", live, archived)
+		t.Fatalf("no archive SQL changed a descriptor's SQL: %+v %+v", live, archived)
+	}
+	if archived.Dialect != "duckdb" {
+		t.Errorf("an archived shard is named for the archive's dialect even when its SQL is the live SQL: %q", archived.Dialect)
 	}
 
-	applyArchiveSQL("archive sql", []string{"a", "b"}, descs)
+	applyArchiveTier("archive sql", []string{"a", "b"}, descs)
+	if archived.Dialect != "duckdb" || live.Dialect != "" || typed.Dialect != "" {
+		t.Errorf("only the archived shard is named for the archive's dialect: archived %q, live %q, typed %q", archived.Dialect, live.Dialect, typed.Dialect)
+	}
 	if live.Sql != "" || live.FieldSql != "" {
 		t.Errorf("a live shard was given the archive's SQL: %+v", live)
 	}

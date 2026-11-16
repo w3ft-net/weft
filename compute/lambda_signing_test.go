@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/credentials"
 
+	"github.com/w3ft-net/weft/backends/logs/archive"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shard"
 )
@@ -86,10 +87,12 @@ func TestComputeFanoutSignsLambdaWithValidRegion(t *testing.T) {
 	defer srv.Close()
 
 	// Configure the pool exactly as cmd/compute/main.go does.
-	pool := &Engine{
-		AWSCreds:  credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", ""),
-		AWSRegion: ResolveRegion(),
+	archives, err := NewArchiveRouter(map[string]string{archive.Default: ArchiveReaderLambda},
+		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", ""), ResolveRegion())
+	if err != nil {
+		t.Fatal(err)
 	}
+	pool := &Engine{Archive: archives}
 
 	stream, err := pool.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
 		Sql: "SELECT raw, ts FROM logs WHERE customer = 'kevlar'",

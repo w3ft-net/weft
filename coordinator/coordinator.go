@@ -787,7 +787,7 @@ func (c *Coordinator) dispatchLoweredWithTier(ctx context.Context, lp *planner.L
 			argStrs[i] = fmt.Sprintf("%v", a)
 		}
 	}
-	applyArchiveSQL(lp.ArchiveDirectShardSQL, argStrs, descs)
+	applyArchiveTier(lp.ArchiveDirectShardSQL, argStrs, descs)
 	stream, err := c.executeCompute(ctx, loweredOwner(lp), limits, &pb.ExecuteQueryRequest{
 		Sql:               lp.DirectShardSQL,
 		FieldSql:          lp.FieldSQL,
@@ -1217,7 +1217,7 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	} else if n := c.applyTypedVariant(plan, argStrs, descs); n > 0 {
 		logQuery(ctx, "query: %d of %d shards run the typed variant (%s)", n, len(descs), strings.Join(plan.Typed.Requires, ","))
 	}
-	applyArchiveSQL(plan.ArchiveDirectShardSQL, argStrs, descs)
+	applyArchiveTier(plan.ArchiveDirectShardSQL, argStrs, descs)
 	stream, err := c.executeCompute(ctx, owner, limits, &pb.ExecuteQueryRequest{
 		Sql:               directSQL,
 		FieldSql:          run.FieldSQL,
@@ -1249,17 +1249,19 @@ func (c *Coordinator) executeQuery(ctx context.Context, plan *planner.QueryPlan,
 	return &ExecuteResult{Stream: stream}, nil
 }
 
-// applyArchiveSQL sends the archived shards the plan spelled for the archive
-// tier: sql, when the archive is written in a different dialect than the live
-// stores (empty otherwise, which leaves every shard on the request's SQL). An
-// archived shard has no field facts, so it takes neither a typed variant nor the
-// field form.
-func applyArchiveSQL(sql string, args []string, descs []*pb.ShardDescriptor) {
-	if sql == "" {
-		return
-	}
+// applyArchiveTier prepares the archived shards for the archive tier. It names
+// the dialect their SQL is written in, so compute can refuse a reader that runs
+// another; and when the archive is written in a different dialect than the live
+// stores it sends them the plan spelled for it: sql (empty otherwise, which
+// leaves every shard on the request's SQL). An archived shard has no field
+// facts, so it takes neither a typed variant nor the field form.
+func applyArchiveTier(sql string, args []string, descs []*pb.ShardDescriptor) {
 	for _, d := range descs {
-		if d.ParquetPath != "" && d.Sql == "" {
+		if d.ParquetPath == "" {
+			continue
+		}
+		d.Dialect = planner.ArchiveDialect()
+		if sql != "" && d.Sql == "" {
 			d.Sql, d.Args, d.FieldSql = sql, args, ""
 		}
 	}
@@ -1325,7 +1327,7 @@ func queryArgStrings(ctx context.Context, args []any) []string {
 // then those traces' summaries from every shard, since a trace's lines sit on
 // whichever shards its services write to and the summary covers all of them.
 func (c *Coordinator) executeTraceList(ctx context.Context, plan *planner.QueryPlan, argStrs []string, descs []*pb.ShardDescriptor, tr TimeRange, owner shape.Added, limits identity.Limits) (*ExecuteResult, error) {
-	applyArchiveSQL(plan.ArchiveDirectShardSQL, argStrs, descs)
+	applyArchiveTier(plan.ArchiveDirectShardSQL, argStrs, descs)
 	idStream, err := c.executeCompute(ctx, owner, limits, &pb.ExecuteQueryRequest{
 		Sql:       plan.DirectShardSQL,
 		Args:      argStrs,
@@ -1366,7 +1368,7 @@ func (c *Coordinator) executeTraceList(ctx context.Context, plan *planner.QueryP
 	}
 	logQuery(ctx, "query: trace list stats: traces=%d shards=%d sql=%s", len(ids), len(all), plan.TraceStats.SQL)
 	statsArgs := queryArgStrings(ctx, plan.TraceStats.WithIDs(ids))
-	applyArchiveSQL(plan.TraceStats.ArchiveSQL, statsArgs, all)
+	applyArchiveTier(plan.TraceStats.ArchiveSQL, statsArgs, all)
 	stream, err := c.executeCompute(ctx, owner, limits, &pb.ExecuteQueryRequest{
 		Sql:       plan.TraceStats.SQL,
 		Args:      statsArgs,

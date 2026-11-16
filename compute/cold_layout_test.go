@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/w3ft-net/weft/backends/logs/archive"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shape"
 	"github.com/w3ft-net/weft/shard"
@@ -39,7 +40,11 @@ func TestComputeForwardsTheDescriptorsLayoutToTheLambda(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			pool := &Engine{}
+			archives, err := NewArchiveRouter(map[string]string{archive.Default: ArchiveReaderLambda}, nil, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pool := &Engine{Archive: archives}
 			stream, err := pool.ExecuteQuery(context.Background(), &pb.ExecuteQueryRequest{
 				Sql: "SELECT raw, ts FROM logs",
 				Shards: []*pb.ShardDescriptor{{

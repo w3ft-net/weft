@@ -1511,7 +1511,12 @@ type ShardDescriptor struct {
 	// layout is the partition layout a cold shard's archive was written in,
 	// which compute forwards to the cold-scan Lambda to type the archive's hive
 	// columns. Absent from an older coordinator: the legacy layout.
-	Layout        *PartitionLayout `protobuf:"bytes,9,opt,name=layout,proto3" json:"layout,omitempty"`
+	Layout *PartitionLayout `protobuf:"bytes,9,opt,name=layout,proto3" json:"layout,omitempty"`
+	// dialect is the name of the SQL dialect an archived shard's SQL is written
+	// in (dialect.Dialect.Name): the deployment's archive tier. Compute refuses an
+	// archived shard whose reader runs another, since the query would fail on it.
+	// Absent from an older coordinator, and on a live shard: DuckDB.
+	Dialect       string `protobuf:"bytes,10,opt,name=dialect,proto3" json:"dialect,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1607,6 +1612,13 @@ func (x *ShardDescriptor) GetLayout() *PartitionLayout {
 		return x.Layout
 	}
 	return nil
+}
+
+func (x *ShardDescriptor) GetDialect() string {
+	if x != nil {
+		return x.Dialect
+	}
+	return ""
 }
 
 type ExecuteQueryRequest struct {
@@ -4530,7 +4542,7 @@ const file_weft_proto_rawDesc = "" +
 	"\x04rows\x18\x01 \x03(\v2\f.weft.LogRowR\x04rows\x12)\n" +
 	"\x10partition_values\x18\x02 \x03(\tR\x0fpartitionValues\"5\n" +
 	"\x0eIngestResponse\x12#\n" +
-	"\rrows_ingested\x18\x01 \x01(\x03R\frowsIngested\"\x99\x02\n" +
+	"\rrows_ingested\x18\x01 \x01(\x03R\frowsIngested\"\xb3\x02\n" +
 	"\x0fShardDescriptor\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x1b\n" +
 	"\tgrpc_addr\x18\x02 \x01(\tR\bgrpcAddr\x12\x1d\n" +
@@ -4541,7 +4553,9 @@ const file_weft_proto_rawDesc = "" +
 	"\x03sql\x18\x06 \x01(\tR\x03sql\x12\x12\n" +
 	"\x04args\x18\a \x03(\tR\x04args\x12\x1b\n" +
 	"\tfield_sql\x18\b \x01(\tR\bfieldSql\x12-\n" +
-	"\x06layout\x18\t \x01(\v2\x15.weft.PartitionLayoutR\x06layout\"\xfc\x03\n" +
+	"\x06layout\x18\t \x01(\v2\x15.weft.PartitionLayoutR\x06layout\x12\x18\n" +
+	"\adialect\x18\n" +
+	" \x01(\tR\adialect\"\xfc\x03\n" +
 	"\x13ExecuteQueryRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12-\n" +
 	"\x06shards\x18\x02 \x03(\v2\x15.weft.ShardDescriptorR\x06shards\x12\x16\n" +

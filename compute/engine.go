@@ -5,19 +5,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
+	weftsdk "github.com/w3ft-net/weft-go"
+
 	"github.com/graybeardcorp/warp/pkg/awk"
 	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/warp/pkg/jq"
 	"github.com/tidwall/gjson"
 
+	"github.com/w3ft-net/weft/backends/logs/archive"
 	"github.com/w3ft-net/weft/planner"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shard"
@@ -32,8 +33,10 @@ import (
 // exclusive with warp's chunked intra-stage parallelism today, so weft's
 // compute stages are always single-worker.
 type Engine struct {
-	AWSCreds  aws.CredentialsProvider
-	AWSRegion string
+	// Archive reads the archived shards a query names, by the format each was
+	// written in (NewArchiveRouter). Nil: a query that reaches an archived shard
+	// fails, saying no reader is configured.
+	Archive *archive.Router
 	// ShardSecret is the SHARD_SECRET bearer token attached to outbound
 	// gRPC-shard dials. cmd/compute/main.go reads it from env at startup;
 	// tests that never reach a real shard can leave it empty.
@@ -119,7 +122,7 @@ func (p *Engine) resolveShard(ctx context.Context, d *pb.ShardDescriptor) (shard
 		}
 	}
 
-	r, err := ResolverFromDescriptor(d, p.ShardSecret, p.AWSCreds, p.AWSRegion)
+	r, err := ResolverFromDescriptor(d, p.ShardSecret, p.Archive)
 	if err != nil {
 		return nil, err
 	}

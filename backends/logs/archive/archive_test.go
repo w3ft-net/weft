@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/w3ft-net/weft/backends/logs/archive"
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 )
 
 // format is a format whose archives' paths end in its own ID.
@@ -17,9 +18,12 @@ type archiver []string
 
 func (a archiver) Writes() []string { return a }
 
+// reader is a reader of the formats it lists, over DuckDB's dialect.
 type reader []string
 
-func (r reader) Reads() []string { return r }
+func (r reader) Reads() []string                              { return r }
+func (r reader) Dialect() dialect.Dialect                     { return dialect.DuckDB }
+func (r reader) Open(archive.Archive) (archive.Handle, error) { return nil, nil }
 
 func newRegistry(t *testing.T, formats []string, readers map[string]reader) *archive.Registry {
 	t.Helper()
@@ -194,5 +198,33 @@ func TestRouter_CheckNamesEveryUnroutableArchive(t *testing.T) {
 	err = rt.Check(append(ok, archive.Manifest{Path: "s3://b/old.b"}, archive.Manifest{Path: "s3://b/odd.csv"}))
 	if err == nil || !strings.Contains(err.Error(), `"b"`) || !strings.Contains(err.Error(), "odd.csv") {
 		t.Fatalf("err = %v, want both the archive in the unread format and the unknown path named", err)
+	}
+}
+
+// A process that only reads archives builds its Router from the reader entries
+// alone: there is no archiver to check, but there must be a reader.
+func TestReaders_NeedsAReaderAndRegisteredNames(t *testing.T) {
+	r := newRegistry(t, []string{"a"}, map[string]reader{"ra": {"a"}, "rb": {"b"}})
+	for name, c := range map[string]struct {
+		readers map[string]string
+		want    string // substring of the error; "" for none
+	}{
+		"one reader":                   {map[string]string{"a": "ra"}, ""},
+		"a default alone":              {map[string]string{"default": "ra"}, ""},
+		"none":                         {nil, "no reader is configured"},
+		"an empty map":                 {map[string]string{}, "no reader is configured"},
+		"a format nobody registered":   {map[string]string{"b": "rb"}, "format that is not registered"},
+		"a reader nobody registered":   {map[string]string{"a": "nope"}, "not registered"},
+		"a reader that cannot read it": {map[string]string{"a": "rb"}, "does not read format"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rt, err := r.Readers(c.readers)
+			switch {
+			case c.want == "" && (err != nil || rt == nil):
+				t.Fatalf("rt = %v, err = %v", rt, err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("err = %v, want one containing %q", err, c.want)
+			}
+		})
 	}
 }

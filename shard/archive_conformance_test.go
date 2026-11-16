@@ -60,20 +60,8 @@ func TestDuckDB_WritesArchivesItsReaderReads(t *testing.T) {
 				})
 			}},
 		},
-		Read: func(t *testing.T, path string) []string {
-			cs, err := NewColdShard("conformance", nil, path, "", nil, ColdLayout(shape.BuildLayout()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := cs.Query(ctx, "SELECT raw, ts FROM logs ORDER BY ts")
-			if err != nil {
-				t.Fatalf("read %s: %v", path, err)
-			}
-			raws := make([]string, len(got))
-			for i, r := range got {
-				raws[i] = r.Raw
-			}
-			return raws
-		},
+		Reader:    LocalReader(nil),
+		Layout:    shape.BuildLayout(),
+		SelectAll: "SELECT raw, ts FROM logs ORDER BY ts",
 	})
 }

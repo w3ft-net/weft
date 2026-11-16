@@ -14,10 +14,15 @@
 package archive
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"sort"
+
+	"github.com/w3ft-net/weft/backends/logs/dialect"
+	"github.com/w3ft-net/weft/backends/logs/live"
+	"github.com/w3ft-net/weft/shape"
 )
 
 // Default is the key of Config.Readers that serves every format ID with no
@@ -54,10 +59,41 @@ type Archiver interface {
 	Writes() []string
 }
 
-// Reader queries archives.
+// Archive is one archive, as a reader opens it.
+type Archive struct {
+	// ID is the shard whose rows the archive holds.
+	ID       string
+	Services []string
+	// Path is where the archive is, as the store that wrote it reported it.
+	Path string
+	// Layout is the partition columns the archive was written in. The zero layout
+	// is the legacy one.
+	Layout shape.Layout
+	// Endpoint is where a reader that runs its queries elsewhere reaches the
+	// engine that does; empty for one that does not.
+	Endpoint string
+}
+
+// Handle queries one archive. It is the reader's, and is closed when the engine
+// is done with the archive.
+type Handle interface {
+	// QueryToSink runs sql, in the reader's dialect, over the archive and streams
+	// its rows to sink: the first two columns are (raw, ts). It ends the stream,
+	// and reports through sink if its rows are not all of them.
+	QueryToSink(ctx context.Context, sql string, args []any, sink live.RowSink)
+	Close() error
+}
+
+// Reader queries archives. Which partitions a query opens is its own business:
+// it is not part of what it is asked, or of any format.
 type Reader interface {
 	// Reads lists the format IDs it can query.
 	Reads() []string
+	// Dialect is the SQL it runs. The coordinator plans the archive tier in one
+	// dialect, so a reader that runs another is refused.
+	Dialect() dialect.Dialect
+	// Open opens a handle on an archive in one of the formats it reads.
+	Open(a Archive) (Handle, error)
 }
 
 // Config is the deployment's archive settings.
@@ -140,26 +176,24 @@ type Router struct {
 	names    map[string]string // reader name by format ID, for errors
 }
 
-// Route checks cfg against what is registered and a, the archiver the live store
-// supplies, and returns the Router for it. It fails unless the archiver writes
-// cfg.Format, cfg.Format has a reader that reads it, and every entry names a
-// registered format and a registered reader that reads it.
-func (r *Registry) Route(cfg Config, a Archiver) (*Router, error) {
-	if r.formats[cfg.Format] == nil {
-		return nil, fmt.Errorf("archive: format %q is not registered", cfg.Format)
-	}
-	if !slices.Contains(a.Writes(), cfg.Format) {
-		return nil, fmt.Errorf("archive: the archiver does not write format %q", cfg.Format)
+// Readers checks the reader entries against what is registered and returns the
+// Router for them. It fails unless there is at least one, and every entry names
+// a registered format (or Default) and a registered reader that reads it. It is
+// what a process that only reads archives builds; Route adds what the one that
+// writes them checks.
+func (r *Registry) Readers(readers map[string]string) (*Router, error) {
+	if len(readers) == 0 {
+		return nil, errors.New("archive: no reader is configured")
 	}
 	rt := &Router{reg: r, readers: map[string]Reader{}, names: map[string]string{}}
 	// Sorted, so the same bad config reports the same error every start.
-	ids := make([]string, 0, len(cfg.Readers))
-	for id := range cfg.Readers {
+	ids := make([]string, 0, len(readers))
+	for id := range readers {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		name := cfg.Readers[id]
+		name := readers[id]
 		rd := r.readers[name]
 		if rd == nil {
 			return nil, fmt.Errorf("archive: readers[%q] names reader %q, which is not registered", id, name)
@@ -168,10 +202,30 @@ func (r *Registry) Route(cfg Config, a Archiver) (*Router, error) {
 			rt.dflt, rt.dfltName = rd, name
 			continue
 		}
+		if r.formats[id] == nil {
+			return nil, fmt.Errorf("archive: readers[%q] names a format that is not registered", id)
+		}
 		if !slices.Contains(rd.Reads(), id) {
 			return nil, fmt.Errorf("archive: reader %q does not read format %q", name, id)
 		}
 		rt.readers[id], rt.names[id] = rd, name
+	}
+	return rt, nil
+}
+
+// Route is Readers for the deployment's whole Config, checked against a, the
+// archiver the live store supplies. It fails too unless the archiver writes
+// cfg.Format and cfg.Format has a reader that reads it.
+func (r *Registry) Route(cfg Config, a Archiver) (*Router, error) {
+	if r.formats[cfg.Format] == nil {
+		return nil, fmt.Errorf("archive: format %q is not registered", cfg.Format)
+	}
+	if !slices.Contains(a.Writes(), cfg.Format) {
+		return nil, fmt.Errorf("archive: the archiver does not write format %q", cfg.Format)
+	}
+	rt, err := r.Readers(cfg.Readers)
+	if err != nil {
+		return nil, err
 	}
 	if _, err := rt.reader(cfg.Format); err != nil {
 		return nil, fmt.Errorf("archive: the configured format has no reader: %w", err)

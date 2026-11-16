@@ -4,13 +4,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/w3ft-net/weft/cluster"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/w3ft-net/weft/cluster"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"google.golang.org/grpc"
 
@@ -28,6 +30,12 @@ func main() {
 	// parallelism lands. The systemd unit passes --parallelism=4 today; without
 	// this stub flag.Parse rejects the binary on boot.
 	_ = flag.Int("parallelism", 0, "(reserved) intra-stage parallelism")
+	// Which reader reads the archives written in each format. There is no
+	// default: a compute process that starts with none could never read an
+	// archived shard, and would find out on the first query that reached one.
+	readers := readerFlag{}
+	flag.Var(readers, "archive-reader", "FORMAT=NAME: the reader of the archives written in FORMAT (repeatable)")
+	readerDefault := flag.String("archive-reader-default", "", "the reader of every archive format with no -archive-reader of its own (the open build has "+compute.ArchiveReaderLambda+")")
 	cfgPath := cluster.DefineFlag(flag.CommandLine)
 	flag.Parse()
 	if err := cluster.Overlay(flag.CommandLine, cluster.Compute, *cfgPath); err != nil {
@@ -50,12 +58,17 @@ func main() {
 		log.Fatal("no SHARD_SECRET set")
 	}
 
-	engine := &compute.Engine{AWSRegion: region, ShardSecret: shardSecret}
+	var creds aws.CredentialsProvider
 	if awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region)); err != nil {
 		weftsdk.Warnf(context.Background(), "warning: AWS config unavailable — cold shard queries will fail: %v", err)
 	} else {
-		engine.AWSCreds = awsCfg.Credentials
+		creds = awsCfg.Credentials
 	}
+	archives, err := compute.NewArchiveRouter(archiveReaders(readers, *readerDefault), creds, region)
+	if err != nil {
+		log.Fatalf("compute: archive readers: %v (give -archive-reader-default %s, or -archive-reader FORMAT=NAME)", err, compute.ArchiveReaderLambda)
+	}
+	engine := &compute.Engine{Archive: archives, ShardSecret: shardSecret}
 	srv := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor()),
 		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor()),

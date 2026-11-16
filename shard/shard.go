@@ -45,15 +45,10 @@ const (
 	FactDirty   = live.FactDirty
 )
 
-// RowSink receives result rows streamed from a shard query. compute.Job satisfies this.
-type RowSink interface {
-	SendRow(row *pb.ResultRow, shardID string)
-	// Fail reports that the shard's rows for this query are missing or
-	// incomplete; the query then has no answer. Called before the shard's
-	// SendSentinel.
-	Fail(shardID string, err error)
-	SendSentinel(shardID string)
-}
+// RowSink receives result rows streamed from a shard query. compute.Job
+// satisfies this. It is defined with the store contract, so a reader that is
+// not DuckDB can stream into it without linking this package.
+type RowSink = live.RowSink
 
 // FieldQuerier is a shard that understands a query's field form: fieldSQL
 // returns just some of each row's fields as field columns (see

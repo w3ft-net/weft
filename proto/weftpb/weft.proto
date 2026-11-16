@@ -287,6 +287,11 @@ message ShardDescriptor {
   // which compute forwards to the cold-scan Lambda to type the archive's hive
   // columns. Absent from an older coordinator: the legacy layout.
   PartitionLayout layout = 9;
+  // dialect is the name of the SQL dialect an archived shard's SQL is written
+  // in (dialect.Dialect.Name): the deployment's archive tier. Compute refuses an
+  // archived shard whose reader runs another, since the query would fail on it.
+  // Absent from an older coordinator, and on a live shard: DuckDB.
+  string dialect = 10;
 }
 
 message ExecuteQueryRequest {

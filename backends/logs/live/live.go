@@ -16,6 +16,16 @@ import (
 	"github.com/w3ft-net/weft/shape"
 )
 
+// RowSink receives the rows of a query as a store, or whatever reads an archive,
+// streams them. compute.Job satisfies it.
+type RowSink interface {
+	SendRow(row *pb.ResultRow, shardID string)
+	// Fail reports that the rows for this query are missing or incomplete; the
+	// query then has no answer. Called before SendSentinel.
+	Fail(shardID string, err error)
+	SendSentinel(shardID string)
+}
+
 // Store is a live log store, one shard's worth of rows.
 type Store interface {
 	// Layout is the partition columns every row carries.
