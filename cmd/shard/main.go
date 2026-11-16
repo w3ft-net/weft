@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/w3ft-net/weft/cluster"
 	"log"
 	"net"
 	"net/http"
@@ -14,6 +13,9 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/w3ft-net/weft/backends/logs/live"
+	"github.com/w3ft-net/weft/cluster"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -40,6 +42,7 @@ func main() {
 	coordAddr := flag.String("coordinator-addr", "", "coordinator gRPC address for heartbeats")
 	hbInterval := flag.Duration("heartbeat-interval", 10*time.Second, "heartbeat interval")
 	volumeHelper := flag.String("volume-helper", defaultVolumeHelper, "root helper (run via sudo) that mounts and unmounts the data volume; absent = no volume management (dev/container)")
+	liveStore := flag.String("live-store", "duckdb", "the live log store this shard runs, by the name of a store this binary links (duckdb)")
 	perKeyTables := flag.Bool("per-key-tables", false, "keep each log source in a table of its own in a new, empty shard database; a database that already holds rows keeps its layout")
 	cfgPath := cluster.DefineFlag(flag.CommandLine)
 	flag.Parse()
@@ -64,6 +67,15 @@ func main() {
 	if *perKeyTables {
 		shardOpts = append(shardOpts, shard.WithPerKeyTables())
 	}
+	// The live stores this binary links. A build with another registers it here.
+	if err := live.Register(shard.DuckDBDriver(shardOpts...)); err != nil {
+		log.Fatalf("shard: %v", err)
+	}
+	driver, err := live.Lookup(*liveStore)
+	if err != nil {
+		log.Fatalf("shard: -live-store: %v", err)
+	}
+	svcOpts := []shardsvc.Option{shardsvc.WithDriver(driver)}
 
 	// Try to start from an existing identity on disk. If shard.json is
 	// missing we start in blank mode and wait for the coordinator to
@@ -77,19 +89,19 @@ func main() {
 			log.Fatalf("spare mode needs the volume helper at %s", *volumeHelper)
 		}
 		weftsdk.Infof(context.Background(), "starting as a warm-pool spare; waiting for a volume")
-		srv = shardsvc.NewSpareServer(*dataDir, dbPath, vol, shardOpts...)
+		srv = shardsvc.NewSpareServer(*dataDir, dbPath, vol, svcOpts...)
 		go activateWhenAttached(srv)
 	} else if id, err := shardIdentityHint(*dataDir); err != nil {
 		log.Fatalf("inspect shard.json: %v", err)
 	} else if id != "" {
 		weftsdk.Infof(context.Background(), "found existing identity %s — opening db at %s", id, dbPath)
-		srv, err = shardsvc.NewServerFromIdentity(*dataDir, dbPath, shardOpts...)
+		srv, err = shardsvc.NewServerFromIdentity(*dataDir, dbPath, svcOpts...)
 		if err != nil {
 			log.Fatalf("reopen from identity: %v", err)
 		}
 	} else {
 		weftsdk.Infof(context.Background(), "no shard.json in %s — starting blank, awaiting Configure", *dataDir)
-		srv = shardsvc.NewBlankServer(*dataDir, dbPath, shardOpts...)
+		srv = shardsvc.NewBlankServer(*dataDir, dbPath, svcOpts...)
 	}
 	if srv.Volume == nil {
 		srv.Volume = vol

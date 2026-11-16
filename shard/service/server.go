@@ -55,7 +55,7 @@ type Server struct {
 	queries   map[*gatedQuery]struct{} // admitted queries, which Pause may cut
 	spare     bool                     // a warm-pool instance not yet given a volume
 	released  bool                     // the volume is not mounted (a spare, or after Pause)
-	shardOpts []shard.Option           // how every database this server opens is configured
+	driver    live.Driver              // the live store this server opens: DuckDB unless WithDriver says another
 
 	// CfgPtr holds the live runtime config. Consulted by Query to pick
 	// up the current SHARD_QUERY_TIMEOUT_SECONDS on every request. Nil
@@ -71,11 +71,40 @@ func (s *Server) runtimeCfg() *weftcfg.Runtime {
 	return s.CfgPtr.Load()
 }
 
-// NewServer wraps an already-open DuckDBShard. Used by in-process tests
-// where no identity file is needed.
-func NewServer(s *shard.DuckDBShard) *Server {
-	srv := &Server{shard: s}
+// Option configures a Server.
+type Option func(*Server)
+
+// WithDriver sets the live store the server opens, in place of DuckDB.
+func WithDriver(d live.Driver) Option {
+	return func(s *Server) { s.driver = d }
+}
+
+// newServer is a Server with its options applied.
+func newServer(opts []Option) *Server {
+	s := &Server{}
+	for _, o := range opts {
+		o(s)
+	}
+	if s.driver == nil {
+		s.driver = shard.DuckDBDriver()
+	}
+	return s
+}
+
+// Driver is the live store the server opens.
+func (s *Server) Driver() live.Driver { return s.driver }
+
+// open opens the live store for shard id, under layout, at the server's path.
+func (s *Server) open(id, path string, layout shape.Layout) (live.Store, error) {
+	return s.driver.Open(live.OpenParams{ID: id, Path: path, Layout: layout})
+}
+
+// NewServer wraps an already-open store, a DuckDB one unless the options say
+// another driver. Used by in-process tests where no identity file is needed.
+func NewServer(s *shard.DuckDBShard, opts ...Option) *Server {
+	srv := newServer(opts)
 	if s != nil {
+		srv.shard = s
 		srv.id = s.ID()
 	}
 	return srv
@@ -83,16 +112,18 @@ func NewServer(s *shard.DuckDBShard) *Server {
 
 // NewBlankServer creates a Server for a fresh EBS volume — no identity
 // yet. Calls to Query/Ingest fail until Configure is invoked. dataDir is
-// where shard.json gets written; dbPath is where the DuckDB file will be
+// where shard.json gets written; dbPath is where the store keeps its data,
 // created on Configure.
-func NewBlankServer(dataDir, dbPath string, opts ...shard.Option) *Server {
-	return &Server{dataDir: dataDir, dbPath: dbPath, shardOpts: opts}
+func NewBlankServer(dataDir, dbPath string, opts ...Option) *Server {
+	s := newServer(opts)
+	s.dataDir, s.dbPath = dataDir, dbPath
+	return s
 }
 
-// NewServerFromIdentity reads shard.json from dataDir, opens the DuckDB
+// NewServerFromIdentity reads shard.json from dataDir, opens the store
 // at dbPath, and returns a configured Server. Use when the shard restarts
 // against an existing EBS volume.
-func NewServerFromIdentity(dataDir, dbPath string, opts ...shard.Option) (*Server, error) {
+func NewServerFromIdentity(dataDir, dbPath string, opts ...Option) (*Server, error) {
 	id, err := shard.LoadIdentity(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("load identity: %w", err)
@@ -100,19 +131,14 @@ func NewServerFromIdentity(dataDir, dbPath string, opts ...shard.Option) (*Serve
 	if id == nil {
 		return nil, fmt.Errorf("no shard.json in %s", dataDir)
 	}
-	ds, err := shard.NewDuckDBShard(id.ShardID, dbPath, append(opts[:len(opts):len(opts)], shard.WithLayout(id.Layout))...)
+	s := newServer(opts)
+	ds, err := s.open(id.ShardID, dbPath, id.Layout)
 	if err != nil {
-		return nil, fmt.Errorf("open duckdb at %s: %w", dbPath, err)
+		return nil, fmt.Errorf("open %s store at %s: %w", s.driver.Name(), dbPath, err)
 	}
-	return &Server{
-		shardOpts:      opts,
-		shard:          ds,
-		id:             id.ShardID,
-		apps:           id.Apps,
-		heartbeatToken: id.HeartbeatToken,
-		dataDir:        dataDir,
-		dbPath:         dbPath,
-	}, nil
+	s.shard, s.id, s.apps, s.heartbeatToken = ds, id.ShardID, id.Apps, id.HeartbeatToken
+	s.dataDir, s.dbPath = dataDir, dbPath
+	return s, nil
 }
 
 // HeartbeatToken returns the per-shard bearer token, or "" if not yet
@@ -149,13 +175,7 @@ func (s *Server) getShard() (live.Store, error) {
 	return s.shard, nil
 }
 
-// optsWithLayout is the server's shard options with the layout the database is
-// opened under; it wins over any layout in the options.
-func (s *Server) optsWithLayout(l shape.Layout) []shard.Option {
-	return append(s.shardOpts[:len(s.shardOpts):len(s.shardOpts)], shard.WithLayout(l))
-}
-
-// Configure assigns an identity, opens the DuckDB, and persists the
+// Configure assigns an identity, opens the store, and persists the
 // identity to disk. Rejects reconfigure: once a shard has an id, it
 // keeps that id for life.
 func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
@@ -176,7 +196,7 @@ func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.C
 
 	if s.dataDir == "" {
 		// In-process test mode: no persistence, in-memory DB.
-		ds, err := shard.NewDuckDBShard(req.ShardId, "", s.optsWithLayout(shard.LayoutFromProto(req.Layout))...)
+		ds, err := s.open(req.ShardId, "", shard.LayoutFromProto(req.Layout))
 		if err != nil {
 			return nil, fmt.Errorf("create shard: %w", err)
 		}
@@ -204,9 +224,9 @@ func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.C
 		return nil, fmt.Errorf("persist identity: %w", err)
 	}
 
-	ds, err := shard.NewDuckDBShard(req.ShardId, s.dbPath, s.optsWithLayout(ident.Layout)...)
+	ds, err := s.open(req.ShardId, s.dbPath, ident.Layout)
 	if err != nil {
-		return nil, fmt.Errorf("open duckdb at %s: %w", s.dbPath, err)
+		return nil, fmt.Errorf("open %s store at %s: %w", s.driver.Name(), s.dbPath, err)
 	}
 	s.shard = ds
 	s.id = req.ShardId

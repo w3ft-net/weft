@@ -19,7 +19,7 @@ func TestPerKeyShard_OverTheWire(t *testing.T) {
 	if err := shard.SaveIdentity(dir, &shard.Identity{ShardID: "wire-test"}); err != nil {
 		t.Fatal(err)
 	}
-	srv, err := NewServerFromIdentity(dir, filepath.Join(dir, "shard.duckdb"), shard.WithPerKeyTables())
+	srv, err := NewServerFromIdentity(dir, filepath.Join(dir, "shard.duckdb"), WithDriver(shard.DuckDBDriver(shard.WithPerKeyTables())))
 	if err != nil {
 		t.Fatal(err)
 	}

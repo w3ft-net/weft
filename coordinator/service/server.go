@@ -13,7 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 	"github.com/w3ft-net/weft/backends/shardstore"
+	"github.com/w3ft-net/weft/planner"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -927,6 +929,17 @@ func (s *Server) Heartbeat(ctx context.Context, req *pb.ShardHeartbeatRequest) (
 	if want := shape.BuildLayout().Fingerprint; req.LayoutFingerprint != "" && req.LayoutFingerprint != want {
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"shard %s stores layout %s, this coordinator's is %s", req.ShardId, req.LayoutFingerprint, want)
+	}
+
+	// Every query is planned in one dialect: a shard whose store is written in
+	// another would fail them. An older shard sends none: it is DuckDB.
+	got := req.Dialect
+	if got == "" {
+		got = dialect.DuckDB.Name()
+	}
+	if want := planner.LiveDialect(); got != want {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"shard %s runs a %s store, this deployment's live stores are %s", req.ShardId, got, want)
 	}
 
 	hb := shardstore.ShardHeartbeat{

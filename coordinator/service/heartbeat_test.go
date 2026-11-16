@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/w3ft-net/weft/backends/logs/dialect"
 	"github.com/w3ft-net/weft/backends/shardstore"
+	"github.com/w3ft-net/weft/planner"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -290,5 +292,41 @@ func TestHeartbeat_NoFieldFactsAcksNothing(t *testing.T) {
 	}
 	if resp.FieldFactsAcked != 0 {
 		t.Errorf("acked = %d with nothing to ack", resp.FieldFactsAcked)
+	}
+}
+
+// otherDialect is DuckDB under another name.
+type otherDialect struct{ dialect.Dialect }
+
+func (otherDialect) Name() string { return "other" }
+
+// Every query is planned in the dialect of the deployment's live stores. A shard
+// whose store is written in another would fail them, so it is refused. A shard
+// from before it reported one is DuckDB.
+func TestHeartbeat_Dialect(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		live  dialect.Dialect // the deployment's
+		shard string          // what the shard reports
+		want  codes.Code
+	}{
+		{"an older shard on a DuckDB deployment", nil, "", codes.OK},
+		{"a DuckDB shard on a DuckDB deployment", nil, "duckdb", codes.OK},
+		{"another store on a DuckDB deployment", nil, "other", codes.FailedPrecondition},
+		{"an older shard on another deployment", otherDialect{dialect.DuckDB}, "", codes.FailedPrecondition},
+		{"a DuckDB shard on another deployment", otherDialect{dialect.DuckDB}, "duckdb", codes.FailedPrecondition},
+		{"the same store", otherDialect{dialect.DuckDB}, "other", codes.OK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			planner.SetDialects(planner.Dialects{Live: tc.live})
+			t.Cleanup(func() { planner.SetDialects(planner.Dialects{}) })
+			srv := newRegisteredShard(t, "shard-a", "good-token")
+			_, err := srv.Heartbeat(heartbeatCtx("good-token"), &pb.ShardHeartbeatRequest{
+				ShardId: "shard-a", Addr: "10.0.0.1:9000", State: "INGESTING", Dialect: tc.shard,
+			})
+			if got := status.Code(err); got != tc.want {
+				t.Fatalf("code = %v (%v), want %v", got, err, tc.want)
+			}
+		})
 	}
 }

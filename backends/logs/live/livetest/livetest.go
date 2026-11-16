@@ -26,6 +26,30 @@ type Spec struct {
 	PartitionValues []string
 }
 
+// RunDriver checks a driver and runs the suite over the stores it opens. spec's
+// New is the driver's Open, with the shard ID "conformance" and no path.
+func RunDriver(t *testing.T, d live.Driver, spec Spec) {
+	t.Run("the driver is named and has a dialect", func(t *testing.T) {
+		if d.Name() == "" {
+			t.Error("the driver has no name")
+		}
+		if d.Dialect() == nil || d.Dialect().Name() == "" {
+			t.Error("the driver has no dialect, or its dialect has no name")
+		}
+	})
+	spec.New = func(t *testing.T) live.Store {
+		s, err := d.Open(live.OpenParams{ID: "conformance"})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if s == nil {
+			t.Fatal("open returned no store and no error")
+		}
+		return s
+	}
+	Run(t, spec)
+}
+
 // recorder counts what a store reports of an ingest.
 type recorder struct {
 	mu              sync.Mutex

@@ -23,7 +23,7 @@ func TestServer_ConfigureOpensPerKeyWhenAsked(t *testing.T) {
 		{"without it", nil, false},
 	} {
 		dir := t.TempDir()
-		srv := NewBlankServer(dir, filepath.Join(dir, "shard.duckdb"), c.opts...)
+		srv := NewBlankServer(dir, filepath.Join(dir, "shard.duckdb"), WithDriver(shard.DuckDBDriver(c.opts...)))
 		if _, err := srv.Configure(context.Background(), &pb.ConfigureRequest{ShardId: "opt-test"}); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -46,7 +46,7 @@ func TestServer_ReopenFromIdentityOpensPerKeyWhenAsked(t *testing.T) {
 	if err := shard.SaveIdentity(dir, &shard.Identity{ShardID: "reopen-test"}); err != nil {
 		t.Fatal(err)
 	}
-	srv, err := NewServerFromIdentity(dir, filepath.Join(dir, "shard.duckdb"), shard.WithPerKeyTables())
+	srv, err := NewServerFromIdentity(dir, filepath.Join(dir, "shard.duckdb"), WithDriver(shard.DuckDBDriver(shard.WithPerKeyTables())))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestServer_OpenFromDiskOpensPerKeyWhenAsked(t *testing.T) {
 	if err := shard.SaveIdentity(dir, &shard.Identity{ShardID: "spare-test"}); err != nil {
 		t.Fatal(err)
 	}
-	srv := NewSpareServer(dir, filepath.Join(dir, "shard.duckdb"), nil, shard.WithPerKeyTables())
+	srv := NewSpareServer(dir, filepath.Join(dir, "shard.duckdb"), nil, WithDriver(shard.DuckDBDriver(shard.WithPerKeyTables())))
 	if err := srv.openFromDisk(); err != nil {
 		t.Fatal(err)
 	}

@@ -52,6 +52,7 @@ func For(srv *shardsvc.Server, addr, instanceID, binarySHA string) (*pb.ShardHea
 		diskBytes = ds.DiskUsage().TotalBytes()
 	}
 	req := Build(shardID, addr, instanceID, state, binarySHA, rowCount, diskBytes)
+	req.Dialect = srv.Driver().Dialect().Name()
 	if ds := srv.Shard(); ds != nil && !srv.Spare() {
 		if f, ok := ds.(live.FieldFactSource); ok {
 			req.FieldFacts = FieldFactDeltas(f.FieldFacts())

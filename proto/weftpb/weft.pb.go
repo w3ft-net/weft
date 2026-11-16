@@ -2010,8 +2010,13 @@ type ShardHeartbeatRequest struct {
 	// shards and never reinterprets data. Absent from an older shard, which is
 	// the legacy layout.
 	LayoutFingerprint string `protobuf:"bytes,13,opt,name=layout_fingerprint,json=layoutFingerprint,proto3" json:"layout_fingerprint,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// dialect is the name of the SQL dialect of the shard's live store
+	// (dialect.Dialect.Name). The coordinator plans every query in one dialect, so
+	// it refuses a shard whose store is written in another: the queries would
+	// fail on it. Absent from an older shard, which is always DuckDB.
+	Dialect       string `protobuf:"bytes,14,opt,name=dialect,proto3" json:"dialect,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ShardHeartbeatRequest) Reset() {
@@ -2110,6 +2115,13 @@ func (x *ShardHeartbeatRequest) GetFieldFacts() []*FieldFactDelta {
 func (x *ShardHeartbeatRequest) GetLayoutFingerprint() string {
 	if x != nil {
 		return x.LayoutFingerprint
+	}
+	return ""
+}
+
+func (x *ShardHeartbeatRequest) GetDialect() string {
+	if x != nil {
+		return x.Dialect
 	}
 	return ""
 }
@@ -4559,7 +4571,7 @@ const file_weft_proto_rawDesc = "" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12#\n" +
 	"\rmissing_shard\x18\x03 \x01(\tR\fmissingShard\x12!\n" +
-	"\frows_scanned\x18\x05 \x01(\x03R\vrowsScannedJ\x04\b\x04\x10\x05R\ainexact\"\xd4\x02\n" +
+	"\frows_scanned\x18\x05 \x01(\x03R\vrowsScannedJ\x04\b\x04\x10\x05R\ainexact\"\xee\x02\n" +
 	"\x15ShardHeartbeatRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1f\n" +
@@ -4575,7 +4587,8 @@ const file_weft_proto_rawDesc = "" +
 	"\x05spare\x18\v \x01(\bR\x05spare\x125\n" +
 	"\vfield_facts\x18\f \x03(\v2\x14.weft.FieldFactDeltaR\n" +
 	"fieldFacts\x12-\n" +
-	"\x12layout_fingerprint\x18\r \x01(\tR\x11layoutFingerprint\"\x81\x02\n" +
+	"\x12layout_fingerprint\x18\r \x01(\tR\x11layoutFingerprint\x12\x18\n" +
+	"\adialect\x18\x0e \x01(\tR\adialect\"\x81\x02\n" +
 	"\x0eFieldFactDelta\x12\x1f\n" +
 	"\vcustomer_id\x18\x01 \x01(\x03R\n" +
 	"customerId\x12\x1c\n" +

@@ -586,6 +586,11 @@ message ShardHeartbeatRequest {
   // shards and never reinterprets data. Absent from an older shard, which is
   // the legacy layout.
   string layout_fingerprint = 13;
+  // dialect is the name of the SQL dialect of the shard's live store
+  // (dialect.Dialect.Name). The coordinator plans every query in one dialect, so
+  // it refuses a shard whose store is written in another: the queries would
+  // fail on it. Absent from an older shard, which is always DuckDB.
+  string dialect = 14;
 }
 
 // FieldFactState is what a shard has learned about a locator's values.

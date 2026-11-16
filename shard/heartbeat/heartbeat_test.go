@@ -8,6 +8,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/w3ft-net/weft/backends/logs/dialect"
+	"github.com/w3ft-net/weft/backends/logs/live"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shape"
 	"github.com/w3ft-net/weft/shard"
@@ -156,5 +158,36 @@ func TestFieldFactDeltas_CarryEveryKeyFieldAndTheState(t *testing.T) {
 	}
 	if got[1].State != pb.FieldFactState_FIELD_FACT_STATE_DIRTY || got[1].Epoch != 4 {
 		t.Errorf("dirty delta = %+v", got[1])
+	}
+}
+
+// otherDriver is DuckDB under another dialect's name.
+type otherDriver struct{ live.Driver }
+
+type otherDialect struct{ dialect.Dialect }
+
+func (otherDialect) Name() string { return "other" }
+
+func (otherDriver) Dialect() dialect.Dialect { return otherDialect{dialect.DuckDB} }
+
+// A shard reports the dialect of the store it runs, so a coordinator planning
+// in another can refuse it; a spare and a blank shard report their driver's too.
+func TestReportsTheStoresDialect(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		srv  *shardsvc.Server
+		want string
+	}{
+		{"the default store", shardsvc.NewBlankServer(t.TempDir(), ""), "duckdb"},
+		{"another store", shardsvc.NewBlankServer(t.TempDir(), "", shardsvc.WithDriver(otherDriver{shard.DuckDBDriver()})), "other"},
+		{"a spare", shardsvc.NewSpareServer(t.TempDir(), "", noVolume{}, shardsvc.WithDriver(otherDriver{shard.DuckDBDriver()})), "other"},
+	} {
+		req, send := For(tc.srv, "10.0.0.2:9000", "i-x", "")
+		if !send {
+			t.Fatalf("%s: no heartbeat", tc.name)
+		}
+		if req.Dialect != tc.want {
+			t.Errorf("%s: dialect = %q, want %q", tc.name, req.Dialect, tc.want)
+		}
 	}
 }

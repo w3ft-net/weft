@@ -189,8 +189,11 @@ func (s *Server) Paused() bool {
 // NewSpareServer is a warm-pool instance: no volume, no database, every
 // data call refused as not ready. Activate turns it into a shard once the
 // leader attaches a volume.
-func NewSpareServer(dataDir, dbPath string, vol Volume, opts ...shard.Option) *Server {
-	return &Server{dataDir: dataDir, dbPath: dbPath, Volume: vol, mode: modeNotReady, spare: true, released: true, shardOpts: opts}
+func NewSpareServer(dataDir, dbPath string, vol Volume, opts ...Option) *Server {
+	s := newServer(opts)
+	s.dataDir, s.dbPath, s.Volume = dataDir, dbPath, vol
+	s.mode, s.spare, s.released = modeNotReady, true, true
+	return s
 }
 
 // Activate waits for the volume to be attached, mounts it, and opens
@@ -230,9 +233,9 @@ func (s *Server) openFromDisk() error {
 	if id == nil {
 		return nil
 	}
-	ds, err := shard.NewDuckDBShard(id.ShardID, s.dbPath, s.optsWithLayout(id.Layout)...)
+	ds, err := s.open(id.ShardID, s.dbPath, id.Layout)
 	if err != nil {
-		return fmt.Errorf("open duckdb at %s: %w", s.dbPath, err)
+		return fmt.Errorf("open %s store at %s: %w", s.driver.Name(), s.dbPath, err)
 	}
 	s.mu.Lock()
 	s.shard = ds
