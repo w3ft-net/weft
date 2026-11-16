@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel in-flight runs for the same ref when a new push lands.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOPRIVATE: github.com/graybeardcorp/*
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout weft-core
+        uses: actions/checkout@v4
+        with:
+          path: weft-core
+      - name: Mint GitHub App token (private sibling checkouts)
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: graybeardcorp
+      - name: Checkout warp
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/warp
+          path: warp
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Point warp at sibling source (ephemeral build-time replace)
+        working-directory: weft-core
+        run: go mod edit -replace github.com/graybeardcorp/warp=../warp
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: weft-core/go.mod
+          cache-dependency-path: weft-core/go.sum
+      - name: go test ./...
+        working-directory: weft-core
+        # Every test here runs on SQLite; the shared *storetest suites run on
+        # Postgres in the hosted repository's CI. cmd/api and cmd/compute assert
+        # their own cgo-free builds.
+        run: go test -tags test -count=1 -timeout 10m -coverpkg=./... -coverprofile=coverage.out ./...
+      - name: Coverage gate
+        working-directory: weft-core
+        env:
+          # Generated code and CLI entry points are excluded, as in hosted's gate.
+          # History (most recent first):
+          #   2026-11-16  77.2% — gate introduced with the repo's own CI
+          WEFT_COVERAGE_MIN: "74"
+        run: |
+          grep -Ev '/(proto/weftpb|cmd)/|_gen\.go:' coverage.out > core.out
+          pct=$(go tool cover -func=core.out | awk '/^total:/ {print $NF}' | tr -d '%')
+          echo "core coverage: ${pct}% (gate: >= ${WEFT_COVERAGE_MIN}%)"
+          awk -v p="$pct" -v m="$WEFT_COVERAGE_MIN" 'BEGIN { exit (p + 0 < m + 0) }'
+
+  tags:
+    name: Build tag sets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout weft-core
+        uses: actions/checkout@v4
+        with:
+          path: weft-core
+      - name: Mint GitHub App token (private sibling checkouts)
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: graybeardcorp
+      - name: Checkout warp
+        uses: actions/checkout@v4
+        with:
+          repository: graybeardcorp/warp
+          path: warp
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Point warp at sibling source (ephemeral build-time replace)
+        working-directory: weft-core
+        run: go mod edit -replace github.com/graybeardcorp/warp=../warp
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: weft-core/go.mod
+          cache-dependency-path: weft-core/go.sum
+      - name: Vet every tag set
+        working-directory: weft-core
+        run: |
+          go vet -tags test ./...
+          go vet -tags integration,test ./...
+      - name: Build the localreader compute
+        working-directory: weft-core
+        run: go build -tags localreader -o /dev/null ./cmd/compute
+      - name: Run the integration-tagged planner tests
+        working-directory: weft-core
+        run: go test -tags integration,test -count=1 ./planner/...

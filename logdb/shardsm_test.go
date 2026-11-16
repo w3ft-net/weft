@@ -17,12 +17,9 @@ import (
 	"github.com/w3ft-net/weft/shard"
 )
 
-// openSMTestStore opens the test postgres (WEFT_TEST_DSN, default the
-// docker-compose dev DB) and returns a transaction-scoped store that
-// rolls back at test end. Skips when postgres is unavailable, matching
-// the other DB-backed logdb tests. Now that the FSMs hold a concrete
-// shardstore.Store (no SMStore interface to fake), state reads/writes go
-// through the real schema.
+// openSMTestStore opens an in-memory SQLite store. The FSMs hold a concrete
+// shardstore.Store (no SMStore interface to fake), so state reads and writes
+// go through the real schema.
 func openSMTestStore(t *testing.T) shardstore.Store {
 	t.Helper()
 	db, err := sqlitedb.Open(":memory:")
