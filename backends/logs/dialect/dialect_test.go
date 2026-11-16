@@ -1,7 +1,9 @@
 package dialect_test
 
 import (
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/w3ft-net/weft/backends/logs/dialect"
@@ -116,6 +118,10 @@ type noFeature struct {
 func (n noFeature) Name() string                    { return n.name }
 func (n noFeature) Supports(f dialect.Feature) bool { return f != n.no }
 
+// runs numbers the test's registrations: the registry is the process's, so a
+// test run again in the same process (-count) must not register a name twice.
+var runs atomic.Int64
+
 func TestRegistry(t *testing.T) {
 	if d, err := dialect.Lookup("duckdb"); err != nil || d.Name() != "duckdb" {
 		t.Fatalf("duckdb: %v, %v", d, err)
@@ -126,11 +132,12 @@ func TestRegistry(t *testing.T) {
 	if dialect.Register(dialect.DuckDB) == nil {
 		t.Error("a name registered twice")
 	}
-	if err := dialect.Register(noFeature{dialect.DuckDB, "no-regex", dialect.Regex}); err != nil {
+	name := fmt.Sprintf("no-regex-%d", runs.Add(1))
+	if err := dialect.Register(noFeature{dialect.DuckDB, name, dialect.Regex}); err != nil {
 		t.Fatal(err)
 	}
-	if d, err := dialect.Lookup("no-regex"); err != nil || d.Supports(dialect.Regex) {
-		t.Errorf("no-regex: %v, %v", d, err)
+	if d, err := dialect.Lookup(name); err != nil || d.Supports(dialect.Regex) {
+		t.Errorf("%s: %v, %v", name, d, err)
 	}
 }
 

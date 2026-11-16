@@ -47,7 +47,10 @@ type Store interface {
 	Archive(ctx context.Context, s3Prefix string) (path string, stats []PartitionStat, err error)
 
 	// Checkpoint makes what has been written durable on the data volume, ahead
-	// of the volume being detached.
+	// of the volume being detached. The node calls it once ingest has stopped
+	// and, for a store that is a FieldFactSource, after FlushFieldFacts: a store
+	// whose own background writes can still be open then is not asked to
+	// checkpoint over them.
 	Checkpoint(ctx context.Context) error
 	// Close releases the store.
 	Close() error

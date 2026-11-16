@@ -205,6 +205,11 @@ func queriesAreCounted(t *testing.T, s live.Store, spec Spec) {
 
 func checkpointKeepsRows(t *testing.T, s live.Store, spec Spec) {
 	ingest(t, s, spec, nil, "a", "b")
+	// As the node does it: ingest has stopped, the store's own writers are
+	// flushed, and then it is checkpointed.
+	if f, ok := s.(live.FieldFactSource); ok {
+		f.FlushFieldFacts()
+	}
 	if err := s.Checkpoint(ctx); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
