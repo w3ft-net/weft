@@ -1,0 +1,1183 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	weftsdk "github.com/w3ft-net/weft-go"
+	"io"
+	"io/fs"
+	"log"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"gopkg.in/yaml.v3"
+
+	pb "github.com/w3ft-net/weft/proto/weftpb"
+	"github.com/w3ft-net/weft/weftd"
+)
+
+// globalDeployment is set at startup from config and stamped on every LogRow.
+// Maps to the "deployment" column on shards (k8s Deployment, AWS ASG, etc.).
+var globalDeployment string
+
+// globalRegion is detected once at startup from cloud metadata (or
+// supplied via config override) and stamped on every LogRow.
+var globalRegion string
+
+// parserCache holds per-app schema-driven parsers. Populated when
+// onboarding completes; consulted on the row-stamping path when
+// parseClientSide is enabled.
+var parserCache = weftd.NewParserCache()
+
+// resampleSource captures the inputs runSchemaRefresher needs to re-run
+// the sampler for an already-configured source when the coordinator
+// reports a pending resample. Registered by onboardAndRun (the one place
+// that knows a source's path/unit) and keyed by fullApp — the same key
+// the parser cache and refresher iterate.
+type resampleSource struct {
+	path     string // file source; empty for journald
+	unit     string // journald source; empty for file
+	instance string
+}
+
+var (
+	resampleMu      sync.Mutex
+	resampleSources = map[string]resampleSource{} // fullApp → sampler inputs
+	resampleActive  = map[string]bool{}           // fullApp → a resample goroutine is in flight
+)
+
+func registerResampleSource(fullApp string, rs resampleSource) {
+	resampleMu.Lock()
+	resampleSources[fullApp] = rs
+	resampleMu.Unlock()
+}
+
+// parseClientSide gates the schema-driven parsing path. Default-on as
+// of the rollout decision: lines pass through ingest.Parser to extract
+// Level / TsUnixNs / PayloadJson before send. Set
+// WEFTD_PARSE_CLIENT_SIDE=0 to fall back to shipping rows with raw +
+// Fields only (pre-plan behavior) as a rollback lever.
+var parseClientSide = os.Getenv("WEFTD_PARSE_CLIENT_SIDE") != "0"
+
+type Config struct {
+	transportConfig `yaml:",inline"` // endpoint:/tls: overrides; dev builds only (see transport_dev.go)
+
+	Token         string                        `yaml:"token"`      // agent auth token (wft_...)
+	Customer      string                        `yaml:"customer"`   // fallback if not returned by auth
+	Deployment    string                        `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+	Region        string                        `yaml:"region"`     // optional override; otherwise probed from cloud metadata
+	Socket        string                        `yaml:"socket"`
+	Metrics       *MetricsConfig                `yaml:"metrics"`       // host metrics; nil (no block) = off. Use parseConfig so a bare `metrics:` counts as present.
+	Metavariables map[string]MetavariableConfig `yaml:"metavariables"` // host-wide column values sourced from env:, file: or json:
+	Sources       []SourceConfig                `yaml:"sources"`
+	AutoUpdate    *bool                         `yaml:"auto_update"` // self-replace on a newer release; nil = on (set false to opt out)
+	Checkpoint    CheckpointConfig              `yaml:"checkpoint"`  // file-offset checkpointing; on by default
+}
+
+// autoUpdateEnabled resolves the auto_update gate. Unset (nil) means on:
+// the fleet self-heals onto new releases by default; an operator opts a
+// host out with `auto_update: false` (e.g. to pin a version under
+// investigation).
+func autoUpdateEnabled(cfg Config) bool {
+	return cfg.AutoUpdate == nil || *cfg.AutoUpdate
+}
+
+// parseConfig decodes the config file. The `metrics:` block turns host metrics
+// on by being present, so a bare `metrics:` (YAML null, which decodes to nil)
+// is taken as present with every default.
+func parseConfig(data []byte) (Config, error) {
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return cfg, err
+	}
+	var keys map[string]any
+	if err := yaml.Unmarshal(data, &keys); err != nil {
+		return cfg, err
+	}
+	if _, ok := keys["metrics"]; ok && cfg.Metrics == nil {
+		cfg.Metrics = &MetricsConfig{}
+	}
+	return cfg, nil
+}
+
+// configError names the reason cfg cannot be run, or "" when it is usable.
+// Kept separate from main so it is testable without driving os.Exit.
+func configError(cfg Config) string {
+	if cfg.Token == "" {
+		return "token is required: set token: in the config file or WEFTD_TOKEN in the environment"
+	}
+	return ""
+}
+
+type SourceConfig struct {
+	Service       string                        `yaml:"service,omitempty"`       // bare service name within namespace (e.g. "coordinator")
+	Kind          string                        `yaml:"kind,omitempty"`          // log-stream kind; defaults to "main". Heartbeats/metrics/runtime ship their own kinds.
+	Path          string                        `yaml:"path"`                    // file path or glob (file tailing)
+	Unit          string                        `yaml:"unit,omitempty"`          // systemd unit name (journal tailing)
+	Metavariables map[string]MetavariableConfig `yaml:"metavariables,omitempty"` // this source's overrides of the host-wide metavariables
+}
+
+// sourceKind returns the configured kind for a source, defaulting to
+// "main". Every tailed log row carries a kind so the pseudofile tree
+// is uniform: /log/<ns>/<svc>/<kind>.log. The telemetry streams
+// (heartbeats, metrics, runtime) build their own 3-seg app names
+// directly and never flow through this.
+func sourceKind(src SourceConfig) string {
+	if src.Kind != "" {
+		return src.Kind
+	}
+	return "main"
+}
+
+// tokenFromChain resolves the auth token. The environment wins over the
+// authored file (AWS-shaped credential chain): a non-empty WEFTD_TOKEN
+// is authoritative, otherwise the file's token: is used. Token is the
+// only value with an env source — see the call site.
+func tokenFromChain(envToken, fileToken string) string {
+	if envToken != "" {
+		return envToken
+	}
+	return fileToken
+}
+
+func main() {
+	weftsdk.InitLogging("", os.Stderr).CaptureStdio()
+	configPath := flag.String("config", "/etc/weftd/config.yaml", "config file path")
+	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(ClientID())
+		os.Exit(0)
+	}
+
+	weftsdk.Infof(context.Background(), "%s starting", ClientID())
+
+	data, err := os.ReadFile(*configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Fatalf("no config at %s — copy %s.example to it and set your token", *configPath, *configPath)
+		}
+		log.Fatalf("read config: %v", err)
+	}
+	cfg, err := parseConfig(data)
+	if err != nil {
+		log.Fatalf("parse config: %v", err)
+	}
+
+	// Token credential chain (AWS-shaped): WEFTD_TOKEN env wins, else the
+	// authored file's token:. Env is the only value with a non-file
+	// source — the token is a credential, so a secret injector / config
+	// management can supply it without templating the YAML. Nothing
+	// structural ever comes from the environment.
+	cfg.Token = tokenFromChain(os.Getenv("WEFTD_TOKEN"), cfg.Token)
+
+	if reason := configError(cfg); reason != "" {
+		log.Fatal(reason)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// File-offset checkpointing: resume tailed files where delivery left off.
+	// Never fatal; a host that cannot checkpoint tails as it always has.
+	flushEvery := configureCheckpointing(cfg.Checkpoint)
+	if checkpoints != nil {
+		go checkpoints.Run(ctx, flushEvery)
+		go runCheckpointStatsReporter(ctx)
+	}
+
+	// Background self-update: once a day, fetch the release manifest and,
+	// when a newer weftd is published, download + verify + swap the binary
+	// and restart into it (systemd Restart=always relaunches). Defaults on
+	// so the fleet self-heals onto fixes without an operator touching each
+	// host; `auto_update: false` opts a host out and reverts to nag-only.
+	go (&weftd.SelfUpdateChecker{
+		CurrentVersion: Version,
+		AutoApply:      autoUpdateEnabled(cfg),
+	}).Run(ctx)
+
+	// Connect to coordinator. The bearer token is attached to every RPC
+	// via PerRPCCredentials — IngestStream reads it from metadata.
+	coordConn, err := grpc.NewClient(cfg.endpoint(),
+		coordDialOptions(cfg.tlsEnabled(), bearerToken{token: cfg.Token, clientID: ClientID(), secure: cfg.tlsEnabled()})...)
+	if err != nil {
+		log.Fatalf("connect to coordinator: %v", err)
+	}
+	coordClient := pb.NewWeftCoordinatorClient(coordConn)
+
+	// Build metrics config to report to coordinator.
+	var metricsProto *pb.MetricsConfig
+	if cfg.Metrics != nil {
+		collectors := cfg.Metrics.Collectors
+		if len(collectors) == 0 {
+			collectors = []string{"cpu", "memory", "disk", "load", "network"}
+		}
+		metricsProto = &pb.MetricsConfig{
+			Enabled:    true,
+			Interval:   cfg.Metrics.Interval,
+			Collectors: collectors,
+		}
+	}
+
+	// Authenticate to verify token and get customer name.
+	//   PermissionDenied → subscription inactive; retry in 24h.
+	//   Unavailable      → coordinator not reachable yet; retry with backoff.
+	//   anything else    → fatal (bad token, bad config).
+	var customer, namespace string
+	var transportBackoff = time.Second
+	for {
+		authResp, err := coordClient.Authenticate(ctx, &pb.AuthenticateRequest{
+			Token:         cfg.Token,
+			MetricsConfig: metricsProto,
+		})
+		if err != nil {
+			switch status.Code(err) {
+			case codes.PermissionDenied:
+				weftsdk.Infof(ctx, "subscription inactive: %v — retrying in 24h", status.Convert(err).Message())
+				select {
+				case <-ctx.Done():
+					os.Exit(0)
+				case <-time.After(24 * time.Hour):
+				}
+				continue
+			case codes.Unavailable:
+				weftsdk.Infof(ctx, "coordinator unreachable, retrying in %v: %v", transportBackoff, err)
+				select {
+				case <-ctx.Done():
+					os.Exit(0)
+				case <-time.After(transportBackoff):
+				}
+				transportBackoff *= 2
+				if transportBackoff > 30*time.Second {
+					transportBackoff = 30 * time.Second
+				}
+				continue
+			default:
+				log.Fatalf("authenticate: %v", err)
+			}
+		}
+		customer = authResp.Customer
+		if customer == "" {
+			customer = cfg.Customer
+		}
+		namespace = authResp.Namespace
+		weftsdk.Infof(ctx, "authenticated as customer=%s namespace=%s", customer, namespace)
+		break
+	}
+
+	// Periodic re-auth: check subscription status daily.
+	// On rejection, log and exit so systemd restarts us into the retry loop above.
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, err := coordClient.Authenticate(ctx, &pb.AuthenticateRequest{Token: cfg.Token})
+				if err != nil && status.Code(err) == codes.PermissionDenied {
+					log.Fatalf("subscription expired: %v", status.Convert(err).Message())
+				}
+			}
+		}
+	}()
+
+	hostname, _ := os.Hostname()
+	// Tell the coordinator which agent is asking whenever it polls a source,
+	// so schemas are only stored if every agent reading them can interpret them.
+	weftd.AgentVersion, weftd.AgentInstance = Version, hostname
+	globalDeployment = cfg.Deployment
+	globalRegion = weftd.DetectRegion(ctx, cfg.Region)
+	if globalRegion != "" {
+		weftsdk.Infof(ctx, "region detected: %s", globalRegion)
+	}
+
+	for _, k := range retiredConfigKeys(data) {
+		weftsdk.Errorf(ctx, "config: ignoring retired key, %s", k)
+	}
+	sourceMetavars, err := initMetavariables(ctx, cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// A concrete file may be matched by a `*.log`-style glob source and
+	// also be the target of a dedicated explicit source (e.g. the
+	// coordinator's query-audit log, tailed with its own kind). Without
+	// deconfliction the file would ingest twice under two different
+	// (app,kind) identities. Explicit wins: collect every non-glob
+	// `path:` and exclude those concrete files from glob expansion.
+	explicitPaths := map[string]bool{}
+	for _, src := range cfg.Sources {
+		if src.Unit == "" && src.Path != "" && !strings.ContainsAny(src.Path, "*?[") {
+			explicitPaths[absClean(src.Path)] = true
+		}
+	}
+
+	// Start sources — each independently onboards then streams.
+	for i, src := range cfg.Sources {
+		src := src // capture loop var
+
+		// Derive the service name for this source.
+		app := src.Service
+		if app == "" && src.Unit != "" {
+			app = strings.TrimSuffix(src.Unit, ".service")
+		}
+		if app == "" && src.Path != "" {
+			// Derive from filename: /var/log/weft/coordinator.log → coordinator
+			base := filepath.Base(src.Path)
+			app = strings.TrimSuffix(base, filepath.Ext(base))
+		}
+		// Every tailed log lands at <ns>/<svc>/<kind>; kind defaults to "main".
+		fullApp := namespace + "/" + app + "/" + sourceKind(src)
+		registerSource(fullApp, sourceMetavars[i])
+
+		if src.Unit != "" {
+			go func() {
+				if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, src.Unit, hostname, fullApp, func() {
+					runJournalTailer(ctx, coordClient, hostname, fullApp, src.Unit)
+				}); err != nil {
+					weftsdk.Errorf(ctx, "[%s] onboard failed: %v", fullApp, err)
+				}
+			}()
+		} else if src.Path != "" {
+			if strings.ContainsAny(src.Path, "*?[") {
+				// Glob: each matched file is onboarded independently from inside watchGlob.
+				// The app name derived from the pattern ("*") is meaningless here.
+				go watchGlob(ctx, coordClient, cfg.Token, hostname, namespace, sourceKind(src), src.Path, explicitPaths, sourceMetavars[i])
+			} else {
+				// Single file: onboard once, then tail.
+				go func() {
+					if err := onboardAndRun(ctx, coordClient, cfg.Token, app, src.Path, "", hostname, fullApp, func() {
+						runFileTailer(ctx, coordClient, hostname, fullApp, src.Path, true)
+					}); err != nil {
+						weftsdk.Errorf(ctx, "[%s] onboard failed: %v", fullApp, err)
+					}
+				}()
+			}
+		}
+	}
+
+	if cfg.Metrics != nil {
+		go runMetricsCollector(ctx, coordClient, hostname, namespace, *cfg.Metrics)
+	}
+
+	// Start socket listener.
+	if cfg.Socket != "" {
+		sock, err := weftd.NewSocketListener(cfg.Socket, "default")
+		if err != nil {
+			log.Fatalf("socket listener: %v", err)
+		}
+		defer sock.Close()
+		go runSocketIngester(ctx, coordClient, hostname, namespace, sock)
+		weftsdk.Infof(ctx, "listening on socket %s", cfg.Socket)
+	}
+
+	if parseClientSide {
+		go runSchemaRefresher(ctx, coordClient, cfg.Token)
+		go runParseStatsReporter(ctx)
+	}
+
+	weftsdk.Infof(ctx, "weftd started: %d sources, streaming to %s", len(cfg.Sources), cfg.endpoint())
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
+	weftsdk.Infof(ctx, "shutting down")
+	cancel()
+	// Let every file tailer deliver and ack what it has read, then persist
+	// the final offsets. Bounded by the shippers' shutdown timeout.
+	tailers.shutdown()
+	if err := checkpoints.Close(); err != nil {
+		weftsdk.Infof(ctx, "checkpoint: final flush: %v", err)
+	}
+}
+
+// onboardAndRun checks if a source is already configured. If so, runs the
+// tailer immediately. If not, submits a sample and polls until configured.
+// In both paths, when parseClientSide is on, the schema YAML returned by
+// the coordinator is compiled into a per-app parser and stashed in the
+// parserCache so the row-stamping hot path can use it.
+// unit is non-empty for journald sources (which have no file path); path is
+// non-empty for file sources. Exactly one is set.
+func onboardAndRun(ctx context.Context, client pb.WeftCoordinatorClient, token, app, path, unit, hostname, fullApp string, run func()) error {
+	// Record how to re-sample this source, so the schema refresher can
+	// honor a user-requested resample later without disturbing the tailer.
+	registerResampleSource(fullApp, resampleSource{path: path, unit: unit, instance: hostname})
+
+	// Check if already configured.
+	st, err := weftd.CheckSourceStatus(ctx, client, token, app)
+	if err != nil {
+		weftsdk.Errorf(ctx, "[%s] status check failed: %v — proceeding to sample", fullApp, err)
+	} else if st.Status == "configured" {
+		installParser(fullApp, st.SchemaYAML)
+		weftsdk.Infof(ctx, "[%s] already configured — starting", fullApp)
+		run()
+		return nil
+	}
+
+	// Submit sample — from the unit's journal for journald sources, from
+	// the file otherwise.
+	if unit != "" {
+		weftsdk.Infof(ctx, "[%s] new source — sampling unit %s", fullApp, unit)
+		err = weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment, false, 0)
+	} else {
+		weftsdk.Infof(ctx, "[%s] new source — sampling %s", fullApp, path)
+		// A file the weft SDK writes is set up from its first line, not a full sample.
+		var sdkFed bool
+		if sdkFed, err = weftd.SubmitSDKSample(ctx, client, token, app, path, hostname, globalDeployment); err == nil && !sdkFed {
+			err = weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment, false, 0)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	weftsdk.Infof(ctx, "[%s] sample submitted — waiting for configuration", fullApp)
+
+	// Poll until configured.
+	schemaYAML, err := weftd.WaitForConfiguration(ctx, client, token, app, func(ctx context.Context, target int) error {
+		if unit != "" {
+			return weftd.SubmitUnitSample(ctx, client, token, app, unit, hostname, globalDeployment, true, target)
+		}
+		return weftd.SubmitSample(ctx, client, token, app, path, hostname, globalDeployment, true, target)
+	})
+	if err != nil {
+		return err
+	}
+	installParser(fullApp, schemaYAML)
+	weftsdk.Infof(ctx, "[%s] configured — starting", fullApp)
+	run()
+	return nil
+}
+
+// installParser compiles schemaYAML into a parser for fullApp and
+// stashes it in the cache. No-op when parseClientSide is off or the
+// YAML is empty (e.g. unconfigured source). Logs and continues on
+// compile failures — the row-stamping path falls back to no-parse.
+func installParser(fullApp, schemaYAML string) {
+	if !parseClientSide || schemaYAML == "" {
+		return
+	}
+	if _, err := parserCache.Install(fullApp, schemaYAML); err != nil {
+		weftsdk.Errorf(context.Background(), "[%s] schema install failed, falling back to no-parse: %v", fullApp, err)
+	}
+}
+
+// runSchemaRefresher polls GetSourceStatus on a 60s ticker for every
+// app in the parser cache. When schema_hash differs from the cached
+// value, installs a fresh parser; an unchanged hash is a one-RPC no-op.
+// A misconfigured source whose status drops back to "pending" stops
+// receiving fresh parsers, but the previously installed one keeps
+// running until process restart — same posture as today's onboarding.
+func runSchemaRefresher(ctx context.Context, client pb.WeftCoordinatorClient, token string) {
+	if !parseClientSide {
+		return
+	}
+	const interval = 60 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		for _, fullApp := range parserCache.Apps() {
+			refreshSource(ctx, client, token, fullApp)
+		}
+	}
+}
+
+// refreshSource checks one source's status and, if the user asked for a
+// resample, kicks it off; otherwise it reinstalls the parser when the
+// server's schema hash has moved. The source is looked up by the key the
+// coordinator stores it under.
+func refreshSource(ctx context.Context, client pb.WeftCoordinatorClient, token, fullApp string) {
+	// The coordinator keys log sources on the BARE service —
+	// GetSourceStatus → FindLogGroup matches the service column alone and
+	// does not strip the kind (unlike SubmitSample). fullApp is the
+	// agent's "namespace/service/kind" composite, so pull the service out
+	// with splitFullApp; stripping only the namespace prefix would leave
+	// "service/kind" and the lookup would never match (every resample and
+	// schema refresh silently stranded at "unknown").
+	_, service, _ := splitFullApp(fullApp)
+	if service == "" {
+		return
+	}
+	st, err := weftd.CheckSourceStatus(ctx, client, token, service)
+	if err != nil {
+		weftsdk.Errorf(ctx, "[%s] schema refresh failed: %v", fullApp, err)
+		return
+	}
+	if st.Status == "configured" && st.ResampleRequested {
+		startResample(ctx, client, token, service, fullApp, int(st.SampleTarget))
+	}
+	if st.Status != "configured" || st.SchemaYAML == "" {
+		return
+	}
+	cached := parserCache.Slot(fullApp).Hash()
+	if cached == st.SchemaHash {
+		return
+	}
+	if _, err := parserCache.Install(fullApp, st.SchemaYAML); err != nil {
+		weftsdk.Errorf(ctx, "[%s] schema reinstall failed (keeping previous parser): %v", fullApp, err)
+		return
+	}
+	weftsdk.Infof(ctx, "[%s] schema updated (hash %s → %s)", fullApp, shortHash(cached), shortHash(st.SchemaHash))
+}
+
+// startResample re-runs the sampler for an already-configured source
+// when the user has asked for a fresh sample. The source's tailer keeps
+// running — ingestion is not interrupted. The in-flight guard prevents
+// stacking a new accumulation every refresh tick while a quiet source is
+// still filling its sample (which, by design, can take a while). The
+// coordinator clears the resample flag when the final sample lands, so
+// subsequent ticks stop triggering this.
+func startResample(ctx context.Context, client pb.WeftCoordinatorClient, token, bareService, fullApp string, target int) {
+	resampleMu.Lock()
+	rs, ok := resampleSources[fullApp]
+	if !ok || resampleActive[fullApp] {
+		resampleMu.Unlock()
+		return
+	}
+	resampleActive[fullApp] = true
+	resampleMu.Unlock()
+
+	weftsdk.Infof(ctx, "[%s] resample requested — sampling concurrently with tailer", fullApp)
+	go func() {
+		defer func() {
+			resampleMu.Lock()
+			delete(resampleActive, fullApp)
+			resampleMu.Unlock()
+		}()
+		var err error
+		if rs.unit != "" {
+			err = weftd.SubmitUnitSample(ctx, client, token, bareService, rs.unit, rs.instance, globalDeployment, true, target)
+		} else {
+			err = weftd.SubmitSample(ctx, client, token, bareService, rs.path, rs.instance, globalDeployment, true, target)
+		}
+		if err != nil {
+			weftsdk.Errorf(ctx, "[%s] resample failed: %v", fullApp, err)
+			return
+		}
+		weftsdk.Infof(ctx, "[%s] resample complete — fresh sample submitted for review", fullApp)
+	}()
+}
+
+// shortHash trims a sha256 hex digest down to 8 chars for log lines.
+// Empty stays empty (used to render a "(new)" arrow on first install).
+func shortHash(h string) string {
+	if len(h) < 8 {
+		return "(new)"
+	}
+	return h[:8]
+}
+
+// runParseStatsReporter drains the parser cache's per-app counters
+// every 60s and emits one log line per app that processed traffic.
+// Misconfigured schemas show up as a high missing-level percentage,
+// which is the cheapest customer-visible signal we can ship without
+// dashboard plumbing. Quiet apps (zero rows in the window) emit no
+// line so the log isn't pure noise on idle hosts.
+func runParseStatsReporter(ctx context.Context) {
+	const interval = 60 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		for _, app := range parserCache.Apps() {
+			ok, missing := parserCache.Slot(app).SwapStats()
+			total := ok + missing
+			if total == 0 {
+				continue
+			}
+			pct := float64(missing) * 100 / float64(total)
+			if missing > 0 {
+				weftsdk.Infof(ctx, "[%s] parse stats: %d ok, %d missing-level (%.1f%%)", app, ok, missing, pct)
+			} else {
+				weftsdk.Infof(ctx, "[%s] parse stats: %d ok", app, ok)
+			}
+		}
+	}
+}
+
+// bearerToken implements grpc.PerRPCCredentials so every outgoing RPC
+// carries `authorization: Bearer <token>` plus `weft-client: <ClientID()>`.
+// The coordinator reads the bearer in IngestStream (and any other
+// streaming RPC) to validate the caller, and reads weft-client to record
+// the agent's version on the token row and gate against a hard-floor
+// version.
+type bearerToken struct {
+	token    string
+	clientID string
+	secure   bool // the connection is TLS; gRPC then refuses to send the token over anything else
+}
+
+func (b bearerToken) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	md := map[string]string{"authorization": "Bearer " + b.token}
+	if b.clientID != "" {
+		md["weft-client"] = b.clientID
+	}
+	return md, nil
+}
+
+func (b bearerToken) RequireTransportSecurity() bool { return b.secure }
+
+// openStream opens an IngestStream to the coordinator with retry.
+// Blocks until a stream is established or ctx is cancelled.
+func openStream(ctx context.Context, client pb.WeftCoordinatorClient, label string) (pb.WeftCoordinator_IngestStreamClient, error) {
+	var backoff time.Duration = time.Second
+
+	for {
+		stream, err := client.IngestStream(ctx)
+		if err == nil {
+			return stream, nil
+		}
+
+		weftsdk.Errorf(ctx, "[%s] stream failed, retrying in %v: %v", label, backoff, err)
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		backoff *= 2
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+	}
+}
+
+// runJournalTailer tails a systemd unit's journal and streams lines.
+// Reconnects automatically if the stream breaks.
+func runJournalTailer(ctx context.Context, client pb.WeftCoordinatorClient, instance, app, unit string) {
+	cmd := exec.CommandContext(ctx, "journalctl", "-f", "-u", unit, "--no-pager", "-o", "cat", "-n", "0")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		weftsdk.Infof(ctx, "[%s] journalctl pipe: %v", app, err)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		weftsdk.Infof(ctx, "[%s] journalctl start: %v", app, err)
+		return
+	}
+
+	streamScannedLines(ctx, client, stdout, instance, app)
+
+	cmd.Wait()
+}
+
+// streamScannedLines pumps every non-blank line from r over a SINGLE
+// reused IngestStream (reconnecting only when a send breaks), then
+// half-closes it on exit. Hoisting the streamState out of the loop is
+// the whole point: the previous code passed a fresh &streamState{} per
+// line, so each journal line opened its own ingest stream, sent one row,
+// and abandoned it — pinning a coordinator handler goroutine in
+// stream.Recv() per line (the server-side leak) and churning ~one stream
+// per log line. runFileTailer already reused one stream; this brings the
+// journal path in line.
+//
+// A line longer than weftd.DefaultMaxLineBytes is cut there and marked, as
+// the file tailer does; bufio.Scanner would instead fail at 64 KiB and end
+// the loop, silently dropping everything after it.
+func streamScannedLines(ctx context.Context, client pb.WeftCoordinatorClient, r io.Reader, instance, app string) {
+	ss := &streamState{}
+	defer func() {
+		if ss.stream != nil {
+			// Half-close so the coordinator's handler sees EOF and returns
+			// cleanly instead of waiting out the idle reaper.
+			ss.stream.CloseAndRecv()
+		}
+	}()
+	br := bufio.NewReaderSize(r, 64<<10)
+	var line []byte
+	truncated := false
+	for {
+		chunk, isPrefix, err := br.ReadLine() // strips \n and \r\n
+		if room := weftd.DefaultMaxLineBytes - len(line); len(chunk) > room {
+			chunk, truncated = chunk[:room], true
+		}
+		line = append(line, chunk...)
+		if isPrefix && err == nil {
+			continue
+		}
+		if len(line) > 0 {
+			text := string(line)
+			if truncated {
+				text += weftd.TruncatedMarker
+			}
+			if sendLineWithReconnect(ctx, client, ss, text, instance, app, "") != nil {
+				return // context cancelled
+			}
+		}
+		line, truncated = line[:0], false
+		if err != nil {
+			return
+		}
+	}
+}
+
+// fixedPrefix returns the longest leading run of `pattern` that contains
+// no glob wildcard. Trailing characters after the last separator are
+// dropped so the prefix is always a directory path. For
+// "/var/log/*/api.log" returns "/var/log/"; for "/var/log/api.log"
+// returns "/var/log/api.log" (no wildcards = whole pattern is fixed);
+// for "**/*.log" returns "" (wildcards from the start).
+func fixedPrefix(pattern string) string {
+	i := strings.IndexAny(pattern, "*?[")
+	if i < 0 {
+		return pattern
+	}
+	j := strings.LastIndex(pattern[:i], string(filepath.Separator))
+	if j < 0 {
+		return ""
+	}
+	return pattern[:j+1]
+}
+
+// matchPath reports whether `path` matches `pattern`, where `**`
+// matches zero or more path segments and other wildcards behave as in
+// filepath.Match. Pattern and path are split on the OS separator and
+// matched segment-by-segment.
+func matchPath(pattern, path string) (bool, error) {
+	sep := string(filepath.Separator)
+	pp := strings.Split(pattern, sep)
+	sp := strings.Split(path, sep)
+	return matchSegments(pp, sp)
+}
+
+func matchSegments(pp, sp []string) (bool, error) {
+	if len(pp) == 0 {
+		return len(sp) == 0, nil
+	}
+	if pp[0] == "**" {
+		// `**` is greedy across zero or more segments. Try every length.
+		for i := 0; i <= len(sp); i++ {
+			ok, err := matchSegments(pp[1:], sp[i:])
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	if len(sp) == 0 {
+		return false, nil
+	}
+	ok, err := filepath.Match(pp[0], sp[0])
+	if err != nil || !ok {
+		return ok, err
+	}
+	return matchSegments(pp[1:], sp[1:])
+}
+
+// globMatch returns the file paths matching `pattern`. Unlike
+// filepath.Glob, supports `**` for recursive matching. Walking starts
+// from fixedPrefix(pattern); a missing prefix dir is not an error
+// (returns no matches), matching filepath.Glob's behavior.
+func globMatch(pattern string) ([]string, error) {
+	if !strings.Contains(pattern, "**") {
+		return filepath.Glob(pattern)
+	}
+	root := fixedPrefix(pattern)
+	if root == "" {
+		root = "."
+	}
+	var matches []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, fs.ErrNotExist) {
+				return filepath.SkipDir
+			}
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ok, _ := matchPath(pattern, path)
+		if ok {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	return matches, nil
+}
+
+// appFromPath derives the app name for a matched file. It strips the
+// fixed prefix from `path`, normalises separators to `/`, and strips
+// the file extension. For pattern "*.log" matching "/var/log/api.log"
+// returns "api"; for "*/access.log" matching ".../api/access.log"
+// returns "api/access"; for "**/*.log" matching ".../v1/access.log"
+// returns "v1/access". Path-segment apps round-trip through the
+// coordinator's namespace check (it allows any app under the
+// authenticated namespace) so the multi-segment form is safe.
+func appFromPath(pattern, path string) string {
+	prefix := fixedPrefix(pattern)
+	rel := strings.TrimPrefix(path, prefix)
+	rel = filepath.ToSlash(rel)
+	rel = strings.TrimSuffix(rel, filepath.Ext(rel))
+	return rel
+}
+
+// absClean normalises a path for set-membership comparison between a
+// configured explicit `path:` and a glob-matched file. Falls back to a
+// lexical clean when the working dir is unavailable so the comparison
+// is still consistent (both sides go through the same function).
+func absClean(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return filepath.Clean(p)
+}
+
+// watchGlob watches a directory for new files matching a glob pattern. For
+// each matching file — both files present at startup and files created later —
+// it runs onboardAndRun with the file's real path and a per-file app name
+// derived from the path. Two files that share a basename across different
+// subdirectories produce distinct apps (e.g. `*/access.log` matching
+// `api/access.log` and `web/access.log` yields apps `api/access` and
+// `web/access`). `**` recurses across zero or more path segments.
+//
+// fsnotify watching is one-level only: it adds the longest fixed prefix
+// of the pattern to the watcher and reacts to Create events at that
+// depth. Files that appear deeper than the prefix at runtime are not
+// auto-discovered — that's the well-known limitation of fsnotify
+// without a recursive subscriber. Startup-time discovery via
+// globMatch handles the deep case.
+func watchGlob(ctx context.Context, client pb.WeftCoordinatorClient, token, instance, namespace, kind, pattern string, excluded map[string]bool, metavars metavarSet) {
+	prefix := fixedPrefix(pattern)
+	watchDir := strings.TrimSuffix(prefix, string(filepath.Separator))
+	if watchDir == "" {
+		watchDir = "."
+	}
+	tailing := make(map[string]bool)
+
+	// startup is false for files created while running: brand new, read from 0.
+	startFile := func(p string, startup bool) {
+		if tailing[p] {
+			return
+		}
+		if excluded[absClean(p)] {
+			weftsdk.Infof(ctx, "[%s] %s claimed by an explicit source — glob skipping", namespace, p)
+			return
+		}
+		tailing[p] = true
+		app := appFromPath(pattern, p)
+		fullApp := namespace + "/" + app + "/" + kind
+		registerSource(fullApp, metavars)
+		go func() {
+			if err := onboardAndRun(ctx, client, token, app, p, "", instance, fullApp, func() {
+				runFileTailer(ctx, client, instance, fullApp, p, startup)
+			}); err != nil {
+				weftsdk.Errorf(ctx, "[%s] onboard failed: %v", fullApp, err)
+			}
+		}()
+	}
+
+	// Onboard + tail any files that already match.
+	startMatching := func() {
+		paths, _ := globMatch(pattern)
+		for _, p := range paths {
+			startFile(p, true)
+		}
+	}
+
+	startMatching()
+	if len(tailing) > 0 {
+		weftsdk.Infof(ctx, "[%s] tailing %d files matching %s", namespace, len(tailing), pattern)
+	}
+
+	// Watch directory for new files.
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		weftsdk.Infof(ctx, "[%s] watch %s: %v", namespace, watchDir, err)
+		return
+	}
+	defer watcher.Close()
+
+	if err := watcher.Add(watchDir); err != nil {
+		// Directory doesn't exist yet — wait for it.
+		weftsdk.Infof(ctx, "[%s] directory %s not found, waiting...", namespace, watchDir)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := watcher.Add(watchDir); err == nil {
+					weftsdk.Infof(ctx, "[%s] directory %s appeared", namespace, watchDir)
+					startMatching()
+					goto watch
+				}
+			}
+		}
+	}
+
+watch:
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Op&fsnotify.Create == fsnotify.Create {
+				matched, _ := matchPath(pattern, event.Name)
+				if matched {
+					weftsdk.Infof(ctx, "[%s] new file %s", namespace, event.Name)
+					// Brand new by construction: read from the top so lines written
+					// between creation and our open are not lost.
+					startFile(event.Name, false)
+				}
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			weftsdk.Errorf(ctx, "[%s] watch error: %v", namespace, err)
+		}
+	}
+}
+
+// prefixNamespace stamps the configured namespace on bare app names
+// posted to the records socket. SDKs send a logical app like
+// "coordinator/runtime"; weftd promotes it to "<ns>/coordinator/runtime"
+// so the coordinator's namespace check accepts the row and the
+// pseudofile renderer drops it under /log/<ns>/. App names that are
+// already qualified pass through untouched.
+func prefixNamespace(namespace, app string) string {
+	if namespace == "" {
+		return app
+	}
+	if app == namespace || strings.HasPrefix(app, namespace+"/") {
+		return app
+	}
+	return namespace + "/" + app
+}
+
+func runSocketIngester(ctx context.Context, client pb.WeftCoordinatorClient, instance, namespace string, sock *weftd.SocketListener) {
+	lines := sock.Lines()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	ss := &streamState{}
+
+	type appLine struct{ app, line, traceID string }
+	var buf []appLine
+
+	prefix := func(app string) string { return prefixNamespace(namespace, app) }
+
+	for {
+		select {
+		case <-ctx.Done():
+			for _, al := range buf {
+				sendLineWithReconnect(ctx, client, ss, al.line, instance, al.app, al.traceID)
+			}
+			if ss.stream != nil {
+				ss.stream.CloseAndRecv()
+			}
+			return
+		case sl, ok := <-lines:
+			if !ok {
+				if ss.stream != nil {
+					ss.stream.CloseAndRecv()
+				}
+				return
+			}
+			buf = append(buf, appLine{app: prefix(sl.App), line: sl.Line, traceID: sl.TraceID})
+			if len(buf) >= 100 {
+				for _, al := range buf {
+					sendLineWithReconnect(ctx, client, ss, al.line, instance, al.app, al.traceID)
+				}
+				buf = buf[:0]
+			}
+		case <-ticker.C:
+			if len(buf) > 0 {
+				for _, al := range buf {
+					sendLineWithReconnect(ctx, client, ss, al.line, instance, al.app, al.traceID)
+				}
+				buf = buf[:0]
+			}
+		}
+	}
+}
+
+// streamState holds a lazily-opened, reconnectable IngestStream.
+type streamState struct {
+	stream pb.WeftCoordinator_IngestStreamClient
+}
+
+// splitFullApp breaks the agent's internal "namespace/service/kind"
+// composite back into its parts for the wire. weftd builds the
+// composite as namespace + "/" + service + "/" + sourceKind, so this is
+// its inverse; it mirrors the coordinator/shard SplitApp defaulting
+// (missing kind → "main"). The composite is still the parser-cache key
+// and log prefix; only the LogRow carries the split fields now.
+func splitFullApp(fullApp string) (namespace, service, kind string) {
+	parts := strings.SplitN(fullApp, "/", 3)
+	switch len(parts) {
+	case 1:
+		return parts[0], "", "main"
+	case 2:
+		return parts[0], parts[1], "main"
+	default:
+		return parts[0], parts[1], parts[2]
+	}
+}
+
+func buildLogRow(line, instance, app, traceID string) *pb.LogRow {
+	now := time.Now()
+
+	// An SDK-written line carries a header with the fields the SDK already
+	// knows. It is stripped here, so the
+	// header never reaches the coordinator and raw is the body only.
+	hdr, line, hasHdr := weftd.ParseHeader(line)
+	if hdr.TraceID != "" {
+		traceID = hdr.TraceID
+	}
+
+	namespace, service, kind := splitFullApp(app)
+
+	var row *pb.LogRow
+	if parseClientSide {
+		if slot := parserCache.Slot(app); slot.Parser() != nil {
+			msg, _ := slot.Parser().ParseLine(line, now)
+			msg.Namespace = namespace
+			msg.Service = service
+			msg.Kind = kind
+			msg.Instance = instance
+			msg.Deployment = globalDeployment
+			msg.Region = globalRegion
+			stampMetavariables(msg, app)
+			if slot.HasLevelField() && msg.Level == "" {
+				slot.RecordMissingLevel()
+			} else {
+				slot.RecordOK()
+			}
+			// A structural (header or socket-envelope) trace ID is
+			// higher-fidelity than schema-based extraction and wins when both
+			// are present.
+			if traceID != "" {
+				msg.TraceId = traceID
+			}
+			row = msg
+		}
+	}
+	if row == nil {
+		row = &pb.LogRow{
+			Namespace:  namespace,
+			Service:    service,
+			Kind:       kind,
+			Instance:   instance,
+			Deployment: globalDeployment,
+			Region:     globalRegion,
+			Raw:        line,
+			TsUnixNs:   now.UnixNano(),
+			TraceId:    traceID,
+		}
+		stampMetavariables(row, app)
+	}
+	if hasHdr {
+		applyHeader(row, hdr)
+	}
+	return row
+}
+
+// applyHeader sets the row's fields from the values the SDK supplied. A
+// header value wins over whatever the schema parser extracted; a value it
+// left empty leaves the parser's result alone.
+func applyHeader(row *pb.LogRow, h weftd.LineHeader) {
+	if h.TsNs != 0 {
+		row.TsUnixNs = h.TsNs
+	}
+	if h.Level != "" {
+		row.Level = strings.ToUpper(h.Level)
+	}
+	if h.SpanName != "" {
+		row.SpanName = h.SpanName
+	}
+	if h.SpanID != "" {
+		row.SpanId = h.SpanID
+	}
+	if h.ParentID != "" {
+		row.ParentSpanId = h.ParentID
+	}
+	if h.DurNs != 0 {
+		row.DurationNs = h.DurNs
+	}
+	if h.Kind != "" {
+		row.Kind = h.Kind
+	}
+	if h.Fmt == "json" && len(row.PayloadJson) == 0 && json.Valid([]byte(row.Raw)) {
+		row.PayloadJson = []byte(row.Raw)
+	}
+}
+
+// sendLineWithReconnect sends a line, opening or reconnecting the stream as needed.
+func sendLineWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, line, instance, app, traceID string) error {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil
+	}
+
+	msg := buildLogRow(line, instance, app, traceID)
+
+	// Try sending on existing stream.
+	if ss.stream != nil {
+		if err := ss.stream.Send(msg); err == nil {
+			return nil
+		}
+		// Stream is broken — will reconnect below.
+		weftsdk.Infof(ctx, "[%s] stream broken, reconnecting", app)
+		ss.stream = nil
+	}
+
+	// Open a new stream.
+	stream, err := openStream(ctx, client, app)
+	if err != nil {
+		return err // context cancelled
+	}
+	ss.stream = stream
+
+	// Retry the send on the fresh stream.
+	if err := ss.stream.Send(msg); err != nil {
+		weftsdk.Errorf(ctx, "[%s] send failed after reconnect: %v", app, err)
+		ss.stream = nil
+	}
+	return nil
+}
+
+func flushWithReconnect(ctx context.Context, client pb.WeftCoordinatorClient, ss *streamState, lines []string, instance, app string) {
+	for _, line := range lines {
+		if err := sendLineWithReconnect(ctx, client, ss, line, instance, app, ""); err != nil {
+			return
+		}
+	}
+}

@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+
+mkdir -p /etc/weftd /var/run/weftd
+systemctl daemon-reload
+
+# Enable so weftd comes up on boot, but do NOT start it now: a fresh
+# install has no /etc/weftd/config.yaml and weftd intentionally fatals
+# without one. The operator authors config.yaml (see config.yaml.example)
+# then runs `systemctl start weftd`. On an already-configured host this
+# is a no-op and the running weftd is left untouched.
+systemctl enable weftd
+
+if [ ! -f /etc/weftd/config.yaml ]; then
+    echo "weftd installed but not started: author /etc/weftd/config.yaml"
+    echo "(copy /etc/weftd/config.yaml.example), then: systemctl start weftd"
+fi

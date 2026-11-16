@@ -1,0 +1,3 @@
+# The open-source default: four coordinates and no group. There is no group
+# column, partition, or code path in a build with this shape.
+coordinates: [namespace, env, service, kind]

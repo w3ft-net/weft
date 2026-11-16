@@ -1,0 +1,611 @@
+package shard
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/tidwall/gjson"
+	weftsdk "github.com/w3ft-net/weft-go"
+
+	"github.com/graybeardcorp/warp/pkg/awk"
+	"github.com/w3ft-net/weft/logtable"
+	pb "github.com/w3ft-net/weft/proto/weftpb"
+)
+
+// Field facts are what this shard has learned about the values of an awk
+// field ("$N") or a top-level payload key (".key") in each source: whether
+// every row it has seen held a number there. The planner lowers `$5 > 500`
+// or `select(.q_max_ms > 10)` exactly only where that is so.
+//
+// A fact is a guess promoted by evidence. A locator is Typed once
+// factTypedAfter rows of its source have all had a numeric value there, and
+// Dirty (permanently, for this shard) from the first row that did not. The
+// classifier runs on its own goroutine, handed each batch after the append
+// commits, so it adds nothing to the ingest path.
+
+const (
+	// factTypedAfter is how many consecutive conforming rows type a locator.
+	factTypedAfter = 1000
+	// factMaxLocators caps the locators tracked per source; later ones are
+	// simply unknown.
+	factMaxLocators = 50
+	// factQueueDepth is how many batches may await the classifier. A batch
+	// that doesn't fit disables the classifier (see Observe).
+	factQueueDepth = 1024
+)
+
+// FactState is where a locator is on its way to being typed.
+type FactState int8
+
+const (
+	FactUnknown FactState = iota
+	FactTyped
+	FactDirty
+)
+
+// FactKey names a locator in a source. Table is the source's logical table,
+// logtable.Name of its partition, namespace, service and kind, whether or not
+// the shard stores a table per key: shards are shared across groups, and the
+// name carries the partition, so a fact of one group is never another's. Env
+// so that a stray row in staging doesn't downgrade production. Locator is "$N"
+// for awk field N, "$N#int" for awk field N holding only integers (see
+// finiteInteger), or ".key" for a top-level payload key.
+type FactKey struct {
+	Table   string
+	Env     string
+	Locator string
+}
+
+// FieldFact is one locator's reportable state. Epoch increases with every
+// transition the coordinator needs to hear about (typed, or typed then
+// dirty), across all of the shard's facts.
+type FieldFact struct {
+	FactKey
+	// Namespace, Service and Kind are the source's, for people reading a
+	// table name, which is a hash.
+	Namespace, Service, Kind string
+	// Customer is the legacy layout's one partition value, for a coordinator
+	// that identifies a source by it. Zero under any other layout. It goes
+	// with tag 26.
+	Customer int64
+	State    FactState
+	Epoch    uint64
+}
+
+type locatorState struct {
+	locator  string // "$N" or ".key"
+	state    FactState
+	conform  int64
+	wasTyped bool // reached Typed once, so the coordinator may hold it
+	epoch    uint64
+	seen     int64 // src.rows+1 of the last row that held this locator
+}
+
+// factSource is what is known about one source's locators. Awk fields, awk
+// fields holding integers and top-level jq keys are tracked separately, up to
+// factMaxLocators of each: a JSON row also has awk fields (the text of its
+// line), which must not crowd out its keys.
+type factSource struct {
+	table    string // logtable.Name of the source
+	customer int64  // see FieldFact.Customer
+	rows     int64
+	awk      map[int]*locatorState
+	awkInt   map[int]*locatorState
+	jq       map[string]*locatorState
+	order    []*locatorState // every tracked locator, to find the ones a row lacks
+}
+
+// sourceKey identifies a source. partition is the batch's partition values as
+// text, so a key is cheap to build per row; the logical table, a hash, is
+// computed once when a source is first seen.
+type sourceKey struct {
+	partition                     string
+	namespace, service, kind, env string
+}
+
+// partitionText is a comparable form of a batch's partition values.
+func partitionText(partition []any) string {
+	var b strings.Builder
+	for i, v := range partition {
+		if i > 0 {
+			b.WriteByte(0x1f)
+		}
+		fmt.Fprint(&b, v)
+	}
+	return b.String()
+}
+
+// legacyCustomer is a legacy-layout partition's customer, or zero.
+func legacyCustomer(partition []any) int64 {
+	if len(partition) == 1 {
+		if c, ok := partition[0].(int64); ok {
+			return c
+		}
+	}
+	return 0
+}
+
+// FieldClassifier learns field facts from the batches a shard ingests. A nil
+// *FieldClassifier is valid and holds no facts.
+type FieldClassifier struct {
+	in   chan observed
+	done chan struct{}
+	// inflight counts batches queued or being classified; tests wait on it.
+	inflight sync.WaitGroup
+
+	mu      sync.Mutex
+	sources map[sourceKey]*factSource
+	epoch   uint64
+	acked   uint64
+	// changed: a classification result differs from the one last persisted
+	// (a source or locator started being tracked, or one became typed or
+	// dirty). Counting more conforming rows is not a change.
+	changed bool
+	// persist keeps a snapshot of the results where a roll will find it.
+	// Called on the classifier goroutine, only when changed.
+	persist func([]byte) error
+	// forget drops what persist kept. A classifier that stops has missed rows,
+	// so the saved results no longer account for the shard.
+	forget   func()
+	disabled bool
+}
+
+// NewFieldClassifier starts a classifier. Stop it with Stop.
+func NewFieldClassifier() *FieldClassifier {
+	c := &FieldClassifier{
+		in:      make(chan observed, factQueueDepth),
+		done:    make(chan struct{}),
+		sources: map[sourceKey]*factSource{},
+	}
+	go c.run()
+	return c
+}
+
+// Stop ends the classifier's goroutine. Observe after Stop is a no-op.
+func (c *FieldClassifier) Stop() {
+	if c == nil {
+		return
+	}
+	select {
+	case <-c.done:
+	default:
+		close(c.done)
+	}
+}
+
+// observed is a committed batch with the partition values it was stored under.
+type observed struct {
+	partition []any
+	rows      []*pb.LogRow
+}
+
+// Observe hands the classifier a committed batch. It never blocks. A batch
+// that doesn't fit the queue was not classified, so any fact could now be
+// wrong: the classifier turns itself off for good and reports nothing, which
+// every consumer reads as "unknown".
+func (c *FieldClassifier) Observe(partition []any, rows []*pb.LogRow) {
+	if c == nil || len(rows) == 0 {
+		return
+	}
+	// The caller may reuse its slice (the ingest stream does), the rows
+	// themselves are not mutated.
+	batch := observed{partition, append([]*pb.LogRow(nil), rows...)}
+	c.inflight.Add(1)
+	select {
+	case c.in <- batch:
+	case <-c.done:
+		c.inflight.Done()
+	default:
+		c.inflight.Done()
+		c.disable("classifier queue full")
+	}
+}
+
+// Disable turns the classifier off, e.g. for a shard that opened with rows
+// it has not classified. Rows are append-only and never rescanned: a shard
+// whose saved state doesn't match its rows simply has no facts.
+func (c *FieldClassifier) Disable(reason string) { c.disable(reason) }
+
+func (c *FieldClassifier) disable(reason string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	already := c.disabled
+	c.disabled = true
+	forget := c.forget
+	c.mu.Unlock()
+	if !already {
+		weftsdk.Warnf(context.Background(), "field facts disabled: %s", reason)
+		if forget != nil {
+			// Off the caller's goroutine: Observe, on the ingest path, can be
+			// the one disabling.
+			c.inflight.Add(1) // so Drain, and a roll's flush, wait for it
+			go func() {
+				defer c.inflight.Done()
+				forget()
+			}()
+		}
+	}
+}
+
+func (c *FieldClassifier) run() {
+	for {
+		select {
+		case <-c.done:
+			return
+		case batch := <-c.in:
+			c.mu.Lock()
+			if !c.disabled {
+				var text string
+				if batch.partition != nil {
+					text = partitionText(batch.partition)
+				}
+				for _, r := range batch.rows {
+					c.classify(batch.partition, text, r)
+				}
+			}
+			snap, save := c.takeChange()
+			c.mu.Unlock()
+			if save {
+				if err := c.persist(snap); err != nil {
+					weftsdk.Warnf(context.Background(), "field facts: not saved: %v", err)
+					c.mu.Lock()
+					c.changed = true // the next batch tries again
+					c.mu.Unlock()
+				}
+			}
+			c.inflight.Done()
+		}
+	}
+}
+
+// classify folds one row in. Caller holds c.mu.
+func (c *FieldClassifier) classify(partition []any, text string, r *pb.LogRow) {
+	kind := r.Kind
+	if kind == "" {
+		kind = "main"
+	}
+	if partition == nil {
+		// From a coordinator that sends no partition values: the legacy
+		// layout's customer, from the row.
+		partition = []any{r.CustomerId}
+		text = partitionText(partition)
+	}
+	c.classifyRow(sourceKey{text, r.Namespace, r.Service, kind, r.Env}, partition, awkFields(r.Raw), r.PayloadJson)
+}
+
+// awkLocators names the first fields without building a string per row.
+var awkLocators = func() []string {
+	out := make([]string, 257)
+	for i := range out {
+		out[i] = "$" + strconv.Itoa(i)
+	}
+	return out
+}()
+
+func awkLocator(n int) string {
+	if n < len(awkLocators) {
+		return awkLocators[n]
+	}
+	return "$" + strconv.Itoa(n)
+}
+
+// classifyRow folds one row's awk fields and top-level payload keys in.
+// Caller holds c.mu.
+func (c *FieldClassifier) classifyRow(sk sourceKey, partition []any, fields []string, payload []byte) {
+	src := c.sources[sk]
+	if src == nil {
+		src = newFactSource(0)
+		src.table = logtable.Name(partition, sk.namespace, sk.service, sk.kind)
+		src.customer = legacyCustomer(partition)
+		c.sources[sk] = src
+		c.changed = true
+	}
+	mark := src.rows + 1
+	for i, f := range fields {
+		n := i + 1
+		ls := src.awk[n]
+		if ls == nil {
+			if ls = src.track(awkLocator(n), len(src.awk)); ls == nil {
+				continue
+			}
+			src.awk[n] = ls
+			c.changed = true
+		}
+		ls.seen = mark
+		c.observe(ls, finiteDecimal(f), sk)
+
+		ils := src.awkInt[n]
+		if ils == nil {
+			if ils = src.track(awkLocator(n)+intSuffix, len(src.awkInt)); ils == nil {
+				continue
+			}
+			src.awkInt[n] = ils
+			c.changed = true
+		}
+		ils.seen = mark
+		c.observe(ils, finiteInteger(f), sk)
+	}
+	if root := gjson.ParseBytes(payload); root.IsObject() {
+		root.ForEach(func(k, v gjson.Result) bool {
+			key := k.String()
+			ls := src.jq[key]
+			if ls == nil {
+				if ls = src.track("."+key, len(src.jq)); ls == nil {
+					return true
+				}
+				src.jq[key] = ls
+				c.changed = true
+			}
+			ls.seen = mark
+			// jq compares a JSON number as a number and everything else
+			// (a string that reads as a number, null, a bool) otherwise.
+			c.observe(ls, v.Type == gjson.Number, sk)
+			return true
+		})
+	}
+	// A locator this row lacks is not a number there.
+	for _, ls := range src.order {
+		if ls.seen != mark {
+			c.observe(ls, false, sk)
+		}
+	}
+	src.rows++
+}
+
+// newFactSource is a source that has seen rows rows.
+func newFactSource(rows int64) *factSource {
+	return &factSource{rows: rows, awk: map[int]*locatorState{}, awkInt: map[int]*locatorState{}, jq: map[string]*locatorState{}}
+}
+
+// track starts following a locator the source has not shown before, or
+// returns nil if kindCount locators of its kind are already followed. Rows
+// before this one lacked it, so it starts dirty unless this is the first row.
+func (src *factSource) track(locator string, kindCount int) *locatorState {
+	if kindCount >= factMaxLocators {
+		return nil
+	}
+	ls := &locatorState{locator: locator}
+	if src.rows > 0 {
+		ls.state = FactDirty
+	}
+	src.order = append(src.order, ls)
+	return ls
+}
+
+// observe folds one value's verdict into a locator. Caller holds c.mu.
+func (c *FieldClassifier) observe(ls *locatorState, numeric bool, sk sourceKey) {
+	switch ls.state {
+	case FactDirty:
+		return
+	case FactTyped:
+		if !numeric {
+			c.epoch++
+			c.changed = true
+			ls.state, ls.epoch = FactDirty, c.epoch
+			weftsdk.Infof(context.Background(), "field fact flipped dirty: partition=%q %s/%s/%s env=%s locator=%s",
+				sk.partition, sk.namespace, sk.service, sk.kind, sk.env, ls.locator)
+		}
+	default:
+		if !numeric {
+			ls.state = FactDirty
+			c.changed = true
+			return
+		}
+		ls.conform++
+		if ls.conform >= factTypedAfter {
+			c.changed = true
+			c.epoch++
+			ls.state, ls.epoch, ls.wasTyped = FactTyped, c.epoch, true
+		}
+	}
+}
+
+// Pending returns the facts the coordinator has not acknowledged: typed
+// ones, and ones that were typed and went dirty (the coordinator must drop
+// them). A locator that was never typed is not reported; absence means
+// unknown.
+func (c *FieldClassifier) Pending() []FieldFact {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.disabled {
+		return nil
+	}
+	var out []FieldFact
+	for sk, src := range c.sources {
+		for _, ls := range src.order {
+			if !ls.wasTyped || ls.epoch <= c.acked {
+				continue
+			}
+			out = append(out, FieldFact{
+				FactKey:   FactKey{src.table, sk.env, ls.locator},
+				Namespace: sk.namespace, Service: sk.service, Kind: sk.kind,
+				Customer: src.customer,
+				State:    ls.state,
+				Epoch:    ls.epoch,
+			})
+		}
+	}
+	return out
+}
+
+// Ack records that the coordinator has every fact up to epoch.
+func (c *FieldClassifier) Ack(epoch uint64) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	if epoch > c.acked {
+		c.acked = epoch
+	}
+	c.mu.Unlock()
+}
+
+// Drain waits for every batch handed to Observe to be classified, and any
+// change it made to be persisted.
+func (c *FieldClassifier) Drain() {
+	if c != nil {
+		c.inflight.Wait()
+	}
+}
+
+// takeChange is the snapshot to persist, if a result changed since the last
+// one. Caller holds c.mu.
+func (c *FieldClassifier) takeChange() ([]byte, bool) {
+	if c.persist == nil || c.disabled || !c.changed {
+		return nil, false
+	}
+	b, err := c.snapshot()
+	if err != nil {
+		return nil, false
+	}
+	c.changed = false
+	return b, true
+}
+
+// savedFacts is the classification results as they are kept in the shard's
+// own database, so a roll (a new instance opening the same volume) carries
+// them over. Counts of rows still on their way to being typed are not kept: a
+// locator that was part-way starts counting again, which is slower and safe.
+type savedFacts struct {
+	Epoch   uint64
+	Sources []savedSource
+}
+
+// savedSource is a source as kept across a roll. Partition and Table are
+// absent from a file the previous build wrote, which knew only CustomerID, the
+// legacy layout's partition.
+type savedSource struct {
+	CustomerID                    int64
+	Partition                     []string `json:",omitempty"`
+	Table                         string   `json:",omitempty"`
+	Namespace, Service, Kind, Env string
+	Locators                      []savedLocator
+}
+
+type savedLocator struct {
+	Locator  string
+	State    FactState
+	WasTyped bool
+	Epoch    uint64
+}
+
+// snapshot encodes the results. Caller holds c.mu.
+func (c *FieldClassifier) snapshot() ([]byte, error) {
+	out := savedFacts{Epoch: c.epoch}
+	for sk, src := range c.sources {
+		ss := savedSource{CustomerID: src.customer, Partition: strings.Split(sk.partition, "\x1f"), Table: src.table,
+			Namespace: sk.namespace, Service: sk.service, Kind: sk.kind, Env: sk.env}
+		for _, ls := range src.order {
+			ss.Locators = append(ss.Locators, savedLocator{ls.locator, ls.state, ls.wasTyped, ls.epoch})
+		}
+		out.Sources = append(out.Sources, ss)
+	}
+	return json.Marshal(out)
+}
+
+// Restore loads results saved by snapshot into a fresh classifier. A restored
+// source counts as having had rows, so a locator it did not save is one the
+// earlier rows lacked, and stays dirty.
+func (c *FieldClassifier) Restore(b []byte) error {
+	var in savedFacts
+	if err := json.Unmarshal(b, &in); err != nil {
+		return fmt.Errorf("saved field facts: %w", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.epoch = in.Epoch
+	for _, ss := range in.Sources {
+		src := newFactSource(1)
+		sk := sourceKey{namespace: ss.Namespace, service: ss.Service, kind: ss.Kind, env: ss.Env}
+		src.customer = ss.CustomerID
+		if ss.Table == "" {
+			legacy := []any{ss.CustomerID}
+			sk.partition, src.table = partitionText(legacy), logtable.Name(legacy, ss.Namespace, ss.Service, ss.Kind)
+		} else {
+			sk.partition, src.table = strings.Join(ss.Partition, "\x1f"), ss.Table
+		}
+		for _, sl := range ss.Locators {
+			ls := &locatorState{locator: sl.Locator, state: sl.State, wasTyped: sl.WasTyped, epoch: sl.Epoch}
+			src.order = append(src.order, ls)
+			switch {
+			case strings.HasPrefix(sl.Locator, "$"):
+				num, ints := strings.CutSuffix(sl.Locator[1:], intSuffix)
+				n, err := strconv.Atoi(num)
+				if err != nil {
+					return fmt.Errorf("saved field facts: locator %q", sl.Locator)
+				}
+				if ints {
+					src.awkInt[n] = ls
+				} else {
+					src.awk[n] = ls
+				}
+			case strings.HasPrefix(sl.Locator, "."):
+				src.jq[sl.Locator[1:]] = ls
+			default:
+				return fmt.Errorf("saved field facts: locator %q", sl.Locator)
+			}
+		}
+		c.sources[sk] = src
+	}
+	c.changed = false
+	return nil
+}
+
+// SetPersist installs the function that keeps the results and the one that
+// drops them. They must be set before the classifier sees a row.
+func (c *FieldClassifier) SetPersist(keep func([]byte) error, forget func()) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.persist, c.forget = keep, forget
+	c.mu.Unlock()
+}
+
+// finiteDecimal is whether awk reads the field as a number and DuckDB's cast
+// reads it as the same one. awk's numbers include inf, nan and hex floats,
+// which the cast reads differently or not at all, so a field holding one is
+// not typed: the plan that skips awk's own comparison needs the two to agree
+// on every row. A field is spelled with digits, a sign, a point and an
+// exponent, nothing else.
+func finiteDecimal(f string) bool {
+	for i := 0; i < len(f); i++ {
+		switch c := f[i]; {
+		case c >= '0' && c <= '9', c == '+', c == '-', c == '.', c == 'e', c == 'E':
+		default:
+			return false
+		}
+	}
+	return awk.LooksNumeric(f)
+}
+
+// intSuffix marks the locator of an awk field's integer fact: "$3#int".
+const intSuffix = "#int"
+
+// finiteInteger is whether f is a decimal integer of at most 15 digits, with an
+// optional sign, so that it is exactly a float64. A sum over such a field is
+// exact while its partial sums stay below 2^53, which the query checks (see
+// planner.KeyedAggregate); a field of anything else is not an integer here.
+func finiteInteger(f string) bool {
+	if f != "" && (f[0] == '+' || f[0] == '-') {
+		f = f[1:]
+	}
+	if f == "" || len(f) > 15 {
+		return false
+	}
+	for i := 0; i < len(f); i++ {
+		if f[i] < '0' || f[i] > '9' {
+			return false
+		}
+	}
+	return true
+}

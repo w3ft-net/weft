@@ -1,0 +1,403 @@
+package shard
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/w3ft-net/weft/shape"
+)
+
+// A keyed archive splits its files by (customer, namespace, service, kind) as
+// well as by time, so a query for one log file opens only that file's
+// directories.
+
+type keyedRow struct {
+	customer                 int64
+	namespace, service, kind string // kind "" is stored as NULL
+}
+
+func legacyShardWith(t *testing.T, keys []keyedRow, perKey int) *DuckDBShard {
+	t.Helper()
+	ds, err := NewDuckDBShard("keyed", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ds.Close() })
+	t0 := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+	for _, k := range keys {
+		var kind any = k.kind
+		if k.kind == "" {
+			kind = nil
+		}
+		for i := 0; i < perKey; i++ {
+			ts := t0.Add(time.Duration(i) * 7 * time.Hour)
+			raw := fmt.Sprintf("%d/%s/%s/%s #%d", k.customer, k.namespace, k.service, k.kind, i)
+			if _, err := ds.db.Exec("INSERT INTO logs (raw, ts, customer_id, namespace, service, kind) VALUES (?, ?, ?, ?, ?, ?)",
+				raw, ts, k.customer, k.namespace, k.service, kind); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return ds
+}
+
+// exportTo writes ds as a time-only archive of the given width (0 for a single file).
+func exportTo(t *testing.T, ds *DuckDBShard, minutes int) (dir, glob string, rows int64) {
+	t.Helper()
+	dir = t.TempDir() + "/shard.attempt-1"
+	if err := os.MkdirAll(dir, 0o755); err != nil { // the local export makes it too
+		t.Fatal(err)
+	}
+	glob, rows, err := ds.exportParquet(context.Background(), dir, minutes)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	return dir, glob, rows
+}
+
+// exportSizedTo writes ds as a sized archive, given the Parquet size the shard is
+// taken to have (which sets every key's bucket width).
+func exportSizedTo(t *testing.T, ds *DuckDBShard, estParquetBytes int64) (dir, glob string, rows int64) {
+	t.Helper()
+	dir = t.TempDir() + "/shard.attempt-1"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	glob, rows, err := ds.exportKeyedParquet(context.Background(), dir, estParquetBytes)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	return dir, glob, rows
+}
+
+// smallShardBytes is a shard too small to fill a file per key: every key gets the
+// widest bucket.
+const smallShardBytes = 64 << 20
+
+var keyedFixture = []keyedRow{
+	{1, "weft", "api", "main"},
+	{1, "weft", "api", "stats"},
+	{1, "weft", "web", "main"},
+	{2, "weft", "api", "main"},
+	{1, "lo/om", "a/b c", "main"}, // names with a slash and a space
+	{1, "weft", "api", ""},        // an old row with no kind
+}
+
+func TestKeyedExport_WritesADirectoryPerKeyAndReadsBackWhole(t *testing.T) {
+	const perKey = 6
+	ds := legacyShardWith(t, keyedFixture, perKey)
+	dir, glob, rows := exportSizedTo(t, ds, smallShardBytes)
+
+	if !IsSized(glob) || !IsKeyed(glob) {
+		t.Fatalf("exported path %q does not say it is sized", glob)
+	}
+	if want := int64(len(keyedFixture) * perKey); rows != want {
+		t.Fatalf("export wrote %d rows, want %d", rows, want)
+	}
+
+	// one directory per key, under the key's own path, never another key's
+	for _, p := range []string{
+		"customer_id=1/namespace=weft/service=api/kind=main",
+		"customer_id=2/namespace=weft/service=api/kind=main",
+		"customer_id=1/namespace=lo%2Fom/service=a%2Fb%20c/kind=main",
+	} {
+		files, _ := filepath.Glob(filepath.Join(dir, "sized", p, "_w=*", "*", "data_0.parquet"))
+		if len(files) == 0 {
+			t.Errorf("no files under %s", p)
+		}
+	}
+
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	count := func(where string, args ...any) int {
+		t.Helper()
+		var n int
+		q := "SELECT count(*) FROM " + ParquetReadExpr(glob, shape.Legacy()) + " WHERE " + where
+		if err := db.QueryRow(q, args...).Scan(&n); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		return n
+	}
+	if got := count("true"); got != len(keyedFixture)*perKey {
+		t.Errorf("read back %d rows, want %d", got, len(keyedFixture)*perKey)
+	}
+	if got := count("customer_id = CAST(? AS BIGINT) AND service = ? AND kind = ?", "1", "api", "main"); got != perKey {
+		t.Errorf("weft/api/main read back %d rows, want %d", got, perKey)
+	}
+	if got := count("service = ?", "a/b c"); got != perKey {
+		t.Errorf("a service with a slash and a space read back %d rows, want %d", got, perKey)
+	}
+	if got := count("kind IS NULL"); got != perKey {
+		t.Errorf("rows with no kind read back %d rows, want %d", got, perKey)
+	}
+	if got := count("customer_id IS NULL"); got != 0 {
+		t.Errorf("%d rows came back with no customer", got)
+	}
+}
+
+// A query for one key must not open another key's files.
+func TestKeyedExport_AQueryOpensOnlyItsKeysFiles(t *testing.T) {
+	ds := legacyShardWith(t, keyedFixture, 6)
+	_, glob, _ := exportSizedTo(t, ds, smallShardBytes)
+
+	expr := ParquetReadExpr(glob, shape.Legacy())
+	withNames := strings.Replace(expr, "hive_partitioning=true", "hive_partitioning=true, filename=true", 1)
+	if withNames == expr {
+		t.Fatal("ParquetReadExpr no longer says hive_partitioning=true; update this test")
+	}
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query("SELECT DISTINCT filename FROM "+withNames+
+		" WHERE customer_id = CAST(? AS BIGINT) AND namespace = ? AND service = ? AND kind = ?", "1", "weft", "web", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var files []string
+	for rows.Next() {
+		var f string
+		if err := rows.Scan(&f); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	if len(files) == 0 {
+		t.Fatal("the query matched no files")
+	}
+	for _, f := range files {
+		if !strings.Contains(f, "service=web/kind=main") {
+			t.Errorf("a query for weft/web/main read %s", f)
+		}
+	}
+}
+
+// A service named like a number is typed as a number by DuckDB when every
+// service in the archive looks like one; the reader pins the key columns to
+// strings so a predicate on another name still binds.
+func TestKeyedExport_NumericLookingServiceNamesStayStrings(t *testing.T) {
+	ds := legacyShardWith(t, []keyedRow{{1, "weft", "123", "main"}, {1, "weft", "456", "main"}}, 3)
+	_, glob, _ := exportSizedTo(t, ds, smallShardBytes)
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow("SELECT count(*) FROM "+ParquetReadExpr(glob, shape.Legacy())+" WHERE service = ?", "api").Scan(&n); err != nil {
+		t.Fatalf("a predicate on a name that isn't a number failed: %v", err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM "+ParquetReadExpr(glob, shape.Legacy())+" WHERE service = ?", "123").Scan(&n); err != nil || n != 3 {
+		t.Fatalf("service 123: %d rows, err=%v, want 3", n, err)
+	}
+}
+
+// The time pruning restates ts bounds on _part, so it must still be correct
+// when the key directories sit above the time ones.
+func TestKeyedExport_TimePruningStillMatches(t *testing.T) {
+	ds := legacyShardWith(t, keyedFixture, 12)
+	_, glob, _ := exportSizedTo(t, ds, 600<<20)
+	lo := time.Date(2026, 10, 14, 6, 0, 0, 0, time.UTC)
+	hi := time.Date(2026, 10, 15, 6, 0, 0, 0, time.UTC)
+	args := []string{"1", lo.Format("2006-01-02 15:04:05"), hi.Format("2006-01-02 15:04:05")}
+	base := "SELECT count(*) FROM logs WHERE customer_id = CAST(? AS BIGINT) AND ts >= CAST(? AS TIMESTAMP) AND ts <= CAST(? AS TIMESTAMP)"
+
+	db, err := sql.Open("duckdb", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	count := func(q string) int {
+		var n int
+		q = replaceFirst(q, "FROM logs", "FROM "+ParquetReadExpr(glob, shape.Legacy()))
+		if err := db.QueryRow(q, toAny(args)...).Scan(&n); err != nil {
+			t.Fatalf("%v\n%s", err, q)
+		}
+		return n
+	}
+	want := count(base)
+	if want == 0 {
+		t.Fatal("window holds no rows")
+	}
+	if got := count(PruneColdPartitions(base, args, glob)); got != want {
+		t.Errorf("pruned read counts %d rows, unpruned %d", got, want)
+	}
+}
+
+// interleavedShard holds rows of 250 services in strict rotation over five days:
+// 1,250 partitions, each batch touching all of them. DuckDB keeps at most 100
+// partition files open and starts a new file each time it reopens one, so left
+// in this order the export writes many files per partition (1,905 files for
+// 308 partitions in a 6M-row trial). Sorted, it writes about one each.
+func interleavedShard(t *testing.T) *DuckDBShard {
+	t.Helper()
+	ds, err := NewDuckDBShard("interleaved", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ds.Close() })
+	if _, err := ds.db.Exec(`INSERT INTO logs (raw, ts, customer_id, namespace, service, kind)
+		SELECT 'line ' || i, TIMESTAMP '2026-10-14 00:00:00' + ((i % 432000) || ' seconds')::INTERVAL,
+		       1, 'weft', 'svc' || (i % 250), 'main'
+		FROM range(500000) r(i)`); err != nil {
+		t.Fatal(err)
+	}
+	return ds
+}
+
+// filesPerPartition counts the parquet files in each partition directory under dir.
+func filesPerPartition(t *testing.T, dir string) map[string]int {
+	t.Helper()
+	counts := map[string]int{}
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".parquet") {
+			counts[filepath.Dir(p)]++
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return counts
+}
+
+// checkFewFilesPerPartition fails if the partitions under dir are split into
+// many files. The input is sorted, so each partition arrives whole, but DuckDB
+// splits the sorted stream between its writer threads and a partition that
+// straddles a boundary gets a file from each side: a handful of extra files,
+// varying with the machine's cores and from run to run. What it must not do is
+// what unsorted input does, hundreds of extra files (181 to 286 extra in 500
+// partitions, in this test with the sort removed), so a read of one key opens
+// about as many files as the key has buckets. The bound is 5% and 8 files.
+func checkFewFilesPerPartition(t *testing.T, dir string, wantPartitions int) {
+	t.Helper()
+	counts := filesPerPartition(t, dir)
+	if len(counts) != wantPartitions {
+		t.Errorf("%d partitions, want %d", len(counts), wantPartitions)
+	}
+	var files int
+	for _, n := range counts {
+		files += n
+	}
+	if max := len(counts) + len(counts)/20 + 8; files > max {
+		t.Errorf("%d files in %d partitions, want at most %d", files, len(counts), max)
+	}
+}
+
+func TestKeyedExport_ManyPartitionsDoNotSplitIntoManyFiles(t *testing.T) {
+	ds := interleavedShard(t)
+	dir, _, rows := exportSizedTo(t, ds, 24<<30) // 98 MiB a key: day buckets
+	if rows != 500000 {
+		t.Fatalf("export wrote %d rows, want 500000", rows)
+	}
+	checkFewFilesPerPartition(t, filepath.Join(dir, "sized"), 1250) // 250 services x 5 days
+}
+
+// Converting a time-only archive does not split its partitions into many files either.
+func TestWriteArchive_ConversionDoesNotSplitIntoManyFiles(t *testing.T) {
+	ds := interleavedShard(t)
+	_, src, _ := exportTo(t, ds, 1440)
+	dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
+	copied, err := copyArchive(src, dstDir+"/sized/**/*.parquet", shape.Legacy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copied != 500000 {
+		t.Fatalf("copied %d rows, want 500000", copied)
+	}
+	checkFewFilesPerPartition(t, filepath.Join(dstDir, "sized"), 500) // 250 services x 2 weeks
+}
+
+// Converting an archive is a copy whose destination is keyed. The source may be a single file, which has no _part, or a time-only
+// archive of any width, whose _part is rebuilt for the new one.
+func TestWriteArchive_ConvertsAnythingToKeyed(t *testing.T) {
+	const perKey = 6
+	ds := legacyShardWith(t, keyedFixture, perKey)
+	want := len(keyedFixture) * perKey
+
+	for _, c := range []struct {
+		name    string
+		minutes int // width of the time-only source; 0 is a single file
+	}{{"single file", 0}, {"time-only, 60 minutes", 60}, {"time-only, 1440 minutes", 1440}} {
+		t.Run(c.name, func(t *testing.T) {
+			_, src, _ := exportTo(t, ds, c.minutes)
+			if IsKeyed(src) {
+				t.Fatalf("source %q is already keyed", src)
+			}
+			dstDir := filepath.Join(t.TempDir(), "shard.attempt-1.r1")
+			dst := dstDir + "/sized/**/*.parquet"
+			copied, err := copyArchive(src, dst, shape.Legacy())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if copied != int64(want) {
+				t.Fatalf("copied %d rows, want %d", copied, want)
+			}
+			if files, _ := filepath.Glob(filepath.Join(dstDir, "sized", "customer_id=1/namespace=weft/service=api/kind=main", "_w=*", "*", "data_0.parquet")); len(files) == 0 {
+				t.Error("no directory for weft/api/main")
+			}
+
+			db, err := sql.Open("duckdb", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			var n, parts, nulls int
+			q := "SELECT count(*), count(DISTINCT _part), count(*) FILTER (WHERE kind IS NULL) FROM " + ParquetReadExpr(dst, shape.Legacy())
+			if err := db.QueryRow(q).Scan(&n, &parts, &nulls); err != nil {
+				t.Fatal(err)
+			}
+			// Too little data to fill a file, so each key gets the widest bucket, a
+			// week from a Thursday; the rows, 7 hours apart over 35 hours from a
+			// Wednesday, cross one Thursday midnight.
+			if n != want || parts != 2 || nulls != perKey {
+				t.Errorf("converted archive: %d rows, %d week buckets, %d with no kind; want %d, 2, %d", n, parts, nulls, want, perKey)
+			}
+		})
+	}
+}
+
+// The cold shard answers a query the same way from either layout.
+func TestColdShard_KeyedAndTimeOnlyArchivesAnswerAlike(t *testing.T) {
+	ds := legacyShardWith(t, keyedFixture, 6)
+	_, plain, _ := exportTo(t, ds, 1440)
+	_, keyed, _ := exportSizedTo(t, ds, smallShardBytes)
+	if IsKeyed(plain) || !IsKeyed(keyed) {
+		t.Fatalf("layouts are %q and %q", plain, keyed)
+	}
+	ask := func(glob string) []string {
+		cs, err := NewColdShard("cold", nil, glob, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cs.Close()
+		rows, err := cs.Query(context.Background(),
+			"SELECT raw, ts FROM logs WHERE customer_id = CAST(? AS BIGINT) AND namespace = ? AND service = ? AND kind = ? ORDER BY ts",
+			"1", "weft", "api", "main")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.Raw)
+		}
+		return out
+	}
+	a, b := ask(plain), ask(keyed)
+	if len(a) != 6 || strings.Join(a, "\n") != strings.Join(b, "\n") {
+		t.Errorf("time-only archive returned %d rows, keyed %d:\n%v\n%v", len(a), len(b), a, b)
+	}
+}

@@ -1,0 +1,278 @@
+package api
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"fmt"
+	"net"
+	"sync"
+	"time"
+
+	weftsdk "github.com/w3ft-net/weft-go"
+
+	"google.golang.org/grpc/metadata"
+
+	"github.com/w3ft-net/weft/backends/source"
+	"github.com/w3ft-net/weft/backends/token"
+	"github.com/w3ft-net/weft/ingest"
+	ingsyslog "github.com/w3ft-net/weft/ingest/syslog"
+	pb "github.com/w3ft-net/weft/proto/weftpb"
+	"github.com/w3ft-net/weft/sources"
+)
+
+// syslogIdleTimeout closes a connection that goes this long without a
+// complete frame. Render doesn't document a keepalive cadence; this is
+// generous enough to tolerate a quiet service while still reclaiming a
+// half-open TCP connection (a dropped NLB target, a client that
+// vanished without a FIN) in bounded time. Reset on every frame, not
+// just at connect.
+const syslogIdleTimeout = 5 * time.Minute
+
+// syslogSampleRecheck is how long a connection waits before asking again
+// whether a service that wasn't collecting a schema sample has started
+// (a new service is only onboarded once the coordinator sees its first
+// row; a resample can be requested at any time).
+const syslogSampleRecheck = 10 * time.Second
+
+// SyslogServer is a TCP syslog listener for exactly one
+// ingest/syslog.Producer. TLS terminates upstream at the NLB, so this
+// only ever sees plaintext TCP. Producer identity comes from which port a connection
+// lands on, decided by the NLB listener before any bytes arrive — this
+// server never guesses. Auth, LF framing, and RFC5424 parsing are all
+// generic; Producer.MapFields is the only platform-specific step. A
+// second syslog-speaking platform gets its own SyslogServer instance on
+// its own port, not new code here.
+type SyslogServer struct {
+	sources     source.Store
+	kinds       *sources.Registry
+	tokens      token.Store
+	coordClient pb.WeftCoordinatorClient
+	producer    ingsyslog.StreamProducer
+	classifier  ingest.Classifier
+	port        int
+
+	mu    sync.Mutex
+	ln    net.Listener
+	conns map[net.Conn]struct{}
+	wg    sync.WaitGroup
+}
+
+// NewSyslogServer constructs a SyslogServer bound to one StreamProducer and
+// its port, reusing this Server's store and coordinator client. Call Start
+// to bind the listener and begin accepting connections.
+func (s *Server) NewSyslogServer(producer ingsyslog.StreamProducer) *SyslogServer {
+	return &SyslogServer{
+		sources:     s.sources,
+		kinds:       s.kindRules(),
+		tokens:      s.tokens,
+		coordClient: s.coordClient,
+		producer:    producer,
+		classifier:  s.classifier,
+		port:        producer.Port(),
+		conns:       make(map[net.Conn]struct{}),
+	}
+}
+
+// Start binds the listener and begins accepting connections in the
+// background, returning once the listener is bound so a caller (e.g.
+// cmd/api/main.go) can fail fast on a port conflict instead of
+// discovering it asynchronously. Close (or ctx cancellation) stops the
+// accept loop and drains in-flight connections.
+func (ss *SyslogServer) Start(ctx context.Context) error {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", ss.port))
+	if err != nil {
+		return fmt.Errorf("syslog[%s]: listen on :%d: %w", ss.producer.Name(), ss.port, err)
+	}
+	ss.ln = ln
+
+	go func() {
+		<-ctx.Done()
+		ss.Close()
+	}()
+
+	ss.wg.Add(1)
+	go ss.acceptLoop(ctx)
+	return nil
+}
+
+// Close stops accepting new connections and closes every connection
+// currently in flight — a graceful-drain step. A connection mid-frame
+// simply loses its next read; the rows already parsed from it were
+// already sent to the coordinator one frame at a time, so nothing
+// beyond the in-flight frame is lost. Blocks until every connection
+// goroutine has returned.
+func (ss *SyslogServer) Close() {
+	ss.mu.Lock()
+	if ss.ln != nil {
+		ss.ln.Close()
+	}
+	for c := range ss.conns {
+		c.Close()
+	}
+	ss.mu.Unlock()
+	ss.wg.Wait()
+}
+
+func (ss *SyslogServer) acceptLoop(ctx context.Context) {
+	defer ss.wg.Done()
+	for {
+		conn, err := ss.ln.Accept()
+		if err != nil {
+			return // listener closed via Close(), or a fatal accept error
+		}
+		ss.trackConn(conn, true)
+		ss.wg.Add(1)
+		go func() {
+			defer ss.wg.Done()
+			defer ss.trackConn(conn, false)
+			ss.handleConn(ctx, conn)
+		}()
+	}
+}
+
+func (ss *SyslogServer) trackConn(conn net.Conn, add bool) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if add {
+		ss.conns[conn] = struct{}{}
+	} else {
+		delete(ss.conns, conn)
+	}
+}
+
+// handleConn owns one Render (or other producer) connection end to
+// end: read the token off the first line, validate it, open one
+// coordinator IngestStream for the life of the connection, and forward
+// every frame that Producer.MapFields accepts. The wire shape this decodes is a
+// leading "TOKEN SP" on each line.
+func (ss *SyslogServer) handleConn(ctx context.Context, conn net.Conn) {
+	defer conn.Close()
+	name := ss.producer.Name()
+	remote := conn.RemoteAddr()
+	br := bufio.NewReaderSize(conn, 4096)
+
+	conn.SetReadDeadline(time.Now().Add(syslogIdleTimeout))
+	firstLine, err := br.ReadBytes('\n')
+	if len(firstLine) == 0 {
+		return // closed before sending anything
+	}
+	token, frame, err := ss.producer.Token(firstLine)
+	if err != nil {
+		weftsdk.Infof(ctx, "syslog[%s]: rejecting %s: %v", name, remote, err)
+		return
+	}
+
+	auth, err := ss.tokens.ValidateToken(token)
+	if err != nil {
+		weftsdk.Errorf(ctx, "syslog[%s]: token validation error from %s: %v", name, remote, err)
+		return
+	}
+	if auth == nil {
+		weftsdk.Infof(ctx, "syslog[%s]: rejecting %s: invalid or revoked token", name, remote)
+		return
+	}
+
+	// Same bearer token in gRPC metadata so the coordinator's own
+	// authenticateStream re-validates independently — this server's
+	// check is an extra gate, not a replacement for it.
+	streamCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	stream, err := ss.coordClient.IngestStream(streamCtx)
+	if err != nil {
+		weftsdk.Infof(ctx, "syslog[%s]: open ingest stream for %s: %v", name, auth.Namespace, err)
+		return
+	}
+
+	r := &syslogConnReader{
+		br:       br,
+		producer: ss.producer,
+		pending:  append(bytes.TrimRight(frame, "\r\n"), '\n'),
+	}
+	streamBroken := false
+	sampleRecheck := make(map[string]time.Time) // service → don't re-check sampling before this
+	ingsyslog.ParseStream(r, ingsyslog.NonTransparent, ingsyslog.DefaultMaxFrame, func(f ingsyslog.Frame, ferr error) {
+		if streamBroken {
+			return
+		}
+		// Any activity — including a frame that fails to parse — counts
+		// as liveness; only a truly silent connection should idle out.
+		conn.SetReadDeadline(time.Now().Add(syslogIdleTimeout))
+		if ferr != nil {
+			return // skip the bad frame, keep the connection — matches HerokuAdapter's tolerance
+		}
+		service, kind, instance, ok := ss.producer.MapFields(f)
+		if !ok {
+			return // e.g. Render's own connectivity-test ping
+		}
+		row := &pb.LogRow{
+			Service:  service,
+			Kind:     kind,
+			Instance: instance,
+			Raw:      f.Message,
+			TsUnixNs: f.Timestamp.UnixNano(),
+		}
+		// Same schema-based enrichment HTTP adapters get via
+		// IngestHandler (adapter.go's enrichRow/enrichRows) — without
+		// it, syslog-sourced rows would be Raw-only forever, the same
+		// gap Heroku had before that fix. Cache-aside against Valkey
+		// (store.FindLogGroupSchema) is what keeps this affordable per
+		// frame across a connection that can live for hours.
+		enrichRow(ctx, ss.sources, auth.Owner, auth.Namespace, row)
+		// Schema-bootstrap sample, same as the HTTP adapters get in
+		// IngestHandler. Per frame rather than per batch, so a service
+		// that isn't collecting one is only re-checked every
+		// syslogSampleRecheck instead of costing a lookup per line.
+		if until, ok := sampleRecheck[service]; !ok || time.Now().After(until) {
+			if accumulateSample(ctx, ss.sources, ss.kinds, ss.classifier, auth.Owner, auth.Namespace, service, []string{row.Raw}) {
+				delete(sampleRecheck, service)
+			} else {
+				sampleRecheck[service] = time.Now().Add(syslogSampleRecheck)
+			}
+		}
+		if err := stream.Send(row); err != nil {
+			weftsdk.Infof(ctx, "syslog[%s]: send row for %s: %v", name, auth.Namespace, err)
+			streamBroken = true
+			// Unblock the next br.Read so ParseStream returns promptly
+			// instead of waiting out the full idle timeout.
+			conn.Close()
+		}
+	})
+
+	if _, err := stream.CloseAndRecv(); err != nil && !streamBroken {
+		weftsdk.Infof(ctx, "syslog[%s]: close ingest stream for %s: %v", name, auth.Namespace, err)
+	}
+}
+
+// syslogConnReader turns a producer's "TOKEN SP <frame>\n" per-line
+// framing into plain "<frame>\n" framing so the shared
+// ingest/syslog.ParseStream (NonTransparent/LF mode) can be reused
+// unmodified. Render's wire capture confirmed the token repeats on
+// every line, not just the first.
+type syslogConnReader struct {
+	br       *bufio.Reader
+	producer ingsyslog.StreamProducer // splits the token off each line
+	pending  []byte                   // next bytes to hand out; primed with the first line's stripped body
+}
+
+func (r *syslogConnReader) Read(p []byte) (int, error) {
+	for len(r.pending) == 0 {
+		line, err := r.br.ReadBytes('\n')
+		if len(line) > 0 {
+			// A line the producer cannot split passes through whole, as a line
+			// without the prefix always did.
+			if _, frame, terr := r.producer.Token(line); terr == nil {
+				line = frame
+			}
+			r.pending = line
+		}
+		if err != nil {
+			if len(r.pending) == 0 {
+				return 0, err
+			}
+			break
+		}
+	}
+	n := copy(p, r.pending)
+	r.pending = r.pending[n:]
+	return n, nil
+}

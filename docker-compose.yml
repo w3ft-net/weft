@@ -1,0 +1,70 @@
+# The open-source stack: api, coordinator and compute, with shards launched by
+# the coordinator as sibling containers through the Docker socket. One SQLite
+# database, shared by api and coordinator on the weft-state volume. Used by the
+# end-to-end tests (e2e/).
+#
+#   docker compose up -d --build
+#   go test -tags e2e ./e2e/ -v
+name: weft-open
+
+x-weft: &weft
+  image: weft-open
+  pull_policy: never
+
+services:
+  compute:
+    <<: *weft
+    build:
+      context: ..
+      dockerfile: weft-core/Dockerfile
+    environment:
+      ROLE: compute
+      SHARD_SECRET: e2e-shard-secret
+
+  coordinator:
+    <<: *weft
+    environment:
+      ROLE: coordinator
+      DB_DSN: /var/lib/weft/weft.db
+      WEFT_BASIC_AUTH_USER: e2e
+      WEFT_BASIC_AUTH_PASSWORD: e2e-password
+      SHARD_SECRET: e2e-shard-secret
+      COMPUTE_ADDR: compute:9010
+      COORDINATOR_LOCAL_ADDR: 0.0.0.0:9025
+      # The Docker launcher: shards are sibling containers that bind-mount a
+      # per-shard directory of the host path, which the coordinator also sees
+      # at WEFT_LOCAL_DATA_ROOT.
+      WEFT_SHARD_IMAGE: weft-open
+      WEFT_DOCKER_NETWORK: weft-open_default
+      WEFT_HOST_DATA_ROOT: ${WEFT_HOST_DATA_ROOT:-${PWD}/.e2e/shard-data}
+      WEFT_LOCAL_DATA_ROOT: /opt/app/shard-data
+      WEFT_COORDINATOR_ADDR: coordinator:9026
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${WEFT_HOST_DATA_ROOT:-${PWD}/.e2e/shard-data}:/opt/app/shard-data
+      - weft-state:/var/lib/weft
+    ports:
+      - "19020:9020"
+      - "19021:9021"
+      - "19025:9025"
+    depends_on:
+      - compute
+
+  api:
+    <<: *weft
+    environment:
+      ROLE: api
+      DB_DSN: /var/lib/weft/weft.db
+      COORDINATOR_ADDR: coordinator:9025
+      WEFT_BASIC_AUTH_USER: e2e
+      WEFT_BASIC_AUTH_PASSWORD: e2e-password
+    volumes:
+      - weft-state:/var/lib/weft
+    ports:
+      - "18080:8080"
+    depends_on:
+      - coordinator
+    restart: on-failure
+
+volumes:
+  weft-state:

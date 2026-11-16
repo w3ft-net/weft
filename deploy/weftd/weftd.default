@@ -1,0 +1,25 @@
+# /etc/default/weftd — optional environment for the weftd log agent.
+#
+# weftd is configured by the YAML file you author at
+# /etc/weftd/config.yaml (start from /etc/weftd/config.yaml.example).
+# That file is the single source of truth for endpoint, sources, kinds,
+# metavariables, metrics — everything. This package never generates or
+# overwrites it.
+#
+# The ONLY thing this file is for is the auth token, as a credential
+# chain: if WEFTD_TOKEN is set here it overrides the `token:` in the
+# config file (AWS-shaped — env wins, file is the fallback). Use this
+# when a secret injector / config management supplies the token out of
+# band and you don't want it written into the YAML. If you put the
+# token in config.yaml, leave this unset and you can ignore this file.
+#
+# Nothing structural belongs here — there are deliberately no
+# WEFTD_APP / WEFTD_LOG_PATH / WEFTD_* knobs anymore; author the YAML.
+#
+# NOTE: the WEFTD_ prefix is intentional. Hosts that also run the weft
+# coordinator use unprefixed admin vars (DB_DSN, SHARD_ASG_SMALL, …);
+# keeping the agent token under WEFTD_ avoids collisions.
+
+# Agent auth token issued by weft. Overrides `token:` in
+# /etc/weftd/config.yaml when set. Leave unset to use the file's token.
+#WEFTD_TOKEN=

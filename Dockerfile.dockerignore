@@ -1,0 +1,9 @@
+# The context is the parent directory: keep only warp and weft-core.
+*
+!warp
+!weft-core
+**/.git
+**/node_modules
+**/*.db
+**/*.db-*
+weft-core/.e2e
