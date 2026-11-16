@@ -36,60 +36,6 @@ type ExportConfig struct {
 	Keyed    bool   // split a partitioned archive by log key too (see IsKeyed)
 }
 
-// ExportManifest is the completion record an export writes to the archive
-// prefix. Attempt lets the coordinator ignore a stale manifest left by an
-// earlier attempt.
-type ExportManifest struct {
-	ShardID     string `json:"shard_id"`
-	Attempt     int    `json:"attempt"`
-	ParquetPath string `json:"parquet_path"`
-	Rows        int64  `json:"rows"`
-	DBBytes     int64  `json:"db_bytes"`
-	// Partitions keeps the JSON key "customers" the previous build reads and
-	// wrote: an export's manifest crosses the coordinator, which may be of
-	// either build.
-	Partitions []PartitionStat `json:"customers"`
-	Started    time.Time       `json:"started"`
-	Finished   time.Time       `json:"finished"`
-}
-
-// ManifestStore persists a manifest at key (as produced by ManifestKey).
-type ManifestStore interface {
-	Put(ctx context.Context, key string, m ExportManifest) error
-}
-
-// ManifestReader is the coordinator's side: it polls for the manifest an export
-// wrote. found is false (with a nil error) when no manifest exists yet; an
-// unreadable or corrupt manifest is an error, never "not found".
-type ManifestReader interface {
-	Get(ctx context.Context, key string) (m ExportManifest, found bool, err error)
-}
-
-// ExportOutputSuffix names one attempt's output: the export writes
-// <prefix>/<shard-id>.attempt-N[.parquet], never into the location a failed
-// attempt used. DuckDB's OVERWRITE_OR_IGNORE only replaces same-named files, so
-// a retry that shared a directory with a partial earlier attempt would leave the
-// old files in place and the archive glob would read both (rows double-count).
-func ExportOutputSuffix(attempt int) string {
-	return fmt.Sprintf(".attempt-%d", attempt)
-}
-
-// ExportOutputPaths lists the delete targets for one attempt's output: the
-// hive-partitioned directory form and the single-file form, in the shapes
-// logdb.ObjectDeleter takes. They are exact (the directory ends in a slash
-// before its glob, the file in .parquet), so attempt 1 can never match
-// attempt 10.
-func ExportOutputPaths(prefix, shardID string, attempt int) []string {
-	base := strings.TrimRight(prefix, "/") + "/" + shardID + ExportOutputSuffix(attempt)
-	return []string{base + "/**/*.parquet", base + ".parquet"}
-}
-
-// ManifestKey is where a shard's export manifest lives under the archive
-// prefix. The coordinator derives the same key to poll for completion.
-func ManifestKey(prefix, shardID string) string {
-	return strings.TrimRight(prefix, "/") + "/_manifests/" + shardID + ".json"
-}
-
 // OpenForExport opens an existing shard database for export without touching
 // its schema: no table creation, no migrations. It refuses a missing file or a
 // database without a logs table, because a mis-mounted or empty volume must

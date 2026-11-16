@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/w3ft-net/weft/backends/logs/archive/parquet"
 	"github.com/w3ft-net/weft/shape"
 )
 
@@ -127,7 +128,7 @@ func createKeyWidths(ctx context.Context, conn *sql.Conn, src string, layout sha
 	}
 	for _, s := range keys {
 		est := int64(float64(estParquetBytes) * float64(s.bytes) / float64(total))
-		args := append(s.key, pickWidth(est, s.hi.Sub(s.lo)))
+		args := append(s.key, parquet.PickWidth(est, s.hi.Sub(s.lo)))
 		if _, err := conn.ExecContext(ctx, `INSERT INTO key_widths VALUES (`+marks+`?, ?, ?, ?)`, args...); err != nil {
 			return fmt.Errorf("record key width: %w", err)
 		}

@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	weftsdk "github.com/w3ft-net/weft-go"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 )
 
 // ErrArchiveInFlight is returned by Archive when another attempt is still

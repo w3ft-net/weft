@@ -12,31 +12,6 @@ import (
 	"github.com/w3ft-net/weft/shape"
 )
 
-func TestPartitionMinutes_ReadsTheWidthFromTheArchiveGlob(t *testing.T) {
-	cases := []struct {
-		path string
-		want int
-		ok   bool
-	}{
-		{"s3://b/40-apps/shard-1.attempt-1/m180/**/*.parquet", 180, true},
-		{"s3://b/40-apps/shard-1.attempt-12/m1/**/*.parquet", 1, true},
-		{"/var/archive/shard-1.attempt-1/m594/**/*.parquet", 594, true},
-		// Archives made before the width was recorded.
-		{"s3://b/40-apps/shard-20261012T0000-93dc471d.attempt-1/**/*.parquet", 0, false},
-		{"s3://b/40-apps/shard-1.attempt-1.parquet", 0, false},
-		{"s3://b/40-apps/shard-1.r1793000000.parquet", 0, false},
-		// A directory that merely starts with m is not a width.
-		{"s3://b/m180x/**/*.parquet", 0, false},
-		{"s3://b/m0/**/*.parquet", 0, false},
-	}
-	for _, c := range cases {
-		got, ok := PartitionMinutes(c.path)
-		if got != c.want || ok != c.ok {
-			t.Errorf("PartitionMinutes(%q) = %d, %v; want %d, %v", c.path, got, ok, c.want, c.ok)
-		}
-	}
-}
-
 // The reader works out which partition holds a timestamp itself, so it has to
 // agree with the bucket DuckDB writes. This pins the writer's expression and
 // the reader's arithmetic to each other across widths that don't divide an
@@ -61,32 +36,6 @@ func TestBucketStart_MatchesWhatTheExportWrites(t *testing.T) {
 			if want := BucketStart(ts, minutes); !got.Equal(want) {
 				t.Fatalf("width %d, ts %s: export puts it in %s, BucketStart says %s", minutes, ts, got, want)
 			}
-		}
-	}
-}
-
-func TestChoosePartitionMinutes(t *testing.T) {
-	const week = 7 * 24 * time.Hour
-	cases := []struct {
-		name  string
-		bytes int64
-		span  time.Duration
-		want  int
-	}{
-		{"fits one file", 80 << 20, week, 0},
-		{"just under the single-file limit", 99 << 20, week, 0},
-		// 100 MiB is 6 files of 16 MiB: 1680-minute buckets over a week.
-		{"just over it", 100 << 20, week, 1680},
-		// 2.67 GB of parquet is 159 files (the count floors): 64-minute buckets.
-		{"a shard that used to get one-day files", 2_673_000_000, week, 64},
-		// 2.9 GB is 172 files: 59-minute buckets.
-		{"a shard that used to get hourly files", 2_900_000_000, week, 59},
-		{"never narrower than a minute", 50 << 30, 10 * time.Minute, 1},
-		{"no time span", 2 << 30, 0, 0},
-	}
-	for _, c := range cases {
-		if got := choosePartitionMinutes(c.bytes, c.span); got != c.want {
-			t.Errorf("%s: choosePartitionMinutes(%d, %s) = %d, want %d", c.name, c.bytes, c.span, got, c.want)
 		}
 	}
 }

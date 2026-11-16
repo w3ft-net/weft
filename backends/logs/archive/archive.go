@@ -7,34 +7,17 @@
 // the ID it was written with, and a query finds its reader through Router with
 // one lookup. See docs/plans/pluggable-log-storage.md.
 //
-// The interfaces below hold only what routing and startup validation use. The
-// rest (a format's layout and pruning, a reader's dialect and execution) joins
-// them as the code that has it moves behind them.
+// The package is the contract and the routing, and knows no format. A format is
+// an implementation in its own package (parquet is the open build's), which a
+// build's main registers. The interfaces below hold only what routing and startup
+// validation use; a reader's dialect and execution join them with phase 4.
 package archive
 
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
-	"strings"
-)
-
-// The IDs of the formats written before manifests recorded one. All are
-// Parquet; they differ in how the archive is split into files (see FormatOf).
-const (
-	// FormatFile is one Parquet file.
-	FormatFile = "parquet-file-v1"
-	// FormatTime is hive-partitioned by time bucket: m<minutes>, or no width
-	// segment for archives made before the width was recorded.
-	FormatTime = "parquet-time-v1"
-	// FormatKeyed is hive-partitioned by log key with one bucket width for every
-	// key (k<minutes>). Still read; no longer written.
-	FormatKeyed = "parquet-keyed-v1"
-	// FormatSized is hive-partitioned by log key, each key with a bucket width
-	// of its own.
-	FormatSized = "parquet-sized-v1"
 )
 
 // Default is the key of Config.Readers that serves every format ID with no
@@ -46,15 +29,22 @@ type Manifest struct {
 	// FormatID is the format the archive was written in. Empty on an archive
 	// written before manifests recorded one.
 	FormatID string
-	// Path is where the archive is: one .parquet file, or a glob ending in
-	// /**/*.parquet.
+	// Path is where the archive is, as the store that wrote it reported it. For an
+	// archive with no recorded format ID it is also how the format is found
+	// (Registry.FormatOf).
 	Path string
 }
 
-// Format is how an archive is laid out in storage. It is data, with no SQL: the
-// reader renders the query over it.
+// Format is how an archive is laid out in storage. It is data, with no SQL and no
+// pruning: the reader renders the query over it, and which partitions it opens is
+// its own business.
 type Format interface {
+	// ID is the stable name a manifest and the configuration know it by.
 	ID() string
+	// Recognizes reports whether path names an archive in this format. It is how
+	// an archive written before manifests recorded an ID says what it is, so two
+	// formats never recognize the same path.
+	Recognizes(path string) bool
 }
 
 // Archiver writes archives. A live store supplies its own, since exporting rows
@@ -68,31 +58,6 @@ type Archiver interface {
 type Reader interface {
 	// Reads lists the format IDs it can query.
 	Reads() []string
-}
-
-var (
-	sizedPath = regexp.MustCompile(`/sized/\*\*/\*\.parquet$`)
-	keyedPath = regexp.MustCompile(`/k[1-9][0-9]*/\*\*/\*\.parquet$`)
-)
-
-// FormatOf is the format ID of an archive. A manifest that records one gives it;
-// an older manifest's is told by the path, which is how every archive written
-// before IDs says what it is.
-func FormatOf(m Manifest) (string, error) {
-	if m.FormatID != "" {
-		return m.FormatID, nil
-	}
-	switch {
-	case sizedPath.MatchString(m.Path):
-		return FormatSized, nil
-	case keyedPath.MatchString(m.Path):
-		return FormatKeyed, nil
-	case strings.HasSuffix(m.Path, "/**/*.parquet"):
-		return FormatTime, nil
-	case strings.HasSuffix(m.Path, ".parquet") && !strings.Contains(m.Path, "*"):
-		return FormatFile, nil
-	}
-	return "", fmt.Errorf("archive: %q has no format ID and its path is of no known layout", m.Path)
 }
 
 // Config is the deployment's archive settings.
@@ -131,6 +96,29 @@ func (r *Registry) AddFormat(f Format) error {
 	return nil
 }
 
+// FormatOf is the ID of the format an archive was written in. A manifest that
+// records one gives it; an older manifest's is told by its path: the one
+// registered format that recognizes it.
+func (r *Registry) FormatOf(m Manifest) (string, error) {
+	if m.FormatID != "" {
+		return m.FormatID, nil
+	}
+	var ids []string
+	for id, f := range r.formats {
+		if f.Recognizes(m.Path) {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	switch len(ids) {
+	case 1:
+		return ids[0], nil
+	case 0:
+		return "", fmt.Errorf("archive: %q has no format ID and no registered format recognizes its path", m.Path)
+	}
+	return "", fmt.Errorf("archive: %q has no format ID and %v all recognize its path", m.Path, ids)
+}
+
 // AddReader registers a reader under a name.
 func (r *Registry) AddReader(name string, rd Reader) error {
 	switch {
@@ -145,6 +133,7 @@ func (r *Registry) AddReader(name string, rd Reader) error {
 
 // Router finds the reader of an archive.
 type Router struct {
+	reg      *Registry
 	readers  map[string]Reader // by format ID, explicit entries
 	dflt     Reader            // nil if the Config names none
 	dfltName string
@@ -162,7 +151,7 @@ func (r *Registry) Route(cfg Config, a Archiver) (*Router, error) {
 	if !slices.Contains(a.Writes(), cfg.Format) {
 		return nil, fmt.Errorf("archive: the archiver does not write format %q", cfg.Format)
 	}
-	rt := &Router{readers: map[string]Reader{}, names: map[string]string{}}
+	rt := &Router{reg: r, readers: map[string]Reader{}, names: map[string]string{}}
 	// Sorted, so the same bad config reports the same error every start.
 	ids := make([]string, 0, len(cfg.Readers))
 	for id := range cfg.Readers {
@@ -194,7 +183,7 @@ func (r *Registry) Route(cfg Config, a Archiver) (*Router, error) {
 // reader is configured for, or whose default reader does not read its format:
 // the query fails, it never guesses.
 func (rt *Router) Reader(m Manifest) (Reader, error) {
-	id, err := FormatOf(m)
+	id, err := rt.reg.FormatOf(m)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +210,7 @@ func (rt *Router) Check(ms []Manifest) error {
 	var errs []error
 	seen := map[string]bool{}
 	for _, m := range ms {
-		id, err := FormatOf(m)
+		id, err := rt.reg.FormatOf(m)
 		if err != nil {
 			errs = append(errs, err)
 			continue

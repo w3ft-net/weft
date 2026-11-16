@@ -20,6 +20,7 @@ import (
 	duckdb "github.com/duckdb/duckdb-go/v2"
 	"github.com/google/uuid"
 
+	"github.com/w3ft-net/weft/backends/logs/archive/parquet"
 	"github.com/w3ft-net/weft/backends/logs/live"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shape"
@@ -1074,8 +1075,8 @@ func (s *DuckDBShard) planPartitions(ctx context.Context) (partitionPlan, error)
 		p.dbBytes = count * 500 // rough DuckDB row size to approximate
 	}
 
-	p.estParquetBytes = int64(float64(p.dbBytes) * parquetToDBRatio)
-	p.targetFiles = p.estParquetBytes / targetFileBytes
+	p.estParquetBytes = int64(float64(p.dbBytes) * parquet.ParquetToDBRatio)
+	p.targetFiles = p.estParquetBytes / parquet.TargetFileBytes
 	if p.estParquetBytes < 100*1024*1024 || p.targetFiles < 2 {
 		return p, nil // fits a single file
 	}
@@ -1084,7 +1085,7 @@ func (s *DuckDBShard) planPartitions(ctx context.Context) (partitionPlan, error)
 	if err := s.db.QueryRowContext(ctx, "SELECT MIN(ts), MAX(ts) FROM "+s.source()).Scan(&tsMin, &tsMax); err != nil {
 		return p, err
 	}
-	p.minutes = choosePartitionMinutes(p.estParquetBytes, tsMax.Sub(tsMin))
+	p.minutes = parquet.ChoosePartitionMinutes(p.estParquetBytes, tsMax.Sub(tsMin))
 	return p, nil
 }
 
@@ -1119,7 +1120,7 @@ func (s *DuckDBShard) exportParquet(ctx context.Context, path string, minutes in
 // exportKeyedParquet writes the shard as a sized archive under path/sized/ (see
 // IsSized): split by (customer, namespace, service, kind), and within each key by
 // time buckets of a width chosen for that key so its files come out near
-// targetFileBytes, given estParquetBytes for the whole shard. Returns the glob
+// parquet.TargetFileBytes, given estParquetBytes for the whole shard. Returns the glob
 // and the number of rows written.
 //
 // The rows are not sorted, but the write is told to keep every partition's file

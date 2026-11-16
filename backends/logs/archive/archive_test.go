@@ -5,12 +5,13 @@ import (
 	"testing"
 
 	"github.com/w3ft-net/weft/backends/logs/archive"
-	"github.com/w3ft-net/weft/shard"
 )
 
+// format is a format whose archives' paths end in its own ID.
 type format string
 
-func (f format) ID() string { return string(f) }
+func (f format) ID() string                  { return string(f) }
+func (f format) Recognizes(path string) bool { return strings.HasSuffix(path, "."+string(f)) }
 
 type archiver []string
 
@@ -19,61 +20,6 @@ func (a archiver) Writes() []string { return a }
 type reader []string
 
 func (r reader) Reads() []string { return r }
-
-func TestFormatOf_TellsAnOlderManifestByItsPath(t *testing.T) {
-	const prefix = "s3://b/apps/shard1.attempt-1"
-	for _, c := range []struct {
-		path, want string
-	}{
-		{prefix + "/sized/**/*.parquet", archive.FormatSized},
-		{prefix + "/k30/**/*.parquet", archive.FormatKeyed},
-		{prefix + "/m60/**/*.parquet", archive.FormatTime},
-		{prefix + "/**/*.parquet", archive.FormatTime}, // before the width was recorded
-		{"s3://b/apps/shard1.parquet", archive.FormatFile},
-	} {
-		got, err := archive.FormatOf(archive.Manifest{Path: c.path})
-		if err != nil || got != c.want {
-			t.Errorf("FormatOf(%q) = %q, %v; want %q", c.path, got, err, c.want)
-		}
-	}
-}
-
-func TestFormatOf_RecordedIDWinsOverPath(t *testing.T) {
-	got, err := archive.FormatOf(archive.Manifest{FormatID: "x-v2", Path: "a/sized/**/*.parquet"})
-	if err != nil || got != "x-v2" {
-		t.Fatalf("got %q, %v", got, err)
-	}
-}
-
-func TestFormatOf_RefusesAPathOfNoKnownLayout(t *testing.T) {
-	for _, p := range []string{"", "s3://b/apps/shard1.csv", "s3://b/apps/*.parquet", "s3://b/apps/shard1"} {
-		if id, err := archive.FormatOf(archive.Manifest{Path: p}); err == nil {
-			t.Errorf("FormatOf(%q) = %q, want an error", p, id)
-		}
-	}
-}
-
-// The path rules are the ones the shard package writes and reads by; the two
-// must not drift.
-func TestFormatOf_AgreesWithTheShardPackage(t *testing.T) {
-	for _, p := range []string{
-		"s3://b/a.attempt-1/sized/**/*.parquet",
-		"s3://b/a.attempt-1/k30/**/*.parquet",
-		"s3://b/a.attempt-1/m30/**/*.parquet",
-		"s3://b/a.attempt-1/**/*.parquet",
-	} {
-		id, err := archive.FormatOf(archive.Manifest{Path: p})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got, want := id == archive.FormatSized, shard.IsSized(p); got != want {
-			t.Errorf("%s: sized = %v, shard.IsSized = %v", p, got, want)
-		}
-		if got, want := id == archive.FormatSized || id == archive.FormatKeyed, shard.IsKeyed(p); got != want {
-			t.Errorf("%s: keyed = %v, shard.IsKeyed = %v", p, got, want)
-		}
-	}
-}
 
 func newRegistry(t *testing.T, formats []string, readers map[string]reader) *archive.Registry {
 	t.Helper()
@@ -89,6 +35,50 @@ func newRegistry(t *testing.T, formats []string, readers map[string]reader) *arc
 		}
 	}
 	return r
+}
+
+func TestFormatOf_ARecordedIDWinsOverThePath(t *testing.T) {
+	r := newRegistry(t, []string{"a"}, nil)
+	got, err := r.FormatOf(archive.Manifest{FormatID: "x-v2", Path: "s3://b/arch.a"})
+	if err != nil || got != "x-v2" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+// An older manifest says what it is by its path: the one registered format that
+// recognizes it.
+func TestFormatOf_TellsAnOlderManifestByItsPath(t *testing.T) {
+	r := newRegistry(t, []string{"a", "b"}, nil)
+	for path, want := range map[string]string{"s3://x/one.a": "a", "s3://x/two.b": "b"} {
+		got, err := r.FormatOf(archive.Manifest{Path: path})
+		if err != nil || got != want {
+			t.Errorf("FormatOf(%q) = %q, %v; want %q", path, got, err, want)
+		}
+	}
+}
+
+func TestFormatOf_RefusesAPathNoFormatOrSeveralFormatsRecognize(t *testing.T) {
+	r := archive.NewRegistry()
+	for _, f := range []archive.Format{format("a"), format("b"), overlapping{"c", "b"}} {
+		if err := r.AddFormat(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if id, err := r.FormatOf(archive.Manifest{Path: "s3://x/none.zzz"}); err == nil || !strings.Contains(err.Error(), "no registered format") {
+		t.Errorf("a path nothing recognizes = %q, %v", id, err)
+	}
+	if id, err := r.FormatOf(archive.Manifest{Path: "s3://x/shared.b"}); err == nil || !strings.Contains(err.Error(), "all recognize") {
+		t.Errorf("a path two formats recognize = %q, %v", id, err)
+	}
+}
+
+// overlapping is a format that recognizes another's paths too, as two formats
+// must never do.
+type overlapping struct{ id, also string }
+
+func (o overlapping) ID() string { return o.id }
+func (o overlapping) Recognizes(path string) bool {
+	return strings.HasSuffix(path, "."+o.id) || strings.HasSuffix(path, "."+o.also)
 }
 
 func TestRegistry_RefusesBadRegistrations(t *testing.T) {
@@ -177,32 +167,32 @@ func TestRouter_DefaultNeverGuesses(t *testing.T) {
 }
 
 func TestRouter_ReaderResolvesAnOlderManifestThroughTheSameTable(t *testing.T) {
-	r := newRegistry(t, []string{archive.FormatSized}, map[string]reader{"d": {archive.FormatSized}})
-	rt, err := r.Route(archive.Config{Format: archive.FormatSized, Readers: map[string]string{archive.FormatSized: "d"}}, archiver{archive.FormatSized})
+	r := newRegistry(t, []string{"a", "b"}, map[string]reader{"d": {"a"}})
+	rt, err := r.Route(archive.Config{Format: "a", Readers: map[string]string{"a": "d"}}, archiver{"a"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.Reader(archive.Manifest{Path: "s3://b/a.attempt-1/sized/**/*.parquet"}); err != nil {
+	if _, err := rt.Reader(archive.Manifest{Path: "s3://b/arch.a"}); err != nil {
 		t.Fatalf("a manifest with no ID: %v", err)
 	}
-	// An archive in the older single-file layout has no reader configured.
-	if _, err := rt.Reader(archive.Manifest{Path: "s3://b/a.parquet"}); err == nil {
-		t.Fatal("a single-file archive found a reader")
+	// An archive in another format has no reader configured.
+	if _, err := rt.Reader(archive.Manifest{Path: "s3://b/arch.b"}); err == nil {
+		t.Fatal("an archive in a format with no reader found one")
 	}
 }
 
 func TestRouter_CheckNamesEveryUnroutableArchive(t *testing.T) {
-	r := newRegistry(t, []string{archive.FormatSized}, map[string]reader{"d": {archive.FormatSized}})
-	rt, err := r.Route(archive.Config{Format: archive.FormatSized, Readers: map[string]string{archive.FormatSized: "d"}}, archiver{archive.FormatSized})
+	r := newRegistry(t, []string{"a", "b"}, map[string]reader{"d": {"a"}})
+	rt, err := r.Route(archive.Config{Format: "a", Readers: map[string]string{"a": "d"}}, archiver{"a"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ok := []archive.Manifest{{Path: "s3://b/a.attempt-1/sized/**/*.parquet"}, {FormatID: archive.FormatSized}}
+	ok := []archive.Manifest{{Path: "s3://b/arch.a"}, {FormatID: "a"}}
 	if err := rt.Check(ok); err != nil {
 		t.Fatal(err)
 	}
-	err = rt.Check(append(ok, archive.Manifest{Path: "s3://b/old.parquet"}, archive.Manifest{Path: "s3://b/odd.csv"}))
-	if err == nil || !strings.Contains(err.Error(), archive.FormatFile) || !strings.Contains(err.Error(), "odd.csv") {
-		t.Fatalf("err = %v, want both the file-format archive and the unknown path named", err)
+	err = rt.Check(append(ok, archive.Manifest{Path: "s3://b/old.b"}, archive.Manifest{Path: "s3://b/odd.csv"}))
+	if err == nil || !strings.Contains(err.Error(), `"b"`) || !strings.Contains(err.Error(), "odd.csv") {
+		t.Fatalf("err = %v, want both the archive in the unread format and the unknown path named", err)
 	}
 }
