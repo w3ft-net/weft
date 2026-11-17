@@ -10,7 +10,7 @@ package theme
 import "github.com/graybeardcorp/warp/pkg/syntax"
 
 // Palette is weft's syntax-highlighting theme, derived from the startup
-// logo (warp's pkg/shellcore/logo.go). The logo interlaces two thread
+// logo (logo.go in this package). The logo interlaces two thread
 // families in 256-color ANSI:
 //
 //	warp threads (cool blues/indigos): 33 69 39 63 75 27 68 105 32 74
