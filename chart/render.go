@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
-	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
 	"github.com/itchyny/timefmt-go"
+	"github.com/w3ft-net/weft/chart/termchart"
 )
 
 // RenderFromStream renders a pipe-stage chart from the upstream
@@ -27,11 +27,11 @@ func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) 
 		if errMsg != "" {
 			return "", errMsg
 		}
-		b := chart.Line(w, h).XRange(plot.XMin, plot.XMax)
+		b := termchart.Line(w, h).XRange(plot.XMin, plot.XMax)
 		if len(plot.Series) > 1 || plot.Series[0].Tag != "" {
-			series := make([]chart.NamedSeries, 0, len(plot.Series))
+			series := make([]termchart.NamedSeries, 0, len(plot.Series))
 			for _, s := range plot.Series {
-				series = append(series, chart.NamedSeries{Label: s.Tag, Points: chartPoints(s.Points)})
+				series = append(series, termchart.NamedSeries{Label: s.Tag, Points: chartPoints(s.Points)})
 			}
 			return renderLine(b.Series(series), args, plot.TimeX)
 		}
@@ -52,7 +52,7 @@ func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) 
 	}
 	slots := w
 	if args.Kind == "bar" {
-		slots = chart.BarSlots(w)
+		slots = termchart.BarSlots(w)
 	}
 	pts, per := fitPoints(groups, ordered, args.Aggregate, slots)
 	values := make([]float64, 0, len(pts))
@@ -60,7 +60,7 @@ func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) 
 		values = append(values, p.Y)
 	}
 	if args.Kind == "sparkline" {
-		return chart.Sparkline(values) + "\n", ""
+		return termchart.Sparkline(values) + "\n", ""
 	}
 
 	labels := make([]string, 0, len(pts))
@@ -76,7 +76,7 @@ func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) 
 		footer = fmt.Sprintf("\x1b[2m%d points → %d bars, %d per bar (%s)\x1b[0m\n", len(ordered), len(pts), per, agg)
 		h--
 	}
-	b := chart.Bar(w, h).BarValues(labels, values)
+	b := termchart.Bar(w, h).BarValues(labels, values)
 	if args.Title != "" {
 		b = b.Title(args.Title)
 	}
@@ -87,15 +87,15 @@ func RenderFromStream(lines []string, args PipeArgs, w, h int) (string, string) 
 	return out + footer, ""
 }
 
-func chartPoints(pts []PlotPoint) []chart.Point {
-	out := make([]chart.Point, len(pts))
+func chartPoints(pts []PlotPoint) []termchart.Point {
+	out := make([]termchart.Point, len(pts))
 	for i, p := range pts {
-		out[i] = chart.Point{X: p.X, Y: p.Y}
+		out[i] = termchart.Point{X: p.X, Y: p.Y}
 	}
 	return out
 }
 
-func renderLine(b *chart.Builder, args PipeArgs, timeX bool) (string, string) {
+func renderLine(b *termchart.Builder, args PipeArgs, timeX bool) (string, string) {
 	if args.Title != "" {
 		b = b.Title(args.Title)
 	}

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore/chart"
+	"github.com/w3ft-net/weft/chart/termchart"
 	"github.com/w3ft-net/weft/timerange"
 )
 
@@ -277,7 +277,7 @@ func RenderCronTitled(name string, series CronSeries, args WatchArgs, title stri
 			if labelW > 0 {
 				fmt.Fprintf(&b, "%-*s", labelW, lineLabel(l.tag, len(lines)))
 			}
-			b.WriteString(chart.Sparkline(values))
+			b.WriteString(termchart.Sparkline(values))
 			b.WriteByte('\n')
 		}
 		return b.String(), ""
@@ -285,7 +285,7 @@ func RenderCronTitled(name string, series CronSeries, args WatchArgs, title stri
 		if len(lines) > 1 {
 			return "", BarTaggedMsg(name, len(lines))
 		}
-		fitted, per := fitAccs(lines[0].accs, chart.BarSlots(w))
+		fitted, per := fitAccs(lines[0].accs, termchart.BarSlots(w))
 		labels := make([]string, len(fitted))
 		values := make([]float64, len(fitted))
 		for i, a := range fitted {
@@ -297,23 +297,23 @@ func RenderCronTitled(name string, series CronSeries, args WatchArgs, title stri
 			footer = fmt.Sprintf("\x1b[2m%d points → %d bars, %d per bar (%s)\x1b[0m\n", len(lines[0].accs), len(fitted), per, args.Aggregate)
 			h--
 		}
-		out, err := chart.Bar(w, h).Title(title).BarValues(labels, values).Render()
+		out, err := termchart.Bar(w, h).Title(title).BarValues(labels, values).Render()
 		if err != nil {
 			return "", err.Error()
 		}
 		return out + footer, ""
 	default: // line
 		plot, _ := CronPlot(series, args)
-		b := chart.Line(w, h).Title(title).XAxisTime().XRange(plot.XMin, plot.XMax)
+		b := termchart.Line(w, h).Title(title).XAxisTime().XRange(plot.XMin, plot.XMax)
 		if series.Alert != nil {
-			b = b.YThreshold(series.Alert.Threshold, chart.SeverityCrit)
+			b = b.YThreshold(series.Alert.Threshold, termchart.SeverityCrit)
 		}
 		if len(plot.Series) == 1 {
 			b = b.Points(chartPoints(plot.Series[0].Points))
 		} else {
-			named := make([]chart.NamedSeries, len(plot.Series))
+			named := make([]termchart.NamedSeries, len(plot.Series))
 			for i, s := range plot.Series {
-				named[i] = chart.NamedSeries{Label: s.Tag, Points: chartPoints(s.Points)}
+				named[i] = termchart.NamedSeries{Label: s.Tag, Points: chartPoints(s.Points)}
 			}
 			b = b.Series(named)
 		}
