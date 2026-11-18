@@ -1,49 +1,66 @@
 package spanview
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/w3ft-net/weft/tracecmd"
 )
 
-// Builtin returns a shellcore.BuiltinFunc that intercepts two typed
-// shapes before they'd otherwise dispatch as a normal query pipeline,
-// entering the SpanView instead:
+// Command returns the `trace` command for the two typed shapes that enter the
+// SpanView:
 //
 //   - `trace --spans --id <id>`            — one request's breakdown
 //   - `trace --spans [--name <span>]`      — every span name aggregated
 //     over the current time range
 //
 // either optionally followed by a <namespace>[/<service>] scope. Any other
-// line returns false so it falls through to the shell's normal pipeline
-// dispatch unchanged: see ParseSpansLine for which, and how the CLI then
-// renders them.
+// shape is not the View's: it belongs to the server (see ParseSpansLine for
+// which, and how the CLI then renders them). Which lines reach this command is
+// decided by the shell's remote hook, not here: the embedder registers
+// Claims for "trace" so the other shapes are shipped before this could run.
+// Run directly, the command refuses them.
 //
-// Wire it via core.RegisterBuiltin("trace", spanview.Builtin(query)).
-func Builtin(query QueryFunc) shellcore.BuiltinFunc {
-	return func(c *shellcore.ShellCore, parts []string) bool {
-		listArgs, ok := ParseSpansLine(parts)
+// The View is entered on the event loop and outlives the run.
+//
+// Wire it via Register, or core.RegisterCommand("trace", spanview.Command(query)).
+func Command(query QueryFunc) func(cx *shellcore.Cmd) int {
+	return func(cx *shellcore.Cmd) int {
+		listArgs, ok := ParseSpansLine(append([]string{"trace"}, cx.Args...))
 		if !ok {
-			return false
+			fmt.Fprintln(cx.Stderr, shellcore.ErrorText("trace: not a span view: trace "+strings.Join(cx.Args, " ")))
+			return 1
 		}
 		listArgs.Query = query
-		if err := c.EnterView(viewName, listArgs); err != nil {
-			c.AppendScrollback(shellcore.ErrorText("span: "+err.Error()) + "\n")
+		if err := cx.OnLoop(func(c *shellcore.ShellCore) error { return c.EnterView(viewName, listArgs) }); err != nil {
+			fmt.Fprintln(cx.Stderr, shellcore.ErrorText("span: "+err.Error()))
+			return 1
 		}
-		return true
+		return 0
 	}
 }
 
-// ParseSpansLine reports whether parts (a builtin dispatch's
-// whitespace-split command line) is one of the two shapes Builtin enters
-// the SpanView for, returning the pipeline to run and the status-bar
-// title. Any other shape — the recent-traces list, one request's lines,
-// the `--samples` list, a piped line (shellcore hands the whole line's
-// fields here, so a literal "|" token fails the scope check), or a grammar
-// error — returns ok=false.
+// Claims reports whether a `trace` line with these arguments (without the
+// word itself) is one the SpanView enters. An embedder whose lines are shipped
+// to a server registers it as the claim predicate for "trace", so every other
+// shape (the recent-traces list, one request's lines, the `--samples` list, a
+// grammar error) still goes to the server unchanged.
+func Claims(args []string) bool {
+	_, ok := ParseSpansLine(append([]string{"trace"}, args...))
+	return ok
+}
+
+// ParseSpansLine reports whether parts (a command line split into words, with
+// parts[0] == "trace") is one of the two shapes Command enters the SpanView
+// for, returning the pipeline to run and the status-bar title. Any other
+// shape — the recent-traces list, one request's lines, the `--samples` list, a
+// piped line (a literal "|" token fails the scope check), or a grammar error —
+// returns ok=false.
 //
-// Exported (not just for Builtin's own use) so other embedders can reuse
-// the exact arg grammar rather than forking it; the grammar itself lives in
-// the tracecmd package.
+// Exported (not just for Command's own use) so other embedders can reuse the
+// exact arg grammar rather than forking it; the grammar itself lives in the
+// tracecmd package.
 func ParseSpansLine(parts []string) (*ListArgs, bool) {
 	if len(parts) == 0 || parts[0] != "trace" {
 		return nil, false
@@ -58,9 +75,9 @@ func ParseSpansLine(parts []string) (*ListArgs, bool) {
 	return &ListArgs{Pipeline: cmd.String(), Title: cmd.Title()}, true
 }
 
-// Register wires spanview into the given shellcore at construction
-// time — the View plus the `trace` builtin covering both span views.
+// Register wires spanview into the given shellcore at construction time: the
+// View plus the `trace` command covering both span views.
 func Register(c *shellcore.ShellCore, query QueryFunc) {
 	c.RegisterView(NewView())
-	c.RegisterBuiltin("trace", Builtin(query))
+	c.RegisterCommand("trace", Command(query))
 }

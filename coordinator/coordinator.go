@@ -1417,23 +1417,21 @@ const scriptExecutionTimeout = 30 * time.Second
 //
 // custID (non-zero) scopes ShellFS and weft.* functions to one
 // group; zero disables both. tr/customer/alertCtx are captured by
-// BinScriptTransform so that interior query pipelines inside /bin
+// the interpreter's parse hook so that interior query pipelines inside /bin
 // scripts — substituted at load time with CallbackCommand nodes —
 // inherit the caller's time window, customer scope, and alert
 // identity.
 //
 // Interior query pipelines are turned into callbacks by
-// rewriteQueryPipelines, invoked at two points:
-//  1. On the top-level AST here, covering query pipelines the caller
-//     typed directly.
-//  2. Via interp.BinScriptTransform, on each /bin/<name> script body
-//     as warp parses it at invocation time — that's where the
-//     interesting cases (loops, command substitutions, function
-//     bodies) live, because /bin scripts are how users compose
-//     multi-line / multi-pipeline logic.
+// rewriteQueryPipelines, installed once as a bash.UseParse hook. warp fires it on the top-level AST (ParseRoot,
+// the pipelines the caller typed directly) and on every script it parses
+// at run time: /bin/<name> bodies, `source`d files and `eval` text. That's
+// where the interesting cases (loops, command substitutions, function
+// bodies) live, because /bin scripts are how users compose multi-line /
+// multi-pipeline logic.
 //
-// Both paths call the same rewriter, so the AST that warp executes
-// has no pipelines left that need weft-side dispatching at runtime.
+// So the AST that warp executes has no pipelines left that need
+// weft-side dispatching at runtime.
 //
 // Execution is capped at scriptExecutionTimeout. When the cap fires
 // the interpreter is cancelled cooperatively; warp stops at the
@@ -1533,10 +1531,9 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 			c.Commands(interp, owner, userID, interp.DirStack().Cwd, c.mountAccess(), c.ShareURLBase, tr.Start, tr.End)
 		}
 
-		rewriteQueryPipelines(ctx, ast, c, tr, owner, userID, alertCtx, failRun)
-		interp.BinScriptTransform = func(_ string, script *bash.Script) {
+		interp.UseParse(func(_ bash.ParseOrigin, script *bash.Script) {
 			rewriteQueryPipelines(ctx, script, c, tr, owner, userID, alertCtx, failRun)
-		}
+		})
 	}
 	res := &ExecuteResult{Stream: stream}
 

@@ -1,12 +1,11 @@
-// Package chart implements weft's `chart` builtin and pipe-stage,
-// plus the live-redraw View triggered by `chart <cron> --follow`.
+// Package chart implements weft's `chart` command (the watch form and the
+// pipe form), plus the live-redraw View triggered by `chart <cron> --follow`.
 //
 // It registers into shellcore via Register at construction time:
 //
 //	cv := chart.NewView(src, rangeSpec)
 //	core.RegisterView(cv)
-//	core.RegisterBuiltin("chart", chart.Builtin(src, rangeSpec))
-//	core.RegisterPipeStage("chart", chart.ParsePipeArgs, chart.RenderPipe(rangeSpec))
+//	core.RegisterCommand("chart", chart.Command(src, rangeSpec))
 //
 // Or, equivalently, the convenience entry point:
 //

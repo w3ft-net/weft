@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
 
@@ -26,11 +27,12 @@ func TestShellBehavior(t *testing.T) {
 }
 
 // dispatchCase builds a MountFS from the fixture files, wires it into a
-// shellcore, types the command, and returns the pipeline the client
-// shipped to the executor via ActionExec (empty if nothing dispatched —
-// e.g. a client-only builtin). The FS is wired so tab-completion and
-// bare-cd validation have something to read, but the pure-terminal
-// client renders no output itself; it ships the line.
+// shellcore, types the command, and returns the line the client handed to its
+// interpreter, exactly as typed (the root parse hook's Script.Source; empty if
+// nothing ran, e.g. a line the core handles itself such as `history`). The hook
+// empties the script so nothing executes. The FS is wired so tab-completion and
+// bare-cd validation have something to read, but the client renders no output
+// itself; it ships the line.
 func dispatchCase(files []File, command string) string {
 	mfs := buildMountFS(files)
 
@@ -38,12 +40,14 @@ func dispatchCase(files []File, command string) string {
 	core := shellcore.NewShellCore(
 		[]string{"myapp"}, 80, 24,
 		func(b []byte) {},
-		func(a shellcore.Action) {
-			if q, ok := a.(shellcore.ActionExec); ok {
-				dispatched = q.Pipeline
-			}
-		},
+		func(a shellcore.Action) {},
 	)
+	core.UseParse(func(o bash.ParseOrigin, s *bash.Script) {
+		if o.Kind == bash.ParseRoot {
+			dispatched = s.Source
+			*s = bash.Script{}
+		}
+	})
 	core.SetFS(mfs)
 	core.Redraw()
 

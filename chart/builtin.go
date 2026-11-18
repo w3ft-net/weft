@@ -1,89 +1,96 @@
 package chart
 
 import (
+	"fmt"
+	"io"
+	"strings"
+
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
 
-// Builtin returns a shellcore.BuiltinFunc that handles `chart …`
-// typed at the prompt (the watch form, not the pipe-stage form).
-// One-shot renders go straight to scrollback; --follow enters the
-// chart View for live redraw.
+// Command returns the `chart` command. One name, two forms, told apart by
+// whether anything is piped into it:
+//
+//   - alone, it charts a cron (`chart <name> ...`): a one-shot render goes
+//     straight to the terminal, --follow enters the chart View for live
+//     redraw;
+//   - after a pipe, it charts the upstream output (`... | chart -x 1`),
+//     spanning the shell's range.
 //
 // rangeSpec returns the shell's current range spec; it is read on every
-// render, so `range` changes and relative ranges slide.
+// render, so `range` changes and relative ranges slide. Anything that needs
+// the core (the terminal size, entering the View) goes through OnLoop.
 //
-// Wire it via core.RegisterBuiltin("chart", chart.Builtin(src, rangeSpec)).
-func Builtin(src CronSource, rangeSpec func() string) shellcore.BuiltinFunc {
-	return func(c *shellcore.ShellCore, parts []string) bool {
-		if len(parts) == 0 || parts[0] != "chart" {
-			return false
+// Wire it via Register, or core.RegisterCommand("chart", chart.Command(src,
+// rangeSpec)) with core.RegisterView(chart.NewView(src, rangeSpec)).
+func Command(src CronSource, rangeSpec func() string) func(cx *shellcore.Cmd) int {
+	return func(cx *shellcore.Cmd) int {
+		fail := func(msg string) int {
+			fmt.Fprintln(cx.Stderr, shellcore.ErrorText(msg))
+			return 1
 		}
-		args, errMsg := ParseWatchCmd(parts[1:])
-		if errMsg != "" {
-			c.AppendScrollback(shellcore.ErrorText(errMsg) + "\n")
-			return true
+		size := func() (w, h int) {
+			cx.OnLoop(func(c *shellcore.ShellCore) error {
+				w, h = c.Width(), c.Height()-1
+				return nil
+			})
+			if w < 20 {
+				w = 20
+			}
+			if h < 6 {
+				h = 6
+			}
+			return w, h
 		}
 
+		if !cx.StdinIsTerminal() {
+			parsed, errMsg := ParsePipeArgs(cx.Args)
+			if errMsg != "" {
+				return fail("chart: " + errMsg)
+			}
+			data, _ := io.ReadAll(cx.Stdin)
+			var lines []string
+			for _, ln := range strings.Split(string(data), "\n") {
+				if strings.TrimSpace(ln) != "" {
+					lines = append(lines, ln)
+				}
+			}
+			w, h := size()
+			out, msg := RenderFromStream(lines, parsed.(PipeArgs).WithRange(rangeSpec()), w, h)
+			if msg != "" {
+				return fail(msg)
+			}
+			io.WriteString(cx.Stdout, out)
+			return 0
+		}
+
+		args, errMsg := ParseWatchCmd(cx.Args)
+		if errMsg != "" {
+			return fail(errMsg)
+		}
 		if args.Follow {
 			if msg := CheckFollow(rangeSpec()); msg != "" {
-				c.AppendScrollback(shellcore.ErrorText("chart: "+msg) + "\n")
-				return true
+				return fail("chart: " + msg)
 			}
-			if err := c.EnterView("chart", args); err != nil {
-				c.AppendScrollback(shellcore.ErrorText("chart: "+err.Error()) + "\n")
+			if err := cx.OnLoop(func(c *shellcore.ShellCore) error { return c.EnterView("chart", args) }); err != nil {
+				return fail("chart: " + err.Error())
 			}
-			return true
+			return 0
 		}
-
-		w, h := c.Width(), c.Height()-1
-		if w < 20 {
-			w = 20
-		}
-		if h < 6 {
-			h = 6
-		}
+		w, h := size()
 		out, msg := RenderOneShot(src, rangeSpec(), args, w, h)
 		if msg != "" {
-			c.AppendScrollback(shellcore.ErrorText("chart: "+msg) + "\n")
-			return true
+			return fail("chart: " + msg)
 		}
-		c.AppendScrollback(out)
-		return true
+		io.WriteString(cx.Stdout, out)
+		return 0
 	}
 }
 
-// RenderPipe returns the shellcore.PipeStageRenderFunc for `... | chart`.
-// It receives the upstream output lines + the parsed PipeArgs and writes
-// the rendered chart to scrollback, spanning the shell's range.
-//
-// Wire it via:
-//
-//	core.RegisterPipeStage("chart", chart.ParsePipeArgs, chart.RenderPipe(rangeSpec))
-func RenderPipe(rangeSpec func() string) shellcore.PipeStageRenderFunc {
-	return func(c *shellcore.ShellCore, lines []string, parsed any) (string, string) {
-		args, ok := parsed.(PipeArgs)
-		if !ok {
-			return "", "chart: internal error: parsed args not PipeArgs"
-		}
-		w, h := c.Width(), c.Height()-1
-		if w < 20 {
-			w = 20
-		}
-		if h < 6 {
-			h = 6
-		}
-		return RenderFromStream(lines, args.WithRange(rangeSpec()), w, h)
-	}
-}
-
-// Register wires chart into the given shellcore at construction
-// time. Convenience wrapper that handles all three registration
-// hooks (View + Builtin + PipeStage) in one call.
-//
-// Embedders that want fine-grained control over each hook can
-// register them individually instead.
+// Register wires chart into the given shellcore at construction time: the View
+// and the `chart` command, which covers both the watch form and the pipe form.
+// Embedders that want fine-grained control can register them individually.
 func Register(c *shellcore.ShellCore, src CronSource, rangeSpec func() string) {
 	c.RegisterView(NewView(src, rangeSpec))
-	c.RegisterBuiltin("chart", Builtin(src, rangeSpec))
-	c.RegisterPipeStage("chart", ParsePipeArgs, RenderPipe(rangeSpec))
+	c.RegisterCommand("chart", Command(src, rangeSpec))
 }

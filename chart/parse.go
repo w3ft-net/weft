@@ -149,7 +149,7 @@ func (a PipeArgs) usesJSONLines() bool {
 //   - --tag is only supported for --kind line (rejected with bar/sparkline).
 //
 // Signature matches shellcore.PipeStageParseFunc — this function
-// is registered directly via core.RegisterPipeStage("chart", ...).
+// is handled by the same `chart` command (see Command).
 func ParsePipeArgs(args []string) (any, string) {
 	out := PipeArgs{}
 	for i := 0; i < len(args); i++ {
