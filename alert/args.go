@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
 
@@ -103,217 +104,165 @@ const (
 	IfNonzero
 )
 
+// Spec declares the `alert` command line: an optional condition keyword
+// (with its value) and the flags. Options may come before or after the
+// keyword.
+var Spec = bash.Spec{
+	Name:    "alert",
+	Summary: "pass input through and fire when a condition holds",
+	Description: "CONDITION is one of: any, above N, below N, eq N, neq N, changed, absent,\n" +
+		"rising PCT%, falling PCT%, matches REGEX. With none it fires on any non-empty input.\n" +
+		"--if-zero and --if-nonzero take an exit status (\"$?\") and are exclusive with a condition.",
+	Flags: []bash.Flag{
+		bash.String("duration", 0, "evaluate over a window of DUR (e.g. 5m)").Arg("DUR"),
+		bash.Bool("average", 0, "with above/below and --duration, compare the window average"),
+		bash.String("msg", 0, "replace the alert message").Arg("TEXT"),
+		bash.StringList("notify", 0, "page this notify.yaml alias (once per alert)").Arg("ALIAS"),
+		bash.String("value", 'v', "evaluate each line's column or .json.path").Arg("FIELD"),
+		bash.String("tag", 't', "name each row by this column or .json.path").Arg("FIELD"),
+		bash.String("if-zero", 0, "fire when VALUE (typically \"$?\") is 0").Arg("VALUE"),
+		bash.String("if-nonzero", 0, "fire when VALUE (typically \"$?\") is not 0").Arg("VALUE"),
+	},
+	Args:            bash.Operands("CONDITION", "VALUE").Any().Complete(bash.NoCompletion),
+	Legacy:          valueAfterKeyword,
+	Strategy:        bash.StageBarrier,
+	Aggregating:     true,
+	NumericOperands: true, // `below -5`
+}
+
+// conditionValues is how many values each condition keyword takes.
+var conditionValues = map[string]int{
+	"any": 0, "above": 1, "below": 1, "eq": 1, "neq": 1,
+	"changed": 0, "absent": 0, "rising": 1, "falling": 1, "matches": 1,
+}
+
+// valueAfterKeyword protects the value that follows a condition keyword from
+// being read as an option, as it never was: `alert matches '-rc[0-9]*$'` is a
+// pattern, not a flag cluster. The value moves behind a `--`.
+func valueAfterKeyword(args []string) []string {
+	if len(args) < 2 || conditionValues[args[0]] == 0 {
+		return args
+	}
+	out := append([]string{args[0]}, args[2:]...)
+	return append(out, "--", args[1])
+}
+
 // ParseArgs parses the argv following `alert` on the command line.
 // Returns an error for malformed flags, unknown conditions, or missing
 // required values, and for options it does not know.
 func ParseArgs(args []string) (*Args, error) {
+	p, err := Spec.Parse(args)
+	if err != nil {
+		// The caller prefixes "alert: ", so drop the spec's own.
+		var ue *bash.UsageError
+		if errors.As(err, &ue) {
+			return nil, errors.New(ue.Msg)
+		}
+		return nil, err
+	}
+	if p.Help {
+		return nil, errors.New(strings.TrimRight(Spec.Help(), "\n"))
+	}
+	return ArgsFrom(p)
+}
+
+// ArgsFrom reads an `alert` line already parsed against Spec.
+func ArgsFrom(p *bash.Parsed) (*Args, error) {
 	parsed := &Args{Condition: Any}
-	i := 0
-	if len(args) == 0 {
-		return parsed, nil
-	}
-
-	// First positional may be a condition keyword. If it starts with "-" or
-	// isn't a known condition, fall through with default (any).
-	switch args[0] {
-	case "any":
-		parsed.Condition = Any
-		i++
-
-	case "above":
-		parsed.Condition = Above
-		i++
-		if i >= len(args) {
-			return nil, fmt.Errorf("above requires a threshold")
+	ops := p.Operands()
+	if len(ops) > 0 {
+		kw, vals := ops[0], ops[1:]
+		want, ok := conditionValues[kw]
+		if !ok {
+			return nil, fmt.Errorf("unknown condition: %s", kw)
 		}
-		v, err := strconv.ParseFloat(args[i], 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid threshold: %s", args[i])
-		}
-		parsed.Threshold = v
-		i++
-
-	case "below":
-		parsed.Condition = Below
-		i++
-		if i >= len(args) {
-			return nil, fmt.Errorf("below requires a threshold")
-		}
-		v, err := strconv.ParseFloat(args[i], 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid threshold: %s", args[i])
-		}
-		parsed.Threshold = v
-		i++
-
-	case "eq":
-		parsed.Condition = Eq
-		i++
-		if i >= len(args) {
-			return nil, fmt.Errorf("eq requires a value")
-		}
-		v, err := strconv.ParseFloat(args[i], 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid value: %s", args[i])
-		}
-		parsed.Threshold = v
-		i++
-
-	case "neq":
-		parsed.Condition = Neq
-		i++
-		if i >= len(args) {
-			return nil, fmt.Errorf("neq requires a value")
-		}
-		v, err := strconv.ParseFloat(args[i], 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid value: %s", args[i])
-		}
-		parsed.Threshold = v
-		i++
-
-	case "changed":
-		parsed.Condition = Changed
-		i++
-
-	case "absent":
-		parsed.Condition = Absent
-		i++
-
-	case "rising":
-		parsed.Condition = Rising
-		i++
-		if i >= len(args) {
-			return nil, fmt.Errorf("rising requires a percentage (e.g., 100%%)")
-		}
-		pct := strings.TrimSuffix(args[i], "%")
-		v, err := strconv.ParseFloat(pct, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid percentage: %s", args[i])
-		}
-		parsed.PctChange = v / 100.0
-		i++
-
-	case "falling":
-		parsed.Condition = Falling
-		i++
-		if i >= len(args) {
-			return nil, fmt.Errorf("falling requires a percentage (e.g., 50%%)")
-		}
-		pct := strings.TrimSuffix(args[i], "%")
-		v, err := strconv.ParseFloat(pct, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid percentage: %s", args[i])
-		}
-		parsed.PctChange = v / 100.0
-		i++
-
-	case "matches":
-		parsed.Condition = Matches
-		i++
-		if i >= len(args) {
-			return nil, fmt.Errorf("matches requires a regular expression")
-		}
-		re, err := regexp.Compile(args[i])
-		if err != nil {
-			return nil, fmt.Errorf("invalid pattern %q: %w", args[i], err)
-		}
-		parsed.Pattern = re
-		i++
-
-	default:
-		if !strings.HasPrefix(args[0], "-") {
-			return nil, fmt.Errorf("unknown condition: %s", args[0])
-		}
-		// First token is a flag — fall through with default condition (any).
-	}
-
-	// Parse flags.
-	for i < len(args) {
-		a := args[i]
-		// Support --notify=foo as well as --notify foo.
-		if strings.HasPrefix(a, "--notify=") {
-			if parsed.Notify != "" {
-				return nil, errSecondNotify
+		if len(vals) < want {
+			switch kw {
+			case "above", "below":
+				return nil, fmt.Errorf("%s requires a threshold", kw)
+			case "eq", "neq":
+				return nil, fmt.Errorf("%s requires a value", kw)
+			case "rising":
+				return nil, fmt.Errorf("rising requires a percentage (e.g., 100%%)")
+			case "falling":
+				return nil, fmt.Errorf("falling requires a percentage (e.g., 50%%)")
+			default:
+				return nil, fmt.Errorf("matches requires a regular expression")
 			}
-			parsed.Notify = strings.TrimPrefix(a, "--notify=")
-			i++
+		}
+		if len(vals) > want {
+			return nil, fmt.Errorf("unexpected argument %q", vals[want])
+		}
+		switch kw {
+		case "any":
+			parsed.Condition = Any
+		case "above", "below", "eq", "neq":
+			parsed.Condition = map[string]Condition{"above": Above, "below": Below, "eq": Eq, "neq": Neq}[kw]
+			v, err := strconv.ParseFloat(vals[0], 64)
+			if err != nil {
+				what := "threshold"
+				if kw == "eq" || kw == "neq" {
+					what = "value"
+				}
+				return nil, fmt.Errorf("invalid %s: %s", what, vals[0])
+			}
+			parsed.Threshold = v
+		case "changed":
+			parsed.Condition = Changed
+		case "absent":
+			parsed.Condition = Absent
+		case "rising", "falling":
+			parsed.Condition = map[string]Condition{"rising": Rising, "falling": Falling}[kw]
+			v, err := strconv.ParseFloat(strings.TrimSuffix(vals[0], "%"), 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid percentage: %s", vals[0])
+			}
+			parsed.PctChange = v / 100.0
+		case "matches":
+			parsed.Condition = Matches
+			re, err := regexp.Compile(vals[0])
+			if err != nil {
+				return nil, fmt.Errorf("invalid pattern %q: %w", vals[0], err)
+			}
+			parsed.Pattern = re
+		}
+	}
+
+	if p.Has("duration") {
+		d, err := time.ParseDuration(p.String("duration"))
+		if err != nil {
+			return nil, fmt.Errorf("invalid duration: %s", p.String("duration"))
+		}
+		parsed.Duration = d
+	}
+	parsed.Average = p.Bool("average")
+	parsed.Msg = p.String("msg")
+	if n := p.List("notify"); len(n) > 1 {
+		return nil, errSecondNotify
+	} else if len(n) == 1 {
+		parsed.Notify = n[0]
+	}
+	for _, f := range []struct {
+		name, label string
+		dst         *shellcore.FieldSpec
+	}{{"value", "-v", &parsed.Key}, {"tag", "-t", &parsed.Tag}} {
+		if !p.Has(f.name) {
 			continue
 		}
-		switch a {
-		case "--duration":
-			i++
-			if i >= len(args) {
-				return nil, fmt.Errorf("--duration requires a value")
-			}
-			d, err := time.ParseDuration(args[i])
-			if err != nil {
-				return nil, fmt.Errorf("invalid duration: %s", args[i])
-			}
-			parsed.Duration = d
-		case "--average":
-			parsed.Average = true
-		case "--msg":
-			i++
-			if i >= len(args) {
-				return nil, fmt.Errorf("--msg requires a value")
-			}
-			parsed.Msg = args[i]
-		case "--notify":
-			i++
-			if i >= len(args) {
-				return nil, fmt.Errorf("--notify requires a value")
-			}
-			if parsed.Notify != "" {
-				return nil, errSecondNotify
-			}
-			parsed.Notify = args[i]
-		case "-v", "--value":
-			i++
-			if i >= len(args) {
-				return nil, fmt.Errorf("%s requires a field number or .json.path", a)
-			}
-			spec, err := shellcore.ParseFieldSpec(args[i])
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", a, err)
-			}
-			if spec.IsZero() {
-				return nil, fmt.Errorf("%s requires a field number or .json.path, got empty value", a)
-			}
-			parsed.Key = spec
-		case "-t", "--tag":
-			i++
-			if i >= len(args) {
-				return nil, fmt.Errorf("%s requires a field number or .json.path", a)
-			}
-			spec, err := shellcore.ParseFieldSpec(args[i])
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", a, err)
-			}
-			if spec.IsZero() {
-				return nil, fmt.Errorf("%s requires a field number or .json.path, got empty value", a)
-			}
-			parsed.Tag = spec
-		case "--if-zero":
-			i++
-			if i >= len(args) {
-				return nil, fmt.Errorf("--if-zero requires a value (typically \"$?\")")
-			}
-			parsed.IfMode = IfZero
-			parsed.IfValue = args[i]
-		case "--if-nonzero":
-			i++
-			if i >= len(args) {
-				return nil, fmt.Errorf("--if-nonzero requires a value (typically \"$?\")")
-			}
-			parsed.IfMode = IfNonzero
-			parsed.IfValue = args[i]
-		default:
-			if strings.HasPrefix(a, "-") {
-				return nil, fmt.Errorf("unknown option %s", a)
-			}
+		spec, err := shellcore.ParseFieldSpec(p.String(f.name))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", f.label, err)
 		}
-		i++
+		if spec.IsZero() {
+			return nil, fmt.Errorf("%s requires a field number or .json.path, got empty value", f.label)
+		}
+		*f.dst = spec
+	}
+	switch {
+	case p.Has("if-zero"):
+		parsed.IfMode, parsed.IfValue = IfZero, p.String("if-zero")
+	case p.Has("if-nonzero"):
+		parsed.IfMode, parsed.IfValue = IfNonzero, p.String("if-nonzero")
 	}
 
 	if parsed.IfMode != IfNone && parsed.Condition != Any {

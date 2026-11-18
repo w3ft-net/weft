@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/w3ft-net/weft/notifycfg"
@@ -28,14 +29,14 @@ func (m *BinMount) Caps() shellcore.MountCaps {
 // operation: every member can read and run /bin. A script no cron runs can be
 // changed by any member; one that crons run needs write on each of their
 // namespaces, since changing it changes what they do.
-func (m *BinMount) Authorize(rel string, want shellcore.Perm) error {
+func (m *BinMount) Authorize(ctx context.Context, rel string, want shellcore.Perm) error {
 	if want&shellcore.PermWrite != 0 {
 		return m.cfg.mayWriteBin(rel)
 	}
 	return nil
 }
 
-func (m *BinMount) ReadDir(rel string) ([]fs.DirEntry, error) {
+func (m *BinMount) ReadDir(ctx context.Context, rel string) ([]fs.DirEntry, error) {
 	if rel != "" {
 		return nil, fs.ErrNotExist
 	}
@@ -66,7 +67,7 @@ func (m *BinMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	return entries, nil
 }
 
-func (m *BinMount) ReadFile(rel string) ([]byte, error) {
+func (m *BinMount) ReadFile(ctx context.Context, rel string) ([]byte, error) {
 	fn, err := m.cfg.bin().Bins.Get(m.cfg.partition(), rel)
 	if err != nil {
 		return nil, fmt.Errorf("/bin/%s: no such file", rel)
@@ -77,7 +78,7 @@ func (m *BinMount) ReadFile(rel string) ([]byte, error) {
 	return []byte(fn.Source), nil
 }
 
-func (m *BinMount) Stat(rel string) (fs.FileInfo, error) {
+func (m *BinMount) Stat(ctx context.Context, rel string) (fs.FileInfo, error) {
 	if rel == "" {
 		return &vfsFileInfo{name: "bin", dir: true}, nil
 	}
@@ -110,7 +111,7 @@ func (m *BinMount) remove(rel string) error {
 }
 
 // FileLanguage implements shellcore.LangMount.
-func (m *BinMount) FileLanguage(rel string) string {
+func (m *BinMount) FileLanguage(ctx context.Context, rel string) string {
 	fn, err := m.cfg.bin().Bins.Get(m.cfg.partition(), rel)
 	if err != nil {
 		return ""
@@ -207,13 +208,13 @@ func (c Config) AmendBinMessage(name, authorID, message string) error {
 	return c.RewordHistory("bin/"+name, message)
 }
 
-func (m *BinMount) WriteFile(rel string, data []byte) error {
+func (m *BinMount) WriteFile(ctx context.Context, rel string, data []byte) error {
 	err := m.writeFile(rel, data)
-	m.cfg.journalWrite("bin/"+rel, err, func() ([]byte, error) { return m.ReadFile(rel) })
+	m.cfg.journalWrite("bin/"+rel, err, func() ([]byte, error) { return m.ReadFile(ctx, rel) })
 	return err
 }
 
-func (m *BinMount) Remove(rel string) error {
+func (m *BinMount) Remove(ctx context.Context, rel string) error {
 	err := m.remove(rel)
 	m.cfg.journalDelete("bin/"+rel, err)
 	return err

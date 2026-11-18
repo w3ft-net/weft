@@ -6,9 +6,47 @@ import (
 	"strings"
 	"time"
 
+	"github.com/graybeardcorp/warp/pkg/bash"
 	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/w3ft-net/weft/timerange"
 )
+
+// Spec declares the `chart` command line. One command, two forms: the flags
+// are the union, and each form rejects the other's (see WatchArgsFrom and
+// PipeArgsFrom). The window is the shell's range, not a flag.
+var Spec = bash.Spec{
+	Name:    "chart",
+	Summary: "chart a cron's results, or the output of the pipeline before it",
+	Description: "Alone, `chart <cron>` charts a cron's saved results; -f redraws it live.\n" +
+		"After a pipe, `... | chart -x 1 -y 2` charts the upstream rows.\n" +
+		"The time span is the shell's range.",
+	Flags: []bash.Flag{
+		bash.String("aggregate", 'a', "reduction: count, sum, avg, min, max, p50, p95 (pipe form also identity)").Arg("FN"),
+		bash.String("bucket", 0, "group rows into time buckets of DUR (e.g. 1m, 1h)").Arg("DUR"),
+		bash.String("kind", 0, "chart type").Arg("KIND").Choices("line", "sparkline", "bar"),
+		bash.String("title", 0, "chart title").Arg("TEXT"),
+		bash.Bool("follow", 'f', "watch form: redraw live"),
+		bash.String("interval", 'i', "watch form, with -f: redraw every DUR (min 100ms)").Arg("DUR"),
+		bash.String("x", 'x', "pipe form: x column or .json.path, optionally with a ::time cast").Arg("COL").ShortOnly(),
+		bash.String("y", 'y', "pipe form: y column or .json.path").Arg("COL").ShortOnly(),
+		bash.String("tag", 't', "pipe form: one line per value of this column or .json.path").Arg("COL"),
+	},
+	Args:     bash.Operands("CRON").Any().Complete(bash.NoCompletion),
+	Strategy: bash.StageBarrier,
+}
+
+// chartUsage is the one-line usage of the watch form, shown when no cron is named.
+const chartUsage = "usage: chart <cron> [-a FN] [--bucket DUR] [--kind KIND] [--title TEXT] [-f [-i DUR]]"
+
+// parseSpec runs Spec over args and turns a usage error into the terse
+// message the shell shows.
+func parseSpec(args []string) (p *bash.Parsed, msg string) {
+	p, err := Spec.Parse(args)
+	if err != nil {
+		return nil, err.Error()
+	}
+	return p, ""
+}
 
 // ParseWatchCmd parses a tokenised `chart …` command line into
 // WatchArgs. The first non-flag token is the cron name (bare or
@@ -17,77 +55,70 @@ import (
 // shell, so it should be terse. The window is the shell's range, not
 // a flag.
 func ParseWatchCmd(args []string) (WatchArgs, string) {
+	p, msg := parseSpec(args)
+	if msg != "" {
+		return WatchArgs{Interval: time.Second, Aggregate: "avg"}, msg
+	}
+	return WatchArgsFrom(p)
+}
+
+// WatchArgsFrom reads the watch form out of a parsed `chart` line.
+func WatchArgsFrom(p *bash.Parsed) (WatchArgs, string) {
 	out := WatchArgs{Interval: time.Second, Aggregate: "avg"}
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--kind":
-			if i+1 >= len(args) {
-				return out, "chart: --kind requires a value (line, sparkline, bar)"
-			}
-			out.Kind = args[i+1]
-			i++
-		case a == "-a" || a == "--aggregate":
-			if i+1 >= len(args) {
-				return out, "chart: -a requires a function (count|sum|avg|min|max|p50|p95)"
-			}
-			out.Aggregate = args[i+1]
-			if !ValidCronAggregate(out.Aggregate) {
-				return out, fmt.Sprintf("chart: unknown --aggregate %q", out.Aggregate)
-			}
-			i++
-		case a == "--bucket":
-			if i+1 >= len(args) {
-				return out, "chart: --bucket requires a duration (e.g. 1h, 30m)"
-			}
-			d, err := time.ParseDuration(args[i+1])
-			if err != nil || d <= 0 {
-				return out, fmt.Sprintf("chart: --bucket: invalid duration %q", args[i+1])
-			}
-			out.Bucket = d
-			i++
-		case a == "--title":
-			if i+1 >= len(args) {
-				return out, "chart: --title requires a value"
-			}
-			out.Title = args[i+1]
-			i++
-		case a == "-i" || a == "--interval":
-			if i+1 >= len(args) {
-				return out, "chart: -i requires a duration (e.g. 1s, 500ms)"
-			}
-			d, err := time.ParseDuration(args[i+1])
-			if err != nil || d < 100*time.Millisecond {
-				return out, "chart: -i must be a duration ≥ 100ms"
-			}
-			out.Interval = d
-			i++
-		case a == "-f" || a == "--follow":
-			out.Follow = true
-		case strings.HasPrefix(a, "-"):
-			return out, fmt.Sprintf("chart: unknown option %s", a)
-		default:
-			if out.Name != "" {
-				return out, fmt.Sprintf("chart: unexpected argument %q (only one cron name allowed)", a)
-			}
-			out.Name = a
+	if p.Help {
+		return out, strings.TrimRight(Spec.Help(), "\n")
+	}
+	for _, f := range []string{"x", "y", "tag"} {
+		if p.Has(f) {
+			return out, fmt.Sprintf("chart: -%s is only for the pipe form (`... | chart`)", flagLabel(f))
 		}
 	}
-	if out.Name == "" {
-		return out, "usage: chart <cron> [-a FN] [--bucket DUR] [--kind KIND] [--title TEXT] [-f [-i DUR]]"
+	out.Kind = p.String("kind")
+	if p.Has("aggregate") {
+		out.Aggregate = p.String("aggregate")
+		if !ValidCronAggregate(out.Aggregate) {
+			return out, fmt.Sprintf("chart: unknown --aggregate %q", out.Aggregate)
+		}
 	}
+	if p.Has("bucket") {
+		d, err := time.ParseDuration(p.String("bucket"))
+		if err != nil || d <= 0 {
+			return out, fmt.Sprintf("chart: --bucket: invalid duration %q", p.String("bucket"))
+		}
+		out.Bucket = d
+	}
+	out.Title = p.String("title")
+	if p.Has("interval") {
+		d, err := time.ParseDuration(p.String("interval"))
+		if err != nil || d < 100*time.Millisecond {
+			return out, "chart: -i must be a duration ≥ 100ms"
+		}
+		out.Interval = d
+	}
+	out.Follow = p.Bool("follow")
+	ops := p.Operands()
+	if len(ops) > 1 {
+		return out, fmt.Sprintf("chart: unexpected argument %q (only one cron name allowed)", ops[1])
+	}
+	if len(ops) == 0 {
+		return out, chartUsage
+	}
+	out.Name = ops[0]
 	// Strip /cron.d/ prefix so the user can `chart /cron.d/foo` or `chart foo`.
 	out.Name = strings.TrimPrefix(out.Name, "/cron.d/")
 	out.Name = strings.TrimPrefix(out.Name, "cron.d/")
 	if out.Kind == "" {
 		out.Kind = "line"
 	}
-	switch out.Kind {
-	case "line", "sparkline", "bar":
-	default:
-		return out, fmt.Sprintf("chart: unknown kind %q (want line, sparkline, bar)", out.Kind)
-	}
 	return out, ""
+}
+
+// flagLabel is how a flag is named in a message: x and y as -x and -y.
+func flagLabel(name string) string {
+	if len(name) == 1 {
+		return name
+	}
+	return "-" + name
 }
 
 // PipeArgs holds the parsed flags for `... | chart` (pipe-stage
@@ -151,69 +182,60 @@ func (a PipeArgs) usesJSONLines() bool {
 // Signature matches shellcore.PipeStageParseFunc — this function
 // is handled by the same `chart` command (see Command).
 func ParsePipeArgs(args []string) (any, string) {
+	p, msg := parseSpec(args)
+	if msg != "" {
+		return PipeArgs{}, msg
+	}
+	return PipeArgsFrom(p)
+}
+
+// PipeArgsFrom reads the pipe form out of a parsed `chart` line.
+func PipeArgsFrom(p *bash.Parsed) (any, string) {
 	out := PipeArgs{}
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "-x":
-			if i+1 >= len(args) {
-				return out, "chart: -x requires a column index or .json.path"
-			}
-			if msg := parseXArg(args[i+1], &out); msg != "" {
-				return out, "chart: -x: " + msg
-			}
-			i++
-		case a == "-y" || a == "-t" || a == "--tag":
-			if i+1 >= len(args) {
-				return out, fmt.Sprintf("chart: %s requires a column index or .json.path", a)
-			}
-			if strings.Contains(args[i+1], "::") {
-				return out, fmt.Sprintf("chart: %s: casts are only supported on -x", a)
-			}
-			s, err := shellcore.ParseFieldSpec(args[i+1])
-			if err != nil {
-				return out, fmt.Sprintf("chart: %s: %s", a, err.Error())
-			}
-			if a == "-y" {
-				out.YSpec = s
-			} else {
-				out.TagSpec = s
-			}
-			i++
-		case a == "-a" || a == "--aggregate":
-			if i+1 >= len(args) {
-				return out, "chart: -a requires a function (count|sum|avg|min|max|p50|p95)"
-			}
-			out.Aggregate = args[i+1]
-			i++
-		case a == "--bucket":
-			if i+1 >= len(args) {
-				return out, "chart: --bucket requires a duration (e.g. 1m, 30s)"
-			}
-			d, err := time.ParseDuration(args[i+1])
-			if err != nil || d <= 0 {
-				return out, fmt.Sprintf("chart: --bucket: invalid duration %q", args[i+1])
-			}
-			out.Bucket = d
-			i++
-		case a == "--kind":
-			if i+1 >= len(args) {
-				return out, "chart: --kind requires line|bar|sparkline"
-			}
-			out.Kind = args[i+1]
-			i++
-		case a == "--title":
-			if i+1 >= len(args) {
-				return out, "chart: --title requires a value"
-			}
-			out.Title = args[i+1]
-			i++
-		case strings.HasPrefix(a, "-"):
-			return out, fmt.Sprintf("chart: unknown option %s", a)
-		default:
-			return out, fmt.Sprintf("chart: unexpected argument %q (use flags only in pipe mode)", a)
+	if p.Help {
+		return out, strings.TrimRight(Spec.Help(), "\n")
+	}
+	for _, f := range []string{"follow", "interval"} {
+		if p.Has(f) {
+			return out, fmt.Sprintf("chart: --%s is only for the watch form (`chart <cron>`)", f)
 		}
 	}
+	if ops := p.Operands(); len(ops) > 0 {
+		return out, fmt.Sprintf("chart: unexpected argument %q (use flags only in pipe mode)", ops[0])
+	}
+	if p.Has("x") {
+		if msg := parseXArg(p.String("x"), &out); msg != "" {
+			return out, "chart: -x: " + msg
+		}
+	}
+	for _, f := range []struct{ name, label string }{{"y", "-y"}, {"tag", "--tag"}} {
+		if !p.Has(f.name) {
+			continue
+		}
+		v := p.String(f.name)
+		if strings.Contains(v, "::") {
+			return out, fmt.Sprintf("chart: %s: casts are only supported on -x", f.label)
+		}
+		s, err := shellcore.ParseFieldSpec(v)
+		if err != nil {
+			return out, fmt.Sprintf("chart: %s: %s", f.label, err.Error())
+		}
+		if f.name == "y" {
+			out.YSpec = s
+		} else {
+			out.TagSpec = s
+		}
+	}
+	out.Aggregate = p.String("aggregate")
+	if p.Has("bucket") {
+		d, err := time.ParseDuration(p.String("bucket"))
+		if err != nil || d <= 0 {
+			return out, fmt.Sprintf("chart: --bucket: invalid duration %q", p.String("bucket"))
+		}
+		out.Bucket = d
+	}
+	out.Kind = p.String("kind")
+	out.Title = p.String("title")
 
 	// Mixing positional and JSON-path is rejected — the line parser
 	// can't be in two modes at once.

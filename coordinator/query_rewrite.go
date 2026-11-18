@@ -61,7 +61,7 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 		// script on stay as ordinary commands after the callback, and warp
 		// resolves them against /bin exactly as it does for
 		// `echo x | script`.
-		k := firstBinStage(pipe, binFS)
+		k := firstBinStage(ctx, pipe, binFS)
 		rest := append([]bash.Command(nil), pipe.Commands[k:]...)
 		// Snapshot the original pipeline before we mutate it. The
 		// callback's rendering uses the snapshot — the live AST node
@@ -208,7 +208,7 @@ func queryUnanswered(err error) bool {
 // firstBinStage returns the index of the first stage after the source
 // whose command names a /bin script, or len(pipe.Commands) when there is
 // none (or fs is nil). Stage 0 is the source command and never splits.
-func firstBinStage(pipe *bash.Pipeline, fs bash.FS) int {
+func firstBinStage(ctx context.Context, pipe *bash.Pipeline, fs bash.FS) int {
 	n := len(pipe.Commands)
 	if fs == nil {
 		return n
@@ -222,7 +222,7 @@ func firstBinStage(pipe *bash.Pipeline, fs bash.FS) int {
 		if name == "" || strings.Contains(name, "/") {
 			continue
 		}
-		if _, err := fs.ReadFile("/bin/" + name); err == nil {
+		if _, err := fs.ReadFile(ctx, "/bin/"+name); err == nil {
 			return i
 		}
 	}

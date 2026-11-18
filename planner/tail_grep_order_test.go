@@ -81,7 +81,7 @@ func TestPushdown_LimitBeforeFilter_DoesNotMerge(t *testing.T) {
 	}
 }
 
-// All-apps wildcard `cat warp.log | tail -n N | grep -v ERROR` emits
+// All-apps wildcard `cat warp.log | tail -n 2000 | grep -v ERROR` emits
 // a flat SQL with no source predicate; the LIMIT is pushed and the
 // inverted grep runs in compute (saturation hazard — see above).
 // Plan must still attach the customer predicate to bound the

@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"context"
 	"testing"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
@@ -16,7 +17,7 @@ func TestCronMount_FileLanguage(t *testing.T) {
 	if !ok {
 		t.Fatalf("CronMount does not implement shellcore.LangMount")
 	}
-	if got := lm.FileLanguage("nightly-errors"); got != "bash" {
+	if got := lm.FileLanguage(context.Background(), "nightly-errors"); got != "bash" {
 		t.Errorf("FileLanguage = %q, want bash", got)
 	}
 }

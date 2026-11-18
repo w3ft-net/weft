@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"path"
@@ -25,7 +26,7 @@ func (m *EtcMount) Caps() shellcore.MountCaps {
 // Authorize is the mount's one access check, called by MountFS before every
 // operation: every member can read /etc, and only the configmgr group can change
 // it. An extension's files check for themselves.
-func (m *EtcMount) Authorize(rel string, want shellcore.Perm) error {
+func (m *EtcMount) Authorize(ctx context.Context, rel string, want shellcore.Perm) error {
 	if want&shellcore.PermWrite == 0 {
 		return nil
 	}
@@ -43,7 +44,7 @@ func (m *EtcMount) notifyInfo() fs.FileInfo {
 	return &vfsFileInfo{name: "notify.yaml"}
 }
 
-func (m *EtcMount) ReadDir(rel string) ([]fs.DirEntry, error) {
+func (m *EtcMount) ReadDir(ctx context.Context, rel string) ([]fs.DirEntry, error) {
 	if rel != "" {
 		return nil, fs.ErrNotExist
 	}
@@ -51,7 +52,7 @@ func (m *EtcMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	entries := []fs.DirEntry{&vfsDirEntry{name: "notify.yaml", size: info.Size(), mtime: info.ModTime()}}
 	if m.cfg.EtcExtensions != nil {
 		for _, ext := range m.cfg.EtcExtensions(m.cfg) {
-			fi, err := ext.Stat("")
+			fi, err := ext.Stat(ctx, "")
 			if err != nil {
 				continue // an extension with nothing to show is not listed
 			}
@@ -67,7 +68,7 @@ func (m *EtcMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	return entries, nil
 }
 
-func (m *EtcMount) ReadFile(rel string) ([]byte, error) {
+func (m *EtcMount) ReadFile(ctx context.Context, rel string) ([]byte, error) {
 	if rel == "notify.yaml" {
 		doc, err := m.cfg.notify().Aliases.Aliases(m.cfg.partition())
 		if err != nil {
@@ -80,7 +81,7 @@ func (m *EtcMount) ReadFile(rel string) ([]byte, error) {
 	return nil, fmt.Errorf("/etc/%s: no such file", rel)
 }
 
-func (m *EtcMount) Stat(rel string) (fs.FileInfo, error) {
+func (m *EtcMount) Stat(ctx context.Context, rel string) (fs.FileInfo, error) {
 	switch rel {
 	case "":
 		return &vfsFileInfo{name: "etc", dir: true}, nil
@@ -117,7 +118,7 @@ func (m *EtcMount) remove(rel string) error {
 // versioned file here. It is not a MountFS operation, so it checks write access
 // itself.
 func (m *EtcMount) AmendVersionMessage(rel, message string) error {
-	if err := m.Authorize(rel, shellcore.PermWrite); err != nil {
+	if err := m.Authorize(m.cfg.ctx(), rel, shellcore.PermWrite); err != nil {
 		return err
 	}
 	if rel != "notify.yaml" {
@@ -130,19 +131,19 @@ func (m *EtcMount) AmendVersionMessage(rel, message string) error {
 }
 
 // FileLanguage implements shellcore.LangMount: notify.yaml highlights as YAML.
-func (m *EtcMount) FileLanguage(rel string) string {
+func (m *EtcMount) FileLanguage(ctx context.Context, rel string) string {
 	if strings.HasSuffix(rel, ".yaml") {
 		return "yaml"
 	}
 	return ""
 }
 
-func (m *EtcMount) WriteFile(rel string, data []byte) error {
+func (m *EtcMount) WriteFile(ctx context.Context, rel string, data []byte) error {
 	err := m.writeFile(rel, data)
 	if rel == "notify.yaml" {
-		m.cfg.journalWrite("etc/notify.yaml", err, func() ([]byte, error) { return m.ReadFile(rel) })
+		m.cfg.journalWrite("etc/notify.yaml", err, func() ([]byte, error) { return m.ReadFile(ctx, rel) })
 	}
 	return err
 }
 
-func (m *EtcMount) Remove(rel string) error { return m.remove(rel) }
+func (m *EtcMount) Remove(ctx context.Context, rel string) error { return m.remove(rel) }

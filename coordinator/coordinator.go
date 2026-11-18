@@ -917,7 +917,7 @@ func (r watchBinResolver) Source(name string) (string, string, bool) {
 // fire), runAlertStage post-processes, and a buffered ExecuteResult
 // is returned.
 func (c *Coordinator) execute(ctx context.Context, pipeline string, tr TimeRange, owner shape.Added, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
-	owner, expanded, err := c.preflight(pipeline, owner)
+	owner, expanded, err := c.preflight(ctx, pipeline, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -1054,7 +1054,7 @@ func (c *Coordinator) runQuery(ctx context.Context, pipeline, cwd string, tr Tim
 // bash invocations so the planner can see their body. Source-arg globs
 // are expanded later, per query pipeline, in runQuery: this sees only
 // the line's first command, which for `cd X && tail *.log` is the cd.
-func (c *Coordinator) preflight(pipeline string, owner shape.Added) (shape.Added, string, error) {
+func (c *Coordinator) preflight(ctx context.Context, pipeline string, owner shape.Added) (shape.Added, string, error) {
 	if NoGroup(owner) {
 		return shape.Added{}, "", errNoOrg
 	}
@@ -1067,10 +1067,10 @@ func (c *Coordinator) preflight(pipeline string, owner shape.Added) (shape.Added
 		// pipeline (and Lua scripts would pass silently because
 		// they're opaque). Failing here keeps the rule uniform and
 		// the error pointed at the right stage name.
-		if err := rejectBinInFollow(pipeline, fs); err != nil {
+		if err := rejectBinInFollow(ctx, pipeline, fs); err != nil {
 			return shape.Added{}, "", err
 		}
-		expanded, err := expandBinPipeline(pipeline, fs)
+		expanded, err := expandBinPipeline(ctx, pipeline, fs)
 		if err != nil {
 			return shape.Added{}, "", fmt.Errorf("expand /bin: %w", err)
 		}
@@ -1444,18 +1444,16 @@ const scriptExecutionTimeout = 30 * time.Second
 // finishes, BEFORE the pipe writers close — so consumers reading
 // Notices past stream EOF see the populated value.
 func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRange, owner shape.Added, userID string, alertCtx *AlertContext, dirStack []string) (*ExecuteResult, error) {
-	ast, err := bash.Parse(pipeline)
-	if err != nil {
+	// Parse once here so a syntax error is the caller's error, not the
+	// stream's; the runner parses the line again when it runs.
+	if _, err := bash.Parse(pipeline); err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
 	}
 
-	interp := bash.NewInterpreter()
-	interp.SetStdin(strings.NewReader(""))
-	// Dirstack courier (in): seed the interpreter's cwd/pushd state from
-	// the caller's cached dirstack so a `cd`-bearing line resolves
-	// relative paths against the client's current directory. Empty means
-	// "fresh shell" — the interpreter's own default (cwd "/") stands.
-	seedDirStack(interp.DirStack(), dirStack)
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+	stream := newLiveScriptStream(stdoutR, stderrR)
+
 	// Highlight server-side `cat` in weft's branded palette so a
 	// delegated client that ships `cat /bin/x` to the exec backend gets
 	// back the same weave it paints for a locally-read file. /bin and
@@ -1466,26 +1464,18 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 	// breaking the raw-content contract (TestCoordinatorQuery_CatTmpReturnsContent).
 	// The palette definition is shared via weft/theme so client and
 	// server can't drift.
-	interp.SetPalette(theme.Palette())
-
-	stdoutR, stdoutW := io.Pipe()
-	stderrR, stderrW := io.Pipe()
-	interp.SetStdout(stdoutW)
-	interp.SetStderr(stderrW)
-	stream := newLiveScriptStream(stdoutR, stderrR)
-	// A log query whose answer is missing rows ends the run as a failure
-	// and stops the script at its next statement.
-	failRun := func(err error) {
-		stream.setRunErr(err)
-		interp.Cancel()
-	}
-
-	bash.RegisterToolCommands(interp)
+	pal := theme.Palette()
+	// The client already checked any directory it shipped, and a cd the
+	// server cannot see (the client's own mounts) must not fail here.
+	cfg := bash.Config{Palette: &pal, SkipCdCheck: true}
 
 	noticeQueue := notices.NewQueue(c.Notices, userID)
 	if !NoGroup(owner) {
 		opts := []shellfs.Option{
 			shellfs.WithNoticeQueue(noticeQueue),
+			// The interpreter hands this context to every filesystem call: the
+			// request's values, such as its trace ID, without its cancellation,
+			// which the runner enforces itself.
 			shellfs.WithContext(context.WithoutCancel(ctx)),
 		}
 		// A redirect like `... > /cron.d/x` writes as the member, under the
@@ -1507,96 +1497,78 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		if c.SeenServices != nil {
 			logServices = c.SeenServices.Names(owner)
 		}
-		// Wrap the mount in a cwd resolver keyed to the (already seeded)
-		// dirstack. pkg/bash's file builtins (ls, cat, grep FILE, …) hand
-		// their raw argument straight to the FS — they don't normalise
-		// relative paths; that's the embedder's job, exactly as warp's own
-		// local-exec seam does. Without the wrapper a bare `ls` (arg ".")
-		// or any relative path cleans to "/" and returns the root mount
-		// set instead of the cwd's contents. Absolute paths pass through
-		// untouched, so the nil-seed callers (cron/watch, cwd "/") are
-		// unaffected. interp.DirStack().Cwd is read lazily, so an in-line
-		// `cd` within the same pipeline is tracked too.
-		interp.SetFS(bash.NewCwdFS(shellfs.New(c.Mounts.Config(mounts.Session{Owner: owner, LogServices: logServices}), append([]shellfs.Option{shellfs.WithAccess(c.mountAccess()), shellfs.WithAlertKinds(c.alertKinds())}, opts...)...), interp.DirStack().Cwd, ""))
+		// The runner wraps the FS in a cwd resolver keyed to the seeded
+		// dirstack: pkg/bash's file builtins (ls, cat, grep FILE, …) hand
+		// their raw argument straight to the FS, so without it a bare `ls`
+		// (arg ".") or any relative path cleans to "/" and returns the root
+		// mount set instead of the cwd's contents.
+		cfg.FS = shellfs.New(c.Mounts.Config(mounts.Session{Owner: owner, LogServices: logServices}), append([]shellfs.Option{shellfs.WithAccess(c.mountAccess()), shellfs.WithAlertKinds(c.alertKinds())}, opts...)...)
 
 		wf := &WeftFuncs{Crons: c.Crons, Sources: c.Sources, Limits: c.limits(owner), Owner: owner, Ctx: context.WithoutCancel(ctx), Scoper: c.Scoper}
-		RegisterWeftCommands(interp, wf)
-		RegisterWeftPredicates(interp, wf)
-		interp.LuaExtensions = []luapkg.Extension{wf.LuaExtension()}
+		cfg.LuaExtensions = []luapkg.Extension{wf.LuaExtension()}
+		cfg.Setup = func(_ context.Context, interp *bash.Interpreter, _ io.Writer, _ io.Reader) {
+			// A log query whose answer is missing rows ends the run as a
+			// failure and stops the script at its next statement.
+			failRun := func(err error) {
+				stream.setRunErr(err)
+				interp.Cancel()
+			}
+			RegisterWeftCommands(interp, wf)
+			RegisterWeftPredicates(interp, wf)
 
-		// `git` over /bin, /cron.d and /etc history and the rest of the
-		// deployment's own commands, in the same scope as the weft.* helpers;
-		// the user they act as is the one making the request.
-		if c.Commands != nil {
-			c.Commands(interp, owner, userID, interp.DirStack().Cwd, c.mountAccess(), c.ShareURLBase, tr.Start, tr.End)
+			// `git` over /bin, /cron.d and /etc history and the rest of the
+			// deployment's own commands, in the same scope as the weft.* helpers;
+			// the user they act as is the one making the request.
+			if c.Commands != nil {
+				c.Commands(interp, owner, userID, interp.DirStack().Cwd, c.mountAccess(), c.ShareURLBase, tr.Start, tr.End)
+			}
+			interp.UseParse(func(_ bash.ParseOrigin, script *bash.Script) {
+				rewriteQueryPipelines(ctx, script, c, tr, owner, userID, alertCtx, failRun)
+			})
 		}
-
-		interp.UseParse(func(_ bash.ParseOrigin, script *bash.Script) {
-			rewriteQueryPipelines(ctx, script, c, tr, owner, userID, alertCtx, failRun)
-		})
 	}
-	res := &ExecuteResult{Stream: stream}
 
-	// Run warp asynchronously. The goroutine sets res.Notices and any
-	// terminal error on the stream BEFORE closing the pipe writers,
-	// so a consumer that reads res.Notices after stream EOF sees the
-	// populated value (program-order: write Notices → write runErr →
-	// close writers; pipe-close synchronizes-with scanner-EOF on the
-	// reader side, which synchronizes-with the consumer's terminal
-	// Next via the channel send/receive in liveScriptStream).
+	res := &ExecuteResult{Stream: stream}
 	timeout := c.ScriptExecutionTimeout
 	if timeout <= 0 {
 		timeout = scriptExecutionTimeout
 	}
-	go func() {
-		// The script outlives the request that started it (its stream
-		// is consumed after Execute returns), so cancellation is
-		// detached — but the values (trace ID) are kept.
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
-		defer cancel()
-		// Watcher: on timeout, ask the interpreter to stop at the
-		// next AST boundary. ExecScript winds down cooperatively.
-		watchDone := make(chan struct{})
-		go func() {
-			select {
-			case <-ctx.Done():
-				interp.Cancel()
-			case <-watchDone:
-			}
-		}()
-		interp.ExecScript(ast)
-		close(watchDone)
-
-		res.Notices = noticeQueue.Drain(ctx)
-		// Dirstack courier (out): publish the post-run dirstack on the
-		// same happens-before edge as Notices (write → pipe close →
-		// consumer's post-EOF read), so the caller can cache the cwd the
-		// pipeline left behind.
-		res.FinalDirStack = interp.DirStack().Stack()
-		if ctx.Err() == context.DeadlineExceeded {
-			stream.setRunErr(fmt.Errorf("script exceeded %s execution time limit", timeout))
+	// Notices are drained inside the run, under its (timeout-bound) context.
+	drain := func(next bash.Runner) bash.Runner {
+		return func(rctx context.Context, req bash.RunRequest, out io.Writer) bash.RunResult {
+			r := next(rctx, req, out)
+			res.Notices = noticeQueue.Drain(rctx)
+			return r
 		}
+	}
+	run := bash.NewRunner(cfg, bash.Timeout(timeout), drain)
+
+	// Run asynchronously. The goroutine sets res.Notices (in drain) and any
+	// terminal error on the stream BEFORE closing the pipe writers, so a
+	// consumer that reads res.Notices after stream EOF sees the populated
+	// value (program-order: write Notices → write runErr → close writers;
+	// pipe-close synchronizes-with scanner-EOF on the reader side, which
+	// synchronizes-with the consumer's terminal Next via the channel
+	// send/receive in liveScriptStream).
+	go func() {
+		// The script outlives the request that started it (its stream is
+		// consumed after Execute returns), so cancellation is detached —
+		// but the values (trace ID) are kept.
+		rr := run(context.WithoutCancel(ctx), bash.RunRequest{Line: pipeline, DirStack: dirStack, Stderr: stderrW}, stdoutW)
+		// Dirstack courier (out): publish the post-run dirstack on the same
+		// happens-before edge as Notices, so the caller can cache the cwd the
+		// pipeline left behind.
+		res.FinalDirStack = rr.DirStack
+		if rr.Exit == 124 && rr.Err != nil {
+			// bash.Timeout ended it; keep the message callers match on.
+			rr.Err = fmt.Errorf("script exceeded %s execution time limit", timeout)
+		}
+		stream.setRunErr(rr.Err)
 		stdoutW.Close()
 		stderrW.Close()
 	}()
 
 	return res, nil
-}
-
-// seedDirStack rewrites ds to match stack (index 0 == cwd) using only the
-// public DirStack interface, so it works against any embedder impl. A nil
-// or empty stack is a no-op — the interpreter keeps its default cwd "/".
-// Mirrors warp's own dirstackReplace: clear to a single entry, set the
-// bottom, then push the rest in reverse so stack[0] ends up current.
-func seedDirStack(ds bash.DirStack, stack []string) {
-	if len(stack) == 0 {
-		return
-	}
-	ds.Clear()
-	_ = ds.Chdir(stack[len(stack)-1])
-	for i := len(stack) - 2; i >= 0; i-- {
-		_ = ds.Push(stack[i])
-	}
 }
 
 // alertKinds are the kinds the coordinator's notifier sends, which a save of

@@ -658,7 +658,7 @@ func (s *Server) handleSaveFunction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid name", http.StatusBadRequest)
 		return
 	}
-	if err := s.shellFS(r, session, nil).WriteFile(p, []byte(req.Source)); err != nil {
+	if err := s.shellFS(r, session, nil).WriteFile(r.Context(), p, []byte(req.Source)); err != nil {
 		writeFSError(w, err)
 		return
 	}
@@ -680,7 +680,7 @@ func (s *Server) handleDeleteFunction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid name", http.StatusBadRequest)
 		return
 	}
-	if err := s.shellFS(r, session, nil).Remove(p); err != nil {
+	if err := s.shellFS(r, session, nil).Remove(r.Context(), p); err != nil {
 		writeFSError(w, err)
 		return
 	}
@@ -899,7 +899,7 @@ func (s *Server) handleSaveWatch(w http.ResponseWriter, r *http.Request) {
 	// something to tell the user, e.g. the truncation lint); store.Split
 	// separates that from a real rejection.
 	content := "# schedule: " + req.Schedule + "\n" + req.Pipeline
-	blocking, warnings := warning.Split(s.shellFS(r, session, nil).WriteFile(p, []byte(content)))
+	blocking, warnings := warning.Split(s.shellFS(r, session, nil).WriteFile(r.Context(), p, []byte(content)))
 	if len(blocking) > 0 {
 		writeFSError(w, errors.Join(blocking...))
 		return
@@ -945,7 +945,7 @@ func (s *Server) handleDeleteWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid name", http.StatusBadRequest)
 		return
 	}
-	if err := s.shellFS(r, session, nil).Remove(p); err != nil {
+	if err := s.shellFS(r, session, nil).Remove(r.Context(), p); err != nil {
 		writeFSError(w, err)
 		return
 	}

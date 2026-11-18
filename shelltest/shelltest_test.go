@@ -1,6 +1,7 @@
 package shelltest
 
 import (
+	"context"
 	"io/fs"
 	"sort"
 	"strings"
@@ -86,7 +87,7 @@ func (m *testMount) Caps() shellcore.MountCaps {
 	return shellcore.MountCaps{Writable: m.writable}
 }
 
-func (m *testMount) ReadFile(rel string) ([]byte, error) {
+func (m *testMount) ReadFile(ctx context.Context, rel string) ([]byte, error) {
 	p := m.abs(rel)
 	for _, f := range m.files {
 		if f.Path == p && !f.IsDir {
@@ -96,7 +97,7 @@ func (m *testMount) ReadFile(rel string) ([]byte, error) {
 	return nil, fs.ErrNotExist
 }
 
-func (m *testMount) WriteFile(rel string, data []byte) error {
+func (m *testMount) WriteFile(ctx context.Context, rel string, data []byte) error {
 	p := m.abs(rel)
 	for i := range m.files {
 		if m.files[i].Path == p {
@@ -108,7 +109,7 @@ func (m *testMount) WriteFile(rel string, data []byte) error {
 	return nil
 }
 
-func (m *testMount) ReadDir(rel string) ([]fs.DirEntry, error) {
+func (m *testMount) ReadDir(ctx context.Context, rel string) ([]fs.DirEntry, error) {
 	p := m.abs(rel)
 	if !strings.HasSuffix(p, "/") {
 		p += "/"
@@ -151,7 +152,7 @@ func (m *testMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	return entries, nil
 }
 
-func (m *testMount) Stat(rel string) (fs.FileInfo, error) {
+func (m *testMount) Stat(ctx context.Context, rel string) (fs.FileInfo, error) {
 	p := m.abs(rel)
 	for _, f := range m.files {
 		if f.Path == p {
@@ -168,7 +169,7 @@ func (m *testMount) Stat(rel string) (fs.FileInfo, error) {
 	return nil, fs.ErrNotExist
 }
 
-func (m *testMount) Remove(rel string) error {
+func (m *testMount) Remove(ctx context.Context, rel string) error {
 	if !m.Caps().Writable {
 		return shellcore.ErrReadOnly
 	}

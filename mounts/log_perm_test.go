@@ -29,15 +29,15 @@ func TestLogMount_NonHostedScope(t *testing.T) {
 	}
 
 	m := &LogMount{cfg: alpha(shape.Coord{})}
-	if err := m.Authorize("alpha/prod", shellcore.PermRead); err != nil {
+	if err := m.Authorize(context.Background(), "alpha/prod", shellcore.PermRead); err != nil {
 		t.Errorf("granted namespace: %v", err)
 	}
-	if err := m.Authorize("beta/prod", shellcore.PermRead); !errors.Is(err, fs.ErrNotExist) {
+	if err := m.Authorize(context.Background(), "beta/prod", shellcore.PermRead); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("ungranted namespace: err = %v, want ErrNotExist", err)
 	}
 
 	m = &LogMount{cfg: alpha(shape.Coord{Env: shape.Value("prod")})}
-	if err := m.Authorize("alpha/prod", shellcore.PermRead); !errors.Is(err, shape.ErrFinerThanNamespace) {
+	if err := m.Authorize(context.Background(), "alpha/prod", shellcore.PermRead); !errors.Is(err, shape.ErrFinerThanNamespace) {
 		t.Errorf("env-restricted scope: err = %v, want a refusal", err)
 	}
 }
@@ -49,14 +49,14 @@ func TestAuthorize_NeverCreatesNamespaces(t *testing.T) {
 	cfg.Principal, cfg.Scope = groupPrincipal(1), staticScope{shape.Set{shapetest.In(1, shape.Coord{Namespace: shape.Value("readable")})}}
 	m := &LogMount{cfg: cfg}
 
-	if err := m.Authorize("readable/prod/api", shellcore.PermRead); err != nil {
+	if err := m.Authorize(context.Background(), "readable/prod/api", shellcore.PermRead); err != nil {
 		t.Errorf("a member with read permission must read their namespace: %v", err)
 	}
-	if err := m.Authorize("private", shellcore.PermRead); !errors.Is(err, fs.ErrNotExist) {
+	if err := m.Authorize(context.Background(), "private", shellcore.PermRead); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a namespace the principal may not read: err = %v, want ErrNotExist", err)
 	}
 	for _, typo := range []string{"typo", "readabel", "no such"} {
-		if err := m.Authorize(typo, shellcore.PermRead); !errors.Is(err, fs.ErrNotExist) {
+		if err := m.Authorize(context.Background(), typo, shellcore.PermRead); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("%q does not exist: err = %v, want ErrNotExist", typo, err)
 		}
 		if _, found, _ := cfg.Sources.GetNamespace(cfg.Owner, typo); found {
@@ -73,7 +73,7 @@ func TestLogReadDir_RootListsReadableNamespaces(t *testing.T) {
 	cfg.LogServices = []string{"withsvc/prod/api/app", "private/prod/api/app"}
 
 	list := func(c Config) []string {
-		ents, err := (&LogMount{cfg: c}).ReadDir("")
+		ents, err := (&LogMount{cfg: c}).ReadDir(context.Background(), "")
 		if err != nil {
 			t.Fatal(err)
 		}

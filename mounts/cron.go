@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"context"
 	"fmt"
 	"github.com/w3ft-net/weft/cronauthor"
 	"io/fs"
@@ -58,7 +59,7 @@ func (m *CronMount) resolve(rel string) (cronPath, error) {
 // operation. A namespace's crons are visible to whoever can read the
 // namespace, and writable by whoever may manage crons in it. Org-level crons
 // are visible to every member and published by PublishOrgWide.
-func (m *CronMount) Authorize(rel string, want shellcore.Perm) error {
+func (m *CronMount) Authorize(ctx context.Context, rel string, want shellcore.Perm) error {
 	p, err := m.resolve(rel)
 	if err != nil {
 		return err
@@ -110,7 +111,7 @@ func (m *CronMount) home(p cronPath) (uint, error) {
 	return ns.ID, nil
 }
 
-func (m *CronMount) ReadDir(rel string) ([]fs.DirEntry, error) {
+func (m *CronMount) ReadDir(ctx context.Context, rel string) ([]fs.DirEntry, error) {
 	p, err := m.resolve(rel)
 	if err != nil {
 		return nil, err
@@ -179,7 +180,7 @@ func (m *CronMount) get(rel string) (*cron.Watch, error) {
 	return w, nil
 }
 
-func (m *CronMount) ReadFile(rel string) ([]byte, error) {
+func (m *CronMount) ReadFile(ctx context.Context, rel string) ([]byte, error) {
 	w, err := m.get(rel)
 	if err != nil {
 		return nil, fmt.Errorf("/cron.d/%s: no such file", rel)
@@ -187,7 +188,7 @@ func (m *CronMount) ReadFile(rel string) ([]byte, error) {
 	return []byte(serialize(*w)), nil
 }
 
-func (m *CronMount) Stat(rel string) (fs.FileInfo, error) {
+func (m *CronMount) Stat(ctx context.Context, rel string) (fs.FileInfo, error) {
 	p, err := m.resolve(rel)
 	if err != nil {
 		return nil, err
@@ -298,7 +299,7 @@ func (m *CronMount) rename(oldRel, newRel string) error {
 // AmendVersionMessage allows recording a commit message for cron entries. It
 // is not a MountFS operation, so it checks write access itself.
 func (m *CronMount) AmendVersionMessage(rel, message string) error {
-	if err := m.Authorize(rel, shellcore.PermWrite); err != nil {
+	if err := m.Authorize(m.cfg.ctx(), rel, shellcore.PermWrite); err != nil {
 		return err
 	}
 	p, err := m.resolve(rel)
@@ -323,13 +324,13 @@ func serialize(w cron.Watch) string {
 // cronAuthor is the cron writing service the Config was given.
 func (c Config) cronAuthor() cronauthor.Service { return c.CronAuthor }
 
-func (m *CronMount) WriteFile(rel string, data []byte) error {
+func (m *CronMount) WriteFile(ctx context.Context, rel string, data []byte) error {
 	err := m.writeFile(rel, data)
-	m.cfg.journalWrite("cron.d/"+rel, err, func() ([]byte, error) { return m.ReadFile(rel) })
+	m.cfg.journalWrite("cron.d/"+rel, err, func() ([]byte, error) { return m.ReadFile(ctx, rel) })
 	return err
 }
 
-func (m *CronMount) Remove(rel string) error {
+func (m *CronMount) Remove(ctx context.Context, rel string) error {
 	err := m.remove(rel)
 	m.cfg.journalDelete("cron.d/"+rel, err)
 	return err
@@ -337,13 +338,13 @@ func (m *CronMount) Remove(rel string) error {
 
 // Rename is a deletion at the old path and a creation at the new one in the
 // history, which has no notion of a move.
-func (m *CronMount) Rename(oldRel, newRel string) error {
+func (m *CronMount) Rename(ctx context.Context, oldRel, newRel string) error {
 	err := m.rename(oldRel, newRel)
 	m.cfg.journalDelete("cron.d/"+oldRel, err)
-	m.cfg.journalWrite("cron.d/"+newRel, err, func() ([]byte, error) { return m.ReadFile(newRel) })
+	m.cfg.journalWrite("cron.d/"+newRel, err, func() ([]byte, error) { return m.ReadFile(ctx, newRel) })
 	return err
 }
 
 // FileLanguage implements shellcore.LangMount: a cron entry is a comment
 // header over a bash pipeline.
-func (m *CronMount) FileLanguage(rel string) string { return "bash" }
+func (m *CronMount) FileLanguage(ctx context.Context, rel string) string { return "bash" }

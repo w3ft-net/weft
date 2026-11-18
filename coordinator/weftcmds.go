@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 )
@@ -25,11 +26,10 @@ func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 		"weft::previous": wf.Previous,
 	} {
 		name, read := name, read
-		interp.RegisterCommand(name, func(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
-			if len(args) < 1 {
-				fmt.Fprintf(stderr, "usage: %s <cron-name>\n", name)
-				return 1
-			}
+		regSpec(interp, bash.Spec{
+			Name: name, Summary: "print the cron's " + strings.TrimPrefix(name, "weft::") + " value",
+			Args: cronOps(1, 1, "CRON"),
+		}, func(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 			val, err := read(args[0])
 			if err != nil {
 				fmt.Fprintln(stderr, err)
@@ -42,53 +42,45 @@ func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 
 	// describe prints how past runs went, one JSON object per line, newest
 	// first: the saved fields no other weft:: function exposes.
-	interp.RegisterCommandMeta("weft::describe", bash.ExternalCmd{
-		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::describe <name> [n]: the last n runs (default 10, max 50) as JSON lines: ran_at, exit_code, duration_ms, tag, value, stdout, stderr",
-		Run: func(args []string, _ io.Reader, stdout io.Writer, stderr io.Writer) int {
-			if len(args) < 1 || len(args) > 2 {
-				fmt.Fprintln(stderr, "usage: weft::describe <cron-name> [n]")
+	regSpec(interp, bash.Spec{
+		Name: "weft::describe", Summary: "print how a cron's recent runs went, as JSON lines",
+		Args:    cronOps(1, 2, "CRON", "N"),
+		TypeDoc: "weft::describe <name> [n]: the last n runs (default 10, max 50) as JSON lines: ran_at, exit_code, duration_ms, tag, value, stdout, stderr",
+	}, func(args []string, _ io.Reader, stdout io.Writer, stderr io.Writer) int {
+		n := defaultDescribeRuns
+		if len(args) == 2 {
+			v, err := strconv.Atoi(args[1])
+			if err != nil {
+				fmt.Fprintf(stderr, "weft::describe: invalid n %q\n", args[1])
 				return 1
 			}
-			n := defaultDescribeRuns
-			if len(args) == 2 {
-				v, err := strconv.Atoi(args[1])
-				if err != nil {
-					fmt.Fprintf(stderr, "weft::describe: invalid n %q\n", args[1])
-					return 1
-				}
-				n = v
-			}
-			runs, err := wf.Describe(args[0], n)
+			n = v
+		}
+		runs, err := wf.Describe(args[0], n)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if err := writeRunsJSONL(stdout, runs); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	})
+
+	register := func(name, typeDoc string, call func(name, dur string) (float64, error)) {
+		regSpec(interp, bash.Spec{
+			Name: name, Summary: "compute " + strings.TrimPrefix(name, "weft::") + " of a cron's results over a window",
+			Args:    cronOps(2, 2, "CRON", "DURATION"),
+			TypeDoc: typeDoc,
+		}, func(args []string, _ io.Reader, stdout io.Writer, stderr io.Writer) int {
+			val, err := call(args[0], args[1])
 			if err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
 			}
-			if err := writeRunsJSONL(stdout, runs); err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
+			fmt.Fprintf(stdout, "%.6g\n", val)
 			return 0
-		},
-	})
-
-	register := func(name, typeDoc string, call func(name, dur string) (float64, error)) {
-		interp.RegisterCommandMeta(name, bash.ExternalCmd{
-			Strategy: bash.StageBarrier,
-			TypeDoc:  typeDoc,
-			Run: func(args []string, _ io.Reader, stdout io.Writer, stderr io.Writer) int {
-				if len(args) < 2 {
-					fmt.Fprintf(stderr, "usage: %s <cron-name> <duration>\n", name)
-					return 1
-				}
-				val, err := call(args[0], args[1])
-				if err != nil {
-					fmt.Fprintln(stderr, err)
-					return 1
-				}
-				fmt.Fprintf(stdout, "%.6g\n", val)
-				return 0
-			},
 		})
 	}
 
@@ -174,32 +166,27 @@ func RegisterWeftCommands(interp *bash.Interpreter, wf *WeftFuncs) {
 		})
 
 	// weft::percentile takes an extra p argument (0..100).
-	interp.RegisterCommandMeta("weft::percentile", bash.ExternalCmd{
-		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::percentile <name> <dur> <p>: linearly interpolated p-th percentile of numeric stdout in window (p in 0..100)",
-		Run: func(args []string, _ io.Reader, stdout io.Writer, stderr io.Writer) int {
-			if len(args) < 3 {
-				fmt.Fprintln(stderr, "usage: weft::percentile <cron-name> <duration> <p>")
-				return 1
-			}
-			d, err := ParseRawDuration(args[1])
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-			p, err := strconv.ParseFloat(args[2], 64)
-			if err != nil {
-				fmt.Fprintf(stderr, "weft::percentile: invalid p %q\n", args[2])
-				return 1
-			}
-			val, err := wf.Percentile(args[0], d, p)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-			fmt.Fprintf(stdout, "%.6g\n", val)
-			return 0
-		},
+	regSpec(interp, bash.Spec{
+		Name: "weft::percentile", Summary: "compute a percentile of a cron's results over a window",
+		Args:    cronOps(3, 3, "CRON", "DURATION", "P"),
+		TypeDoc: "weft::percentile <name> <dur> <p>: linearly interpolated p-th percentile of numeric stdout in window (p in 0..100)",
+	}, func(args []string, _ io.Reader, stdout io.Writer, stderr io.Writer) int {
+		d, err := ParseRawDuration(args[1])
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		p, err := strconv.ParseFloat(args[2], 64)
+		if err != nil {
+			fmt.Fprintf(stderr, "weft::percentile: invalid p %q\n", args[2])
+			return 1
+		}
+		val, err := wf.Percentile(args[0], d, p)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%.6g\n", val)
+		return 0
 	})
-
 }

@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"context"
 	"io/fs"
 	"reflect"
 	"testing"
@@ -20,7 +21,7 @@ func TestLogMountServiceIsDirectory(t *testing.T) {
 
 	names := func(rel string) []string {
 		t.Helper()
-		ents, err := m.ReadDir(rel)
+		ents, err := m.ReadDir(context.Background(), rel)
 		if err != nil {
 			t.Fatalf("ReadDir(%q): %v", rel, err)
 		}
@@ -56,7 +57,7 @@ func TestLogMountServiceIsDirectory(t *testing.T) {
 		"loom/prod/api/main.log": false,
 		"loom/edge":              true,
 	} {
-		fi, err := m.Stat(rel)
+		fi, err := m.Stat(context.Background(), rel)
 		if err != nil {
 			t.Errorf("Stat(%q): %v", rel, err)
 			continue
@@ -65,7 +66,7 @@ func TestLogMountServiceIsDirectory(t *testing.T) {
 			t.Errorf("Stat(%q).IsDir() = %v, want %v", rel, fi.IsDir(), wantDir)
 		}
 	}
-	if _, err := m.Stat("loom/prod/nope"); err != fs.ErrNotExist {
+	if _, err := m.Stat(context.Background(), "loom/prod/nope"); err != fs.ErrNotExist {
 		t.Errorf("Stat(loom/prod/nope) err = %v, want ErrNotExist", err)
 	}
 }
@@ -73,7 +74,7 @@ func TestLogMountServiceIsDirectory(t *testing.T) {
 // Walk of a service directory returns only that service's files.
 func TestLogMountWalkServiceSubtree(t *testing.T) {
 	m := &LogMount{cfg: ownerCfg(t, []string{"loom/prod/api/main", "loom/prod/api/metrics", "loom/prod/worker/main"})}
-	got, err := m.Walk("loom/prod/api")
+	got, err := m.Walk(context.Background(), "loom/prod/api")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestLogMountThreeSegmentServiceSpansEnvs(t *testing.T) {
 	})}
 	names := func(rel string) []string {
 		t.Helper()
-		ents, err := m.ReadDir(rel)
+		ents, err := m.ReadDir(context.Background(), rel)
 		if err != nil {
 			t.Fatalf("ReadDir(%q): %v", rel, err)
 		}
@@ -126,7 +127,7 @@ func TestLogMountThreeSegmentServiceSpansEnvs(t *testing.T) {
 		"acme/worker/main.log":   false,
 		"acme/prod/api/main.log": false, // 4-segment form unchanged
 	} {
-		fi, err := m.Stat(rel)
+		fi, err := m.Stat(context.Background(), rel)
 		if err != nil {
 			t.Errorf("Stat(%q): %v", rel, err)
 			continue
@@ -136,11 +137,11 @@ func TestLogMountThreeSegmentServiceSpansEnvs(t *testing.T) {
 		}
 	}
 	for _, rel := range []string{"acme/nope", "acme/api/nope.log", "acme/worker/metrics.log", "other/api"} {
-		if _, err := m.Stat(rel); err == nil {
+		if _, err := m.Stat(context.Background(), rel); err == nil {
 			t.Errorf("Stat(%q) should not exist", rel)
 		}
 	}
-	if _, err := m.ReadDir("acme/nope"); err == nil {
+	if _, err := m.ReadDir(context.Background(), "acme/nope"); err == nil {
 		t.Error("ReadDir of a service no env carries should fail")
 	}
 
@@ -158,7 +159,7 @@ func TestLogMountEnvlessServiceWinsOverMergedView(t *testing.T) {
 		"acme/prod/api/main", // env-bearing service of the same name
 		"acme/prod/api/metrics",
 	})}
-	ents, err := m.ReadDir("acme/api")
+	ents, err := m.ReadDir(context.Background(), "acme/api")
 	if err != nil {
 		t.Fatal(err)
 	}

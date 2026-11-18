@@ -254,9 +254,33 @@ func TestAlert_Rising_NoPrevious(t *testing.T) {
 func TestAlert_ParseArgsRejectsUnknownOptions(t *testing.T) {
 	for _, args := range []string{"--foo", "above 50 --foo", "above 50 -x", "above 50 --msg hi --severity high", "-z"} {
 		_, err := alert.ParseArgs(strings.Fields(args))
-		if err == nil || !strings.Contains(err.Error(), "unknown option") {
-			t.Errorf("alert.ParseArgs(%q) = %v, want unknown option error", args, err)
+		if err == nil || !strings.Contains(err.Error(), "option") {
+			t.Errorf("alert.ParseArgs(%q) = %v, want an option error", args, err)
 		}
+	}
+}
+
+// Through the spec, options may precede the condition, a negative threshold is
+// not a flag, and a stray extra operand is an error rather than ignored.
+func TestAlert_ParseArgsGNUGrammar(t *testing.T) {
+	a, err := alert.ParseArgs(strings.Fields("--msg hi below -5"))
+	if err != nil || a.Condition != alert.Below || a.Threshold != -5 || a.Msg != "hi" {
+		t.Errorf("options first: %+v, %v", a, err)
+	}
+	a, err = alert.ParseArgs(strings.Fields("--duration=5m --average above 3"))
+	if err != nil || a.Duration.Minutes() != 5 || !a.Average || a.Threshold != 3 {
+		t.Errorf("long forms: %+v, %v", a, err)
+	}
+	// A value that follows its keyword is a value even when it starts with a dash.
+	a, err = alert.ParseArgs([]string{"matches", "-rc[0-9]*$", "-v", "1", "-t", "2"})
+	if err != nil || a.Condition != alert.Matches || a.Pattern.String() != "-rc[0-9]*$" || a.Key.IsZero() || a.Tag.IsZero() {
+		t.Errorf("dash pattern: %+v, %v", a, err)
+	}
+	if _, err := alert.ParseArgs(strings.Fields("above 5 extra")); err == nil {
+		t.Error("an extra operand should be an error")
+	}
+	if _, err := alert.ParseArgs(strings.Fields("above")); err == nil || !strings.Contains(err.Error(), "requires a threshold") {
+		t.Errorf("missing threshold: %v", err)
 	}
 }
 

@@ -22,52 +22,52 @@ import (
 // under `weft.is_above(...)` / `weft.has_changed(...)` etc. — Lua uses
 // the table-access dot, bash uses :: as the namespace separator.
 func RegisterWeftPredicates(interp *bash.Interpreter, wf *WeftFuncs) {
-	interp.RegisterCommandMeta("weft::is_above", bash.ExternalCmd{
-		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_above <cron> <threshold> [<window> [--average]]: exit 0 if the cron's value is above the threshold",
-		Run:      numericPredicate(wf, "weft::is_above", predicateAbove(wf)),
-	})
-	interp.RegisterCommandMeta("weft::is_below", bash.ExternalCmd{
-		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_below <cron> <threshold> [<window> [--average]]: exit 0 if the cron's value is below the threshold",
-		Run:      numericPredicate(wf, "weft::is_below", predicateBelow(wf)),
-	})
-	interp.RegisterCommandMeta("weft::is_absent", bash.ExternalCmd{
-		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_absent <cron> [<window>]: exit 0 if the cron has no recent result (within <window> if given, else latest is empty)",
-		Run:      predicateAbsent(wf),
-	})
-	interp.RegisterCommandMeta("weft::has_changed", bash.ExternalCmd{
-		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::has_changed <cron>: exit 0 if the cron's latest output differs from the previous tick",
-		Run:      predicateChanged(wf),
-	})
-	interp.RegisterCommandMeta("weft::is_rising", bash.ExternalCmd{
-		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_rising <cron> [<pct>] [<window>]: exit 0 if the cron rose by at least pct% (default 0) vs baseline (prev tick by default; avg over window if given)",
-		Run:      numericPredicate(wf, "weft::is_rising", predicateRising(wf)),
-	})
-	interp.RegisterCommandMeta("weft::is_falling", bash.ExternalCmd{
-		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_falling <cron> [<pct>] [<window>]: exit 0 if the cron fell by at least pct% (default 0) vs baseline (prev tick by default; avg over window if given)",
-		Run:      numericPredicate(wf, "weft::is_falling", predicateFalling(wf)),
-	})
-	interp.RegisterCommandMeta("weft::is_outlier", bash.ExternalCmd{
-		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_outlier <cron> <n_stddev> <window> [--above|--below]: exit 0 if |latest - avg(window)| > n_stddev * stddev(window). --above/--below restricts to one direction.",
-		Run:      numericPredicate(wf, "weft::is_outlier", predicateOutlier(wf)),
-	})
-	interp.RegisterCommandMeta("weft::is_seasonal", bash.ExternalCmd{
-		Strategy: bash.StageBarrier,
-		TypeDoc:  "weft::is_seasonal <cron> <n_stddev> <period> <window>: exit 0 if latest is n_stddev away from same-time-of-period mean over window (e.g. period=1d window=4w compares to same hour over last 4 days)",
-		Run:      numericPredicate(wf, "weft::is_seasonal", predicateSeasonal(wf)),
-	})
+	pred := func(name, summary, typeDoc string, args bash.OperandSpec, flags []bash.Flag, run weftRun) {
+		regSpec(interp, bash.Spec{Name: name, Summary: summary, Flags: flags, Args: args, TypeDoc: typeDoc, UsageExit: 2}, run)
+	}
+	average := []bash.Flag{bash.Bool("average", 0, "with a window, compare the window's average instead of every sample")}
+	direction := []bash.Flag{
+		bash.Bool("above", 0, "only count a deviation above the average"),
+		bash.Bool("below", 0, "only count a deviation below the average"),
+	}
+	pred("weft::is_above", "exit 0 if the cron's value is above a threshold",
+		"weft::is_above <cron> <threshold> [<window> [--average]]: exit 0 if the cron's value is above the threshold",
+		cronOps(2, 3, "CRON", "THRESHOLD", "WINDOW"), average,
+		numericPredicate(wf, "weft::is_above", predicateAbove(wf)))
+	pred("weft::is_below", "exit 0 if the cron's value is below a threshold",
+		"weft::is_below <cron> <threshold> [<window> [--average]]: exit 0 if the cron's value is below the threshold",
+		cronOps(2, 3, "CRON", "THRESHOLD", "WINDOW"), average,
+		numericPredicate(wf, "weft::is_below", predicateBelow(wf)))
+	pred("weft::is_absent", "exit 0 if the cron has no recent result",
+		"weft::is_absent <cron> [<window>]: exit 0 if the cron has no recent result (within <window> if given, else latest is empty)",
+		cronOps(1, 2, "CRON", "WINDOW"), nil, predicateAbsent(wf))
+	pred("weft::has_changed", "exit 0 if the cron's latest output differs from the previous tick",
+		"weft::has_changed <cron>: exit 0 if the cron's latest output differs from the previous tick",
+		cronOps(1, 1, "CRON"), nil, predicateChanged(wf))
+	pred("weft::is_rising", "exit 0 if the cron rose by at least a percentage",
+		"weft::is_rising <cron> [<pct>] [<window>]: exit 0 if the cron rose by at least pct% (default 0) vs baseline (prev tick by default; avg over window if given)",
+		cronOps(1, 3, "CRON", "PCT", "WINDOW"), nil,
+		numericPredicate(wf, "weft::is_rising", predicateRising(wf)))
+	pred("weft::is_falling", "exit 0 if the cron fell by at least a percentage",
+		"weft::is_falling <cron> [<pct>] [<window>]: exit 0 if the cron fell by at least pct% (default 0) vs baseline (prev tick by default; avg over window if given)",
+		cronOps(1, 3, "CRON", "PCT", "WINDOW"), nil,
+		numericPredicate(wf, "weft::is_falling", predicateFalling(wf)))
+	pred("weft::is_outlier", "exit 0 if the cron's latest value is an outlier against a window",
+		"weft::is_outlier <cron> <n_stddev> <window> [--above|--below]: exit 0 if |latest - avg(window)| > n_stddev * stddev(window). --above/--below restricts to one direction.",
+		cronOps(3, 3, "CRON", "N_STDDEV", "WINDOW"), direction,
+		numericPredicate(wf, "weft::is_outlier", predicateOutlier(wf)))
+	pred("weft::is_seasonal", "exit 0 if the cron's latest value is unusual for the time of period",
+		"weft::is_seasonal <cron> <n_stddev> <period> <window>: exit 0 if latest is n_stddev away from same-time-of-period mean over window (e.g. period=1d window=4w compares to same hour over last 4 days)",
+		cronOps(4, 4, "CRON", "N_STDDEV", "PERIOD", "WINDOW"), nil,
+		numericPredicate(wf, "weft::is_seasonal", predicateSeasonal(wf)))
 
 	// Stdin comparators — read a float from stdin, compare to threshold.
 	// Let users pipe an aggregate value through a predicate:
 	//   weft::avg foo 5m | weft::is_gt 50 && ...
-	interp.RegisterCommand("weft::is_gt", stdinComparator(func(x, t float64) bool { return x > t }))
-	interp.RegisterCommand("weft::is_lt", stdinComparator(func(x, t float64) bool { return x < t }))
+	pred("weft::is_gt", "exit 0 if the number on stdin is greater than THRESHOLD", "", cronOps(1, 1, "THRESHOLD"), nil,
+		stdinComparator(func(x, t float64) bool { return x > t }))
+	pred("weft::is_lt", "exit 0 if the number on stdin is less than THRESHOLD", "", cronOps(1, 1, "THRESHOLD"), nil,
+		stdinComparator(func(x, t float64) bool { return x < t }))
 }
 
 // numericPredicate refuses a text cron before run: exit 2 with a message,

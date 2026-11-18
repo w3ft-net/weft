@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -25,7 +26,7 @@ import (
 
 func planAfterExpand(t *testing.T, fs *testFS, pipeline string) *planner.QueryPlan {
 	t.Helper()
-	expanded, err := expandBinPipeline(pipeline, fs)
+	expanded, err := expandBinPipeline(context.Background(), pipeline, fs)
 	if err != nil {
 		t.Fatalf("expandBinPipeline: %v", err)
 	}

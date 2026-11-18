@@ -44,8 +44,8 @@ func New(cfg mounts.Config, opts ...Option) *ShellFS {
 // Walk returns the flat subtree under path as mount-relative paths,
 // directories suffixed with "/". It backs the server's tree fast-path
 // (one call instead of O(directories) ReadDir round-trips).
-func (f *ShellFS) Walk(path string) ([]string, error) {
-	return mounts.Walk(f.cfg, path)
+func (f *ShellFS) Walk(ctx context.Context, path string) ([]string, error) {
+	return mounts.Walk(ctx, f.cfg, path)
 }
 
 // Option shapes the Config a ShellFS is made over.
@@ -109,58 +109,58 @@ func (f *ShellFS) MountFS() *shellcore.MountFS { return f.mfs }
 
 // --- bash.FS implementation ---
 
-func (f *ShellFS) ReadFile(path string) ([]byte, error) {
-	return f.mfs.ReadFile(path)
+func (f *ShellFS) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	return f.mfs.ReadFile(ctx, path)
 }
 
-func (f *ShellFS) WriteFile(path string, data []byte) error {
-	return f.mfs.WriteFile(path, data)
+func (f *ShellFS) WriteFile(ctx context.Context, path string, data []byte) error {
+	return f.mfs.WriteFile(ctx, path, data)
 }
 
-func (f *ShellFS) Stat(path string) (fs.FileInfo, error) {
-	return f.mfs.Stat(path)
+func (f *ShellFS) Stat(ctx context.Context, path string) (fs.FileInfo, error) {
+	return f.mfs.Stat(ctx, path)
 }
 
-func (f *ShellFS) ReadDir(path string) ([]fs.DirEntry, error) {
-	return f.mfs.ReadDir(path)
+func (f *ShellFS) ReadDir(ctx context.Context, path string) ([]fs.DirEntry, error) {
+	return f.mfs.ReadDir(ctx, path)
 }
 
-func (f *ShellFS) Remove(path string) error {
-	return f.mfs.Remove(path)
+func (f *ShellFS) Remove(ctx context.Context, path string) error {
+	return f.mfs.Remove(ctx, path)
 }
 
 // --- Optional bash.FS interfaces ---
 
-func (f *ShellFS) AppendFile(path string, data []byte) error {
-	return f.mfs.AppendFile(path, data)
+func (f *ShellFS) AppendFile(ctx context.Context, path string, data []byte) error {
+	return f.mfs.AppendFile(ctx, path, data)
 }
 
-func (f *ShellFS) Mkdir(path string) error {
-	return f.mfs.Mkdir(path)
+func (f *ShellFS) Mkdir(ctx context.Context, path string) error {
+	return f.mfs.Mkdir(ctx, path)
 }
 
-func (f *ShellFS) RemoveAll(path string) error {
-	return f.mfs.RemoveAll(path)
+func (f *ShellFS) RemoveAll(ctx context.Context, path string) error {
+	return f.mfs.RemoveAll(ctx, path)
 }
 
-func (f *ShellFS) CopyFile(src, dst string) error {
-	return f.mfs.CopyFile(src, dst)
+func (f *ShellFS) CopyFile(ctx context.Context, src, dst string) error {
+	return f.mfs.CopyFile(ctx, src, dst)
 }
 
-func (f *ShellFS) Rename(oldPath, newPath string) error {
-	return f.mfs.Rename(oldPath, newPath)
+func (f *ShellFS) Rename(ctx context.Context, oldPath, newPath string) error {
+	return f.mfs.Rename(ctx, oldPath, newPath)
 }
 
-func (f *ShellFS) Touch(path string) error {
-	return f.mfs.Touch(path)
+func (f *ShellFS) Touch(ctx context.Context, path string) error {
+	return f.mfs.Touch(ctx, path)
 }
 
-func (f *ShellFS) Glob(pattern string) ([]string, error) {
-	return f.mfs.Glob(pattern)
+func (f *ShellFS) Glob(ctx context.Context, pattern string) ([]string, error) {
+	return f.mfs.Glob(ctx, pattern)
 }
 
-func (f *ShellFS) FileLanguage(path string) string {
-	return f.mfs.FileLanguage(path)
+func (f *ShellFS) FileLanguage(ctx context.Context, path string) string {
+	return f.mfs.FileLanguage(ctx, path)
 }
 
 // --- Extra methods not in bash.FS ---

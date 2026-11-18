@@ -44,14 +44,14 @@ func TestParse_Errors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"--bogus"}, "trace: unknown option --bogus"},
-		{[]string{"-v"}, "trace: unknown option -v"},
-		{[]string{"--id"}, "trace: --id needs a trace id"},
+		{[]string{"--bogus"}, "trace: unrecognized option '--bogus'"},
+		{[]string{"-v"}, "trace: invalid option -- 'v'"},
+		{[]string{"--id"}, "trace: option '--id' requires an argument"},
 		{[]string{"--id", "--spans"}, "trace: --id needs a trace id"},
 		{[]string{"--id", "a", "--id", "b"}, "trace: --id given more than once"},
-		{[]string{"--name"}, "trace: --name needs a span name"},
+		{[]string{"--name"}, "trace: option '--name' requires an argument"},
 		{[]string{"--spans", "--name", "a", "--name", "b"}, "trace: --name given more than once"},
-		{[]string{"a", "b"}, "trace: expected at most one <namespace>[/<service>] argument"},
+		{[]string{"a", "b"}, "trace: extra operand 'b'"},
 		{[]string{"/log/acme/api"}, "trace: a scope is <namespace>[/<service>], not a path"},
 		{[]string{"acme/"}, "trace: a scope is <namespace>[/<service>]"},
 		{[]string{"/api"}, "trace: a scope is <namespace>[/<service>]"},

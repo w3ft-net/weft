@@ -49,7 +49,7 @@ func TestParseHook_EvalBodyIsRewritten(t *testing.T) {
 
 func TestParseHook_SourcedFileIsRewritten(t *testing.T) {
 	fs := bash.NewMemFS()
-	fs.WriteFile("/lib.sh", []byte("cat /log/foo.log"))
+	fs.WriteFile(context.Background(), "/lib.sh", []byte("cat /log/foo.log"))
 	got := captureAfterRewrite(t, fs, `source /lib.sh`)
 	s := got[bash.ParseSource]
 	if s == nil {
@@ -60,7 +60,7 @@ func TestParseHook_SourcedFileIsRewritten(t *testing.T) {
 
 func TestParseHook_BinScriptIsRewritten(t *testing.T) {
 	fs := bash.NewMemFS()
-	fs.WriteFile("/bin/errs", []byte("cat /log/foo.log"))
+	fs.WriteFile(context.Background(), "/bin/errs", []byte("cat /log/foo.log"))
 	got := captureAfterRewrite(t, fs, `errs`)
 	s := got[bash.ParseExecutable]
 	if s == nil {

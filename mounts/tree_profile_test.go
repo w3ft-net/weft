@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"context"
 	"io/fs"
 	"strings"
 	"testing"
@@ -21,14 +22,22 @@ type countingLogMount struct {
 	walkScans int      // full LogServices slice scans implied by Walk
 }
 
-func (c *countingLogMount) Prefix() string                     { return c.inner.Prefix() }
-func (c *countingLogMount) Caps() shellcore.MountCaps          { return c.inner.Caps() }
-func (c *countingLogMount) ReadFile(r string) ([]byte, error)  { return c.inner.ReadFile(r) }
-func (c *countingLogMount) Stat(r string) (fs.FileInfo, error) { return c.inner.Stat(r) }
-func (c *countingLogMount) WriteFile(r string, d []byte) error { return c.inner.WriteFile(r, d) }
-func (c *countingLogMount) Remove(r string) error              { return c.inner.Remove(r) }
+func (c *countingLogMount) Prefix() string            { return c.inner.Prefix() }
+func (c *countingLogMount) Caps() shellcore.MountCaps { return c.inner.Caps() }
+func (c *countingLogMount) ReadFile(ctx context.Context, r string) ([]byte, error) {
+	return c.inner.ReadFile(context.Background(), r)
+}
+func (c *countingLogMount) Stat(ctx context.Context, r string) (fs.FileInfo, error) {
+	return c.inner.Stat(context.Background(), r)
+}
+func (c *countingLogMount) WriteFile(ctx context.Context, r string, d []byte) error {
+	return c.inner.WriteFile(context.Background(), r, d)
+}
+func (c *countingLogMount) Remove(ctx context.Context, r string) error {
+	return c.inner.Remove(context.Background(), r)
+}
 
-func (c *countingLogMount) ReadDir(rel string) ([]fs.DirEntry, error) {
+func (c *countingLogMount) ReadDir(ctx context.Context, rel string) ([]fs.DirEntry, error) {
 	c.rels = append(c.rels, rel)
 	switch {
 	case rel == "":
@@ -38,13 +47,13 @@ func (c *countingLogMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	default:
 		c.scans++
 	}
-	return c.inner.ReadDir(rel)
+	return c.inner.ReadDir(context.Background(), rel)
 }
 
-func (c *countingLogMount) Walk(rel string) ([]string, error) {
+func (c *countingLogMount) Walk(ctx context.Context, rel string) ([]string, error) {
 	c.walkCalls++
 	c.walkScans++ // LogMount.Walk is a single pass over LogServices
-	return c.inner.Walk(rel)
+	return c.inner.Walk(context.Background(), rel)
 }
 
 // buildLogServices fabricates a realistic slash-encoded app universe:
@@ -119,7 +128,7 @@ func TestTreeLogUsesSingleWalk(t *testing.T) {
 	apps := buildLogServices(50, 5, 30) // 7,500 apps
 	mfs, cm := newCountingTreeFS(t, apps)
 
-	if _, err := mfs.Tree("/log"); err != nil {
+	if _, err := mfs.Tree(context.Background(), "/log"); err != nil {
 		t.Fatalf("tree /log: %v", err)
 	}
 
@@ -151,7 +160,7 @@ func TestTreeWalkOutputParity(t *testing.T) {
 	// Walk path.
 	walkFS := shellcore.NewMountFS()
 	walkFS.Register(&LogMount{cfg: cfg})
-	walkOut, err := walkFS.Tree("/log")
+	walkOut, err := walkFS.Tree(context.Background(), "/log")
 	if err != nil {
 		t.Fatalf("walk tree: %v", err)
 	}
@@ -160,7 +169,7 @@ func TestTreeWalkOutputParity(t *testing.T) {
 	// MountFS.Tree's recursive ReadDir fallback.
 	rdFS := shellcore.NewMountFS()
 	rdFS.Register(readDirOnly{&LogMount{cfg: cfg}})
-	rdOut, err := rdFS.Tree("/log")
+	rdOut, err := rdFS.Tree(context.Background(), "/log")
 	if err != nil {
 		t.Fatalf("readdir tree: %v", err)
 	}
@@ -174,13 +183,23 @@ func TestTreeWalkOutputParity(t *testing.T) {
 // MountFS.Tree falls back to recursive ReadDir.
 type readDirOnly struct{ lm *LogMount }
 
-func (r readDirOnly) Prefix() string                            { return r.lm.Prefix() }
-func (r readDirOnly) Caps() shellcore.MountCaps                 { return r.lm.Caps() }
-func (r readDirOnly) ReadDir(rel string) ([]fs.DirEntry, error) { return r.lm.ReadDir(rel) }
-func (r readDirOnly) ReadFile(rel string) ([]byte, error)       { return r.lm.ReadFile(rel) }
-func (r readDirOnly) Stat(rel string) (fs.FileInfo, error)      { return r.lm.Stat(rel) }
-func (r readDirOnly) WriteFile(rel string, d []byte) error      { return r.lm.WriteFile(rel, d) }
-func (r readDirOnly) Remove(rel string) error                   { return r.lm.Remove(rel) }
+func (r readDirOnly) Prefix() string            { return r.lm.Prefix() }
+func (r readDirOnly) Caps() shellcore.MountCaps { return r.lm.Caps() }
+func (r readDirOnly) ReadDir(ctx context.Context, rel string) ([]fs.DirEntry, error) {
+	return r.lm.ReadDir(context.Background(), rel)
+}
+func (r readDirOnly) ReadFile(ctx context.Context, rel string) ([]byte, error) {
+	return r.lm.ReadFile(context.Background(), rel)
+}
+func (r readDirOnly) Stat(ctx context.Context, rel string) (fs.FileInfo, error) {
+	return r.lm.Stat(context.Background(), rel)
+}
+func (r readDirOnly) WriteFile(ctx context.Context, rel string, d []byte) error {
+	return r.lm.WriteFile(context.Background(), rel, d)
+}
+func (r readDirOnly) Remove(ctx context.Context, rel string) error {
+	return r.lm.Remove(context.Background(), rel)
+}
 
 // TestProfileTreeLog is the informational profile retained from the
 // original investigation. It logs the traversal shape across sizes;
@@ -195,7 +214,7 @@ func TestProfileTreeLog(t *testing.T) {
 		apps := buildLogServices(c.ns, c.env, c.app)
 		mfs, cm := newCountingTreeFS(t, apps)
 		start := time.Now()
-		if _, err := mfs.Tree("/log"); err != nil {
+		if _, err := mfs.Tree(context.Background(), "/log"); err != nil {
 			t.Fatalf("tree /log: %v", err)
 		}
 		el := time.Since(start)
@@ -211,7 +230,7 @@ func BenchmarkTreeLog(b *testing.B) {
 	mfs.Register(&LogMount{cfg: ownerCfg(b, apps)})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := mfs.Tree("/log"); err != nil {
+		if _, err := mfs.Tree(context.Background(), "/log"); err != nil {
 			b.Fatal(err)
 		}
 	}

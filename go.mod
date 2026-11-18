@@ -19,7 +19,7 @@ require (
 	github.com/duckdb/duckdb-go/v2 v2.10501.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/graybeardcorp/warp v0.4.0
+	github.com/graybeardcorp/warp v0.5.0
 	github.com/itchyny/timefmt-go v0.1.9
 	github.com/leodido/go-syslog/v4 v4.6.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2

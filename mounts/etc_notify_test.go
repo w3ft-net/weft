@@ -18,7 +18,7 @@ const notifySystem = "system:\n  email: [ops@example.test]\n"
 // skipped when an alert fires.
 func TestEtcWriteNotify_RefusesAKindTheBuildDoesNotSend(t *testing.T) {
 	m := &EtcMount{cfg: Config{}}
-	err := m.WriteFile("notify.yaml", []byte(notifySystem+"ops:\n  slack: ['#ops']\n"))
+	err := m.WriteFile(context.Background(), "notify.yaml", []byte(notifySystem+"ops:\n  slack: ['#ops']\n"))
 	if err == nil || !strings.Contains(err.Error(), `"slack"`) {
 		t.Fatalf("err = %v, want a refusal naming slack", err)
 	}
@@ -56,7 +56,7 @@ func TestEtcWriteNotify_AcceptsTheDeploymentsKindsAndChecksTheirEntries(t *testi
 	kinds := alerting.NewRegistry(nil, pagerTarget{})
 
 	bad := &EtcMount{cfg: Config{AlertKinds: kinds}}
-	err := bad.WriteFile("notify.yaml", []byte(notifySystem+"ops:\n  pager:\n    - {name: primary, severity: loud}\n"))
+	err := bad.WriteFile(context.Background(), "notify.yaml", []byte(notifySystem+"ops:\n  pager:\n    - {name: primary, severity: loud}\n"))
 	if err == nil || !strings.Contains(err.Error(), "severity") {
 		t.Fatalf("a bad severity: err = %v, want it refused", err)
 	}
@@ -64,7 +64,7 @@ func TestEtcWriteNotify_AcceptsTheDeploymentsKindsAndChecksTheirEntries(t *testi
 	cfg := ownerCfg(t, nil)
 	cfg.AlertKinds = kinds
 	good := &EtcMount{cfg: cfg}
-	if err := good.WriteFile("notify.yaml", []byte(notifySystem+"ops:\n  pager: [primary]\n")); err != nil {
+	if err := good.WriteFile(context.Background(), "notify.yaml", []byte(notifySystem+"ops:\n  pager: [primary]\n")); err != nil {
 		t.Fatalf("the deployment's kind was refused: %v", err)
 	}
 	if doc, _ := cfg.Notify.Aliases.Aliases(cfg.Owner); !strings.Contains(doc.Text, "pager") {

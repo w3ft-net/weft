@@ -12,7 +12,7 @@ import (
 // its aliases deliver through, so they take the same group, and the check is
 // the /etc mount's own rather than a second copy of it.
 func (s *Server) requireConfigWrite(w http.ResponseWriter, r *http.Request, session Session) bool {
-	if err := s.shellFS(r, session, nil).MountFS().Access("/etc/notify.yaml", shellcore.PermWrite); err != nil {
+	if err := s.shellFS(r, session, nil).MountFS().Access(r.Context(), "/etc/notify.yaml", shellcore.PermWrite); err != nil {
 		writeFSError(w, err)
 		return false
 	}
@@ -46,7 +46,7 @@ func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// The /etc mount validates the aliases.
-	if err := s.shellFS(r, session, nil).WriteFile("/etc/notify.yaml", []byte(req.AliasesYAML)); err != nil {
+	if err := s.shellFS(r, session, nil).WriteFile(r.Context(), "/etc/notify.yaml", []byte(req.AliasesYAML)); err != nil {
 		writeFSError(w, err)
 		return
 	}

@@ -71,7 +71,7 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 	fs := s.shellFS(r, session, logServices)
 
 	if r.URL.Query().Get("walk") == "1" {
-		paths, err := fs.Walk(path)
+		paths, err := fs.Walk(r.Context(), path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -81,7 +81,7 @@ func (s *Server) handleListFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entries, err := fs.ReadDir(path)
+	entries, err := fs.ReadDir(r.Context(), path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -104,7 +104,7 @@ func (s *Server) handleReadFS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fs := s.shellFS(r, session, nil)
-	data, err := fs.ReadFile(path)
+	data, err := fs.ReadFile(r.Context(), path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -142,7 +142,7 @@ func (s *Server) handleWriteFS(w http.ResponseWriter, r *http.Request) {
 	// message rather than reporting a successful write as a failed
 	// one; the dedicated /api/crons endpoint is where a cron save's
 	// warnings actually reach the user.
-	blocking, _ := warning.Split(fs.WriteFile(req.Path, []byte(req.Content)))
+	blocking, _ := warning.Split(fs.WriteFile(r.Context(), req.Path, []byte(req.Content)))
 	if len(blocking) > 0 {
 		writeFSError(w, errors.Join(blocking...))
 		return
@@ -159,7 +159,7 @@ func (s *Server) handleRemoveFS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fs := s.shellFS(r, session, nil)
-	if err := fs.Remove(path); err != nil {
+	if err := fs.Remove(r.Context(), path); err != nil {
 		writeFSError(w, err)
 		return
 	}

@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"context"
 	"path"
 	"strings"
 )
@@ -12,12 +13,12 @@ import (
 // call. /log takes LogMount.Walk's single-pass, memoised-permission
 // fast path; the other (small, local) mounts fall back to a recursive
 // ReadDir over the composed MountFS.
-func Walk(cfg Config, p string) ([]string, error) {
+func Walk(ctx context.Context, cfg Config, p string) ([]string, error) {
 	p = "/" + strings.Trim(path.Clean("/"+p), "/")
 	if p == "/log" || strings.HasPrefix(p, "/log/") {
 		lm := &LogMount{cfg: cfg}
 		rel := strings.TrimPrefix(strings.TrimPrefix(p, "/log"), "/")
-		return lm.Walk(rel)
+		return lm.Walk(ctx, rel)
 	}
 
 	mfs := New(cfg)
@@ -25,7 +26,7 @@ func Walk(cfg Config, p string) ([]string, error) {
 	var out []string
 	var rec func(abs string)
 	rec = func(abs string) {
-		names, err := mfs.ReadDir(abs)
+		names, err := mfs.ReadDir(ctx, abs)
 		if err != nil {
 			return
 		}

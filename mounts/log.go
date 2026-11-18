@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"context"
 	"io/fs"
 	"slices"
 	"sort"
@@ -25,7 +26,7 @@ func (m *LogMount) Caps() shellcore.MountCaps {
 // operation: the first path segment must be a namespace the caller can read.
 // A namespace that is missing and one that is unreadable are
 // indistinguishable, so probing names reveals nothing.
-func (m *LogMount) Authorize(rel string, _ shellcore.Perm) error {
+func (m *LogMount) Authorize(ctx context.Context, rel string, _ shellcore.Perm) error {
 	if rel == "" {
 		return nil
 	}
@@ -39,7 +40,7 @@ func (m *LogMount) Authorize(rel string, _ shellcore.Perm) error {
 	return nil
 }
 
-func (m *LogMount) ReadDir(rel string) ([]fs.DirEntry, error) {
+func (m *LogMount) ReadDir(ctx context.Context, rel string) ([]fs.DirEntry, error) {
 	if rel == "" {
 		nss, _, err := m.cfg.scope()
 		if err != nil {
@@ -90,7 +91,7 @@ func (m *LogMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	return entries, nil
 }
 
-func (m *LogMount) ReadFile(rel string) ([]byte, error) {
+func (m *LogMount) ReadFile(ctx context.Context, rel string) ([]byte, error) {
 	if rel == "" {
 		return nil, fs.ErrNotExist
 	}
@@ -101,7 +102,7 @@ func (m *LogMount) ReadFile(rel string) ([]byte, error) {
 	return nil, fs.ErrNotExist
 }
 
-func (m *LogMount) Stat(rel string) (fs.FileInfo, error) {
+func (m *LogMount) Stat(ctx context.Context, rel string) (fs.FileInfo, error) {
 	if rel == "" {
 		return &vfsFileInfo{name: "log", dir: true}, nil
 	}
@@ -120,8 +121,8 @@ func (m *LogMount) Stat(rel string) (fs.FileInfo, error) {
 	return nil, fs.ErrNotExist
 }
 
-func (m *LogMount) WriteFile(string, []byte) error { return shellcore.ErrReadOnly }
-func (m *LogMount) Remove(string) error            { return shellcore.ErrReadOnly }
+func (m *LogMount) WriteFile(context.Context, string, []byte) error { return shellcore.ErrReadOnly }
+func (m *LogMount) Remove(context.Context, string) error            { return shellcore.ErrReadOnly }
 
 // Walk satisfies shellcore.WalkMount: it returns the entire subtree
 // rooted at rel in a single pass over LogServices, so MountFS.Tree skips
@@ -134,7 +135,7 @@ func (m *LogMount) Remove(string) error            { return shellcore.ErrReadOnl
 //
 // Readable namespaces come from one query, not a permission lookup per
 // namespace.
-func (m *LogMount) Walk(rel string) ([]string, error) {
+func (m *LogMount) Walk(ctx context.Context, rel string) ([]string, error) {
 	nss, _, err := m.cfg.scope()
 	if err != nil {
 		return nil, err

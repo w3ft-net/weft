@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"context"
 	"testing"
 
 	"github.com/graybeardcorp/warp/pkg/shellcore"
@@ -24,7 +25,7 @@ func TestEtcMount_FileLanguage(t *testing.T) {
 		"usage":                "",
 	}
 	for rel, want := range cases {
-		if got := lm.FileLanguage(rel); got != want {
+		if got := lm.FileLanguage(context.Background(), rel); got != want {
 			t.Errorf("FileLanguage(%q) = %q, want %q", rel, got, want)
 		}
 	}

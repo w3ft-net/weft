@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
@@ -19,7 +20,7 @@ import (
 // bash body expansion, so we fail out before any inlining happens. If
 // fs is nil (no customer context resolved) the check no-ops — there
 // are no /bin/ scripts to clash with.
-func rejectBinInFollow(pipeline string, fs bash.FS) error {
+func rejectBinInFollow(ctx context.Context, pipeline string, fs bash.FS) error {
 	if fs == nil {
 		return nil
 	}
@@ -53,7 +54,7 @@ func rejectBinInFollow(pipeline string, fs bash.FS) error {
 		if name == "" {
 			continue
 		}
-		if _, err := fs.ReadFile("/bin/" + name); err == nil {
+		if _, err := fs.ReadFile(ctx, "/bin/"+name); err == nil {
 			return fmt.Errorf(
 				"plan: `/bin/%s` can't run under `tail -f` — /bin/ scripts "+
 					"(bash or lua) may contain aggregating stages or opaque "+
@@ -104,7 +105,7 @@ func isTailFollow(cmd *bash.SimpleCommand) bool {
 //
 // Lua /bin scripts are intentionally skipped — they execute through
 // warp's Lua runtime at runLocal time, not as textual pipelines.
-func expandBinPipeline(pipeline string, fs bash.FS) (string, error) {
+func expandBinPipeline(ctx context.Context, pipeline string, fs bash.FS) (string, error) {
 	if fs == nil {
 		return pipeline, nil
 	}
@@ -132,13 +133,13 @@ func expandBinPipeline(pipeline string, fs bash.FS) (string, error) {
 	}
 	path := "/bin/" + name
 
-	data, err := fs.ReadFile(path)
+	data, err := fs.ReadFile(ctx, path)
 	if err != nil {
 		return pipeline, nil // not a /bin script
 	}
 
 	// Skip Lua — warp runs those through luapkg.RunScript at exec time.
-	if lfs, ok := fs.(bash.LangFS); ok && lfs.FileLanguage(path) == "lua" {
+	if lfs, ok := fs.(bash.LangFS); ok && lfs.FileLanguage(ctx, path) == "lua" {
 		return pipeline, nil
 	}
 

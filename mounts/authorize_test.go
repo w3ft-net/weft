@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"testing"
@@ -30,17 +31,17 @@ func TestAuthorize_WriteNeedsGroup(t *testing.T) {
 		member := tc.mount(Config{Principal: nobody{}, Authz: grants{}})
 		manager := tc.mount(Config{Principal: nobody{}, Authz: grants{identity.ActionManageBin: true, identity.ActionManageCron: true, identity.ActionManageEtc: true}})
 		for _, want := range []shellcore.Perm{r, x, r | x} {
-			if err := member.Authorize(tc.rel, want); err != nil {
+			if err := member.Authorize(context.Background(), tc.rel, want); err != nil {
 				t.Errorf("%s: member denied %03b: %v", tc.name, want, err)
 			}
 		}
-		if err := member.Authorize(tc.rel, w); !errors.Is(err, fs.ErrPermission) {
+		if err := member.Authorize(context.Background(), tc.rel, w); !errors.Is(err, fs.ErrPermission) {
 			t.Errorf("%s: member write: err = %v, want fs.ErrPermission", tc.name, err)
 		}
-		if err := member.Authorize(tc.rel, r|w); !errors.Is(err, fs.ErrPermission) {
+		if err := member.Authorize(context.Background(), tc.rel, r|w); !errors.Is(err, fs.ErrPermission) {
 			t.Errorf("%s: member read+write: err = %v, want fs.ErrPermission", tc.name, err)
 		}
-		if err := manager.Authorize(tc.rel, r|w|x); err != nil {
+		if err := manager.Authorize(context.Background(), tc.rel, r|w|x); err != nil {
 			t.Errorf("%s: manager denied: %v", tc.name, err)
 		}
 	}

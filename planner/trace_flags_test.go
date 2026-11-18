@@ -8,10 +8,10 @@ import (
 
 func TestPlan_TraceRejectsUnknownOptions(t *testing.T) {
 	for _, c := range []struct{ pipeline, want string }{
-		{`trace --bogus`, "trace: unknown option --bogus"},
-		{`trace --id abc123 --bogus`, "trace: unknown option --bogus"},
-		{`trace -v`, "trace: unknown option -v"},
-		{`trace --spans --bogus`, "trace: unknown option --bogus"},
+		{`trace --bogus`, "trace: unrecognized option '--bogus'"},
+		{`trace --id abc123 --bogus`, "trace: unrecognized option '--bogus'"},
+		{`trace -v`, "trace: invalid option -- 'v'"},
+		{`trace --spans --bogus`, "trace: unrecognized option '--bogus'"},
 	} {
 		_, err := planBare(c.pipeline, "", time.Time{}, time.Time{})
 		if err == nil || !strings.Contains(err.Error(), c.want) {

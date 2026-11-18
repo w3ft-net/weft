@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/graybeardcorp/warp/pkg/bash"
 )
 
 // Mode says which of the five shapes a command is.
@@ -36,54 +38,68 @@ type Cmd struct {
 	Service   string // positional scope, after the slash
 }
 
+// Spec declares the `trace` command line.
+var Spec = bash.Spec{
+	Name:    "trace",
+	Summary: "show traces, their spans, or one operation",
+	Description: "trace [NS[/SVC]]                      recent traces\n" +
+		"trace --id ID [NS[/SVC]]            one request's log lines\n" +
+		"trace --spans [NS[/SVC]]            operations across requests\n" +
+		"trace --spans --id ID [NS[/SVC]]    one request's breakdown\n" +
+		"trace --spans --name SPAN [--samples]   one operation",
+	Flags: []bash.Flag{
+		bash.StringList("id", 0, "the trace to show").Arg("ID"),
+		bash.Bool("spans", 0, "the operations view"),
+		bash.StringList("name", 0, "one span name (needs --spans)").Arg("SPAN"),
+		bash.Bool("samples", 0, "the slowest occurrences of --name"),
+	},
+	Args:     bash.Operands("SCOPE").Optional().Complete(bash.NoCompletion),
+	Strategy: bash.StageBarrier,
+}
+
 // Parse reads the arguments after the word `trace`.
 func Parse(args []string) (*Cmd, error) {
-	c := &Cmd{}
-	var haveID, haveName, haveScope bool
-	value := func(i int, flag, what string) (string, error) {
-		if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
-			return "", fmt.Errorf("trace: %s needs %s", flag, what)
-		}
-		return args[i+1], nil
+	p, err := Spec.Parse(args)
+	if err != nil {
+		return nil, err
 	}
-	for i := 0; i < len(args); i++ {
-		switch a := args[i]; {
-		case a == "--id":
-			v, err := value(i, "--id", "a trace id")
-			if err != nil {
-				return nil, err
-			}
-			if haveID {
-				return nil, errors.New("trace: --id given more than once")
-			}
-			c.ID, haveID = v, true
-			i++
-		case a == "--name":
-			v, err := value(i, "--name", "a span name")
-			if err != nil {
-				return nil, err
-			}
-			if haveName {
-				return nil, errors.New("trace: --name given more than once")
-			}
-			c.Name, haveName = v, true
-			i++
-		case a == "--spans":
-			c.Spans = true
-		case a == "--samples":
-			c.Samples = true
-		case strings.HasPrefix(a, "-"):
-			return nil, fmt.Errorf("trace: unknown option %s", a)
-		default:
-			if haveScope {
-				return nil, errors.New("trace: expected at most one <namespace>[/<service>] argument")
-			}
-			ns, svc, err := parseScope(a)
-			if err != nil {
-				return nil, err
-			}
-			c.Namespace, c.Service, haveScope = ns, svc, true
+	if p.Help {
+		return nil, errors.New(strings.TrimRight(Spec.Help(), "\n"))
+	}
+	return From(p)
+}
+
+// From reads a `trace` line already parsed against Spec.
+func From(p *bash.Parsed) (*Cmd, error) {
+	c := &Cmd{Spans: p.Bool("spans"), Samples: p.Bool("samples")}
+	// A flag's value may not look like another flag: `--id --spans` is a
+	// missing id, not an id called "--spans".
+	value := func(flag, what string) (string, error) {
+		vals := p.List(flag)
+		if len(vals) == 0 {
+			return "", nil
 		}
+		if len(vals) > 1 {
+			return "", fmt.Errorf("trace: --%s given more than once", flag)
+		}
+		if vals[0] == "" || strings.HasPrefix(vals[0], "-") {
+			return "", fmt.Errorf("trace: --%s needs %s", flag, what)
+		}
+		return vals[0], nil
+	}
+	var err error
+	if c.ID, err = value("id", "a trace id"); err != nil {
+		return nil, err
+	}
+	if c.Name, err = value("name", "a span name"); err != nil {
+		return nil, err
+	}
+	if ops := p.Operands(); len(ops) > 0 {
+		ns, svc, err := parseScope(ops[0])
+		if err != nil {
+			return nil, err
+		}
+		c.Namespace, c.Service = ns, svc
 	}
 	switch {
 	case c.Name != "" && !c.Spans:

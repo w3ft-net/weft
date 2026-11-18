@@ -80,16 +80,16 @@ var adapter = identity.Access{
 // the system identity beside them may not.
 func TestOptions_ApplyInOrder(t *testing.T) {
 	member := New(config(t), WithAccess(adapter), WithUser("u1"))
-	if err := member.MountFS().Access("/bin/scan", shellcore.PermWrite); err != nil {
+	if err := member.MountFS().Access(context.Background(), "/bin/scan", shellcore.PermWrite); err != nil {
 		t.Errorf("a member writing /bin: %v", err)
 	}
 	system := New(config(t), WithAccess(adapter))
-	if err := system.MountFS().Access("/bin/scan", shellcore.PermWrite); err != nil {
+	if err := system.MountFS().Access(context.Background(), "/bin/scan", shellcore.PermWrite); err != nil {
 		// Both are held to the same Authorizer here; the point is that it is asked.
 		t.Logf("the system identity was refused: %v", err)
 	}
 	// With no access the mounts deny everything.
-	if err := New(config(t)).MountFS().Access("/bin/scan", shellcore.PermWrite); !errors.Is(err, fs.ErrPermission) {
+	if err := New(config(t)).MountFS().Access(context.Background(), "/bin/scan", shellcore.PermWrite); !errors.Is(err, fs.ErrPermission) {
 		t.Errorf("no access: err = %v, want a permission refusal", err)
 	}
 }
@@ -98,13 +98,13 @@ func TestOptions_ApplyInOrder(t *testing.T) {
 // its directory.
 func TestShellFS_TmpRoundTrip(t *testing.T) {
 	f := New(config(t), WithAccess(adapter), WithUser("u1"))
-	if err := f.WriteFile("/tmp/note", []byte("hello")); err != nil {
+	if err := f.WriteFile(context.Background(), "/tmp/note", []byte("hello")); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := f.ReadFile("/tmp/note"); err != nil || string(got) != "hello" {
+	if got, err := f.ReadFile(context.Background(), "/tmp/note"); err != nil || string(got) != "hello" {
 		t.Fatalf("ReadFile = %q %v", got, err)
 	}
-	ents, err := f.ReadDir("/tmp")
+	ents, err := f.ReadDir(context.Background(), "/tmp")
 	if err != nil || len(ents) != 1 || ents[0].Name() != "note" {
 		t.Fatalf("ReadDir = %v %v", ents, err)
 	}

@@ -76,6 +76,17 @@ var (
 
 func (r *Repo) owner() shape.Added { return r.cfg.Mounts.Partition() }
 
+// ctx is the context for the repo's writes through the mounts. gitcore's
+// AutoCommitter methods take none, so it is the one the mounts were
+// configured with (mounts.Config.Ctx), as before warp passed a context to
+// every filesystem call.
+func (r *Repo) ctx() context.Context {
+	if r.cfg.Mounts.Ctx != nil {
+		return r.cfg.Mounts.Ctx
+	}
+	return context.Background()
+}
+
 // repo is the Source's repository, read once until a write changes it.
 func (r *Repo) repo() (gitcore.Repository, error) {
 	if r.src == nil {
@@ -217,7 +228,7 @@ func (r *Repo) WriteFile(p, content, message string) (gitcore.ObjectID, error) {
 	}
 	// A save can come back with non-blocking warnings (the save-time lints); the
 	// version was written, so only a rejection fails the write.
-	if blocking, _ := warning.Split(r.mountFS(message).WriteFile("/"+p, []byte(content))); len(blocking) > 0 {
+	if blocking, _ := warning.Split(r.mountFS(message).WriteFile(r.ctx(), "/"+p, []byte(content))); len(blocking) > 0 {
 		return "", errors.Join(blocking...)
 	}
 	r.src = nil
@@ -240,7 +251,7 @@ func (r *Repo) RemoveFile(p, _ string) (gitcore.ObjectID, error) {
 	if err := r.tracked(p); err != nil {
 		return "", err
 	}
-	if err := r.mountFS("").Remove("/" + p); err != nil {
+	if err := r.mountFS("").Remove(r.ctx(), "/"+p); err != nil {
 		return "", err
 	}
 	r.src = nil
@@ -324,7 +335,7 @@ func (r *Repo) Reword(id gitcore.ObjectID, message string) error {
 	}
 	// Rewording is a write to the file, so it takes the same group as any other
 	// write: ask the mounts, rather than repeating their check here.
-	if err := r.mountFS("").Access("/"+p, shellcore.PermWrite); err != nil {
+	if err := r.mountFS("").Access(r.ctx(), "/"+p, shellcore.PermWrite); err != nil {
 		return err
 	}
 	if r.cfg.Journal != nil {

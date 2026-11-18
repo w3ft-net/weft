@@ -21,7 +21,7 @@ import (
 // render, so `range` changes and relative ranges slide. Anything that needs
 // the core (the terminal size, entering the View) goes through OnLoop.
 //
-// Wire it via Register, or core.RegisterCommand("chart", chart.Command(src,
+// Wire it via Register, or core.RegisterSpec(chart.Spec, chart.Command(src,
 // rangeSpec)) with core.RegisterView(chart.NewView(src, rangeSpec)).
 func Command(src CronSource, rangeSpec func() string) func(cx *shellcore.Cmd) int {
 	return func(cx *shellcore.Cmd) int {
@@ -44,7 +44,7 @@ func Command(src CronSource, rangeSpec func() string) func(cx *shellcore.Cmd) in
 		}
 
 		if !cx.StdinIsTerminal() {
-			parsed, errMsg := ParsePipeArgs(cx.Args)
+			parsed, errMsg := PipeArgsFrom(cx.Flags)
 			if errMsg != "" {
 				return fail("chart: " + errMsg)
 			}
@@ -64,7 +64,7 @@ func Command(src CronSource, rangeSpec func() string) func(cx *shellcore.Cmd) in
 			return 0
 		}
 
-		args, errMsg := ParseWatchCmd(cx.Args)
+		args, errMsg := WatchArgsFrom(cx.Flags)
 		if errMsg != "" {
 			return fail(errMsg)
 		}
@@ -92,5 +92,5 @@ func Command(src CronSource, rangeSpec func() string) func(cx *shellcore.Cmd) in
 // Embedders that want fine-grained control can register them individually.
 func Register(c *shellcore.ShellCore, src CronSource, rangeSpec func() string) {
 	c.RegisterView(NewView(src, rangeSpec))
-	c.RegisterCommand("chart", Command(src, rangeSpec))
+	c.RegisterSpec(Spec, Command(src, rangeSpec))
 }

@@ -1,6 +1,7 @@
 package mounts
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 
@@ -28,7 +29,7 @@ func (c Config) tmp() (st tmp.Store, owner shape.Added) {
 	return c.Tmp, c.partition()
 }
 
-func (m *TmpMount) ReadDir(rel string) ([]fs.DirEntry, error) {
+func (m *TmpMount) ReadDir(ctx context.Context, rel string) ([]fs.DirEntry, error) {
 	st, owner := m.cfg.tmp()
 	rows, err := st.List(owner, rel)
 	if err != nil {
@@ -54,7 +55,7 @@ func (m *TmpMount) ReadDir(rel string) ([]fs.DirEntry, error) {
 	return entries, nil
 }
 
-func (m *TmpMount) ReadFile(rel string) ([]byte, error) {
+func (m *TmpMount) ReadFile(ctx context.Context, rel string) ([]byte, error) {
 	st, owner := m.cfg.tmp()
 	data, err := st.Read(owner, rel)
 	if err != nil {
@@ -63,7 +64,7 @@ func (m *TmpMount) ReadFile(rel string) ([]byte, error) {
 	return data, nil
 }
 
-func (m *TmpMount) Stat(rel string) (fs.FileInfo, error) {
+func (m *TmpMount) Stat(ctx context.Context, rel string) (fs.FileInfo, error) {
 	if rel == "" {
 		return &vfsFileInfo{name: "tmp", dir: true}, nil
 	}
@@ -75,7 +76,7 @@ func (m *TmpMount) Stat(rel string) (fs.FileInfo, error) {
 	return &vfsFileInfo{name: lastSegment(rel), dir: f.IsDir, size: f.Size, mtime: f.UpdatedAt}, nil
 }
 
-func (m *TmpMount) WriteFile(rel string, data []byte) error {
+func (m *TmpMount) WriteFile(ctx context.Context, rel string, data []byte) error {
 	st, owner := m.cfg.tmp()
 	lim := st.Limits(owner)
 	created, err := st.Write(owner, lim, m.cfg.UserID, rel, data)
@@ -86,14 +87,14 @@ func (m *TmpMount) WriteFile(rel string, data []byte) error {
 	return nil
 }
 
-func (m *TmpMount) Remove(rel string) error {
+func (m *TmpMount) Remove(ctx context.Context, rel string) error {
 	st, owner := m.cfg.tmp()
 	return st.Remove(owner, rel)
 }
 
 // --- Optional interfaces ---
 
-func (m *TmpMount) AppendFile(rel string, data []byte) error {
+func (m *TmpMount) AppendFile(ctx context.Context, rel string, data []byte) error {
 	st, owner := m.cfg.tmp()
 	lim := st.Limits(owner)
 	created, err := st.Append(owner, lim, m.cfg.UserID, rel, data)
@@ -104,19 +105,19 @@ func (m *TmpMount) AppendFile(rel string, data []byte) error {
 	return nil
 }
 
-func (m *TmpMount) Mkdir(rel string) error {
+func (m *TmpMount) Mkdir(ctx context.Context, rel string) error {
 	// No expiry notice here: a directory holds nothing that can be lost,
 	// and noteFileCreated counts files only.
 	st, owner := m.cfg.tmp()
 	return st.Mkdir(owner, m.cfg.UserID, rel)
 }
 
-func (m *TmpMount) RemoveAll(rel string) error {
+func (m *TmpMount) RemoveAll(ctx context.Context, rel string) error {
 	st, owner := m.cfg.tmp()
 	return st.RemoveAll(owner, rel)
 }
 
-func (m *TmpMount) CopyFile(srcRel, dstRel string) error {
+func (m *TmpMount) CopyFile(ctx context.Context, srcRel, dstRel string) error {
 	st, owner := m.cfg.tmp()
 	lim := st.Limits(owner)
 	if err := st.Copy(owner, lim, m.cfg.UserID, srcRel, dstRel); err != nil {
@@ -129,12 +130,12 @@ func (m *TmpMount) CopyFile(srcRel, dstRel string) error {
 
 // Rename creates no file, so no expiry notice: the path moved, the retention
 // clock it was already on didn't.
-func (m *TmpMount) Rename(oldRel, newRel string) error {
+func (m *TmpMount) Rename(ctx context.Context, oldRel, newRel string) error {
 	st, owner := m.cfg.tmp()
 	return st.Rename(owner, oldRel, newRel)
 }
 
-func (m *TmpMount) Touch(rel string) error {
+func (m *TmpMount) Touch(ctx context.Context, rel string) error {
 	st, owner := m.cfg.tmp()
 	lim := st.Limits(owner)
 	created, err := st.Touch(owner, lim, m.cfg.UserID, rel)

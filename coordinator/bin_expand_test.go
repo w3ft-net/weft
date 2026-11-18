@@ -1,6 +1,7 @@
 package coordinator
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -25,15 +26,15 @@ func newTestFS() *testFS {
 }
 
 func (f *testFS) setBash(path, body string) {
-	f.WriteFile(path, []byte(body))
+	f.WriteFile(context.Background(), path, []byte(body))
 }
 
 func (f *testFS) setLua(path, body string) {
-	f.WriteFile(path, []byte(body))
+	f.WriteFile(context.Background(), path, []byte(body))
 	f.langs[path] = "lua"
 }
 
-func (f *testFS) FileLanguage(path string) string {
+func (f *testFS) FileLanguage(ctx context.Context, path string) string {
 	if l, ok := f.langs[path]; ok {
 		return l
 	}
@@ -44,7 +45,7 @@ func TestExpandBinPipeline_SubstitutesPositionalSingleArg(t *testing.T) {
 	fs := newTestFS()
 	fs.setBash("/bin/count_errors", `cat /log/$1 | grep ERROR | wc -l`)
 
-	got, err := expandBinPipeline("count_errors disk.log", fs)
+	got, err := expandBinPipeline(context.Background(), "count_errors disk.log", fs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestExpandBinPipeline_SplicesIntoOuterPipeline(t *testing.T) {
 	fs := newTestFS()
 	fs.setBash("/bin/errors", `cat /log/$1 | grep ERROR`)
 
-	got, err := expandBinPipeline("errors disk.log | wc -l", fs)
+	got, err := expandBinPipeline(context.Background(), "errors disk.log | wc -l", fs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +73,7 @@ func TestExpandBinPipeline_LuaScriptLeftAlone(t *testing.T) {
 	fs := newTestFS()
 	fs.setLua("/bin/greet", `print(arg[1])`)
 
-	got, err := expandBinPipeline("greet world", fs)
+	got, err := expandBinPipeline(context.Background(), "greet world", fs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestExpandBinPipeline_LuaScriptLeftAlone(t *testing.T) {
 
 func TestExpandBinPipeline_NotABinScript(t *testing.T) {
 	fs := newTestFS()
-	got, err := expandBinPipeline("echo hello | wc -l", fs)
+	got, err := expandBinPipeline(context.Background(), "echo hello | wc -l", fs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +97,7 @@ func TestExpandBinPipeline_MultipleArgs(t *testing.T) {
 	fs := newTestFS()
 	fs.setBash("/bin/find_in", `cat /log/$1 | grep $2`)
 
-	got, err := expandBinPipeline("find_in api.log timeout", fs)
+	got, err := expandBinPipeline(context.Background(), "find_in api.log timeout", fs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +113,8 @@ func TestExpandBinPipeline_SameScriptDifferentArgs(t *testing.T) {
 	fs := newTestFS()
 	fs.setBash("/bin/count_errors", `cat /log/$1 | grep ERROR | wc -l`)
 
-	disk, _ := expandBinPipeline("count_errors disk.log", fs)
-	cpu, _ := expandBinPipeline("count_errors cpu.log", fs)
+	disk, _ := expandBinPipeline(context.Background(), "count_errors disk.log", fs)
+	cpu, _ := expandBinPipeline(context.Background(), "count_errors cpu.log", fs)
 
 	if disk == cpu {
 		t.Fatalf("same output for different args: %q", disk)
@@ -141,7 +142,7 @@ func TestExpandBinPipeline_QuotedPositionalWithSpaces(t *testing.T) {
 	fs := newTestFS()
 	fs.setBash("/bin/log-pattern-count", `tail -n $2 /log/weft/$1/main.log | grep -c "$3"`)
 
-	got, err := expandBinPipeline(`log-pattern-count coordinator 500 'compute exit 127'`, fs)
+	got, err := expandBinPipeline(context.Background(), `log-pattern-count coordinator 500 'compute exit 127'`, fs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +189,7 @@ func TestExpandBinPipeline_QuotedPositionalWithSpaces(t *testing.T) {
 func TestExpandBinPipeline_QuotedArgRoundTripsToPlanner(t *testing.T) {
 	fs := newTestFS()
 	fs.setBash("/bin/log-pattern-count", `tail -n $2 /log/weft/$1/main.log | grep -c "$3"`)
-	expanded, err := expandBinPipeline(`log-pattern-count coordinator 500 'compute exit 127'`, fs)
+	expanded, err := expandBinPipeline(context.Background(), `log-pattern-count coordinator 500 'compute exit 127'`, fs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +274,7 @@ func TestComputeStage_PreservesShellMetacharacters(t *testing.T) {
 }
 
 func TestExpandBinPipeline_NilFS(t *testing.T) {
-	got, err := expandBinPipeline("foo bar", nil)
+	got, err := expandBinPipeline(context.Background(), "foo bar", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +289,7 @@ func TestExpandBinPipeline_MultiListBodyPassThrough(t *testing.T) {
 	fs := newTestFS()
 	fs.setBash("/bin/seq", `echo $1 && echo $2`)
 
-	got, _ := expandBinPipeline("seq a b", fs)
+	got, _ := expandBinPipeline(context.Background(), "seq a b", fs)
 	if got != "seq a b" {
 		t.Errorf("multi-list body should pass through; got %q", got)
 	}
