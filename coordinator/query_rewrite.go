@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	warpfs "github.com/graybeardcorp/warp/pkg/fs"
 	"github.com/w3ft-net/weft/mounts"
 	"io"
 	"strings"
@@ -46,7 +47,7 @@ func rewriteQueryPipelines(ctx context.Context, script *bash.Script, c *Coordina
 	}
 	// /bin is resolved through the group's shell filesystem. Absent for
 	// tests that build a Coordinator without a store.
-	var binFS bash.FS
+	var binFS warpfs.FS
 	if !NoGroup(owner) && c != nil && c.Mounts != nil {
 		binFS = shellfs.New(c.Mounts.Config(mounts.Session{Owner: owner}), shellfs.WithAccess(c.mountAccess()))
 	}
@@ -208,7 +209,7 @@ func queryUnanswered(err error) bool {
 // firstBinStage returns the index of the first stage after the source
 // whose command names a /bin script, or len(pipe.Commands) when there is
 // none (or fs is nil). Stage 0 is the source command and never splits.
-func firstBinStage(ctx context.Context, pipe *bash.Pipeline, fs bash.FS) int {
+func firstBinStage(ctx context.Context, pipe *bash.Pipeline, fs warpfs.FS) int {
 	n := len(pipe.Commands)
 	if fs == nil {
 		return n

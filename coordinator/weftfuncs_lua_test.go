@@ -2,11 +2,12 @@ package coordinator
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
 
-	luapkg "github.com/graybeardcorp/warp/pkg/lua"
+	luapkg "github.com/graybeardcorp/warp-lua"
 )
 
 // mockWeftFuncs implements weftQueryFuncs so the production
@@ -161,7 +162,7 @@ func newMock() *mockWeftFuncs {
 func runLuaWithWeftMock(t *testing.T, source, stdin string, m *mockWeftFuncs) (stdout, stderr string, exitCode int) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
-	code := luapkg.RunScript(source, nil, strings.NewReader(stdin), &outBuf, &errBuf, luapkg.WithExtension(buildWeftLuaExtension(m)))
+	code := luapkg.RunScript(context.Background(), source, nil, strings.NewReader(stdin), &outBuf, &errBuf, luapkg.WithExtension(buildWeftLuaExtension(m)))
 	return outBuf.String(), errBuf.String(), code
 }
 
@@ -369,7 +370,7 @@ end
 func TestLuaWithoutWeftExtension(t *testing.T) {
 	// weft table should not exist when no extension is installed.
 	var out, errBuf bytes.Buffer
-	code := luapkg.RunScript(`print(type(weft))`, nil, strings.NewReader(""), &out, &errBuf)
+	code := luapkg.RunScript(context.Background(), `print(type(weft))`, nil, strings.NewReader(""), &out, &errBuf)
 	if code != 0 {
 		t.Fatalf("exit %d", code)
 	}

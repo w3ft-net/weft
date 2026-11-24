@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	warpfs "github.com/graybeardcorp/warp/pkg/fs"
 	"slices"
 	"strings"
 	"testing"
@@ -14,15 +15,15 @@ import (
 	"github.com/w3ft-net/weft/shape/shapetest"
 )
 
-// testFS satisfies bash.FS + bash.LangFS by delegating most methods to an
+// testFS satisfies warpfs.FS + warpfs.LangFS by delegating most methods to an
 // embedded MemFS and tagging per-path languages.
 type testFS struct {
-	*bash.MemFS
+	*warpfs.MemFS
 	langs map[string]string
 }
 
 func newTestFS() *testFS {
-	return &testFS{MemFS: bash.NewMemFS(), langs: map[string]string{}}
+	return &testFS{MemFS: warpfs.NewMemFS(), langs: map[string]string{}}
 }
 
 func (f *testFS) setBash(path, body string) {

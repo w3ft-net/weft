@@ -12,13 +12,13 @@ package alert
 import (
 	"errors"
 	"fmt"
+	"github.com/w3ft-net/weft/fieldspec"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
-	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
 
 // errSecondNotify rejects a second --notify. An alert pages one alias; the
@@ -83,8 +83,8 @@ type Args struct {
 	Average   bool                // --average flag (above/below with duration)
 	Msg       string              // --msg override
 	Notify    string              // --notify=<alias> → notify.yaml lookup
-	Key       shellcore.FieldSpec // -v: 1-indexed column or .json.path; zero = "whole line"
-	Tag       shellcore.FieldSpec // -t/--tag: same shape; zero = no tag
+	Key       fieldspec.FieldSpec // -v: 1-indexed column or .json.path; zero = "whole line"
+	Tag       fieldspec.FieldSpec // -t/--tag: same shape; zero = no tag
 	// IfMode/IfValue support `alert --if-zero "$?"` and
 	// `alert --if-nonzero "$?"` — a cron composes predicates with
 	// bash &&/||, then passes the resulting exit code to alert
@@ -244,12 +244,12 @@ func ArgsFrom(p *bash.Parsed) (*Args, error) {
 	}
 	for _, f := range []struct {
 		name, label string
-		dst         *shellcore.FieldSpec
+		dst         *fieldspec.FieldSpec
 	}{{"value", "-v", &parsed.Key}, {"tag", "-t", &parsed.Tag}} {
 		if !p.Has(f.name) {
 			continue
 		}
-		spec, err := shellcore.ParseFieldSpec(p.String(f.name))
+		spec, err := fieldspec.ParseFieldSpec(p.String(f.name))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", f.label, err)
 		}

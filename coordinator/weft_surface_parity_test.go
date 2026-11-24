@@ -2,19 +2,20 @@ package coordinator
 
 import (
 	"bytes"
+	"context"
 	"sort"
 	"strings"
 	"testing"
 
+	luapkg "github.com/graybeardcorp/warp-lua"
 	"github.com/graybeardcorp/warp/pkg/bash"
-	luapkg "github.com/graybeardcorp/warp/pkg/lua"
 )
 
 // Every weft.<fn> in Lua must exist as weft::<fn> in bash, and vice
 // versa: the manual documents one surface in two spellings.
 func TestWeftSurfaceParity_LuaAndBash(t *testing.T) {
 	var out, errb bytes.Buffer
-	code := luapkg.RunScript(
+	code := luapkg.RunScript(context.Background(),
 		`for k in pairs(weft) do print(k) end`, nil, strings.NewReader(""),
 		&out, &errb, luapkg.WithExtension(buildWeftLuaExtension(newMock())))
 	if code != 0 {

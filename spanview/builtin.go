@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/tracecmd"
 )
 
@@ -33,7 +33,7 @@ func Command(query QueryFunc) func(cx *shellcore.Cmd) int {
 			return 1
 		}
 		listArgs.Query = query
-		if err := cx.OnLoop(func(c *shellcore.ShellCore) error { return c.EnterView(viewName, listArgs) }); err != nil {
+		if err := cx.OnLoop(func(c *shellcore.Shell) error { return c.EnterView(viewName, listArgs) }); err != nil {
 			fmt.Fprintln(cx.Stderr, shellcore.ErrorText("span: "+err.Error()))
 			return 1
 		}
@@ -77,7 +77,7 @@ func ParseSpansLine(parts []string) (*ListArgs, bool) {
 
 // Register wires spanview into the given shellcore at construction time: the
 // View plus the `trace` command covering both span views.
-func Register(c *shellcore.ShellCore, query QueryFunc) {
+func Register(c *shellcore.Shell, query QueryFunc) {
 	c.RegisterView(NewView())
 	c.RegisterCommand("trace", Command(query))
 }

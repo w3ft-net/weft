@@ -9,10 +9,10 @@ package cronauthor
 
 import (
 	"fmt"
+	"github.com/w3ft-net/weft/fieldspec"
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
-	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/w3ft-net/weft/alert"
 	"github.com/w3ft-net/weft/backends/cron"
 	"github.com/w3ft-net/weft/binscript"
@@ -51,7 +51,7 @@ func valueTypeHeader(pipeline string) (string, error) {
 
 // schemaHeaders reads a cron's `# value:` and `# tag:` header comments.
 // They name JSON paths only: text output has a fixed positional rule.
-func schemaHeaders(pipeline string) (value, tag shellcore.FieldSpec, err error) {
+func schemaHeaders(pipeline string) (value, tag fieldspec.FieldSpec, err error) {
 	seen := map[string]bool{}
 	for _, line := range strings.Split(pipeline, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -69,7 +69,7 @@ func schemaHeaders(pipeline string) (value, tag shellcore.FieldSpec, err error) 
 		}
 		seen[key] = true
 		src := strings.TrimSpace(strings.TrimPrefix(trimmed, "# "+key+":"))
-		spec, perr := shellcore.ParseFieldSpec(src)
+		spec, perr := fieldspec.ParseFieldSpec(src)
 		if perr != nil || !spec.IsJSON() {
 			return value, tag, fmt.Errorf("'# %s:' takes a JSON path like .host, got %q; text output is <value> [<tag>] per line and needs no header", key, src)
 		}

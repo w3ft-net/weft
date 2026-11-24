@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/identity"
 	"github.com/w3ft-net/weft/shape"
 )

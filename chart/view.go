@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 )
 
 // View is the live-chart takeover screen. It implements
@@ -44,7 +44,7 @@ func (v *View) Name() string { return "chart" }
 
 // OnEnter starts a chart-follow session. Args must be a WatchArgs
 // value (the builtin handler produces these when --follow is set).
-func (v *View) OnEnter(c *shellcore.ShellCore, args any) error {
+func (v *View) OnEnter(c *shellcore.Shell, args any) error {
 	a, ok := args.(WatchArgs)
 	if !ok {
 		return fmt.Errorf("chart: expected WatchArgs, got %T", args)
@@ -60,14 +60,14 @@ func (v *View) OnEnter(c *shellcore.ShellCore, args any) error {
 }
 
 // OnExit tears down the session and clears the screen.
-func (v *View) OnExit(c *shellcore.ShellCore) {
+func (v *View) OnExit(c *shellcore.Shell) {
 	v.session = nil
 }
 
 // HandleKey processes a keystroke. q/Esc/Ctrl+C/Ctrl+D exit;
 // everything else is ignored (no scroll, no zoom — the chart
 // always shows the configured window).
-func (v *View) HandleKey(c *shellcore.ShellCore, ev shellcore.KeyEvent) bool {
+func (v *View) HandleKey(c *shellcore.Shell, ev shellcore.KeyEvent) bool {
 	if v.session == nil {
 		return false
 	}
@@ -85,7 +85,7 @@ func (v *View) HandleKey(c *shellcore.ShellCore, ev shellcore.KeyEvent) bool {
 }
 
 // Render paints one frame. Called on enter and resize.
-func (v *View) Render(c *shellcore.ShellCore) {
+func (v *View) Render(c *shellcore.Shell) {
 	if v.session == nil {
 		return
 	}
@@ -96,7 +96,7 @@ func (v *View) Render(c *shellcore.ShellCore) {
 
 // Tick is called every shellcore SpinnerTick. Throttled to
 // args.Interval; refetches and repaints when due.
-func (v *View) Tick(c *shellcore.ShellCore) {
+func (v *View) Tick(c *shellcore.Shell) {
 	st := v.session
 	if st == nil {
 		return
@@ -112,7 +112,7 @@ func (v *View) Tick(c *shellcore.ShellCore) {
 }
 
 // fetchAndDraw pulls fresh results and repaints.
-func (v *View) fetchAndDraw(c *shellcore.ShellCore) {
+func (v *View) fetchAndDraw(c *shellcore.Shell) {
 	st := v.session
 	if st == nil {
 		return
@@ -135,7 +135,7 @@ func (v *View) fetchAndDraw(c *shellcore.ShellCore) {
 // paint draws the current frame. Wraps in DEC synchronized-update
 // sequences so terminals that support them (xterm.js, modern
 // xterm, kitty, wezterm, iTerm2 ≥ 3.5) avoid mid-frame tearing.
-func (v *View) paint(c *shellcore.ShellCore) {
+func (v *View) paint(c *shellcore.Shell) {
 	st := v.session
 	if st == nil {
 		return
@@ -190,7 +190,7 @@ func (v *View) paint(c *shellcore.ShellCore) {
 // dims returns (width, height) for one chart frame, sized to the
 // current terminal. Reserves nothing because the View paints the
 // full screen.
-func dims(c *shellcore.ShellCore) (int, int) {
+func dims(c *shellcore.Shell) (int, int) {
 	w, h := c.Width(), c.Height()
 	if w < 20 {
 		w = 20

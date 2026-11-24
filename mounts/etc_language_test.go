@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 )
 
 // TestEtcMount_FileLanguage pins that /etc's YAML files self-identify so

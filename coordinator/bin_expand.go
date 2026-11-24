@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	warpfs "github.com/graybeardcorp/warp/pkg/fs"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
 )
@@ -20,7 +21,7 @@ import (
 // bash body expansion, so we fail out before any inlining happens. If
 // fs is nil (no customer context resolved) the check no-ops — there
 // are no /bin/ scripts to clash with.
-func rejectBinInFollow(ctx context.Context, pipeline string, fs bash.FS) error {
+func rejectBinInFollow(ctx context.Context, pipeline string, fs warpfs.FS) error {
 	if fs == nil {
 		return nil
 	}
@@ -105,7 +106,7 @@ func isTailFollow(cmd *bash.SimpleCommand) bool {
 //
 // Lua /bin scripts are intentionally skipped — they execute through
 // warp's Lua runtime at runLocal time, not as textual pipelines.
-func expandBinPipeline(ctx context.Context, pipeline string, fs bash.FS) (string, error) {
+func expandBinPipeline(ctx context.Context, pipeline string, fs warpfs.FS) (string, error) {
 	if fs == nil {
 		return pipeline, nil
 	}
@@ -139,7 +140,7 @@ func expandBinPipeline(ctx context.Context, pipeline string, fs bash.FS) (string
 	}
 
 	// Skip Lua — warp runs those through luapkg.RunScript at exec time.
-	if lfs, ok := fs.(bash.LangFS); ok && lfs.FileLanguage(ctx, path) == "lua" {
+	if lfs, ok := fs.(warpfs.LangFS); ok && lfs.FileLanguage(ctx, path) == "lua" {
 		return pipeline, nil
 	}
 

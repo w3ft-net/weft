@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 )
 
 type LogMount struct{ cfg Config }
@@ -18,15 +18,14 @@ var _ shellcore.AuthMount = (*LogMount)(nil)
 
 func (m *LogMount) Prefix() string { return "/log" }
 
-func (m *LogMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{Writable: false}
-}
-
 // Authorize is the mount's one access check, called by MountFS before every
 // operation: the first path segment must be a namespace the caller can read.
 // A namespace that is missing and one that is unreadable are
 // indistinguishable, so probing names reveals nothing.
-func (m *LogMount) Authorize(ctx context.Context, rel string, _ shellcore.Perm) error {
+func (m *LogMount) Authorize(ctx context.Context, rel string, want shellcore.Perm) error {
+	if want&shellcore.PermWrite != 0 {
+		return shellcore.ErrReadOnly
+	}
 	if rel == "" {
 		return nil
 	}

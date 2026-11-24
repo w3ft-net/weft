@@ -2,15 +2,15 @@ package coordinator
 
 import (
 	"fmt"
+	"github.com/w3ft-net/weft/fieldspec"
 	"strings"
 	"testing"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
 )
 
-func mustSpec(t *testing.T, s string) shellcore.FieldSpec {
+func mustSpec(t *testing.T, s string) fieldspec.FieldSpec {
 	t.Helper()
-	f, err := shellcore.ParseFieldSpec(s)
+	f, err := fieldspec.ParseFieldSpec(s)
 	if err != nil {
 		t.Fatal(err)
 	}

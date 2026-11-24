@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	warpfs "github.com/graybeardcorp/warp/pkg/fs"
 	"testing"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
@@ -12,7 +13,7 @@ import (
 // hook the coordinator installs, and returns the post-rewrite trees warp saw for each origin
 // kind. A later hook records the tree and then empties it, so the callbacks
 // (which need a live Coordinator) never run.
-func captureAfterRewrite(t *testing.T, fs *bash.MemFS, script string) map[bash.ParseKind]*bash.Script {
+func captureAfterRewrite(t *testing.T, fs *warpfs.MemFS, script string) map[bash.ParseKind]*bash.Script {
 	t.Helper()
 	interp := bash.NewInterpreter()
 	interp.SetFS(fs)
@@ -39,7 +40,7 @@ func captureAfterRewrite(t *testing.T, fs *bash.MemFS, script string) map[bash.P
 // eval previously bypassed BinScriptTransform, so a query typed through eval
 // reached warp's own cat instead of runQuery.
 func TestParseHook_EvalBodyIsRewritten(t *testing.T) {
-	got := captureAfterRewrite(t, bash.NewMemFS(), `eval "cat /log/foo.log"`)
+	got := captureAfterRewrite(t, warpfs.NewMemFS(), `eval "cat /log/foo.log"`)
 	s := got[bash.ParseEval]
 	if s == nil {
 		t.Fatal("eval body never reached the parse hook chain")
@@ -48,7 +49,7 @@ func TestParseHook_EvalBodyIsRewritten(t *testing.T) {
 }
 
 func TestParseHook_SourcedFileIsRewritten(t *testing.T) {
-	fs := bash.NewMemFS()
+	fs := warpfs.NewMemFS()
 	fs.WriteFile(context.Background(), "/lib.sh", []byte("cat /log/foo.log"))
 	got := captureAfterRewrite(t, fs, `source /lib.sh`)
 	s := got[bash.ParseSource]
@@ -59,7 +60,7 @@ func TestParseHook_SourcedFileIsRewritten(t *testing.T) {
 }
 
 func TestParseHook_BinScriptIsRewritten(t *testing.T) {
-	fs := bash.NewMemFS()
+	fs := warpfs.NewMemFS()
 	fs.WriteFile(context.Background(), "/bin/errs", []byte("cat /log/foo.log"))
 	got := captureAfterRewrite(t, fs, `errs`)
 	s := got[bash.ParseExecutable]

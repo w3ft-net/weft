@@ -26,7 +26,7 @@ func TestAwkFields_MatchesAwk(t *testing.T) {
 		"naïve café 🚀",
 	} {
 		var out bytes.Buffer
-		if _, err := awk.Run(`{ for (i = 1; i <= NF; i++) print $i }`, strings.NewReader(line+"\n"), &out, ""); err != nil {
+		if _, err := awk.Run(`{ for (i = 1; i <= NF; i++) print $i }`, strings.NewReader(line+"\n"), &out, awk.Options{}); err != nil {
 			t.Fatal(err)
 		}
 		want := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")

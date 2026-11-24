@@ -4,7 +4,7 @@
 // canonical resolver runs on the API server against its own clock per
 // request, so a long-lived shell pane never queries against a stale window.
 //
-// This used to live in warp/pkg/shellcore but the parser is weft domain
+// This used to live in warp/pkg/shell but the parser is weft domain
 // logic — warp itself never called it. Moved here to keep warp
 // weft-agnostic.
 package timerange

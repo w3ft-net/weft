@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/w3ft-net/weft/fieldspec"
 	"io"
 	"strconv"
 	"strings"
@@ -14,7 +15,6 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/w3ft-net/weft/alert"
 	"github.com/w3ft-net/weft/backends/cron"
 	"github.com/w3ft-net/weft/backends/source"
@@ -137,11 +137,11 @@ func splitAlertRows(data string, parsed *alert.Args) []alertRow {
 			continue
 		}
 		r := alertRow{raw: trim}
-		if v, err := shellcore.ResolveField(parsed.Key, trim); err == nil {
+		if v, err := fieldspec.ResolveField(parsed.Key, trim); err == nil {
 			r.value = v
 		}
 		if !parsed.Tag.IsZero() {
-			if t, err := shellcore.ResolveField(parsed.Tag, trim); err == nil {
+			if t, err := fieldspec.ResolveField(parsed.Tag, trim); err == nil {
 				r.tag = t
 			}
 		}

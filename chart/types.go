@@ -11,7 +11,7 @@
 //
 //	chart.Register(core, src, rangeSpec)
 //
-// The package depends only on warp/pkg/shellcore (for the View
+// The package depends only on warp/pkg/shell (for the View
 // interface and Core methods) and chart/termchart (for the
 // generic chart-rendering primitives). Weft-specific knowledge
 // (CronSource, /cron.d/ paths) lives here.

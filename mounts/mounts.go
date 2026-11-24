@@ -12,7 +12,7 @@ import (
 
 	"github.com/w3ft-net/weft/cronauthor"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/alerting"
 	"github.com/w3ft-net/weft/backends/history"
 	"github.com/w3ft-net/weft/backends/source"

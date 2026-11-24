@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/w3ft-net/weft/backends/tmp"
 	"github.com/w3ft-net/weft/shape"
 )
@@ -18,10 +17,6 @@ const NoticeKeyTmpExpiry = "tmp_48h_expiry"
 type TmpMount struct{ cfg Config }
 
 func (m *TmpMount) Prefix() string { return "/tmp" }
-
-func (m *TmpMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{Writable: true}
-}
 
 // tmp is the store the /tmp mount reads and writes, and the owner it acts for.
 // A write is held to st.Limits(owner).

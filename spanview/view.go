@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/theme"
 	"github.com/w3ft-net/weft/tracecmd"
 )
@@ -80,7 +80,7 @@ func NewView() *SpanView { return &SpanView{} }
 
 func (v *SpanView) Name() string { return viewName }
 
-func (v *SpanView) OnEnter(c *shellcore.ShellCore, args any) error {
+func (v *SpanView) OnEnter(c *shellcore.Shell, args any) error {
 	a, ok := args.(*ListArgs)
 	if !ok || a.Query == nil {
 		return fmt.Errorf("span: invalid args")
@@ -121,18 +121,18 @@ func (v *SpanView) OnEnter(c *shellcore.ShellCore, args any) error {
 	return nil
 }
 
-func (v *SpanView) OnExit(c *shellcore.ShellCore) {
+func (v *SpanView) OnExit(c *shellcore.Shell) {
 	c.Write([]byte("\x1b[?1049l"))
 }
 
-func (v *SpanView) HandleKey(c *shellcore.ShellCore, ev shellcore.KeyEvent) bool {
+func (v *SpanView) HandleKey(c *shellcore.Shell, ev shellcore.KeyEvent) bool {
 	if v.level == levelSamples {
 		return v.handleSamplesKey(c, ev)
 	}
 	return v.handleListKey(c, ev)
 }
 
-func (v *SpanView) handleListKey(c *shellcore.ShellCore, ev shellcore.KeyEvent) bool {
+func (v *SpanView) handleListKey(c *shellcore.Shell, ev shellcore.KeyEvent) bool {
 	switch {
 	case ev.Key == shellcore.KeyEsc, ev.Rune == 'q', ev.Rune == 'Q':
 		c.ExitView()
@@ -163,7 +163,7 @@ func (v *SpanView) handleListKey(c *shellcore.ShellCore, ev shellcore.KeyEvent) 
 	return true
 }
 
-func (v *SpanView) handleSamplesKey(c *shellcore.ShellCore, ev shellcore.KeyEvent) bool {
+func (v *SpanView) handleSamplesKey(c *shellcore.Shell, ev shellcore.KeyEvent) bool {
 	occ := v.currentOccurrences()
 	switch {
 	case ev.Key == shellcore.KeyEsc:
@@ -247,7 +247,7 @@ func (v *SpanView) fetchSamples(row theme.SpanRollupRow) {
 }
 
 // Tick drains the async fetch result, if any, and repaints once.
-func (v *SpanView) Tick(c *shellcore.ShellCore) {
+func (v *SpanView) Tick(c *shellcore.Shell) {
 	if v.samplesPending != nil {
 		select {
 		case res := <-v.samplesPending:
@@ -278,7 +278,7 @@ func (v *SpanView) Tick(c *shellcore.ShellCore) {
 	}
 }
 
-func (v *SpanView) Render(c *shellcore.ShellCore) {
+func (v *SpanView) Render(c *shellcore.Shell) {
 	w, h := c.Width(), c.Height()
 	if w < 20 {
 		w = 20

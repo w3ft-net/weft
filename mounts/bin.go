@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/backends/bin"
 	"github.com/w3ft-net/weft/binscript"
 )
@@ -20,10 +20,6 @@ type BinMount struct{ cfg Config }
 func (c Config) bin() binscript.Service { return c.BinService }
 
 func (m *BinMount) Prefix() string { return "/bin" }
-
-func (m *BinMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{Writable: true}
-}
 
 // Authorize is the mount's one access check, called by MountFS before every
 // operation: every member can read and run /bin. A script no cron runs can be

@@ -17,12 +17,12 @@ import "strings"
 // 256-palette indices to match the rest of shellcore (see shellcore/ansi.go);
 // a value of 0 with usefg=false means "default foreground/background".
 type style struct {
-	fg     uint8
-	bg     uint8
-	useFg  bool
-	useBg  bool
-	bold   bool
-	dim    bool
+	fg    uint8
+	bg    uint8
+	useFg bool
+	useBg bool
+	bold  bool
+	dim   bool
 }
 
 func (s style) equal(o style) bool {
@@ -35,8 +35,8 @@ func (s style) equal(o style) bool {
 // writes are silently dropped — chart code happily computes coordinates
 // that fall outside the plot area.
 type cellGrid struct {
-	w, h  int
-	runes []rune
+	w, h   int
+	runes  []rune
 	styles []style
 }
 

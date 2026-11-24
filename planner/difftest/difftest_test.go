@@ -468,8 +468,8 @@ func TestRowStagesAreRowwise(t *testing.T) {
 			}
 			checked[st] = true
 			var stream, stderr bytes.Buffer
-			if _, err := bash.RunStreaming(st, strings.NewReader(input.String()), &stream, &stderr); err != nil {
-				t.Fatalf("%s: %v", st, err)
+			if res := bash.NewRunner(bash.Config{NoStepLimits: true})(context.Background(), bash.RunRequest{Line: st, Stdin: strings.NewReader(input.String()), Stderr: &stderr}, &stream); res.Err != nil {
+				t.Fatalf("%s: %v", st, res.Err)
 			}
 			rs, err := compute.NewRowStages([]string{st})
 			if err != nil {

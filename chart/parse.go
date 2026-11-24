@@ -2,12 +2,12 @@ package chart
 
 import (
 	"fmt"
+	"github.com/w3ft-net/weft/fieldspec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
-	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/w3ft-net/weft/timerange"
 )
 
@@ -126,12 +126,12 @@ func flagLabel(name string) string {
 // don't overlap. Exported so non-interactive callers (e.g.
 // weft sh -c "...") can carry it across the query/render boundary.
 type PipeArgs struct {
-	XSpec     shellcore.FieldSpec
+	XSpec     fieldspec.FieldSpec
 	XEnd      int    // last column of an `-x <start>-<end>` range, joined by spaces; 0 = no range
 	XTime     bool   // -x carries a ::time cast
 	XFormat   string // strftime format from ::time(<format>); "" = RFC3339 or epoch seconds
-	YSpec     shellcore.FieldSpec
-	TagSpec   shellcore.FieldSpec // splits output into one line per tag value; line/sparkline only
+	YSpec     fieldspec.FieldSpec
+	TagSpec   fieldspec.FieldSpec // splits output into one line per tag value; line/sparkline only
 	Aggregate string              // count | sum | avg | min | max | p50 | p95 | identity
 	Bucket    time.Duration       // 0 = no bucketing
 	Kind      string              // line | bar | sparkline
@@ -216,7 +216,7 @@ func PipeArgsFrom(p *bash.Parsed) (any, string) {
 		if strings.Contains(v, "::") {
 			return out, fmt.Sprintf("chart: %s: casts are only supported on -x", f.label)
 		}
-		s, err := shellcore.ParseFieldSpec(v)
+		s, err := fieldspec.ParseFieldSpec(v)
 		if err != nil {
 			return out, fmt.Sprintf("chart: %s: %s", f.label, err.Error())
 		}
@@ -239,8 +239,8 @@ func PipeArgsFrom(p *bash.Parsed) (any, string) {
 
 	// Mixing positional and JSON-path is rejected — the line parser
 	// can't be in two modes at once.
-	specs := []shellcore.FieldSpec{}
-	for _, s := range []shellcore.FieldSpec{out.XSpec, out.YSpec, out.TagSpec} {
+	specs := []fieldspec.FieldSpec{}
+	for _, s := range []fieldspec.FieldSpec{out.XSpec, out.YSpec, out.TagSpec} {
 		if !s.IsZero() {
 			specs = append(specs, s)
 		}
@@ -324,7 +324,7 @@ func parseXArg(v string, out *PipeArgs) string {
 		out.XEnd = end
 		base = lo
 	}
-	spec, err := shellcore.ParseFieldSpec(base)
+	spec, err := fieldspec.ParseFieldSpec(base)
 	if err != nil {
 		return err.Error()
 	}

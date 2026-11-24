@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"github.com/graybeardcorp/warp/pkg/gitcore"
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/backends/history"
 	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/shape"

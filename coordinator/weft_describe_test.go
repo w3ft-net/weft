@@ -2,12 +2,13 @@ package coordinator
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
-	luapkg "github.com/graybeardcorp/warp/pkg/lua"
+	luapkg "github.com/graybeardcorp/warp-lua"
 
 	"github.com/w3ft-net/weft/backends/cron"
 )
@@ -85,7 +86,7 @@ func TestWeftLua_Describe(t *testing.T) {
 		{RanAt: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC), ExitCode: 1, DurationMs: 12, Stderr: "boom"},
 	}}
 	var out, errb bytes.Buffer
-	code := luapkg.RunScript(`
+	code := luapkg.RunScript(context.Background(), `
 local runs = weft.describe("canary", 5)
 print(#runs, runs[1].exit_code, runs[1].stderr, runs[1].duration_ms, runs[1].ran_at)
 `, nil, strings.NewReader(""), &out, &errb, luapkg.WithExtension(buildWeftLuaExtension(m)))

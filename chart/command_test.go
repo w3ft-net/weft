@@ -2,11 +2,12 @@ package chart
 
 import (
 	"errors"
+	"github.com/w3ft-net/weft/testhost"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 )
 
 type fakeCronSrc struct {
@@ -18,15 +19,17 @@ func (f fakeCronSrc) GetCronSeries(string, string) (CronSeries, error) { return 
 
 // cmdCore builds a core with chart registered the way the CLI does, in sync or
 // async (SetPost) form, and returns helpers to type a line and settle the run.
-func cmdCore(t *testing.T, src CronSource, async bool) (*shellcore.ShellCore, func(string), func() string) {
+func cmdCore(t *testing.T, src CronSource, async bool) (*shellcore.Shell, func(string), func() string) {
 	t.Helper()
-	core := shellcore.NewShellCore(nil, 100, 30, func([]byte) {}, func(shellcore.Action) {})
-	Register(core, src, func() string { return "2h.." })
+	var core *shellcore.Shell
 	var q chan func()
 	if async {
 		q = make(chan func(), 256)
-		core.SetPost(func(fn func()) { q <- fn })
+		core = testhost.NewAsync(100, 30, func([]byte) {}, func(shellcore.Action) {}, func(fn func()) { q <- fn })
+	} else {
+		core = testhost.New(100, 30, func([]byte) {}, func(shellcore.Action) {})
 	}
+	Register(core, src, func() string { return "2h.." })
 	run := func(line string) {
 		for _, r := range line {
 			core.HandleEvent(shellcore.KeyEvent{Rune: r})

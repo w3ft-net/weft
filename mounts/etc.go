@@ -7,7 +7,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/alerting"
 	"github.com/w3ft-net/weft/identity"
 	"github.com/w3ft-net/weft/notifycfg"
@@ -18,10 +18,6 @@ import (
 type EtcMount struct{ cfg Config }
 
 func (m *EtcMount) Prefix() string { return "/etc" }
-
-func (m *EtcMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{Writable: true}
-}
 
 // Authorize is the mount's one access check, called by MountFS before every
 // operation: every member can read /etc, and only the configmgr group can change

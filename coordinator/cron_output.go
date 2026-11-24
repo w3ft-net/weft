@@ -3,10 +3,10 @@ package coordinator
 import (
 	"bufio"
 	"fmt"
+	"github.com/w3ft-net/weft/fieldspec"
 	"strconv"
 	"strings"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/tidwall/gjson"
 	"github.com/w3ft-net/weft/backends/cron"
 )
@@ -16,7 +16,7 @@ import (
 // cron alerts, and whether its values are text (`# type: text`). A zero
 // value field means the default text rule.
 type cronSchema struct {
-	value, tag shellcore.FieldSpec
+	value, tag fieldspec.FieldSpec
 	alerts     bool
 	text       bool
 }
@@ -25,12 +25,12 @@ func schemaForWatch(w cron.Watch) (cronSchema, error) {
 	s := cronSchema{alerts: w.Compiled.HasAlert, text: w.Compiled.ValueType == cron.ValueText}
 	var err error
 	if w.Compiled.ValueField != nil {
-		if s.value, err = shellcore.ParseFieldSpec(*w.Compiled.ValueField); err != nil {
+		if s.value, err = fieldspec.ParseFieldSpec(*w.Compiled.ValueField); err != nil {
 			return s, fmt.Errorf("value_field %q: %w", *w.Compiled.ValueField, err)
 		}
 	}
 	if w.Compiled.TagField != nil {
-		if s.tag, err = shellcore.ParseFieldSpec(*w.Compiled.TagField); err != nil {
+		if s.tag, err = fieldspec.ParseFieldSpec(*w.Compiled.TagField); err != nil {
 			return s, fmt.Errorf("tag_field %q: %w", *w.Compiled.TagField, err)
 		}
 	}
@@ -152,7 +152,7 @@ func (s cronSchema) flaglessAlertPoint(n int, line string) (cronPoint, error) {
 // positionalPoint reads alert -v N [-t M] columns. The two-field limit of
 // the default rule doesn't apply: the flags say which columns matter.
 func (s cronSchema) positionalPoint(n int, line string) (cronPoint, error) {
-	raw, _ := shellcore.ResolveField(s.value, line)
+	raw, _ := fieldspec.ResolveField(s.value, line)
 	if raw == "" {
 		return cronPoint{}, fmt.Errorf("line %d has no field %s for alert -v", n, s.value)
 	}
@@ -161,7 +161,7 @@ func (s cronSchema) positionalPoint(n int, line string) (cronPoint, error) {
 		return cronPoint{}, err
 	}
 	if !s.tag.IsZero() {
-		p.tag, _ = shellcore.ResolveField(s.tag, line)
+		p.tag, _ = fieldspec.ResolveField(s.tag, line)
 	}
 	return p, nil
 }

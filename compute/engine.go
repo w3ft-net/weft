@@ -701,13 +701,13 @@ func (j *Job) consume() {
 		// jq prints compact (one value per line) by default in weft:
 		// its output feeds line-oriented stages, and it matches what a
 		// projection SQL computes.
-		opts := bash.StreamingOptions{JqCompact: true}
+		cfg := bash.Config{NoStepLimits: true, JqCompact: true}
 		if jqVarsCh != nil {
-			opts.JqInputVars = func() map[string]jq.Value { return <-jqVarsCh }
+			cfg.JqInputVars = func() map[string]jq.Value { return <-jqVarsCh }
 		}
 		if awkVarsCh != nil {
 			var cur rowAwkVars
-			opts.AwkPerRecordBind = func(string) []awk.Binding {
+			cfg.AwkPerRecordBind = func(string) []awk.Binding {
 				if cur.records == 0 {
 					// The previous row's records have all been bound, and awk
 					// copied the values, so its slice can serve a later row.
@@ -723,7 +723,8 @@ func (j *Job) consume() {
 				return cur.binds
 			}
 		}
-		exitCode, err = bash.RunStreamingWithOptions(pipeline, stdinR, stdoutW, &stderrBuf, opts)
+		res := bash.NewRunner(cfg)(context.Background(), bash.RunRequest{Line: pipeline, Stdin: stdinR, Stderr: &stderrBuf}, stdoutW)
+		exitCode, err = res.Exit, res.Err
 		// A pipeline that stopped reading early (head) must not strand the
 		// writer: its writes now fail, and it drains the remaining shards to
 		// their sentinels without emitting.

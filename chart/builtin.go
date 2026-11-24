@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 )
 
 // Command returns the `chart` command. One name, two forms, told apart by
@@ -30,7 +30,7 @@ func Command(src CronSource, rangeSpec func() string) func(cx *shellcore.Cmd) in
 			return 1
 		}
 		size := func() (w, h int) {
-			cx.OnLoop(func(c *shellcore.ShellCore) error {
+			cx.OnLoop(func(c *shellcore.Shell) error {
 				w, h = c.Width(), c.Height()-1
 				return nil
 			})
@@ -72,7 +72,7 @@ func Command(src CronSource, rangeSpec func() string) func(cx *shellcore.Cmd) in
 			if msg := CheckFollow(rangeSpec()); msg != "" {
 				return fail("chart: " + msg)
 			}
-			if err := cx.OnLoop(func(c *shellcore.ShellCore) error { return c.EnterView("chart", args) }); err != nil {
+			if err := cx.OnLoop(func(c *shellcore.Shell) error { return c.EnterView("chart", args) }); err != nil {
 				return fail("chart: " + err.Error())
 			}
 			return 0
@@ -90,7 +90,7 @@ func Command(src CronSource, rangeSpec func() string) func(cx *shellcore.Cmd) in
 // Register wires chart into the given shellcore at construction time: the View
 // and the `chart` command, which covers both the watch form and the pipe form.
 // Embedders that want fine-grained control can register them individually.
-func Register(c *shellcore.ShellCore, src CronSource, rangeSpec func() string) {
+func Register(c *shellcore.Shell, src CronSource, rangeSpec func() string) {
 	c.RegisterView(NewView(src, rangeSpec))
 	c.RegisterSpec(Spec, Command(src, rangeSpec))
 }

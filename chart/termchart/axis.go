@@ -19,10 +19,10 @@ const (
 // bottom (X-axis labels) of a chart canvas. The remaining rectangle is
 // the plot area where lines / bars get drawn.
 const (
-	yAxisWidth    = 10
-	xAxisHeight   = 2
-	titleHeight   = 1
-	legendHeight  = 1
+	yAxisWidth   = 10
+	xAxisHeight  = 2
+	titleHeight  = 1
+	legendHeight = 1
 )
 
 type rect struct {
@@ -33,12 +33,12 @@ func (r rect) right() int  { return r.x + r.w }
 func (r rect) bottom() int { return r.y + r.h }
 
 type layout struct {
-	plot     rect
-	yAxis    rect
-	xAxis    rect
-	title    rect
-	legend   rect
-	hasTitle bool
+	plot      rect
+	yAxis     rect
+	xAxis     rect
+	title     rect
+	legend    rect
+	hasTitle  bool
 	hasLegend bool
 }
 

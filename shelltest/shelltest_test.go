@@ -2,6 +2,7 @@ package shelltest
 
 import (
 	"context"
+	"github.com/w3ft-net/weft/testhost"
 	"io/fs"
 	"sort"
 	"strings"
@@ -9,7 +10,7 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 )
 
 func TestShellBehavior(t *testing.T) {
@@ -38,8 +39,8 @@ func dispatchCase(files []File, command string) string {
 	mfs := buildMountFS(files)
 
 	var dispatched string
-	core := shellcore.NewShellCore(
-		[]string{"myapp"}, 80, 24,
+	core := testhost.New(
+		80, 24,
 		func(b []byte) {},
 		func(a shellcore.Action) {},
 	)
@@ -49,7 +50,7 @@ func dispatchCase(files []File, command string) string {
 			*s = bash.Script{}
 		}
 	})
-	core.SetFS(mfs)
+	core.SetConfig(bash.Config{FS: mfs})
 	core.Redraw()
 
 	for _, r := range command {
@@ -83,8 +84,11 @@ type testMount struct {
 }
 
 func (m *testMount) Prefix() string { return m.prefix }
-func (m *testMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{Writable: m.writable}
+func (m *testMount) Authorize(_ context.Context, _ string, want shellcore.Perm) error {
+	if !m.writable && want&shellcore.PermWrite != 0 {
+		return shellcore.ErrReadOnly
+	}
+	return shellcore.ErrNotSupported
 }
 
 func (m *testMount) ReadFile(ctx context.Context, rel string) ([]byte, error) {
@@ -170,9 +174,6 @@ func (m *testMount) Stat(ctx context.Context, rel string) (fs.FileInfo, error) {
 }
 
 func (m *testMount) Remove(ctx context.Context, rel string) error {
-	if !m.Caps().Writable {
-		return shellcore.ErrReadOnly
-	}
 	p := m.abs(rel)
 	for i := range m.files {
 		if m.files[i].Path == p {

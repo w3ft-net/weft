@@ -1,24 +1,24 @@
-// Package shellfs implements the warp bash.FS interface for weft by
+// Package shellfs implements the warp warpfs.FS interface for weft by
 // delegating to the mount-based FS in the mounts package. ShellFS is
-// a thin adapter that satisfies bash.FS and exposes extra methods
+// a thin adapter that satisfies warpfs.FS and exposes extra methods
 // (AmendVersionMessage) needed by the coordinator and vim popup.
 package shellfs
 
 import (
 	"context"
+	warpfs "github.com/graybeardcorp/warp/pkg/fs"
 	"io/fs"
 
-	"github.com/graybeardcorp/warp/pkg/bash"
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/alerting"
 	"github.com/w3ft-net/weft/identity"
 	"github.com/w3ft-net/weft/mounts"
 )
 
 // Compile-time interface checks.
-var _ bash.FS = (*ShellFS)(nil)
+var _ warpfs.FS = (*ShellFS)(nil)
 
-// ShellFS implements bash.FS for the weft shell by delegating to a
+// ShellFS implements warpfs.FS for the weft shell by delegating to a
 // mount-composed filesystem.
 type ShellFS struct {
 	mfs *shellcore.MountFS
@@ -96,7 +96,7 @@ func WithNoticeQueue(q NoticeSink) Option {
 }
 
 // WithContext binds the request context the mounts run under. warp's
-// bash.FS interface is ctx-less, so the per-request ShellFS carries it;
+// warpfs.FS interface is ctx-less, so the per-request ShellFS carries it;
 // embedders pass a context.WithoutCancel(requestCtx) so the trace ID
 // survives while the FS may outlive the request.
 func WithContext(ctx context.Context) Option {
@@ -107,7 +107,7 @@ func WithContext(ctx context.Context) Option {
 // direct access (e.g., to call ReadDir or Tree).
 func (f *ShellFS) MountFS() *shellcore.MountFS { return f.mfs }
 
-// --- bash.FS implementation ---
+// --- warpfs.FS implementation ---
 
 func (f *ShellFS) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return f.mfs.ReadFile(ctx, path)
@@ -129,7 +129,7 @@ func (f *ShellFS) Remove(ctx context.Context, path string) error {
 	return f.mfs.Remove(ctx, path)
 }
 
-// --- Optional bash.FS interfaces ---
+// --- Optional warpfs.FS interfaces ---
 
 func (f *ShellFS) AppendFile(ctx context.Context, path string, data []byte) error {
 	return f.mfs.AppendFile(ctx, path, data)
@@ -163,7 +163,7 @@ func (f *ShellFS) FileLanguage(ctx context.Context, path string) string {
 	return f.mfs.FileLanguage(ctx, path)
 }
 
-// --- Extra methods not in bash.FS ---
+// --- Extra methods not in warpfs.FS ---
 
 // AmendVersionMessage records a commit message for versioned paths.
 func (f *ShellFS) AmendVersionMessage(path, message string) error {

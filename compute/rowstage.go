@@ -105,8 +105,7 @@ type rowInterp struct {
 
 func newRowInterp(binder awkBinder) *rowInterp {
 	ri := &rowInterp{interp: bash.NewInterpreter()}
-	ri.interp.AwkMaxSteps = 0
-	ri.interp.SedMaxSteps = 0
+	ri.interp.NoStepLimits = true
 	ri.interp.AwkPerRecordVars = func(string) map[string]string { return binder.vars(ri.meta) }
 	ri.interp.SetStdout(&ri.out)
 	ri.interp.SetStderr(io.Discard)
@@ -165,7 +164,7 @@ func (st *rowStage) keep(raw, payload string, meta map[string]string) bool {
 		if st.meta.Reads() {
 			opts.Vars = st.jqVars.Vars(meta)
 		}
-		out, err := jq.EvalAllWithOptions(st.jq, v, opts)
+		out, err := jq.EvalAll(st.jq, v, opts)
 		return err == nil && len(out) > 0
 	}
 	ri := st.interp.Get().(*rowInterp)

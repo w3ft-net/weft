@@ -14,7 +14,7 @@ import (
 
 	"github.com/w3ft-net/weft/binscript"
 
-	luapkg "github.com/graybeardcorp/warp/pkg/lua"
+	luapkg "github.com/graybeardcorp/warp-lua"
 	"github.com/w3ft-net/weft/backends/cron"
 	"github.com/w3ft-net/weft/backends/cron/cronstats"
 	"github.com/w3ft-net/weft/backends/source"

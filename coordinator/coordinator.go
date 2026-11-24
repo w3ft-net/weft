@@ -26,8 +26,9 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
+	luapkg "github.com/graybeardcorp/warp-lua"
+	"github.com/graybeardcorp/warp-lua/luashell"
 	"github.com/graybeardcorp/warp/pkg/bash"
-	luapkg "github.com/graybeardcorp/warp/pkg/lua"
 	"github.com/w3ft-net/weft/backends/cron"
 	"github.com/w3ft-net/weft/backends/source"
 	"github.com/w3ft-net/weft/compute"
@@ -1505,7 +1506,6 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 		cfg.FS = shellfs.New(c.Mounts.Config(mounts.Session{Owner: owner, LogServices: logServices}), append([]shellfs.Option{shellfs.WithAccess(c.mountAccess()), shellfs.WithAlertKinds(c.alertKinds())}, opts...)...)
 
 		wf := &WeftFuncs{Crons: c.Crons, Sources: c.Sources, Limits: c.limits(owner), Owner: owner, Ctx: context.WithoutCancel(ctx), Scoper: c.Scoper}
-		cfg.LuaExtensions = []luapkg.Extension{wf.LuaExtension()}
 		cfg.Setup = func(_ context.Context, interp *bash.Interpreter, _ io.Writer, _ io.Reader) {
 			// A log query whose answer is missing rows ends the run as a
 			// failure and stops the script at its next statement.
@@ -1513,6 +1513,7 @@ func (c *Coordinator) runLocal(ctx context.Context, pipeline string, tr TimeRang
 				stream.setRunErr(err)
 				interp.Cancel()
 			}
+			luashell.Register(interp, luapkg.WithExtension(wf.LuaExtension()))
 			RegisterWeftCommands(interp, wf)
 			RegisterWeftPredicates(interp, wf)
 

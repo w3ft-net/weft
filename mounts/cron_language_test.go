@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 )
 
 // TestCronMount_FileLanguage pins that /cron.d entries self-identify as

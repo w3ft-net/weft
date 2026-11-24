@@ -2,13 +2,13 @@ package chart
 
 import (
 	"fmt"
+	"github.com/w3ft-net/weft/fieldspec"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
 	"github.com/itchyny/timefmt-go"
 	"github.com/w3ft-net/weft/chart/termchart"
 )
@@ -185,7 +185,7 @@ func resolveXY(line string, args PipeArgs, isTimeX bool, seq int) (xLabel string
 			yStr = fields[col-1]
 		}
 	} else {
-		raw, err := shellcore.ResolveField(args.YSpec, line)
+		raw, err := fieldspec.ResolveField(args.YSpec, line)
 		if err != nil {
 			return "", 0, 0, rowError, "y: " + err.Error()
 		}
@@ -209,12 +209,12 @@ func resolveXY(line string, args PipeArgs, isTimeX bool, seq int) (xLabel string
 	return xLabel, xNum, yNum, rowOK, ""
 }
 
-// resolveX is shellcore.ResolveField for -x, plus the column range a
+// resolveX is fieldspec.ResolveField for -x, plus the column range a
 // ::time cast allows: columns start..end joined by single spaces, or
 // "" when the line is too short to have them all.
 func resolveX(args PipeArgs, line string) (string, error) {
 	if args.XEnd == 0 {
-		return shellcore.ResolveField(args.XSpec, line)
+		return fieldspec.ResolveField(args.XSpec, line)
 	}
 	fields := strings.Fields(line)
 	if len(fields) < args.XEnd {
@@ -399,7 +399,7 @@ func groupRowsByTag(lines []string, args PipeArgs) ([]tagGroup, bool, string) {
 			continue
 		}
 
-		tagVal, err := shellcore.ResolveField(args.TagSpec, line)
+		tagVal, err := fieldspec.ResolveField(args.TagSpec, line)
 		if err != nil {
 			return nil, false, "tag: " + err.Error()
 		}

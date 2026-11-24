@@ -11,17 +11,13 @@ import (
 
 	"github.com/w3ft-net/weft/backends/cron"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/identity"
 )
 
 type CronMount struct{ cfg Config }
 
 func (m *CronMount) Prefix() string { return "/cron.d" }
-
-func (m *CronMount) Caps() shellcore.MountCaps {
-	return shellcore.MountCaps{Writable: true}
-}
 
 // cronPath is a /cron.d path resolved: the root, a namespace directory, or a
 // cron. A cron is homed in a namespace (ns set) or at the org level.

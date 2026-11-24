@@ -49,17 +49,17 @@ const (
 // `chart` builtin and `ls -l /cron.d/` row glyph both go through
 // Sparkline / Builder.
 type Builder struct {
-	w, h    int
-	title   string
-	points  []Point
-	xAxis   XAxisFormat
-	thresh  *threshold
-	noAxis  bool
-	chart   chartKind
-	bars    []float64 // bar mode: per-tag heights, parallel to barLabels
+	w, h      int
+	title     string
+	points    []Point
+	xAxis     XAxisFormat
+	thresh    *threshold
+	noAxis    bool
+	chart     chartKind
+	bars      []float64 // bar mode: per-tag heights, parallel to barLabels
 	barLabels []string
-	series  []NamedSeries // line mode: multi-series input, takes precedence over points
-	xRange  *[2]float64   // line mode: fixed x extent, nil = the data's own
+	series    []NamedSeries // line mode: multi-series input, takes precedence over points
+	xRange    *[2]float64   // line mode: fixed x extent, nil = the data's own
 }
 
 type threshold struct {

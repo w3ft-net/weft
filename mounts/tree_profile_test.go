@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/graybeardcorp/warp/pkg/shellcore"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 )
 
 // countingLogMount wraps *LogMount and records every ReadDir/Walk the
@@ -23,7 +23,6 @@ type countingLogMount struct {
 }
 
 func (c *countingLogMount) Prefix() string            { return c.inner.Prefix() }
-func (c *countingLogMount) Caps() shellcore.MountCaps { return c.inner.Caps() }
 func (c *countingLogMount) ReadFile(ctx context.Context, r string) ([]byte, error) {
 	return c.inner.ReadFile(context.Background(), r)
 }
@@ -184,7 +183,6 @@ func TestTreeWalkOutputParity(t *testing.T) {
 type readDirOnly struct{ lm *LogMount }
 
 func (r readDirOnly) Prefix() string            { return r.lm.Prefix() }
-func (r readDirOnly) Caps() shellcore.MountCaps { return r.lm.Caps() }
 func (r readDirOnly) ReadDir(ctx context.Context, rel string) ([]fs.DirEntry, error) {
 	return r.lm.ReadDir(context.Background(), rel)
 }
