@@ -4,6 +4,7 @@ package planner
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -13,9 +14,17 @@ import (
 	"github.com/graybeardcorp/warp/pkg/jq"
 )
 
+// runBash runs one line through a bare warp runner with input on stdin.
+func runBash(line, input string) (stdout, stderr string, exit int, err error) {
+	var out, errb bytes.Buffer
+	res := bash.NewRunner(bash.Config{})(context.Background(),
+		bash.RunRequest{Line: line, Stdin: strings.NewReader(input), Stderr: &errb}, &out)
+	return out.String(), errb.String(), res.Exit, res.Err
+}
+
 func runJq(expr, input string) (string, error) {
 	var out bytes.Buffer
-	if err := jq.Run(expr, strings.NewReader(input), &out); err != nil {
+	if err := jq.Run(expr, strings.NewReader(input), &out, jq.Options{}); err != nil {
 		return "", err
 	}
 	return strings.TrimSuffix(out.String(), "\n"), nil
@@ -36,7 +45,7 @@ func TestExplain_JqPctExtraction(t *testing.T) {
 
 	t.Run("bash pipeline extracts .pct via jq", func(t *testing.T) {
 		input := metricsJSON + "\n"
-		stdout, stderr, exitCode, err := bash.Run("jq '.pct'", input)
+		stdout, stderr, exitCode, err := runBash("jq '.pct'", input)
 		if err != nil {
 			t.Fatalf("bash.Run: %v", err)
 		}
@@ -56,7 +65,7 @@ func TestExplain_JqPctExtraction(t *testing.T) {
 			`{"type":"memory","pct":45}`,
 		}
 		input := strings.Join(lines, "\n") + "\n"
-		stdout, stderr, exitCode, err := bash.Run("jq '.pct'", input)
+		stdout, stderr, exitCode, err := runBash("jq '.pct'", input)
 		if err != nil {
 			t.Fatalf("bash.Run: %v", err)
 		}

@@ -152,10 +152,10 @@ github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e h1:ijClszYn+mADRFY17k
 github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e/go.mod h1:boTsfXsheKC2y+lKOCMpSfarhxDeIzfZG1jqGcPl3cA=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/graybeardcorp/warp v0.4.0 h1:E/qheGxw5rb2ORlV3JSvmQcg9W77fWfBOudQk6kO51o=
-github.com/graybeardcorp/warp v0.4.0/go.mod h1:eUF5gbY1k+hAF07OtsLtfqQMxhSDedAuu93H9CekJzc=
-github.com/graybeardcorp/warp v0.5.0 h1:bsjDzdpgAiqVSE5NQpuqDXyJvbN3fa0jshcqdJa/VUE=
-github.com/graybeardcorp/warp v0.5.0/go.mod h1:eUF5gbY1k+hAF07OtsLtfqQMxhSDedAuu93H9CekJzc=
+github.com/graybeardcorp/warp v0.6.0 h1:7PTWDM7WLJ5H83KKCSUywT2+Ryr/TheJLHhl/P/Yf+c=
+github.com/graybeardcorp/warp v0.6.0/go.mod h1:/6+WoqErbefiuqIjCdFVYslL/GmmLP9JJWYaXp3IK7c=
+github.com/graybeardcorp/warp-lua v0.1.0 h1:hejh2DBue0BG9DW3uPWKp7GB0D87Qpf/HWA7oJEturA=
+github.com/graybeardcorp/warp-lua v0.1.0/go.mod h1:C0FTnzba2LstR9Nkt3aT1RyFDvp9truPZ4K2qzioLRU=
 github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=
 github.com/hashicorp/golang-lru/v2 v2.0.7/go.mod h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=
 github.com/itchyny/timefmt-go v0.1.9 h1:J4j1qMqZbg5jycwT6zIKfRgZ9aqqMxqanaI6Rr9Ezs8=
