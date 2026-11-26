@@ -37,7 +37,7 @@ var (
 
 func (p *proxyBackend) setAuth(req *http.Request) {
 	if p.token != "" {
-		req.Header.Set("Authorization", "Bearer "+p.token)
+		req.Header.Set("Authorization", Authorization(p.token))
 	}
 	if p.org != "" {
 		req.Header.Set("X-Active-Org", p.org)

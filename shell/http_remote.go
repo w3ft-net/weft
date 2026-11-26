@@ -133,7 +133,7 @@ func (h *HTTPCoordinator) SetClientID(id string) {
 // authHeaders is Authorization + X-Active-Org + X-Weft-Client for every
 // outgoing request. Centralized so a new endpoint can't forget any of them.
 func (h *HTTPCoordinator) authHeaders() map[string]string {
-	hd := map[string]string{"Authorization": "Bearer " + h.token}
+	hd := map[string]string{"Authorization": Authorization(h.token)}
 	if h.org != "" {
 		hd["X-Active-Org"] = h.org
 	}

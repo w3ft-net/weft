@@ -48,7 +48,7 @@ func NewProxyFS(baseURL, token, org string) *ProxyFS {
 
 func (p *ProxyFS) setAuth(req *http.Request) {
 	if p.token != "" {
-		req.Header.Set("Authorization", "Bearer "+p.token)
+		req.Header.Set("Authorization", Authorization(p.token))
 	}
 	if p.org != "" {
 		req.Header.Set("X-Active-Org", p.org)

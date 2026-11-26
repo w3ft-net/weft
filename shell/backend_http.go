@@ -50,7 +50,7 @@ func NewHTTPBackend(baseURL, token, org string) *HTTPBackend {
 // so a new endpoint can't forget the org header (same pattern as
 // HTTPCoordinator).
 func (b *HTTPBackend) setAuthHeaders(req *http.Request) {
-	req.Header.Set("Authorization", "Bearer "+b.token)
+	req.Header.Set("Authorization", Authorization(b.token))
 	if b.org != "" {
 		req.Header.Set("X-Active-Org", b.org)
 	}
