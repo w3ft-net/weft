@@ -59,11 +59,6 @@ func (*Identity) Forward(r *http.Request) map[string]string {
 	return nil
 }
 
-// ShellRan sends the client nothing.
-func (*Identity) ShellRan(context.Context, weftapi.Session, weftapi.ShellRun) map[string]any {
-	return nil
-}
-
 // Routes registers nothing: there is no sign-in, token or account route in the
 // open build.
 func (*Identity) Routes(*weftapi.Routes) {}

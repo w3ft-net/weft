@@ -22,7 +22,7 @@ type countingLogMount struct {
 	walkScans int      // full LogServices slice scans implied by Walk
 }
 
-func (c *countingLogMount) Prefix() string            { return c.inner.Prefix() }
+func (c *countingLogMount) Prefix() string { return c.inner.Prefix() }
 func (c *countingLogMount) ReadFile(ctx context.Context, r string) ([]byte, error) {
 	return c.inner.ReadFile(context.Background(), r)
 }
@@ -182,7 +182,7 @@ func TestTreeWalkOutputParity(t *testing.T) {
 // MountFS.Tree falls back to recursive ReadDir.
 type readDirOnly struct{ lm *LogMount }
 
-func (r readDirOnly) Prefix() string            { return r.lm.Prefix() }
+func (r readDirOnly) Prefix() string { return r.lm.Prefix() }
 func (r readDirOnly) ReadDir(ctx context.Context, rel string) ([]fs.DirEntry, error) {
 	return r.lm.ReadDir(context.Background(), rel)
 }

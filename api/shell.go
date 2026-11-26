@@ -59,9 +59,6 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Pipeline string `json:"pipeline"`
 		Follow   bool   `json:"follow"`
-		// Modal is set by a browser modal fetching its own rows (the trace
-		// view). Its pipeline finishing is not the user running a pipeline.
-		Modal bool `json:"modal"`
 		// Range is an unresolved time-window spec ("1d..", "30m..10m",
 		// "2026-04-01..2026-04-12", "05-14T09:00..05-14T17:00"). The
 		// server resolves it on every request against its own clock so a
@@ -155,8 +152,6 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 		ctx = metadata.AppendToOutgoingContext(ctx, "weft-dirstack", d)
 	}
 
-	run := ShellRun{Pipeline: req.Pipeline, Modal: req.Modal}
-
 	// Capture the response trailer so the post-run dirstack (weft-final-
 	// dirstack) can be surfaced to the client after the stream ends.
 	var trailer metadata.MD
@@ -201,11 +196,7 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 			// A tail -f stream is designed to stay open indefinitely —
 			// it only ever ends via client cancellation (this branch),
 			// never a server-side io.EOF. The client is already gone, so
-			// there is no event to write, but the deployment is still told
-			// the run finished: stopping a live tail counts as finishing
-			// it. There's no way to tell a deliberate stop from an
-			// accidental disconnect, which is an accepted tradeoff.
-			s.ident().ShellRan(r.Context(), session, run)
+			// there is nothing to write.
 			return
 
 		case <-ticker.C:
@@ -221,11 +212,6 @@ func (s *Server) handleShellExec(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if rr.err == io.EOF {
-				// Pipeline finished cleanly. The deployment may answer with
-				// an event of its own for the client.
-				if ev := s.ident().ShellRan(r.Context(), session, run); ev != nil {
-					writeSSEEvent(w, ev)
-				}
 				if !req.Follow {
 					// Dirstack courier (back to client): the coordinator
 					// returns the post-run stack as a weft-final-dirstack

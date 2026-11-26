@@ -78,6 +78,9 @@ func Run(fl *Flags, dep *deployment.Deployment, own *Own) {
 	srv.SetSources(b.Sources)
 	srv.SetCrons(b.Crons)
 	srv.SetBins(b.Bins)
+	if b.Dashboards != nil {
+		srv.SetDashboards(b.Dashboards)
+	}
 	srv.SetNotify(b.Notify)
 	srv.SetIngestFailures(b.IngestFailures)
 	srv.SetMounts(dep.Mounts)

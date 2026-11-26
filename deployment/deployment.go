@@ -17,6 +17,7 @@ import (
 	weftapi "github.com/w3ft-net/weft/api"
 	"github.com/w3ft-net/weft/backends/bin"
 	"github.com/w3ft-net/weft/backends/cron"
+	"github.com/w3ft-net/weft/backends/dashboard"
 	"github.com/w3ft-net/weft/backends/ingestfail"
 	"github.com/w3ft-net/weft/backends/source"
 	"github.com/w3ft-net/weft/backends/token"
@@ -64,10 +65,12 @@ type Authn struct {
 
 // Backends is where the stores live, as every process reads them.
 type Backends struct {
-	Tokens         token.Store
-	Sources        source.Store
-	Crons          cron.Store
-	Bins           bin.Store
+	Tokens  token.Store
+	Sources source.Store
+	Crons   cron.Store
+	Bins    bin.Store
+	// Dashboards is /etc/dashboards. Nil serves no dashboard routes.
+	Dashboards     dashboard.Store
 	Notify         notifycfg.Service
 	IngestFailures ingestfail.Store
 }

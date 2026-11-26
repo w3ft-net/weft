@@ -14,6 +14,7 @@ import (
 
 	"github.com/w3ft-net/weft/backends/bin"
 	"github.com/w3ft-net/weft/backends/cron"
+	dashstore "github.com/w3ft-net/weft/backends/dashboard"
 	"github.com/w3ft-net/weft/backends/ingestfail"
 	"github.com/w3ft-net/weft/notifycfg"
 	"github.com/w3ft-net/weft/warning"
@@ -54,6 +55,7 @@ type Server struct {
 	namespaceCreated func(ctx context.Context, session Session, namespace uint)
 	fleet            sources.AgentFleet     // who reads the agent-sampled sources; nil is none
 	crons            cron.Store             // crons, their results and series
+	dashboards       dashstore.Store        // /etc/dashboards; nil serves no dashboard routes
 	limits           identity.Entitlements  // what each plan allows; nil is no limits
 	ingest           ingestfail.Store       // ingestion failures
 	notify           notifycfg.Service      // notification config and secrets
@@ -333,6 +335,12 @@ func (s *Server) Handler() http.Handler {
 	auth.Handle("PUT /api/functions/{name}", BodyCap(cfg.FunctionBodyMax, protected(s.handleSaveFunction)))
 	auth.Handle("DELETE /api/functions/{name}", protected(s.handleDeleteFunction))
 	auth.HandleFunc("GET /api/crons", s.handleListWatches)
+	if s.dashboards != nil {
+		auth.HandleFunc("GET /api/dashboards", s.handleListDashboards)
+		auth.HandleFunc("GET /api/dashboards/{name}", s.handleGetDashboard)
+		auth.Handle("PUT /api/dashboards/{name}", BodyCap(cfg.WatchBodyMax, protected(s.handleSaveDashboard)))
+		auth.Handle("DELETE /api/dashboards/{name}", protected(s.handleDeleteDashboard))
+	}
 	// A cron is /api/crons/{name} at the org level, or /api/crons/{ns}/{name}
 	// in a namespace; cronPath joins the two.
 	for _, base := range []string{"/api/crons/{name}", "/api/crons/{ns}/{name}"} {
@@ -392,7 +400,7 @@ func (s *Server) Handler() http.Handler {
 	// already mounts.
 	gate := s.ident().Authenticate(gatedAuth)
 	mounts := map[string]bool{}
-	for _, path := range []string{
+	gated := []string{
 		"/api/sources",
 		"/api/sources/",
 		"/api/tokens",
@@ -410,7 +418,11 @@ func (s *Server) Handler() http.Handler {
 		"/api/namespaces/",
 		"/api/fs/",
 		"/api/ingestion-status",
-	} {
+	}
+	if s.dashboards != nil {
+		gated = append(gated, "/api/dashboards", "/api/dashboards/")
+	}
+	for _, path := range gated {
 		mux.Handle(path, gate)
 		mounts[path] = true
 	}
@@ -702,16 +714,7 @@ func cronPath(r *http.Request) string {
 // homed in a namespace the caller can't read: the same answer as no such cron.
 func (s *Server) cronAt(ctx context.Context, session Session, p string) (*cron.Watch, error) {
 	owner := session.Principal().Partition()
-	var ns uint
-	name := p
-	if home, rest, homed := strings.Cut(p, "/"); homed {
-		if rest == "" || strings.Contains(rest, "/") {
-			return nil, cron.ErrNotFound
-		}
-		n, ok, err := s.sources.GetNamespace(owner, home)
-		if err != nil || !ok {
-			return nil, cron.ErrNotFound
-		}
+	if home, _, homed := strings.Cut(p, "/"); homed {
 		readable, err := s.readable(ctx, session)
 		if err != nil {
 			return nil, err
@@ -719,9 +722,8 @@ func (s *Server) cronAt(ctx context.Context, session Session, p string) (*cron.W
 		if !slices.Contains(readable, home) {
 			return nil, cron.ErrNotFound
 		}
-		ns, name = n.ID, rest
 	}
-	return s.crons.GetWatch(owner, ns, name)
+	return s.cronNamed(owner, p)
 }
 
 // readableCrons lists the org-level crons and those homed in a namespace the

@@ -18,6 +18,9 @@ type Stores struct {
 	Coord   *CoordinationBackend
 	Shards  *ShardBackend
 	DLQ     *DLQBackend
+	Login   *LoginBackend
+	// Dashboards is /etc/dashboards.
+	Dashboards *DashboardBackend
 	// Notify is the notification config, its aliases and secrets both kept by
 	// the one store.
 	Notify notifycfg.Service
@@ -57,6 +60,12 @@ func Open(db *sql.DB) (*Stores, error) {
 		return nil, err
 	}
 	s.DLQ = NewDLQBackend()
+	if s.Login, err = NewLoginBackend(db); err != nil {
+		return nil, err
+	}
+	if s.Dashboards, err = NewDashboardBackend(db); err != nil {
+		return nil, err
+	}
 	notify, err := NewNotifyBackend(db)
 	if err != nil {
 		return nil, err

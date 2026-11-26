@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -45,8 +46,7 @@ func (openIdentity) Forward(r *http.Request) map[string]string {
 	}
 	return nil
 }
-func (openIdentity) ShellRan(context.Context, api.Session, api.ShellRun) map[string]any { return nil }
-func (openIdentity) Routes(*api.Routes)                                                 {}
+func (openIdentity) Routes(*api.Routes) {}
 
 // openSubject is the open build's api over one SQLite database, with the one
 // group the default shape has. Under a shape with group columns the open build
@@ -73,6 +73,7 @@ func openSubject(t *testing.T) apitest.Subject {
 	srv.SetSources(st.Sources)
 	srv.SetCrons(st.Crons)
 	srv.SetBins(st.Bins)
+	srv.SetDashboards(st.Dashboards)
 	srv.SetNotify(st.Notify)
 	srv.SetIngestFailures(st.Ingest)
 	srv.SetMounts(&mounts.Backends{
@@ -81,6 +82,9 @@ func openSubject(t *testing.T) apitest.Subject {
 		Notify:     st.Notify,
 		CronAuthor: cronauthor.Service{Crons: st.Crons, Sources: st.Sources, Bins: st.Bins},
 		Tmp:        st.Tmp,
+		EtcExtensions: func(c mounts.Config) []shellcore.Mount {
+			return []shellcore.Mount{mounts.Dashboards(c, st.Dashboards)}
+		},
 	})
 	srv.SetAlertKinds(alerting.NewRegistry(st.Notify))
 	h := srv.Handler()
@@ -125,3 +129,4 @@ func TestIngest_Open(t *testing.T)     { apitest.Ingest(t, openSubject) }
 func TestAuth_Open(t *testing.T)       { apitest.Auth(t, openSubject) }
 func TestAuthorizer_Open(t *testing.T) { apitest.Authorizer(t, openSubject) }
 func TestBins_Open(t *testing.T)       { apitest.Bins(t, openSubject) }
+func TestDashboards_Open(t *testing.T) { apitest.Dashboards(t, openSubject) }

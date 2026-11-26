@@ -40,21 +40,8 @@ type Identity interface {
 	// caller itself: gRPC metadata, as key/value pairs.
 	Forward(r *http.Request) map[string]string
 
-	// ShellRan tells the deployment that a pipeline the session ran has
-	// finished. A non-nil result is an extra event the deployment sends the
-	// client on the shell stream, a JSON object carrying its own "type".
-	ShellRan(ctx context.Context, s Session, run ShellRun) map[string]any
-
 	// Routes registers the identity's own routes: sign-in, tokens, the account.
 	Routes(rt *Routes)
-}
-
-// ShellRun is a finished shell pipeline.
-type ShellRun struct {
-	Pipeline string
-	// Modal is set when a browser modal fetched its own rows (the trace view),
-	// not the user running a pipeline.
-	Modal bool
 }
 
 // SetIdentity installs the deployment's Identity. Until it is called the
@@ -77,11 +64,10 @@ func (noIdentity) Authenticate(http.Handler) http.Handler {
 		http.Error(w, ErrNoIdentity.Error(), http.StatusUnauthorized)
 	})
 }
-func (noIdentity) Protect(next http.Handler) http.Handler                     { return next }
-func (noIdentity) Entitled(context.Context, Session) error                    { return nil }
-func (noIdentity) Forward(*http.Request) map[string]string                    { return nil }
-func (noIdentity) ShellRan(context.Context, Session, ShellRun) map[string]any { return nil }
-func (noIdentity) Routes(*Routes)                                             {}
+func (noIdentity) Protect(next http.Handler) http.Handler  { return next }
+func (noIdentity) Entitled(context.Context, Session) error { return nil }
+func (noIdentity) Forward(*http.Request) map[string]string { return nil }
+func (noIdentity) Routes(*Routes)                          {}
 
 // ident is the installed Identity, or the one that refuses everyone.
 func (s *Server) ident() Identity {

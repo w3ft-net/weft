@@ -42,8 +42,7 @@ func (openIdentity) Forward(r *http.Request) map[string]string {
 	}
 	return nil
 }
-func (openIdentity) ShellRan(context.Context, Session, ShellRun) map[string]any { return nil }
-func (openIdentity) Routes(*Routes)                                             {}
+func (openIdentity) Routes(*Routes) {}
 
 // openAPI is an api server over the open build's stores: one SQLite database,
 // the one group the default shape has, and one authenticated user. Under a

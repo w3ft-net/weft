@@ -5,11 +5,13 @@
 package local
 
 import (
+	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/alerting"
 	"github.com/w3ft-net/weft/backends/defaults"
 	"github.com/w3ft-net/weft/backends/history/gitrepo"
 	"github.com/w3ft-net/weft/binscript"
 	"github.com/w3ft-net/weft/cronauthor"
+	"github.com/w3ft-net/weft/dashboard"
 	"github.com/w3ft-net/weft/deployment"
 	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/sqlitedb"
@@ -63,6 +65,7 @@ func Open(path string) (*Local, func(), error) {
 			Sources:        stores.Sources,
 			Crons:          stores.Crons,
 			Bins:           stores.Bins,
+			Dashboards:     stores.Dashboards,
 			Notify:         stores.Notify,
 			IngestFailures: stores.Ingest,
 		},
@@ -70,9 +73,14 @@ func Open(path string) (*Local, func(), error) {
 			Sources:    stores.Sources,
 			BinService: binscript.Service{Bins: stores.Bins, Crons: stores.Crons, Sources: stores.Sources},
 			Notify:     stores.Notify,
-			CronAuthor: cronauthor.Service{Crons: stores.Crons, Sources: stores.Sources, Bins: stores.Bins},
-			Tmp:        stores.Tmp,
-			History:    hist,
+			CronAuthor: cronauthor.Service{Crons: stores.Crons, Sources: stores.Sources, Bins: stores.Bins,
+				Readers: dashboard.Readers(stores.Dashboards)},
+			Tmp:     stores.Tmp,
+			History: hist,
+			EtcExtensions: func(c mounts.Config) []shellcore.Mount {
+				return []shellcore.Mount{mounts.Dashboards(c, stores.Dashboards)}
+			},
+			CronRenamed: mounts.DashboardCronRenamed(stores.Dashboards),
 		},
 		AlertTargets: []alerting.AlertTarget{alerting.EmailTarget{SMTP: alerting.SMTPFromEnv()}},
 	}
