@@ -9,19 +9,19 @@ import (
 	"testing"
 
 	"github.com/w3ft-net/weft/alerting"
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/binscript"
 	"github.com/w3ft-net/weft/coordinator"
 	"github.com/w3ft-net/weft/cronauthor"
 	"github.com/w3ft-net/weft/identity"
+	"github.com/w3ft-net/weft/identity/open"
 	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/shape"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // openIdentity is the open build's one HTTP Basic credential, as cmd/api
 // supplies it; it is repeated here because a main package cannot be imported.
-type openIdentity struct{ basic defaults.Basic }
+type openIdentity struct{ basic basicCred }
 
 func (i openIdentity) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +51,7 @@ func (openIdentity) Routes(*Routes) {}
 type openAPI struct {
 	t     *testing.T
 	srv   *Server
-	st    *defaults.Stores
+	st    *mem.Stores
 	owner shape.Added
 	h     http.Handler
 }
@@ -66,18 +66,10 @@ func newOpenAPI(t *testing.T) *openAPI {
 	if coordinator.NoGroup(shape.Added{}) {
 		t.Skip("the open build has no group under a shape with required columns")
 	}
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	st, err := defaults.Open(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := mem.Open()
 	srv := NewServer("localhost:9020", "http://localhost:3000")
-	srv.SetIdentity(openIdentity{basic: defaults.Basic{User: openUser, Password: openPassword}})
-	srv.SetAccess(defaults.OpenAccess())
+	srv.SetIdentity(openIdentity{basic: basicCred{User: openUser, Password: openPassword}})
+	srv.SetAccess(open.Access())
 	srv.SetTokens(st.Tokens)
 	srv.SetSources(st.Sources)
 	srv.SetCrons(st.Crons)
@@ -122,3 +114,17 @@ func (a *openAPI) namespace(name string) uint {
 	}
 	return n.ID
 }
+
+// basicCred is the single HTTP Basic credential the test identity accepts.
+type basicCred struct{ User, Password string }
+
+func (b basicCred) Authenticate(header string) bool {
+	return header == "Basic "+base64.StdEncoding.EncodeToString([]byte(b.User+":"+b.Password))
+}
+
+func (b basicCred) Caller() identity.Caller { return basicCaller{b.User} }
+
+type basicCaller struct{ user string }
+
+func (c basicCaller) Principal() identity.Principal { return open.Principal{User: c.user} }
+func (c basicCaller) UserID() string                { return c.user }

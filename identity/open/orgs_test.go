@@ -1,4 +1,4 @@
-package defaults
+package open
 
 import (
 	"testing"
@@ -8,8 +8,8 @@ import (
 )
 
 // With no organizations a principal carries only its user.
-func TestOpenOrgs_HaveNoOrganizations(t *testing.T) {
-	var o OpenOrgs
+func TestOrgs_HaveNoOrganizations(t *testing.T) {
+	var o Orgs
 	a := o.PrincipalOf(shapetest.Added(7), "u1")
 	if a.Subject() != "u1" || a.Partition() != (shape.Added{}) {
 		t.Errorf("PrincipalOf = %+v", a)

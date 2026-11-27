@@ -8,27 +8,18 @@ import (
 
 	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/backends/cron"
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/dashboard"
 	"github.com/w3ft-net/weft/identity"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // dashboardFS is a filesystem with /etc/dashboards over SQLite, acting as a
 // configmgr member (or not), with a numeric cron ops/errors and a text cron
 // ops/holders.
-func dashboardFS(t *testing.T, manager bool) (*shellcore.MountFS, *defaults.DashboardBackend, Config) {
+func dashboardFS(t *testing.T, manager bool) (*shellcore.MountFS, *mem.Dashboards, Config) {
 	t.Helper()
 	cfg := ownerCfg(t, []string{"ops/web"})
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	st, err := defaults.NewDashboardBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := mem.NewDashboards()
 	if manager {
 		cfg.Authz = grants{identity.ActionManageEtc: true}
 	}

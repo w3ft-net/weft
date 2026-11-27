@@ -1,4 +1,4 @@
-package defaults
+package mem
 
 import (
 	"context"
@@ -11,12 +11,12 @@ import (
 )
 
 func TestDLQConformance(t *testing.T) {
-	dlqstoretest.Run(t, func(t *testing.T) dlq.Store { return NewDLQBackend() })
+	dlqstoretest.Run(t, func(t *testing.T) dlq.Store { return NewDLQ() })
 }
 
 // A batch that cannot be decoded stays, is reported, and the others replay.
 func TestDLQReplay_ABatchItCannotDecodeStaysAndTheOthersReplay(t *testing.T) {
-	s := NewDLQBackend()
+	s := NewDLQ()
 	ctx := context.Background()
 	s.batches = append(s.batches, dlqBatch{id: -1, payload: []byte{0x00, 0xff}})
 	if _, err := s.Write(ctx, shapetest.Added(1), []*pb.LogRow{{Namespace: "weft", Service: "coordinator", Raw: "good"}}); err != nil {

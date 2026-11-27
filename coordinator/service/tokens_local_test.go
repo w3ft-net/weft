@@ -8,28 +8,16 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/backends/token"
 	"github.com/w3ft-net/weft/shape"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // A stream authenticates against any token.Store: here the open build's
 // SQLite one, with no Postgres, in a build whose owners map to no org.
 func TestAuthenticateStream_OverTheLocalTokenStore(t *testing.T) {
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	sources, err := defaults.NewSourceBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tokens, err := defaults.NewTokenBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sources := mem.NewSources()
+	tokens := mem.NewTokens(sources)
 	ns, err := sources.FindOrCreateNamespace(shape.Added{}, "ops")
 	if err != nil {
 		t.Fatal(err)

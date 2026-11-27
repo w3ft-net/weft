@@ -4,28 +4,17 @@ package logdb
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/w3ft-net/weft/backends/defaults"
-	"github.com/w3ft-net/weft/sqlitedb"
+	"github.com/w3ft-net/weft/backends/mem"
 )
 
-// The open build runs the control plane over the SQLite store: a bucket and
+// The open build runs the control plane over a shard store: a bucket and
 // the shard the bucket FSM mints are persisted there, and a restarted registry
 // hydrates from it, with no Postgres anywhere.
 func TestControlPlane_RunsOverTheLocalShardStore(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "weft.db")
-	db, err := sqlitedb.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	st, err := defaults.NewShardBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := mem.NewShards()
 
 	reg := NewShardRegistry()
 	reg.SetStore(st)
@@ -53,18 +42,9 @@ func TestControlPlane_RunsOverTheLocalShardStore(t *testing.T) {
 		t.Fatalf("minted shard in the store: %+v ok=%v err=%v", row, ok, err)
 	}
 
-	// A restart: a fresh registry over the same file adopts the shard.
-	db2, err := sqlitedb.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db2.Close() })
-	st2, err := defaults.NewShardBackend(db2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A restart: a fresh registry over the same store adopts the shard.
 	reg2 := NewShardRegistry()
-	reg2.SetStore(st2)
+	reg2.SetStore(st)
 	if err := reg2.LoadFromStore(noReconstruct); err != nil {
 		t.Fatal(err)
 	}

@@ -7,9 +7,8 @@ import (
 	"io/fs"
 	"testing"
 
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/backends/tmp"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 type countingNotices struct{ keys []string }
@@ -19,15 +18,7 @@ func (c *countingNotices) Maybe(_ context.Context, key string) { c.keys = append
 // /tmp runs over any tmp.Store: here the open build's SQLite one, with no
 // Postgres and no user store behind the mount.
 func TestTmpMount_OverTheLocalStore(t *testing.T) {
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	st, err := defaults.NewTmpBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := mem.NewTmp()
 	notices := &countingNotices{}
 	m := &TmpMount{cfg: Config{Tmp: st, UserID: "user-1", NoticeQueue: notices}}
 

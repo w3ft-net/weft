@@ -3,6 +3,7 @@ package defaults
 import (
 	"database/sql"
 
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/notifycfg"
 )
 
@@ -17,7 +18,7 @@ type Stores struct {
 	Ingest  *IngestFailBackend
 	Coord   *CoordinationBackend
 	Shards  *ShardBackend
-	DLQ     *DLQBackend
+	DLQ     *mem.DLQ
 	Login   *LoginBackend
 	// Dashboards is /etc/dashboards.
 	Dashboards *DashboardBackend
@@ -59,7 +60,7 @@ func Open(db *sql.DB) (*Stores, error) {
 	if s.Shards, err = NewShardBackend(db); err != nil {
 		return nil, err
 	}
-	s.DLQ = NewDLQBackend()
+	s.DLQ = mem.NewDLQ()
 	if s.Login, err = NewLoginBackend(db); err != nil {
 		return nil, err
 	}

@@ -8,8 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/w3ft-net/weft/backends/defaults"
-	"github.com/w3ft-net/weft/sqlitedb"
+	"github.com/w3ft-net/weft/backends/mem"
 
 	"github.com/w3ft-net/weft/backends/shardstore"
 
@@ -17,21 +16,12 @@ import (
 	"github.com/w3ft-net/weft/shard"
 )
 
-// openSMTestStore opens an in-memory SQLite store. The FSMs hold a concrete
+// openSMTestStore opens an in-memory shard store. The FSMs hold a concrete
 // shardstore.Store (no SMStore interface to fake), so state reads and writes
-// go through the real schema.
+// go through the real contract.
 func openSMTestStore(t *testing.T) shardstore.Store {
 	t.Helper()
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	st, err := defaults.NewShardBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return st
+	return mem.NewShards()
 }
 
 // seedBucket inserts a bucket row (unique label) and returns it.

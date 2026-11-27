@@ -3,16 +3,16 @@ package coordtest_test
 import (
 	"testing"
 
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/binscript"
 	"github.com/w3ft-net/weft/coordinator"
 	"github.com/w3ft-net/weft/coordinator/coordtest"
 	"github.com/w3ft-net/weft/cronauthor"
 	"github.com/w3ft-net/weft/identity"
+	"github.com/w3ft-net/weft/identity/open"
 	"github.com/w3ft-net/weft/logtable"
 	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/shape"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // localSubject is the open build's stores: one SQLite database, with the one
@@ -20,15 +20,7 @@ import (
 // has no group to run queries as, so those suites skip.
 func localSubject(t *testing.T) coordtest.Subject {
 	t.Helper()
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	st, err := defaults.Open(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := mem.Open()
 	return coordtest.Subject{
 		Crons: st.Crons, Sources: st.Sources, Bins: st.Bins, Notify: st.Notify, Claims: st.Coord, Shards: st.Shards,
 		Owner:     shape.Added{},
@@ -46,10 +38,10 @@ func localSubject(t *testing.T) coordtest.Subject {
 				Tmp:        st.Tmp,
 			}
 			cfg.Shards = st.Shards
-			cfg.Orgs, cfg.Scoper, cfg.Authz = defaults.OpenOrgs{}, defaults.OpenScoper{}, defaults.OpenAuthorizer{}
+			cfg.Orgs, cfg.Scoper, cfg.Authz = open.Orgs{}, open.Scoper{}, open.Authorizer{}
 			return coordinator.NewCoordinator(cfg)
 		},
-		PrincipalOf: func(user string) identity.Principal { return defaults.OpenPrincipal{User: user} },
+		PrincipalOf: func(user string) identity.Principal { return open.Principal{User: user} },
 	}
 }
 

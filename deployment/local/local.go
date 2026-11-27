@@ -16,6 +16,7 @@ import (
 	"github.com/w3ft-net/weft/cronauthor"
 	"github.com/w3ft-net/weft/dashboard"
 	"github.com/w3ft-net/weft/deployment"
+	"github.com/w3ft-net/weft/identity/open"
 	"github.com/w3ft-net/weft/deployment/magiclink"
 	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/sqlitedb"
@@ -130,7 +131,7 @@ func Open(path string, opts ...Option) (*Local, func(), error) {
 	}
 	d := &deployment.Deployment{
 		Authn:  auth.Authn,
-		Access: defaults.OpenAccess(),
+		Access: open.Access(),
 		Backends: deployment.Backends{
 			Tokens:         stores.Tokens,
 			Sources:        stores.Sources,

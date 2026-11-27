@@ -2,7 +2,6 @@ package coordinator
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"sort"
 	"sync"
@@ -13,9 +12,8 @@ import (
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/shape"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // fakeClaimer is an in-memory coordination.Claims shared by several simulated
@@ -51,8 +49,7 @@ type firedRun struct {
 }
 
 type claimEnv struct {
-	db      *sql.DB
-	crons   *defaults.CronBackend
+	crons   *mem.Crons
 	watch   cron.Watch
 	claims  *fakeClaimer
 	mu      sync.Mutex
@@ -70,9 +67,7 @@ func newClaimEnv(t *testing.T, name string) *claimEnv {
 // setCreatedAt backdates (or dates) the cron: the store stamps it at save.
 func (e *claimEnv) setCreatedAt(t *testing.T, at time.Time) {
 	t.Helper()
-	if _, err := e.db.Exec(`UPDATE cron_watches SET created_at = ? WHERE id = ?`, at.UTC().Format("2006-01-02T15:04:05.000000000Z"), e.watch.ID); err != nil {
-		t.Fatal(err)
-	}
+	e.crons.SetCreatedAt(e.watch.ID, at)
 	e.watch.CreatedAt = at
 }
 
@@ -80,19 +75,8 @@ func (e *claimEnv) setCreatedAt(t *testing.T, at time.Time) {
 // ("" is the owner level).
 func newClaimEnvIn(t *testing.T, name, namespace string) *claimEnv {
 	t.Helper()
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	sources, err := defaults.NewSourceBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	crons, err := defaults.NewCronBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sources := mem.NewSources()
+	crons := mem.NewCrons(sources)
 	var home uint
 	if namespace != "" {
 		ns, err := sources.FindOrCreateNamespace(shape.Added{}, namespace)
@@ -109,7 +93,7 @@ func newClaimEnvIn(t *testing.T, name, namespace string) *claimEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &claimEnv{db: db, crons: crons, watch: *w, claims: &fakeClaimer{}}
+	e := &claimEnv{crons: crons, watch: *w, claims: &fakeClaimer{}}
 	// An existing cron: created long before any slot a test simulates, so the
 	// creation rule (see claimTick) does not skip its slots.
 	e.setCreatedAt(t, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))

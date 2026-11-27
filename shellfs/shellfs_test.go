@@ -7,14 +7,13 @@ import (
 	"testing"
 
 	shellcore "github.com/graybeardcorp/warp/pkg/shell"
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/binscript"
 	"github.com/w3ft-net/weft/cronauthor"
 	"github.com/w3ft-net/weft/identity"
 	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/shape"
 	"github.com/w3ft-net/weft/shape/shapetest"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 type principal struct{ user string }
@@ -39,27 +38,10 @@ func (allScope) ReadScope(_ context.Context, a identity.Principal) (shape.Set, e
 
 func config(t *testing.T) mounts.Config {
 	t.Helper()
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	srcs, err := defaults.NewSourceBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bins, err := defaults.NewBinBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	crons, err := defaults.NewCronBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmp, err := defaults.NewTmpBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	srcs := mem.NewSources()
+	bins := mem.NewBins()
+	crons := mem.NewCrons(srcs)
+	tmp := mem.NewTmp()
 	return mounts.Config{
 		Owner:      shapetest.Added(1),
 		Sources:    srcs,

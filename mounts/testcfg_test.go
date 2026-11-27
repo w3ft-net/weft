@@ -4,14 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/binscript"
 	"github.com/w3ft-net/weft/cronauthor"
 	"github.com/w3ft-net/weft/identity"
 	"github.com/w3ft-net/weft/notifycfg"
 	"github.com/w3ft-net/weft/shape"
 	"github.com/w3ft-net/weft/shape/shapetest"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // ownerCfg returns a Config over SQLite stores holding one namespace per first
@@ -19,31 +18,11 @@ import (
 // reads every namespace and writes nothing.
 func ownerCfg(t testing.TB, services []string) Config {
 	t.Helper()
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	bins, err := defaults.NewBinBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srcs, err := defaults.NewSourceBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	crons, err := defaults.NewCronBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	notify, err := defaults.NewNotifyBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmp, err := defaults.NewTmpBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	bins := mem.NewBins()
+	srcs := mem.NewSources()
+	crons := mem.NewCrons(srcs)
+	notify := mem.NewNotify()
+	tmp := mem.NewTmp()
 	owner := shapetest.Added(1)
 	seen := map[string]bool{}
 	for _, a := range services {

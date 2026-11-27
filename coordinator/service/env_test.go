@@ -5,16 +5,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/binscript"
 	"github.com/w3ft-net/weft/compute"
 	"github.com/w3ft-net/weft/coordinator"
 	"github.com/w3ft-net/weft/cronauthor"
 	"github.com/w3ft-net/weft/identity"
+	"github.com/w3ft-net/weft/identity/open"
 	"github.com/w3ft-net/weft/mounts"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shape"
-	"github.com/w3ft-net/weft/sqlitedb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -24,7 +24,7 @@ import (
 // build has no group to run as, so a test that builds one skips.
 type svcEnv struct {
 	t     *testing.T
-	st    *defaults.Stores
+	st    *mem.Stores
 	owner shape.Added
 }
 
@@ -33,15 +33,7 @@ func newSvcEnv(t *testing.T) *svcEnv {
 	if coordinator.NoGroup(shape.Added{}) {
 		t.Skip("the open build has no group under a shape with required columns")
 	}
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	st, err := defaults.Open(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := mem.Open()
 	return &svcEnv{t: t, st: st}
 }
 
@@ -70,10 +62,10 @@ func (e *svcEnv) coord(cfg coordinator.CoordinatorConfig) *coordinator.Coordinat
 		cfg.Authz = allowAll{}
 	}
 	if cfg.Scoper == nil {
-		cfg.Scoper = defaults.OpenScoper{}
+		cfg.Scoper = open.Scoper{}
 	}
 	if cfg.Orgs == nil {
-		cfg.Orgs = defaults.OpenOrgs{}
+		cfg.Orgs = open.Orgs{}
 	}
 	return coordinator.NewCoordinator(cfg)
 }
@@ -112,7 +104,7 @@ func (e *svcEnv) inNamespace(ns string) shape.Set {
 
 // callerCtx is ctx with user authenticated as the env's group.
 func (e *svcEnv) callerCtx(ctx context.Context, user string) context.Context {
-	return identity.WithCaller(ctx, testCaller{principal: defaults.OpenPrincipal{User: user}, user: user})
+	return identity.WithCaller(ctx, testCaller{principal: open.Principal{User: user}, user: user})
 }
 
 type testCaller struct {

@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/deployment"
 	"github.com/w3ft-net/weft/identity"
+	"github.com/w3ft-net/weft/identity/open"
 	"github.com/w3ft-net/weft/mounts"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // A coordinator with no way to authenticate its callers must not start, so an
@@ -43,18 +43,10 @@ func TestValidate_RequiresEachBackend(t *testing.T) {
 // in-memory database, after change has had its say.
 func testDeployment(t *testing.T, change func(*deployment.Deployment, *Own)) (*deployment.Deployment, *Own) {
 	t.Helper()
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	st, err := defaults.Open(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := mem.Open()
 	d := &deployment.Deployment{
 		Authn:  deployment.Authn{GRPC: noAuthn{}},
-		Access: defaults.OpenAccess(),
+		Access: open.Access(),
 		Backends: deployment.Backends{
 			Tokens:         st.Tokens,
 			Sources:        st.Sources,
@@ -66,7 +58,7 @@ func testDeployment(t *testing.T, change func(*deployment.Deployment, *Own)) (*d
 		Mounts: &mounts.Backends{},
 	}
 	o := &Own{
-		Orgs:     defaults.OpenOrgs{},
+		Orgs:     open.Orgs{},
 		Platform: func(context.Context, string, string) (logdb.Platform, error) { return logdb.Platform{}, nil },
 		Backends: Backends{
 			Notices:      st.Notices,

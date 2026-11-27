@@ -1,4 +1,4 @@
-package defaults
+package open
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 // read as everyone's data.
 func TestScoper_UnderAGroupShapeTheScopeIsRefused(t *testing.T) {
 	shapetest.NeedsGroup(t)
-	scope, err := OpenScoper{}.ReadScope(context.Background(), OpenPrincipal{})
+	scope, err := Scoper{}.ReadScope(context.Background(), Principal{})
 	if err != nil {
 		return // refused by the scoper itself: also closed
 	}
@@ -29,18 +29,18 @@ func TestScoper_UnderAGroupShapeTheScopeIsRefused(t *testing.T) {
 // The adapter of a build with one group reads the whole of the principal's
 // partition and nothing else.
 func TestScoper_ReadsThePrincipalsWholePartition(t *testing.T) {
-	a := OpenPrincipal{User: "u"}
-	got, err := OpenScoper{}.ReadScope(context.Background(), a)
+	a := Principal{User: "u"}
+	got, err := Scoper{}.ReadScope(context.Background(), a)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0] != a.Partition().Coord() {
 		t.Errorf("ReadScope = %+v, want the one whole-partition tuple", got)
 	}
-	if _, err := (OpenScoper{}).ReadScope(context.Background(), nil); !errors.Is(err, identity.ErrDenied) {
+	if _, err := (Scoper{}).ReadScope(context.Background(), nil); !errors.Is(err, identity.ErrDenied) {
 		t.Errorf("no principal: err = %v, want a denial", err)
 	}
-	ns, err := OpenScoper{}.NamespaceScope(context.Background(), shape.Added{}, "any")
+	ns, err := Scoper{}.NamespaceScope(context.Background(), shape.Added{}, "any")
 	if err != nil || len(ns) != 1 {
 		t.Errorf("NamespaceScope = %+v, %v", ns, err)
 	}
@@ -54,7 +54,7 @@ func TestAuthorizer_UnderAGroupShapeDeniesEverything(t *testing.T) {
 	for _, act := range []identity.Action{
 		identity.ActionCreateNamespace, identity.ActionManageBin, identity.ActionManageCron, identity.ActionManageEtc,
 	} {
-		err := OpenAuthorizer{}.Authorize(context.Background(), OpenPrincipal{}, act, identity.Resource{})
+		err := Authorizer{}.Authorize(context.Background(), Principal{}, act, identity.Resource{})
 		if !errors.Is(err, identity.ErrDenied) {
 			t.Errorf("%s under a group shape: err = %v, want a denial", act, err)
 		}
@@ -72,11 +72,11 @@ func TestAuthorizer_AllowsTheCoreAndDeniesTheRest(t *testing.T) {
 		identity.ActionManageBin, identity.ActionManageEtc, identity.ActionManageCron,
 		identity.ActionPublishOrgWide, identity.ActionGrantNamespaceRead,
 	} {
-		if err := (OpenAuthorizer{}).Authorize(context.Background(), OpenPrincipal{}, act, identity.Resource{}); err != nil {
+		if err := (Authorizer{}).Authorize(context.Background(), Principal{}, act, identity.Resource{}); err != nil {
 			t.Errorf("%s was refused: %v", act, err)
 		}
 	}
-	err := OpenAuthorizer{}.Authorize(context.Background(), OpenPrincipal{}, "hosted/manage-billing", identity.Resource{})
+	err := Authorizer{}.Authorize(context.Background(), Principal{}, "hosted/manage-billing", identity.Resource{})
 	if !errors.Is(err, identity.ErrDenied) {
 		t.Errorf("an action of another adapter: err = %v, want a denial", err)
 	}

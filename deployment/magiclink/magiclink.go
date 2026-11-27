@@ -29,9 +29,9 @@ import (
 	"google.golang.org/grpc/status"
 
 	weftapi "github.com/w3ft-net/weft/api"
-	"github.com/w3ft-net/weft/backends/defaults"
 	"github.com/w3ft-net/weft/backends/login"
 	"github.com/w3ft-net/weft/identity"
+	"github.com/w3ft-net/weft/identity/open"
 )
 
 // SecretEnv names the environment variable that holds the key sessions are
@@ -143,7 +143,7 @@ func (i *Identity) emailOf(header string) (string, bool) {
 
 type caller struct{ email string }
 
-func (c caller) Principal() identity.Principal { return defaults.OpenPrincipal{User: c.email} }
+func (c caller) Principal() identity.Principal { return open.Principal{User: c.email} }
 func (c caller) UserID() string                { return c.email }
 
 // Authenticate admits a request with a valid session.

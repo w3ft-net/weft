@@ -7,30 +7,16 @@ import (
 	"time"
 
 	"github.com/w3ft-net/weft/backends/cron"
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/shape"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // The cron executor runs over the cron contract and the coordination contract:
-// here the open build's SQLite stores, with no Postgres behind either.
+// here the in-memory stores, with no Postgres behind either.
 func TestCronExecutor_OverTheLocalStores(t *testing.T) {
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := defaults.NewSourceBackend(db); err != nil { // the namespaces a cron is homed in
-		t.Fatal(err)
-	}
-	crons, err := defaults.NewCronBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	claims, err := defaults.NewCoordinationBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sources := mem.NewSources() // the namespaces a cron is homed in
+	crons := mem.NewCrons(sources)
+	claims := mem.NewCoordination()
 
 	owner := shape.Added{}
 	spec := func(enabled bool) cron.WatchSpec {

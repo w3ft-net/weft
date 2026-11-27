@@ -8,42 +8,27 @@ import (
 	"time"
 
 	"github.com/w3ft-net/weft/backends/cron"
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/identity"
 	"github.com/w3ft-net/weft/notifycfg"
 	"github.com/w3ft-net/weft/shape"
 	"github.com/w3ft-net/weft/shape/shapetest"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // wfEnv is a group's crons and namespaces over the local stores, for the tests
 // of the weft:: functions, which read only the cron contract.
 type wfEnv struct {
-	crons   *defaults.CronBackend
-	sources *defaults.SourceBackend
+	crons   *mem.Crons
+	sources *mem.Sources
 	notify  notifycfg.Service
 	owner   shape.Added
 }
 
 func newWFEnv(t *testing.T) *wfEnv {
 	t.Helper()
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	sources, err := defaults.NewSourceBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	crons, err := defaults.NewCronBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	nl, err := defaults.NewNotifyBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sources := mem.NewSources()
+	crons := mem.NewCrons(sources)
+	nl := mem.NewNotify()
 	return &wfEnv{crons: crons, sources: sources, notify: notifycfg.Service{Aliases: nl, Secrets: nl}, owner: shapetest.Added(1)}
 }
 

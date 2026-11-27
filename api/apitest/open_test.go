@@ -16,16 +16,16 @@ import (
 	"github.com/w3ft-net/weft/alerting"
 	"github.com/w3ft-net/weft/api"
 	"github.com/w3ft-net/weft/api/apitest"
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/coordinator"
+	"github.com/w3ft-net/weft/identity/open"
 	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/shape"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // openIdentity is the open build's one HTTP Basic credential. The production
 // one is in cmd/api, a main package, so it cannot be imported here.
-type openIdentity struct{ basic defaults.Basic }
+type openIdentity struct{ basic basicCred }
 
 func (i openIdentity) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -56,19 +56,11 @@ func openSubject(t *testing.T) apitest.Subject {
 	if coordinator.NoGroup(shape.Added{}) {
 		t.Skip("the open build has no group under a shape with required columns")
 	}
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	st, err := defaults.Open(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	basic := defaults.Basic{User: "weft", Password: "pw"}
+	st := mem.Open()
+	basic := basicCred{User: "weft", Password: "pw"}
 	srv := api.NewServer("localhost:9020", "http://localhost:3000")
 	srv.SetIdentity(openIdentity{basic: basic})
-	srv.SetAccess(defaults.OpenAccess())
+	srv.SetAccess(open.Access())
 	srv.SetTokens(st.Tokens)
 	srv.SetSources(st.Sources)
 	srv.SetCrons(st.Crons)
@@ -94,7 +86,7 @@ func openSubject(t *testing.T) apitest.Subject {
 		Server: srv,
 		Header: header,
 		SetAuthz: func(a identity.Authorizer) {
-			ad := defaults.OpenAccess()
+			ad := open.Access()
 			ad.Authz = a
 			srv.SetAccess(ad)
 		},
@@ -130,3 +122,17 @@ func TestAuth_Open(t *testing.T)       { apitest.Auth(t, openSubject) }
 func TestAuthorizer_Open(t *testing.T) { apitest.Authorizer(t, openSubject) }
 func TestBins_Open(t *testing.T)       { apitest.Bins(t, openSubject) }
 func TestDashboards_Open(t *testing.T) { apitest.Dashboards(t, openSubject) }
+
+// basicCred is the single HTTP Basic credential the test identity accepts.
+type basicCred struct{ User, Password string }
+
+func (b basicCred) Authenticate(header string) bool {
+	return header == "Basic "+base64.StdEncoding.EncodeToString([]byte(b.User+":"+b.Password))
+}
+
+func (b basicCred) Caller() identity.Caller { return basicCaller{b.User} }
+
+type basicCaller struct{ user string }
+
+func (c basicCaller) Principal() identity.Principal { return open.Principal{User: c.user} }
+func (c basicCaller) UserID() string                { return c.user }

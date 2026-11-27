@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/w3ft-net/weft/identity"
+	"github.com/w3ft-net/weft/identity/open"
 )
 
 // Environment variables the open build reads its one credential from.
@@ -81,7 +82,7 @@ func (b Basic) Caller() identity.Caller { return BasicCaller{User: b.User} }
 // BasicCaller is the open build's caller.
 type BasicCaller struct{ User string }
 
-func (c BasicCaller) Principal() identity.Principal { return OpenPrincipal{User: c.User} }
+func (c BasicCaller) Principal() identity.Principal { return open.Principal{User: c.User} }
 func (c BasicCaller) UserID() string                { return c.User }
 
 // Server is the coordinator's identity (package identity): it authenticates each

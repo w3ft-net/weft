@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/graybeardcorp/warp/pkg/gitcore"
-	"github.com/w3ft-net/weft/backends/defaults"
 	"github.com/w3ft-net/weft/backends/history"
 	"github.com/w3ft-net/weft/backends/history/gitrepo"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/binscript"
 	"github.com/w3ft-net/weft/cronauthor"
 	"github.com/w3ft-net/weft/identity"
@@ -19,7 +19,6 @@ import (
 	"github.com/w3ft-net/weft/notifycfg"
 	"github.com/w3ft-net/weft/shape"
 	"github.com/w3ft-net/weft/shape/shapetest"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // The repository over a git-backed history, SQLite stores and a Config that lets
@@ -60,31 +59,11 @@ func newWorld(t *testing.T, mod func(*gitrepo.Config)) *world {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git binary")
 	}
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	srcs, err := defaults.NewSourceBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bins, err := defaults.NewBinBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	crons, err := defaults.NewCronBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	notify, err := defaults.NewNotifyBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmp, err := defaults.NewTmpBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	srcs := mem.NewSources()
+	bins := mem.NewBins()
+	crons := mem.NewCrons(srcs)
+	notify := mem.NewNotify()
+	tmp := mem.NewTmp()
 	owner := shapetest.Added(1)
 	if _, err := srcs.FindOrCreateNamespace(owner, "ops"); err != nil {
 		t.Fatal(err)

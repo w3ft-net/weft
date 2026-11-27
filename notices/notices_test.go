@@ -4,22 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/backends/notice"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 func testStore(t *testing.T) notice.Store {
 	t.Helper()
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	s, err := defaults.NewNoticeBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := mem.NewNotices()
 	return s
 }
 

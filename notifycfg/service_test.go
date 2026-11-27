@@ -1,13 +1,12 @@
 package notifycfg_test
 
 import (
+	"github.com/w3ft-net/weft/backends/mem"
 	"strings"
 	"testing"
 
-	"github.com/w3ft-net/weft/backends/defaults"
 	"github.com/w3ft-net/weft/notifycfg"
 	"github.com/w3ft-net/weft/shape"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 const secretNotifyYAML = `system:
@@ -23,15 +22,7 @@ hook:
 
 func newService(t *testing.T) notifycfg.Service {
 	t.Helper()
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	s, err := defaults.NewNotifyBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := mem.NewNotify()
 	return notifycfg.Service{Aliases: s, Secrets: s}
 }
 

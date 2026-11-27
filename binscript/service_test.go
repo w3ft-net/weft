@@ -7,10 +7,9 @@ import (
 
 	"github.com/w3ft-net/weft/backends/bin"
 	"github.com/w3ft-net/weft/backends/cron"
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/binscript"
 	"github.com/w3ft-net/weft/shape"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 type fixture struct {
@@ -21,23 +20,9 @@ type fixture struct {
 
 func newFixture(t *testing.T) fixture {
 	t.Helper()
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	bins, err := defaults.NewBinBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srcs, err := defaults.NewSourceBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	crons, err := defaults.NewCronBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	bins := mem.NewBins()
+	srcs := mem.NewSources()
+	crons := mem.NewCrons(srcs)
 	var owner shape.Added
 	ns, err := srcs.FindOrCreateNamespace(owner, "ops")
 	if err != nil {
