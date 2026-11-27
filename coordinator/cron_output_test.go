@@ -5,7 +5,6 @@ import (
 	"github.com/w3ft-net/weft/fieldspec"
 	"strings"
 	"testing"
-
 )
 
 func mustSpec(t *testing.T, s string) fieldspec.FieldSpec {

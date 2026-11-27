@@ -31,14 +31,16 @@ type redisFanout struct {
 	ps     *redis.PubSub
 
 	mu       sync.Mutex
-	patterns map[tailTopic]string
+	patterns map[TailTopic]string
 }
 
-// newRedisFanout deliberately does not Ping at construction: tail is
+var _ TailBus = (*redisFanout)(nil)
+
+// NewRedisTailBus is the TailBus over Redis Pub/Sub at addr. It deliberately does not Ping at construction: tail is
 // already documented as best-effort, so a transient ElastiCache blip at
 // coordinator boot must not crash-loop the process that also owns the
 // durable ingest path. go-redis's client is lazy/auto-reconnecting.
-func newRedisFanout(addr string, tlsEnabled bool, deliver func(rows []Row)) *redisFanout {
+func NewRedisTailBus(addr string, tlsEnabled bool) TailBus {
 	opts := &redis.Options{Addr: addr}
 	if tlsEnabled {
 		opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
@@ -53,10 +55,11 @@ func newRedisFanout(addr string, tlsEnabled bool, deliver func(rows []Row)) *red
 	}
 	client := redis.NewClient(opts)
 	ps := client.PSubscribe(context.Background()) // patterns added via announceInterest
-	r := &redisFanout{client: client, ps: ps, patterns: make(map[tailTopic]string)}
-	go r.recvLoop(deliver)
-	return r
+	return &redisFanout{client: client, ps: ps, patterns: make(map[TailTopic]string)}
 }
+
+// Start begins receiving.
+func (r *redisFanout) Start(deliver func(rows []Row)) { go r.recvLoop(deliver) }
 
 func (r *redisFanout) recvLoop(deliver func(rows []Row)) {
 	for msg := range r.ps.Channel() {
@@ -104,7 +107,7 @@ func addedFromChannel(channel string) (shape.Added, error) {
 // pattern builds the PSUBSCRIBE glob for a topic. Always goes through
 // PSUBSCRIBE, even for a fully-specified topic, to keep one code path
 // instead of branching between SUBSCRIBE/PSUBSCRIBE.
-func pattern(t tailTopic) string {
+func pattern(t TailTopic) string {
 	p := "tail:" + channelPrefix(t.Added)
 	switch {
 	case t.Wildcard:
@@ -142,7 +145,7 @@ func channelFor(row Row) string {
 	return "tail:" + channelPrefix(row.Added) + row.Namespace + ":" + row.Service + ":" + kind
 }
 
-func (r *redisFanout) announceInterest(ctx context.Context, t tailTopic, add bool) {
+func (r *redisFanout) Interest(ctx context.Context, t TailTopic, add bool) {
 	p := pattern(t)
 	if add {
 		r.mu.Lock()
@@ -165,7 +168,7 @@ func (r *redisFanout) announceInterest(ctx context.Context, t tailTopic, add boo
 
 // publish pipelines one PUBLISH per row so a multi-row batch costs one
 // Redis round trip.
-func (r *redisFanout) publish(rows []Row) {
+func (r *redisFanout) Publish(rows []Row) {
 	if len(rows) == 0 {
 		return
 	}

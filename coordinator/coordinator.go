@@ -272,12 +272,9 @@ type CoordinatorConfig struct {
 	DLQ      dlq.Store
 	Errors   *IngestionErrorRecorder
 
-	// RedisAddr/RedisTLS configure TailFanout's cross-coordinator
-	// delivery.
-	// RedisAddr == "" leaves tail -f local-only, same as before this
-	// field existed.
-	RedisAddr string
-	RedisTLS  bool
+	// TailBus carries tail rows between coordinators. Nil leaves tail -f local
+	// to this process.
+	TailBus TailBus
 
 	// LambdaFunctionURL is the Lambda endpoint for cold shard queries.
 	// Passed to compute workers for archived shard descriptors.
@@ -424,7 +421,7 @@ func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
 		ShareURLBase:           cfg.ShareURLBase,
 	}
 	if cfg.Tail != nil {
-		c.TailFanout = NewTailFanout(cfg.Tail, cfg.RedisAddr, cfg.RedisTLS)
+		c.TailFanout = NewTailFanout(cfg.Tail, cfg.TailBus)
 	}
 	return c
 }

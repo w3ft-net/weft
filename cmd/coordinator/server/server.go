@@ -220,6 +220,13 @@ func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 	// scheduled-watch dispatch on the same path.
 	notifier := coordinator.NewNotifier(dep.Backends.Notify, dep.AlertTargets...)
 
+	// Cross-coordinator tail -f: over Redis when an address is given, else
+	// local to this process.
+	var tailBus coordinator.TailBus
+	if *redisAddr != "" {
+		tailBus = coordinator.NewRedisTailBus(*redisAddr, *redisTLS)
+	}
+
 	coordCfg := CoordinatorConfig(dep, own, coordinator.CoordinatorConfig{
 		Compute:           computeClient,
 		Notifier:          notifier,
@@ -228,8 +235,7 @@ func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 		DLQ:               b.DeadLetters,
 		Usage:             coordinator.NewCustomerUsageStats(),
 		LambdaFunctionURL: os.Getenv("LAMBDA_FUNCTION_URL"),
-		RedisAddr:         *redisAddr,
-		RedisTLS:          *redisTLS,
+		TailBus:           tailBus,
 		ShareURLBase:      *shareURLBase,
 	})
 	coord := coordinator.NewCoordinator(coordCfg)

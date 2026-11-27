@@ -19,7 +19,7 @@ import (
 // everywhere else must be unaffected by TailFanout's existence.
 func TestTailFanout_LocalPassthrough(t *testing.T) {
 	broker := NewTailBroker()
-	f := NewTailFanout(broker, "", false)
+	f := NewTailFanout(broker, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -70,8 +70,8 @@ func requireLocalRedis(t *testing.T) string {
 func TestTailFanout_RedisCrossDelivery(t *testing.T) {
 	addr := requireLocalRedis(t)
 
-	a := NewTailFanout(NewTailBroker(), addr, false)
-	b := NewTailFanout(NewTailBroker(), addr, false)
+	a := NewTailFanout(NewTailBroker(), NewRedisTailBus(addr, false))
+	b := NewTailFanout(NewTailBroker(), NewRedisTailBus(addr, false))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

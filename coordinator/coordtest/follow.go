@@ -22,7 +22,7 @@ import (
 func FollowQueries(t *testing.T, newSubject func(t *testing.T) Subject) {
 	withBroker := func(f *queryFixture) *queryFixture {
 		f.c.Tail = coordinator.NewTailBroker()
-		f.c.TailFanout = coordinator.NewTailFanout(f.c.Tail, "", false)
+		f.c.TailFanout = coordinator.NewTailFanout(f.c.Tail, nil)
 		return f
 	}
 	follow := func(t *testing.T, f *queryFixture, ctx context.Context, line string, seed []string) *coordinator.ExecuteResult {
