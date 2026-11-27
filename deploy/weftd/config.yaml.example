@@ -11,6 +11,11 @@
 # (AWS-shaped credential chain) — use that if a secret injector supplies
 # the token out of band; otherwise just set token: here.
 
+# The coordinator's ingest address (required). The connection uses TLS unless
+# you set `tls: false`, which is for a plaintext coordinator on a private network.
+endpoint: ingest.example.com:9443
+# tls: false
+
 token: wft_REPLACE_ME
 
 # Optional host-wide values stamped on every row.
@@ -35,9 +40,13 @@ metavariables:
 metrics:
   interval: 30s
 
-# Self-update: when a newer weftd is published, the agent downloads,
-# verifies, swaps its own binary and restarts into it. On by default;
-# set false to pin this host (e.g. while investigating an issue).
+# Self-update, off unless you configure it. update_manifest_url is where you
+# publish release manifests (the signature is at the same URL plus ".sig");
+# update_public_key is the base64 Ed25519 key it must verify against. With
+# auto_update: true the agent downloads, verifies, swaps its own binary and
+# restarts into it; without it a newer release is only logged.
+# update_manifest_url: https://releases.example.com/weftd/latest/manifest.json
+# update_public_key: BASE64_ED25519_PUBLIC_KEY
 # auto_update: true
 
 # --- Anchor holder ---------------------------------------------------

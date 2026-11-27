@@ -42,11 +42,12 @@ provide the token without templating the YAML.
 
 ### 3. Configure and start
 
-weftd reads `/etc/weftd/config.yaml`. A minimal config needs only a token and
-at least one source:
+weftd reads `/etc/weftd/config.yaml`. A minimal config needs the coordinator's
+ingest address, a token and at least one source:
 
 ```yaml
 # /etc/weftd/config.yaml
+endpoint: ingest.<your-domain>:9443
 token: wft_a1b2c3d4e5f6...
 
 sources:
@@ -90,8 +91,12 @@ General, box-level settings are top-level keys:
 
 | Key | Definition | Default |
 |---|---|---|
+| `endpoint` | The coordinator's ingest address, `host:port`. | none; required |
+| `tls` | Encrypt the connection to the coordinator. Set `false` only for a plaintext coordinator on a private network. | `true` |
 | `token` | Ingest token for your namespace. May instead come from the `WEFTD_TOKEN` environment variable (see [Connect a host](#connect-a-host-with-weftd)). | none; required |
-| `auto_update` | Self-update from `releases.w3ft.net` (see [Updates](#updates)). `false` pins this host to the installed version. | `true` |
+| `auto_update` | Replace the running binary when a newer release is published (see [Updates](#updates)). | `false` |
+| `update_manifest_url` | Where your release manifest is published. Setting it turns on the daily check. | none |
+| `update_public_key` | Base64 Ed25519 public key the manifest's signature must verify against. Required with `update_manifest_url`. | none |
 | `deployment` | The fleet or scaling unit this agent belongs to (k8s Deployment, AWS ASG, etc.). Stamped on every row, and the service [host metrics](#system-metrics-optional) are written under. | empty |
 | `region` | Region stamped on every row. | auto-detected from cloud metadata at startup |
 | `socket` | Path of the records socket for your apps (see [App API](#app-api)). | none; socket disabled |
@@ -396,8 +401,13 @@ weftd's own log (`journalctl -u weftd`), and summarized once a minute as a
 
 ### Updates
 
-Once a day (or on restart) weftd checks `releases.w3ft.net` for a newer
-release. By default it downloads the build, verifies its SHA-256, replaces the
-running binary, and exits so systemd (`Restart=always`) relaunches it. Set
-`auto_update: false` to pin a host.  It then only logs a line when a newer
-version exists.
+With `update_manifest_url` set, weftd checks it once a day (and on restart) for
+a newer release and logs a line when one exists. With `auto_update: true` it
+also downloads the build, verifies its SHA-256, replaces the running binary and
+exits so systemd (`Restart=always`) relaunches it.
+
+The manifest is the JSON file at `update_manifest_url`, and its detached
+Ed25519 signature (base64, over the file's exact bytes) is served at the same
+URL with `.sig` appended. weftd refuses a manifest whose signature does not
+verify against `update_public_key`. Without `update_manifest_url` weftd never
+contacts a release server.

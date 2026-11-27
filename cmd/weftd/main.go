@@ -27,6 +27,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	pb "github.com/w3ft-net/weft/proto/weftpb"
+	"github.com/w3ft-net/weft/release"
 	"github.com/w3ft-net/weft/weftd"
 )
 
@@ -74,26 +75,49 @@ func registerResampleSource(fullApp string, rs resampleSource) {
 var parseClientSide = os.Getenv("WEFTD_PARSE_CLIENT_SIDE") != "0"
 
 type Config struct {
-	transportConfig `yaml:",inline"` // endpoint:/tls: overrides; dev builds only (see transport_dev.go)
+	transportConfig `yaml:",inline"` // endpoint: (required) and tls: (default on)
 
-	Token         string                        `yaml:"token"`      // agent auth token (wft_...)
-	Customer      string                        `yaml:"customer"`   // fallback if not returned by auth
-	Deployment    string                        `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
-	Region        string                        `yaml:"region"`     // optional override; otherwise probed from cloud metadata
-	Socket        string                        `yaml:"socket"`
-	Metrics       *MetricsConfig                `yaml:"metrics"`       // host metrics; nil (no block) = off. Use parseConfig so a bare `metrics:` counts as present.
-	Metavariables map[string]MetavariableConfig `yaml:"metavariables"` // host-wide column values sourced from env:, file: or json:
-	Sources       []SourceConfig                `yaml:"sources"`
-	AutoUpdate    *bool                         `yaml:"auto_update"` // self-replace on a newer release; nil = on (set false to opt out)
-	Checkpoint    CheckpointConfig              `yaml:"checkpoint"`  // file-offset checkpointing; on by default
+	Token           string                        `yaml:"token"`      // agent auth token (wft_...)
+	Customer        string                        `yaml:"customer"`   // fallback if not returned by auth
+	Deployment      string                        `yaml:"deployment"` // fleet/scaling-unit (k8s Deployment, AWS ASG, etc.)
+	Region          string                        `yaml:"region"`     // optional override; otherwise probed from cloud metadata
+	Socket          string                        `yaml:"socket"`
+	Metrics         *MetricsConfig                `yaml:"metrics"`       // host metrics; nil (no block) = off. Use parseConfig so a bare `metrics:` counts as present.
+	Metavariables   map[string]MetavariableConfig `yaml:"metavariables"` // host-wide column values sourced from env:, file: or json:
+	Sources         []SourceConfig                `yaml:"sources"`
+	AutoUpdate      *bool                         `yaml:"auto_update"`         // self-replace on a newer release; nil = off
+	UpdateManifest  string                        `yaml:"update_manifest_url"` // where release manifests are published; required for auto_update
+	UpdatePublicKey string                        `yaml:"update_public_key"`   // base64 Ed25519 key the manifest signature must verify against
+	Checkpoint      CheckpointConfig              `yaml:"checkpoint"`          // file-offset checkpointing; on by default
 }
 
-// autoUpdateEnabled resolves the auto_update gate. Unset (nil) means on:
-// the fleet self-heals onto new releases by default; an operator opts a
-// host out with `auto_update: false` (e.g. to pin a version under
-// investigation).
+// autoUpdateEnabled resolves the auto_update gate. Unset (nil) means off: a
+// host replaces its own binary only when the operator opts in.
 func autoUpdateEnabled(cfg Config) bool {
-	return cfg.AutoUpdate == nil || *cfg.AutoUpdate
+	return cfg.AutoUpdate != nil && *cfg.AutoUpdate
+}
+
+// updateChecker builds the self-update checker from the config, or nil when no
+// manifest is configured. A manifest needs the key its signature is checked
+// against, and auto_update needs a manifest: a config that breaks either is
+// refused at start rather than updating from an unverified source.
+func updateChecker(cfg Config, version string) (*weftd.SelfUpdateChecker, error) {
+	if cfg.UpdateManifest == "" {
+		if autoUpdateEnabled(cfg) {
+			return nil, errors.New("`auto_update: true` needs `update_manifest_url:`")
+		}
+		return nil, nil
+	}
+	key, err := release.ParsePublicKey(cfg.UpdatePublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("`update_public_key:` (required with `update_manifest_url:`): %w", err)
+	}
+	return &weftd.SelfUpdateChecker{
+		CurrentVersion: version,
+		AutoApply:      autoUpdateEnabled(cfg),
+		ManifestURL:    cfg.UpdateManifest,
+		PublicKey:      key,
+	}, nil
 }
 
 // parseConfig decodes the config file. The `metrics:` block turns host metrics
@@ -119,6 +143,9 @@ func parseConfig(data []byte) (Config, error) {
 func configError(cfg Config) string {
 	if cfg.Token == "" {
 		return "token is required: set token: in the config file or WEFTD_TOKEN in the environment"
+	}
+	if err := cfg.transportConfig.validate(); err != nil {
+		return err.Error()
 	}
 	return ""
 }
@@ -190,6 +217,11 @@ func main() {
 		log.Fatal(reason)
 	}
 
+	updater, err := updateChecker(cfg, Version)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -201,15 +233,13 @@ func main() {
 		go runCheckpointStatsReporter(ctx)
 	}
 
-	// Background self-update: once a day, fetch the release manifest and,
-	// when a newer weftd is published, download + verify + swap the binary
-	// and restart into it (systemd Restart=always relaunches). Defaults on
-	// so the fleet self-heals onto fixes without an operator touching each
-	// host; `auto_update: false` opts a host out and reverts to nag-only.
-	go (&weftd.SelfUpdateChecker{
-		CurrentVersion: Version,
-		AutoApply:      autoUpdateEnabled(cfg),
-	}).Run(ctx)
+	// Background self-update, only when update_manifest_url is configured:
+	// once a day, fetch the signed release manifest and, when a newer weftd is
+	// published, either log it or (auto_update: true) download + verify + swap
+	// the binary and restart into it (systemd Restart=always relaunches).
+	if updater != nil {
+		go updater.Run(ctx)
+	}
 
 	// Connect to coordinator. The bearer token is attached to every RPC
 	// via PerRPCCredentials — IngestStream reads it from metadata.

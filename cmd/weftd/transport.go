@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -10,11 +11,24 @@ import (
 	"github.com/w3ft-net/weft/grpckeepalive"
 )
 
-// defaultEndpoint is the production coordinator ingest address: the public
-// NLB's TLS listener. Release builds ship only here, over TLS; the address
-// and the TLS gate are not configurable. A dev build (-tags weftd_dev, see
-// transport_dev.go) can override both to reach a plaintext local coordinator.
-const defaultEndpoint = "ingest.w3ft.net:9443"
+// transportConfig is where weftd ships and how: the coordinator's ingest address
+// (required: there is no default) and whether the connection is encrypted (on
+// unless `tls: false`, which is for a plaintext coordinator on a private network).
+type transportConfig struct {
+	Endpoint string `yaml:"endpoint"` // coordinator ingest address, host:port
+	TLS      *bool  `yaml:"tls"`      // nil = on
+}
+
+func (t transportConfig) endpoint() string { return t.Endpoint }
+func (t transportConfig) tlsEnabled() bool { return t.TLS == nil || *t.TLS }
+
+// validate is why a config without an endpoint does not start.
+func (t transportConfig) validate() error {
+	if t.Endpoint == "" {
+		return errors.New("`endpoint:` is required: the coordinator's ingest address, host:port")
+	}
+	return nil
+}
 
 // coordKeepalive is how weftd tells a dead coordinator connection from a quiet
 // one. A host behind a middlebox reaches the coordinator through it, and when
@@ -34,7 +48,7 @@ func coordDialOptions(useTLS bool, creds credentials.PerRPCCredentials) []grpc.D
 }
 
 // transportCreds is the channel security for the coordinator connection:
-// verified TLS against the system roots, or plaintext when a dev build opts out.
+// verified TLS against the system roots, or plaintext when the config opts out.
 func transportCreds(useTLS bool) credentials.TransportCredentials {
 	if !useTLS {
 		return insecure.NewCredentials()

@@ -46,9 +46,10 @@ source</a>. Put <code>token:</code> in
 <code>/etc/default/weftd</code>). The environment value wins, so a secret injector can
 provide the token without templating the YAML.</p>
 <h3 id="3-configure-and-start">3. Configure and start</h3>
-<p>weftd reads <code>/etc/weftd/config.yaml</code>. A minimal config needs only a token and
-at least one source:</p>
+<p>weftd reads <code>/etc/weftd/config.yaml</code>. A minimal config needs the coordinator's
+ingest address, a token and at least one source:</p>
 <pre><code class="language-yaml"># /etc/weftd/config.yaml
+endpoint: ingest.&lt;your-domain&gt;:9443
 token: wft_a1b2c3d4e5f6...
 
 sources:
@@ -119,14 +120,34 @@ See <a href="/manual/introduction#paths">Paths</a> for the layout rules.)</p>
 </thead>
 <tbody>
 <tr>
+<td><code>endpoint</code></td>
+<td>The coordinator's ingest address, <code>host:port</code>.</td>
+<td>none; required</td>
+</tr>
+<tr>
+<td><code>tls</code></td>
+<td>Encrypt the connection to the coordinator. Set <code>false</code> only for a plaintext coordinator on a private network.</td>
+<td><code>true</code></td>
+</tr>
+<tr>
 <td><code>token</code></td>
 <td>Ingest token for your namespace. May instead come from the <code>WEFTD_TOKEN</code> environment variable (see <a href="#connect-a-host-with-weftd">Connect a host</a>).</td>
 <td>none; required</td>
 </tr>
 <tr>
 <td><code>auto_update</code></td>
-<td>Self-update from <code>releases.w3ft.net</code> (see <a href="#updates">Updates</a>). <code>false</code> pins this host to the installed version.</td>
-<td><code>true</code></td>
+<td>Replace the running binary when a newer release is published (see <a href="#updates">Updates</a>).</td>
+<td><code>false</code></td>
+</tr>
+<tr>
+<td><code>update_manifest_url</code></td>
+<td>Where your release manifest is published. Setting it turns on the daily check.</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>update_public_key</code></td>
+<td>Base64 Ed25519 public key the manifest's signature must verify against. Required with <code>update_manifest_url</code>.</td>
+<td>none</td>
 </tr>
 <tr>
 <td><code>deployment</code></td>
@@ -587,11 +608,15 @@ running are read from their first line. Every skip or replay is logged to
 weftd's own log (<code>journalctl -u weftd</code>), and summarized once a minute as a
 <code>checkpoint stats</code> line per file.</p>
 <h3 id="updates">Updates</h3>
-<p>Once a day (or on restart) weftd checks <code>releases.w3ft.net</code> for a newer
-release. By default it downloads the build, verifies its SHA-256, replaces the
-running binary, and exits so systemd (<code>Restart=always</code>) relaunches it. Set
-<code>auto_update: false</code> to pin a host.  It then only logs a line when a newer
-version exists.</p>
+<p>With <code>update_manifest_url</code> set, weftd checks it once a day (and on restart) for
+a newer release and logs a line when one exists. With <code>auto_update: true</code> it
+also downloads the build, verifies its SHA-256, replaces the running binary and
+exits so systemd (<code>Restart=always</code>) relaunches it.</p>
+<p>The manifest is the JSON file at <code>update_manifest_url</code>, and its detached
+Ed25519 signature (base64, over the file's exact bytes) is served at the same
+URL with <code>.sig</code> appended. weftd refuses a manifest whose signature does not
+verify against <code>update_public_key</code>. Without <code>update_manifest_url</code> weftd never
+contacts a release server.</p>
 `,
 } as const;
 

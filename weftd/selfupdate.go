@@ -1,10 +1,11 @@
 // Package weftd contains helpers used by the cmd/weftd binary. This
-// file implements the daily check against the public release manifest
-// at releases.w3ft.net.
+// file implements the daily check against the operator's signed release
+// manifest.
 package weftd
 
 import (
 	"context"
+	"crypto/ed25519"
 	weftsdk "github.com/w3ft-net/weft-go"
 	"net/http"
 	"os"
@@ -16,19 +17,20 @@ import (
 	"github.com/w3ft-net/weft/release"
 )
 
-// SelfUpdateChecker checks releases.w3ft.net for a newer weftd. When
-// AutoApply is set (the default — see cmd/weftd autoUpdateEnabled), a
+// SelfUpdateChecker checks the configured manifest for a newer weftd. When
+// AutoApply is set (opt-in — see cmd/weftd autoUpdateEnabled), a
 // newer build is downloaded, sha256-verified, swapped over the running
 // binary, and the process restarts into it (systemd Restart=always
 // relaunches). When AutoApply is off it only nags once a day so the
 // operator can act on their own schedule. The download/verify/replace
 // mechanics live in release, shared with `weft update`.
 type SelfUpdateChecker struct {
-	CurrentVersion string        // the running binary's Version
-	AutoApply      bool          // download+replace+restart vs. nag-only
-	ManifestURL    string        // default https://releases.w3ft.net/weftd/latest/manifest.json
-	CheckInterval  time.Duration // default 24h
-	HTTP           *http.Client  // default 30s timeout
+	CurrentVersion string            // the running binary's Version
+	AutoApply      bool              // download+replace+restart vs. nag-only
+	ManifestURL    string            // required; the signature is at ManifestURL+".sig"
+	PublicKey      ed25519.PublicKey // the key the manifest signature must verify against
+	CheckInterval  time.Duration     // default 24h
+	HTTP           *http.Client      // default 30s timeout
 
 	// Test seams. ExecPath resolves the binary to overwrite (default
 	// os.Executable); Restart hands control back to the supervisor after a
@@ -43,9 +45,6 @@ type SelfUpdateChecker struct {
 // (overriding only the seams it cares about) without tripping a nil
 // client or nil hook.
 func (c *SelfUpdateChecker) init() {
-	if c.ManifestURL == "" {
-		c.ManifestURL = "https://releases.w3ft.net/weftd/latest/manifest.json"
-	}
 	if c.CheckInterval <= 0 {
 		c.CheckInterval = 24 * time.Hour
 	}
@@ -66,6 +65,9 @@ func (c *SelfUpdateChecker) init() {
 // shouldn't kill the nag (or, with AutoApply, ingest).
 func (c *SelfUpdateChecker) Run(ctx context.Context) {
 	c.init()
+	if c.ManifestURL == "" {
+		return
+	}
 
 	c.checkOnce()
 	t := time.NewTicker(c.CheckInterval)
@@ -84,7 +86,7 @@ func (c *SelfUpdateChecker) Run(ctx context.Context) {
 // the result (its restart arrives via the Restart hook).
 func (c *SelfUpdateChecker) checkOnce() bool {
 	c.init()
-	m, err := release.FetchManifestWith(c.HTTP, c.ManifestURL)
+	m, err := release.FetchSignedManifest(c.HTTP, c.ManifestURL, c.PublicKey)
 	if err != nil {
 		weftsdk.Infof(context.Background(), "selfupdate: %v", err)
 		return false

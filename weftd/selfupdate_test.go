@@ -1,7 +1,9 @@
 package weftd
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -11,6 +13,19 @@ import (
 	"runtime"
 	"testing"
 )
+
+// The key the test "releases" are signed with, and the one a checker trusts.
+var testPub, testPriv, _ = ed25519.GenerateKey(nil)
+
+// serveSigned writes the manifest and its detached signature.
+func serveSigned(w http.ResponseWriter, r *http.Request, m map[string]any, priv ed25519.PrivateKey) {
+	body, _ := json.Marshal(m)
+	if r.URL.Path == "/manifest.json.sig" {
+		w.Write([]byte(base64.StdEncoding.EncodeToString(ed25519.Sign(priv, body))))
+		return
+	}
+	w.Write(body)
+}
 
 // newBinary is the bytes the test "release" serves; distinct from the
 // old binary so a successful swap is observable byte-for-byte.
@@ -41,7 +56,20 @@ func updateServer(t *testing.T, version string, badSHA256 bool) *httptest.Server
 				"url":    base + "/bin",
 			}},
 		}
-		_ = json.NewEncoder(w).Encode(m)
+		serveSigned(w, r, m, testPriv)
+	})
+	mux.HandleFunc("/manifest.json.sig", func(w http.ResponseWriter, r *http.Request) {
+		serveSigned(w, r, map[string]any{
+			"binary":  "weftd",
+			"version": version,
+			"platforms": []map[string]string{{
+				"suffix": "test",
+				"goos":   runtime.GOOS,
+				"goarch": runtime.GOARCH,
+				"sha256": sha,
+				"url":    base + "/bin",
+			}},
+		}, testPriv)
 	})
 	mux.HandleFunc("/bin", func(w http.ResponseWriter, r *http.Request) {
 		w.Write(newBinary)
@@ -66,6 +94,7 @@ func checkerFor(t *testing.T, srv *httptest.Server, current string, autoApply bo
 		CurrentVersion: current,
 		AutoApply:      autoApply,
 		ManifestURL:    srv.URL + "/manifest.json",
+		PublicKey:      testPub,
 		HTTP:           srv.Client(),
 		ExecPath:       func() (string, error) { return bin, nil },
 		Restart:        func() { restarted = true },
@@ -150,7 +179,7 @@ func TestSelfUpdateNoMatchingPlatform(t *testing.T) {
 				"sha256": "x", "url": "http://unused/bin",
 			}},
 		}
-		_ = json.NewEncoder(w).Encode(m)
+		serveSigned(w, r, m, testPriv)
 	}))
 	t.Cleanup(srv.Close)
 	c, bin, restarted := checkerFor(t, srv, "0.18.0", true)
@@ -162,5 +191,23 @@ func TestSelfUpdateNoMatchingPlatform(t *testing.T) {
 	}
 	if *restarted {
 		t.Fatal("Restart called with no matching platform")
+	}
+}
+
+// A manifest signed by any key but the configured one is refused, so a host
+// pointed at a compromised or spoofed release server never swaps its binary.
+func TestSelfUpdateRejectsWrongKey(t *testing.T) {
+	srv := updateServer(t, "0.19.0", false)
+	c, bin, restarted := checkerFor(t, srv, "0.18.0", true)
+	other, _, _ := ed25519.GenerateKey(nil)
+	c.PublicKey = other
+
+	c.checkOnce()
+
+	if got := binContent(t, bin); got != "OLD BINARY" {
+		t.Fatalf("binary replaced from a manifest the key does not verify: %q", got)
+	}
+	if *restarted {
+		t.Fatal("Restart called for an unverified manifest")
 	}
 }

@@ -10,7 +10,9 @@
 package release
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -62,6 +64,52 @@ func FetchManifestWith(c *http.Client, url string) (*Manifest, error) {
 		return nil, fmt.Errorf("parse manifest: %w", err)
 	}
 	return &m, nil
+}
+
+// FetchSignedManifest is FetchManifestWith for a manifest whose Ed25519
+// signature, base64 in the file at url+".sig", must verify against pub. The
+// signature covers the manifest's bytes exactly as served, so a manifest that
+// has been altered, or that was signed by another key, is refused before it is
+// parsed.
+func FetchSignedManifest(c *http.Client, url string, pub ed25519.PublicKey) (*Manifest, error) {
+	body, err := get(c, url)
+	if err != nil {
+		return nil, err
+	}
+	sigText, err := get(c, url+".sig")
+	if err != nil {
+		return nil, fmt.Errorf("manifest signature: %w", err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigText)))
+	if err != nil || !ed25519.Verify(pub, body, sig) {
+		return nil, fmt.Errorf("manifest signature does not verify against the configured key")
+	}
+	var m Manifest
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, fmt.Errorf("parse manifest: %w", err)
+	}
+	return &m, nil
+}
+
+func get(c *http.Client, url string) ([]byte, error) {
+	resp, err := c.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+}
+
+// ParsePublicKey decodes a base64 Ed25519 public key.
+func ParsePublicKey(s string) (ed25519.PublicKey, error) {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(s))
+	if err != nil || len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("not a base64 Ed25519 public key (%d bytes expected)", ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(raw), nil
 }
 
 // FindPlatform returns the manifest's platform line for goos/goarch, or
