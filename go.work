@@ -3,7 +3,10 @@ go 1.25.0
 use (
 	.
 	./examples/single-machine
+	./ext/backends/sqlite
 	./ext/config/ssm
+	./ext/identity/basic
+	./ext/launcher/docker
 	./ext/launcher/ec2
 	./ext/llm/bedrock
 	./ext/storage/lambda
