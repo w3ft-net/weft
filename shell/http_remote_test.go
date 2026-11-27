@@ -26,7 +26,7 @@ func TestHTTPCoordinator_QuerySendsRange(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPCoordinator(srv.URL, "tok", "org")
+	c := NewHTTPCoordinator(srv.URL, "tok", Header("X-Active-Org", "org"))
 	if _, err := c.Query("cat api.log", "1d..", []string{"/log/acme", "/tmp"}); err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestHTTPCoordinator_Query426(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPCoordinator(srv.URL, "tok", "org")
+	c := NewHTTPCoordinator(srv.URL, "tok", Header("X-Active-Org", "org"))
 	c.SetClientID("weft/0.2.5")
 	_, err := c.Query("cat /log/foo", "1d..", nil)
 	if err == nil {
@@ -75,7 +75,7 @@ func TestHTTPCoordinator_ListApps401(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPCoordinator(srv.URL, "stale-tok", "org")
+	c := NewHTTPCoordinator(srv.URL, "stale-tok", Header("X-Active-Org", "org"))
 	_, err := c.ListApps()
 	if err == nil {
 		t.Fatal("expected error for 401 response")
@@ -102,7 +102,7 @@ func TestHTTPCoordinator_SendsClientHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPCoordinator(srv.URL, "tok", "org")
+	c := NewHTTPCoordinator(srv.URL, "tok", Header("X-Active-Org", "org"))
 	c.SetClientID("weft/0.4.2+abc123")
 	if _, err := c.Query("cat /log/foo", "1d..", nil); err != nil {
 		t.Fatalf("Query: %v", err)
@@ -144,7 +144,7 @@ func TestHTTPCoordinator_TimeoutErrorIsUserFacing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPCoordinator(srv.URL, "tok", "org")
+	c := NewHTTPCoordinator(srv.URL, "tok", Header("X-Active-Org", "org"))
 	c.client.Timeout = 50 * time.Millisecond
 	c.streamClient.Timeout = 50 * time.Millisecond // a query has none by default
 
@@ -170,7 +170,7 @@ func TestHTTPCoordinator_UnreachableErrorIsUserFacing(t *testing.T) {
 	url := srv.URL
 	srv.Close()
 
-	c := NewHTTPCoordinator(url, "tok", "org")
+	c := NewHTTPCoordinator(url, "tok", Header("X-Active-Org", "org"))
 	_, err := c.Query("cat api.log", "1h..", nil)
 	leaks(t, err, url)
 	if !strings.Contains(err.Error(), "could not reach") {
@@ -191,7 +191,7 @@ func TestHTTPCoordinator_QueryIsNotCutOffByTheClient(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewHTTPCoordinator(srv.URL, "tok", "org")
+	c := NewHTTPCoordinator(srv.URL, "tok", Header("X-Active-Org", "org"))
 	c.client.Timeout = 50 * time.Millisecond
 
 	res, err := c.Query("cat api.log", "1d..", nil)

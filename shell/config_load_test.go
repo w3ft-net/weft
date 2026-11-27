@@ -3,6 +3,7 @@ package shell
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -38,7 +39,6 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 	withHome(t)
 	t.Setenv("WEFT_ENDPOINT", "https://api.example.test")
 	t.Setenv("WEFT_TOKEN", "tok-abc")
-	t.Setenv("WEFT_ORG", "acme")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -49,9 +49,6 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 	}
 	if cfg.Token != "tok-abc" {
 		t.Errorf("Token = %q", cfg.Token)
-	}
-	if cfg.Org != "acme" {
-		t.Errorf("Org = %q", cfg.Org)
 	}
 }
 
@@ -73,8 +70,8 @@ func TestLoadConfig_FromHomeFile(t *testing.T) {
 	if cfg.Endpoint != "https://api.home.test" {
 		t.Errorf("Endpoint = %q", cfg.Endpoint)
 	}
-	if cfg.Token != "home-tok" || cfg.Org != "home-org" {
-		t.Errorf("got Token=%q Org=%q", cfg.Token, cfg.Org)
+	if cfg.Token != "home-tok" || cfg.Extra["org"] != "home-org" {
+		t.Errorf("got Token=%q org=%v", cfg.Token, cfg.Extra["org"])
 	}
 }
 
@@ -117,8 +114,8 @@ func TestLoadConfig_EnvOverridesFile(t *testing.T) {
 	if cfg.Endpoint != "https://env.test" {
 		t.Errorf("Endpoint = %q, want env override", cfg.Endpoint)
 	}
-	if cfg.Token != "file-tok" || cfg.Org != "file-org" {
-		t.Errorf("Token/Org should come from file: got Token=%q Org=%q", cfg.Token, cfg.Org)
+	if cfg.Token != "file-tok" || cfg.Extra["org"] != "file-org" {
+		t.Errorf("Token/org should come from file: got Token=%q org=%v", cfg.Token, cfg.Extra["org"])
 	}
 }
 
@@ -141,7 +138,7 @@ func TestSaveConfig_WritesToHome(t *testing.T) {
 	in := &Config{
 		Endpoint: "https://save.test",
 		Token:    "save-tok",
-		Org:      "save-org",
+		Extra:    map[string]any{"org": "save-org"},
 	}
 	if err := SaveConfig(in); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
@@ -159,7 +156,7 @@ func TestSaveConfig_WritesToHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if *out != *in {
-		t.Errorf("round-trip:\n  got:  %+v\n  want: %+v", *out, *in)
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("round-trip:\n  got:  %+v\n  want: %+v", out, in)
 	}
 }

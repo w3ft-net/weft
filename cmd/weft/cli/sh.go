@@ -73,7 +73,7 @@ func runInteractive(e Env, s *shell.Shell) error {
 	if id := e.(*env).opts.Identity; id != nil && (s.User == "" || s.Customer == "") {
 		if cfg, err := e.Config(); err == nil {
 			if cred, err := e.Credential(cfg); err == nil {
-				if u, g, ok := id(cfg.Endpoint, cred, e.Org(cfg)); ok {
+				if u, g, ok := id(cfg.Endpoint, cred, e.Decorators(cfg)); ok {
 					if s.User == "" {
 						s.User = u
 					}

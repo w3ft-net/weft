@@ -43,14 +43,14 @@ func newTestBackend(t *testing.T, handler func(rec *recordedReq, w http.Response
 		handler(rec, w)
 	}))
 	t.Cleanup(srv.Close)
-	return NewHTTPBackend(srv.URL, "tok-test", "acme"), rec
+	return NewHTTPBackend(srv.URL, "tok-test", Header("X-Active-Org", "acme")), rec
 }
 
 // TestNewHTTPBackend_StripsTrailingSlash: callers sometimes pass
 // "https://api.test/" — the backend should normalize so the / in
 // the path doesn't double up.
 func TestNewHTTPBackend_StripsTrailingSlash(t *testing.T) {
-	b := NewHTTPBackend("https://api.test/", "t", "o")
+	b := NewHTTPBackend("https://api.test/", "t", Header("X-Active-Org", "o"))
 	if b.baseURL != "https://api.test" {
 		t.Errorf("baseURL = %q, want trailing-/-stripped", b.baseURL)
 	}
@@ -74,7 +74,7 @@ func TestHTTPBackend_SetAuthHeaders(t *testing.T) {
 	}
 
 	// Empty org should omit the header.
-	b2 := NewHTTPBackend("http://x", "t", "")
+	b2 := NewHTTPBackend("http://x", "t")
 	// We can't easily inspect a request without a server, but the
 	// setAuthHeaders branch is exercised below.
 	req, _ := http.NewRequest("GET", "http://x/foo", nil)

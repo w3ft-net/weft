@@ -24,10 +24,10 @@ func newTestProxyMount(t *testing.T, prefix string, handler http.HandlerFunc) sh
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return newProxyMount(prefix, true, &proxyBackend{
-		client:  srv.Client(),
-		baseURL: srv.URL,
-		token:   "tok",
-		org:     "acme",
+		client:     srv.Client(),
+		baseURL:    srv.URL,
+		token:      "tok",
+		decorators: []RequestDecorator{Header("X-Active-Org", "acme")},
 	})
 }
 
@@ -64,7 +64,7 @@ func TestProxyMount_AbsolutePaths(t *testing.T) {
 }
 
 func TestProxyMount_SetAuth(t *testing.T) {
-	p := &proxyBackend{token: "abc", org: "acme"}
+	p := &proxyBackend{token: "abc", decorators: []RequestDecorator{Header("X-Active-Org", "acme")}}
 	req, _ := http.NewRequest("GET", "http://x/y", nil)
 	p.setAuth(req)
 	if req.Header.Get("Authorization") != "Bearer abc" {
@@ -288,7 +288,7 @@ func TestProxyMount_Stat_NotFound(t *testing.T) {
 // MountFS. Pin both the prefix set and the writable flag — /log is
 // read-only because shards are append-only via ingest, not /api/fs.
 func TestNewProxyMountFS(t *testing.T) {
-	mfs := NewProxyMountFS("http://example.test", "tok", "acme")
+	mfs := NewProxyMountFS("http://example.test", "tok", Header("X-Active-Org", "acme"))
 	if mfs == nil {
 		t.Fatal("nil MountFS")
 	}

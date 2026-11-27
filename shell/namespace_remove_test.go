@@ -21,7 +21,7 @@ func TestRemoveNamespace(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	h := NewHTTPCoordinator(srv.URL, "tok", "")
+	h := NewHTTPCoordinator(srv.URL, "tok")
 
 	err := h.RemoveNamespace("ns", false)
 	var notEmpty *NamespaceNotEmptyError

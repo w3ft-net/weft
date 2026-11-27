@@ -104,19 +104,19 @@ type TokenInfo struct {
 // Keep the split explicit so a new endpoint has to pick its intent
 // rather than inheriting the wrong timeout by accident.
 type HTTPCoordinator struct {
-	baseURL      string // e.g., "https://api.weft.example.com"
-	token        string // JWT for Authorization header
-	org          string // X-Active-Org for the user's currently-selected org
-	clientID     string // X-Weft-Client; set by cmd/weft via SetClientID
+	baseURL      string             // e.g., "https://api.weft.example.com"
+	token        string             // JWT for Authorization header
+	decorators   []RequestDecorator // the deployment's own headers
+	clientID     string             // X-Weft-Client; set by cmd/weft via SetClientID
 	client       remoteClient
 	streamClient remoteClient
 }
 
-func NewHTTPCoordinator(baseURL, token, org string) *HTTPCoordinator {
+func NewHTTPCoordinator(baseURL, token string, decorators ...RequestDecorator) *HTTPCoordinator {
 	return &HTTPCoordinator{
 		baseURL:      strings.TrimSuffix(baseURL, "/"),
 		token:        token,
-		org:          org,
+		decorators:   decorators,
 		client:       remoteClient{&http.Client{Timeout: 10 * time.Second}},
 		streamClient: remoteClient{&http.Client{}},
 	}
@@ -130,23 +130,26 @@ func (h *HTTPCoordinator) SetClientID(id string) {
 	h.clientID = id
 }
 
-// authHeaders is Authorization + X-Active-Org + X-Weft-Client for every
-// outgoing request. Centralized so a new endpoint can't forget any of them.
-func (h *HTTPCoordinator) authHeaders() map[string]string {
-	hd := map[string]string{"Authorization": Authorization(h.token)}
-	if h.org != "" {
-		hd["X-Active-Org"] = h.org
-	}
+// setAuthHeaders is Authorization + X-Weft-Client + the deployment's decorators
+// for every outgoing request. Centralized so a new endpoint can't forget any
+// of them.
+func (h *HTTPCoordinator) setAuthHeaders(req *http.Request) {
+	req.Header.Set("Authorization", Authorization(h.token))
 	if h.clientID != "" {
-		hd["X-Weft-Client"] = h.clientID
+		req.Header.Set("X-Weft-Client", h.clientID)
 	}
-	return hd
+	decorate(req, h.decorators)
 }
 
-func (h *HTTPCoordinator) setAuthHeaders(req *http.Request) {
-	for k, v := range h.authHeaders() {
-		req.Header.Set(k, v)
+// authHeaders is what setAuthHeaders sets, as a map, for the exec client.
+func (h *HTTPCoordinator) authHeaders() map[string]string {
+	req := &http.Request{Header: http.Header{}}
+	h.setAuthHeaders(req)
+	hd := make(map[string]string, len(req.Header))
+	for k := range req.Header {
+		hd[k] = req.Header.Get(k)
 	}
+	return hd
 }
 
 func (h *HTTPCoordinator) Close() error { return nil }

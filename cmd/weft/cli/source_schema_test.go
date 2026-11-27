@@ -37,7 +37,7 @@ func fetchSchema(t *testing.T, body string) *shell.SourceSchema {
 		w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	sch, err := shell.NewHTTPCoordinator(srv.URL, "tok", "").GetSourceSchema("ns", "svc")
+	sch, err := shell.NewHTTPCoordinator(srv.URL, "tok").GetSourceSchema("ns", "svc")
 	if err != nil {
 		t.Fatal(err)
 	}

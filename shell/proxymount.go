@@ -23,10 +23,10 @@ import (
 // /cron.d, /etc, /log, /tmp). Paths it receives are absolute ("/bin/scan"),
 // which is what the API takes, so one backend serves every mount.
 type proxyBackend struct {
-	client  *http.Client
-	baseURL string
-	token   string
-	org     string
+	client     *http.Client
+	baseURL    string
+	token      string
+	decorators []RequestDecorator
 }
 
 var (
@@ -39,9 +39,7 @@ func (p *proxyBackend) setAuth(req *http.Request) {
 	if p.token != "" {
 		req.Header.Set("Authorization", Authorization(p.token))
 	}
-	if p.org != "" {
-		req.Header.Set("X-Active-Org", p.org)
-	}
+	decorate(req, p.decorators)
 }
 
 // do sends a request built with the run's context, so Ctrl+C cancels it,
@@ -176,12 +174,12 @@ func newProxyMount(prefix string, writable bool, b *proxyBackend) shellcore.Moun
 
 // NewProxyMountFS constructs a MountFS with proxy mounts for all weft
 // virtual directories, pointing at the given API endpoint.
-func NewProxyMountFS(baseURL, token, org string) *shellcore.MountFS {
+func NewProxyMountFS(baseURL, token string, decorators ...RequestDecorator) *shellcore.MountFS {
 	b := &proxyBackend{
-		client:  &http.Client{Timeout: 30 * time.Second},
-		baseURL: baseURL,
-		token:   token,
-		org:     org,
+		client:     &http.Client{Timeout: 30 * time.Second},
+		baseURL:    baseURL,
+		token:      token,
+		decorators: decorators,
 	}
 	mfs := shellcore.NewMountFS()
 	for _, d := range proxyMounts {

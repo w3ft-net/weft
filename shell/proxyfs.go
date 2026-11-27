@@ -24,10 +24,10 @@ import (
 type ProxyFS struct {
 	*shellcore.MountFS
 
-	baseURL string
-	token   string
-	org     string
-	client  *http.Client
+	baseURL    string
+	token      string
+	decorators []RequestDecorator
+	client     *http.Client
 
 	mu        sync.RWMutex
 	specCache map[string]*dashboard.Spec
@@ -35,14 +35,14 @@ type ProxyFS struct {
 
 // NewProxyFS constructs a ProxyFS that routes all FS operations through
 // the server's /api/fs/ endpoints and provides dashboard/chart data.
-func NewProxyFS(baseURL, token, org string) *ProxyFS {
+func NewProxyFS(baseURL, token string, decorators ...RequestDecorator) *ProxyFS {
 	return &ProxyFS{
-		MountFS:   NewProxyMountFS(baseURL, token, org),
-		baseURL:   baseURL,
-		token:     token,
-		org:       org,
-		client:    &http.Client{Timeout: 30 * time.Second},
-		specCache: make(map[string]*dashboard.Spec),
+		MountFS:    NewProxyMountFS(baseURL, token, decorators...),
+		baseURL:    baseURL,
+		token:      token,
+		decorators: decorators,
+		client:     &http.Client{Timeout: 30 * time.Second},
+		specCache:  make(map[string]*dashboard.Spec),
 	}
 }
 
@@ -50,9 +50,7 @@ func (p *ProxyFS) setAuth(req *http.Request) {
 	if p.token != "" {
 		req.Header.Set("Authorization", Authorization(p.token))
 	}
-	if p.org != "" {
-		req.Header.Set("X-Active-Org", p.org)
-	}
+	decorate(req, p.decorators)
 }
 
 // GetCronSeries satisfies chart.CronSource.
@@ -159,7 +157,7 @@ func (p *ProxyFS) Prefetch() {
 	}
 	go func() {
 		defer wg.Done()
-		b := &proxyBackend{client: p.client, baseURL: p.baseURL, token: p.token, org: p.org}
+		b := &proxyBackend{client: p.client, baseURL: p.baseURL, token: p.token, decorators: p.decorators}
 		b.Walk(context.Background(), "/cron.d")
 	}()
 	wg.Wait()

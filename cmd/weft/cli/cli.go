@@ -32,7 +32,11 @@ type Options struct {
 
 	// Identity names the signed-in user for the shell prompt. Nil, or a false
 	// result, falls back to the OS user.
-	Identity func(endpoint, credential, org string) (user, group string, ok bool)
+	Identity func(endpoint, credential string, decorators []shell.RequestDecorator) (user, group string, ok bool)
+
+	// Decorators adds the deployment's own headers (an active-org selector, say)
+	// to every request the clients send. Nil adds none.
+	Decorators func(cfg *shell.Config) []shell.RequestDecorator
 
 	// PreRun runs before every command, once its flags are parsed.
 	PreRun func(cmd *cobra.Command, args []string)
@@ -52,10 +56,8 @@ type Env interface {
 	// Config is the loaded configuration with the --org flag applied.
 	Config() (*shell.Config, error)
 	SaveConfig(*shell.Config) error
-	// Org is the active org: the --org flag, else the configured one.
-	Org(cfg *shell.Config) string
-	// OrgFlag is the variable a deployment binds its --org flag to.
-	OrgFlag() *string
+	// Decorators are the deployment's request decorators for cfg.
+	Decorators(cfg *shell.Config) []shell.RequestDecorator
 	// Credential is the provider's credential for cfg.
 	Credential(cfg *shell.Config) (string, error)
 	// Coordinator is an authenticated client for the api.

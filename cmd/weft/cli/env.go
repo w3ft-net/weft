@@ -10,20 +10,19 @@ import (
 )
 
 type env struct {
-	opts    Options
-	orgFlag string
+	opts Options
 }
 
 func (e *env) ClientID() string                 { return e.opts.ClientID }
-func (e *env) OrgFlag() *string                 { return &e.orgFlag }
 func (e *env) Config() (*shell.Config, error)   { return shell.LoadConfig() }
 func (e *env) SaveConfig(c *shell.Config) error { return shell.SaveConfig(c) }
 
-func (e *env) Org(cfg *shell.Config) string {
-	if e.orgFlag != "" {
-		return e.orgFlag
+// Decorators are the deployment's request decorators for cfg.
+func (e *env) Decorators(cfg *shell.Config) []shell.RequestDecorator {
+	if e.opts.Decorators == nil {
+		return nil
 	}
-	return cfg.Org
+	return e.opts.Decorators(cfg)
 }
 
 func (e *env) Credential(cfg *shell.Config) (string, error) { return e.opts.Auth.Credential(cfg) }
@@ -49,7 +48,7 @@ func (e *env) Coordinator() (*shell.HTTPCoordinator, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := shell.NewHTTPCoordinator(cfg.Endpoint, cred, e.Org(cfg))
+	c := shell.NewHTTPCoordinator(cfg.Endpoint, cred, e.Decorators(cfg)...)
 	c.SetClientID(e.opts.ClientID)
 	return c, nil
 }
@@ -59,7 +58,7 @@ func (e *env) Backend() (*shell.HTTPBackend, error) {
 	if err != nil {
 		return nil, err
 	}
-	return shell.NewHTTPBackend(cfg.Endpoint, cred, e.Org(cfg)), nil
+	return shell.NewHTTPBackend(cfg.Endpoint, cred, e.Decorators(cfg)...), nil
 }
 
 // Shell builds a shell backed by the api over HTTP. The CLI only speaks HTTP:
@@ -70,8 +69,8 @@ func (e *env) Shell() (*shell.Shell, error) {
 	if err != nil {
 		return nil, err
 	}
-	org := e.Org(cfg)
-	remote := shell.NewHTTPCoordinator(cfg.Endpoint, cred, org)
+	decorators := e.Decorators(cfg)
+	remote := shell.NewHTTPCoordinator(cfg.Endpoint, cred, decorators...)
 	remote.SetClientID(e.opts.ClientID)
 	apps, err := remote.ListApps()
 	if err != nil {
@@ -101,7 +100,7 @@ func (e *env) Shell() (*shell.Shell, error) {
 		},
 		Range: "1d..",
 		Apps:  apps,
-		FS:    shell.NewProxyFS(cfg.Endpoint, cred, org),
+		FS:    shell.NewProxyFS(cfg.Endpoint, cred, decorators...),
 	}
 	return s, nil
 }

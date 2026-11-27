@@ -27,33 +27,28 @@ type WatchData struct {
 
 // HTTPBackend implements Backend over the weft HTTP API.
 type HTTPBackend struct {
-	baseURL string
-	token   string
-	org     string // X-Active-Org header value; empty omits the header
-	client  *http.Client
+	baseURL    string
+	token      string
+	decorators []RequestDecorator
+	client     *http.Client
 }
 
-// NewHTTPBackend creates a backend using the coordinator HTTP API.
-// org is the X-Active-Org value to send on every request — empty
-// lets the server fall back to the user's last-active or oldest
-// membership.
-func NewHTTPBackend(baseURL, token, org string) *HTTPBackend {
+// NewHTTPBackend creates a backend using the coordinator HTTP API. The
+// decorators run on every request.
+func NewHTTPBackend(baseURL, token string, decorators ...RequestDecorator) *HTTPBackend {
 	return &HTTPBackend{
-		baseURL: strings.TrimSuffix(baseURL, "/"),
-		token:   token,
-		org:     org,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		baseURL:    strings.TrimSuffix(baseURL, "/"),
+		token:      token,
+		decorators: decorators,
+		client:     &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
-// setAuthHeaders applies Authorization + X-Active-Org. Centralized
-// so a new endpoint can't forget the org header (same pattern as
-// HTTPCoordinator).
+// setAuthHeaders applies Authorization and the decorators. Centralized so a new
+// endpoint can't forget them (same pattern as HTTPCoordinator).
 func (b *HTTPBackend) setAuthHeaders(req *http.Request) {
 	req.Header.Set("Authorization", Authorization(b.token))
-	if b.org != "" {
-		req.Header.Set("X-Active-Org", b.org)
-	}
+	decorate(req, b.decorators)
 }
 
 func (b *HTTPBackend) ListFunctions() ([]string, error) {

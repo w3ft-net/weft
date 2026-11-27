@@ -30,7 +30,7 @@ func TestProxyFS_Prefetch_WalksCronD(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	NewProxyFS(srv.URL, "tok", "acme").Prefetch()
+	NewProxyFS(srv.URL, "tok", Header("X-Active-Org", "acme")).Prefetch()
 
 	sort.Strings(reqs)
 	want := []string{"/bin walk=", "/cron.d walk=1", "/etc/dashboards walk="}

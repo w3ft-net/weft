@@ -54,13 +54,15 @@ func EmailLocalPart(email string) string {
 // Config is the .weft.yaml configuration. Endpoint must be an http(s)
 // URL pointing at the weft api server; the CLI speaks HTTP end-to-end
 // now (no direct-to-coordinator gRPC). `weft login` writes this file
-// automatically after the device-flow round-trip. Org pins the user
-// to a specific membership; the --org flag overrides it per call so
-// people can poke at the demo without editing the file.
+// automatically after the device-flow round-trip.
 type Config struct {
 	Endpoint string `yaml:"endpoint"` // api base URL, e.g. https://api.weft.example.com
 	Token    string `yaml:"token"`    // JWT from the device flow
-	Org      string `yaml:"org"`      // active org slug (sent as X-Active-Org)
+
+	// Extra carries the keys a deployment adds to the file (core reads none of
+	// them), so a binary that selects an org, say, keeps its choice here and the
+	// file round-trips through SaveConfig.
+	Extra map[string]any `yaml:",inline"`
 
 	// AutoUpdate=false opts this user out of the CLI's daily self-update
 	// (nil/true = on). WEFT_NO_AUTO_UPDATE=1 does the same per invocation.
@@ -68,7 +70,7 @@ type Config struct {
 }
 
 // LoadConfig resolves configuration from the following chain (first wins):
-//  1. Environment variables: WEFT_TOKEN, WEFT_ORG, and (non-release builds
+//  1. Environment variables: WEFT_TOKEN and (non-release builds
 //     only — see config_endpoint_dev.go/config_endpoint_release.go) WEFT_ENDPOINT
 //  2. .weft.yaml in the current working directory
 //  3. .weft.yaml in the user's home directory
@@ -88,9 +90,6 @@ func LoadConfig() (*Config, error) {
 	}
 	if v := os.Getenv("WEFT_TOKEN"); v != "" {
 		cfg.Token = v
-	}
-	if v := os.Getenv("WEFT_ORG"); v != "" {
-		cfg.Org = v
 	}
 
 	if cfg.Endpoint == "" {
@@ -129,8 +128,7 @@ func loadConfigFrom(path string) (*Config, error) {
 }
 
 // SaveConfig writes the config to ~/.weft.yaml. Used by `weft login`
-// (writes endpoint+token+org after device-flow approval) and `weft org
-// switch` (rewrites just the org field).
+// (writes endpoint+token after device-flow approval).
 func SaveConfig(cfg *Config) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
