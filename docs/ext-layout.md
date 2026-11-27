@@ -71,21 +71,35 @@ README. Each imports core and the `ext/*` it needs, and nothing else.
 
 Every step leaves core and hosted building and tested.
 
-1. **Cut the seams** that say **Cut** above, with the implementations still in
-   core: `logdb.Platform`, readers into `NewArchiveRouter`, `llm.Proposer`,
-   `tailfanout.Bus`. Pure refactors: green before any file moves.
-2. **Create the modules and `go.work`**, empty. Hosted adds them to its `go.work`.
-3. **Move the SDK-heavy implementations** (`ext/launcher/ec2`,
-   `ext/storage/*`, `ext/ingest/cloudwatch`, `ext/llm/bedrock`, `ext/config/ssm`,
-   `ext/tailfanout/redis`), one module per commit.
-   After the last, `go mod tidy` in core drops the AWS SDK and go-redis; verify with
-   `go list -deps ./... | grep -E 'aws-sdk|go-redis'` empty.
-4. **Move the zero-dependency implementations** (`ext/backends/*`, `ext/launcher/docker`,
-   `ext/identity/*`). Core's `go.mod` loses `modernc.org/sqlite`. Conformance tests
-   move with the implementation; the suites stay.
-5. **`examples/single-machine`**: the mains, Dockerfile and compose; `e2e/` moves
-   here and passes. Core no longer ships `cmd/api`, `cmd/coordinator` and friends as
-   binaries; `cmd/*/server` stay as libraries.
+1. **Cut the seams** (done, 2026-11-27): `logdb.Platform`, readers into
+   `NewArchiveRouter`, `ingest.LLM`, `coordinator.TailBus`, `shard.RequestSigner`.
+   Every SDK import now sits in a file of its own: `logdb/provisioner_ec2*.go`,
+   `volumes.go`, `export_resources.go`, `objectdeleter_s3.go`, `platform_env.go`;
+   `shard/export_s3.go`, `lambda_aws.go`; `ingest/cloudwatch.go`, `llm_bedrock.go`;
+   `config/ssm.go`; `coordinator/tail_fanout_redis.go`; `backends/dlq/dlqs3`;
+   `cmd/compute` (the reader set).
+2. **Mains out of core first.** An ext imports core, so a core `cmd/*` main cannot
+   import an ext: the moment `config/ssm` leaves, `cmd/api`, `cmd/coordinator` and
+   `cmd/shard` could no longer build. So before any move, make each process a
+   library (`cmd/api/server` and `cmd/coordinator/server` already are; `cmd/shard`
+   and `cmd/compute` get the same: a `Run(Options)` and a tiny main), and create
+   `examples/single-machine` and `examples/ha-aws` holding the mains, with the
+   composition still reading core's in-tree implementations. Core keeps only
+   libraries; `weft` and `weftd` stay (they link no ext). Add the `go.work`.
+3. **Move the SDK-heavy implementations one module per commit**, each with the
+   example mains that use it switching their import in the same commit:
+   `ext/config/ssm`, `ext/tailfanout/redis`, `ext/llm/bedrock`,
+   `ext/ingest/cloudwatch`, `ext/storage/lambda`, `ext/storage/s3`,
+   `ext/launcher/ec2`. After the last, `go mod tidy` in core drops the AWS SDK and
+   go-redis; verify with `go list -deps ./... | grep -E 'aws-sdk|go-redis'` empty.
+   Registries that currently name an ext (`config.SourceFromEnv` knows "ssm")
+   take the ext's constructor instead.
+4. **Move the zero-dependency implementations** (`ext/backends/*`,
+   `ext/launcher/docker`, `ext/identity/*`). Core's `go.mod` loses
+   `modernc.org/sqlite`. Conformance tests move with the implementation; the
+   suites stay.
+5. **`examples/single-machine` stands alone**: Dockerfile, compose and README;
+   `e2e/` moves here and passes.
 
 ## Risks
 
