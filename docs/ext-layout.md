@@ -94,7 +94,7 @@ Every step leaves core and hosted building and tested.
    go-redis; verify with `go list -deps ./... | grep -E 'aws-sdk|go-redis'` empty.
    Registries that currently name an ext (`config.SourceFromEnv` knows "ssm")
    take the ext's constructor instead.
-4. **Move the zero-dependency implementations** (`ext/backends/*`,
+4. **Move the zero-dependency implementations** (in progress, 2026-11-27: core's tests now run on `backends/mem`, in-memory stores that pass every conformance suite; `identity/open` holds the single-group access policy; `ext/backends/sqlite` and `ext/launcher/docker` are moved and pass; `ext/identity/basic` is moved but its test file still has leftover renames; left: `ext/identity/magiclink`, moving `deployment/local` into `examples/single-machine`, `cmd/weft/cli/auth.go` constants, `go mod tidy` and tags. `backends/history/gitrepo` stays in core: it needs no Go dependency and core's `witrepo` tests use it. The core build is broken at the WIP commit until the example is rewired) (`ext/backends/*`,
    `ext/launcher/docker`, `ext/identity/*`). Core's `go.mod` loses
    `modernc.org/sqlite`. Conformance tests move with the implementation; the
    suites stay.
