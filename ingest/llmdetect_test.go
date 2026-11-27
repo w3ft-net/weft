@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -400,24 +401,25 @@ func TestBuildProposePromptShowsMarks(t *testing.T) {
 	}
 }
 
-// jsonDoc stands in for the Smithy document Bedrock returns as a tool's
-// input: all the code under test needs from it is its JSON form.
-type jsonDoc struct{ json string }
+// fakeLLM answers every call with a fixed tool input.
+type fakeLLM struct{ out string }
 
-func (d jsonDoc) MarshalSmithyDocument() ([]byte, error) { return []byte(d.json), nil }
+func (f fakeLLM) CallTool(context.Context, ToolRequest) (json.RawMessage, error) {
+	return json.RawMessage(f.out), nil
+}
 
-// The model's tool input arrives as a Smithy document, and decoding it into
-// the response structs has to keep multi-word keys (field_index,
-// extract_pattern, ...). The document type's own UnmarshalSmithyDocument
-// ignores `json` tags and silently zeroed every one of them, so every
-// proposal arrived with nothing to locate it by and was dropped.
-func TestDecodeToolInputKeepsMultiWordKeys(t *testing.T) {
-	var out classifyToolResponse
-	err := decodeToolInput(jsonDoc{`{
+// The model's tool input has to decode into the response structs keeping
+// multi-word keys (field_index, extract_pattern, ...). Decoding through a
+// provider's document type that ignored `json` tags once silently zeroed every
+// one of them, so every proposal arrived with nothing to locate it by and was
+// dropped.
+func TestLLMClassifierKeepsMultiWordKeys(t *testing.T) {
+	c := LLMClassifier{LLM: fakeLLM{`{
 		"level": {"present": true, "field_index": 3, "json_path": "", "extract_pattern": "", "sample_value": "INFO"},
 		"trace_id": {"present": true, "field_index": 0, "json_path": "", "extract_pattern": "trace_id=(\\S+)", "sample_value": "abc"},
 		"timestamp": {"present": true, "field_index": 1, "span_fields": 2, "json_path": "", "strftime": "%Y-%m-%d %H:%M:%S", "sample_value": "2026-10-15 12:00:00"}
-	}`}, &out)
+	}`}}
+	out, _, err := c.classifyRaw(context.Background(), Detect([]string{"2026-10-15 12:00:00 x INFO trace_id=abc"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,8 +433,9 @@ func TestDecodeToolInputKeepsMultiWordKeys(t *testing.T) {
 		t.Errorf("timestamp = %+v, want field_index 1 spanning 2", out.Timestamp)
 	}
 
-	var pr proposeToolResponse
-	if err := decodeToolInput(jsonDoc{`{"candidates":[{"field_index":0,"json_path":".a.b","extract_pattern":"","span_fields":0,"strftime":""}]}`}, &pr); err != nil {
+	pc := LLMClassifier{LLM: fakeLLM{`{"candidates":[{"field_index":0,"json_path":".a.b","extract_pattern":"","span_fields":0,"strftime":""}]}`}}
+	pr, err := pc.proposeRaw(context.Background(), ProposeInput{Lines: []string{"x"}})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if len(pr.Candidates) != 1 || pr.Candidates[0].JSONPath != ".a.b" {

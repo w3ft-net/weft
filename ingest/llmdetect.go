@@ -5,17 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	brdoc "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
-	brtypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
 // ClassifierResult is one classification pass over a sample: the LLM's
@@ -42,62 +35,46 @@ type Classifier interface {
 	Classify(ctx context.Context, det *Detection) (*ClassifierResult, error)
 }
 
-// BedrockClassifier classifies via Amazon Bedrock's Converse API with tool
-// use, forcing structured JSON output instead of free-text parsing.
-type BedrockClassifier struct {
-	client  *bedrockruntime.Client
-	modelID string
+// LLM is a language model that answers by calling one tool: the provider side
+// of classification, with no vocabulary of any one cloud. An implementation (the
+// Bedrock one today, in ext/llm/bedrock once moved) sends the request with the
+// tool forced, at temperature 0, and returns the tool's input as JSON. A model
+// that does not call the tool is an error, not something to guess at.
+type LLM interface {
+	CallTool(ctx context.Context, req ToolRequest) (json.RawMessage, error)
 }
 
-// NewBedrockClassifier builds a classifier against modelID (a Bedrock
-// model ID or cross-region inference profile ID/ARN — e.g. Amazon Nova
-// Lite) using cfg's credentials/region.
-func NewBedrockClassifier(cfg aws.Config, modelID string) *BedrockClassifier {
-	return &BedrockClassifier{
-		client:  bedrockruntime.NewFromConfig(cfg),
-		modelID: modelID,
-	}
+// ToolRequest is one forced tool call.
+type ToolRequest struct {
+	System      string
+	User        string
+	Tool        string         // the tool's name
+	Description string         // what the tool reports
+	Schema      map[string]any // JSON schema of the tool's input
+	MaxTokens   int
 }
 
-// NewBedrockClassifierFromEnv builds a BedrockClassifier from
-// BEDROCK_CLASSIFIER_MODEL_ID and BEDROCK_REGION, shared by both
-// cmd/api and cmd/coordinator's main.go (each constructs one Server that
-// needs a Classifier) so the env-var convention and AWS config loading
-// live in one place instead of two copies in unrelated main packages.
-//
-// Deliberately separate from AWS_REGION (used elsewhere for SSM/S3/EC2):
-// Bedrock model availability is region-specific and Nova Lite may not be
-// offered wherever the coordinator otherwise runs — see the infra
-// prerequisite note in docs/plans (schema-configuration LLM classification
-// plan). Returns (nil, nil) — not an error — when
-// BEDROCK_CLASSIFIER_MODEL_ID is unset, so classification is simply
-// disabled (ClassifyAsync already treats a nil Classifier as "skip") until
-// an operator explicitly configures it, rather than the server failing to
-// start.
-func NewBedrockClassifierFromEnv(ctx context.Context) (Classifier, error) {
-	modelID := os.Getenv("BEDROCK_CLASSIFIER_MODEL_ID")
-	if modelID == "" {
-		return nil, nil
-	}
-	region := os.Getenv("BEDROCK_REGION")
-	if region == "" {
-		return nil, fmt.Errorf("BEDROCK_CLASSIFIER_MODEL_ID is set but BEDROCK_REGION is not")
-	}
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
-	if err != nil {
-		return nil, fmt.Errorf("load AWS config for bedrock classifier: %w", err)
-	}
-	return NewBedrockClassifier(cfg, modelID), nil
-}
+// LLMClassifier is the Classifier (and the extractor Proposer) over any LLM. The
+// prompts, the schemas and the verification of what the model claims are here;
+// the model call is the LLM's.
+type LLMClassifier struct{ LLM LLM }
 
 const classifyToolName = "classify_log_fields"
+
+func classifyRequest(det *Detection, lines []string) ToolRequest {
+	return ToolRequest{
+		System: classifySystemPrompt, User: buildClassifyPrompt(det, lines),
+		Tool: classifyToolName, Schema: classifyJSONSchema, MaxTokens: 2048,
+		Description: "Report the detected timestamp/level/trace/span field classifications for the log sample.",
+	}
+}
 
 // Classify sends the sample (already envelope-stripped by det) to the
 // model and returns validated candidates. Every candidate returned here
 // has already been checked against the real sample lines
 // (validateClassification) — a model claim that doesn't hold up is
 // dropped, never passed through as if confirmed.
-func (c *BedrockClassifier) Classify(ctx context.Context, det *Detection) (*ClassifierResult, error) {
+func (c LLMClassifier) Classify(ctx context.Context, det *Detection) (*ClassifierResult, error) {
 	out, lines, err := c.classifyRaw(ctx, det)
 	if err != nil {
 		return nil, err
@@ -111,7 +88,7 @@ func (c *BedrockClassifier) Classify(ctx context.Context, det *Detection) (*Clas
 // classifyRaw is the model call alone: its unverified proposals and the
 // lines they were made against. Split from Classify so tests can see what the
 // model said before verification decided what to keep.
-func (c *BedrockClassifier) classifyRaw(ctx context.Context, det *Detection) (*classifyToolResponse, []string, error) {
+func (c LLMClassifier) classifyRaw(ctx context.Context, det *Detection) (*classifyToolResponse, []string, error) {
 	lines := det.Lines
 	if len(lines) > 30 {
 		lines = lines[:30]
@@ -119,52 +96,15 @@ func (c *BedrockClassifier) classifyRaw(ctx context.Context, det *Detection) (*c
 	if len(lines) == 0 {
 		return nil, nil, nil
 	}
-
-	resp, err := c.client.Converse(ctx, classifyConverseInput(c.modelID, det, lines))
-	if err != nil {
-		return nil, nil, fmt.Errorf("bedrock converse: %w", err)
-	}
-
-	raw, err := extractToolUseInput(resp)
+	raw, err := c.LLM.CallTool(ctx, classifyRequest(det, lines))
 	if err != nil {
 		return nil, nil, err
 	}
-
 	var out classifyToolResponse
-	if err := decodeToolInput(raw, &out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, nil, fmt.Errorf("decode classifier tool response: %w", err)
 	}
-
 	return &out, lines, nil
-}
-
-// extractToolUseInput pulls the tool_use content block's Input document
-// out of a Converse response. ToolChoiceMemberAny forces the model to use
-// a tool, so a well-behaved model always returns exactly this shape; if
-// it doesn't, that's a hard error rather than something worth guessing at.
-func extractToolUseInput(resp *bedrockruntime.ConverseOutput) (brdoc.Interface, error) {
-	msg, ok := resp.Output.(*brtypes.ConverseOutputMemberMessage)
-	if !ok {
-		return nil, fmt.Errorf("unexpected converse output type %T", resp.Output)
-	}
-	for _, block := range msg.Value.Content {
-		if tu, ok := block.(*brtypes.ContentBlockMemberToolUse); ok {
-			return tu.Value.Input, nil
-		}
-	}
-	return nil, fmt.Errorf("model response had no tool_use block (stop reason %s)", resp.StopReason)
-}
-
-// decodeToolInput decodes a tool-use input document into out through its JSON
-// form. The document's own UnmarshalSmithyDocument is not used: it ignores
-// `json` struct tags, so a multi-word key like field_index never reached its
-// field and every proposal came back with nothing to locate it by.
-func decodeToolInput(raw interface{ MarshalSmithyDocument() ([]byte, error) }, out any) error {
-	b, err := raw.MarshalSmithyDocument()
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(b, out)
 }
 
 // classifyToolResponse mirrors classifyToolSpec's JSON schema.
@@ -423,16 +363,6 @@ For duration_ns (stored as nanoseconds whatever it is written in), also give dur
 For timestamp, give field_index or json_path the same way, plus a strftime pattern (e.g. "%Y-%m-%d %H:%M:%S,%f", "%Y-%m-%dT%H:%M:%S%z") describing the value's format. Use %f for a fractional-second field written as exactly 6 digits (microseconds); use %3f for exactly 3 digits (milliseconds, the common case for comma-separated fractional seconds like "10:15:03,102"); use %9f for 9 digits (nanoseconds). sample_value should be the literal value you found for every present field, for traceability.
 
 Only claim present: true when you actually see the field in the sample — never guess. Respond only by calling the classify_log_fields tool.`
-
-func classifyToolSpec() brtypes.ToolSpecification {
-	return brtypes.ToolSpecification{
-		Name:        aws.String(classifyToolName),
-		Description: aws.String("Report the detected timestamp/level/trace/span field classifications for the log sample."),
-		InputSchema: &brtypes.ToolInputSchemaMemberJson{
-			Value: brdoc.NewLazyDocument(classifyJSONSchema),
-		},
-	}
-}
 
 var tagFieldSchema = map[string]any{
 	"type": "object",
@@ -879,7 +809,7 @@ var probeFieldLabels = map[ProbeField]string{
 
 // ProposeExtractors asks the model for candidate extractors that fit the
 // user's marks. Its answer is untrusted; Probe verifies every candidate.
-func (c *BedrockClassifier) ProposeExtractors(ctx context.Context, in ProposeInput) ([]ProbeExtractor, error) {
+func (c LLMClassifier) ProposeExtractors(ctx context.Context, in ProposeInput) ([]ProbeExtractor, error) {
 	out, err := c.proposeRaw(ctx, in)
 	if err != nil {
 		return nil, err
@@ -888,63 +818,23 @@ func (c *BedrockClassifier) ProposeExtractors(ctx context.Context, in ProposeInp
 }
 
 // proposeRaw is the model call alone (see classifyRaw).
-func (c *BedrockClassifier) proposeRaw(ctx context.Context, in ProposeInput) (*proposeToolResponse, error) {
+func (c LLMClassifier) proposeRaw(ctx context.Context, in ProposeInput) (*proposeToolResponse, error) {
 	lines := in.Lines
 	if len(lines) > 50 {
 		lines = lines[:50]
 	}
 	in.Lines = lines
-	resp, err := c.client.Converse(ctx, &bedrockruntime.ConverseInput{
-		ModelId: aws.String(c.modelID),
-		Messages: []brtypes.Message{{
-			Role:    brtypes.ConversationRoleUser,
-			Content: []brtypes.ContentBlock{&brtypes.ContentBlockMemberText{Value: buildProposePrompt(in)}},
-		}},
-		System: []brtypes.SystemContentBlock{&brtypes.SystemContentBlockMemberText{Value: proposeSystemPromptFor(in.Field)}},
-		ToolConfig: &brtypes.ToolConfiguration{
-			Tools: []brtypes.Tool{&brtypes.ToolMemberToolSpec{Value: brtypes.ToolSpecification{
-				Name:        aws.String(proposeToolName),
-				Description: aws.String("Report candidate extraction rules for the marked value."),
-				InputSchema: &brtypes.ToolInputSchemaMemberJson{Value: brdoc.NewLazyDocument(proposeSchemaFor(in.Field))},
-			}}},
-			ToolChoice: &brtypes.ToolChoiceMemberAny{},
-		},
-		InferenceConfig: &brtypes.InferenceConfiguration{Temperature: aws.Float32(0), MaxTokens: aws.Int32(1024)},
+	raw, err := c.LLM.CallTool(ctx, ToolRequest{
+		System: proposeSystemPromptFor(in.Field), User: buildProposePrompt(in),
+		Tool: proposeToolName, Schema: proposeSchemaFor(in.Field), MaxTokens: 1024,
+		Description: "Report candidate extraction rules for the marked value.",
 	})
-	if err != nil {
-		return nil, fmt.Errorf("bedrock converse: %w", err)
-	}
-	raw, err := extractToolUseInput(resp)
 	if err != nil {
 		return nil, err
 	}
 	var out proposeToolResponse
-	if err := decodeToolInput(raw, &out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("decode proposer tool response: %w", err)
 	}
 	return &out, nil
-}
-
-// classifyConverseInput is the classification request for a sample.
-func classifyConverseInput(modelID string, det *Detection, lines []string) *bedrockruntime.ConverseInput {
-	return &bedrockruntime.ConverseInput{
-		ModelId: aws.String(modelID),
-		Messages: []brtypes.Message{
-			{
-				Role:    brtypes.ConversationRoleUser,
-				Content: []brtypes.ContentBlock{&brtypes.ContentBlockMemberText{Value: buildClassifyPrompt(det, lines)}},
-			},
-		},
-		System: []brtypes.SystemContentBlock{
-			&brtypes.SystemContentBlockMemberText{Value: classifySystemPrompt},
-		},
-		ToolConfig: &brtypes.ToolConfiguration{
-			Tools:      []brtypes.Tool{&brtypes.ToolMemberToolSpec{Value: classifyToolSpec()}},
-			ToolChoice: &brtypes.ToolChoiceMemberAny{},
-		},
-		InferenceConfig: &brtypes.InferenceConfiguration{
-			Temperature: aws.Float32(0),
-			MaxTokens:   aws.Int32(2048),
-		},
-	}
 }

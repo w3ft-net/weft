@@ -16,7 +16,7 @@ import (
 //
 //	BEDROCK_LIVE_MODEL_ID=us.amazon.nova-lite-v1:0 BEDROCK_LIVE_REGION=us-east-2 \
 //	  go test -tags test ./ingest -run Live -v
-func liveClassifier(t *testing.T) *BedrockClassifier {
+func liveClassifier(t *testing.T) LLMClassifier {
 	t.Helper()
 	model, region := os.Getenv("BEDROCK_LIVE_MODEL_ID"), os.Getenv("BEDROCK_LIVE_REGION")
 	if model == "" || region == "" {
@@ -26,7 +26,7 @@ func liveClassifier(t *testing.T) *BedrockClassifier {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewBedrockClassifier(cfg, model)
+	return LLMClassifier{LLM: NewBedrockLLM(cfg, model)}
 }
 
 // Detection at sample time: the model's real proposals must survive the
@@ -120,15 +120,7 @@ func TestLiveRawToolInput(t *testing.T) {
 	det := Detect(lines)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	resp, err := c.client.Converse(ctx, classifyConverseInput(c.modelID, det, lines))
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := extractToolUseInput(resp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := raw.MarshalSmithyDocument()
+	b, err := c.LLM.CallTool(ctx, classifyRequest(det, lines))
 	if err != nil {
 		t.Fatal(err)
 	}
