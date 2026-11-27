@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -12,19 +12,31 @@ import (
 
 	"github.com/w3ft-net/weft/cluster"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"google.golang.org/grpc"
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
+	"github.com/w3ft-net/weft/backends/logs/archive"
 	"github.com/w3ft-net/weft/compute"
 	computesvc "github.com/w3ft-net/weft/compute/service"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/transport"
 )
 
-func main() {
+// Options is what a deployment decides about its compute process.
+type Options struct {
+	// Readers are the archive readers this process can read with, by name: the
+	// storage the deployment uses supplies them (compute.ArchiveReaderLambda,
+	// compute.ArchiveReaderLocal, or its own). Built after the flags are parsed.
+	Readers func() map[string]archive.Reader
+	// DefaultReader is the reader of every archive format with no
+	// -archive-reader of its own, when no -archive-reader-default names one. Empty:
+	// there is none, and a process given no reader refuses to start.
+	DefaultReader string
+}
+
+// Run is the compute process. It returns only when the process is to exit.
+func Run(opts Options) {
 	weftsdk.InitLogging("", os.Stderr).CaptureStdio()
 	port := flag.Int("port", 9010, "gRPC listen port")
 	// Accepted but unused until intra-stage
@@ -36,7 +48,7 @@ func main() {
 	// archived shard, and would find out on the first query that reached one.
 	readers := readerFlag{}
 	flag.Var(readers, "archive-reader", "FORMAT=NAME: the reader of the archives written in FORMAT (repeatable)")
-	readerDefault := flag.String("archive-reader-default", "", "the reader of every archive format with no -archive-reader of its own ("+compute.ArchiveReaderLambda+", or "+compute.ArchiveReaderLocal+" in a -tags localreader build, where it is the default)")
+	readerDefault := flag.String("archive-reader-default", "", "the reader of every archive format with no -archive-reader of its own (a reader name this build links)")
 	cfgPath := cluster.DefineFlag(flag.CommandLine)
 	tlsCfg := transport.DefineFlags(flag.CommandLine)
 	flag.Parse()
@@ -46,12 +58,6 @@ func main() {
 	if err := cluster.Overlay(flag.CommandLine, cluster.Compute, *cfgPath); err != nil {
 		log.Fatalf("compute: %v", err)
 	}
-
-	// Region must be threaded explicitly: the SDK default chain does
-	// not reliably resolve it from IMDS, and signing Lambda cold-shard
-	// requests with an empty region yields a 403 from the function
-	// URL's IAM authorizer. See compute.ResolveRegion.
-	region := compute.ResolveRegion()
 
 	// Bearer token for the gRPC-shard interceptor. Compute owns this
 	// now — the coordinator no longer carries it in ExecuteQueryRequest.
@@ -63,19 +69,17 @@ func main() {
 		log.Fatal("no SHARD_SECRET set")
 	}
 
-	var creds aws.CredentialsProvider
-	if awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region)); err != nil {
-		weftsdk.Warnf(context.Background(), "warning: AWS config unavailable — cold shard queries will fail: %v", err)
-	} else {
-		creds = awsCfg.Credentials
-	}
 	def := *readerDefault
 	if def == "" && len(readers) == 0 {
-		def = defaultArchiveReader
+		def = opts.DefaultReader
 	}
-	archives, err := compute.NewArchiveRouter(archiveReaders(readers, def), archiveReaderSet(creds, region))
+	var available map[string]archive.Reader
+	if opts.Readers != nil {
+		available = opts.Readers()
+	}
+	archives, err := compute.NewArchiveRouter(archiveReaders(readers, def), available)
 	if err != nil {
-		log.Fatalf("compute: archive readers: %v (give -archive-reader-default %s, or -archive-reader FORMAT=NAME)", err, compute.ArchiveReaderLambda)
+		log.Fatalf("compute: archive readers: %v (give -archive-reader-default NAME, or -archive-reader FORMAT=NAME)", err)
 	}
 	engine := &compute.Engine{Archive: archives, ShardSecret: shardSecret}
 	srv := grpc.NewServer(append(transport.ServerOptions(),

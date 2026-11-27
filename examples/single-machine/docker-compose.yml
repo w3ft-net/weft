@@ -1,4 +1,4 @@
-# The open-source stack: api, coordinator and compute, with shards launched by
+# The single-machine stack: api, coordinator and compute, with shards launched by
 # the coordinator as sibling containers through the Docker socket. One SQLite
 # database, shared by api and coordinator on the weft-state volume. Used by the
 # end-to-end tests (e2e/).
@@ -15,8 +15,8 @@ services:
   compute:
     <<: *weft
     build:
-      context: ..
-      dockerfile: weft-core/Dockerfile
+      context: ../../..
+      dockerfile: weft-core/examples/single-machine/Dockerfile
     environment:
       ROLE: compute
       SHARD_SECRET: e2e-shard-secret

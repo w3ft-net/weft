@@ -1,4 +1,4 @@
-package main
+package server
 
 // GitSHA is the build commit's SHA. The Packer build for the shard tier
 // sets it via `-ldflags "-X main.GitSHA=$GIT_SHA"`; locally-built binaries

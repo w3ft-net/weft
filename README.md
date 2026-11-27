@@ -25,11 +25,15 @@ customer hosts that ships log lines to the coordinator. `weft` is the CLI.
     make web             # build the web app (needs node)
     make api-web         # the api with the web app embedded
 
-`docker-compose.yml` brings up a single-machine stack that the end-to-end tests
-in `e2e/` run against:
+`examples/single-machine` holds the mains, the Dockerfile and the compose file for
+a stack on one machine, and the end-to-end tests that run against it:
 
+    cd examples/single-machine
     docker compose up -d --build
     go test -tags e2e ./e2e/ -v
+
+Core itself is libraries: each process is a `cmd/<name>/server` package with a
+`Run`, and an example (or your own deployment) supplies the `main`.
 
 The module depends on `warp` and `warp-lua`; see `go.mod`.
 

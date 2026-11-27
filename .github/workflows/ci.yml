@@ -54,8 +54,8 @@ jobs:
       - name: go test ./...
         working-directory: weft-core
         # Every test here runs on SQLite; the shared *storetest suites run on
-        # Postgres in the hosted repository's CI. cmd/api and cmd/compute assert
-        # their own cgo-free builds.
+        # Postgres in the hosted repository's CI. the single-machine example (examples/
+        # single-machine) asserts its own cgo-free builds.
         run: go test -tags test -count=1 -timeout 10m -coverpkg=./... -coverprofile=coverage.out ./...
       - name: Coverage gate
         working-directory: weft-core
@@ -106,9 +106,12 @@ jobs:
         run: |
           go vet -tags test ./...
           go vet -tags integration,test ./...
-      - name: Build the localreader compute
-        working-directory: weft-core
-        run: go build -tags localreader -o /dev/null ./cmd/compute
+      - name: Build and test the single-machine example
+        working-directory: weft-core/examples/single-machine
+        run: |
+          go vet -tags test ./...
+          go build -o /dev/null ./cmd/compute
+          go test -tags test -count=1 ./cmd/...
       - name: Run the integration-tagged planner tests
         working-directory: weft-core
         run: go test -tags integration,test -count=1 ./planner/...

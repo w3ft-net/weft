@@ -39,4 +39,4 @@ web: wasm
 
 # The api with the web app inside it.
 api-web: web
-	go build -tags webembed -o bin/api ./cmd/api
+	cd examples/single-machine && go build -tags webembed -o ../../bin/api ./cmd/api

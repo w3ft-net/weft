@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 // completion manifest last. It never serves, heartbeats or registers, so the
 // export host cannot be mistaken for a shard. Returns the process exit code:
 // 0 on success, 2 for a usage error, 1 for a failed export.
-func runExportCommand(args []string) int {
+func runExportCommand(args []string, manifests func(context.Context, string) (shard.ManifestStore, error)) int {
 	fs := flag.NewFlagSet("export", flag.ContinueOnError)
 	shardID := fs.String("shard-id", "", "id of the shard being exported")
 	dbPath := fs.String("db", "", "path to the restored shard.duckdb")
@@ -36,7 +36,7 @@ func runExportCommand(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	store, err := exportManifestStore(ctx, *prefix)
+	store, err := exportManifestStore(ctx, *prefix, manifests)
 	if err != nil {
 		weftsdk.Infof(ctx, "export shard=%s attempt=%d: %v", *shardID, *attempt, err)
 		return 1
@@ -53,15 +53,15 @@ func runExportCommand(args []string) int {
 	return 0
 }
 
-// exportManifestStore picks S3 for an s3:// prefix and the local filesystem
-// otherwise, matching how Archive itself chooses its destination.
-func exportManifestStore(ctx context.Context, prefix string) (shard.ManifestStore, error) {
-	if !strings.HasPrefix(prefix, "s3://") {
+// exportManifestStore is the local filesystem for a directory prefix, and the
+// deployment's store for anything else (an s3:// prefix): without one an
+// object-store prefix is refused.
+func exportManifestStore(ctx context.Context, prefix string, manifests func(context.Context, string) (shard.ManifestStore, error)) (shard.ManifestStore, error) {
+	if !strings.Contains(prefix, "://") {
 		return shard.LocalManifestStore{}, nil
 	}
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = "us-east-2"
+	if manifests == nil {
+		return nil, fmt.Errorf("archive prefix %q needs a manifest store, and this build links none", prefix)
 	}
-	return shard.NewS3ManifestStore(ctx, region)
+	return manifests(ctx, prefix)
 }

@@ -1,7 +1,8 @@
-package main
+package server
 
 import (
 	"flag"
+	"github.com/w3ft-net/weft/shard"
 	"testing"
 
 	"github.com/w3ft-net/weft/backends/logs/archive"
@@ -37,13 +38,17 @@ func TestArchiveReaderFlags(t *testing.T) {
 // With no flags there is no mapping, and compute refuses it before it serves a
 // query: an archived shard could never be read.
 func TestNoArchiveReaderFlagsIsRefused(t *testing.T) {
-	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, ""), archiveReaderSet(nil, "")); err == nil {
+	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, ""), testReaders()); err == nil {
 		t.Fatal("compute built a router with no reader configured")
 	}
-	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, "duckdb-lambda"), archiveReaderSet(nil, "")); err != nil {
+	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, "duckdb-lambda"), testReaders()); err != nil {
 		t.Fatalf("the Lambda reader as the default: %v", err)
 	}
-	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, "no-such-reader"), archiveReaderSet(nil, "")); err == nil {
+	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, "no-such-reader"), testReaders()); err == nil {
 		t.Fatal("an unregistered reader was accepted")
 	}
+}
+
+func testReaders() map[string]archive.Reader {
+	return map[string]archive.Reader{"duckdb-lambda": shard.RemoteReader(nil)}
 }

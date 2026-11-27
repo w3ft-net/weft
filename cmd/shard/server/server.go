@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -30,10 +30,20 @@ import (
 	shardsvc "github.com/w3ft-net/weft/shard/service"
 )
 
-func main() {
+// Options is what a deployment decides about its shard process.
+type Options struct {
+	// ManifestStore is where an archive export writes its completion manifest,
+	// for the archive prefix it is given. Nil: only a local directory prefix is
+	// supported, and an s3:// prefix is refused.
+	ManifestStore func(ctx context.Context, prefix string) (shard.ManifestStore, error)
+}
+
+// Run is the shard process: `weft-shard`, or `weft-shard export` for the
+// ephemeral archive export. It returns only when the process is to exit.
+func Run(opts Options) {
 	weftsdk.InitLogging("", os.Stderr).CaptureStdio()
 	if len(os.Args) > 1 && os.Args[1] == "export" {
-		os.Exit(runExportCommand(os.Args[2:]))
+		os.Exit(runExportCommand(os.Args[2:], opts.ManifestStore))
 	}
 
 	grpcPort := flag.Int("grpc-port", 9000, "gRPC listen port")

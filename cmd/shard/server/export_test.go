@@ -1,7 +1,8 @@
-package main
+package server
 
 import (
 	"context"
+	_ "github.com/w3ft-net/weft/shard/duckdbdrv"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,7 +32,7 @@ func TestRunExportCommand_WritesParquetAndManifest(t *testing.T) {
 	db := exportCLIFixture(t)
 	out := t.TempDir()
 
-	code := runExportCommand([]string{"--shard-id", "s-cli", "--db", db, "--prefix", out, "--attempt", "2", "--timeout", "1m"})
+	code := runExportCommand([]string{"--shard-id", "s-cli", "--db", db, "--prefix", out, "--attempt", "2", "--timeout", "1m"}, nil)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
@@ -47,7 +48,7 @@ func TestRunExportCommand_FailureExitsNonZeroWithoutManifest(t *testing.T) {
 	out := t.TempDir()
 	missing := filepath.Join(t.TempDir(), "nope.duckdb")
 
-	code := runExportCommand([]string{"--shard-id", "s-cli", "--db", missing, "--prefix", out, "--attempt", "1"})
+	code := runExportCommand([]string{"--shard-id", "s-cli", "--db", missing, "--prefix", out, "--attempt", "1"}, nil)
 	if code == 0 {
 		t.Fatal("exit code 0 for a missing database")
 	}
@@ -64,7 +65,7 @@ func TestRunExportCommand_RequiresFlags(t *testing.T) {
 		{"--db", "/x", "--prefix", "/x", "--attempt", "1"},      // no shard id
 		{"--shard-id", "s", "--db", "/x", "--prefix", "/x"},     // no attempt
 	} {
-		if code := runExportCommand(args); code != 2 {
+		if code := runExportCommand(args, nil); code != 2 {
 			t.Errorf("args %v: exit code = %d, want 2 (usage)", args, code)
 		}
 	}

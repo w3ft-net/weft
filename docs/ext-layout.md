@@ -82,7 +82,7 @@ Every step leaves core and hosted building and tested.
    import an ext: the moment `config/ssm` leaves, `cmd/api`, `cmd/coordinator` and
    `cmd/shard` could no longer build. So before any move, make each process a
    library (`cmd/api/server` and `cmd/coordinator/server` already are; `cmd/shard`
-   and `cmd/compute` get the same: a `Run(Options)` and a tiny main), and create
+   and `cmd/compute` get the same: a `Run(Options)` and a tiny main; done), and create
    `examples/single-machine` and `examples/ha-aws` holding the mains, with the
    composition still reading core's in-tree implementations. Core keeps only
    libraries; `weft` and `weftd` stay (they link no ext). Add the `go.work`.
