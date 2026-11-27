@@ -3,8 +3,6 @@ package shard
 import (
 	"errors"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-
 	"github.com/w3ft-net/weft/backends/logs/archive"
 	"github.com/w3ft-net/weft/backends/logs/archive/parquet"
 	"github.com/w3ft-net/weft/backends/logs/dialect"
@@ -14,11 +12,11 @@ import (
 // DuckDB writes. LambdaReader is the production one; LocalReader runs DuckDB in
 // the reading process, which tests use.
 
-// LambdaReader reads an archive by sending the query to the Lambda Function URL
-// in Archive.Endpoint, where DuckDB runs it over the Parquet. creds, when set,
-// SigV4-signs the request (a URL with AWS_IAM authorization).
-func LambdaReader(creds aws.CredentialsProvider, region string) archive.Reader {
-	return coldReader{remote: true, creds: creds, region: region}
+// RemoteReader reads an archive by sending the query to the endpoint in
+// Archive.Endpoint (a Lambda Function URL, say), where DuckDB runs it over the
+// Parquet. sign, when set, authenticates each request.
+func RemoteReader(sign RequestSigner) archive.Reader {
+	return coldReader{remote: true, sign: sign}
 }
 
 // LocalReader reads an archive with DuckDB in this process, from a local path or,
@@ -27,8 +25,7 @@ func LocalReader(s3 *S3Config) archive.Reader { return coldReader{s3: s3} }
 
 type coldReader struct {
 	remote bool
-	creds  aws.CredentialsProvider
-	region string
+	sign   RequestSigner
 	s3     *S3Config
 }
 
@@ -50,8 +47,8 @@ func (r coldReader) Open(a archive.Archive) (archive.Handle, error) {
 	if err != nil {
 		return nil, err // not cs: a nil *ColdShard in an archive.Handle is not nil
 	}
-	if r.remote && r.creds != nil {
-		cs.WithAWSAuth(r.creds, r.region)
+	if r.remote && r.sign != nil {
+		cs.WithSigner(r.sign)
 	}
 	return cs, nil
 }

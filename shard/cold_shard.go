@@ -3,18 +3,13 @@ package shard
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	v4signer "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
@@ -40,8 +35,7 @@ type ColdShard struct {
 	// Remote mode (Lambda function URL or test httptest server).
 	functionURL string
 	client      *http.Client
-	creds       aws.CredentialsProvider
-	region      string
+	sign        RequestSigner // nil: requests go unsigned
 }
 
 // LambdaQueryRequest is the JSON request body sent to a remote cold-query handler.
@@ -149,12 +143,16 @@ func NewColdShard(id string, apps []string, parquetPath, functionURL string, s3c
 	return cs, nil
 }
 
-// WithAWSAuth enables SigV4 request signing for Lambda function URL
-// calls. Required when the function URL uses AWS_IAM authorization.
-// Returns the receiver for chaining.
-func (s *ColdShard) WithAWSAuth(creds aws.CredentialsProvider, region string) *ColdShard {
-	s.creds = creds
-	s.region = region
+// RequestSigner authenticates a request to a remote cold-query endpoint, given
+// the request and its body (a SigV4 signer for a Lambda URL with AWS_IAM
+// authorization, say). The core knows no scheme; the storage that needs one
+// supplies it.
+type RequestSigner func(req *http.Request, body []byte) error
+
+// WithSigner signs every request to the remote endpoint with sign. Returns the
+// receiver for chaining.
+func (s *ColdShard) WithSigner(sign RequestSigner) *ColdShard {
+	s.sign = sign
 	return s
 }
 
@@ -370,24 +368,10 @@ func (s *ColdShard) IngestBatch(ctx context.Context, b Batch, rec IngestRecorder
 }
 
 func (s *ColdShard) signRequest(req *http.Request, body []byte) error {
-	return SignLambdaV4(req, body, s.creds, s.region)
-}
-
-// SignLambdaV4 SigV4-signs a Lambda Function URL request when creds are
-// present (the URL uses AWS_IAM auth); a nil provider is a no-op for the
-// unsigned test/localstack path. Shared by the cold-shard query client
-// and the compactor client.
-func SignLambdaV4(req *http.Request, body []byte, creds aws.CredentialsProvider, region string) error {
-	if creds == nil {
+	if s.sign == nil {
 		return nil
 	}
-	hash := sha256.Sum256(body)
-	payloadHash := hex.EncodeToString(hash[:])
-	c, err := creds.Retrieve(req.Context())
-	if err != nil {
-		return fmt.Errorf("retrieve credentials: %w", err)
-	}
-	return v4signer.NewSigner().SignHTTP(req.Context(), c, req, payloadHash, "lambda", region, time.Now())
+	return s.sign(req, body)
 }
 
 // Close releases the in-memory DuckDB connection (no-op in remote mode).
