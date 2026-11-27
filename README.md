@@ -41,6 +41,12 @@ pairs (the keys are in `config/runtime.go`). They come from the YAML file at
 by environment variables of the same name. They reload every minute and on
 SIGHUP. `WEFT_CONFIG_SOURCE=ssm` reads an AWS SSM parameter instead of the file.
 
+## Secrets
+
+Notify secrets (webhook tokens and the like) are encrypted at rest with AES-GCM
+when `WEFT_SECRETS_KEY` is set; without it they are stored in clear and the
+process warns at startup. Keep the key: a ciphertext does not read without it.
+
 ## Documentation
 
 - `docs/architecture.md`: system overview

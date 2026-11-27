@@ -1,18 +1,31 @@
 package defaults
 
 import (
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
 	"time"
+
+	weftsdk "github.com/w3ft-net/weft-go"
 
 	"github.com/w3ft-net/weft/backends/notify"
 	"github.com/w3ft-net/weft/shape"
 )
 
 // NotifyBackend is the notify.yaml document and the secrets over one SQLite database.
-type NotifyBackend struct{ db *sql.DB }
+type NotifyBackend struct {
+	db  *sql.DB
+	gcm cipher.AEAD // nil: secrets are stored as they are
+}
 
 var (
 	_ notify.Store   = (*NotifyBackend)(nil)
@@ -38,11 +51,72 @@ const notifyTimeFmt = "2006-01-02T15:04:05.000000000Z"
 
 // NewNotifyBackend is a store over db, creating its tables if need be. db comes from
 // sqlitedb.Open and is the caller's to close.
+//
+// Secret values are encrypted at rest with AES-256-GCM when WEFT_SECRETS_KEY is
+// set (any string; its SHA-256 is the key). Without it they are stored in clear
+// and the backend warns once at startup. A value written before the key was set
+// still reads; a stored ciphertext does not read without the key it was written
+// with.
 func NewNotifyBackend(db *sql.DB) (*NotifyBackend, error) {
 	if _, err := db.Exec(notifySchema); err != nil {
 		return nil, fmt.Errorf("create notify schema: %w", err)
 	}
-	return &NotifyBackend{db: db}, nil
+	s := &NotifyBackend{db: db}
+	if k := os.Getenv("WEFT_SECRETS_KEY"); k != "" {
+		g, err := newSecretsGCM(k)
+		if err != nil {
+			return nil, err
+		}
+		s.gcm = g
+	} else {
+		weftsdk.Warnf(context.Background(), "notify secrets are stored unencrypted: set WEFT_SECRETS_KEY to encrypt them at rest")
+	}
+	return s, nil
+}
+
+func newSecretsGCM(key string) (cipher.AEAD, error) {
+	sum := sha256.Sum256([]byte(key))
+	block, err := aes.NewCipher(sum[:])
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+const secretPrefix = "enc:v1:"
+
+// seal is the stored form of a secret's value. The name is authenticated with
+// it, so a ciphertext copied under another name does not open.
+func (s *NotifyBackend) seal(name, value string) (string, error) {
+	if s.gcm == nil {
+		return value, nil
+	}
+	nonce := make([]byte, s.gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	ct := s.gcm.Seal(nonce, nonce, []byte(value), []byte(name))
+	return secretPrefix + base64.StdEncoding.EncodeToString(ct), nil
+}
+
+func (s *NotifyBackend) open(name, stored string) (string, error) {
+	enc, ok := strings.CutPrefix(stored, secretPrefix)
+	if !ok {
+		return stored, nil
+	}
+	if s.gcm == nil {
+		return "", fmt.Errorf("secret %q is encrypted: set WEFT_SECRETS_KEY to the key it was written with", name)
+	}
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil || len(raw) < s.gcm.NonceSize() {
+		return "", fmt.Errorf("secret %q is corrupt", name)
+	}
+	n := s.gcm.NonceSize()
+	pt, err := s.gcm.Open(nil, raw[:n], raw[n:], []byte(name))
+	if err != nil {
+		return "", fmt.Errorf("secret %q does not decrypt with WEFT_SECRETS_KEY", name)
+	}
+	return string(pt), nil
 }
 
 func (s *NotifyBackend) Aliases(shape.Added) (notify.Document, error) {
@@ -116,12 +190,19 @@ func (s *NotifyBackend) Value(_ shape.Added, name string) (string, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", notify.ErrNotFound
 	}
-	return v, err
+	if err != nil {
+		return "", err
+	}
+	return s.open(name, v)
 }
 
 func (s *NotifyBackend) Set(_ shape.Added, name, value string) error {
-	_, err := s.db.Exec(`INSERT INTO notify_secrets (name, value) VALUES (?, ?)
-		ON CONFLICT(name) DO UPDATE SET value = excluded.value`, name, value)
+	stored, err := s.seal(name, value)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT INTO notify_secrets (name, value) VALUES (?, ?)
+		ON CONFLICT(name) DO UPDATE SET value = excluded.value`, name, stored)
 	return err
 }
 
