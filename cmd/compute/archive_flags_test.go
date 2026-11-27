@@ -37,13 +37,13 @@ func TestArchiveReaderFlags(t *testing.T) {
 // With no flags there is no mapping, and compute refuses it before it serves a
 // query: an archived shard could never be read.
 func TestNoArchiveReaderFlagsIsRefused(t *testing.T) {
-	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, ""), nil, ""); err == nil {
+	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, ""), archiveReaderSet(nil, "")); err == nil {
 		t.Fatal("compute built a router with no reader configured")
 	}
-	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, "duckdb-lambda"), nil, ""); err != nil {
+	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, "duckdb-lambda"), archiveReaderSet(nil, "")); err != nil {
 		t.Fatalf("the Lambda reader as the default: %v", err)
 	}
-	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, "no-such-reader"), nil, ""); err == nil {
+	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, "no-such-reader"), archiveReaderSet(nil, "")); err == nil {
 		t.Fatal("an unregistered reader was accepted")
 	}
 }

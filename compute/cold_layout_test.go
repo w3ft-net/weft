@@ -40,7 +40,8 @@ func TestComputeForwardsTheDescriptorsLayoutToTheLambda(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			archives, err := NewArchiveRouter(map[string]string{archive.Default: ArchiveReaderLambda}, nil, "")
+			archives, err := NewArchiveRouter(map[string]string{archive.Default: ArchiveReaderLambda},
+				map[string]archive.Reader{ArchiveReaderLambda: shard.LambdaReader(nil, "")})
 			if err != nil {
 				t.Fatal(err)
 			}

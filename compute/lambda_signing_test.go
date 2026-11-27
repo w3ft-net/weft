@@ -88,7 +88,7 @@ func TestComputeFanoutSignsLambdaWithValidRegion(t *testing.T) {
 
 	// Configure the pool exactly as cmd/compute/main.go does.
 	archives, err := NewArchiveRouter(map[string]string{archive.Default: ArchiveReaderLambda},
-		credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", ""), ResolveRegion())
+		map[string]archive.Reader{ArchiveReaderLambda: shard.LambdaReader(credentials.NewStaticCredentialsProvider("AKIDEXAMPLE", "secret", ""), ResolveRegion())})
 	if err != nil {
 		t.Fatal(err)
 	}

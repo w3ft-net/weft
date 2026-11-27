@@ -73,7 +73,7 @@ func main() {
 	if def == "" && len(readers) == 0 {
 		def = defaultArchiveReader
 	}
-	archives, err := compute.NewArchiveRouter(archiveReaders(readers, def), creds, region)
+	archives, err := compute.NewArchiveRouter(archiveReaders(readers, def), archiveReaderSet(creds, region))
 	if err != nil {
 		log.Fatalf("compute: archive readers: %v (give -archive-reader-default %s, or -archive-reader FORMAT=NAME)", err, compute.ArchiveReaderLambda)
 	}

@@ -5,14 +5,11 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-
 	"github.com/w3ft-net/weft/backends/logs/archive"
 	"github.com/w3ft-net/weft/backends/logs/archive/parquet"
 	"github.com/w3ft-net/weft/backends/logs/live"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shard"
-	"github.com/w3ft-net/weft/shard/duckbind"
 )
 
 // ArchiveReaderLambda is the name configuration gives the Lambda reader: the
@@ -27,28 +24,27 @@ const ArchiveReaderLambda = "duckdb-lambda"
 const ArchiveReaderLocal = "duckdb-local"
 
 // NewArchiveRouter builds what a compute process reads archives through: the
-// formats and readers this build links, and the configured choice of reader for
-// each format. readers maps a format ID, or archive.Default, to a reader's
-// name. There must be at least one: with none, an archived shard could never be
-// read, and a process that starts anyway only finds out on the first query.
+// formats this build links, the readers the caller has, and the configured choice
+// of reader for each format. chosen maps a format ID, or archive.Default, to the
+// name of one of readers. There must be at least one: with none, an archived shard
+// could never be read, and a process that starts anyway only finds out on the
+// first query.
 //
-// A build with another reader registers it here, beside the Lambda one.
-func NewArchiveRouter(readers map[string]string, creds aws.CredentialsProvider, region string) (*archive.Router, error) {
+// Which readers exist is the caller's: the composition (a main) builds them from
+// the storage it uses, so this package names no cloud.
+func NewArchiveRouter(chosen map[string]string, readers map[string]archive.Reader) (*archive.Router, error) {
 	reg := archive.NewRegistry()
 	for _, f := range parquet.Formats() {
 		if err := reg.AddFormat(f); err != nil {
 			return nil, err
 		}
 	}
-	if err := reg.AddReader(ArchiveReaderLambda, shard.LambdaReader(creds, region)); err != nil {
-		return nil, err
-	}
-	if duckbind.Linked() {
-		if err := reg.AddReader(ArchiveReaderLocal, shard.LocalReader(shard.S3ConfigFromEnv())); err != nil {
+	for name, r := range readers {
+		if err := reg.AddReader(name, r); err != nil {
 			return nil, err
 		}
 	}
-	return reg.Readers(readers)
+	return reg.Readers(chosen)
 }
 
 // archiveShard is a reader's handle as a shard, for a reader whose handle is not
