@@ -20,10 +20,22 @@ import (
 // (SHARD_*, EXPORT_*, LAMBDA_FUNCTION_URL, PARQUET_DIR, the WEFT_* Docker
 // variables). Both halves are being moved out of core, to ext/launcher/ec2 and
 // ext/launcher/docker; a deployment then builds its Platform itself.
-func PlatformFromEnv(ctx context.Context, region, shardSecret string) (Platform, error) {
+// ExportStorage is where the archive export keeps its manifests and removes its
+// output: the object store the deployment archives to (ext/storage/s3). Nil: the
+// export is disabled and shards archive in process.
+type ExportStorage func(ctx context.Context, region string) (ExportManifests, ObjectDeleter, error)
+
+// ExportManifests is what the export keeps its completion manifests in: the
+// export host writes them, the coordinator reads them back.
+type ExportManifests interface {
+	shard.ManifestStore
+	shard.ManifestReader
+}
+
+func PlatformFromEnv(ctx context.Context, region, shardSecret string, storage ExportStorage) (Platform, error) {
 	subnets := parseShardSubnets()
 	if len(subnets) > 0 {
-		return ec2Platform(ctx, region, shardSecret, subnets, parseShardTemplates())
+		return ec2Platform(ctx, region, shardSecret, subnets, parseShardTemplates(), storage)
 	}
 	return dockerPlatform(shardSecret), nil
 }
@@ -182,7 +194,11 @@ func (c exportConfig) usable(parquetDir string) (bool, string) {
 // process, which is the pre-export behavior: loud in the log, never a boot
 // failure, because a coordinator that will not start is worse than a slow
 // archive.
-func wireArchiveExport(ctx context.Context, provConfig *ProvisionerConfig, region string, tierSubnets map[string]map[string]string) {
+func wireArchiveExport(ctx context.Context, provConfig *ProvisionerConfig, region string, tierSubnets map[string]map[string]string, storage ExportStorage) {
+	if storage == nil {
+		weftsdk.Infof(ctx, "provisioner: archive export disabled (no export storage linked); shards archive in process")
+		return
+	}
 	c := parseExportConfig(tierSubnets)
 	if ok, why := c.usable(provConfig.ParquetDir); !ok {
 		weftsdk.Infof(ctx, "provisioner: archive export disabled (%s); shards archive in process", why)
@@ -193,14 +209,9 @@ func wireArchiveExport(ctx context.Context, provConfig *ProvisionerConfig, regio
 		weftsdk.Infof(ctx, "provisioner: archive export disabled, ExportResources: %v; shards archive in process", err)
 		return
 	}
-	manifests, err := shard.NewS3ManifestStore(ctx, region)
+	manifests, outputs, err := storage(ctx, region)
 	if err != nil {
-		weftsdk.Infof(ctx, "provisioner: archive export disabled, manifest store: %v; shards archive in process", err)
-		return
-	}
-	outputs, err := NewS3ObjectDeleter(ctx, region)
-	if err != nil {
-		weftsdk.Infof(ctx, "provisioner: archive export disabled, output deleter: %v; shards archive in process", err)
+		weftsdk.Infof(ctx, "provisioner: archive export disabled, export storage: %v; shards archive in process", err)
 		return
 	}
 	provConfig.Exports = exports
@@ -220,7 +231,7 @@ func wireArchiveExport(ctx context.Context, provConfig *ProvisionerConfig, regio
 // capacity authority, so a shard is backed by exactly one instance and there
 // is no "ghost" failure mode. subnets is tier→az→subnet; templates is
 // tier→launch-template-id.
-func ec2Platform(ctx context.Context, region, shardSecret string, subnets map[string]map[string]string, templates map[string]string) (Platform, error) {
+func ec2Platform(ctx context.Context, region, shardSecret string, subnets map[string]map[string]string, templates map[string]string, storage ExportStorage) (Platform, error) {
 	// One VolumeManager, shared: the EC2Provisioner creates/attaches volumes
 	// on launch, and the provisioner's shard SM retires them on archive.
 	vm, err := NewEC2VolumeManager(region)
@@ -237,7 +248,7 @@ func ec2Platform(ctx context.Context, region, shardSecret string, subnets map[st
 	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 	provConfig.LambdaFunctionURL = os.Getenv("LAMBDA_FUNCTION_URL")
 	provConfig.VolumeSizesGB = parseShardVolumeSizes()
-	wireArchiveExport(ctx, &provConfig, region, subnets)
+	wireArchiveExport(ctx, &provConfig, region, subnets, storage)
 	weftsdk.Infof(ctx, "provisioner: per-tier volume sizes (GiB) from env: %v (tiers absent fall back to %d)", provConfig.VolumeSizesGB, defaultShardVolumeGB)
 	return Platform{Launcher: ep, Volumes: vm, Standby: ep, Config: provConfig}, nil
 }

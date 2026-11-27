@@ -128,10 +128,11 @@ func (LocalManifestStore) Get(_ context.Context, key string) (ExportManifest, bo
 	if err != nil {
 		return ExportManifest{}, false, err
 	}
-	return decodeManifest(key, b)
+	return DecodeManifest(key, b)
 }
 
-func decodeManifest(key string, b []byte) (ExportManifest, bool, error) {
+// DecodeManifest reads a stored manifest, found false for an empty one; key names it in errors.
+func DecodeManifest(key string, b []byte) (ExportManifest, bool, error) {
 	var m ExportManifest
 	if err := json.Unmarshal(b, &m); err != nil {
 		return ExportManifest{}, false, fmt.Errorf("decode manifest %s: %w", key, err)

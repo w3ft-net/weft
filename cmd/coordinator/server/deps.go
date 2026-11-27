@@ -29,6 +29,9 @@ import (
 // deployment.Deployment every process shares. A field marked optional left nil
 // is the open default: no feature, or the one-group behaviour.
 type Own struct {
+	// ExportStorage is the object store the ephemeral archive export writes its
+	// manifests to (ext/storage/s3). Nil: shards archive in process.
+	ExportStorage logdb.ExportStorage
 	// Classifier builds the LLM-based schema-field classifier (ext/llm/bedrock),
 	// or returns nil when it is not configured. Nil: the coordinator has none.
 	Classifier func(ctx context.Context) (ingest.Classifier, error)

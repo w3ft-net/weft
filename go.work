@@ -6,5 +6,6 @@ use (
 	./ext/config/ssm
 	./ext/llm/bedrock
 	./ext/storage/lambda
+	./ext/storage/s3
 	./ext/tailfanout/redis
 )

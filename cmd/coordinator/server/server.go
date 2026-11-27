@@ -270,7 +270,7 @@ func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 	// EC2-direct launching, else Docker); the runtime-derived inputs (db,
 	// secret, holder) are logdb.Config's. logdb.Start owns the registry and
 	// returns it inside the provisioner.
-	plat, err := logdb.PlatformFromEnv(provCtx, *awsRegion, shardSecret)
+	plat, err := logdb.PlatformFromEnv(provCtx, *awsRegion, shardSecret, own.ExportStorage)
 	if err != nil {
 		log.Fatalf("shard platform: %v", err)
 	}
