@@ -7,7 +7,7 @@ import (
 
 type nopLauncher struct{}
 
-func (nopLauncher) LaunchInstance(context.Context, string) (string, error) { return "", nil }
+func (nopLauncher) LaunchInstance(context.Context, string) (string, error)  { return "", nil }
 func (nopLauncher) TerminateInstance(context.Context, string, string) error { return nil }
 
 // Start runs over any Platform: with only a launcher it builds a provisioner and
