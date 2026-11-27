@@ -462,10 +462,10 @@ func (h *HTTPCoordinator) DeletePagerDuty(name string) error {
 	return nil
 }
 
-// SaveWebhookSecret creates or replaces a named webhook secret.
-func (h *HTTPCoordinator) SaveWebhookSecret(name, value string) error {
+// SaveSecret creates or replaces a named secret.
+func (h *HTTPCoordinator) SaveSecret(name, value string) error {
 	body, _ := json.Marshal(map[string]string{"name": name, "value": value})
-	req, _ := http.NewRequest("PUT", h.baseURL+"/api/integrations/webhook-secrets", bytes.NewReader(body))
+	req, _ := http.NewRequest("PUT", h.baseURL+"/api/secrets", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	h.setAuthHeaders(req)
 	resp, err := h.client.Do(req)
@@ -479,9 +479,30 @@ func (h *HTTPCoordinator) SaveWebhookSecret(name, value string) error {
 	return nil
 }
 
-// DeleteWebhookSecret removes a webhook secret by name.
-func (h *HTTPCoordinator) DeleteWebhookSecret(name string) error {
-	req, _ := http.NewRequest("DELETE", h.baseURL+"/api/integrations/webhook-secrets/"+url.PathEscape(name), nil)
+// ListSecrets is the names of the caller's secrets; the server never returns a value.
+func (h *HTTPCoordinator) ListSecrets() ([]string, error) {
+	req, _ := http.NewRequest("GET", h.baseURL+"/api/secrets", nil)
+	h.setAuthHeaders(req)
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, httpError(resp)
+	}
+	var out struct {
+		Secrets []string `json:"secrets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Secrets, nil
+}
+
+// DeleteSecret removes a secret by name.
+func (h *HTTPCoordinator) DeleteSecret(name string) error {
+	req, _ := http.NewRequest("DELETE", h.baseURL+"/api/secrets/"+url.PathEscape(name), nil)
 	h.setAuthHeaders(req)
 	resp, err := h.client.Do(req)
 	if err != nil {

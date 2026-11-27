@@ -59,24 +59,29 @@ type Registry struct {
 	targets map[string]AlertTarget
 }
 
-// SecretResolver fills in the ${secrets.NAME} references of a webhook target;
-// notifycfg.Service is one.
+// SecretResolver reads the secrets targets deliver with: it fills in the
+// ${secrets.NAME} references of a webhook target and returns a named secret's
+// value for the others; notifycfg.Service is one.
 type SecretResolver interface {
+	Secret(owner shape.Added, name string) (string, error)
 	ResolveWebhook(owner shape.Added, t notifycfg.WebhookTarget) (notifycfg.WebhookTarget, *strings.Replacer, error)
 }
 
-// NewRegistry is the core's kinds over secrets (webhook, and email over the SMTP the
-// environment names) plus the given targets. A given "email" target replaces
-// the core's, for a deployment with SMTP settings of its own. Any other kind
-// given twice is a wiring mistake and panics.
+// NewRegistry is the core's kinds over secrets (webhook, slack, pagerduty, and
+// email over the SMTP the environment names) plus the given targets. A given
+// "slack", "pagerduty" or "email" target replaces the core's, for a deployment
+// with credentials or SMTP settings of its own. Any other kind given twice is a
+// wiring mistake and panics.
 func NewRegistry(secrets SecretResolver, targets ...AlertTarget) *Registry {
 	r := &Registry{}
 	r.Register(NewWebhookTarget(secrets))
 	for _, t := range targets {
 		r.Register(t)
 	}
-	if _, ok := r.targets["email"]; !ok {
-		r.Register(EmailTarget{SMTP: SMTPFromEnv()})
+	for _, d := range []AlertTarget{NewSlackTarget(secrets), NewPagerDutyTarget(secrets), EmailTarget{SMTP: SMTPFromEnv()}} {
+		if _, ok := r.targets[d.Kind()]; !ok {
+			r.Register(d)
+		}
 	}
 	return r
 }

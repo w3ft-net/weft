@@ -14,13 +14,13 @@ import (
 const notifySystem = "system:\n  email: [ops@example.test]\n"
 
 // Saving /etc/notify.yaml checks the kinds against what the build sends: the
-// open build sends webhook and email, so `slack:` is refused at save time, not
+// open build sends webhook, slack, pagerduty and email, so `smoke-signal:` is refused at save time, not
 // skipped when an alert fires.
 func TestEtcWriteNotify_RefusesAKindTheBuildDoesNotSend(t *testing.T) {
 	m := &EtcMount{cfg: Config{}}
-	err := m.WriteFile(context.Background(), "notify.yaml", []byte(notifySystem+"ops:\n  slack: ['#ops']\n"))
-	if err == nil || !strings.Contains(err.Error(), `"slack"`) {
-		t.Fatalf("err = %v, want a refusal naming slack", err)
+	err := m.WriteFile(context.Background(), "notify.yaml", []byte(notifySystem+"ops:\n  smoke-signal: [hill]\n"))
+	if err == nil || !strings.Contains(err.Error(), `"smoke-signal"`) {
+		t.Fatalf("err = %v, want a refusal naming smoke-signal", err)
 	}
 }
 

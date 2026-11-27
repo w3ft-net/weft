@@ -41,21 +41,18 @@ func TestRegistry_ValidateOpensEveryEntry(t *testing.T) {
 	if err := r.Validate(bad); err == nil || !strings.Contains(err.Error(), "coop") {
 		t.Errorf("an entry the target rejects: err = %v", err)
 	}
-	unknown, _ := notifycfg.Parse("a:\n  slack: ['#x']\n")
-	if err := r.Validate(unknown); err == nil || !strings.Contains(err.Error(), `"slack"`) {
+	unknown, _ := notifycfg.Parse("a:\n  smoke-signal: [x]\n")
+	if err := r.Validate(unknown); err == nil || !strings.Contains(err.Error(), `"smoke-signal"`) {
 		t.Errorf("a kind with no target: err = %v", err)
 	}
 }
 
-func TestRegistry_CoreShipsWebhookAndEmail(t *testing.T) {
+func TestRegistry_CoreShipsWebhookSlackPagerDutyAndEmail(t *testing.T) {
 	r := NewRegistry(nil)
-	for _, kind := range []string{"webhook", "email"} {
+	for _, kind := range []string{"webhook", "slack", "pagerduty", "email"} {
 		if _, ok := r.Lookup(kind); !ok {
 			t.Errorf("the core registry has no %s target", kind)
 		}
-	}
-	if _, ok := r.Lookup("slack"); ok {
-		t.Error("the core registry sends slack")
 	}
 }
 

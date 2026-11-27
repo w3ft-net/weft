@@ -353,8 +353,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	auth.HandleFunc("GET /api/notify", s.handleGetNotifyConfig)
 	auth.Handle("PUT /api/notify", BodyCap(cfg.WatchBodyMax, protected(s.handleSaveNotifyConfig)))
-	auth.Handle("PUT /api/integrations/webhook-secrets", protected(s.handleWebhookSecretSave))
-	auth.Handle("DELETE /api/integrations/webhook-secrets/{name}", protected(s.handleWebhookSecretDelete))
+	auth.Handle("GET /api/secrets", protected(s.handleSecretList))
+	auth.Handle("PUT /api/secrets", protected(s.handleSecretSave))
+	auth.Handle("DELETE /api/secrets/{name}", protected(s.handleSecretDelete))
 	auth.HandleFunc("GET /api/namespaces", s.handleListNamespaces)
 	auth.Handle("POST /api/namespaces", protected(s.handleCreateNamespace))
 	auth.Handle("DELETE /api/namespaces/{name}", protected(s.handleDeleteNamespace))
@@ -412,8 +413,8 @@ func (s *Server) Handler() http.Handler {
 		"/api/crons",
 		"/api/crons/",
 		"/api/notify",
-		"/api/integrations/webhook-secrets",
-		"/api/integrations/webhook-secrets/",
+		"/api/secrets",
+		"/api/secrets/",
 		"/api/namespaces",
 		"/api/namespaces/",
 		"/api/fs/",

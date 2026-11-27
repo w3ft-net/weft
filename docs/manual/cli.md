@@ -51,7 +51,7 @@ plan.
 | `weft namespace {list \| create \| remove}` | Manage [namespaces](namespaces.md) |
 | `weft token {create \| list \| revoke}` | Manage [tokens](namespaces.md#tokens) |
 | `weft source {add \| list \| remove \| pending \| configure \| resample \| migrate \| schema}` | Manage log sources and [their schemas](connect-source.md#sampling-logs-for-a-schema) |
-| `weft integration {list \| slack \| pagerduty}` | Connect [notification](alerts.md) destinations |
+| `weft secret {set \| rm \| list}` | Manage the secrets [alert targets](alerts.md#slack-and-pagerduty-credentials) use |
 | `weft mcp` | Run an MCP server on stdio, so an LLM client such as Claude Code can read your logs and propose scripts and alerting crons |
 | `weft propose {review \| apply \| clear}` | Review, apply or discard the changes an MCP client has staged |
 | `weft update` | Replace the binary with the latest release |

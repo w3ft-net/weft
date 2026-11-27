@@ -53,10 +53,10 @@ func (s *Server) handleSaveNotifyConfig(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleWebhookSecretSave creates or replaces a named webhook secret, the
-// credential a webhook alert target delivers with.
+// handleSecretSave creates or replaces a named secret, the credential an alert
+// target delivers with (a webhook header, `slack_token`, `pagerduty_<name>`).
 // Body: {"name": "token", "value": "<secret>"}.
-func (s *Server) handleWebhookSecretSave(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSecretSave(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 	if !s.requireConfigWrite(w, r, session) {
 		return
@@ -79,9 +79,26 @@ func (s *Server) handleWebhookSecretSave(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleWebhookSecretDelete removes a webhook secret that no alias uses.
-// Path: DELETE /api/integrations/webhook-secrets/{name}
-func (s *Server) handleWebhookSecretDelete(w http.ResponseWriter, r *http.Request) {
+// handleSecretList returns the names of the owner's secrets, never a value.
+func (s *Server) handleSecretList(w http.ResponseWriter, r *http.Request) {
+	session := GetSession(r)
+	if !s.requireConfigWrite(w, r, session) {
+		return
+	}
+	if !s.requireGroup(w, session) {
+		return
+	}
+	names, err := s.NotifyService().Secrets.Names(session.Principal().Partition())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string][]string{"secrets": names})
+}
+
+// handleSecretDelete removes a secret that no alias uses.
+// Path: DELETE /api/secrets/{name}
+func (s *Server) handleSecretDelete(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 	if !s.requireConfigWrite(w, r, session) {
 		return

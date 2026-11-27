@@ -245,26 +245,32 @@ system:
 You can change its target to any service type. You just can't remove the
 top-level key.
 
-### Connecting Slack and PagerDuty
+### Slack and PagerDuty credentials
 
-`notify.yaml` names destinations — the credentials behind them live with your
-account. Connect them  under **Account → Integrations** in the browser or from
-the terminal with `weft integration`.
+`notify.yaml` names destinations; the credentials behind them are
+[secrets](#webhook-secrets), set with `weft secret`.
 
 ```
-# PagerDuty
-weft integration pagerduty add ops-daytime --key YOUR_ROUTING_KEY
-weft integration pagerduty rm  ops-daytime
+# Slack: a bot token (xoxb-...) or an incoming-webhook URL
+weft secret set slack_token --value xoxb-...
 
-# Slack
-weft integration slack connect
-weft integration slack rm
+# PagerDuty: one routing key per name used in notify.yaml
+weft secret set pagerduty_ops-daytime --value YOUR_ROUTING_KEY
 ```
 
-A PagerDuty alias in `notify.yaml` must match a name you've registered with
-`weft integration pagerduty add`. Slack channels are named directly in
-`notify.yaml` (`"#alerts"`) once the workspace is connected, and you'll have to
-add weft to those channels for it to notify you.
+A Slack entry (`"#alerts"`) uses `slack_token`, and a PagerDuty entry named
+`ops-daytime` uses `pagerduty_ops-daytime`. An entry can name a different
+secret with `token:`:
+
+```yaml
+ops:
+  slack:
+    - {channel: "#alerts", token: "${secrets.team_b_slack}"}
+  pagerduty:
+    - {name: primary, severity: critical, token: "${secrets.primary_key}"}
+```
+
+With a bot token, add the bot to the channels it should post to.
 
 ### Webhooks
 
@@ -312,11 +318,11 @@ is retried on the following ticks of the incident.
 #### Webhook secrets
 
 If you need to use a token in an auth header for a webhook but would rather not
-shove a secret somewhere broadly readable, store it as a webhook secret instead
+shove a secret somewhere broadly readable, store it as a secret instead
 and refer to it by name:
 
 ```
-weft integration webhook-secret set my_token --value s3cr3t
+weft secret set my_token --value s3cr3t
 ```
 
 You can then interpolate it with `${secrets.my_token}` in a webhook's `url` or
@@ -325,7 +331,7 @@ sends the request.  Error messages, logs, catting `/etc/notify.yaml` etc. show
 `${secrets.pages_token}` instead of the value.
 
 Secret names must be `[\w_-]*`. You can't write `notify.yaml` if it refers to a
-secret you haven't defined, and `weft integration webhook-secret rm <name>`
+secret you haven't defined, and `weft secret rm <name>`
 will fail if an alias still refers to it.
 
 

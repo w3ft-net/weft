@@ -92,13 +92,13 @@ func TestNotifier_OneTargetFailingDoesNotStopTheRest(t *testing.T) {
 // keys come back so the retry skips them.
 func TestNotifier_UnregisteredKindIsAnError(t *testing.T) {
 	env := newWFEnv(t)
-	if err := env.notify.Save(env.owner, "", "system:\n  email: [a@example.test]\nflock:\n  slack: ['#ops']\n  carrier-pigeon: [north]\n"); err != nil {
+	if err := env.notify.Save(env.owner, "", "system:\n  email: [a@example.test]\nflock:\n  smoke-signal: [hill]\n  carrier-pigeon: [north]\n"); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeTarget{}
 	sent, err := NewNotifier(env.notify, f).Send(context.Background(), env.owner, "flock", "disk", "boom", nil)
-	if err == nil || !strings.Contains(err.Error(), `"slack"`) {
-		t.Errorf("err = %v, want one naming the missing slack target", err)
+	if err == nil || !strings.Contains(err.Error(), `"smoke-signal"`) {
+		t.Errorf("err = %v, want one naming the missing smoke-signal target", err)
 	}
 	if !slices.Equal(sent, []string{"carrier-pigeon:north"}) {
 		t.Errorf("sent = %v, want the registered kind still delivered", sent)

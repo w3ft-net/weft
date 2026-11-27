@@ -17,7 +17,7 @@ const alerts = {
     { level: 2, id: "notifications", text: "Notifications" },
     { level: 3, id: "define-a-notification-alias", text: "Define a notification alias" },
     { level: 3, id: "the-system-alias", text: "The system alias" },
-    { level: 3, id: "connecting-slack-and-pagerduty", text: "Connecting Slack and PagerDuty" },
+    { level: 3, id: "slack-and-pagerduty-credentials", text: "Slack and PagerDuty credentials" },
     { level: 3, id: "webhooks", text: "Webhooks" },
     { level: 3, id: "email", text: "Email" },
     { level: 3, id: "testing-an-alias", text: "Testing an alias" },
@@ -220,22 +220,25 @@ populates it with the email address of the person who created the org:</p>
 </code></pre>
 <p>You can change its target to any service type. You just can't remove the
 top-level key.</p>
-<h3 id="connecting-slack-and-pagerduty">Connecting Slack and PagerDuty</h3>
-<p><code>notify.yaml</code> names destinations — the credentials behind them live with your
-account. Connect them  under <strong>Account → Integrations</strong> in the browser or from
-the terminal with <code>weft integration</code>.</p>
-<pre><code># PagerDuty
-weft integration pagerduty add ops-daytime --key YOUR_ROUTING_KEY
-weft integration pagerduty rm  ops-daytime
+<h3 id="slack-and-pagerduty-credentials">Slack and PagerDuty credentials</h3>
+<p><code>notify.yaml</code> names destinations; the credentials behind them are
+<a href="#webhook-secrets">secrets</a>, set with <code>weft secret</code>.</p>
+<pre><code># Slack: a bot token (xoxb-...) or an incoming-webhook URL
+weft secret set slack_token --value xoxb-...
 
-# Slack
-weft integration slack connect
-weft integration slack rm
+# PagerDuty: one routing key per name used in notify.yaml
+weft secret set pagerduty_ops-daytime --value YOUR_ROUTING_KEY
 </code></pre>
-<p>A PagerDuty alias in <code>notify.yaml</code> must match a name you've registered with
-<code>weft integration pagerduty add</code>. Slack channels are named directly in
-<code>notify.yaml</code> (<code>&quot;#alerts&quot;</code>) once the workspace is connected, and you'll have to
-add weft to those channels for it to notify you.</p>
+<p>A Slack entry (<code>&quot;#alerts&quot;</code>) uses <code>slack_token</code>, and a PagerDuty entry named
+<code>ops-daytime</code> uses <code>pagerduty_ops-daytime</code>. An entry can name a different
+secret with <code>token:</code>:</p>
+<pre><code class="language-yaml">ops:
+  slack:
+    - {channel: &quot;#alerts&quot;, token: &quot;\${secrets.team_b_slack}&quot;}
+  pagerduty:
+    - {name: primary, severity: critical, token: &quot;\${secrets.primary_key}&quot;}
+</code></pre>
+<p>With a bot token, add the bot to the channels it should post to.</p>
 <h3 id="webhooks">Webhooks</h3>
 <p>A webhook target is either a bare URL or a mapping with a <code>url</code> and optional
 <code>headers</code>:</p>
@@ -293,16 +296,16 @@ whose body is JSON:</p>
 is retried on the following ticks of the incident.</p>
 <h4 id="webhook-secrets">Webhook secrets</h4>
 <p>If you need to use a token in an auth header for a webhook but would rather not
-shove a secret somewhere broadly readable, store it as a webhook secret instead
+shove a secret somewhere broadly readable, store it as a secret instead
 and refer to it by name:</p>
-<pre><code>weft integration webhook-secret set my_token --value s3cr3t
+<pre><code>weft secret set my_token --value s3cr3t
 </code></pre>
 <p>You can then interpolate it with <code>\${secrets.my_token}</code> in a webhook's <code>url</code> or
 in a header value, as in the example above. Weft substitutes the value when it
 sends the request.  Error messages, logs, catting <code>/etc/notify.yaml</code> etc. show
 <code>\${secrets.pages_token}</code> instead of the value.</p>
 <p>Secret names must be <code>[\\w_-]*</code>. You can't write <code>notify.yaml</code> if it refers to a
-secret you haven't defined, and <code>weft integration webhook-secret rm &lt;name&gt;</code>
+secret you haven't defined, and <code>weft secret rm &lt;name&gt;</code>
 will fail if an alias still refers to it.</p>
 <h3 id="email">Email</h3>
 <p>Email addresses carry no account-level credential. They are written into

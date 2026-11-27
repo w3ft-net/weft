@@ -73,8 +73,8 @@ plan.</p>
 <td>Manage log sources and <a href="/manual/overview#sampling-logs-for-a-schema">their schemas</a></td>
 </tr>
 <tr>
-<td><code>weft integration {list | slack | pagerduty}</code></td>
-<td>Connect <a href="/manual/alerts">notification</a> destinations</td>
+<td><code>weft secret {set | rm | list}</code></td>
+<td>Manage the secrets <a href="/manual/alerts#slack-and-pagerduty-credentials">alert targets</a> use</td>
 </tr>
 <tr>
 <td><code>weft mcp</code></td>

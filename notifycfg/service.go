@@ -80,8 +80,20 @@ func (s Service) checkSecretRefs(owner shape.Added, aliases AliasMap) error {
 		for _, t := range aliases[alias].Webhook {
 			for _, ref := range t.SecretRefs() {
 				if !known[ref] {
-					return fmt.Errorf("notify.yaml: alias %q refers to ${secrets.%s}, which is not defined; define it with `weft integration webhook-secret set %s --value <value>`", alias, ref, ref)
+					return fmt.Errorf("notify.yaml: alias %q refers to ${secrets.%s}, which is not defined; define it with `weft secret set %s --value <value>`", alias, ref, ref)
 				}
+			}
+		}
+		var tokens []string
+		for _, t := range aliases[alias].Slack {
+			tokens = append(tokens, t.Token)
+		}
+		for _, t := range aliases[alias].PagerDuty {
+			tokens = append(tokens, t.Token)
+		}
+		for _, tok := range tokens {
+			if name := TokenSecret(tok, ""); name != "" && !known[name] {
+				return fmt.Errorf("notify.yaml: alias %q refers to ${secrets.%s}, which is not defined; define it with `weft secret set %s --value <value>`", alias, name, name)
 			}
 		}
 	}
@@ -118,6 +130,15 @@ func (s Service) DeleteSecret(owner shape.Added, name string) error {
 	} else {
 		return err
 	}
+}
+
+// Secret is the value of a named secret.
+func (s Service) Secret(owner shape.Added, name string) (string, error) {
+	v, err := s.Secrets.Value(owner, name)
+	if errors.Is(err, notify.ErrNotFound) {
+		return "", fmt.Errorf("secret %q is not defined; define it with `weft secret set %s --value <value>`", name, name)
+	}
+	return v, err
 }
 
 // ResolveWebhook substitutes ${secrets.NAME} in the target's URL and header

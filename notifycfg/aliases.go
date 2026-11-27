@@ -86,9 +86,12 @@ func (a *Alias) Targets() []AliasEntries {
 }
 
 // SlackTarget is a single Slack destination. Accepts either a bare string
-// (the channel name, e.g. "#ops") or a YAML mapping for future options.
+// (the channel name, e.g. "#ops") or a mapping with `channel:` and an optional
+// `token:` naming the secret that holds the credential, `${secrets.NAME}`; the
+// default is the secret `slack_token`.
 type SlackTarget struct {
 	Channel string `yaml:"channel"`
+	Token   string `yaml:"token,omitempty"`
 }
 
 // UnmarshalYAML lets a SlackTarget be written as either a plain string or
@@ -101,6 +104,7 @@ func (s *SlackTarget) UnmarshalYAML(node *yaml.Node) error {
 	case yaml.MappingNode:
 		var raw struct {
 			Channel string `yaml:"channel"`
+			Token   string `yaml:"token"`
 		}
 		if err := node.Decode(&raw); err != nil {
 			return err
@@ -108,7 +112,10 @@ func (s *SlackTarget) UnmarshalYAML(node *yaml.Node) error {
 		if raw.Channel == "" {
 			return fmt.Errorf("slack target missing `channel`")
 		}
-		s.Channel = raw.Channel
+		if err := checkTokenRef(raw.Token); err != nil {
+			return fmt.Errorf("slack target: %w", err)
+		}
+		s.Channel, s.Token = raw.Channel, raw.Token
 		return nil
 	}
 	return fmt.Errorf("slack target must be a string or mapping")
@@ -117,14 +124,41 @@ func (s *SlackTarget) UnmarshalYAML(node *yaml.Node) error {
 // MarshalYAML emits a bare string when no options are set so round-trips
 // preserve the ergonomic form.
 func (s SlackTarget) MarshalYAML() (any, error) {
-	return s.Channel, nil
+	if s.Token == "" {
+		return s.Channel, nil
+	}
+	return map[string]string{"channel": s.Channel, "token": s.Token}, nil
+}
+
+// checkTokenRef accepts an empty token (the default secret) or exactly one
+// ${secrets.NAME} reference.
+func checkTokenRef(token string) error {
+	if token == "" {
+		return nil
+	}
+	if m := secretRefRe.FindStringSubmatch(token); m == nil || m[0] != token {
+		return fmt.Errorf("`token:` must be a single ${secrets.NAME} reference, got %q", token)
+	}
+	return nil
+}
+
+// TokenSecret is the name of the secret that holds the credential: the one the
+// entry's `token:` references, else def.
+func TokenSecret(token, def string) string {
+	if m := secretRefRe.FindStringSubmatch(token); m != nil {
+		return m[1]
+	}
+	return def
 }
 
 // PDTarget is a single PagerDuty destination. Accepts either a bare string
-// (the integration name) or a mapping with `name:` and optional `severity:`.
+// (the integration name) or a mapping with `name:` and optional `severity:` and
+// `token:`. The routing key is the secret `pagerduty_<name>`, or the one `token:`
+// references, `${secrets.NAME}`.
 type PDTarget struct {
 	Name     string `yaml:"name"`
 	Severity string `yaml:"severity,omitempty"`
+	Token    string `yaml:"token,omitempty"`
 }
 
 // ValidPDSeverities enumerates the PagerDuty Events v2 severity levels.
@@ -146,6 +180,7 @@ func (p *PDTarget) UnmarshalYAML(node *yaml.Node) error {
 		var raw struct {
 			Name     string `yaml:"name"`
 			Severity string `yaml:"severity"`
+			Token    string `yaml:"token"`
 		}
 		if err := node.Decode(&raw); err != nil {
 			return err
@@ -156,8 +191,10 @@ func (p *PDTarget) UnmarshalYAML(node *yaml.Node) error {
 		if raw.Severity != "" && !ValidPDSeverities[raw.Severity] {
 			return fmt.Errorf("pagerduty severity %q not one of critical/error/warning/info", raw.Severity)
 		}
-		p.Name = raw.Name
-		p.Severity = raw.Severity
+		if err := checkTokenRef(raw.Token); err != nil {
+			return fmt.Errorf("pagerduty target: %w", err)
+		}
+		p.Name, p.Severity, p.Token = raw.Name, raw.Severity, raw.Token
 		return nil
 	}
 	return fmt.Errorf("pagerduty target must be a string or mapping")

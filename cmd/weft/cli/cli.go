@@ -97,7 +97,7 @@ func NewRoot(opts Options) (*cobra.Command, Env) {
 		return pflag.NormalizedName(name)
 	})
 	root.AddCommand(
-		shCmd(env), namespaceCmd(env), sourceCmd(env), tokenCmd(env),
+		shCmd(env), namespaceCmd(env), sourceCmd(env), tokenCmd(env), secretCmd(env),
 		mcpCmd(env), proposeCmd(env), versionCmd(env),
 	)
 	return root, env
