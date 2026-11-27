@@ -12,11 +12,6 @@ import (
 	"github.com/w3ft-net/weft/shard"
 )
 
-// ArchiveReaderLambda is the name configuration gives the Lambda reader: the
-// archive reader of the open build, which runs DuckDB over the Parquet in a
-// Lambda function and is reached at the URL in each archived shard's descriptor.
-const ArchiveReaderLambda = "duckdb-lambda"
-
 // ArchiveReaderLocal is the name configuration gives the in-process reader: it
 // runs DuckDB in the compute process over the Parquet, at a local path or in S3
 // (S3_* environment, see shard.S3ConfigFromEnv). It exists only in a build that

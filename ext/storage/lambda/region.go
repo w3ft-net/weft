@@ -1,8 +1,8 @@
-package compute
+package lambda
 
 import "os"
 
-// ResolveRegion returns the AWS region the compute worker uses for
+// ResolveRegion returns the AWS region a compute worker uses for
 // Lambda cold-shard SigV4 signing.
 //
 // AWS SDK v2's default config chain does not reliably derive a region

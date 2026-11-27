@@ -11,7 +11,7 @@ import (
 // The Lambda reader runs the query where the endpoint is, so an archive with no
 // endpoint cannot be read through it; with one it opens without calling it.
 func TestLambdaReader_NeedsAnEndpoint(t *testing.T) {
-	r := LambdaReader(nil, "us-east-2")
+	r := RemoteReader(nil)
 	if _, err := r.Open(archive.Archive{ID: "s1", Path: "s3://b/a.parquet"}); err == nil || !strings.Contains(err.Error(), "function URL") {
 		t.Fatalf("open with no endpoint: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestColdReaders_ReadEveryParquetFormatInDuckDBsDialect(t *testing.T) {
 	for _, f := range parquet.Formats() {
 		want[f.ID()] = true
 	}
-	for name, r := range map[string]archive.Reader{"lambda": LambdaReader(nil, ""), "local": LocalReader(nil)} {
+	for name, r := range map[string]archive.Reader{"lambda": RemoteReader(nil), "local": LocalReader(nil)} {
 		got := r.Reads()
 		if len(got) != len(want) {
 			t.Errorf("%s reads %v, want %d formats", name, got, len(want))

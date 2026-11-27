@@ -26,7 +26,7 @@ import (
 // Options is what a deployment decides about its compute process.
 type Options struct {
 	// Readers are the archive readers this process can read with, by name: the
-	// storage the deployment uses supplies them (compute.ArchiveReaderLambda,
+	// storage the deployment uses supplies them (ext/storage/lambda,
 	// compute.ArchiveReaderLocal, or its own). Built after the flags are parsed.
 	Readers func() map[string]archive.Reader
 	// DefaultReader is the reader of every archive format with no

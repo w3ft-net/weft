@@ -14,11 +14,11 @@ func TestArchiveReaderFlags(t *testing.T) {
 	each := readerFlag{}
 	fs.Var(each, "archive-reader", "")
 	def := fs.String("archive-reader-default", "", "")
-	if err := fs.Parse([]string{"-archive-reader", "parquet-sized-v1=duckdb-lambda", "-archive-reader-default", "duckdb-lambda"}); err != nil {
+	if err := fs.Parse([]string{"-archive-reader", "parquet-sized-v1=remote", "-archive-reader-default", "remote"}); err != nil {
 		t.Fatal(err)
 	}
 	got := archiveReaders(each, *def)
-	if len(got) != 2 || got["parquet-sized-v1"] != "duckdb-lambda" || got[archive.Default] != "duckdb-lambda" {
+	if len(got) != 2 || got["parquet-sized-v1"] != "remote" || got[archive.Default] != "remote" {
 		t.Errorf("readers = %v", got)
 	}
 	for _, bad := range []string{"noequals", "=x", "x=", ""} {
@@ -41,7 +41,7 @@ func TestNoArchiveReaderFlagsIsRefused(t *testing.T) {
 	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, ""), testReaders()); err == nil {
 		t.Fatal("compute built a router with no reader configured")
 	}
-	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, "duckdb-lambda"), testReaders()); err != nil {
+	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, "remote"), testReaders()); err != nil {
 		t.Fatalf("the Lambda reader as the default: %v", err)
 	}
 	if _, err := compute.NewArchiveRouter(archiveReaders(readerFlag{}, "no-such-reader"), testReaders()); err == nil {
@@ -50,5 +50,5 @@ func TestNoArchiveReaderFlagsIsRefused(t *testing.T) {
 }
 
 func testReaders() map[string]archive.Reader {
-	return map[string]archive.Reader{"duckdb-lambda": shard.RemoteReader(nil)}
+	return map[string]archive.Reader{"remote": shard.RemoteReader(nil)}
 }
