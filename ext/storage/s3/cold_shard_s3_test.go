@@ -1,8 +1,11 @@
-package shard
+package s3
 
 import (
 	"context"
 	"fmt"
+	"github.com/w3ft-net/weft/shard"
+	_ "github.com/w3ft-net/weft/shard/duckbind"
+	_ "github.com/w3ft-net/weft/shard/duckdbdrv"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,7 +65,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 	})
 
 	// Ingest test data.
-	ds, err := NewDuckDBShard("s3-test", "")
+	ds, err := shard.NewDuckDBShard("s3-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +87,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 	}
 
 	// Upload to S3.
-	s3Key := "test/shard-s3-test.parquet"
+	s3Key := "test/shard.shard-s3-test.parquet"
 	f, err := os.Open(localPath)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +106,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 
 	// Create ColdShard pointing at S3 (LocalStack).
 	s3Path := fmt.Sprintf("s3://%s/%s", s3TestBucket, s3Key)
-	cs, err := NewColdShard("cold-s3", []string{"vimgym", "callbox"}, s3Path, "", &S3Config{
+	cs, err := shard.NewColdShard("cold-s3", []string{"vimgym", "callbox"}, s3Path, "", &shard.S3Config{
 		Endpoint:  "localhost:4566",
 		AccessKey: s3TestAccessKey,
 		SecretKey: s3TestSecretKey,
@@ -112,7 +115,7 @@ func TestColdShard_S3Integration(t *testing.T) {
 	})
 
 	if err != nil {
-		t.Fatalf("create cold shard with S3: %v", err)
+		t.Fatalf("create cold shard.shard with S3: %v", err)
 	}
 	defer cs.Close()
 
@@ -147,3 +150,5 @@ func TestColdShard_S3Integration(t *testing.T) {
 		t.Fatalf("expected 's3 test row 1', got '%s'", result[0].Raw)
 	}
 }
+
+var coldT0 = time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
