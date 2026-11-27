@@ -78,7 +78,7 @@ Every step leaves core and hosted building and tested.
    `shard/export_s3.go`, `lambda_aws.go`; `ingest/cloudwatch.go`, `llm_bedrock.go`;
    `config/ssm.go`; `coordinator/tail_fanout_redis.go`; `backends/dlq/dlqs3`;
    `cmd/compute` (the reader set).
-2. **Mains out of core first.** An ext imports core, so a core `cmd/*` main cannot
+2. **Mains out of core first** (done, 2026-11-27: `examples/single-machine` holds the four mains, Dockerfile, compose and `e2e/`, which passes; hosted builds its own shard and compute mains from core's `cmd/*/server`; `examples/ha-aws` waits for step 22). An ext imports core, so a core `cmd/*` main cannot
    import an ext: the moment `config/ssm` leaves, `cmd/api`, `cmd/coordinator` and
    `cmd/shard` could no longer build. So before any move, make each process a
    library (`cmd/api/server` and `cmd/coordinator/server` already are; `cmd/shard`
