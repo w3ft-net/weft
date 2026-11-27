@@ -304,7 +304,7 @@ func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 	}
 	cfgCtx, cfgCancel := context.WithCancel(context.Background())
 	defer cfgCancel()
-	cfgPtr := weftcfg.Watch(cfgCtx, appName, *awsRegion, 60*time.Second)
+	cfgPtr := weftcfg.Watch(cfgCtx, weftcfg.SourceFromEnv(*awsRegion), 60*time.Second)
 	bootCfg := cfgPtr.Load()
 
 	// Post-provisioner db-dependent setup: usage metering, customer

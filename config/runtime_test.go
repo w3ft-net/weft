@@ -74,17 +74,17 @@ func TestOverlay_AppliesRecognizedValues(t *testing.T) {
 	}
 }
 
-func TestLoadWithClient_MissingParamFallsBack(t *testing.T) {
-	client := &fakeSSM{err: errors.New("ParameterNotFound: not found")}
-	r := loadWithClient(context.Background(), client, "weft")
+func TestSSMSource_MissingParamIsEmpty(t *testing.T) {
+	src := SSMSource{AppName: "weft", client: &fakeSSM{err: errors.New("ParameterNotFound: not found")}}
+	r := Load(context.Background(), src)
 	if r.LoginRPM != Defaults().LoginRPM {
 		t.Errorf("expected defaults on missing param, got %d", r.LoginRPM)
 	}
 }
 
-func TestLoadWithClient_AppliesBlob(t *testing.T) {
-	client := &fakeSSM{value: `{"RATELIMIT_LOGIN_RPM": "99", "OTHER_TEAM_KEY": "ignored"}`}
-	r := loadWithClient(context.Background(), client, "weft")
+func TestSSMSource_AppliesBlob(t *testing.T) {
+	src := SSMSource{AppName: "weft", client: &fakeSSM{value: `{"RATELIMIT_LOGIN_RPM": "99", "OTHER_TEAM_KEY": "ignored"}`}}
+	r := Load(context.Background(), src)
 	if r.LoginRPM != 99 {
 		t.Errorf("LoginRPM: got %d, want 99", r.LoginRPM)
 	}
@@ -93,9 +93,8 @@ func TestLoadWithClient_AppliesBlob(t *testing.T) {
 	}
 }
 
-func TestLoadWithClient_InvalidJSONFallsBack(t *testing.T) {
-	client := &fakeSSM{value: `not-json`}
-	r := loadWithClient(context.Background(), client, "weft")
+func TestSSMSource_InvalidJSONFallsBack(t *testing.T) {
+	r := Load(context.Background(), SSMSource{AppName: "weft", client: &fakeSSM{value: `not-json`}})
 	if r.LoginRPM != Defaults().LoginRPM {
 		t.Errorf("expected defaults on bad JSON")
 	}

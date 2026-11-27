@@ -148,21 +148,13 @@ func Run(fl *Flags, dep *deployment.Deployment, own *Own) {
 	// daily Stripe usage reporter).
 	ext.Serving(ctx, srv)
 
-	// Kick off the runtime-config watcher. Reads /weft/config/app from
-	// SSM on boot and re-reads every 60s, atomically swapping the
-	// pointer every rate-limit, body-cap, and grpc-cap consumer holds.
-	// Missing param / AWS errors fall through to compile-time defaults.
-	appName := os.Getenv("APP_NAME")
-	if appName == "" {
-		appName = "weft"
-	}
-	// AWS SDK v2's default chain doesn't reliably resolve region from
-	// IMDS; pass it explicitly. AWS_REGION is set by user-data on EC2.
+	// Kick off the runtime-config watcher: the YAML file (or SSM, with
+	// WEFT_CONFIG_SOURCE=ssm) overridden by the environment, re-read every 60s
+	// and on SIGHUP, atomically swapping the pointer every rate-limit, body-cap
+	// and grpc-cap consumer holds. A source that cannot be read falls through to
+	// compile-time defaults. AWS_REGION, when set, is where SSM is.
 	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = "us-east-2"
-	}
-	srv.SetConfig(config.Watch(ctx, appName, region, 60*time.Second))
+	srv.SetConfig(config.Watch(ctx, config.SourceFromEnv(region), 60*time.Second))
 
 	weftsdk.Infof(ctx, "weft-api listening on :%s (coordinator: %s)", *port, *coordAddr)
 	if err := http.ListenAndServe(":"+*port, srv.Handler()); err != nil {

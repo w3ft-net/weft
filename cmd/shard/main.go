@@ -135,7 +135,7 @@ func main() {
 	}
 	cfgCtx, cfgCancel := context.WithCancel(context.Background())
 	defer cfgCancel()
-	cfgPtr := weftcfg.Watch(cfgCtx, appName, region, 60*time.Second)
+	cfgPtr := weftcfg.Watch(cfgCtx, weftcfg.SourceFromEnv(region), 60*time.Second)
 	srv.CfgPtr = cfgPtr
 	bootCfg := cfgPtr.Load()
 

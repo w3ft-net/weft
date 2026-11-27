@@ -33,6 +33,14 @@ in `e2e/` run against:
 
 The module depends on `warp` and `warp-lua`; see `go.mod`.
 
+## Runtime settings
+
+Rate limits, body caps, timeouts and version floors are flat `UPPER_SNAKE: value`
+pairs (the keys are in `config/runtime.go`). They come from the YAML file at
+`WEFT_CONFIG_FILE` (default `/etc/weft/config.yaml`; absent is fine), overridden
+by environment variables of the same name. They reload every minute and on
+SIGHUP. `WEFT_CONFIG_SOURCE=ssm` reads an AWS SSM parameter instead of the file.
+
 ## Documentation
 
 - `docs/architecture.md`: system overview

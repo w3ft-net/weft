@@ -1,30 +1,25 @@
-// Package config holds runtime-tunable settings that live in SSM and can
-// be overridden out-of-band via `kevcons config set` or a raw
-// `aws ssm put-parameter --overwrite`. Everything here is read at boot
-// and refreshed on a 60-second tick; every consumer reads from an
-// atomic.Pointer so overrides propagate within that window without a
-// restart.
+// Package config holds the runtime-tunable settings (rate limits, body caps,
+// timeouts, version floors). A Source supplies a flat map of UPPER_SNAKE keys to
+// values; the Runtime is Defaults() with the recognized keys applied. Everything
+// is read at boot and refreshed on a tick (and on SIGHUP); every consumer reads
+// from an atomic.Pointer so a change propagates without a restart.
 //
-// The on-disk shape is the single aggregated kevcons blob at
-// /{appName}/config/app — a JSON object of string keys → string values.
-// Keys we don't recognize are ignored (other teams' settings).
-// Unknown/empty values for keys we do recognize fall through to the
-// compile-time Defaults().
+// Keys we don't recognize are ignored. Unknown/empty values for keys we do
+// recognize fall through to the compile-time Defaults().
 package config
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	weftsdk "github.com/w3ft-net/weft-go"
+	"os"
+	"os/signal"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	weftsdk "github.com/w3ft-net/weft-go"
 )
 
 // Runtime is the full set of tunable limits for the coordinator, api,
@@ -174,12 +169,6 @@ const (
 	keyWeftdHardFloor         = "WEFTD_HARD_FLOOR"
 )
 
-// paramPath returns the SSM path the kevcons config-set command writes
-// to for a Go app (see kevcons/cmd/config.go resolveConfigStore).
-func paramPath(appName string) string {
-	return fmt.Sprintf("/%s/config/app", appName)
-}
-
 // Overlay applies any keys from blob that we recognize onto r. Unknown
 // keys and unparseable values are ignored (logged, but not fatal) so
 // one bad entry can't break the whole config refresh.
@@ -241,64 +230,29 @@ func overlayString(blob map[string]string, key string, dst *string) {
 	}
 }
 
-// ssmClient is a tiny interface so tests can substitute a fake.
-type ssmClient interface {
-	GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
-}
-
-// Load fetches /{appName}/config/app from SSM and returns the
-// defaults-with-overlay. Any failure (param missing, AWS unreachable,
-// JSON malformed) falls back to defaults with a log line — we never
-// fail startup over config. Region is required because the AWS SDK
-// v2's default chain doesn't always resolve a region from instance
-// metadata the way v1 did; passing it explicitly is the reliable path.
-func Load(ctx context.Context, appName, region string) *Runtime {
-	opts := []func(*awsconfig.LoadOptions) error{}
-	if region != "" {
-		opts = append(opts, awsconfig.WithRegion(region))
-	}
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
-	if err != nil {
-		weftsdk.Errorf(ctx, "config: AWS config load failed, using defaults: %v", err)
-		return Defaults()
-	}
-	return loadWithClient(ctx, ssm.NewFromConfig(cfg), appName)
-}
-
-func loadWithClient(ctx context.Context, client ssmClient, appName string) *Runtime {
+// Load is Defaults() with src's values applied. A source that fails leaves the
+// defaults: a deployment never fails to start over config.
+func Load(ctx context.Context, src Source) *Runtime {
 	r := Defaults()
-	name := paramPath(appName)
-	out, err := client.GetParameter(ctx, &ssm.GetParameterInput{Name: &name})
-	if err != nil || out == nil || out.Parameter == nil || out.Parameter.Value == nil {
-		// Missing param is the common case pre-seed; don't noise the
-		// logs for it. Only log if AWS itself complains.
-		if err != nil && !isParamNotFound(err) {
-			weftsdk.Errorf(ctx, "config: SSM GetParameter %s failed, using defaults: %v", name, err)
-		}
-		return r
-	}
-	var blob map[string]string
-	if err := json.Unmarshal([]byte(*out.Parameter.Value), &blob); err != nil {
-		weftsdk.Infof(ctx, "config: %s is not valid JSON, using defaults: %v", name, err)
+	blob, err := src.Load(ctx)
+	if err != nil {
+		weftsdk.Errorf(ctx, "config: %v, using defaults", err)
 		return r
 	}
 	r.Overlay(blob)
 	return r
 }
 
-func isParamNotFound(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "ParameterNotFound")
-}
-
-// Watch kicks off a background refresher that re-reads SSM every
-// interval and atomically swaps ptr when the loaded Runtime differs
-// from the current one. Returns the pointer immediately so callers can
-// start serving with the initial load while the goroutine runs
-// forever until ctx is cancelled.
-func Watch(ctx context.Context, appName, region string, interval time.Duration) *atomic.Pointer[Runtime] {
+// Watch loads src now and reloads it every interval and on SIGHUP, atomically
+// swapping the returned pointer when the result differs. A reload that fails
+// keeps the values in force. It runs until ctx is cancelled.
+func Watch(ctx context.Context, src Source, interval time.Duration) *atomic.Pointer[Runtime] {
 	ptr := new(atomic.Pointer[Runtime])
-	ptr.Store(Load(ctx, appName, region))
+	ptr.Store(Load(ctx, src))
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
+		defer signal.Stop(hup)
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -306,12 +260,18 @@ func Watch(ctx context.Context, appName, region string, interval time.Duration) 
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				next := Load(ctx, appName, region)
-				cur := ptr.Load()
-				if !reflect.DeepEqual(cur, next) {
-					weftsdk.Infof(ctx, "config: runtime config changed, applying new values")
-					ptr.Store(next)
-				}
+			case <-hup:
+			}
+			blob, err := src.Load(ctx)
+			if err != nil {
+				weftsdk.Errorf(ctx, "config: reload failed, keeping the current values: %v", err)
+				continue
+			}
+			next := Defaults()
+			next.Overlay(blob)
+			if !reflect.DeepEqual(ptr.Load(), next) {
+				weftsdk.Infof(ctx, "config: runtime config changed, applying new values")
+				ptr.Store(next)
 			}
 		}
 	}()
