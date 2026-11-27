@@ -31,6 +31,7 @@ services:
       SHARD_SECRET: e2e-shard-secret
       COMPUTE_ADDR: compute:9010
       COORDINATOR_LOCAL_ADDR: 0.0.0.0:9025
+      SHARE_URL_BASE: http://localhost:18080
       # The Docker launcher: shards are sibling containers that bind-mount a
       # per-shard directory of the host path, which the coordinator also sees
       # at WEFT_LOCAL_DATA_ROOT.
@@ -56,6 +57,8 @@ services:
       ROLE: api
       DB_DSN: /var/lib/weft/weft.db
       COORDINATOR_ADDR: coordinator:9025
+      BASE_URL: http://localhost:18080
+      API_BASE_URL: http://localhost:18080
       WEFT_BASIC_AUTH_USER: e2e
       WEFT_BASIC_AUTH_PASSWORD: e2e-password
     volumes:

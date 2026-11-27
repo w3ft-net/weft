@@ -63,7 +63,7 @@ func TestInstallWeftdPointsAtVersionedDeb(t *testing.T) {
 			continue
 		}
 		body := string(d.body)
-		want := "https://releases.w3ft.net/weftd/v" + string(ver) + "/weftd_" + string(ver) + "_amd64.deb"
+		want := "https://<your-releases-host>/weftd/v" + string(ver) + "/weftd_" + string(ver) + "_amd64.deb"
 		if !strings.Contains(body, want) {
 			t.Errorf("install doc does not contain %s", want)
 		}

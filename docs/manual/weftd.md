@@ -23,7 +23,7 @@ source](connect-source.md).
 Download weftd from the **Downloads** page. Or just use curl:
 
 ```
-curl -LO https://releases.w3ft.net/weftd/v{{WEFTD_VERSION}}/weftd_{{WEFTD_VERSION}}_amd64.deb
+curl -LO https://<your-releases-host>/weftd/v{{WEFTD_VERSION}}/weftd_{{WEFTD_VERSION}}_amd64.deb
 sudo dpkg -i weftd_{{WEFTD_VERSION}}_amd64.deb
 ```
 

@@ -10,6 +10,7 @@ type Flags struct {
 	DBDSN            string
 	CoordinatorAddr  string
 	BaseURL          string
+	APIBaseURL       string
 	RenderSyslogPort int
 	RedisAddr        string
 	RedisTLS         bool
@@ -21,7 +22,8 @@ func Define(fs *flag.FlagSet) *Flags {
 	fs.StringVar(&f.Port, "port", "8080", "HTTP listen port")
 	fs.StringVar(&f.DBDSN, "db-dsn", "", "PostgreSQL DSN")
 	fs.StringVar(&f.CoordinatorAddr, "coordinator", "localhost:9025", "coordinator gRPC address (its --local-addr; the public port serves only ingest RPCs)")
-	fs.StringVar(&f.BaseURL, "base-url", "https://w3ft.net", "base URL for magic links")
+	fs.StringVar(&f.BaseURL, "base-url", "", "required: the web app's external origin, e.g. https://weft.example.com (magic links, CORS)")
+	fs.StringVar(&f.APIBaseURL, "api-base-url", "", "required: the api's own external origin, e.g. https://api.weft.example.com (ingest URLs shown to users)")
 	fs.IntVar(&f.RenderSyslogPort, "render-syslog-port", 9023, "TCP port for the Render TLS syslog listener; the NLB terminates TLS and forwards plaintext here")
 	fs.StringVar(&f.RedisAddr, "redis-addr", "", "Redis/Valkey address for the shared ingest-schema cache (host:port); empty disables it, every schema lookup falls through to Postgres directly")
 	fs.BoolVar(&f.RedisTLS, "redis-tls", false, "use TLS for the Redis connection (required for ElastiCache in-transit encryption)")

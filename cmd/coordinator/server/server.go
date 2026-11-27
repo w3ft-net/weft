@@ -139,6 +139,9 @@ func ParseFlags() *Flags {
 func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 	logFile := flags.logFile
 	fl := &flags.Flags
+	if fl.ShareURLBase == "" {
+		log.Fatalf("coordinator: --share-url-base is required: the origin clipboard short links are built on")
+	}
 	if err := validate(dep, own); err != nil {
 		log.Fatalf("coordinator: %v", err)
 	}

@@ -585,7 +585,7 @@ func (s *Server) IngestStream(stream pb.WeftCoordinator_IngestStreamServer) erro
 	if floor := s.runtimeCfg().WeftdHardFloor; floor != "" {
 		if clientBelow(clientID, floor) {
 			return status.Errorf(codes.FailedPrecondition,
-				"weftd version %q is below the hard floor %q — upgrade weftd; see https://releases.w3ft.net/weftd/latest/",
+				"weftd version %q is below the hard floor %q — upgrade weftd",
 				clientID, floor)
 		}
 	}

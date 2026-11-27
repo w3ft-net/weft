@@ -1,5 +1,7 @@
+  -api-base-url string
+    	required: the api's own external origin, e.g. https://api.weft.example.com (ingest URLs shown to users)
   -base-url string
-    	base URL for magic links (default "https://w3ft.net")
+    	required: the web app's external origin, e.g. https://weft.example.com (magic links, CORS)
   -coordinator string
     	coordinator gRPC address (its --local-addr; the public port serves only ingest RPCs) (default "localhost:9025")
   -db-dsn string

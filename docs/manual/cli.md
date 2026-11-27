@@ -21,7 +21,7 @@ Download the binary for your platform (Linux or macOS, amd64 or arm64) from the
 Downloads page, or fetch it directly:
 
 ```
-curl -Lo weft https://releases.w3ft.net/weft/latest/weft-darwin-arm64
+curl -Lo weft https://<your-releases-host>/weft/latest/weft-darwin-arm64
 chmod +x weft && sudo mv weft /usr/local/bin/
 ```
 

@@ -24,8 +24,8 @@ that requires its own token, but it's probably tidier if it's got its own.</p>
 <h3 id="2-add-the-drain">2. Add the drain</h3>
 <p>For each Heroku app you want to ingest, run <code>heroku drains:add</code> with the
 token embedded in the weft drain URL. Your token goes in the URL like so:</p>
-<pre><code>heroku drains:add &quot;https://api.w3ft.net/api/ingest/heroku/wft_a1b2c3d4e5f6...&quot; -a myapp
-heroku drains:add &quot;https://api.w3ft.net/api/ingest/heroku/wft_a1b2c3d4e5f6...&quot; -a sister-app
+<pre><code>heroku drains:add &quot;https://&lt;your-api-host&gt;/api/ingest/heroku/wft_a1b2c3d4e5f6...&quot; -a myapp
+heroku drains:add &quot;https://&lt;your-api-host&gt;/api/ingest/heroku/wft_a1b2c3d4e5f6...&quot; -a sister-app
 </code></pre>
 <p>Heroku starts delivering within a few seconds. Then confirm rows are landing
 and, if you want nice, speedy lookups, <a href="/manual/overview#sampling-logs-for-a-schema">approve a

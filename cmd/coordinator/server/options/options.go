@@ -35,7 +35,7 @@ func Define(fs *flag.FlagSet) *Flags {
 	fs.StringVar(&f.RedisAddr, "redis-addr", "", "Redis address for cross-coordinator tail -f fan-out (host:port); empty disables cross-coordinator fan-out, tail stays local to this process")
 	fs.BoolVar(&f.RedisTLS, "redis-tls", false, "use TLS for the Redis connection (required for ElastiCache in-transit encryption)")
 	fs.StringVar(&f.AWSRegion, "region", "us-east-2", "AWS region for shard EC2 launches + volume management")
-	fs.StringVar(&f.ShareURLBase, "share-url-base", "https://w3ft.net", "origin `clipboard` short links are built on")
+	fs.StringVar(&f.ShareURLBase, "share-url-base", "", "required: origin `clipboard` short links are built on, e.g. https://weft.example.com")
 	fs.StringVar(&f.Customer, "customer", "", "fallback customer for dev/docker (queries pass customer per-request)")
 	fs.StringVar(&f.DBDSN, "db-dsn", "", "PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)")
 	fs.StringVar(&f.QueryLogPath, "query-log", "/var/log/weft/queries.log", "path for the query-audit log; falls back to stderr if unwritable")

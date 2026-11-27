@@ -104,7 +104,7 @@ type TokenInfo struct {
 // Keep the split explicit so a new endpoint has to pick its intent
 // rather than inheriting the wrong timeout by accident.
 type HTTPCoordinator struct {
-	baseURL      string // e.g., "https://api.w3ft.net"
+	baseURL      string // e.g., "https://api.weft.example.com"
 	token        string // JWT for Authorization header
 	org          string // X-Active-Org for the user's currently-selected org
 	clientID     string // X-Weft-Client; set by cmd/weft via SetClientID

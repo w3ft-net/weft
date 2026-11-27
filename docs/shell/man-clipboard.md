@@ -25,7 +25,7 @@ clipboard /bin/<name> --range=<spec> -- <script-args>...
 ## DESCRIPTION
 
 `clipboard` records the current shell's view of a `/bin/` script and
-pushes a short link to it (`https://w3ft.net/s/k3Fz9aQ2xB`; the host depends on your deployment) onto the
+pushes a short link to it (`https://<your-host>/s/k3Fz9aQ2xB`) onto the
 system clipboard. A teammate who opens the link — signed in to the
 same org — lands in the web shell with the script invocation
 pre-filled, ready to run with a single Enter. The script must already

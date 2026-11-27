@@ -72,3 +72,15 @@ func validate(dep *deployment.Deployment) error {
 	}
 	return nil
 }
+
+// validateURLs is why an api without its external origins does not start: the
+// urls it hands users (magic links, ingest endpoints) have no sensible default.
+func validateURLs(fl *Flags) error {
+	if fl.BaseURL == "" {
+		return errors.New("--base-url is required: the web app's external origin")
+	}
+	if fl.APIBaseURL == "" {
+		return errors.New("--api-base-url is required: the api's own external origin")
+	}
+	return nil
+}

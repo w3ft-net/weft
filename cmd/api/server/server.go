@@ -52,6 +52,9 @@ func Run(fl *Flags, dep *deployment.Deployment, own *Own) {
 	port, coordAddr, baseURL := &fl.Port, &fl.CoordinatorAddr, &fl.BaseURL
 	renderSyslogPort := &fl.RenderSyslogPort
 
+	if err := validateURLs(fl); err != nil {
+		log.Fatalf("api: %v", err)
+	}
 	if err := validate(dep); err != nil {
 		log.Fatalf("api: %v", err)
 	}
@@ -61,6 +64,7 @@ func Run(fl *Flags, dep *deployment.Deployment, own *Own) {
 	}
 
 	srv := weftapi.NewServer(*coordAddr, *baseURL)
+	srv.SetAPIBaseURL(fl.APIBaseURL)
 	srv.SetIdentity(dep.Authn.API)
 	if app := web.Handler(); app != nil {
 		// This binary carries the web app (-tags webembed): serve it at the root,

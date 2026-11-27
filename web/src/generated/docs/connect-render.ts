@@ -26,7 +26,7 @@ that requires its own token, but it's probably tidier if it's got its own.</p>
 <p>In the Render dashboard, click <strong>Integrations → Observability</strong> in the sidebar.
 Scroll down to <strong>Log Streams</strong>, add a stream, and configure a generic/custom
 syslog destination. Paste in the token from Step 1, along with the endpoint
-(<code>render.syslog.w3ft.net:6514</code>).</p>
+(<code>render.syslog.&lt;your-domain&gt;:6514</code>).</p>
 <p>Render starts streaming within a few seconds. If you want nice, speedy lookups,
 <a href="/manual/overview#sampling-logs-for-a-schema">approve a schema</a>. Render
 schemas are per service, so it covers the web, cron and build files under it.</p>
@@ -76,7 +76,7 @@ Stream</strong>, and click <strong>+ Add destination</strong>. Choose <strong>Cu
 <tbody>
 <tr>
 <td>Endpoint</td>
-<td><code>https://api.w3ft.net/api/ingest/otlp</code></td>
+<td><code>https://&lt;your-api-host&gt;/api/ingest/otlp</code></td>
 </tr>
 <tr>
 <td>API key</td>

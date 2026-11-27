@@ -68,7 +68,8 @@ type Server struct {
 	alertKinds       *alerting.Registry // the kinds a save of /etc/notify.yaml may name; nil is the core's
 	identity         Identity           // authenticates the api's users; see SetIdentity
 	coordAddr        string             // coordinator gRPC address
-	baseURL          string             // e.g., https://w3ft.net
+	baseURL          string             // the web app's external URL
+	apiURL           string             // the api's own external URL
 
 	// Coordinator gRPC client (connected lazily via Connect).
 	coordConn   *grpc.ClientConn
@@ -191,12 +192,11 @@ func (s *Server) currentConfig() *config.Runtime {
 	return s.cfgPtr.Load()
 }
 
-// apiBaseURL returns the API's own external URL (e.g., https://api.w3ft.net).
-// Derived from baseURL by inserting "api." prefix.
-func (s *Server) apiBaseURL() string {
-	// https://w3ft.net → https://api.w3ft.net
-	return strings.Replace(s.baseURL, "://", "://api.", 1)
-}
+// apiBaseURL returns the API's own external URL, as set by SetAPIBaseURL.
+func (s *Server) apiBaseURL() string { return s.apiURL }
+
+// SetAPIBaseURL sets the API's own external URL (e.g. https://api.weft.example.com).
+func (s *Server) SetAPIBaseURL(u string) { s.apiURL = u }
 
 // NewServer creates an API server. Wires a defaults-backed config
 // pointer + limiter so callers that don't call SetConfig (tests,

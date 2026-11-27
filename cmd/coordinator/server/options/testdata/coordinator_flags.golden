@@ -25,4 +25,4 @@
   -region string
     	AWS region for shard EC2 launches + volume management (default "us-east-2")
   -share-url-base clipboard
-    	origin clipboard short links are built on (default "https://w3ft.net")
+    	required: origin clipboard short links are built on, e.g. https://weft.example.com

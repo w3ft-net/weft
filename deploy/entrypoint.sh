@@ -11,6 +11,7 @@ case "$ROLE" in
     [ -n "${COORDINATOR_LOCAL_ADDR:-}" ] && ARGS+=(--local-addr="$COORDINATOR_LOCAL_ADDR")
     [ -n "${DB_DSN:-}" ]                 && ARGS+=(--db-dsn="$DB_DSN")
     [ -n "${COMPUTE_ADDR:-}" ]           && ARGS+=(--compute="$COMPUTE_ADDR")
+    [ -n "${SHARE_URL_BASE:-}" ]         && ARGS+=(--share-url-base="$SHARE_URL_BASE")
     exec weft-coordinator "${ARGS[@]}"
     ;;
 
@@ -35,6 +36,8 @@ case "$ROLE" in
     ARGS=(--port="${API_PORT:-8080}")
     [ -n "${COORDINATOR_ADDR:-}" ] && ARGS+=(--coordinator="$COORDINATOR_ADDR")
     [ -n "${DB_DSN:-}" ]           && ARGS+=(--db-dsn="$DB_DSN")
+    [ -n "${BASE_URL:-}" ]         && ARGS+=(--base-url="$BASE_URL")
+    [ -n "${API_BASE_URL:-}" ]     && ARGS+=(--api-base-url="$API_BASE_URL")
     exec weft-api "${ARGS[@]}"
     ;;
 

@@ -25,8 +25,8 @@ For each Heroku app you want to ingest, run `heroku drains:add` with the
 token embedded in the weft drain URL. Your token goes in the URL like so:
 
 ```
-heroku drains:add "https://api.w3ft.net/api/ingest/heroku/wft_a1b2c3d4e5f6..." -a myapp
-heroku drains:add "https://api.w3ft.net/api/ingest/heroku/wft_a1b2c3d4e5f6..." -a sister-app
+heroku drains:add "https://<your-api-host>/api/ingest/heroku/wft_a1b2c3d4e5f6..." -a myapp
+heroku drains:add "https://<your-api-host>/api/ingest/heroku/wft_a1b2c3d4e5f6..." -a sister-app
 ```
 
 Heroku starts delivering within a few seconds. Then confirm rows are landing

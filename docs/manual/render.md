@@ -23,7 +23,7 @@ that requires its own token, but it's probably tidier if it's got its own.
 In the Render dashboard, click **Integrations → Observability** in the sidebar.
 Scroll down to **Log Streams**, add a stream, and configure a generic/custom
 syslog destination. Paste in the token from Step 1, along with the endpoint
-(`render.syslog.w3ft.net:6514`).
+(`render.syslog.<your-domain>:6514`).
 
 Render starts streaming within a few seconds. If you want nice, speedy lookups,
 [approve a schema](connect-source.md#sampling-logs-for-a-schema). Render
@@ -54,7 +54,7 @@ Stream**, and click **+ Add destination**. Choose **Custom** and enter:
 
 | Field | Value |
 |---|---|
-| Endpoint | `https://api.w3ft.net/api/ingest/otlp` |
+| Endpoint | `https://<your-api-host>/api/ingest/otlp` |
 | API key | your weft token |
 
 ### Mapping render metrics to log files in weft

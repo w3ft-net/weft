@@ -21,7 +21,7 @@ get used to reaching for the executable in the terminal.</p>
 <h3 id="installation">Installation</h3>
 <p>Download the binary for your platform (Linux or macOS, amd64 or arm64) from the
 Downloads page, or fetch it directly:</p>
-<pre><code>curl -Lo weft https://releases.w3ft.net/weft/latest/weft-darwin-arm64
+<pre><code>curl -Lo weft https://&lt;your-releases-host&gt;/weft/latest/weft-darwin-arm64
 chmod +x weft &amp;&amp; sudo mv weft /usr/local/bin/
 </code></pre>
 <p>Swap <code>darwin-arm64</code> for <code>darwin-amd64</code>, <code>linux-amd64</code> or <code>linux-arm64</code>. Check

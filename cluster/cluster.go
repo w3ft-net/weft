@@ -42,6 +42,8 @@ type Config struct {
 	// BaseURL is the origin the api builds magic links on and the coordinator
 	// builds share links on.
 	BaseURL string `yaml:"base_url"`
+	// APIBaseURL is the api's own external origin.
+	APIBaseURL string `yaml:"api_base_url"`
 	Redis   struct {
 		Addr string `yaml:"addr"`
 		TLS  bool   `yaml:"tls"`
@@ -105,6 +107,7 @@ func (c *Config) Flags(server string) map[string]string {
 			set("coordinator", "localhost:"+local)
 		}
 		set("base-url", c.BaseURL)
+		set("api-base-url", c.APIBaseURL)
 		redis()
 	case Coordinator:
 		if local != "" {

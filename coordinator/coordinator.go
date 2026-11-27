@@ -195,7 +195,7 @@ type Coordinator struct {
 	// Tests override to shorten the wait.
 	ScriptExecutionTimeout time.Duration
 	// ShareURLBase is the absolute base URL `clipboard` short links are
-	// built on. Empty = https://w3ft.net.
+	// built on.
 	ShareURLBase string
 
 	// loweredCache memoizes the decoded planner.LoweredPlan per watch
@@ -287,8 +287,7 @@ type CoordinatorConfig struct {
 	// runLocal. Zero leaves the default in place.
 	ScriptExecutionTimeout time.Duration
 
-	// ShareURLBase is the base URL `clipboard` short links are built on
-	// ("" = https://w3ft.net).
+	// ShareURLBase is the base URL `clipboard` short links are built on.
 	ShareURLBase string
 }
 

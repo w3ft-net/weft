@@ -58,7 +58,7 @@ func EmailLocalPart(email string) string {
 // to a specific membership; the --org flag overrides it per call so
 // people can poke at the demo without editing the file.
 type Config struct {
-	Endpoint string `yaml:"endpoint"` // api base URL, e.g. https://api.w3ft.net
+	Endpoint string `yaml:"endpoint"` // api base URL, e.g. https://api.weft.example.com
 	Token    string `yaml:"token"`    // JWT from the device flow
 	Org      string `yaml:"org"`      // active org slug (sent as X-Active-Org)
 
