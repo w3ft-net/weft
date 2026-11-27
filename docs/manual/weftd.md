@@ -91,7 +91,7 @@ General, box-level settings are top-level keys:
 
 | Key | Definition | Default |
 |---|---|---|
-| `endpoint` | The coordinator's ingest address, `host:port`. | none; required |
+| `endpoint` | The coordinator's ingest address, `host:port`. | none; required unless your weftd build has one baked in |
 | `tls` | Encrypt the connection to the coordinator. Set `false` only for a plaintext coordinator on a private network. | `true` |
 | `token` | Ingest token for your namespace. May instead come from the `WEFTD_TOKEN` environment variable (see [Connect a host](#connect-a-host-with-weftd)). | none; required |
 | `auto_update` | Replace the running binary when a newer release is published (see [Updates](#updates)). | `false` |

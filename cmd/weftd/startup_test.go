@@ -67,3 +67,21 @@ func TestUpdateChecker(t *testing.T) {
 		t.Fatal("a manifest alone must only nag, not apply")
 	}
 }
+
+func TestBakedInDefaultEndpoint(t *testing.T) {
+	old := defaultEndpoint
+	defaultEndpoint = "ingest.example.com:9443"
+	defer func() { defaultEndpoint = old }()
+
+	cfg := Config{Token: "wft_x"}
+	if got := configError(cfg); got != "" {
+		t.Fatalf("a config with no endpoint failed despite a baked-in default: %q", got)
+	}
+	if cfg.endpoint() != "ingest.example.com:9443" {
+		t.Fatalf("endpoint() = %q", cfg.endpoint())
+	}
+	cfg.Endpoint = "other:1"
+	if cfg.endpoint() != "other:1" {
+		t.Fatalf("a configured endpoint lost to the default: %q", cfg.endpoint())
+	}
+}

@@ -11,20 +11,32 @@ import (
 	"github.com/w3ft-net/weft/grpckeepalive"
 )
 
+// defaultEndpoint is the coordinator address a config that names none ships
+// to. It is empty in a plain build, which then requires `endpoint:`; an operator
+// who distributes their own weftd bakes theirs in at link time:
+//
+//	go build -ldflags "-X main.defaultEndpoint=ingest.example.com:9443" ./cmd/weftd
+var defaultEndpoint = ""
+
 // transportConfig is where weftd ships and how: the coordinator's ingest address
-// (required: there is no default) and whether the connection is encrypted (on
+// (required unless the build baked in a default) and whether the connection is encrypted (on
 // unless `tls: false`, which is for a plaintext coordinator on a private network).
 type transportConfig struct {
 	Endpoint string `yaml:"endpoint"` // coordinator ingest address, host:port
 	TLS      *bool  `yaml:"tls"`      // nil = on
 }
 
-func (t transportConfig) endpoint() string { return t.Endpoint }
+func (t transportConfig) endpoint() string {
+	if t.Endpoint == "" {
+		return defaultEndpoint
+	}
+	return t.Endpoint
+}
 func (t transportConfig) tlsEnabled() bool { return t.TLS == nil || *t.TLS }
 
 // validate is why a config without an endpoint does not start.
 func (t transportConfig) validate() error {
-	if t.Endpoint == "" {
+	if t.endpoint() == "" {
 		return errors.New("`endpoint:` is required: the coordinator's ingest address, host:port")
 	}
 	return nil

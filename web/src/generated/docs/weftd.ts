@@ -122,7 +122,7 @@ See <a href="/manual/introduction#paths">Paths</a> for the layout rules.)</p>
 <tr>
 <td><code>endpoint</code></td>
 <td>The coordinator's ingest address, <code>host:port</code>.</td>
-<td>none; required</td>
+<td>none; required unless your weftd build has one baked in</td>
 </tr>
 <tr>
 <td><code>tls</code></td>
