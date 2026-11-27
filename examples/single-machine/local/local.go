@@ -10,16 +10,17 @@ import (
 
 	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/alerting"
-	"github.com/w3ft-net/weft/backends/defaults"
 	"github.com/w3ft-net/weft/backends/history/gitrepo"
 	"github.com/w3ft-net/weft/binscript"
 	"github.com/w3ft-net/weft/cronauthor"
 	"github.com/w3ft-net/weft/dashboard"
 	"github.com/w3ft-net/weft/deployment"
+	"github.com/w3ft-net/weft/ext/backends/sqlite"
+	"github.com/w3ft-net/weft/ext/backends/sqlite/sqlitedb"
+	"github.com/w3ft-net/weft/ext/identity/basic"
+	"github.com/w3ft-net/weft/ext/identity/magiclink"
 	"github.com/w3ft-net/weft/identity/open"
-	"github.com/w3ft-net/weft/deployment/magiclink"
 	"github.com/w3ft-net/weft/mounts"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 // Option adjusts Open.
@@ -38,17 +39,17 @@ const AuthEnv = "WEFT_AUTH"
 type authn struct {
 	deployment.Authn
 	// build, when set, finishes Authn once the stores are open.
-	build func(*defaults.Stores) (deployment.Authn, error)
+	build func(*sqlite.Stores) (deployment.Authn, error)
 }
 
 func authnFromEnv(o *options) (authn, error) {
 	switch mode := os.Getenv(AuthEnv); mode {
 	case "", "basic":
-		basic, err := defaults.BasicFromEnv()
+		id, err := basic.FromEnv()
 		if err != nil {
 			return authn{}, err
 		}
-		return authn{Authn: deployment.Authn{API: &Identity{Basic: basic}, GRPC: basic.Server()}}, nil
+		return authn{Authn: deployment.Authn{API: id, GRPC: id.Credential.Server()}}, nil
 	case "magiclink":
 		secret, err := magiclink.SecretFromEnv()
 		if err != nil {
@@ -62,7 +63,7 @@ func authnFromEnv(o *options) (authn, error) {
 			// The coordinator: sessions are verified, nobody signs in here.
 			return authn{Authn: deployment.Authn{GRPC: ver}}, nil
 		}
-		return authn{build: func(s *defaults.Stores) (deployment.Authn, error) {
+		return authn{build: func(s *sqlite.Stores) (deployment.Authn, error) {
 			id, err := magiclink.New(magiclink.Config{
 				Store: s.Login, Secret: secret, BaseURL: o.baseURL,
 				Mail: magiclink.SMTPMailer{SMTP: alerting.SMTPFromEnv()},
@@ -85,7 +86,7 @@ const DefaultPath = "weft.db"
 type Local struct {
 	*deployment.Deployment
 	// Stores is every store the one database holds.
-	Stores *defaults.Stores
+	Stores *sqlite.Stores
 	// History is the git repository that records tracked files.
 	History *gitrepo.Store
 }
@@ -113,7 +114,7 @@ func Open(path string, opts ...Option) (*Local, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	stores, err := defaults.Open(sdb)
+	stores, err := sqlite.Open(sdb)
 	if err != nil {
 		sdb.Close()
 		return nil, nil, err

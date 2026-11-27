@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/graybeardcorp/warp/pkg/bash"
-	"github.com/w3ft-net/weft/backends/defaults"
 	"github.com/w3ft-net/weft/cmd/coordinator/server"
-	"github.com/w3ft-net/weft/deployment/local"
-	"github.com/w3ft-net/weft/identity"
+	"github.com/w3ft-net/weft/examples/single-machine/local"
 	"github.com/w3ft-net/weft/ext/launcher/docker"
+	"github.com/w3ft-net/weft/identity"
+	"github.com/w3ft-net/weft/identity/open"
 	"github.com/w3ft-net/weft/logdb"
 	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/shape"
@@ -23,13 +23,13 @@ import (
 
 func main() {
 	fl := server.ParseFlags()
-	open, closeOpen, err := local.Open(fl.DBDSN)
+	loc, closeOpen, err := local.Open(fl.DBDSN)
 	if err != nil {
 		log.Fatalf("open database: %v", err)
 	}
 	defer closeOpen()
-	stores := open.Stores
-	server.Run(fl, open.Deployment, &server.Own{
+	stores := loc.Stores
+	server.Run(fl, loc.Deployment, &server.Own{
 		Platform: func(_ context.Context, _, shardSecret string) (logdb.Platform, error) {
 			return docker.FromEnv(shardSecret), nil
 		},
@@ -43,9 +43,9 @@ func main() {
 		},
 		Commands: func(interp *bash.Interpreter, owner shape.Added, _ string, cwd func() string, _ identity.Access, _ string, _, _ time.Time) {
 			witrepo.RegisterCommand(interp, witrepo.Config{
-				Mounts:  open.Mounts.Config(mounts.Session{Owner: owner}),
-				Source:  open.History,
-				Journal: open.History,
+				Mounts:  loc.Mounts.Config(mounts.Session{Owner: owner}),
+				Source:  loc.History,
+				Journal: loc.History,
 				Cwd:     cwd,
 			})
 		},

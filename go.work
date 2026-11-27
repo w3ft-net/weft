@@ -6,6 +6,7 @@ use (
 	./ext/backends/sqlite
 	./ext/config/ssm
 	./ext/identity/basic
+	./ext/identity/magiclink
 	./ext/launcher/docker
 	./ext/launcher/ec2
 	./ext/llm/bedrock

@@ -54,8 +54,8 @@ func TestBasic_Authenticate(t *testing.T) {
 		}
 	}
 	// A zero credential authenticates nobody, not everybody.
-	if (Basic{}).Authenticate(basicHeader("", "")) {
-		t.Error("an unconfigured Basic accepted an empty credential")
+	if (Credential{}).Authenticate(basicHeader("", "")) {
+		t.Error("an unconfigured Credential accepted an empty credential")
 	}
 }
 

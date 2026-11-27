@@ -17,9 +17,8 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	weftapi "github.com/w3ft-net/weft/api"
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/backends/mem"
 	"github.com/w3ft-net/weft/identity"
-	"github.com/w3ft-net/weft/sqlitedb"
 )
 
 type mailbox struct {
@@ -48,16 +47,8 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	db, err := sqlitedb.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store, err := defaults.NewLoginBackend(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.Exec(`INSERT INTO login_emails (email, created_at) VALUES ('me@example.test', 'x')`)
+	store := mem.NewLogin()
+	store.Allow("me@example.test")
 	mail := &mailbox{ch: make(chan struct{}, 4)}
 	id, err := New(Config{Store: store, Secret: secret, BaseURL: "https://weft.example.test", Mail: mail})
 	if err != nil {

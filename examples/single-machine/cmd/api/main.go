@@ -8,7 +8,7 @@ import (
 	"log"
 
 	"github.com/w3ft-net/weft/cmd/api/server"
-	"github.com/w3ft-net/weft/deployment/local"
+	"github.com/w3ft-net/weft/examples/single-machine/local"
 )
 
 func main() {

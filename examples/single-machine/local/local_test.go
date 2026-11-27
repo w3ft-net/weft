@@ -5,15 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/w3ft-net/weft/backends/defaults"
+	"github.com/w3ft-net/weft/ext/identity/basic"
 )
 
 // An open deployment with no credential configured must not start: Open is
 // where the process reads its secrets.
 func TestOpen_RefusesWithoutACredential(t *testing.T) {
-	t.Setenv(defaults.BasicUserEnv, "")
-	t.Setenv(defaults.BasicPasswordEnv, "")
-	if _, _, err := Open(filepath.Join(t.TempDir(), "weft.db")); !errors.Is(err, defaults.ErrNoCredential) {
+	t.Setenv(basic.UserEnv, "")
+	t.Setenv(basic.PasswordEnv, "")
+	if _, _, err := Open(filepath.Join(t.TempDir(), "weft.db")); !errors.Is(err, basic.ErrNoCredential) {
 		t.Fatalf("Open() = %v, want ErrNoCredential", err)
 	}
 }
@@ -21,8 +21,8 @@ func TestOpen_RefusesWithoutACredential(t *testing.T) {
 // What Open returns is a complete deployment: every part a process needs, and
 // both halves of the credential.
 func TestOpen_BuildsEveryRequiredPart(t *testing.T) {
-	t.Setenv(defaults.BasicUserEnv, "u")
-	t.Setenv(defaults.BasicPasswordEnv, "p")
+	t.Setenv(basic.UserEnv, "u")
+	t.Setenv(basic.PasswordEnv, "p")
 	l, closeOpen, err := Open(filepath.Join(t.TempDir(), "weft.db"))
 	if err != nil {
 		t.Fatal(err)
