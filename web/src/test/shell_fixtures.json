@@ -1,0 +1,156 @@
+[
+  {
+    "name": "root listing",
+    "files": [
+      {
+        "path": "/bin/hello",
+        "content": "echo hi"
+      },
+      {
+        "path": "/tmp/scratch",
+        "content": "temp"
+      }
+    ],
+    "cases": [
+      {
+        "name": "ls / ships",
+        "command": "ls /",
+        "want_dispatch": "ls /"
+      }
+    ]
+  },
+  {
+    "name": "bin operations",
+    "files": [
+      {
+        "path": "/bin/hello",
+        "content": "echo hi"
+      },
+      {
+        "path": "/bin/check",
+        "content": "#!/usr/bin/env lua\nprint('ok')"
+      }
+    ],
+    "cases": [
+      {
+        "name": "ls /bin ships",
+        "command": "ls /bin",
+        "want_dispatch": "ls /bin"
+      },
+      {
+        "name": "cat /bin/hello ships",
+        "command": "cat /bin/hello",
+        "want_dispatch": "cat /bin/hello"
+      },
+      {
+        "name": "cat nonexistent ships (server reports the error)",
+        "command": "cat /bin/nope",
+        "want_dispatch": "cat /bin/nope"
+      }
+    ]
+  },
+  {
+    "name": "log queries",
+    "files": [
+      {
+        "path": "/bin/hello",
+        "content": "echo hi"
+      }
+    ],
+    "cases": [
+      {
+        "name": "cat /log/\u003capp\u003e ships",
+        "command": "cat /log/myapp.log",
+        "want_dispatch": "cat /log/myapp.log"
+      },
+      {
+        "name": "ls /log ships",
+        "command": "ls /log",
+        "want_dispatch": "ls /log"
+      }
+    ]
+  },
+  {
+    "name": "tmp operations",
+    "files": [
+      {
+        "path": "/tmp/notes.txt",
+        "content": "remember this"
+      }
+    ],
+    "cases": [
+      {
+        "name": "cat /tmp/notes.txt ships",
+        "command": "cat /tmp/notes.txt",
+        "want_dispatch": "cat /tmp/notes.txt"
+      },
+      {
+        "name": "ls /tmp ships",
+        "command": "ls /tmp",
+        "want_dispatch": "ls /tmp"
+      }
+    ]
+  },
+  {
+    "name": "cron.d operations",
+    "files": [
+      {
+        "path": "/cron.d/heartbeat",
+        "content": "# schedule: */5 * * * *\ncurl localhost/health\n"
+      }
+    ],
+    "cases": [
+      {
+        "name": "ls /cron.d ships",
+        "command": "ls /cron.d",
+        "want_dispatch": "ls /cron.d"
+      },
+      {
+        "name": "cat /cron.d/heartbeat ships",
+        "command": "cat /cron.d/heartbeat",
+        "want_dispatch": "cat /cron.d/heartbeat"
+      }
+    ]
+  },
+  {
+    "name": "rm on read-only mount",
+    "files": [
+      {
+        "path": "/bin/hello",
+        "content": "echo hi"
+      }
+    ],
+    "cases": [
+      {
+        "name": "rm /log/x ships",
+        "command": "rm /log/myapp.log",
+        "want_dispatch": "rm /log/myapp.log"
+      }
+    ]
+  },
+  {
+    "name": "etc subdirectories",
+    "files": [
+      {
+        "path": "/etc/dashboards/ops.yaml",
+        "content": "title: ops"
+      },
+      {
+        "path": "/etc/notify.yaml",
+        "content": "aliases: {}"
+      }
+    ],
+    "cases": [
+      {
+        "name": "ls /etc ships",
+        "command": "ls /etc",
+        "want_dispatch": "ls /etc"
+      },
+      {
+        "name": "cat /etc/notify.yaml ships",
+        "command": "cat /etc/notify.yaml",
+        "want_dispatch": "cat /etc/notify.yaml"
+      }
+    ]
+  }
+]

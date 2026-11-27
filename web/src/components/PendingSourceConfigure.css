@@ -1,0 +1,282 @@
+/* Pending-source onboarding, the schema editor, the configured-sources
+   list and the add-kinesis form. All render inside Namespaces panes, so
+   rows are flat lines separated by dashed rules rather than boxes. */
+
+.psc-row {
+  border-bottom: 1px dashed var(--border);
+}
+.psc-row:last-child { border-bottom: none; }
+
+.psc-header {
+  display: grid;
+  grid-template-columns: 3ch auto auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0 1.5ch;
+  width: 100%;
+  padding: 3px 0;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.psc-header:hover { background: var(--bg-elevated); }
+.psc-header:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.psc-header-static { cursor: default; }
+.psc-header-static:hover { background: transparent; }
+
+.psc-service-name { font-weight: 700; color: var(--text-bright); }
+
+.psc-meta {
+  color: var(--text-dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.psc-chevron { color: var(--text-dim); text-align: center; }
+
+.psc-body { padding: 8px 0 14px 3ch; }
+
+.psc-prose {
+  color: var(--text-primary);
+  margin: 0 0 12px;
+  max-width: 80ch;
+}
+
+.psc-prose strong { color: var(--text-bright); }
+.psc-prose code { color: var(--accent); }
+
+.psc-hint {
+  color: var(--text-dim);
+  margin: 4px 0 0;
+  max-width: 80ch;
+}
+
+/* Sample block — looks like the output of `head` in a terminal. */
+.psc-sample-label {
+  display: flex;
+  gap: 1ch;
+  color: var(--text-secondary);
+  margin-bottom: 0;
+  padding: 2px 1ch;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-bottom: none;
+}
+
+.psc-prompt { color: var(--accent); }
+.psc-sample-count { margin-left: auto; color: var(--text-dim); }
+
+.psc-sample {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  padding: 6px 1ch;
+  margin: 0 0 6px;
+  max-height: 400px;
+  overflow: auto;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.psc-sample-line { white-space: pre; }
+
+/* The detected timestamp, marked the way a pager highlights a search hit. */
+.psc-highlight-ts {
+  background: var(--accent);
+  color: var(--bg-deep);
+}
+
+.psc-textbtn {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 2px 0;
+}
+.psc-textbtn::before { content: '… '; color: var(--text-dim); }
+.psc-textbtn:hover,
+.psc-textbtn:focus-visible { text-decoration: underline; text-underline-offset: 3px; outline: none; }
+
+/* Advanced fields: two columns of `key: [input]` rows. */
+.psc-advanced {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 4ch;
+  margin: 12px 0 8px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.psc-advanced-stack {
+  grid-template-columns: minmax(0, 60ch);
+  margin-top: 6px;
+  padding-top: 0;
+  border-top: none;
+}
+
+.psc-field {
+  display: grid;
+  grid-template-columns: 30ch minmax(0, 1fr);
+  align-items: center;
+}
+
+.psc-advanced-stack .psc-field { grid-template-columns: 12ch minmax(0, 1fr); }
+
+.psc-label { color: var(--text-dim); white-space: nowrap; }
+.psc-opt { color: var(--border-bright); margin-left: 0.5ch; }
+
+.psc-field input,
+.psc-field select { width: 100%; min-width: 0; }
+
+.psc-error {
+  margin: 8px 0;
+  padding: 2px 1ch;
+  border-left: 2px solid var(--red);
+  background: var(--red-bg);
+  color: var(--red);
+}
+
+.psc-actions {
+  display: flex;
+  gap: 2ch;
+  align-items: center;
+  margin-top: 12px;
+}
+
+/* ── AddKinesisSource ────────────────────────────── */
+.psc-row-form {
+  margin-top: 10px;
+  border: 1px dashed var(--border-bright);
+}
+.psc-row-form:last-child { border-bottom: 1px dashed var(--border-bright); }
+.psc-row-form .psc-body { padding: 8px 1.5ch 12px; }
+.psc-form-title { color: var(--text-bright); font-weight: 700; }
+
+/* ── ConfiguredSourcesList ───────────────────────── */
+.csl-list { display: flex; flex-direction: column; }
+
+.csl-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 2ch;
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.csl-row:last-child { border-bottom: none; }
+.csl-row:hover { background: var(--bg-elevated); }
+
+.csl-row-main {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 1.5ch;
+  min-width: 0;
+}
+
+.csl-service { font-weight: 700; color: var(--text-bright); }
+
+.csl-badge { color: var(--text-secondary); }
+.csl-badge-weftd { color: var(--cyan); }
+.csl-badge-kinesis { color: var(--purple); }
+
+.csl-meta {
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.csl-sep::before { content: '│ '; color: var(--border-bright); }
+
+.csl-meta-dim { color: var(--text-muted); }
+
+.csl-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+}
+
+.csl-schema-panel {
+  flex-basis: 100%;
+  margin: 4px 0 6px 2ch;
+}
+
+@media (max-width: 768px) {
+  .psc-advanced { grid-template-columns: 1fr; }
+  .psc-field, .psc-advanced-stack .psc-field { grid-template-columns: 1fr; }
+  .psc-header { grid-template-columns: 3ch auto auto; }
+  .psc-header .psc-meta { grid-column: 2 / -1; }
+  .psc-body { padding-left: 1ch; }
+}
+
+.psc-meter {
+  display: inline-block;
+  width: 12ch;
+  height: 0.8em;
+  vertical-align: baseline;
+  border: 1px solid var(--border);
+}
+.psc-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.psc-preview {
+  margin: 0 0 4px 4.5ch;
+  padding: 4px 1ch;
+  max-height: 14em;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+}
+
+/* Extraction wizard (decision tree over the sample). */
+.psc-wizard { padding: 4px 0; }
+.psc-wiz-head { display: flex; gap: 1ch; align-items: baseline; margin-bottom: 4px; }
+.psc-wiz-head .psc-textbtn { margin-left: auto; }
+.psc-wiz-line {
+  padding: 4px 1ch;
+  margin: 2px 0 6px;
+  background: var(--bg-elevated);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.psc-wiz-selectable { cursor: text; user-select: text; }
+/* Same vocabulary as the CLI wizard: green = what the rule found, purple =
+   what you selected, red = a line you flagged wrong, dim dot = no value. */
+.psc-hit { background: var(--green); color: var(--bg-deep); padding: 0; }
+.psc-sel { background: var(--purple); color: var(--bg-deep); font-weight: bold; padding: 0; }
+.psc-wiz-line ::selection, .psc-wiz-line::selection { background: var(--purple); color: var(--bg-deep); }
+.psc-mark-user { background: var(--green); color: var(--bg-deep); }
+.psc-mark-none { color: var(--red); font-weight: bold; }
+.psc-mark-miss { color: var(--text-dim); }
+.psc-wiz-notice { color: var(--warn, var(--text-dim)); margin: 4px 0; }
+.psc-wiz-rule { color: var(--text-dim); margin-bottom: 4px; }
+.psc-wiz-rows { max-height: 24em; overflow: auto; border-top: 1px dashed var(--border); }
+.psc-wiz-row {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr) auto;
+  gap: 0 1ch;
+  align-items: baseline;
+  padding: 1px 0;
+  border-bottom: 1px dashed var(--border);
+  color: var(--text-dim);
+}
+.psc-wiz-row-hit { color: var(--text-primary); }
+.psc-wiz-row:hover { background: var(--bg-elevated); }
+.psc-wiz-text { white-space: pre-wrap; word-break: break-all; }
+.psc-values { margin-bottom: 8px; }
+.psc-value-row { display: grid; grid-template-columns: 16ch minmax(0, 1fr); gap: 0 1ch; }
+.psc-value-rule { color: var(--text-dim); word-break: break-all; }
+.psc-wiz-preview { max-height: 22em; }

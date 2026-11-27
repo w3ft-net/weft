@@ -20,6 +20,7 @@ import (
 	ingsyslog "github.com/w3ft-net/weft/ingest/syslog"
 	"github.com/w3ft-net/weft/planner"
 	"github.com/w3ft-net/weft/sources"
+	"github.com/w3ft-net/weft/web"
 )
 
 // Flags are the api's command-line flags, parsed.
@@ -61,6 +62,11 @@ func Run(fl *Flags, dep *deployment.Deployment, own *Own) {
 
 	srv := weftapi.NewServer(*coordAddr, *baseURL)
 	srv.SetIdentity(dep.Authn.API)
+	if app := web.Handler(); app != nil {
+		// This binary carries the web app (-tags webembed): serve it at the root,
+		// beside the api routes, which answer first.
+		srv.Extend(func(rt *weftapi.Routes) { rt.Public("/", app) })
+	}
 	if err := srv.Connect(); err != nil {
 		log.Fatalf("connect to coordinator: %v", err)
 	}

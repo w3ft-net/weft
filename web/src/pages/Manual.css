@@ -1,0 +1,309 @@
+/* Manual — reads like man(1) paged through less(1): a running header,
+   section headings flush left with their body indented beneath, code
+   fences as terminal output, and an inverse (END) marker.
+
+   Layout: app sidebar | manual topic list | body. manual-layout is the
+   inner flex container so the topic list can sit beside the body
+   without disturbing the outer app-layout. */
+.manual-layout {
+  display: flex;
+  align-items: stretch;
+  min-height: 100%;
+}
+
+.manual-body {
+  flex: 1;
+  min-width: 0;
+  max-width: 92ch;
+  padding: 20px 4ch 40px;
+}
+
+/* man running header: name(1) ... manual ... name(1) */
+.manual-manhead {
+  display: flex;
+  justify-content: space-between;
+  gap: 2ch;
+  color: var(--text-dim);
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.manual-page-title,
+.manual-topic-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-bright);
+  margin: 0 0 6px;
+}
+
+.manual-page-title::before { content: '~/'; color: var(--text-dim); font-weight: 400; }
+
+.manual-intro {
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+  padding-left: 4ch;
+}
+
+/* ── Index: whatis-style category listing ─────────────── */
+.manual-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.manual-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 2px;
+}
+
+.manual-card-title a { color: var(--text-bright); }
+.manual-card-title a:hover { color: var(--accent); }
+
+.manual-card-summary {
+  color: var(--text-secondary);
+  padding-left: 4ch;
+  max-width: 80ch;
+  margin-bottom: 6px;
+}
+
+.manual-card-topics {
+  list-style: none;
+  padding-left: 4ch;
+}
+
+.manual-card-topic {
+  display: grid;
+  grid-template-columns: 26ch 1fr;
+  gap: 2ch;
+  padding: 0 1ch;
+  margin-left: -1ch;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.manual-card-topic-slug { color: var(--accent); }
+.manual-card-topic-slug::after { content: '(1)'; color: var(--text-dim); }
+
+.manual-card-topic:hover,
+.manual-card-topic:focus-visible {
+  background: var(--accent);
+  color: var(--bg-deep);
+  text-decoration: none;
+  outline: none;
+}
+
+.manual-card-topic:hover *,
+.manual-card-topic:focus-visible *,
+.manual-card-topic:hover .manual-card-topic-slug::after,
+.manual-card-topic:focus-visible .manual-card-topic-slug::after { color: var(--bg-deep); }
+
+/* ── Topic page ────────────────────────────────────────── */
+.manual-breadcrumb {
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.manual-breadcrumb a { color: var(--text-secondary); }
+.manual-breadcrumb a:hover { color: var(--accent); }
+.manual-breadcrumb-sep { color: var(--text-dim); }
+.manual-breadcrumb-category { color: var(--text-secondary); }
+
+/* Previous / next page links, repeated above the title and below the body. */
+.manual-pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 2ch;
+  margin: 12px 0;
+}
+
+.manual-pager a {
+  display: flex;
+  flex-direction: column;
+  max-width: 48%;
+  color: var(--text-secondary);
+}
+
+.manual-pager a:hover { color: var(--accent); }
+.manual-pager-next { text-align: right; align-items: flex-end; margin-left: auto; }
+.manual-pager-dir { color: var(--text-dim); }
+.manual-pager-bottom { margin-top: 28px; }
+
+.manual-topic-title { margin-bottom: 16px; }
+
+/* Section list — a compact index, h3 entries indented under h2. */
+.manual-topic-toc {
+  padding-left: 4ch;
+  margin-bottom: 28px;
+}
+
+.manual-topic-toc-label {
+  color: var(--text-dim);
+  margin-bottom: 2px;
+  margin-left: -4ch;
+}
+
+.manual-topic-toc-label::after { content: ':'; }
+
+.manual-topic-toc ul { list-style: none; }
+
+.manual-topic-toc a { color: var(--accent); }
+.manual-topic-toc a::before { content: '§ '; color: var(--text-dim); }
+
+.manual-topic-toc-h3 { padding-left: 3ch; }
+
+/* ── Rendered markdown ─────────────────────────────────
+   man layout: h2 flush left, everything else indented 4ch beneath. */
+.manual-section > * { margin-left: 4ch; }
+.manual-section > h2 { margin-left: 0; }
+.manual-section > h3 { margin-left: 2ch; }
+
+.manual-section h2 {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-bright);
+  margin-top: 28px;
+  margin-bottom: 8px;
+  scroll-margin-top: 16px;
+}
+
+.manual-section h3 {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 20px;
+  margin-bottom: 6px;
+  scroll-margin-top: 16px;
+}
+
+.manual-section h3::before { content: '· '; color: var(--text-dim); font-weight: 400; }
+
+.manual-section h2:first-child,
+.manual-section h3:first-child {
+  margin-top: 0;
+}
+
+.manual-section p {
+  color: var(--text-secondary);
+  max-width: 80ch;
+  margin-bottom: 12px;
+}
+
+.manual-section strong { color: var(--text-bright); }
+
+.manual-section a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--border-bright);
+  text-underline-offset: 3px;
+}
+
+.manual-section a:hover {
+  color: var(--accent-hover);
+  text-decoration-color: currentColor;
+}
+
+.manual-section code {
+  font-family: var(--font-mono);
+  color: var(--cyan);
+}
+
+.manual-section ul,
+.manual-section ol {
+  padding-left: 3ch;
+  margin-bottom: 12px;
+  max-width: 80ch;
+}
+
+.manual-section ul { list-style: none; }
+.manual-section ul > li::before {
+  content: '- ';
+  color: var(--text-dim);
+  margin-left: -2ch;
+}
+
+.manual-section li {
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+
+.manual-section ol li::marker { color: var(--text-dim); }
+
+/* Code fences read as terminal output. */
+.manual-section pre {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-bright);
+  padding: 10px 2ch;
+  font-family: var(--font-mono);
+  color: var(--text-bright);
+  overflow-x: auto;
+  margin-bottom: 14px;
+  white-space: pre;
+}
+
+.manual-section pre code {
+  color: inherit;
+}
+
+.manual-section table {
+  border-collapse: collapse;
+  margin: 10px 0 16px 4ch;
+}
+
+.manual-section th,
+.manual-section td {
+  padding: 2px 3ch 2px 0;
+  text-align: left;
+  vertical-align: top;
+  color: var(--text-secondary);
+}
+
+.manual-section th {
+  color: var(--text-dim);
+  font-weight: 400;
+  border-bottom: 1px dashed var(--border-bright);
+}
+
+.manual-section tbody tr:hover td { background: var(--bg-elevated); }
+
+.manual-section blockquote {
+  border-left: 2px solid var(--border-bright);
+  padding-left: 2ch;
+  color: var(--text-secondary);
+}
+
+.manual-section hr {
+  border: none;
+  border-top: 1px dashed var(--border);
+  margin: 20px 0;
+}
+
+/* less(1)-style end of page. */
+.manual-end {
+  display: flex;
+  align-items: center;
+  gap: 2ch;
+  margin-top: 36px;
+  color: var(--text-dim);
+}
+
+.manual-end-mark {
+  background: var(--text-primary);
+  color: var(--bg-deep);
+  padding: 0 0.5ch;
+}
+
+@media (max-width: 900px) {
+  .manual-layout { flex-direction: column; }
+  .manual-body { padding: 16px 16px 28px; }
+  .manual-section > *, .manual-section > h3 { margin-left: 0; }
+  .manual-section table { margin-left: 0; display: block; overflow-x: auto; }
+  .manual-intro, .manual-card-summary, .manual-card-topics, .manual-topic-toc { padding-left: 2ch; }
+  .manual-topic-toc-label { margin-left: -2ch; }
+  .manual-card-topic { grid-template-columns: 1fr; gap: 0; }
+  .manual-manhead span:first-child, .manual-manhead span:last-child { display: none; }
+}

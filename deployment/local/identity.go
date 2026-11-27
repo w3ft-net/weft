@@ -6,6 +6,7 @@ package local
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	weftapi "github.com/w3ft-net/weft/api"
@@ -59,6 +60,15 @@ func (*Identity) Forward(r *http.Request) map[string]string {
 	return nil
 }
 
-// Routes registers nothing: there is no sign-in, token or account route in the
-// open build.
-func (*Identity) Routes(*weftapi.Routes) {}
+// Routes registers /api/auth/me, the one route the web app asks to learn how it
+// is signed in. The browser holds no token here: it answers the Basic challenge
+// itself and sends the credential on every request, so session is "open" and
+// there is no sign-in page.
+func (i *Identity) Routes(rt *weftapi.Routes) {
+	rt.Authed("GET /api/auth/me", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"id": i.Basic.User, "email": i.Basic.User, "session": "open",
+		})
+	}))
+}

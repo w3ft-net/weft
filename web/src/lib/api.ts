@@ -1,0 +1,761 @@
+import type { ChartPlot } from './chartPlot'
+import { extraRequestHeaders } from './headers'
+
+const API_BASE = import.meta.env.VITE_API_URL || ''
+
+// ApiError surfaces structured codes from the backend (e.g.
+// email_verification_required) so callers can render the right UI
+// affordance instead of a generic alert. Plain string errors still fall
+// into message; code is "" when the backend returned non-JSON text.
+export class ApiError extends Error {
+  code: string
+  status: number
+  constructor(message: string, code: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.code = code
+    this.status = status
+  }
+}
+
+// The session token's localStorage key, exported so AuthContext can clear or
+// rewrite it without re-stringing the name.
+export const TOKEN_STORAGE_KEY = 'weft_token'
+
+export { addRequestHeaders } from './headers'
+
+async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const token = localStorage.getItem(TOKEN_STORAGE_KEY)
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string> || {}),
+  }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  Object.assign(headers, extraRequestHeaders())
+
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers })
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    // Try to parse as a structured error. Backend emits
+    // {code, message} for things the UI should react to (e.g.
+    // email_verification_required); plain text otherwise.
+    let code = ''
+    let message = body || `HTTP ${res.status}`
+    try {
+      const parsed = JSON.parse(body)
+      if (parsed && typeof parsed === 'object' && parsed.code) {
+        code = String(parsed.code)
+        message = String(parsed.message || body)
+      }
+    } catch {
+      // not JSON — leave defaults
+    }
+    throw new ApiError(message, code, res.status)
+  }
+
+  const text = await res.text()
+  return (text ? JSON.parse(text) : null) as T
+}
+
+// Auth
+export function login(email: string): Promise<{ message: string }> {
+  return apiFetch('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
+// signup_tier is set when the link finished a signup: the plan to carry on to
+// payment with.
+export function verify(token: string): Promise<{ token: string; user: User; signup_tier?: string }> {
+  return apiFetch('/api/auth/verify', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  })
+}
+
+export function getMe(): Promise<User> {
+  return apiFetch('/api/auth/me')
+}
+
+// Tokens
+export function getTokens(): Promise<AgentToken[]> {
+  return apiFetch('/api/tokens')
+}
+
+export function createToken(label: string, namespace: string, env: string): Promise<AgentToken & { token: string }> {
+  return apiFetch('/api/tokens', {
+    method: 'POST',
+    body: JSON.stringify({ label, namespace, env }),
+  })
+}
+
+export function revokeToken(id: string): Promise<void> {
+  return apiFetch(`/api/tokens/${id}`, { method: 'DELETE' })
+}
+
+// Functions (/bin/)
+export async function getFunctions(): Promise<ShellFunction[]> {
+  const resp = await apiFetch<{ functions: ShellFunction[] }>('/api/functions')
+  return resp.functions || []
+}
+
+export function saveFunction(name: string, source: string): Promise<void> {
+  return apiFetch(`/api/functions/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ source }),
+  })
+}
+
+export function deleteFunction(name: string): Promise<void> {
+  return apiFetch(`/api/functions/${encodeURIComponent(name)}`, { method: 'DELETE' })
+}
+
+// Watches (/cron.d/)
+export interface WatchesResponse {
+  crons: CronWatch[]
+  count: number
+  limit: number
+  min_interval: string
+}
+
+export function getWatches(): Promise<WatchesResponse> {
+  return apiFetch('/api/crons')
+}
+
+// SaveWatchResult.warnings carries non-blocking, save-time messages
+// (e.g. a cron whose tail/head cap risks silently truncating data) —
+// the save always succeeds; warnings is empty/absent when there's
+// nothing to say. Generic by design: any future save-time check uses
+// the same field, so callers don't need to know which check fired.
+export interface SaveWatchResult {
+  warnings?: string[]
+}
+
+export function saveWatch(name: string, schedule: string, pipeline: string): Promise<SaveWatchResult> {
+  return apiFetch(`/api/crons/${cronUrl(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ schedule, pipeline }),
+  })
+}
+
+// cronUrl turns a cron path into URL segments, keeping the slash between
+// namespace and name.
+export function cronUrl(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
+
+export function deleteWatch(name: string): Promise<void> {
+  return apiFetch(`/api/crons/${cronUrl(name)}`, { method: 'DELETE' })
+}
+
+export function getWatch(name: string): Promise<CronWatch> {
+  return apiFetch(`/api/crons/${cronUrl(name)}`)
+}
+
+export function getWatchResults(name: string): Promise<CronResult[]> {
+  return apiFetch(`/api/crons/${cronUrl(name)}/results`)
+}
+
+export type ChartRange = '1h' | '6h' | '24h' | '7d' | '30d' | '90d' | '1y'
+
+export const CHART_RANGES: readonly ChartRange[] = ['1h', '6h', '24h', '7d', '30d', '90d', '1y'] as const
+
+// Approximate widths in ms — used client-side to grey out range
+// buttons whose windows exceed the caller's plan retention. Server
+// is still authoritative (it rejects over-long ranges), this is just
+// UX.
+export const CHART_RANGE_MS: Record<ChartRange, number> = {
+  '1h':  60 * 60 * 1000,
+  '6h':  6 * 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d':  7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+  '90d': 90 * 24 * 60 * 60 * 1000,
+  '1y':  365 * 24 * 60 * 60 * 1000,
+}
+
+export interface ChartPoint {
+  ts: number // unix millis
+  tag: string
+  value: number
+  count: number
+  min: number
+  max: number
+}
+
+export interface ChartResponse {
+  points: ChartPoint[]
+  granularity: 'raw' | 'hourly' | '4h' | 'daily'
+  range: ChartRange
+}
+
+export function getWatchChart(name: string, range: ChartRange): Promise<ChartResponse> {
+  return apiFetch(`/api/crons/${cronUrl(name)}/chart?range=${range}`)
+}
+
+// User is the signed-in identity /api/auth/me returns. `session` says how the
+// api authenticates: "open" is the open build's single Basic credential, where
+// the browser holds no token and there is no sign-in page; "token" is a signed
+// session from a sign-in link. A deployment's own fields (hosted adds plan and
+// org memberships) ride along: read them through its own typed view of the user.
+export interface User {
+  id: string
+  email: string
+  name?: string
+  customer: string // the group the session acts in
+  session?: 'open' | 'token'
+  [extra: string]: unknown
+}
+
+// FSEntry mirrors api.FSEntry on the server: one row in a directory
+// listing returned by /api/fs/list, used by the shell chrome's
+// tree sidebars.
+export interface FSEntry {
+  name: string
+  is_dir: boolean
+}
+
+// listFS returns the immediate children of a path. Empty `entries`
+// is a real result (an empty directory) — distinct from a 404 which
+// throws.
+export function listFS(path: string): Promise<{ entries: FSEntry[] }> {
+  return apiFetch(`/api/fs/list?path=${encodeURIComponent(path)}`)
+}
+
+export interface AgentToken {
+  id: string
+  label: string
+  namespace: string
+  env: string
+  status: 'active' | 'revoked'
+  created_at: string
+}
+
+export interface ShellFunction {
+  ID: number
+  Name: string
+  Source: string
+  CreatedAt: string
+  UpdatedAt: string
+}
+
+export interface CronWatch {
+  ID: number
+  Name: string
+  // <namespace>/<name>, or the bare name for a transitional org-level cron.
+  // Every reference to a cron uses this, not Name.
+  path: string
+  Schedule: string
+  Pipeline: string
+  Enabled: boolean
+  LastRunAt: string | null
+  LastStatus: string
+  CreatedAt: string
+  UpdatedAt: string
+  // Alert projection — populated only when the watch's `alert` stage
+  // uses a condition with a single numeric cutoff (above/below/eq/neq).
+  // Rising/falling/changed/absent leave both null.
+  AlertCondition: 'above' | 'below' | 'eq' | 'neq' | null
+  AlertThreshold: number | null
+}
+
+export interface CronResult {
+  ID: number
+  CronWatchID: number
+  RanAt: string
+  Stdout: string
+  Stderr: string
+  ExitCode: number
+  DurationMs: number
+  // Parsed numeric value from the watch's alert_key field (or the whole
+  // stdout in single-row mode). Null when the value wasn't parseable.
+  Value: number | null
+  // Per-row tag from the watch's alert_tag field. Empty in single-row mode.
+  Tag: string
+}
+
+// Org permissions
+
+// Namespaces
+export interface NamespaceInfo {
+  name: string
+  id: number
+}
+
+export async function getNamespaces(): Promise<NamespaceInfo[]> {
+  const resp = await apiFetch<{ namespaces: NamespaceInfo[] }>('/api/namespaces')
+  return resp.namespaces || []
+}
+
+export function createNamespace(name: string): Promise<NamespaceInfo> {
+  return apiFetch('/api/namespaces', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+}
+
+// Pending sources (weftd auto-discovery)
+
+// Field names mirror Go's Detection struct (no json tags — PascalCase).
+export interface TimestampCandidate {
+  FieldIndex: number
+  SpanFields: number
+  Format: string
+  JSONPath: string
+  Sample: string
+}
+
+// FieldCandidate is the shape shared by level, trace ID, and all four
+// span fields (mirrors Go's ingest.FieldCandidate). Exactly one of
+// FieldIndex/JSONPath is meaningful for a given candidate — FieldIndex 0
+// with a non-empty Pattern and no JSONPath means "search the whole line"
+// (Schema's TraceIDPattern convention).
+export interface FieldCandidate {
+  FieldIndex: number
+  JSONPath: string
+  Sample: string
+  Pattern: string
+  // Keep only the text before the first occurrence of this (e.g. "/" for
+  // INFO/MainProcess): the field's head is the value.
+  CutAt?: string
+  // The distinct values seen at this position (categorical fields).
+  Values?: string[] | null
+}
+
+export interface SourceDetection {
+  Lines: string[] | null
+  JSONCoverage: number
+  JSONTailCoverage: number
+  JSONTailStartField: number
+  TimestampCandidates: TimestampCandidate[] | null
+  LevelCandidates: FieldCandidate[] | null
+  TraceIDCandidates: FieldCandidate[] | null
+  SpanNameCandidates: FieldCandidate[] | null
+  SpanIDCandidates: FieldCandidate[] | null
+  ParentSpanIDCandidates: FieldCandidate[] | null
+  DurationNsCandidates: FieldCandidate[] | null
+}
+
+export interface PendingSource {
+  service: string
+  namespace: string
+  instance: string
+  host_group: string
+  sample: string[]
+  detection: SourceDetection
+  created_at: string
+  // "sampling" = still accumulating (not yet configurable); "pending" =
+  // full sample, ready to configure.
+  status: 'sampling' | 'pending'
+  sample_collected: number
+  sample_target: number
+  // RFC3339 time the newest sample lines arrived ('' before the first).
+  sample_updated_at: string
+}
+
+// How one value is read out of its field (mirrors ingest.ExtractSpec): literal
+// text stripped from the front/back, characters stripped from both ends, a
+// delimiter to cut at, and a whole-line regex tried if the field gives nothing.
+export interface ExtractSpec {
+  prefix?: string
+  suffix?: string
+  chars?: string
+  cut_at?: string
+  fallback?: string
+}
+
+export interface ConfigureSourceRequest {
+  envelope?: string
+  // Per value ("level", "trace_id", ...): how to read it. A value with no
+  // entry is read the legacy way.
+  extract?: Record<string, ExtractSpec>
+  format: string
+  json_start_field?: number
+  timestamp_field: string
+  timestamp_format: string
+  timestamp_fields?: number
+  level_field: string
+  level_pattern: string
+  trace_id_field: string
+  trace_id_pattern: string
+  span_name_field: string
+  span_name_pattern: string
+  span_id_field: string
+  span_id_pattern: string
+  parent_span_id_field: string
+  parent_span_id_pattern: string
+  duration_ns_field: string
+  duration_ns_pattern: string
+  // How the duration text reads: '' / 'ns' (bare nanoseconds), 'us' | 'ms' | 's'
+  // (a bare number in that unit), or 'text' (carries its own unit, e.g. 5.01s).
+  duration_unit?: string
+  expand_keys?: { key: string; type: string }[]
+}
+
+export async function getPendingSources(namespace?: string): Promise<PendingSource[]> {
+  const path = namespace
+    ? `/api/sources/pending?namespace=${encodeURIComponent(namespace)}`
+    : '/api/sources/pending'
+  const resp = await apiFetch<PendingSource[] | null>(path)
+  return resp || []
+}
+
+// getPendingSourceCount is the cheap form of getPendingSources().length, for
+// the sidebar badge that polls every 30s.
+export async function getPendingSourceCount(): Promise<number> {
+  const resp = await apiFetch<{ count: number }>('/api/sources/pending/count')
+  return resp.count
+}
+
+// A Preview is sample lines split into segments; a segment with a `field`
+// is a value the schema extracts. Segments concatenated equal the line.
+// `fields` lists the fields that appeared, in canonical order.
+export interface PreviewSegment {
+  text: string
+  field?: string
+}
+
+export interface Preview {
+  lines: PreviewSegment[][]
+  fields: string[]
+}
+
+// previewSource applies an unsaved schema to the source's stored sample.
+export function previewSource(
+  namespace: string,
+  service: string,
+  config: ConfigureSourceRequest,
+): Promise<Preview> {
+  return apiFetch<Preview>(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/schema-preview`,
+    { method: 'POST', body: JSON.stringify(config) },
+  )
+}
+
+export function configureSource(
+  namespace: string,
+  service: string,
+  config: ConfigureSourceRequest,
+): Promise<void> {
+  return apiFetch(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/configure`,
+    { method: 'POST', body: JSON.stringify(config) },
+  )
+}
+
+// suggestFromDetection pre-fills the configure form from a source's detection:
+// the sample's format, and where a JSON tail starts. How each value (timestamp,
+// level, trace ID, ...) is read is deliberately left empty: the extraction
+// wizard fills it from the server, which learns it from the data, so the
+// browser carries no reading of detection (and no defaults) of its own.
+export function suggestFromDetection(d: SourceDetection): ConfigureSourceRequest {
+  const format =
+    d.JSONCoverage > 0.8 ? 'json'
+      : d.JSONTailCoverage > 0.5 ? 'prefix_json'
+        : 'text'
+  return {
+    format,
+    json_start_field: format === 'prefix_json' ? d.JSONTailStartField : 0,
+    timestamp_field: '',
+    timestamp_format: '',
+    level_field: '',
+    level_pattern: '',
+    trace_id_field: '',
+    trace_id_pattern: '',
+    span_name_field: '',
+    span_name_pattern: '',
+    span_id_field: '',
+    span_id_pattern: '',
+    parent_span_id_field: '',
+    parent_span_id_pattern: '',
+    duration_ns_field: '',
+    duration_ns_pattern: '',
+  }
+}
+
+// Cross-page change notifications for pending sources. The sidebar badge
+// and the Namespaces page both need to refresh when a source transitions
+// from pending → configured (or a new one arrives via weftd).
+const pendingSourcesBus = new EventTarget()
+
+export function notifyPendingSourcesChanged(): void {
+  pendingSourcesBus.dispatchEvent(new Event('change'))
+}
+
+export function onPendingSourcesChanged(handler: () => void): () => void {
+  pendingSourcesBus.addEventListener('change', handler)
+  return () => pendingSourcesBus.removeEventListener('change', handler)
+}
+
+// ─── Configured sources (CloudWatch push + weftd) ────────────────
+
+export interface SourceInfo {
+  namespace: string
+  service: string
+  source_type: 'weftd' | 'kinesis' | 'direct'
+  log_group: string
+  region: string
+  enabled: boolean
+}
+
+export async function listSources(namespace?: string): Promise<SourceInfo[]> {
+  const path = namespace
+    ? `/api/sources?namespace=${encodeURIComponent(namespace)}`
+    : '/api/sources'
+  const resp = await apiFetch<SourceInfo[] | null>(path)
+  return resp || []
+}
+
+// SourceSchema is the GET /api/sources/{ns}/{service}/schema response. For a
+// configured source, schema_yaml carries the live schema (viewable at any
+// time). For a still-sampling source, sample_collected/sample_target
+// report progress so the UI can say "not enough lines yet (N/target)".
+export interface SourceSchema {
+  status: 'configured' | 'sampling' | 'pending'
+  schema_yaml?: string
+  // Recent live lines with the extracted fields marked, or why there are none.
+  preview?: Preview
+  preview_note?: string
+  // Set when the source is written by the weft SDK: its values come from the line header.
+  sdk_note?: string
+  schema_hash?: string
+  resample_requested?: boolean
+  sample_collected?: number
+  sample_target?: number
+  sample?: string[]
+  sample_updated_at?: string
+}
+
+export function getSourceSchema(namespace: string, service: string): Promise<SourceSchema> {
+  return apiFetch<SourceSchema>(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/schema`,
+  )
+}
+
+// LARGER_SAMPLE_LINES is the sample size asked for when a value was on none of
+// the lines of the first one (the CLI asks for the same).
+export const LARGER_SAMPLE_LINES = 500
+
+// resampleSource asks the agent for a fresh sample of an already-configured
+// source. Ingestion continues on the current schema; the fresh sample
+// appears for review once the agent finishes accumulating.
+// lines is the sample size wanted; omitted asks for the default.
+export function resampleSource(namespace: string, service: string, lines?: number): Promise<void> {
+  return apiFetch(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/resample${lines ? `?size=${lines}` : ''}`,
+    { method: 'POST' },
+  )
+}
+
+export function deleteSource(namespace: string, service: string): Promise<void> {
+  // service is the bare service name (e.g. "coordinator"); it maps
+  // directly to the positional path segment the backend expects.
+  return apiFetch(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}`,
+    { method: 'DELETE' },
+  )
+}
+
+// ─── Kinesis (Firehose push) source add flow ─────────────────────
+//
+// Unlike CloudWatch poll mode, there's no "pull sample" step: the source
+// is created pending, and CloudWatchAdapter accumulates a real sample
+// from the customer's own Firehose deliveries once their CloudFormation
+// stack is live. It then shows up in getPendingSources() like any other
+// pending source, and finishes through the existing
+// <PendingSourceConfigure> flow.
+
+export interface AddKinesisSourceRequest {
+  namespace: string
+  service: string
+  log_group: string
+  region: string
+}
+
+export function addKinesisSource(req: AddKinesisSourceRequest): Promise<void> {
+  return apiFetch('/api/sources/kinesis', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+}
+
+// Dashboards (/etc/dashboards/)
+export type DashboardTileSize = 'sm' | 'md' | 'lg'
+export type DashboardTileKind = 'line' | 'bar' | 'sparkline' | 'counter' | 'gauge' | 'table'
+
+// Server-formatted counter/gauge text; clients show it verbatim.
+export interface DashboardTileDisplay {
+  before?: string
+  num: string
+  after?: string
+}
+
+export interface DashboardTile {
+  kind: DashboardTileKind
+  cron: string
+  // The viewer can't read the cron's namespace: only the title comes back.
+  restricted?: boolean
+  title?: string
+  aggregate?: string
+  bucket?: string
+  range?: string
+  // Counter, gauge and table tiles: what they show, one point per tag, highest
+  // first: the cron's latest run, or with a range or aggregate its aggregate
+  // over the range.
+  points?: LatestPoint[]
+  // Line, sparkline and bar tiles: the cron's range reduced by this tile's
+  // aggregate and bucket like `chart <cron>`, or why there is no plot.
+  plot?: ChartPlot
+  error?: string
+  size?: DashboardTileSize
+  format?: string
+  display?: DashboardTileDisplay
+  max?: number // gauge full scale
+  // The cron's alert cutoff is breached by the value this tile shows. A tile
+  // has no threshold of its own.
+  critical?: boolean
+}
+
+export interface DashboardSection {
+  title?: string
+  tiles: DashboardTile[]
+}
+
+export interface DashboardSpec {
+  title?: string
+  sections: DashboardSection[]
+}
+
+// LatestPoint mirrors chart.LatestPoint: one tag of a cron's latest run,
+// with a number or, for a `# type: text` cron, text.
+export interface LatestPoint {
+  tag: string
+  value?: number
+  text?: string
+  critical?: boolean // value breaches the cron's alert; set on dashboard tiles
+}
+
+export interface DashboardWatchPayload {
+  cron: CronWatch
+}
+
+export interface DashboardListItem {
+  name: string
+  title?: string
+  updated_at?: string
+  invalid?: boolean
+}
+
+export interface DashboardResponse {
+  name: string
+  updated_at?: string
+  spec: DashboardSpec
+  crons: Record<string, DashboardWatchPayload | null>
+}
+
+export async function listDashboards(): Promise<DashboardListItem[]> {
+  const resp = await apiFetch<{ dashboards: DashboardListItem[] }>('/api/dashboards')
+  return resp.dashboards || []
+}
+
+export interface SharedLink {
+  bin: string
+  range: string
+  args: string
+}
+
+// What a `clipboard` short link (/s/<slug>) points at; 404s for anyone
+// outside the org that made it.
+export function getSharedLink(slug: string): Promise<SharedLink> {
+  return apiFetch(`/api/shared-links/${encodeURIComponent(slug)}`)
+}
+
+export function getDashboard(name: string): Promise<DashboardResponse> {
+  return apiFetch(`/api/dashboards/${encodeURIComponent(name)}`)
+}
+
+// ── Admin API ─────────────────────────────────────────────────────────────
+
+export { apiFetch }
+
+// ── Schema extraction probe ────────────────────────────────────────────
+// The wizard's decision tree asks the server (POST …/probe) for an
+// extraction rule built from what the user highlighted, applied to the
+// source's stored sample. See ingest/probe.go.
+
+export type ProbeField =
+  | 'timestamp' | 'level' | 'trace_id' | 'span_name' | 'span_id' | 'parent_span_id' | 'duration_ns'
+
+// A user's statement about one sample line: this text is the value
+// (prefix = the line's text before it), or there is none (none: true).
+export interface ProbeMark {
+  line: number
+  prefix: string
+  text: string
+  none: boolean
+}
+
+export interface ProbeExtractor {
+  field: string
+  pattern: string
+  spec?: ExtractSpec
+  timestamp_format?: string
+  timestamp_fields?: number
+  duration_unit?: string
+}
+
+export interface ProbeLineResult {
+  line: number
+  matched: boolean
+  value: string
+  text?: string
+  prefix?: string
+}
+
+export interface ProbeResult {
+  extractor: ProbeExtractor | null
+  // 'rule' = built from the marks, 'model' = proposed by the model and then
+  // verified against the sample.
+  source?: 'rule' | 'model'
+  results: ProbeLineResult[]
+  matched: number
+  total: number
+  message?: string
+  // With use_detected: how many candidates detection found for this field.
+  detected_total?: number
+  // The extractor in words, from the server (the single source of the wording).
+  description?: string
+  // ConfigureSourceRequest keys this extractor sets; `extract` maps a value's
+  // name to its spec (null clears it). Merge with lib/schemaPatch.
+  schema_patch?: Record<string, string | number | Record<string, ExtractSpec | null>>
+  // A duration located by a bare number: the person must say what it counts
+  // (probe again with duration_unit).
+  needs_unit?: boolean
+}
+
+export interface ProbeRequest {
+  field: ProbeField
+  base: { envelope: string; format: string; field_separator: string; json_start_field: number }
+  marks: ProbeMark[]
+  previous?: ProbeExtractor
+  use_detected?: boolean
+  // With use_detected: which detected candidate (0-based) to start from.
+  detected_index?: number
+  // Ask the model for a first guess when nothing has been marked.
+  propose?: boolean
+  // What a bare duration number is counted in: 'ns' | 'us' | 'ms' | 's'.
+  duration_unit?: string
+}
+
+export type ProbeFn = (req: ProbeRequest) => Promise<ProbeResult>
+
+export function probeSource(namespace: string, service: string, req: ProbeRequest): Promise<ProbeResult> {
+  return apiFetch<ProbeResult>(
+    `/api/sources/${encodeURIComponent(namespace)}/${encodeURIComponent(service)}/probe`,
+    { method: 'POST', body: JSON.stringify(req) },
+  )
+}

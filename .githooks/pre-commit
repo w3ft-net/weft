@@ -1,11 +1,11 @@
 #!/bin/sh
-# Regenerate the shell help corpus when a doc (or docgen itself) is part of the
+# Regenerate the shell help corpus and the web manual when a doc (or docgen itself) is part of the
 # commit, and stage the output so the generated text lands in the same commit as
 # the markdown. Enable with `make hooks`.
 set -e
 
 STAGED='^(docs/(shell|manual)/.*\.md|cmd/docgen/)'
-GENERATED="shell/help_corpus_gen.go"
+GENERATED="shell/help_corpus_gen.go web/src/generated"
 
 git diff --cached --name-only | grep -Eq "$STAGED" || exit 0
 
@@ -16,5 +16,5 @@ if ! git diff --quiet -- docs/shell docs/manual cmd/docgen; then
 	exit 1
 fi
 
-go run ./cmd/docgen
+go run ./cmd/docgen -web-out web/src/generated/docs
 git add -- $GENERATED

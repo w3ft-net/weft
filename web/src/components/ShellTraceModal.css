@@ -1,0 +1,235 @@
+/* Trace modal — a TUI dialog: bordered box over a dimmed backdrop with
+   the title set into the top border, like spanview in the terminal. */
+
+.shell-trace-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 20, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.shell-trace-modal-panel {
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-bright);
+  min-width: min(560px, 94vw);
+  max-width: 1040px;
+  width: 86vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding-top: 6px;
+}
+
+/* Header sits on the top border; its pieces knock out the line. */
+.shell-trace-modal-header {
+  position: absolute;
+  top: -0.8em;
+  left: 1ch;
+  right: 1ch;
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.shell-trace-modal-header > * {
+  background: var(--bg-surface);
+  pointer-events: auto;
+}
+
+.shell-trace-modal-title {
+  font-size: 13px;
+  color: var(--text-bright);
+  font-weight: 700;
+  padding: 0 1ch;
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shell-trace-modal-title::before { content: '─ '; color: var(--border-bright); font-weight: 400; }
+
+.shell-trace-modal-back { padding: 0 1ch; }
+
+.shell-trace-modal-close {
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 1ch;
+}
+
+.shell-trace-modal-close:hover,
+.shell-trace-modal-close:focus-visible {
+  background: var(--text-primary);
+  color: var(--bg-deep);
+  outline: none;
+}
+
+.shell-trace-modal-body {
+  padding: 14px 2ch 12px;
+  overflow: auto;
+  flex: 1;
+}
+
+.shell-trace-modal-loading,
+.shell-trace-modal-empty,
+.shell-trace-modal-error {
+  color: var(--text-dim);
+  padding: 24px 0;
+  text-align: center;
+}
+
+.shell-trace-modal-error { color: var(--red); }
+
+/* Gap mode (bare `trace <id>`): a flat list mirroring theme's ANSI
+   layout — gap time, bar, service badge, message. */
+.shell-trace-gap-list {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.shell-trace-gap-row {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+}
+
+.shell-trace-gap-passthrough {
+  color: var(--text-dim);
+  padding: 4px 0;
+}
+
+.shell-trace-gap-time {
+  flex: 0 0 7ch;
+  text-align: right;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.shell-trace-gap-bar-col {
+  width: 10ch;
+  flex: 0 0 10ch;
+  height: 1em;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.shell-trace-gap-bar {
+  height: 1em;
+  background: var(--text-dim);
+}
+
+.shell-trace-gap-badge {
+  flex: 0 0 20ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.shell-trace-gap-message {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+/* Rollup/aggregate mode (`trace <id> --spans` / `trace spans [name]`):
+   column headers stay upper-case to match theme.SpanRollupColumns' own
+   `top`-style output in the CLI. */
+.shell-trace-rollup-table,
+.shell-trace-samples-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.shell-trace-rollup-table th,
+.shell-trace-samples-table th {
+  text-align: right;
+  color: var(--text-dim);
+  font-weight: 400;
+  padding: 1px 1ch;
+  border-bottom: 1px dashed var(--border-bright);
+}
+
+.shell-trace-rollup-table th:first-child,
+.shell-trace-rollup-table th:nth-child(2),
+.shell-trace-samples-table th:first-child,
+.shell-trace-samples-table th:nth-child(2) {
+  text-align: left;
+}
+
+.shell-trace-rollup-table td,
+.shell-trace-samples-table td {
+  text-align: right;
+  padding: 1px 1ch;
+}
+
+.shell-trace-rollup-name,
+.shell-trace-samples-table td:first-child,
+.shell-trace-samples-table td:nth-child(2) {
+  text-align: left;
+}
+
+.shell-trace-rollup-name {
+  color: var(--amber);
+  font-weight: 700;
+}
+
+.shell-trace-rollup-row { cursor: pointer; }
+
+.shell-trace-rollup-row:hover td { background: var(--bg-elevated); }
+
+.shell-trace-rollup-bar-cell { width: 12ch; }
+
+.shell-trace-rollup-bar {
+  height: 1em;
+  background: var(--amber);
+  opacity: 0.8;
+}
+
+.shell-trace-rollup-num { font-variant-numeric: tabular-nums; }
+
+.shell-trace-rollup-errors {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.shell-trace-samples-traceid { color: var(--text-dim); }
+
+/* List mode (bare `trace`): the recent traces, newest first. A row opens that
+   trace in the same modal. */
+.shell-trace-list-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.shell-trace-list-table th {
+  text-align: left;
+  color: var(--text-bright);
+  font-weight: 700;
+  padding: 0 1ch;
+}
+
+.shell-trace-list-table td {
+  padding: 0 1ch;
+  white-space: nowrap;
+}
+
+.shell-trace-list-row { cursor: pointer; }
+.shell-trace-list-row:hover td { background: var(--bg-elevated); }
+
+.shell-trace-list-root,
+.shell-trace-list-services {
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shell-trace-list-services { color: var(--text-dim); }

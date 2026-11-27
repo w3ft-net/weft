@@ -1,0 +1,60 @@
+/* File tree inside the shell's side pane. Drawn like `tree`: ▸/▾ for
+   directories, ├─ └─ connectors for children, inverse row on hover. */
+
+.file-tree-row {
+  list-style: none;
+}
+
+.file-tree-name {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0 1ch;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+.file-tree-name:hover:not(:disabled),
+.file-tree-name:focus-visible {
+  background: var(--accent);
+  color: var(--bg-deep);
+  outline: none;
+}
+
+.file-tree-name:hover:not(:disabled) .file-tree-icon,
+.file-tree-name:hover:not(:disabled) .file-tree-branch,
+.file-tree-name:focus-visible .file-tree-icon,
+.file-tree-name:focus-visible .file-tree-branch { color: inherit; }
+
+.file-tree-name:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.file-tree-dir { color: var(--accent); }
+
+.file-tree-icon {
+  display: inline-block;
+  width: 2ch;
+  color: var(--text-dim);
+}
+
+.file-tree-branch {
+  color: var(--border-bright);
+  margin-right: 1ch;
+}
+
+.file-tree-children {
+  padding-left: 2ch;
+}
+
+.file-tree-empty {
+  list-style: none;
+  padding: 0 1ch 0 3ch;
+  line-height: 1.7;
+  color: var(--text-dim);
+}

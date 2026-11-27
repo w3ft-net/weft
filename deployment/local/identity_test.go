@@ -2,6 +2,7 @@ package local
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -68,7 +69,7 @@ func TestForward_CarriesTheCredentialToTheCoordinator(t *testing.T) {
 }
 
 // The open build ships no sign-in: the core registers none of those routes and
-// this identity adds none, so every one is a 404, and a core route answers an
+// this identity adds only /api/auth/me, so every sign-in route is a 404, and a core route answers an
 // anonymous caller 401 asking for the credential.
 func TestServer_HasNoLoginRoutesAndGatesTheCore(t *testing.T) {
 	srv := weftapi.NewServer("", "http://localhost")
@@ -77,7 +78,7 @@ func TestServer_HasNoLoginRoutesAndGatesTheCore(t *testing.T) {
 
 	for _, rt := range []struct{ method, path string }{
 		{"POST", "/api/auth/login"}, {"POST", "/api/auth/signup"}, {"POST", "/api/auth/verify"},
-		{"POST", "/api/auth/device"}, {"GET", "/api/auth/me"}, {"POST", "/api/team/accept"},
+		{"POST", "/api/auth/device"}, {"POST", "/api/team/accept"},
 	} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(rt.method, rt.path, strings.NewReader("")))
@@ -86,7 +87,7 @@ func TestServer_HasNoLoginRoutesAndGatesTheCore(t *testing.T) {
 		}
 	}
 	for _, rt := range []struct{ method, path string }{
-		{"GET", "/api/functions"}, {"GET", "/api/crons"}, {"GET", "/api/sources"},
+		{"GET", "/api/auth/me"}, {"GET", "/api/functions"}, {"GET", "/api/crons"}, {"GET", "/api/sources"},
 		{"POST", "/api/shell/exec"}, {"GET", "/api/fs/list"}, {"GET", "/api/tokens"}, {"POST", "/api/namespaces"},
 	} {
 		w := httptest.NewRecorder()
@@ -94,5 +95,26 @@ func TestServer_HasNoLoginRoutesAndGatesTheCore(t *testing.T) {
 		if w.Code != http.StatusUnauthorized || w.Header().Get("WWW-Authenticate") == "" {
 			t.Errorf("%s %s = %d (%q), want 401 asking for Basic", rt.method, rt.path, w.Code, w.Header().Get("WWW-Authenticate"))
 		}
+	}
+}
+
+// The web app learns it is in an open session from /api/auth/me: there is no
+// token to hold and no sign-in page to show.
+func TestMe_SaysTheSessionIsOpen(t *testing.T) {
+	srv := weftapi.NewServer("", "http://localhost")
+	srv.SetIdentity(testIdentity())
+	req := httptest.NewRequest("GET", "/api/auth/me", nil)
+	req.Header.Set("Authorization", basic("weft", "pw"))
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body)
+	}
+	var me map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &me); err != nil {
+		t.Fatal(err)
+	}
+	if me["session"] != "open" || me["email"] != "weft" {
+		t.Errorf("me = %v", me)
 	}
 }

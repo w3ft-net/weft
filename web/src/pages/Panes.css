@@ -1,0 +1,120 @@
+/* Panes — full-screen tmux-style multiplexer. No SidebarNav here; the
+   page draws its own key-hint bar on top and a tmux status line below,
+   using the same tokens and segment style as the app's status bar. */
+
+.panes-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+}
+
+.panes-loading {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  background: var(--bg-deep);
+  color: var(--text-dim);
+}
+
+.panes-bar {
+  display: flex;
+  align-items: stretch;
+  font-size: 12px;
+  line-height: 24px;
+  height: 24px;
+  white-space: nowrap;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.panes-bar-top {
+  border-bottom: 1px solid var(--border-bright);
+  white-space: pre;
+}
+
+.panes-bar-status {
+  background: var(--border);
+  color: var(--text-secondary);
+}
+
+.panes-title { padding: 0 0 0 1.5ch; color: var(--text-bright); font-weight: 700; }
+.panes-sub { padding: 0 1.5ch 0 1ch; color: var(--text-dim); }
+
+.panes-hint { color: var(--text-dim); margin-left: auto; padding-right: 1.5ch; }
+.panes-hint kbd {
+  background: var(--border-bright);
+  color: var(--text-bright);
+  padding: 0 0.6ch;
+  font-family: inherit;
+}
+
+.panes-seg { padding: 0 1.5ch; }
+.panes-fill { flex: 1; }
+.panes-brand { background: var(--brand); color: var(--bg-deep); font-weight: 700; }
+.panes-focus { background: var(--accent); color: var(--bg-deep); font-weight: 700; }
+.panes-prefix { background: var(--green); color: var(--bg-deep); font-weight: 700; }
+.panes-zoom { background: var(--amber); color: var(--bg-deep); font-weight: 700; }
+
+.panes-grid {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--border-bright); /* shows through pane borders as dividers */
+}
+
+/* Panes are absolutely positioned from the split tree's layout rects so
+   splitting/closing never remounts a living terminal. */
+.pane {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-deep);
+  box-sizing: border-box;
+  border: 1px solid var(--border-bright);
+  overflow: hidden;
+}
+
+/* The focused pane gets cyan borders, like tmux's active-pane border. */
+.pane.is-focused { border-color: var(--accent); }
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1ch;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.pane.is-focused .pane-head {
+  color: var(--bg-deep);
+  background: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.pane-name { font-weight: 700; }
+
+.pane-close {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 0 2px;
+}
+.pane-close:hover,
+.pane-close:focus-visible { background: var(--red); color: var(--bg-deep); outline: none; }
+
+.pane-term {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 2px 4px;
+}

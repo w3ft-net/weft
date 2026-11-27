@@ -48,9 +48,9 @@ jobs:
       - name: Generated docs are current
         working-directory: weft-core
         run: |
-          go run ./cmd/docgen
-          git diff --exit-code -- shell/help_corpus_gen.go \
-            || { echo "::error::the shell help corpus is stale; run 'make docs' and commit"; exit 1; }
+          go run ./cmd/docgen -web-out web/src/generated/docs
+          git diff --exit-code -- shell/help_corpus_gen.go web/src/generated \
+            || { echo "::error::the generated docs are stale; run 'make docs' and commit"; exit 1; }
       - name: go test ./...
         working-directory: weft-core
         # Every test here runs on SQLite; the shared *storetest suites run on

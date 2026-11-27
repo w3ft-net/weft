@@ -1,0 +1,221 @@
+.shell-main {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Terminal wrapper ─────────────────────────────── */
+.shell-wrap {
+  --shell-chrome-h: 25px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-deep);
+}
+
+/* ── Chrome: a one-line tab bar over the terminal ─────
+   sh  browse:  /bin  /cron.d  /tmp  /etc
+   The open side pane's tab is drawn in inverse video. */
+.shell-chrome {
+  display: flex;
+  align-items: stretch;
+  height: var(--shell-chrome-h);
+  line-height: calc(var(--shell-chrome-h) - 1px);
+  border-bottom: 1px solid var(--border-bright);
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.shell-chrome-title {
+  padding: 0 1.5ch;
+  background: var(--border);
+  color: var(--text-bright);
+  font-weight: 700;
+}
+
+.shell-chrome-hint {
+  padding: 0 1ch 0 1.5ch;
+  color: var(--text-dim);
+}
+.shell-chrome-hint::after { content: ':'; }
+
+.shell-chrome-actions {
+  display: flex;
+  align-items: stretch;
+}
+
+.shell-chrome-btn {
+  background: none;
+  border: none;
+  padding: 0 1ch;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.shell-chrome-btn:hover,
+.shell-chrome-btn:focus-visible {
+  background: var(--bg-elevated);
+  color: var(--text-bright);
+  outline: none;
+}
+
+.shell-chrome-btn-active,
+.shell-chrome-btn-active:hover {
+  background: var(--accent);
+  color: var(--bg-deep);
+  font-weight: 700;
+}
+
+/* ── xterm.js container ─────────────────────────── */
+.shell-xterm-container {
+  flex: 1;
+  overflow: hidden;
+  background: var(--bg-deep);
+  padding: 6px 8px;
+}
+
+/* ── Side panes (/bin, /cron.d, /tmp, /etc) ─────────
+   Slide over the right edge of the terminal, separated by a rule. */
+.shell-query-sidebar {
+  position: absolute;
+  top: var(--shell-chrome-h);
+  right: 0;
+  bottom: 0;
+  width: 36ch;
+  max-width: 100%;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-bright);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform 0.12s steps(3), visibility 0.12s;
+  z-index: 10;
+  overflow: hidden;
+}
+
+.shell-query-sidebar-open {
+  transform: translateX(0);
+  visibility: visible;
+}
+
+.shell-query-sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  padding: 2px 1ch;
+  border-bottom: 1px dashed var(--border-bright);
+  flex-shrink: 0;
+}
+
+.shell-query-sidebar-title {
+  color: var(--text-bright);
+  font-weight: 700;
+}
+
+.shell-query-sidebar-badge {
+  color: var(--text-dim);
+  margin-left: auto;
+}
+
+.shell-query-sidebar-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.shell-query-sidebar-badge + .shell-query-sidebar-close { margin-left: 0; }
+
+.shell-query-sidebar-close:hover,
+.shell-query-sidebar-close:focus-visible {
+  background: var(--text-primary);
+  color: var(--bg-deep);
+  outline: none;
+}
+
+.shell-query-empty {
+  color: var(--text-dim);
+  padding: 8px 1ch;
+}
+
+.shell-query-empty code { color: var(--green); }
+
+.shell-query-list {
+  list-style: none;
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 0;
+}
+
+.shell-query-item {
+  padding: 2px 1ch 4px;
+  position: relative;
+}
+
+.shell-query-item:hover { background: var(--bg-elevated); }
+
+.shell-query-name {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  display: block;
+  max-width: calc(100% - 4ch);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-query-name:hover,
+.shell-query-name:focus-visible {
+  background: var(--accent);
+  color: var(--bg-deep);
+  outline: none;
+}
+
+.shell-query-pipeline {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-left: 2ch;
+}
+
+.shell-query-pipeline::before { content: '└ '; color: var(--border-bright); margin-left: -2ch; }
+
+.shell-query-schedule { color: var(--text-primary); }
+
+.shell-query-delete {
+  position: absolute;
+  top: 2px;
+  right: 1ch;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.shell-query-delete:hover,
+.shell-query-delete:focus-visible {
+  background: var(--red);
+  color: var(--bg-deep);
+  outline: none;
+}
+
+.shell-link-error {
+  padding: 8px 12px;
+  background: var(--bg-deep);
+  border-bottom: 1px solid var(--border, #444);
+  color: var(--err, #e5534b);
+  font-size: 13px;
+}
