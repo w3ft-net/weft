@@ -98,8 +98,7 @@ Every step leaves core and hosted building and tested.
    `ext/launcher/docker`, `ext/identity/*`). Core's `go.mod` loses
    `modernc.org/sqlite`. Conformance tests move with the implementation; the
    suites stay.
-5. **`examples/single-machine` stands alone**: Dockerfile, compose and README;
-   `e2e/` moves here and passes.
+5. **`examples/single-machine` stands alone** (done, 2026-11-27: Dockerfile, compose and README are here; `e2e/` passes against the rebuilt stack).
 
 ## Risks
 
