@@ -29,9 +29,9 @@ import (
 // deployment.Deployment every process shares. A field marked optional left nil
 // is the open default: no feature, or the one-group behaviour.
 type Own struct {
-	// ExportStorage is the object store the ephemeral archive export writes its
-	// manifests to (ext/storage/s3). Nil: shards archive in process.
-	ExportStorage logdb.ExportStorage
+	// Platform is where shards run: the launcher, volumes, standby pool and
+	// archive export of the deployment (ext/launcher/*). Required.
+	Platform func(ctx context.Context, region, shardSecret string) (logdb.Platform, error)
 	// Classifier builds the LLM-based schema-field classifier (ext/llm/bedrock),
 	// or returns nil when it is not configured. Nil: the coordinator has none.
 	Classifier func(ctx context.Context) (ingest.Classifier, error)
@@ -149,6 +149,7 @@ func validate(dep *deployment.Deployment, own *Own) error {
 	}{
 		{"Authn.GRPC", dep.Authn.GRPC != nil},
 		{"Own.Orgs", own.Orgs != nil},
+		{"Own.Platform", own.Platform != nil},
 		{"Own.Backends.Notices", b.Notices != nil},
 		{"Own.Backends.Coordination", b.Coordination != nil},
 		{"Own.Backends.Shards", b.Shards != nil},

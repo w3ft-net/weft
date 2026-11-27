@@ -1,8 +1,9 @@
-package logdb
+package ec2
 
 import (
 	"context"
 	"fmt"
+	"github.com/w3ft-net/weft/logdb"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -20,7 +21,7 @@ const (
 	tagStandbyAZ   = "shard_az"
 )
 
-var _ StandbyLauncher = (*EC2Provisioner)(nil)
+var _ logdb.StandbyLauncher = (*EC2Provisioner)(nil)
 
 // CurrentImageID is the AMI shards launch from: the coordinator's own
 // (empty when IMDS couldn't say, and then launches use the template's).
@@ -30,14 +31,14 @@ func (p *EC2Provisioner) CurrentImageID() string { return p.imageID }
 // subnet, tagged as a standby (and as claimed by claimFor, when set) at
 // birth. It does not wait for running: the standby's first heartbeat is
 // what makes it useful, and the pool tracks that.
-func (p *EC2Provisioner) LaunchStandby(ctx context.Context, tier, az, claimFor string) (StandbyInstance, error) {
+func (p *EC2Provisioner) LaunchStandby(ctx context.Context, tier, az, claimFor string) (logdb.StandbyInstance, error) {
 	subnet, ok := p.subnets[tier][az]
 	if !ok {
-		return StandbyInstance{}, fmt.Errorf("launch spare: no subnet configured for tier=%q az=%q (tier has: %v)", tier, az, p.AZsForTier(tier))
+		return logdb.StandbyInstance{}, fmt.Errorf("launch spare: no subnet configured for tier=%q az=%q (tier has: %v)", tier, az, p.AZsForTier(tier))
 	}
 	templateID, ok := p.templates[tier]
 	if !ok {
-		return StandbyInstance{}, fmt.Errorf("launch spare: no launch template configured for tier=%q", tier)
+		return logdb.StandbyInstance{}, fmt.Errorf("launch spare: no launch template configured for tier=%q", tier)
 	}
 	tags := []ec2types.Tag{
 		{Key: aws.String(tagStandby), Value: aws.String("true")},
@@ -63,12 +64,12 @@ func (p *EC2Provisioner) LaunchStandby(ctx context.Context, tier, az, claimFor s
 	}
 	out, err := p.ec2.RunInstances(ctx, in)
 	if err != nil {
-		return StandbyInstance{}, fmt.Errorf("RunInstances spare (template=%s subnet=%s image=%s): %w", templateID, subnet, p.imageID, err)
+		return logdb.StandbyInstance{}, fmt.Errorf("RunInstances spare (template=%s subnet=%s image=%s): %w", templateID, subnet, p.imageID, err)
 	}
 	if len(out.Instances) == 0 || out.Instances[0].InstanceId == nil {
-		return StandbyInstance{}, fmt.Errorf("RunInstances spare (template=%s subnet=%s): no instance returned", templateID, subnet)
+		return logdb.StandbyInstance{}, fmt.Errorf("RunInstances spare (template=%s subnet=%s): no instance returned", templateID, subnet)
 	}
-	return StandbyInstance{
+	return logdb.StandbyInstance{
 		InstanceID: *out.Instances[0].InstanceId,
 		Tier:       tier,
 		AZ:         az,
@@ -79,14 +80,14 @@ func (p *EC2Provisioner) LaunchStandby(ctx context.Context, tier, az, claimFor s
 
 // ListStandbyInstances returns every pending or running instance still
 // tagged as a standby.
-func (p *EC2Provisioner) ListStandbyInstances(ctx context.Context) ([]StandbyInstance, error) {
+func (p *EC2Provisioner) ListStandbyInstances(ctx context.Context) ([]logdb.StandbyInstance, error) {
 	in := &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{
 			{Name: aws.String("tag-key"), Values: []string{tagStandby}},
 			{Name: aws.String("instance-state-name"), Values: []string{"pending", "running"}},
 		},
 	}
-	var out []StandbyInstance
+	var out []logdb.StandbyInstance
 	for {
 		resp, err := p.ec2.DescribeInstances(ctx, in)
 		if err != nil {
@@ -94,7 +95,7 @@ func (p *EC2Provisioner) ListStandbyInstances(ctx context.Context) ([]StandbyIns
 		}
 		for _, r := range resp.Reservations {
 			for _, inst := range r.Instances {
-				sp := StandbyInstance{InstanceID: aws.ToString(inst.InstanceId), ImageID: aws.ToString(inst.ImageId)}
+				sp := logdb.StandbyInstance{InstanceID: aws.ToString(inst.InstanceId), ImageID: aws.ToString(inst.ImageId)}
 				if inst.LaunchTime != nil {
 					sp.LaunchedAt = *inst.LaunchTime
 				}

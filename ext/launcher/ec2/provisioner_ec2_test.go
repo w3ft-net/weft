@@ -1,10 +1,11 @@
 //go:build test
 
-package logdb
+package ec2
 
 import (
 	"context"
 	"fmt"
+	"github.com/w3ft-net/weft/logdb"
 	"sync"
 	"testing"
 	"time"
@@ -217,7 +218,7 @@ func ec2Contains(ss []string, s string) bool {
 	return false
 }
 
-func newTestEC2Provisioner(client EC2RunAPI, vm VolumeManager) *EC2Provisioner {
+func newTestEC2Provisioner(client EC2RunAPI, vm logdb.VolumeManager) *EC2Provisioner {
 	p := NewEC2ProvisionerWithClient(client, vm,
 		map[string]map[string]string{"small": {"us-east-2a": "subnet-a", "us-east-2b": "subnet-b"}},
 		map[string]string{"small": "lt-small"},
@@ -245,7 +246,7 @@ func TestEC2Provisioner_LaunchFresh(t *testing.T) {
 	vm := &fakeVolumeManager{}
 	p := newTestEC2Provisioner(f, vm)
 
-	res, err := p.Launch(context.Background(), LaunchSpec{
+	res, err := p.Launch(context.Background(), logdb.LaunchSpec{
 		ShardID: "s-1", Tier: "small", AZ: "us-east-2a", SizeGB: 20,
 	})
 	if err != nil {
@@ -286,7 +287,7 @@ func TestEC2Provisioner_LaunchOverridesAMI(t *testing.T) {
 	)
 	p.pollInterval = time.Millisecond
 
-	if _, err := p.Launch(context.Background(), LaunchSpec{
+	if _, err := p.Launch(context.Background(), logdb.LaunchSpec{
 		ShardID: "s-1", Tier: "small", AZ: "us-east-2a", SizeGB: 20,
 	}); err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -307,16 +308,16 @@ func TestEC2Provisioner_IdempotentReplay(t *testing.T) {
 	p := newTestEC2Provisioner(f, vm)
 	ctx := context.Background()
 
-	first, err := p.Launch(ctx, LaunchSpec{ShardID: "s-1", Tier: "small", AZ: "us-east-2a", SizeGB: 20})
+	first, err := p.Launch(ctx, logdb.LaunchSpec{ShardID: "s-1", Tier: "small", AZ: "us-east-2a", SizeGB: 20})
 	if err != nil {
 		t.Fatalf("first launch: %v", err)
 	}
 	// Simulate the crash-replay state: the instance is up and tagged, and the
 	// volume it created is now discoverable by tag (the persist that would
 	// have recorded it never happened — that's the crash).
-	vm.findResult = map[string]*VolumeInfo{"s-1": {VolumeID: first.VolumeID}}
+	vm.findResult = map[string]*logdb.VolumeInfo{"s-1": {VolumeID: first.VolumeID}}
 
-	replay, err := p.Launch(ctx, LaunchSpec{ShardID: "s-1", Tier: "small", AZ: "us-east-2a", SizeGB: 20})
+	replay, err := p.Launch(ctx, logdb.LaunchSpec{ShardID: "s-1", Tier: "small", AZ: "us-east-2a", SizeGB: 20})
 	if err != nil {
 		t.Fatalf("replay launch: %v", err)
 	}
@@ -343,7 +344,7 @@ func TestEC2Provisioner_RecoveryReattach(t *testing.T) {
 	p := newTestEC2Provisioner(f, vm)
 	ctx := context.Background()
 
-	first, err := p.Launch(ctx, LaunchSpec{ShardID: "s-1", Tier: "small", AZ: "us-east-2a", SizeGB: 20})
+	first, err := p.Launch(ctx, logdb.LaunchSpec{ShardID: "s-1", Tier: "small", AZ: "us-east-2a", SizeGB: 20})
 	if err != nil {
 		t.Fatalf("first launch: %v", err)
 	}
@@ -351,7 +352,7 @@ func TestEC2Provisioner_RecoveryReattach(t *testing.T) {
 	if err := p.Terminate(ctx, first.InstanceID); err != nil {
 		t.Fatalf("reap: %v", err)
 	}
-	rec, err := p.Launch(ctx, LaunchSpec{
+	rec, err := p.Launch(ctx, logdb.LaunchSpec{
 		ShardID: "s-1", Tier: "small", AZ: "us-east-2a", ExistingVolumeID: first.VolumeID,
 	})
 	if err != nil {
@@ -387,7 +388,7 @@ func TestEC2Provisioner_WaitsForRunning(t *testing.T) {
 	vm := &fakeVolumeManager{}
 	p := newTestEC2Provisioner(f, vm)
 
-	res, err := p.Launch(context.Background(), LaunchSpec{ShardID: "s-1", Tier: "small", AZ: "us-east-2a", SizeGB: 20})
+	res, err := p.Launch(context.Background(), logdb.LaunchSpec{ShardID: "s-1", Tier: "small", AZ: "us-east-2a", SizeGB: 20})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -402,10 +403,10 @@ func TestEC2Provisioner_WaitsForRunning(t *testing.T) {
 
 func TestEC2Provisioner_UnknownAZorTierErrorsFast(t *testing.T) {
 	p := newTestEC2Provisioner(newFakeEC2(), &fakeVolumeManager{})
-	if _, err := p.Launch(context.Background(), LaunchSpec{ShardID: "s-1", Tier: "small", AZ: "us-west-1a"}); err == nil {
+	if _, err := p.Launch(context.Background(), logdb.LaunchSpec{ShardID: "s-1", Tier: "small", AZ: "us-west-1a"}); err == nil {
 		t.Fatal("want error for unconfigured AZ")
 	}
-	if _, err := p.Launch(context.Background(), LaunchSpec{ShardID: "s-1", Tier: "large", AZ: "us-east-2a"}); err == nil {
+	if _, err := p.Launch(context.Background(), logdb.LaunchSpec{ShardID: "s-1", Tier: "large", AZ: "us-east-2a"}); err == nil {
 		t.Fatal("want error for tier with no subnet/template")
 	}
 }

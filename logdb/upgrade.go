@@ -431,7 +431,7 @@ func (sh *Shard) upgradeSwap(ctx context.Context, f UpgradeFacts) error {
 	case "":
 		start := sh.deps.Clock()
 		actx, span := weftsdk.StartSpan(vctx, "upgrade.attach")
-		err := sh.deps.Volumes.AttachToInstance(actx, info.VolumeID, f.SuccessorInstanceID, shardVolumeDevice)
+		err := sh.deps.Volumes.AttachToInstance(actx, info.VolumeID, f.SuccessorInstanceID, ShardVolumeDevice)
 		span.RecordError(err)
 		span.End()
 		if err != nil {
@@ -586,7 +586,7 @@ func (sh *Shard) upgradeRollBack(ctx context.Context, f UpgradeFacts) error {
 		}
 		return nil // the volume detaches as the standby shuts down
 	case info.InstanceID == "":
-		if err := sh.deps.Volumes.AttachToInstance(vctx, info.VolumeID, f.DemotedInstanceID, shardVolumeDevice); err != nil {
+		if err := sh.deps.Volumes.AttachToInstance(vctx, info.VolumeID, f.DemotedInstanceID, ShardVolumeDevice); err != nil {
 			if sh.instanceGone(ctx, f.DemotedInstanceID) || sh.phaseAge(f) > upgradeRollBackBudget {
 				return sh.abortForDeadInstance(ctx, f, fmt.Sprintf("the volume cannot go back to it: %v", err))
 			}

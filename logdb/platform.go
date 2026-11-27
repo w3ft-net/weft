@@ -1,5 +1,11 @@
 package logdb
 
+import (
+	"context"
+
+	"github.com/w3ft-net/weft/shard"
+)
+
 // Platform is where shards run: what launches them, and what a platform that has
 // them keeps beside the launcher. Start takes one; a deployment composes it from
 // the launcher it uses (ext/launcher/*) and the core never names a cloud.
@@ -21,4 +27,16 @@ type Platform struct {
 	// export, volume sizes and where Parquet and cold reads live. Start sets the
 	// per-process fields (secret, holder, leases, retention) on a copy.
 	Config ProvisionerConfig
+}
+
+// ExportStorage is where the archive export keeps its manifests and removes its
+// output: the object store the deployment archives to (ext/storage/s3). Nil: the
+// export is disabled and shards archive in process.
+type ExportStorage func(ctx context.Context, region string) (ExportManifests, ObjectDeleter, error)
+
+// ExportManifests is what the export keeps its completion manifests in: the
+// export host writes them, the coordinator reads them back.
+type ExportManifests interface {
+	shard.ManifestStore
+	shard.ManifestReader
 }

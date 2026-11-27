@@ -1,13 +1,13 @@
-package logdb
+package ec2
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
+	"github.com/w3ft-net/weft/logdb"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -50,29 +50,6 @@ type EC2ExportAPI interface {
 	RunInstances(ctx context.Context, in *ec2.RunInstancesInput, opts ...func(*ec2.Options)) (*ec2.RunInstancesOutput, error)
 	DescribeInstances(ctx context.Context, in *ec2.DescribeInstancesInput, opts ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 	TerminateInstances(ctx context.Context, in *ec2.TerminateInstancesInput, opts ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error)
-}
-
-// SnapshotSpec describes the snapshot of a shard's volume for one export attempt.
-type SnapshotSpec struct {
-	ShardID  string
-	Attempt  int
-	VolumeID string
-}
-
-// ExportSnapshotState is a snapshot's progress as EC2 reports it.
-type ExportSnapshotState struct {
-	State    string // pending | completed | error | recoverable
-	Progress string // e.g. "42%"
-}
-
-// ExportSpec describes the instance for one export attempt.
-type ExportSpec struct {
-	ShardID      string
-	Attempt      int
-	SnapshotID   string
-	InstanceType string
-	AZ           string // must have a configured subnet
-	Prefix       string // archive prefix the export writes under
 }
 
 // ExportResources creates, observes and removes the per-attempt export
@@ -122,7 +99,7 @@ func attemptTagFilters(shardID string, attempt int) []ec2types.Filter {
 // snapshot id without waiting for it to complete (poll SnapshotState).
 // Idempotent: a snapshot already tagged for this shard and attempt is adopted,
 // unless it is in the error state, in which case a fresh one is created.
-func (x *ExportResources) CreateSnapshot(ctx context.Context, spec SnapshotSpec) (string, error) {
+func (x *ExportResources) CreateSnapshot(ctx context.Context, spec logdb.SnapshotSpec) (string, error) {
 	if spec.ShardID == "" || spec.Attempt <= 0 || spec.VolumeID == "" {
 		return "", fmt.Errorf("CreateSnapshot: shard id, attempt > 0 and volume id are required (got %+v)", spec)
 	}
@@ -162,27 +139,21 @@ func (x *ExportResources) CreateSnapshot(ctx context.Context, spec SnapshotSpec)
 	return *out.SnapshotId, nil
 }
 
-// errSnapshotNotFound is wrapped by SnapshotState when EC2 does not know the
-// snapshot, as opposed to a describe call that merely failed. The shard FSM
-// treats the first as a vanished snapshot (fail the attempt) and the second as
-// transient (retry next tick).
-var errSnapshotNotFound = errors.New("export snapshot not found")
-
 // SnapshotState reports a snapshot's state. An unknown snapshot wraps
-// errSnapshotNotFound.
-func (x *ExportResources) SnapshotState(ctx context.Context, snapshotID string) (ExportSnapshotState, error) {
+// logdb.ErrSnapshotNotFound.
+func (x *ExportResources) SnapshotState(ctx context.Context, snapshotID string) (logdb.ExportSnapshotState, error) {
 	out, err := x.ec2.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{SnapshotIds: []string{snapshotID}})
 	if err != nil {
 		if snapshotAlreadyGone(err) { // EC2's own "InvalidSnapshot.NotFound" for an unknown id
-			return ExportSnapshotState{}, fmt.Errorf("snapshot %s: %w", snapshotID, errSnapshotNotFound)
+			return logdb.ExportSnapshotState{}, fmt.Errorf("snapshot %s: %w", snapshotID, logdb.ErrSnapshotNotFound)
 		}
-		return ExportSnapshotState{}, fmt.Errorf("describe snapshot %s: %w", snapshotID, err)
+		return logdb.ExportSnapshotState{}, fmt.Errorf("describe snapshot %s: %w", snapshotID, err)
 	}
 	if len(out.Snapshots) == 0 {
-		return ExportSnapshotState{}, fmt.Errorf("snapshot %s: %w", snapshotID, errSnapshotNotFound)
+		return logdb.ExportSnapshotState{}, fmt.Errorf("snapshot %s: %w", snapshotID, logdb.ErrSnapshotNotFound)
 	}
 	s := out.Snapshots[0]
-	return ExportSnapshotState{State: string(s.State), Progress: aws.ToString(s.Progress)}, nil
+	return logdb.ExportSnapshotState{State: string(s.State), Progress: aws.ToString(s.Progress)}, nil
 }
 
 // LaunchInstance starts the export instance for the attempt with a volume
@@ -192,7 +163,7 @@ func (x *ExportResources) SnapshotState(ctx context.Context, snapshotID string) 
 // there is no separate export volume to track or leak. The instance terminates,
 // not stops, when it shuts itself down. Idempotent: a pending|running instance
 // already tagged for this shard and attempt is adopted.
-func (x *ExportResources) LaunchInstance(ctx context.Context, spec ExportSpec) (string, error) {
+func (x *ExportResources) LaunchInstance(ctx context.Context, spec logdb.ExportSpec) (string, error) {
 	if spec.ShardID == "" || spec.Attempt <= 0 || spec.SnapshotID == "" || spec.InstanceType == "" || spec.Prefix == "" {
 		return "", fmt.Errorf("LaunchInstance: shard id, attempt > 0, snapshot id, instance type and prefix are required (got %+v)", spec)
 	}
@@ -329,23 +300,13 @@ func (x *ExportResources) Cleanup(ctx context.Context, shardID string) error {
 	return errors.Join(errs...)
 }
 
-// ExportResource is one export snapshot or instance found in AWS, with the
-// identity its tags carry. Created is zero when EC2 did not report a time.
-type ExportResource struct {
-	Kind    string // "instance" or "snapshot"
-	ID      string
-	ShardID string
-	Attempt int
-	Created time.Time
-}
-
 // ListExportResources returns every live export instance and every export
 // snapshot in the account, found by the export_shard_id tag. Instances that
 // are already terminated are skipped: nothing is left to remove. It is the
 // sweep's view of the world, independent of what the shard rows say.
-func (x *ExportResources) ListExportResources(ctx context.Context) ([]ExportResource, error) {
+func (x *ExportResources) ListExportResources(ctx context.Context) ([]logdb.ExportResource, error) {
 	hasTag := ec2types.Filter{Name: aws.String("tag-key"), Values: []string{exportTagShard}}
-	var out []ExportResource
+	var out []logdb.ExportResource
 
 	insts, err := x.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{hasTag, {
@@ -388,8 +349,8 @@ func (x *ExportResources) ListExportResources(ctx context.Context) ([]ExportReso
 	return out, nil
 }
 
-func exportResourceFromTags(kind, id string, tags []ec2types.Tag) ExportResource {
-	r := ExportResource{Kind: kind, ID: id}
+func exportResourceFromTags(kind, id string, tags []ec2types.Tag) logdb.ExportResource {
+	r := logdb.ExportResource{Kind: kind, ID: id}
 	for _, t := range tags {
 		switch aws.ToString(t.Key) {
 		case exportTagShard:
@@ -403,7 +364,7 @@ func exportResourceFromTags(kind, id string, tags []ec2types.Tag) ExportResource
 
 // DeleteExportResource removes one export instance or snapshot. A resource
 // that is already gone is success: the sweep races the FSM's own cleanup.
-func (x *ExportResources) DeleteExportResource(ctx context.Context, r ExportResource) error {
+func (x *ExportResources) DeleteExportResource(ctx context.Context, r logdb.ExportResource) error {
 	switch r.Kind {
 	case "instance":
 		_, err := x.ec2.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{r.ID}})

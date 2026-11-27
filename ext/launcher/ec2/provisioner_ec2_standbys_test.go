@@ -1,9 +1,10 @@
 //go:build test
 
-package logdb
+package ec2
 
 import (
 	"context"
+	"github.com/w3ft-net/weft/logdb"
 	"testing"
 	"time"
 )
@@ -96,15 +97,15 @@ func TestEC2Provisioner_ClaimReleaseAndListStandbys(t *testing.T) {
 
 // pooledProvisioner is an EC2Provisioner whose launches claim from a pool
 // holding one heartbeating current-image standby in us-east-2a.
-func pooledProvisioner(t *testing.T, vols VolumeManager) (*EC2Provisioner, *fakeEC2, string) {
+func pooledProvisioner(t *testing.T, vols logdb.VolumeManager) (*EC2Provisioner, *fakeEC2, string) {
 	t.Helper()
 	f := newFakeEC2()
 	p := newTestEC2Provisioner(f, vols)
 	p.imageID = "ami-current"
 	db := &memStandbys{}
-	pool := NewStandbyPool(db, p, time.Now)
-	p.SetStandbys(NewStandbyService(pool, nil, nil))
-	if err := pool.Reconcile(context.Background(), map[StandbyPair]bool{{"small", "us-east-2a"}: true}, func(Standby) StandbyUse { return StandbyInUse }); err != nil {
+	pool := logdb.NewStandbyPool(db, p, time.Now)
+	p.SetStandbys(logdb.NewStandbyService(pool, nil, nil))
+	if err := pool.Reconcile(context.Background(), map[logdb.StandbyPair]bool{{"small", "us-east-2a"}: true}, func(logdb.Standby) logdb.StandbyUse { return logdb.StandbyInUse }); err != nil {
 		t.Fatal(err)
 	}
 	standbys, _ := p.ListStandbyInstances(context.Background())
@@ -124,7 +125,7 @@ func TestEC2Provisioner_RecoveryClaimsAStandby(t *testing.T) {
 	vols := &swapVolumes{volume: "vol-1", shardID: "s-rec", attachedTo: "i-dead"}
 	p, f, standby := pooledProvisioner(t, vols)
 	before := len(f.insts)
-	res, err := p.Launch(context.Background(), LaunchSpec{ShardID: "s-rec", Tier: "small", AZ: "us-east-2a", ExistingVolumeID: "vol-1"})
+	res, err := p.Launch(context.Background(), logdb.LaunchSpec{ShardID: "s-rec", Tier: "small", AZ: "us-east-2a", ExistingVolumeID: "vol-1"})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -150,7 +151,7 @@ func TestEC2Provisioner_MintClaimsAStandby(t *testing.T) {
 	vols := &swapVolumes{shardID: "s-other"}
 	p, f, standby := pooledProvisioner(t, vols)
 	before := len(f.insts)
-	res, err := p.Launch(context.Background(), LaunchSpec{ShardID: "s-new", Tier: "small", AZ: "us-east-2a", SizeGB: 20})
+	res, err := p.Launch(context.Background(), logdb.LaunchSpec{ShardID: "s-new", Tier: "small", AZ: "us-east-2a", SizeGB: 20})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -168,7 +169,7 @@ func TestEC2Provisioner_LaunchFallsBackWithoutAStandby(t *testing.T) {
 	vols := &swapVolumes{shardID: "s-other"}
 	p, f, standby := pooledProvisioner(t, vols)
 	before := len(f.insts)
-	res, err := p.Launch(context.Background(), LaunchSpec{ShardID: "s-b", Tier: "small", AZ: "us-east-2b", SizeGB: 20})
+	res, err := p.Launch(context.Background(), logdb.LaunchSpec{ShardID: "s-b", Tier: "small", AZ: "us-east-2b", SizeGB: 20})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}

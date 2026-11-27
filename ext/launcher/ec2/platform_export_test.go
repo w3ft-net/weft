@@ -1,6 +1,6 @@
 //go:build test
 
-package logdb
+package ec2
 
 import "testing"
 

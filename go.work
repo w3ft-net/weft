@@ -4,6 +4,7 @@ use (
 	.
 	./examples/single-machine
 	./ext/config/ssm
+	./ext/launcher/ec2
 	./ext/llm/bedrock
 	./ext/storage/lambda
 	./ext/storage/s3

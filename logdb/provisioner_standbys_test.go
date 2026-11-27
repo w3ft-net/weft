@@ -4,32 +4,83 @@ package logdb
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/w3ft-net/weft/backends/shardstore"
 )
 
-// standbysProvisioner is a leader provisioner over a tx-scoped store, an
-// EC2Provisioner on the fake EC2 (small in us-east-2a/b, medium in 2c) and
-// a pool over both.
-func standbysProvisioner(t *testing.T) (*Provisioner, standbyDB, *fakeEC2) {
+// fakeStandbyLauncher is an in-memory StandbyLauncher (and ShardLauncher): the
+// pool's logic, not any platform's tagging, is what these tests are about.
+type fakeStandbyLauncher struct {
+	mu    sync.Mutex
+	n     int
+	insts []StandbyInstance
+}
+
+func (f *fakeStandbyLauncher) CurrentImageID() string { return "ami-1" }
+
+func (f *fakeStandbyLauncher) LaunchStandby(_ context.Context, tier, az, claimFor string) (StandbyInstance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.n++
+	in := StandbyInstance{InstanceID: fmt.Sprintf("i-fake-%d", f.n), Tier: tier, AZ: az, ImageID: "ami-1", LaunchedAt: time.Now(), ClaimedBy: claimFor}
+	f.insts = append(f.insts, in)
+	return in, nil
+}
+
+func (f *fakeStandbyLauncher) ListStandbyInstances(context.Context) ([]StandbyInstance, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]StandbyInstance(nil), f.insts...), nil
+}
+
+func (f *fakeStandbyLauncher) ClaimInstance(_ context.Context, id, shardID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.insts {
+		if f.insts[i].InstanceID == id {
+			f.insts[i].ClaimedBy = shardID
+		}
+	}
+	return nil
+}
+
+func (f *fakeStandbyLauncher) ReleaseStandby(ctx context.Context, id string) error {
+	return f.Terminate(ctx, id)
+}
+
+func (f *fakeStandbyLauncher) Terminate(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.insts {
+		if f.insts[i].InstanceID == id {
+			f.insts = append(f.insts[:i], f.insts[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+func (f *fakeStandbyLauncher) LaunchInstance(context.Context, string) (string, error) { return "", nil }
+func (f *fakeStandbyLauncher) TerminateInstance(ctx context.Context, id, _ string) error {
+	return f.Terminate(ctx, id)
+}
+
+// standbysProvisioner is a leader provisioner over a tx-scoped store, a fake
+// launcher and a pool over both. Small stripes into us-east-2a/b, medium into 2c.
+func standbysProvisioner(t *testing.T) (*Provisioner, standbyDB, *fakeStandbyLauncher) {
 	t.Helper()
 	db := openStandbyTestStore(t)
-	f := newFakeEC2()
-	ep := NewEC2ProvisionerWithClient(f, &fakeVolumeManager{},
-		map[string]map[string]string{
-			"small":  {"us-east-2a": "subnet-a", "us-east-2b": "subnet-b"},
-			"medium": {"us-east-2c": "subnet-c"},
-		},
-		map[string]string{"small": "lt-small", "medium": "lt-medium"},
-		"ami-1")
+	ep := &fakeStandbyLauncher{}
 	reg := NewShardRegistry()
 	reg.SetStore(db.Store)
 	p := NewProvisioner(reg, ep, ProvisionerConfig{MaxConcurrentEvaluate: 1})
 	setTestStore(p, db.Store)
 	p.SetStandbys(NewStandbyService(NewStandbyPool(db, ep, time.Now), nil, nil))
-	return p, db, f
+	return p, db, ep
 }
 
 func pairsOf(t *testing.T, p *Provisioner) map[StandbyPair]bool {
@@ -168,4 +219,17 @@ func mustListStandbys(t *testing.T, p *Provisioner) []StandbyInstance {
 		t.Fatal(err)
 	}
 	return got
+}
+
+// The fake's topology: small stripes across 2a and 2b, medium sits in 2c.
+var fakeTierAZs = map[string][]string{"small": {"us-east-2a", "us-east-2b"}, "medium": {"us-east-2c"}}
+
+func (f *fakeStandbyLauncher) AZsForTier(tier string) []string { return fakeTierAZs[tier] }
+
+func (f *fakeStandbyLauncher) StripeAZ(tier string, index int) string {
+	azs := fakeTierAZs[tier]
+	if len(azs) == 0 {
+		return ""
+	}
+	return azs[index%len(azs)]
 }

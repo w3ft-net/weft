@@ -1,11 +1,12 @@
 //go:build test
 
-package logdb
+package ec2
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/w3ft-net/weft/logdb"
 	"strings"
 	"sync"
 	"testing"
@@ -201,7 +202,7 @@ func TestExportResources_CreateSnapshotTagsAndIsIdempotent(t *testing.T) {
 	api := &fakeExportEC2{}
 	x := newTestExportResources(api)
 
-	id1, err := x.CreateSnapshot(context.Background(), SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "vol-9"})
+	id1, err := x.CreateSnapshot(context.Background(), logdb.SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "vol-9"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +215,7 @@ func TestExportResources_CreateSnapshotTagsAndIsIdempotent(t *testing.T) {
 
 	// A crash-replay of the same attempt adopts the snapshot rather than
 	// minting a second one.
-	id2, err := x.CreateSnapshot(context.Background(), SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "vol-9"})
+	id2, err := x.CreateSnapshot(context.Background(), logdb.SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "vol-9"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +224,7 @@ func TestExportResources_CreateSnapshotTagsAndIsIdempotent(t *testing.T) {
 	}
 
 	// A new attempt gets its own snapshot.
-	id3, err := x.CreateSnapshot(context.Background(), SnapshotSpec{ShardID: "s-1", Attempt: 2, VolumeID: "vol-9"})
+	id3, err := x.CreateSnapshot(context.Background(), logdb.SnapshotSpec{ShardID: "s-1", Attempt: 2, VolumeID: "vol-9"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,10 +236,10 @@ func TestExportResources_CreateSnapshotTagsAndIsIdempotent(t *testing.T) {
 func TestExportResources_CreateSnapshotDoesNotAdoptAnErroredSnapshot(t *testing.T) {
 	api := &fakeExportEC2{}
 	x := newTestExportResources(api)
-	id1, _ := x.CreateSnapshot(context.Background(), SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "vol-9"})
+	id1, _ := x.CreateSnapshot(context.Background(), logdb.SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "vol-9"})
 	api.snaps[0].state = ec2types.SnapshotStateError
 
-	id2, err := x.CreateSnapshot(context.Background(), SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "vol-9"})
+	id2, err := x.CreateSnapshot(context.Background(), logdb.SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "vol-9"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +250,7 @@ func TestExportResources_CreateSnapshotDoesNotAdoptAnErroredSnapshot(t *testing.
 
 func TestExportResources_CreateSnapshotValidates(t *testing.T) {
 	x := newTestExportResources(&fakeExportEC2{})
-	for _, spec := range []SnapshotSpec{
+	for _, spec := range []logdb.SnapshotSpec{
 		{Attempt: 1, VolumeID: "v"}, {ShardID: "s", VolumeID: "v"}, {ShardID: "s", Attempt: 1},
 	} {
 		if _, err := x.CreateSnapshot(context.Background(), spec); err == nil {
@@ -261,7 +262,7 @@ func TestExportResources_CreateSnapshotValidates(t *testing.T) {
 func TestExportResources_SnapshotState(t *testing.T) {
 	api := &fakeExportEC2{}
 	x := newTestExportResources(api)
-	id, _ := x.CreateSnapshot(context.Background(), SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "v"})
+	id, _ := x.CreateSnapshot(context.Background(), logdb.SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "v"})
 
 	st, err := x.SnapshotState(context.Background(), id)
 	if err != nil || st.State != "pending" || st.Progress != "42%" {
@@ -274,15 +275,15 @@ func TestExportResources_SnapshotState(t *testing.T) {
 	// An unknown snapshot is distinguishable from a failed describe: the FSM
 	// treats the first as a vanished snapshot (fail the attempt), the second as
 	// transient (retry).
-	if _, err := x.SnapshotState(context.Background(), "snap-nope"); !errors.Is(err, errSnapshotNotFound) {
-		t.Fatalf("SnapshotState of an unknown snapshot = %v, want errSnapshotNotFound", err)
+	if _, err := x.SnapshotState(context.Background(), "snap-nope"); !errors.Is(err, logdb.ErrSnapshotNotFound) {
+		t.Fatalf("SnapshotState of an unknown snapshot = %v, want logdb.ErrSnapshotNotFound", err)
 	}
 }
 
 // ── instances ───────────────────────────────────────────────────────
 
-func exportSpec() ExportSpec {
-	return ExportSpec{ShardID: "s-1", Attempt: 2, SnapshotID: "snap-7", InstanceType: "r7g.xlarge", AZ: "us-east-2b", Prefix: "s3://weft-cold/warp"}
+func exportSpec() logdb.ExportSpec {
+	return logdb.ExportSpec{ShardID: "s-1", Attempt: 2, SnapshotID: "snap-7", InstanceType: "r7g.xlarge", AZ: "us-east-2b", Prefix: "s3://weft-cold/warp"}
 }
 
 func TestExportResources_LaunchInstanceRequestShape(t *testing.T) {
@@ -374,12 +375,12 @@ func TestExportResources_LaunchInstanceFailsFastOnBadConfig(t *testing.T) {
 	if _, err := x.LaunchInstance(context.Background(), badAZ); err == nil {
 		t.Error("launch in an AZ with no subnet succeeded")
 	}
-	for name, mutate := range map[string]func(*ExportSpec){
-		"no shard":    func(s *ExportSpec) { s.ShardID = "" },
-		"no attempt":  func(s *ExportSpec) { s.Attempt = 0 },
-		"no snapshot": func(s *ExportSpec) { s.SnapshotID = "" },
-		"no type":     func(s *ExportSpec) { s.InstanceType = "" },
-		"no prefix":   func(s *ExportSpec) { s.Prefix = "" },
+	for name, mutate := range map[string]func(*logdb.ExportSpec){
+		"no shard":    func(s *logdb.ExportSpec) { s.ShardID = "" },
+		"no attempt":  func(s *logdb.ExportSpec) { s.Attempt = 0 },
+		"no snapshot": func(s *logdb.ExportSpec) { s.SnapshotID = "" },
+		"no type":     func(s *logdb.ExportSpec) { s.InstanceType = "" },
+		"no prefix":   func(s *logdb.ExportSpec) { s.Prefix = "" },
 	} {
 		spec := exportSpec()
 		mutate(&spec)
@@ -423,8 +424,8 @@ func TestExportResources_CleanupRemovesOnlyThisShardsResources(t *testing.T) {
 	mine := exportSpec()
 	other := exportSpec()
 	other.ShardID = "s-other"
-	mineSnap, _ := x.CreateSnapshot(ctx, SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "v"})
-	otherSnap, _ := x.CreateSnapshot(ctx, SnapshotSpec{ShardID: "s-other", Attempt: 1, VolumeID: "v2"})
+	mineSnap, _ := x.CreateSnapshot(ctx, logdb.SnapshotSpec{ShardID: "s-1", Attempt: 1, VolumeID: "v"})
+	otherSnap, _ := x.CreateSnapshot(ctx, logdb.SnapshotSpec{ShardID: "s-other", Attempt: 1, VolumeID: "v2"})
 	mineInst, _ := x.LaunchInstance(ctx, mine)
 	otherInst, _ := x.LaunchInstance(ctx, other)
 

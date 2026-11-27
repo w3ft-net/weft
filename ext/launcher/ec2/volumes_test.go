@@ -1,8 +1,9 @@
-package logdb
+package ec2
 
 import (
 	"context"
 	"fmt"
+	"github.com/w3ft-net/weft/logdb"
 	"sync"
 	"testing"
 	"time"
@@ -201,7 +202,7 @@ func TestVolumeManager_CreateForShard_TagsAndSizesVolume(t *testing.T) {
 	mock := &mockEC2Volumes{}
 	vm := NewEC2VolumeManagerWithClient(mock)
 
-	id, err := vm.CreateForShard(context.Background(), CreateVolumeOpts{
+	id, err := vm.CreateForShard(context.Background(), logdb.CreateVolumeOpts{
 		ShardID: "shard-2026w16-small-01",
 		Tier:    "small",
 		AZ:      "us-east-2a",

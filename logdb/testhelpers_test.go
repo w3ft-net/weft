@@ -175,3 +175,12 @@ func ptr[T any](v T) *T { return &v }
 
 // setTestStore gives p the shard-state store.
 func setTestStore(p *Provisioner, db shardstore.Store) { p.SetShardStore(db) }
+
+func contains(xs []string, x string) bool {
+	for _, e := range xs {
+		if e == x {
+			return true
+		}
+	}
+	return false
+}

@@ -42,13 +42,11 @@ const (
 	defaultArchiveSweepInterval = 15 * time.Minute
 )
 
-// ExportLister is the sweep's view of AWS. *ExportResources implements it.
+// ExportLister is the sweep's view of AWS. ext/launcher/ec2 implements it.
 type ExportLister interface {
 	ListExportResources(ctx context.Context) ([]ExportResource, error)
 	DeleteExportResource(ctx context.Context, r ExportResource) error
 }
-
-var _ ExportLister = (*ExportResources)(nil)
 
 // archiveSweepStore is the slice of PGShardStore the sweeper reads.
 type archiveSweepStore interface {

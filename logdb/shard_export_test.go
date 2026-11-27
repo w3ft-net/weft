@@ -880,7 +880,7 @@ func TestShardExport_OutputDeleteFailureRetriesNextTick(t *testing.T) {
 	f.assertDataIntact(t)
 
 	// Cleanup already removed the snapshot; the next tick sees it vanished.
-	f.ops.snapErr = errSnapshotNotFound
+	f.ops.snapErr = ErrSnapshotNotFound
 	f.outputs.err = nil
 	f.evaluate(t)
 
@@ -895,7 +895,7 @@ func TestShardExport_OutputDeleteFailureRetriesNextTick(t *testing.T) {
 func TestShardExport_SnapshotVanishedFailsTheAttempt(t *testing.T) {
 	f := newExportFixture(t)
 	f.seedAttempt(t, 1, f.clock, "snap-1", "")
-	f.ops.snapErr = errSnapshotNotFound
+	f.ops.snapErr = ErrSnapshotNotFound
 
 	f.evaluate(t)
 

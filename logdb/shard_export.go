@@ -43,13 +43,13 @@ const (
 	// Resetting export_attempt to 0 re-arms it.
 	maxExportAttempts = 3
 
-	// defaultMaxConcurrentExports caps export instances in flight across all
+	// DefaultMaxConcurrentExports caps export instances in flight across all
 	// shards, to stay under EC2 vCPU quotas when a bucket cohort reaches
 	// ARCHIVING together.
-	defaultMaxConcurrentExports = 2
+	DefaultMaxConcurrentExports = 2
 )
 
-// ExportOps is the AWS surface the export phases use. *ExportResources is the
+// ExportOps is the AWS surface the export phases use. The EC2 ExportResources (ext/launcher/ec2) is the
 // production implementation; tests fake it.
 type ExportOps interface {
 	CreateSnapshot(ctx context.Context, spec SnapshotSpec) (string, error)
@@ -58,8 +58,6 @@ type ExportOps interface {
 	InstanceState(ctx context.Context, instanceID string) (string, error)
 	Cleanup(ctx context.Context, shardID string) error
 }
-
-var _ ExportOps = (*ExportResources)(nil)
 
 // ExportSize maps a shard's on-disk size to the export instance type for it:
 // the smallest class whose MaxDBBytes is at least the size.
@@ -113,7 +111,7 @@ func (d *ShardDeps) maxConcurrentExports() int {
 	if d.MaxConcurrentExports > 0 {
 		return d.MaxConcurrentExports
 	}
-	return defaultMaxConcurrentExports
+	return DefaultMaxConcurrentExports
 }
 
 // exportInstanceEnded reports whether an EC2 instance state means the export
@@ -264,7 +262,7 @@ func (sh *Shard) advanceExport(ctx context.Context) error {
 		snapID = id
 	}
 	snap, err := d.Exports.SnapshotState(ctx, snapID)
-	if errors.Is(err, errSnapshotNotFound) {
+	if errors.Is(err, ErrSnapshotNotFound) {
 		// Also what a half-finished failure looks like: cleanup removed the
 		// snapshot but a later step did not complete. Failing again re-runs the
 		// idempotent cleanup instead of polling a snapshot that will never return.

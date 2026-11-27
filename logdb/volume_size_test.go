@@ -10,8 +10,8 @@ func TestVolumeSizeGB_FallsBackPerTier(t *testing.T) {
 	cases := map[string]int32{
 		"small":   25,                   // explicit override
 		"large":   100,                  // explicit override
-		"medium":  defaultShardVolumeGB, // present but 0 → fallback
-		"unknown": defaultShardVolumeGB, // absent → fallback
+		"medium":  DefaultShardVolumeGB, // present but 0 → fallback
+		"unknown": DefaultShardVolumeGB, // absent → fallback
 	}
 	for tier, want := range cases {
 		if got := d.volumeSizeGB(tier); got != want {
@@ -21,27 +21,7 @@ func TestVolumeSizeGB_FallsBackPerTier(t *testing.T) {
 
 	// Nil map (the dev/test ShardDeps) must still resolve to the default.
 	var nilDeps ShardDeps
-	if got := nilDeps.volumeSizeGB("small"); got != defaultShardVolumeGB {
-		t.Errorf("nil-map volumeSizeGB = %d, want %d", got, defaultShardVolumeGB)
-	}
-}
-
-// TestParseShardVolumeSizes_ParsesAndSkipsJunk asserts a positive integer is
-// parsed per tier and that blank/malformed/non-positive values are skipped
-// (left to the launch-time default), never poisoning the map with a 0.
-func TestParseShardVolumeSizes_ParsesAndSkipsJunk(t *testing.T) {
-	t.Setenv("SHARD_SMALL_VOLUME_GB", "25")
-	t.Setenv("SHARD_MEDIUM_VOLUME_GB", "not-a-number")
-	t.Setenv("SHARD_LARGE_VOLUME_GB", "0")
-
-	got := parseShardVolumeSizes()
-	if got["small"] != 25 {
-		t.Errorf("small: want 25, got %d", got["small"])
-	}
-	if _, ok := got["medium"]; ok {
-		t.Errorf("medium: malformed value should be skipped, got %d", got["medium"])
-	}
-	if _, ok := got["large"]; ok {
-		t.Errorf("large: non-positive value should be skipped, got %d", got["large"])
+	if got := nilDeps.volumeSizeGB("small"); got != DefaultShardVolumeGB {
+		t.Errorf("nil-map volumeSizeGB = %d, want %d", got, DefaultShardVolumeGB)
 	}
 }

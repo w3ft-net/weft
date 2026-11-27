@@ -1,4 +1,4 @@
-package logdb
+package ec2
 
 import (
 	"reflect"

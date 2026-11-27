@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"github.com/w3ft-net/weft/logdb"
 	"strings"
 	"testing"
 
@@ -64,7 +66,8 @@ func testDeployment(t *testing.T, change func(*deployment.Deployment, *Own)) (*d
 		Mounts: &mounts.Backends{},
 	}
 	o := &Own{
-		Orgs: defaults.OpenOrgs{},
+		Orgs:     defaults.OpenOrgs{},
+		Platform: func(context.Context, string, string) (logdb.Platform, error) { return logdb.Platform{}, nil },
 		Backends: Backends{
 			Notices:      st.Notices,
 			Coordination: st.Coord,

@@ -1,43 +1,30 @@
-package logdb
+package ec2
 
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
-	"github.com/w3ft-net/weft/shard"
+	"github.com/w3ft-net/weft/logdb"
 )
 
-// PlatformFromEnv is the Platform the environment names: EC2 launched directly
-// when SHARD_<TIER>_SUBNETS is configured, Docker otherwise. It is where the
-// deployment policy that the coordinator's main has no reason to know lives
-// (SHARD_*, EXPORT_*, LAMBDA_FUNCTION_URL, PARQUET_DIR, the WEFT_* Docker
-// variables). Both halves are being moved out of core, to ext/launcher/ec2 and
-// ext/launcher/docker; a deployment then builds its Platform itself.
-// ExportStorage is where the archive export keeps its manifests and removes its
-// output: the object store the deployment archives to (ext/storage/s3). Nil: the
-// export is disabled and shards archive in process.
-type ExportStorage func(ctx context.Context, region string) (ExportManifests, ObjectDeleter, error)
-
-// ExportManifests is what the export keeps its completion manifests in: the
-// export host writes them, the coordinator reads them back.
-type ExportManifests interface {
-	shard.ManifestStore
-	shard.ManifestReader
-}
-
-func PlatformFromEnv(ctx context.Context, region, shardSecret string, storage ExportStorage) (Platform, error) {
+// FromEnv is the EC2 platform the environment configures: SHARD_<TIER>_SUBNETS
+// and _LAUNCH_TEMPLATE name where shards launch, SHARD_<TIER>_VOLUME_GB their
+// volumes, EXPORT_* the archive export. ok is false when no tier is configured
+// (nothing to launch into), so the caller can fall back to another platform.
+// storage is where the archive export keeps its manifests; nil disables the
+// export.
+func FromEnv(ctx context.Context, region, shardSecret string, storage logdb.ExportStorage) (plat logdb.Platform, ok bool, err error) {
 	subnets := parseShardSubnets()
-	if len(subnets) > 0 {
-		return ec2Platform(ctx, region, shardSecret, subnets, parseShardTemplates(), storage)
+	if len(subnets) == 0 {
+		return logdb.Platform{}, false, nil
 	}
-	return dockerPlatform(shardSecret), nil
+	plat, err = platform(ctx, region, shardSecret, subnets, parseShardTemplates(), storage)
+	return plat, err == nil, err
 }
 
 // parseShardSubnets reads the per-AZ subnet topology from the environment —
@@ -87,7 +74,7 @@ func parseShardSubnets() map[string]map[string]string {
 // These come from Terraform (the asg-weft-application stack's
 // shard_<tier>_volume_gb vars). Returns tier→GiB for the tiers that set a
 // positive value; a tier missing or malformed here falls back to
-// defaultShardVolumeGB at launch (see ShardDeps.volumeSizeGB). Empty when no
+// logdb.DefaultShardVolumeGB at launch (see ShardDeps.volumeSizeGB). Empty when no
 // tier is configured (dev mode), which is fine — the docker launcher ignores
 // volume size.
 func parseShardVolumeSizes() map[string]int32 {
@@ -103,7 +90,7 @@ func parseShardVolumeSizes() map[string]int32 {
 		}
 		gb, err := strconv.Atoi(raw)
 		if err != nil || gb <= 0 {
-			weftsdk.Warnf(context.Background(), "warning: %s=%q is not a positive integer, ignoring (tier %s falls back to %d GiB)", env, raw, tier, defaultShardVolumeGB)
+			weftsdk.Warnf(context.Background(), "warning: %s=%q is not a positive integer, ignoring (tier %s falls back to %d GiB)", env, raw, tier, logdb.DefaultShardVolumeGB)
 			continue
 		}
 		out[tier] = int32(gb)
@@ -145,7 +132,7 @@ func parseShardTemplates() map[string]string {
 // derived from SHARD_<TIER>_SUBNETS rather than configured separately.
 type exportConfig struct {
 	LaunchTemplate string
-	MaxConcurrent  int // 0 → defaultMaxConcurrentExports
+	MaxConcurrent  int // 0 → logdb.DefaultMaxConcurrentExports
 	Subnets        map[string]string
 }
 
@@ -166,7 +153,7 @@ func parseExportConfig(tierSubnets map[string]map[string]string) exportConfig {
 	if raw := strings.TrimSpace(os.Getenv("EXPORT_MAX_CONCURRENT")); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 {
-			weftsdk.Warnf(context.Background(), "warning: EXPORT_MAX_CONCURRENT=%q is not a positive integer, using the default (%d)", raw, defaultMaxConcurrentExports)
+			weftsdk.Warnf(context.Background(), "warning: EXPORT_MAX_CONCURRENT=%q is not a positive integer, using the default (%d)", raw, logdb.DefaultMaxConcurrentExports)
 		} else {
 			c.MaxConcurrent = n
 		}
@@ -194,7 +181,7 @@ func (c exportConfig) usable(parquetDir string) (bool, string) {
 // process, which is the pre-export behavior: loud in the log, never a boot
 // failure, because a coordinator that will not start is worse than a slow
 // archive.
-func wireArchiveExport(ctx context.Context, provConfig *ProvisionerConfig, region string, tierSubnets map[string]map[string]string, storage ExportStorage) {
+func wireArchiveExport(ctx context.Context, provConfig *logdb.ProvisionerConfig, region string, tierSubnets map[string]map[string]string, storage logdb.ExportStorage) {
 	if storage == nil {
 		weftsdk.Infof(ctx, "provisioner: archive export disabled (no export storage linked); shards archive in process")
 		return
@@ -220,84 +207,35 @@ func wireArchiveExport(ctx context.Context, provConfig *ProvisionerConfig, regio
 	provConfig.MaxConcurrentExports = c.MaxConcurrent
 	maxConcurrent := c.MaxConcurrent
 	if maxConcurrent == 0 {
-		maxConcurrent = defaultMaxConcurrentExports
+		maxConcurrent = logdb.DefaultMaxConcurrentExports
 	}
 	weftsdk.Infof(ctx, "provisioner: archive export enabled (template=%s subnets=%v max_concurrent=%d)",
 		c.LaunchTemplate, c.Subnets, maxConcurrent)
 }
 
-// ec2Platform is the EC2Provisioner and volume manager for production deploys. The coordinator launches shard instances directly via
+// platform is the EC2Provisioner and volume manager for production deploys. The coordinator launches shard instances directly via
 // RunInstances/TerminateInstances (no Auto Scaling Group) — it is the sole
 // capacity authority, so a shard is backed by exactly one instance and there
 // is no "ghost" failure mode. subnets is tier→az→subnet; templates is
 // tier→launch-template-id.
-func ec2Platform(ctx context.Context, region, shardSecret string, subnets map[string]map[string]string, templates map[string]string, storage ExportStorage) (Platform, error) {
-	// One VolumeManager, shared: the EC2Provisioner creates/attaches volumes
+func platform(ctx context.Context, region, shardSecret string, subnets map[string]map[string]string, templates map[string]string, storage logdb.ExportStorage) (logdb.Platform, error) {
+	// One logdb.VolumeManager, shared: the EC2Provisioner creates/attaches volumes
 	// on launch, and the provisioner's shard SM retires them on archive.
 	vm, err := NewEC2VolumeManager(region)
 	if err != nil {
-		return Platform{}, fmt.Errorf("EC2Provisioner needs a VolumeManager (launch creates/attaches volumes): %w", err)
+		return logdb.Platform{}, fmt.Errorf("EC2Provisioner needs a logdb.VolumeManager (launch creates/attaches volumes): %w", err)
 	}
 	ep, err := NewEC2Provisioner(region, subnets, templates, vm)
 	if err != nil {
-		return Platform{}, fmt.Errorf("EC2 provisioner: %w", err)
+		return logdb.Platform{}, fmt.Errorf("EC2 provisioner: %w", err)
 	}
 	weftsdk.Infof(ctx, "provisioner: EC2Provisioner (direct, per-AZ) for %d tier(s): subnets=%v templates=%v", len(subnets), subnets, templates)
 
-	provConfig := DefaultProvisionerConfig()
+	provConfig := logdb.DefaultProvisionerConfig()
 	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
 	provConfig.LambdaFunctionURL = os.Getenv("LAMBDA_FUNCTION_URL")
 	provConfig.VolumeSizesGB = parseShardVolumeSizes()
 	wireArchiveExport(ctx, &provConfig, region, subnets, storage)
-	weftsdk.Infof(ctx, "provisioner: per-tier volume sizes (GiB) from env: %v (tiers absent fall back to %d)", provConfig.VolumeSizesGB, defaultShardVolumeGB)
-	return Platform{Launcher: ep, Volumes: vm, Standby: ep, Config: provConfig}, nil
-}
-
-// dockerPlatform is the Docker launcher the compose file configures.
-func dockerPlatform(shardSecret string) Platform {
-	provConfig := DevProvisionerConfig()
-	provConfig.ParquetDir = os.Getenv("PARQUET_DIR")
-	launcher := buildDockerLauncher(shardSecret)
-	weftsdk.Infof(context.Background(), "provisioner: docker launcher, image=%s data=%s", launcher.Image, launcher.HostDataRoot)
-	return Platform{Launcher: launcher, Config: provConfig}
-}
-
-// buildDockerLauncher constructs a DockerLauncher from env vars set
-// on the coordinator container by docker-compose. Fatal on missing/
-// empty required vars — there's no in-process fallback in this
-// branch, so the operator gets a precise error rather than silent
-// data loss.
-//
-// Required env vars:
-//
-//	WEFT_SHARD_IMAGE      — the image tag to spawn (typically the
-//	                         same image the coordinator runs from)
-//	WEFT_DOCKER_NETWORK   — the docker network name from compose so
-//	                         the spawned shard can resolve
-//	                         "coordinator" by service DNS
-//	WEFT_HOST_DATA_ROOT   — host-side absolute path bind-mounted to
-//	                         WEFT_LOCAL_DATA_ROOT inside both the
-//	                         coordinator and each spawned shard
-//	WEFT_LOCAL_DATA_ROOT  — same volume's path inside the
-//	                         coordinator container; used to mkdir
-//	                         per-shard subdirs
-//	WEFT_COORDINATOR_ADDR — the address shards send heartbeats to;
-//	                         typically "coordinator:9020"
-func buildDockerLauncher(shardSecret string) *DockerLauncher {
-	requireEnv := func(name string) string {
-		v := os.Getenv(name)
-		if v == "" {
-			log.Fatalf("docker launcher: %s is required (no in-process fallback in dev mode)", name)
-		}
-		return v
-	}
-	return &DockerLauncher{
-		Image:             requireEnv("WEFT_SHARD_IMAGE"),
-		Network:           requireEnv("WEFT_DOCKER_NETWORK"),
-		HostDataRoot:      requireEnv("WEFT_HOST_DATA_ROOT"),
-		LocalDataRoot:     requireEnv("WEFT_LOCAL_DATA_ROOT"),
-		CoordinatorAddr:   requireEnv("WEFT_COORDINATOR_ADDR"),
-		HeartbeatInterval: 10 * time.Second,
-		ShardSecret:       shardSecret,
-	}
+	weftsdk.Infof(ctx, "provisioner: per-tier volume sizes (GiB) from env: %v (tiers absent fall back to %d)", provConfig.VolumeSizesGB, logdb.DefaultShardVolumeGB)
+	return logdb.Platform{Launcher: ep, Volumes: vm, Standby: ep, Config: provConfig}, nil
 }

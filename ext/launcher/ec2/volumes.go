@@ -1,8 +1,9 @@
-package logdb
+package ec2
 
 import (
 	"context"
 	"fmt"
+	"github.com/w3ft-net/weft/logdb"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,51 +23,14 @@ type EC2VolumesAPI interface {
 	CreateTags(ctx context.Context, in *ec2.CreateTagsInput, opts ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error)
 }
 
-// VolumeInfo is a flattened view of an EBS volume relevant to shard
-// lifecycle decisions.
-type VolumeInfo struct {
-	VolumeID string
-	AZ       string
-	State    string // available / in-use / creating / deleting / ...
-	ShardID  string // from the shard_id tag; empty for volumes created pre-christening
-	Tier     string // from the shard_tier tag
-	// InstanceID is the instance the volume is attached (or attaching) to,
-	// "" when it is available. An upgrade's swap and rollback re-derive
-	// their progress from it.
-	InstanceID string
-}
-
-// CreateVolumeOpts parameterises a CreateForShard call.
-type CreateVolumeOpts struct {
-	ShardID string
-	Tier    string // small / medium / large; stored as shard_tier tag
-	AZ      string
-	SizeGB  int32
-}
-
-// VolumeManager wraps the EC2 volume APIs with a narrow
-// interface the coordinator can use without dragging the full SDK
-// into every call site. Pure wrappers — decisions about which call
-// to make (christen vs recover, archive vs retain) live in the
-// provisioner, not here.
-type VolumeManager interface {
-	CreateForShard(ctx context.Context, opts CreateVolumeOpts) (volumeID string, err error)
-	FindByShard(ctx context.Context, shardID string) (*VolumeInfo, error)
-	ListAvailableByTier(ctx context.Context, tier, az string) ([]VolumeInfo, error)
-	TagWithShardID(ctx context.Context, volumeID, shardID string) error
-	AttachToInstance(ctx context.Context, volumeID, instanceID, device string) error
-	DetachFromInstance(ctx context.Context, volumeID string, force bool) error
-	DeleteVolume(ctx context.Context, volumeID string) error
-}
-
-// EC2VolumeManager is the production VolumeManager over aws-sdk-go-v2.
+// EC2VolumeManager is the production logdb.VolumeManager over aws-sdk-go-v2.
 type EC2VolumeManager struct {
 	client       EC2VolumesAPI
 	pollInterval time.Duration
 	pollAttempts int
 }
 
-// NewEC2VolumeManager builds a real EC2-backed VolumeManager.
+// NewEC2VolumeManager builds a real EC2-backed logdb.VolumeManager.
 func NewEC2VolumeManager(region string) (*EC2VolumeManager, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region))
 	if err != nil {
@@ -92,7 +56,7 @@ func NewEC2VolumeManagerWithClient(client EC2VolumesAPI) *EC2VolumeManager {
 // shard_id / shard_tier / Name. Returns the volume id. Does not wait
 // for the volume to leave the "creating" state — attach polls for
 // readiness separately.
-func (m *EC2VolumeManager) CreateForShard(ctx context.Context, opts CreateVolumeOpts) (string, error) {
+func (m *EC2VolumeManager) CreateForShard(ctx context.Context, opts logdb.CreateVolumeOpts) (string, error) {
 	size := opts.SizeGB
 	if size <= 0 {
 		return "", fmt.Errorf("CreateForShard: SizeGB must be > 0")
@@ -132,7 +96,7 @@ func (m *EC2VolumeManager) CreateForShard(ctx context.Context, opts CreateVolume
 // nil, nil when no such volume exists (christening case). Multiple
 // matches return the first — the provisioner is responsible for
 // surfacing a duplicates alarm via a separate code path.
-func (m *EC2VolumeManager) FindByShard(ctx context.Context, shardID string) (*VolumeInfo, error) {
+func (m *EC2VolumeManager) FindByShard(ctx context.Context, shardID string) (*logdb.VolumeInfo, error) {
 	if shardID == "" {
 		return nil, fmt.Errorf("FindByShard: shardID required")
 	}
@@ -149,7 +113,7 @@ func (m *EC2VolumeManager) FindByShard(ctx context.Context, shardID string) (*Vo
 		return nil, nil
 	}
 	v := out.Volumes[0]
-	info := &VolumeInfo{}
+	info := &logdb.VolumeInfo{}
 	if v.VolumeId != nil {
 		info.VolumeID = *v.VolumeId
 	}
@@ -173,7 +137,7 @@ func (m *EC2VolumeManager) FindByShard(ctx context.Context, shardID string) (*Vo
 // the requested shard_tier tag and (b) are currently available (i.e.
 // not attached to an instance). These are recovery candidates — their
 // previous instance died and left the volume detached.
-func (m *EC2VolumeManager) ListAvailableByTier(ctx context.Context, tier, az string) ([]VolumeInfo, error) {
+func (m *EC2VolumeManager) ListAvailableByTier(ctx context.Context, tier, az string) ([]logdb.VolumeInfo, error) {
 	if tier == "" || az == "" {
 		return nil, fmt.Errorf("ListAvailableByTier: tier and az required")
 	}
@@ -187,9 +151,9 @@ func (m *EC2VolumeManager) ListAvailableByTier(ctx context.Context, tier, az str
 	if err != nil {
 		return nil, fmt.Errorf("DescribeVolumes tier=%s az=%s: %w", tier, az, err)
 	}
-	infos := make([]VolumeInfo, 0, len(out.Volumes))
+	infos := make([]logdb.VolumeInfo, 0, len(out.Volumes))
 	for _, v := range out.Volumes {
-		info := VolumeInfo{State: string(v.State)}
+		info := logdb.VolumeInfo{State: string(v.State)}
 		if v.VolumeId != nil {
 			info.VolumeID = *v.VolumeId
 		}

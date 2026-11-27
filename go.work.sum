@@ -4,3 +4,4 @@ github.com/w3ft-net/weft v0.9.3/go.mod h1:A8Wqh1whl1+mrcMqjYQ4pExwbAN9qfmMGUV9KP
 github.com/w3ft-net/weft v0.9.4/go.mod h1:A8Wqh1whl1+mrcMqjYQ4pExwbAN9qfmMGUV9KPZu0AA=
 github.com/w3ft-net/weft v0.9.5/go.mod h1:A8Wqh1whl1+mrcMqjYQ4pExwbAN9qfmMGUV9KPZu0AA=
 github.com/w3ft-net/weft v0.9.6/go.mod h1:A8Wqh1whl1+mrcMqjYQ4pExwbAN9qfmMGUV9KPZu0AA=
+github.com/w3ft-net/weft v0.9.7/go.mod h1:A8Wqh1whl1+mrcMqjYQ4pExwbAN9qfmMGUV9KPZu0AA=

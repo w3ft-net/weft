@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/w3ft-net/weft/cmd/coordinator/server"
 	"github.com/w3ft-net/weft/deployment/local"
 	"github.com/w3ft-net/weft/identity"
+	"github.com/w3ft-net/weft/logdb"
 	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/shape"
 	"github.com/w3ft-net/weft/witrepo"
@@ -27,6 +29,9 @@ func main() {
 	defer closeOpen()
 	stores := open.Stores
 	server.Run(fl, open.Deployment, &server.Own{
+		Platform: func(_ context.Context, _, shardSecret string) (logdb.Platform, error) {
+			return logdb.DockerPlatformFromEnv(shardSecret), nil
+		},
 		Orgs: defaults.OpenOrgs{},
 		Backends: server.Backends{
 			Notices:      stores.Notices,

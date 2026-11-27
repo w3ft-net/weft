@@ -1,9 +1,10 @@
-package logdb
+package ec2
 
 import (
 	"context"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
+	"github.com/w3ft-net/weft/logdb"
 	"io"
 	"sort"
 	"strings"
@@ -19,44 +20,6 @@ import (
 // shardVolumeDevice is the block device the shard binary mounts for its
 // DuckDB data (matches entrypoint.sh's mount of /dev/sdf).
 const shardVolumeDevice = "/dev/sdf"
-
-// defaultShardVolumeGB is the fallback size for a newly-created shard data
-// volume when the tier has no SHARD_<TIER>_VOLUME_GB override wired through
-// (dev mode, or a misconfigured prod env). Production sizes come per-tier from
-// Terraform via ProvisionerConfig.VolumeSizesGB — see logdb.parseShardVolumeSizes.
-// Sized to the small tier's realistic floor so a missing override never
-// over-provisions: on a t4g.micro the binding disk constraint is co-located
-// DuckDB spill headroom, not data, and ~25 GiB holds a ~12 GiB .duckdb plus an
-// equal spill arena (see duck-db-tuning.md).
-const defaultShardVolumeGB int32 = 25
-
-// ShardLaunchAPI is the launch primitive the shard FSM depends on. Narrow
-// so test fakes don't have to stand up a whole EC2 client.
-type ShardLaunchAPI interface {
-	Launch(ctx context.Context, spec LaunchSpec) (LaunchResult, error)
-	Terminate(ctx context.Context, instanceID string) error
-}
-
-// LaunchSpec describes one shard instance to bring up. ExistingVolumeID
-// distinguishes a fresh launch (empty: create a new gp3 volume) from a
-// recovery launch (set: reattach the surviving volume). The (Tier, AZ)
-// pair must resolve to a configured subnet + the tier to a launch template,
-// or Launch errors fast — silently falling back would hide config drift.
-type LaunchSpec struct {
-	ShardID          string
-	Tier             string
-	AZ               string
-	ExistingVolumeID string // "" → fresh (create volume); set → recovery (reattach)
-	SizeGB           int32  // fresh-launch volume size; ignored on recovery
-}
-
-// LaunchResult carries the identifiers the shard SM persists onto its entry
-// once a launch completes.
-type LaunchResult struct {
-	InstanceID string
-	VolumeID   string
-	AZ         string
-}
 
 // EC2RunAPI is the slice of the EC2 client EC2Provisioner needs. RunInstances
 // stamps the shard_id tag at birth (via TagSpecifications), so there's no
@@ -87,7 +50,7 @@ type EC2RunAPI interface {
 // relaunch (after the dead instance is reaped) correctly starts fresh.
 type EC2Provisioner struct {
 	ec2     EC2RunAPI
-	volumes VolumeManager
+	volumes logdb.VolumeManager
 
 	// subnets[tier][az] = subnet id; templates[tier] = launch template id.
 	// Both immutable after construction — the provisioner only ever picks
@@ -111,21 +74,21 @@ type EC2Provisioner struct {
 
 	// standbys, when set, is the warm pool Launch claims from before running a
 	// fresh instance.
-	standbys Standbys
+	standbys logdb.Standbys
 }
 
 // SetStandbys lets Launch claim warm-pool standbys for recoveries and mints.
-func (p *EC2Provisioner) SetStandbys(s Standbys) { p.standbys = s }
+func (p *EC2Provisioner) SetStandbys(s logdb.Standbys) { p.standbys = s }
 
 var (
-	_ ShardLaunchAPI = (*EC2Provisioner)(nil)
-	_ ShardLauncher  = (*EC2Provisioner)(nil)
+	_ logdb.ShardLaunchAPI = (*EC2Provisioner)(nil)
+	_ logdb.ShardLauncher  = (*EC2Provisioner)(nil)
 )
 
 // NewEC2Provisioner builds a real EC2-backed provisioner. subnets maps
 // tier → az → subnet id; templates maps tier → launch template id (both
 // parsed from SHARD_<TIER>_SUBNETS / SHARD_<TIER>_LAUNCH_TEMPLATE at boot).
-func NewEC2Provisioner(region string, subnets map[string]map[string]string, templates map[string]string, volumes VolumeManager) (*EC2Provisioner, error) {
+func NewEC2Provisioner(region string, subnets map[string]map[string]string, templates map[string]string, volumes logdb.VolumeManager) (*EC2Provisioner, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region))
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
@@ -146,7 +109,7 @@ func NewEC2Provisioner(region string, subnets map[string]map[string]string, temp
 // NewEC2ProvisionerWithClient injects collaborators (for tests). imageID is the
 // AMI to launch shards from (overriding the launch template); "" disables the
 // override and uses the template's baked AMI.
-func NewEC2ProvisionerWithClient(client EC2RunAPI, volumes VolumeManager, subnets map[string]map[string]string, templates map[string]string, imageID string) *EC2Provisioner {
+func NewEC2ProvisionerWithClient(client EC2RunAPI, volumes logdb.VolumeManager, subnets map[string]map[string]string, templates map[string]string, imageID string) *EC2Provisioner {
 	return &EC2Provisioner{
 		ec2:          client,
 		volumes:      volumes,
@@ -215,15 +178,15 @@ func (p *EC2Provisioner) StripeAZ(tier string, index int) string {
 // once the instance is running and its volume attached. Fresh vs recovery is
 // decided by spec.ExistingVolumeID. Idempotent: an instance already tagged
 // for this shard (pending|running) is adopted rather than duplicated.
-func (p *EC2Provisioner) Launch(ctx context.Context, spec LaunchSpec) (LaunchResult, error) {
+func (p *EC2Provisioner) Launch(ctx context.Context, spec logdb.LaunchSpec) (logdb.LaunchResult, error) {
 	subnet, ok := p.subnets[spec.Tier][spec.AZ]
 	if !ok {
-		return LaunchResult{}, fmt.Errorf("launch %s: no subnet configured for tier=%q az=%q (tier has: %v)",
+		return logdb.LaunchResult{}, fmt.Errorf("launch %s: no subnet configured for tier=%q az=%q (tier has: %v)",
 			spec.ShardID, spec.Tier, spec.AZ, p.AZsForTier(spec.Tier))
 	}
 	templateID, ok := p.templates[spec.Tier]
 	if !ok {
-		return LaunchResult{}, fmt.Errorf("launch %s: no launch template configured for tier=%q", spec.ShardID, spec.Tier)
+		return logdb.LaunchResult{}, fmt.Errorf("launch %s: no launch template configured for tier=%q", spec.ShardID, spec.Tier)
 	}
 
 	// Idempotency: adopt an in-flight instance already tagged for this shard
@@ -232,7 +195,7 @@ func (p *EC2Provisioner) Launch(ctx context.Context, spec LaunchSpec) (LaunchRes
 	// still starts fresh.
 	instanceID, err := p.findLiveByShard(ctx, spec.ShardID)
 	if err != nil {
-		return LaunchResult{}, fmt.Errorf("launch %s: %w", spec.ShardID, err)
+		return logdb.LaunchResult{}, fmt.Errorf("launch %s: %w", spec.ShardID, err)
 	}
 	if instanceID == "" && p.standbys != nil {
 		// A warm-pool standby is already booted: claiming one skips the
@@ -250,7 +213,7 @@ func (p *EC2Provisioner) Launch(ctx context.Context, spec LaunchSpec) (LaunchRes
 	} else {
 		instanceID, err = p.runInstance(ctx, spec, subnet, templateID)
 		if err != nil {
-			return LaunchResult{}, fmt.Errorf("launch %s: %w", spec.ShardID, err)
+			return logdb.LaunchResult{}, fmt.Errorf("launch %s: %w", spec.ShardID, err)
 		}
 	}
 
@@ -258,7 +221,7 @@ func (p *EC2Provisioner) Launch(ctx context.Context, spec LaunchSpec) (LaunchRes
 	// is a real instance-state wait (seconds), not the ASG model's
 	// poll-the-group-until-InService discovery dance.
 	if err := p.waitForRunning(ctx, instanceID); err != nil {
-		return LaunchResult{}, fmt.Errorf("launch %s: %w", spec.ShardID, err)
+		return logdb.LaunchResult{}, fmt.Errorf("launch %s: %w", spec.ShardID, err)
 	}
 
 	volumeID := spec.ExistingVolumeID
@@ -269,12 +232,12 @@ func (p *EC2Provisioner) Launch(ctx context.Context, spec LaunchSpec) (LaunchRes
 		// crash-consistent volume, so force the detach rather than wait.
 		info, err := p.volumes.FindByShard(ctx, spec.ShardID)
 		if err != nil {
-			return LaunchResult{}, fmt.Errorf("launch %s: find volume: %w", spec.ShardID, err)
+			return logdb.LaunchResult{}, fmt.Errorf("launch %s: find volume: %w", spec.ShardID, err)
 		}
 		if info != nil && info.InstanceID != "" && info.InstanceID != instanceID {
 			weftsdk.Infof(ctx, "ec2-provisioner: force-detaching %s from reaped instance %s", volumeID, info.InstanceID)
 			if err := p.volumes.DetachFromInstance(ctx, volumeID, true); err != nil {
-				return LaunchResult{}, fmt.Errorf("launch %s: force-detach %s from %s: %w", spec.ShardID, volumeID, info.InstanceID, err)
+				return logdb.LaunchResult{}, fmt.Errorf("launch %s: force-detach %s from %s: %w", spec.ShardID, volumeID, info.InstanceID, err)
 			}
 		}
 	}
@@ -284,29 +247,29 @@ func (p *EC2Provisioner) Launch(ctx context.Context, spec LaunchSpec) (LaunchRes
 		// created rather than mint a second, orphaned one. The same tag
 		// lookup recovery already relies on.
 		if info, ferr := p.volumes.FindByShard(ctx, spec.ShardID); ferr != nil {
-			return LaunchResult{}, fmt.Errorf("launch %s: find volume: %w", spec.ShardID, ferr)
+			return logdb.LaunchResult{}, fmt.Errorf("launch %s: find volume: %w", spec.ShardID, ferr)
 		} else if info != nil {
 			volumeID = info.VolumeID
 		}
 	}
 	if volumeID == "" {
-		volumeID, err = p.volumes.CreateForShard(ctx, CreateVolumeOpts{
+		volumeID, err = p.volumes.CreateForShard(ctx, logdb.CreateVolumeOpts{
 			ShardID: spec.ShardID,
 			Tier:    spec.Tier,
 			AZ:      spec.AZ,
 			SizeGB:  spec.SizeGB,
 		})
 		if err != nil {
-			return LaunchResult{}, fmt.Errorf("launch %s: create volume: %w", spec.ShardID, err)
+			return logdb.LaunchResult{}, fmt.Errorf("launch %s: create volume: %w", spec.ShardID, err)
 		}
 	}
 	if err := p.volumes.AttachToInstance(ctx, volumeID, instanceID, shardVolumeDevice); err != nil {
-		return LaunchResult{}, fmt.Errorf("launch %s: attach %s→%s: %w", spec.ShardID, volumeID, instanceID, err)
+		return logdb.LaunchResult{}, fmt.Errorf("launch %s: attach %s→%s: %w", spec.ShardID, volumeID, instanceID, err)
 	}
 
 	weftsdk.Infof(ctx, "ec2-provisioner: launched %s (instance=%s vol=%s az=%s subnet=%s)",
 		spec.ShardID, instanceID, volumeID, spec.AZ, subnet)
-	return LaunchResult{InstanceID: instanceID, VolumeID: volumeID, AZ: spec.AZ}, nil
+	return logdb.LaunchResult{InstanceID: instanceID, VolumeID: volumeID, AZ: spec.AZ}, nil
 }
 
 // Terminate removes a shard instance. An already-gone instance is success
@@ -354,7 +317,7 @@ func (p *EC2Provisioner) findLiveByShard(ctx context.Context, shardID string) (s
 // untagged "ghost", not even momentarily. No ClientToken: idempotency comes
 // from findLiveByShard (a stable token would, across recovery generations,
 // return the prior — terminated — instance instead of launching a new one).
-func (p *EC2Provisioner) runInstance(ctx context.Context, spec LaunchSpec, subnet, templateID string) (string, error) {
+func (p *EC2Provisioner) runInstance(ctx context.Context, spec logdb.LaunchSpec, subnet, templateID string) (string, error) {
 	in := &ec2.RunInstancesInput{
 		LaunchTemplate: &ec2types.LaunchTemplateSpecification{
 			LaunchTemplateId: aws.String(templateID),
@@ -426,9 +389,9 @@ func instanceState(out *ec2.DescribeInstancesOutput, instanceID string) string {
 	return ""
 }
 
-// LaunchInstance / TerminateInstance satisfy the legacy ShardLauncher
+// LaunchInstance / TerminateInstance satisfy the legacy logdb.ShardLauncher
 // interface so NewProvisioner accepts an *EC2Provisioner. The FSM drives
-// launches through the ShardLaunchAPI surface (Launch/Terminate); these exist
+// launches through the logdb.ShardLaunchAPI surface (Launch/Terminate); these exist
 // only for the constructor's parameter type.
 func (p *EC2Provisioner) LaunchInstance(context.Context, string) (string, error) {
 	return "", fmt.Errorf("EC2Provisioner.LaunchInstance is a no-op; launches go through Launch(spec)")
