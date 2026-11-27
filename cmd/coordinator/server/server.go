@@ -256,24 +256,27 @@ func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 	coordinator.SetQueryLogCoordinatorID(holder)
 
 	// Shard-data control plane: registry hydration, provisioner +
-	// launcher, lifecycle poller. All policy from env lives inside
-	// logdb (SHARD_<TIER>_SUBNETS / SHARD_<TIER>_LAUNCH_TEMPLATE select
-	// EC2-direct launching); only the runtime-derived inputs (db, secret,
-	// region, holder) cross the boundary. logdb.Start owns the registry
-	// and returns it inside the provisioner.
+	// launcher, lifecycle poller. Where shards run is the platform's
+	// (today read from the environment: SHARD_<TIER>_SUBNETS select
+	// EC2-direct launching, else Docker); the runtime-derived inputs (db,
+	// secret, holder) are logdb.Config's. logdb.Start owns the registry and
+	// returns it inside the provisioner.
+	plat, err := logdb.PlatformFromEnv(provCtx, *awsRegion, shardSecret)
+	if err != nil {
+		log.Fatalf("shard platform: %v", err)
+	}
 	prov, err := logdb.Start(logdb.Config{
 		Ctx:         provCtx,
 		Shards:      b.Shards,
 		Services:    b.Services,
 		Standbys:    b.Standbys,
 		ShardSecret: shardSecret,
-		AWSRegion:   *awsRegion,
 		Holder:      holder,
 		Leases:      coordn,
 		Retention:   own.Retention,
 
 		LegacyFactTable: own.LegacyFactTable,
-	})
+	}, plat)
 	if err != nil {
 		log.Fatalf("logdb.Start: %v", err)
 	}
