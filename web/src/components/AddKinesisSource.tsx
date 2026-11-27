@@ -22,7 +22,7 @@ export default function AddKinesisSource({
 
   const [service, setService] = useState('')
   const [logGroup, setLogGroup] = useState('')
-  const [region, setRegion] = useState('us-east-2')
+  const [region, setRegion] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -36,8 +36,8 @@ export default function AddKinesisSource({
       await addKinesisSource({
         namespace,
         service: service.trim(),
-        log_group: logGroup.trim(),
-        region: region.trim(),
+        locator: logGroup.trim(),
+        params: { region: region.trim() },
       })
       onAdded()
     } catch (e) {

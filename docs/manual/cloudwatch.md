@@ -27,8 +27,8 @@ example, if we wanted to add the service `lovelace` to the `loom` namespace:
 
 ```
 weft source add loom/lovelace \
-  --log-group /aws/lambda/lovelace \
-  --region us-east-2
+  --locator /aws/lambda/lovelace \
+  --param region=us-east-2
 ```
 
 The source will now show up as pending in `weft source list` or `weft source

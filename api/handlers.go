@@ -370,7 +370,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Source management (dashboard-authenticated).
 	auth.HandleFunc("GET /api/sources", s.handleListSources)
-	auth.Handle("POST /api/sources/kinesis", protected(s.handleAddKinesisSource))
+	auth.Handle("POST /api/sources", protected(s.handleAddSource))
 	auth.Handle("DELETE /api/sources/{namespace}/{app}", protected(s.handleDeleteSource))
 
 	// The producers that deliver over HTTPS mount themselves, each at the route

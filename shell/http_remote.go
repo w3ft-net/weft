@@ -153,11 +153,11 @@ func (h *HTTPCoordinator) Close() error { return nil }
 
 // errUnauthorized is what a 401 means to a human at the terminal, whichever
 // endpoint said it.
-var errUnauthorized = errors.New("unauthorized — run `weft login` or check WEFT_TOKEN")
+var errUnauthorized = errors.New("unauthorized — check your credentials (WEFT_TOKEN, or the credential in .weft.yaml)")
 
 // httpError turns a non-2xx response into a CLI-friendly error. 401 always
 // means the same thing to a human at the terminal, regardless of which
-// endpoint said it, so every caller gets the same "run weft login" hint
+// endpoint said it, so every caller gets the same credentials hint
 // instead of a raw status code — weft sh's first call (ListApps, via
 // connectRemote in cmd/weft/main.go) used to leak "HTTP 401" straight to
 // the terminal on an expired/invalid token.
@@ -577,25 +577,21 @@ func (h *HTTPCoordinator) ConfigureSource(namespace, service string, config map[
 
 // ── Sources (CloudWatch push + weftd) ───────────────────────────
 
-// AddKinesisSourceRequest mirrors the JSON body accepted by
-// POST /api/sources/kinesis. No cross-account role (nothing runs in
-// weft's account for this path — see
-// docs/plans/cloudwatch-kinesis-subscription.md) and no schema fields
-// (the source is created StatusPending; `weft source configure`
-// finishes it once real events have started flowing through the
-// customer's Firehose stream and a sample has accumulated).
-type AddKinesisSourceRequest struct {
-	Namespace string `json:"namespace"`
-	Service   string `json:"service"`
-	LogGroup  string `json:"log_group"`
-	Region    string `json:"region"`
+// AddSourceRequest mirrors the JSON body accepted by POST /api/sources. The
+// server decides what Locator means and which Params it takes. The source is
+// created StatusPending; `weft source configure` finishes it once real events
+// have flowed and a sample has accumulated.
+type AddSourceRequest struct {
+	Namespace string            `json:"namespace"`
+	Service   string            `json:"service"`
+	Locator   string            `json:"locator"`
+	Params    map[string]string `json:"params,omitempty"`
 }
 
-// AddKinesisSource registers the AWS-log-group→service mapping for a
-// Firehose push source.
-func (h *HTTPCoordinator) AddKinesisSource(req AddKinesisSourceRequest) error {
+// AddSource registers a push source.
+func (h *HTTPCoordinator) AddSource(req AddSourceRequest) error {
 	body, _ := json.Marshal(req)
-	r, _ := http.NewRequest("POST", h.baseURL+"/api/sources/kinesis", bytes.NewReader(body))
+	r, _ := http.NewRequest("POST", h.baseURL+"/api/sources", bytes.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	h.setAuthHeaders(r)
 

@@ -94,7 +94,7 @@ func LoadConfig() (*Config, error) {
 	}
 
 	if cfg.Endpoint == "" {
-		return nil, fmt.Errorf("no endpoint configured — run `weft login`")
+		return nil, fmt.Errorf("no endpoint configured — set `endpoint:` in .weft.yaml to your api URL")
 	}
 
 	return cfg, nil

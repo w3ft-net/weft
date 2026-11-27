@@ -27,8 +27,8 @@ that requires its own token, but it's probably tidier if it's got its own.</p>
 <p>Use the <code>weft</code> CLI to tell weft which log group maps to which service. For
 example, if we wanted to add the service <code>lovelace</code> to the <code>loom</code> namespace:</p>
 <pre><code>weft source add loom/lovelace \\
-  --log-group /aws/lambda/lovelace \\
-  --region us-east-2
+  --locator /aws/lambda/lovelace \\
+  --param region=us-east-2
 </code></pre>
 <p>The source will now show up as pending in <code>weft source list</code> or <code>weft source pending</code> until you get logs flowing.</p>
 <h3 id="deploy-the-cloudformation-stack">Deploy the CloudFormation stack</h3>

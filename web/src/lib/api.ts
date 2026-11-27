@@ -572,12 +572,12 @@ export function deleteSource(namespace: string, service: string): Promise<void> 
 export interface AddKinesisSourceRequest {
   namespace: string
   service: string
-  log_group: string
-  region: string
+  locator: string
+  params: Record<string, string>
 }
 
 export function addKinesisSource(req: AddKinesisSourceRequest): Promise<void> {
-  return apiFetch('/api/sources/kinesis', {
+  return apiFetch('/api/sources', {
     method: 'POST',
     body: JSON.stringify(req),
   })

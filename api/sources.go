@@ -535,29 +535,37 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 
-// handleAddKinesisSource registers the AWS-log-group→service mapping for
-// a Firehose push source: no cross-account role to verify and no schema
-// to build server-side. The source is created StatusPending; enrichRows/
-// accumulatePendingSamples (api/adapter.go) accumulate a sample
-// from the customer's real Firehose deliveries once their CloudFormation
-// stack is live, and `weft source configure` (unmodified — already
-// source-type-agnostic) finishes onboarding once a human has something
-// to approve.
-func (s *Server) handleAddKinesisSource(w http.ResponseWriter, r *http.Request) {
+// handleAddSource registers a push source by locator: what the locator means
+// (today an AWS CloudWatch log group, with its region as a param) is the
+// server's to decide, so clients carry no source-type vocabulary. The source is
+// created StatusPending; enrichRows/accumulatePendingSamples (api/adapter.go)
+// accumulate a sample from the real deliveries, and `weft source configure`
+// finishes onboarding once a human has something to approve.
+func (s *Server) handleAddSource(w http.ResponseWriter, r *http.Request) {
 	session := GetSession(r)
 
 	var req struct {
-		Namespace string `json:"namespace"`
-		Service   string `json:"service"`
-		LogGroup  string `json:"log_group"`
-		Region    string `json:"region"`
+		Namespace string            `json:"namespace"`
+		Service   string            `json:"service"`
+		Locator   string            `json:"locator"`
+		Params    map[string]string `json:"params"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if req.Namespace == "" || req.Service == "" || req.LogGroup == "" {
-		http.Error(w, "namespace, service, and log_group are required", http.StatusBadRequest)
+	if req.Namespace == "" || req.Service == "" || req.Locator == "" {
+		http.Error(w, "namespace, service, and locator are required", http.StatusBadRequest)
+		return
+	}
+	for k := range req.Params {
+		if k != "region" {
+			http.Error(w, fmt.Sprintf("unknown param %q (known: region)", k), http.StatusBadRequest)
+			return
+		}
+	}
+	if req.Params["region"] == "" {
+		http.Error(w, "param region is required: the log group's AWS region, e.g. --param region=eu-west-1", http.StatusBadRequest)
 		return
 	}
 
@@ -569,8 +577,8 @@ func (s *Server) handleAddKinesisSource(w http.ResponseWriter, r *http.Request) 
 	if _, err := s.coordClient.AddSource(s.coordCtx(r), &pb.AddSourceRequest{
 		Namespace: req.Namespace,
 		Service:   req.Service,
-		LogGroup:  req.LogGroup,
-		Region:    req.Region,
+		LogGroup:  req.Locator,
+		Region:    req.Params["region"],
 	}); err != nil {
 		http.Error(w, "add source: "+err.Error(), http.StatusBadGateway)
 		return

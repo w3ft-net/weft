@@ -68,7 +68,7 @@ func TestHTTPCoordinator_Query426(t *testing.T) {
 // TestHTTPCoordinator_ListApps401 pins the friendly 401-handling path.
 // ListApps is what `weft sh` calls first (connectRemote, cmd/weft/main.go)
 // to build the shell, so an expired/invalid token surfaces here — the CLI
-// must say to run `weft login`, not dump a raw "HTTP 401" at the user.
+// must say to check credentials, not dump a raw "HTTP 401" at the user.
 func TestHTTPCoordinator_ListApps401(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unauthorized: token expired", http.StatusUnauthorized)
@@ -82,10 +82,10 @@ func TestHTTPCoordinator_ListApps401(t *testing.T) {
 	}
 	msg := err.Error()
 	if strings.Contains(msg, "401") {
-		t.Errorf("error %q leaks the raw HTTP status — want a login hint instead", msg)
+		t.Errorf("error %q leaks the raw HTTP status — want a credentials hint instead", msg)
 	}
-	if !strings.Contains(msg, "weft login") {
-		t.Errorf("error %q missing a `weft login` hint", msg)
+	if !strings.Contains(msg, "credentials") {
+		t.Errorf("error %q missing a credentials hint", msg)
 	}
 }
 

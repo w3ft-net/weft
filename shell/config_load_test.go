@@ -124,7 +124,7 @@ func TestLoadConfig_EnvOverridesFile(t *testing.T) {
 
 // TestLoadConfig_NoEndpoint: without endpoint configured, LoadConfig
 // returns an actionable error. The CLI surfaces this to nudge the
-// user to run `weft login`.
+// user to set the endpoint.
 func TestLoadConfig_NoEndpoint(t *testing.T) {
 	withHome(t)
 	if _, err := LoadConfig(); err == nil {

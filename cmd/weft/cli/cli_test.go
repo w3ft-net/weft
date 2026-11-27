@@ -97,7 +97,7 @@ func TestUnknownFlagIsAnError(t *testing.T) {
 
 func TestArgumentShapes(t *testing.T) {
 	for _, args := range [][]string{
-		{"source", "add", "ops/api"},     // --log-group is required
+		{"source", "add", "ops/api"},     // --locator is required
 		{"source", "remove", "ops"},      // not ns/svc
 		{"namespace", "create", "a/b"},   // a namespace has no slash
 		{"token", "create"},              // needs a namespace

@@ -31,16 +31,17 @@ func sourceCmd(e Env) *cobra.Command {
 // target is the positional ns/svc every per-source command takes.
 func target(arg string) (namespace, service string, err error) { return parseTarget(arg) }
 
-// A source is registered as a push-based CloudWatch source: the AWS
-// log-group to service mapping the CloudWatch adapter routes against, created
-// pending. There is no live sample to pull at creation time (the Firehose
-// stream has not been deployed yet), so this registers the mapping and
+// sourceAddCmd registers a push source by locator. The CLI knows no source
+// types: the server decides what the locator means and which params it takes
+// (a CloudWatch log group takes region). The source is created pending, and
 // `weft source configure` finishes onboarding once real events have
 // accumulated a sample.
 func sourceAddCmd(e Env) *cobra.Command {
-	var logGroup, region string
+	var locator string
+	var params map[string]string
 	cmd := &cobra.Command{
-		Use: "add NS/SVC --log-group GROUP", Short: "Register a CloudWatch log group as a source", Args: cobra.ExactArgs(1),
+		Use: "add NS/SVC --locator LOCATOR [--param k=v]", Short: "Register a push source", Args: cobra.ExactArgs(1),
+		Example: "  weft source add loom/lovelace --locator /aws/lambda/lovelace --param region=us-east-2",
 		RunE: runE(func(_ *cobra.Command, args []string) error {
 			namespace, service, err := target(args[0])
 			if err != nil {
@@ -50,21 +51,20 @@ func sourceAddCmd(e Env) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := client.AddKinesisSource(shell.AddKinesisSourceRequest{
-				Namespace: namespace, Service: service, LogGroup: logGroup, Region: region,
+			if err := client.AddSource(shell.AddSourceRequest{
+				Namespace: namespace, Service: service, Locator: locator, Params: params,
 			}); err != nil {
 				return fmt.Errorf("add source: %v", err)
 			}
-			ui.Successf("Added pending source: %s/%s → %s (kinesis push).\n"+
-				"Waiting for the Firehose stream to deliver events and accumulate a sample —\n"+
-				"then run `weft source configure %s/%s` to approve a schema.\n",
-				namespace, service, logGroup, namespace, service)
+			ui.Successf("Added pending source: %s/%s → %s.\n"+
+				"Once events arrive and a sample accumulates, run `weft source configure %s/%s` to approve a schema.\n",
+				namespace, service, locator, namespace, service)
 			return nil
 		}),
 	}
-	cmd.Flags().StringVar(&logGroup, "log-group", "", "The CloudWatch log group")
-	cmd.MarkFlagRequired("log-group")
-	cmd.Flags().StringVar(&region, "region", "us-east-2", "The log group's AWS region")
+	cmd.Flags().StringVar(&locator, "locator", "", "Where the source's logs come from (for CloudWatch, the log group)")
+	cmd.MarkFlagRequired("locator")
+	cmd.Flags().StringToStringVar(&params, "param", nil, "A source parameter, k=v (repeatable)")
 	return cmd
 }
 

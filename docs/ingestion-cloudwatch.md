@@ -63,7 +63,7 @@ needs to think about.
 
 Per AWS account/region the customer wants to connect:
 
-1. Register the source: `weft source add NS/NAME --log-group /aws/lambda/my-function` (or the dashboard's "+ Add Kinesis source"). This only records the AWS log-group→service mapping — `StatusPending`, no schema yet.
+1. Register the source: `weft source add NS/NAME --locator /aws/lambda/my-function --param region=us-east-2` (or the dashboard's "+ Add Kinesis source"). This only records the AWS log-group→service mapping — `StatusPending`, no schema yet.
 2. Deploy the CloudFormation template (`deploy/weft-cloudwatch-firehose/template.yaml`) against the account/region owning that log group, passing the namespace's agent token and the log group name(s). This provisions:
    - The Firehose delivery stream, pointed at `https://api.w3ft.net/api/ingest/cloudwatch`
    - The IAM role CloudWatch Logs assumes to call `firehose:PutRecord`/`PutRecordBatch`
