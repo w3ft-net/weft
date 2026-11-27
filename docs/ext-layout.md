@@ -86,7 +86,7 @@ Every step leaves core and hosted building and tested.
    `examples/single-machine` and `examples/ha-aws` holding the mains, with the
    composition still reading core's in-tree implementations. Core keeps only
    libraries; `weft` and `weftd` stay (they link no ext). Add the `go.work`.
-3. **Move the SDK-heavy implementations one module per commit**, each with the
+3. **Move the SDK-heavy implementations one module per commit** (done, 2026-11-27: `ext/config/ssm`, `ext/tailfanout/redis`, `ext/llm/bedrock`, `ext/storage/lambda`, `ext/storage/s3`, `ext/launcher/ec2`; the CloudWatch poller client and the ASG discovery had no callers and were deleted. Core's `go.mod` has no AWS SDK or go-redis), each with the
    example mains that use it switching their import in the same commit:
    `ext/config/ssm`, `ext/tailfanout/redis`, `ext/llm/bedrock`,
    `ext/ingest/cloudwatch`, `ext/storage/lambda`, `ext/storage/s3`,
