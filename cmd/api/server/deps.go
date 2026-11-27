@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"errors"
+	"github.com/w3ft-net/weft/config"
 
 	weftapi "github.com/w3ft-net/weft/api"
 	"github.com/w3ft-net/weft/deployment"
@@ -18,6 +19,9 @@ import (
 // Own is what only the api asks of a deployment, beside the deployment.Deployment
 // every process shares.
 type Own struct {
+	// ConfigKinds are the config sources WEFT_CONFIG_SOURCE can name beyond the
+	// file (ext/config/ssm).
+	ConfigKinds []config.Kind
 	// Groups says whether a partition names a group; the routes that read or
 	// write a group's data refuse a session that acts in none. Nil: every
 	// partition does.

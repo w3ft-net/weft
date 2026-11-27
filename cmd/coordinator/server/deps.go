@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	weftcfg "github.com/w3ft-net/weft/config"
 	"strings"
 	"time"
 
@@ -27,6 +28,9 @@ import (
 // deployment.Deployment every process shares. A field marked optional left nil
 // is the open default: no feature, or the one-group behaviour.
 type Own struct {
+	// ConfigKinds are the config sources WEFT_CONFIG_SOURCE can name beyond the
+	// file (ext/config/ssm).
+	ConfigKinds []weftcfg.Kind
 	// Orgs maps a group's org handle to the shape. Required.
 	Orgs coordinator.Orgs
 	// Backends is where the coordinator's own data lives. Required, except

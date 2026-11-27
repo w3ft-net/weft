@@ -76,26 +76,46 @@ func (l Layered) Load(ctx context.Context) (map[string]string, error) {
 // DefaultFile is where the file source looks when WEFT_CONFIG_FILE is unset.
 const DefaultFile = "/etc/weft/config.yaml"
 
+// Kind is a source a deployment can offer by name, chosen with
+// WEFT_CONFIG_SOURCE. The file source is always there; an extension supplies the
+// others (ext/config/ssm).
+type Kind struct {
+	Name string
+	// New builds the source. region is where the deployment's cloud is, and may be
+	// empty to use the SDK's own resolution.
+	New func(region string) Source
+}
+
 // SourceFromEnv is the source a process runs on when its deployment names none:
 // the YAML file at WEFT_CONFIG_FILE (else DefaultFile), overridden by the
-// environment. WEFT_CONFIG_SOURCE=ssm reads AWS SSM instead (APP_NAME, default
-// "weft", names the parameter), still overridden by the environment; region is
-// where SSM is, and may be empty to use the SDK's own resolution.
-func SourceFromEnv(region string) Source {
+// environment. WEFT_CONFIG_SOURCE=<name> reads the named kind instead of the file
+// (still overridden by the environment); a name no kind answers to is a mistake
+// and is reported by the returned source on every load, so it is never silently
+// read as no configuration.
+func SourceFromEnv(region string, kinds ...Kind) Source {
 	var base Source
-	switch os.Getenv("WEFT_CONFIG_SOURCE") {
-	case "ssm":
-		app := os.Getenv("APP_NAME")
-		if app == "" {
-			app = "weft"
-		}
-		base = SSMSource{AppName: app, Region: region}
-	default:
+	switch name := os.Getenv("WEFT_CONFIG_SOURCE"); name {
+	case "", "file":
 		path := os.Getenv("WEFT_CONFIG_FILE")
 		if path == "" {
 			path = DefaultFile
 		}
 		base = FileSource{Path: path}
+	default:
+		for _, k := range kinds {
+			if k.Name == name {
+				base = k.New(region)
+			}
+		}
+		if base == nil {
+			base = unknownKind(name)
+		}
 	}
 	return Layered{base, EnvSource{}}
+}
+
+type unknownKind string
+
+func (u unknownKind) Load(context.Context) (map[string]string, error) {
+	return nil, fmt.Errorf("WEFT_CONFIG_SOURCE=%q: this build has no such config source", string(u))
 }

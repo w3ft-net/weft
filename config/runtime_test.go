@@ -1,28 +1,8 @@
 package config
 
 import (
-	"context"
-	"errors"
 	"testing"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
-	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
-
-type fakeSSM struct {
-	value string
-	err   error
-}
-
-func (f *fakeSSM) GetParameter(ctx context.Context, in *ssm.GetParameterInput, _ ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	return &ssm.GetParameterOutput{
-		Parameter: &ssmtypes.Parameter{Value: aws.String(f.value)},
-	}, nil
-}
 
 func TestOverlay_IgnoresUnknownAndBadValues(t *testing.T) {
 	r := Defaults()
@@ -71,31 +51,5 @@ func TestOverlay_AppliesRecognizedValues(t *testing.T) {
 	}
 	if r.IngestTokenBurstBytes != 4194304 {
 		t.Errorf("IngestTokenBurstBytes: got %d, want 4194304", r.IngestTokenBurstBytes)
-	}
-}
-
-func TestSSMSource_MissingParamIsEmpty(t *testing.T) {
-	src := SSMSource{AppName: "weft", client: &fakeSSM{err: errors.New("ParameterNotFound: not found")}}
-	r := Load(context.Background(), src)
-	if r.LoginRPM != Defaults().LoginRPM {
-		t.Errorf("expected defaults on missing param, got %d", r.LoginRPM)
-	}
-}
-
-func TestSSMSource_AppliesBlob(t *testing.T) {
-	src := SSMSource{AppName: "weft", client: &fakeSSM{value: `{"RATELIMIT_LOGIN_RPM": "99", "OTHER_TEAM_KEY": "ignored"}`}}
-	r := Load(context.Background(), src)
-	if r.LoginRPM != 99 {
-		t.Errorf("LoginRPM: got %d, want 99", r.LoginRPM)
-	}
-	if r.LoginBurst != Defaults().LoginBurst {
-		t.Errorf("LoginBurst should retain default")
-	}
-}
-
-func TestSSMSource_InvalidJSONFallsBack(t *testing.T) {
-	r := Load(context.Background(), SSMSource{AppName: "weft", client: &fakeSSM{value: `not-json`}})
-	if r.LoginRPM != Defaults().LoginRPM {
-		t.Errorf("expected defaults on bad JSON")
 	}
 }

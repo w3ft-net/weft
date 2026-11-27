@@ -32,6 +32,9 @@ import (
 
 // Options is what a deployment decides about its shard process.
 type Options struct {
+	// ConfigKinds are the config sources WEFT_CONFIG_SOURCE can name beyond the
+	// file (ext/config/ssm).
+	ConfigKinds []weftcfg.Kind
 	// ManifestStore is where an archive export writes its completion manifest,
 	// for the archive prefix it is given. Nil: only a local directory prefix is
 	// supported, and an s3:// prefix is refused.
@@ -149,7 +152,7 @@ func Run(opts Options) {
 	}
 	cfgCtx, cfgCancel := context.WithCancel(context.Background())
 	defer cfgCancel()
-	cfgPtr := weftcfg.Watch(cfgCtx, weftcfg.SourceFromEnv(region), 60*time.Second)
+	cfgPtr := weftcfg.Watch(cfgCtx, weftcfg.SourceFromEnv(region, opts.ConfigKinds...), 60*time.Second)
 	srv.CfgPtr = cfgPtr
 	bootCfg := cfgPtr.Load()
 

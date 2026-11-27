@@ -158,7 +158,7 @@ func Run(fl *Flags, dep *deployment.Deployment, own *Own) {
 	// and grpc-cap consumer holds. A source that cannot be read falls through to
 	// compile-time defaults. AWS_REGION, when set, is where SSM is.
 	region := os.Getenv("AWS_REGION")
-	srv.SetConfig(config.Watch(ctx, config.SourceFromEnv(region), 60*time.Second))
+	srv.SetConfig(config.Watch(ctx, config.SourceFromEnv(region, own.ConfigKinds...), 60*time.Second))
 
 	weftsdk.Infof(ctx, "weft-api listening on :%s (coordinator: %s)", *port, *coordAddr)
 	var err error

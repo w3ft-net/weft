@@ -69,3 +69,20 @@ func waitFor(t *testing.T, ok func() bool) {
 	}
 	t.Fatal("condition not reached")
 }
+
+func TestSourceFromEnv_NamedKinds(t *testing.T) {
+	t.Setenv("WEFT_CONFIG_SOURCE", "fake")
+	kind := Kind{Name: "fake", New: func(region string) Source { return fakeSource{"RATELIMIT_LOGIN_RPM": "42"} }}
+	if r := Load(context.Background(), SourceFromEnv("", kind)); r.LoginRPM != 42 {
+		t.Fatalf("LoginRPM = %d, want the kind's 42", r.LoginRPM)
+	}
+	// A name no kind answers to is an error on load, so the process falls back to
+	// defaults loudly rather than reading nothing silently.
+	if _, err := SourceFromEnv("").Load(context.Background()); err == nil {
+		t.Fatal("an unknown WEFT_CONFIG_SOURCE loaded without an error")
+	}
+}
+
+type fakeSource map[string]string
+
+func (f fakeSource) Load(context.Context) (map[string]string, error) { return f, nil }
