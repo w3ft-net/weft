@@ -21,6 +21,7 @@ import (
 	"github.com/w3ft-net/weft/compute"
 	computesvc "github.com/w3ft-net/weft/compute/service"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
+	"github.com/w3ft-net/weft/transport"
 )
 
 func main() {
@@ -37,7 +38,11 @@ func main() {
 	flag.Var(readers, "archive-reader", "FORMAT=NAME: the reader of the archives written in FORMAT (repeatable)")
 	readerDefault := flag.String("archive-reader-default", "", "the reader of every archive format with no -archive-reader of its own ("+compute.ArchiveReaderLambda+", or "+compute.ArchiveReaderLocal+" in a -tags localreader build, where it is the default)")
 	cfgPath := cluster.DefineFlag(flag.CommandLine)
+	tlsCfg := transport.DefineFlags(flag.CommandLine)
 	flag.Parse()
+	if err := tlsCfg.Apply(); err != nil {
+		log.Fatalf("compute: %v", err)
+	}
 	if err := cluster.Overlay(flag.CommandLine, cluster.Compute, *cfgPath); err != nil {
 		log.Fatalf("compute: %v", err)
 	}
@@ -73,10 +78,10 @@ func main() {
 		log.Fatalf("compute: archive readers: %v (give -archive-reader-default %s, or -archive-reader FORMAT=NAME)", err, compute.ArchiveReaderLambda)
 	}
 	engine := &compute.Engine{Archive: archives, ShardSecret: shardSecret}
-	srv := grpc.NewServer(
+	srv := grpc.NewServer(append(transport.ServerOptions(),
 		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor()),
 		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor()),
-	)
+	)...)
 	pb.RegisterWeftComputeServer(srv, computesvc.NewServer(engine))
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))

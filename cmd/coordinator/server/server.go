@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/w3ft-net/weft/transport"
 	"log"
 	"net"
 	"net/http"
@@ -139,6 +140,9 @@ func ParseFlags() *Flags {
 func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 	logFile := flags.logFile
 	fl := &flags.Flags
+	if err := fl.TLS.Apply(); err != nil {
+		log.Fatalf("coordinator: %v", err)
+	}
 	if fl.ShareURLBase == "" {
 		log.Fatalf("coordinator: --share-url-base is required: the origin clipboard short links are built on")
 	}
@@ -398,7 +402,7 @@ func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 			stream = append(stream, coordsvc.OnlyStreamInterceptor(allowed))
 		}
 		authUnary, authStream := ids.Interceptors(noJWT)
-		return grpc.NewServer(
+		return grpc.NewServer(append(transport.ServerOptions(),
 			grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
 			// Accept the keepalive pings weftd sends to notice a dead
 			// connection; the default refuses anything faster than every five
@@ -406,7 +410,7 @@ func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 			grpc.KeepaliveEnforcementPolicy(grpckeepalive.ServerEnforcement),
 			grpc.ChainUnaryInterceptor(append(unary, authUnary...)...),
 			grpc.ChainStreamInterceptor(append(stream, authStream...)...),
-		)
+		)...)
 	}
 	srv := newGRPC(coordsvc.PublicMethods, skip)
 	localSrv := newGRPC(nil, skip)

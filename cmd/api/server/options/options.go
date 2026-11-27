@@ -1,6 +1,10 @@
 package options
 
-import "flag"
+import (
+	"flag"
+
+	"github.com/w3ft-net/weft/transport"
+)
 
 // Flags are the api's command-line flags. Their names, defaults and usage text
 // are the process's interface to its unit files; testdata/api_flags.golden pins
@@ -14,6 +18,7 @@ type Flags struct {
 	RenderSyslogPort int
 	RedisAddr        string
 	RedisTLS         bool
+	TLS              *transport.Config
 }
 
 // Define registers the api's flags on fs.
@@ -27,5 +32,6 @@ func Define(fs *flag.FlagSet) *Flags {
 	fs.IntVar(&f.RenderSyslogPort, "render-syslog-port", 9023, "TCP port for the Render TLS syslog listener; the NLB terminates TLS and forwards plaintext here")
 	fs.StringVar(&f.RedisAddr, "redis-addr", "", "Redis/Valkey address for the shared ingest-schema cache (host:port); empty disables it, every schema lookup falls through to Postgres directly")
 	fs.BoolVar(&f.RedisTLS, "redis-tls", false, "use TLS for the Redis connection (required for ElastiCache in-transit encryption)")
+	f.TLS = transport.DefineFlags(fs)
 	return f
 }

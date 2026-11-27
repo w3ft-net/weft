@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	weftsdk "github.com/w3ft-net/weft-go"
+	"github.com/w3ft-net/weft/transport"
 	"io"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 )
@@ -24,7 +24,7 @@ type Client struct {
 // NewClient connects to a remote compute worker.
 func NewClient(addr string) (*Client, error) {
 	conn, err := grpc.NewClient(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		transport.DialOption(),
 		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor()),
 		grpc.WithChainStreamInterceptor(weftsdk.GRPC.StreamClientInterceptor()))
 	if err != nil {

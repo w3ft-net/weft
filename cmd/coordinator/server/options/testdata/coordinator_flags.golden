@@ -26,3 +26,9 @@
     	AWS region for shard EC2 launches + volume management (default "us-east-2")
   -share-url-base clipboard
     	required: origin clipboard short links are built on, e.g. https://weft.example.com
+  -tls-ca string
+    	PEM CA bundle: dial peers over TLS, trusting it; empty dials plaintext
+  -tls-cert string
+    	PEM certificate to serve TLS with (with --tls-key); empty serves plaintext
+  -tls-key string
+    	PEM private key for --tls-cert

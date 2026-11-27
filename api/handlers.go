@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/w3ft-net/weft/transport"
 	"net/http"
 	"slices"
 	"strings"
@@ -27,7 +28,6 @@ import (
 	"github.com/w3ft-net/weft/timerange"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
 	weftsdk "github.com/w3ft-net/weft-go"
@@ -272,7 +272,7 @@ func (s *Server) authorize(ctx context.Context, session Session, act identity.Ac
 // Close when done.
 func (s *Server) Connect() error {
 	conn, err := grpc.NewClient(s.coordAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		transport.DialOption(),
 		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor()),
 		grpc.WithChainStreamInterceptor(weftsdk.GRPC.StreamClientInterceptor()))
 	if err != nil {

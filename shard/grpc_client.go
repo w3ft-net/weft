@@ -3,13 +3,13 @@ package shard
 import (
 	"context"
 	"fmt"
+	"github.com/w3ft-net/weft/transport"
 	"io"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/resolver"
 	"google.golang.org/grpc/resolver/manual"
 	"google.golang.org/grpc/status"
@@ -85,7 +85,7 @@ func NewGRPCShard(id, addr, token string) (*GRPCShard, error) {
 	res.InitialState(resolver.State{Addresses: []resolver.Address{{Addr: addr}}})
 	conn, err := grpc.NewClient(res.Scheme()+":///"+id,
 		grpc.WithResolvers(res),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		transport.DialOption(),
 		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor(), grpctoken.ClientTokenUnaryInterceptor(token)),
 		grpc.WithChainStreamInterceptor(weftsdk.GRPC.StreamClientInterceptor(), grpctoken.ClientTokenStreamInterceptor(token)),
 	)

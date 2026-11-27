@@ -51,6 +51,7 @@ process warns at startup. Keep the key: a ciphertext does not read without it.
 
 - `docs/architecture.md`: system overview
 - `docs/query-execution.md`: predicate pushdown and shard routing
+- `docs/security.md`: the trust model, TLS and secrets
 - `docs/shard-lifecycle.md`: shard states and window rotation
 - `docs/ingestion-*.md`: CloudWatch, weftd and syslog ingest
 - `docs/manual/`, `docs/shell/`: the user manual and the shell's help corpus

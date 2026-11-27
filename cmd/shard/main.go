@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/w3ft-net/weft/transport"
 	"log"
 	"net"
 	"net/http"
@@ -18,7 +19,6 @@ import (
 	"github.com/w3ft-net/weft/cluster"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	weftsdk "github.com/w3ft-net/weft-go"
 
@@ -45,7 +45,11 @@ func main() {
 	liveStore := flag.String("live-store", "duckdb", "the live log store this shard runs, by the name of a store this binary links (duckdb)")
 	perKeyTables := flag.Bool("per-key-tables", false, "keep each log source in a table of its own in a new, empty shard database; a database that already holds rows keeps its layout")
 	cfgPath := cluster.DefineFlag(flag.CommandLine)
+	tlsCfg := transport.DefineFlags(flag.CommandLine)
 	flag.Parse()
+	if err := tlsCfg.Apply(); err != nil {
+		log.Fatalf("shard: %v", err)
+	}
 	if err := cluster.Overlay(flag.CommandLine, cluster.Shard, *cfgPath); err != nil {
 		log.Fatalf("shard: %v", err)
 	}
@@ -143,11 +147,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen grpc: %v", err)
 	}
-	gs := grpc.NewServer(
+	gs := grpc.NewServer(append(transport.ServerOptions(),
 		grpc.MaxRecvMsgSize(bootCfg.GRPCMaxRecvBytes),
 		grpc.ChainUnaryInterceptor(weftsdk.GRPC.UnaryServerInterceptor(), grpctoken.SharedTokenUnaryServerInterceptor(shardSecret), srv.UnaryInterceptor()),
 		grpc.ChainStreamInterceptor(weftsdk.GRPC.StreamServerInterceptor(), grpctoken.SharedTokenStreamServerInterceptor(shardSecret), srv.StreamInterceptor()),
-	)
+	)...)
 	pb.RegisterShardQueryServer(gs, srv)
 
 	go func() {
@@ -313,7 +317,7 @@ func runHeartbeat(coordAddr string, grpcPort int, hbInterval time.Duration, srv 
 	myAddr := fmt.Sprintf("%s:%d", myIP, grpcPort)
 	myInstanceID := getInstanceID()
 
-	conn, err := grpc.NewClient(coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(coordAddr, transport.DialOption())
 	if err != nil {
 		weftsdk.Infof(context.Background(), "heartbeat: connect to coordinator: %v", err)
 		return

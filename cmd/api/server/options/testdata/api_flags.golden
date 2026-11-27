@@ -14,3 +14,9 @@
     	use TLS for the Redis connection (required for ElastiCache in-transit encryption)
   -render-syslog-port int
     	TCP port for the Render TLS syslog listener; the NLB terminates TLS and forwards plaintext here (default 9023)
+  -tls-ca string
+    	PEM CA bundle: dial peers over TLS, trusting it; empty dials plaintext
+  -tls-cert string
+    	PEM certificate to serve TLS with (with --tls-key); empty serves plaintext
+  -tls-key string
+    	PEM private key for --tls-cert

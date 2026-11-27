@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"flag"
+	"github.com/w3ft-net/weft/transport"
 	"log"
 	"net/http"
 	"os"
@@ -52,6 +53,9 @@ func Run(fl *Flags, dep *deployment.Deployment, own *Own) {
 	port, coordAddr, baseURL := &fl.Port, &fl.CoordinatorAddr, &fl.BaseURL
 	renderSyslogPort := &fl.RenderSyslogPort
 
+	if err := fl.TLS.Apply(); err != nil {
+		log.Fatalf("api: %v", err)
+	}
 	if err := validateURLs(fl); err != nil {
 		log.Fatalf("api: %v", err)
 	}
@@ -157,7 +161,14 @@ func Run(fl *Flags, dep *deployment.Deployment, own *Own) {
 	srv.SetConfig(config.Watch(ctx, config.SourceFromEnv(region), 60*time.Second))
 
 	weftsdk.Infof(ctx, "weft-api listening on :%s (coordinator: %s)", *port, *coordAddr)
-	if err := http.ListenAndServe(":"+*port, srv.Handler()); err != nil {
+	var err error
+	httpSrv := &http.Server{Addr: ":" + *port, Handler: srv.Handler(), TLSConfig: transport.ServerTLS()}
+	if httpSrv.TLSConfig != nil {
+		err = httpSrv.ListenAndServeTLS("", "")
+	} else {
+		err = httpSrv.ListenAndServe()
+	}
+	if err != nil {
 		log.Fatal(err)
 	}
 }

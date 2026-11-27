@@ -1,6 +1,10 @@
 package options
 
-import "flag"
+import (
+	"flag"
+
+	"github.com/w3ft-net/weft/transport"
+)
 
 // Flags are the coordinator's command-line flags. Their names,
 // defaults and usage text are the process's interface to its unit files and
@@ -17,6 +21,7 @@ type Flags struct {
 	RedisTLS     bool
 	AWSRegion    string
 	ShareURLBase string
+	TLS          *transport.Config
 	Customer     string
 	DBDSN        string
 	QueryLogPath string
@@ -39,5 +44,6 @@ func Define(fs *flag.FlagSet) *Flags {
 	fs.StringVar(&f.Customer, "customer", "", "fallback customer for dev/docker (queries pass customer per-request)")
 	fs.StringVar(&f.DBDSN, "db-dsn", "", "PostgreSQL DSN (e.g., host=localhost dbname=weft user=weft password=...)")
 	fs.StringVar(&f.QueryLogPath, "query-log", "/var/log/weft/queries.log", "path for the query-audit log; falls back to stderr if unwritable")
+	f.TLS = transport.DefineFlags(fs)
 	return f
 }

@@ -3,6 +3,7 @@ package logdb
 import (
 	"context"
 	"fmt"
+	"github.com/w3ft-net/weft/transport"
 	"time"
 
 	"github.com/w3ft-net/weft/backends/shardstore"
@@ -11,7 +12,6 @@ import (
 	weftsdk "github.com/w3ft-net/weft-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	"github.com/w3ft-net/weft/grpctoken"
@@ -102,7 +102,7 @@ func (p grpcPauser) Resume(ctx context.Context, addr string) error {
 
 func (p grpcPauser) with(addr string, call func(pb.ShardQueryClient) error) error {
 	conn, err := grpc.NewClient(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		transport.DialOption(),
 		grpc.WithChainUnaryInterceptor(weftsdk.GRPC.UnaryClientInterceptor(), grpctoken.ClientTokenUnaryInterceptor(p.shardSecret)),
 	)
 	if err != nil {
