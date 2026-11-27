@@ -166,7 +166,7 @@ func (s *Server) kindRules() *sources.Registry {
 
 // SetClassifier wires the LLM classifier used for pending-source schema
 // detection. Optional — a nil/never-called classifier just means
-// ClassifyAsync skips LLM classification (see NewBedrockClassifierFromEnv,
+// ClassifyAsync skips LLM classification (see ext/llm/bedrock,
 // which itself returns nil when unconfigured).
 func (s *Server) SetClassifier(c ingest.Classifier) {
 	s.classifier = c

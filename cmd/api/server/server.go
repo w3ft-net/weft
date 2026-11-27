@@ -17,7 +17,6 @@ import (
 	"github.com/w3ft-net/weft/cmd/api/server/options"
 	"github.com/w3ft-net/weft/config"
 	"github.com/w3ft-net/weft/deployment"
-	"github.com/w3ft-net/weft/ingest"
 	ingsyslog "github.com/w3ft-net/weft/ingest/syslog"
 	"github.com/w3ft-net/weft/planner"
 	"github.com/w3ft-net/weft/sources"
@@ -110,14 +109,15 @@ func Run(fl *Flags, dep *deployment.Deployment, own *Own) {
 	}
 
 	// LLM-based schema-field classification for pending sources — see
-	// ingest/llmdetect.go. Disabled (classifier stays nil) unless
-	// BEDROCK_CLASSIFIER_MODEL_ID/BEDROCK_REGION are set; that's a
-	// deliberate opt-in, not a startup requirement, since it depends on
-	// IAM/model-access being provisioned separately (infrastructure-live).
-	if classifier, err := ingest.NewBedrockClassifierFromEnv(context.Background()); err != nil {
-		weftsdk.Warnf(context.Background(), "WARNING: bedrock classifier disabled: %v", err)
-	} else if classifier != nil {
-		srv.SetClassifier(classifier)
+	// ingest/llmdetect.go. Off unless the deployment supplies a classifier and
+	// it is configured; that is an opt-in, not a startup requirement, since a
+	// model has to be provisioned separately.
+	if own.Classifier != nil {
+		if classifier, err := own.Classifier(context.Background()); err != nil {
+			weftsdk.Warnf(context.Background(), "WARNING: schema classifier disabled: %v", err)
+		} else if classifier != nil {
+			srv.SetClassifier(classifier)
+		}
 	}
 
 	// The deployment's own configuration of the server (hosted: Stripe prices

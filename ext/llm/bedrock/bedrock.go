@@ -1,4 +1,6 @@
-package ingest
+// Package bedrock is an ingest.LLM over Amazon Bedrock's Converse API: the model
+// behind schema-field classification.
+package bedrock
 
 import (
 	"context"
@@ -11,24 +13,26 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	brdoc "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	brtypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+
+	"github.com/w3ft-net/weft/ingest"
 )
 
-// BedrockLLM is an LLM over Amazon Bedrock's Converse API with tool use, which
+// LLM is an ingest.LLM over Amazon Bedrock's Converse API with tool use, which
 // forces structured JSON output instead of free-text parsing. It is the only
 // Bedrock code; it moves to ext/llm/bedrock.
-type BedrockLLM struct {
+type LLM struct {
 	client  *bedrockruntime.Client
 	modelID string
 }
 
-// NewBedrockLLM builds the LLM against modelID (a Bedrock model ID or
+// New builds the LLM against modelID (a Bedrock model ID or
 // cross-region inference profile ID/ARN, e.g. Amazon Nova Lite) using cfg's
 // credentials and region.
-func NewBedrockLLM(cfg aws.Config, modelID string) *BedrockLLM {
-	return &BedrockLLM{client: bedrockruntime.NewFromConfig(cfg), modelID: modelID}
+func New(cfg aws.Config, modelID string) *LLM {
+	return &LLM{client: bedrockruntime.NewFromConfig(cfg), modelID: modelID}
 }
 
-// NewBedrockClassifierFromEnv builds a classifier over Bedrock from
+// ClassifierFromEnv builds a classifier over Bedrock from
 // BEDROCK_CLASSIFIER_MODEL_ID and BEDROCK_REGION, shared by both the api and the
 // coordinator (each constructs one Server that needs a Classifier).
 //
@@ -38,7 +42,7 @@ func NewBedrockLLM(cfg aws.Config, modelID string) *BedrockLLM {
 // error, when BEDROCK_CLASSIFIER_MODEL_ID is unset: classification is then
 // disabled (ClassifyAsync treats a nil Classifier as "skip") until an operator
 // configures it, rather than the server failing to start.
-func NewBedrockClassifierFromEnv(ctx context.Context) (Classifier, error) {
+func ClassifierFromEnv(ctx context.Context) (ingest.Classifier, error) {
 	modelID := os.Getenv("BEDROCK_CLASSIFIER_MODEL_ID")
 	if modelID == "" {
 		return nil, nil
@@ -51,10 +55,10 @@ func NewBedrockClassifierFromEnv(ctx context.Context) (Classifier, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config for bedrock classifier: %w", err)
 	}
-	return LLMClassifier{LLM: NewBedrockLLM(cfg, modelID)}, nil
+	return ingest.LLMClassifier{LLM: New(cfg, modelID)}, nil
 }
 
-func (b *BedrockLLM) CallTool(ctx context.Context, req ToolRequest) (json.RawMessage, error) {
+func (b *LLM) CallTool(ctx context.Context, req ingest.ToolRequest) (json.RawMessage, error) {
 	resp, err := b.client.Converse(ctx, &bedrockruntime.ConverseInput{
 		ModelId: aws.String(b.modelID),
 		Messages: []brtypes.Message{{

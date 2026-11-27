@@ -1,4 +1,4 @@
-package ingest
+package bedrock
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+
+	"github.com/w3ft-net/weft/ingest"
 )
 
 // Live Bedrock tests: opt-in, because they spend a few model calls and need
@@ -16,7 +18,7 @@ import (
 //
 //	BEDROCK_LIVE_MODEL_ID=us.amazon.nova-lite-v1:0 BEDROCK_LIVE_REGION=us-east-2 \
 //	  go test -tags test ./ingest -run Live -v
-func liveClassifier(t *testing.T) LLMClassifier {
+func liveClassifier(t *testing.T) ingest.LLMClassifier {
 	t.Helper()
 	model, region := os.Getenv("BEDROCK_LIVE_MODEL_ID"), os.Getenv("BEDROCK_LIVE_REGION")
 	if model == "" || region == "" {
@@ -26,7 +28,7 @@ func liveClassifier(t *testing.T) LLMClassifier {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return LLMClassifier{LLM: NewBedrockLLM(cfg, model)}
+	return ingest.LLMClassifier{LLM: New(cfg, model)}
 }
 
 // Detection at sample time: the model's real proposals must survive the
@@ -43,15 +45,13 @@ func TestLiveClassifyMinorityTraceID(t *testing.T) {
 			lines = append(lines, ts+" DEBUG handled GET /healthz 200 1ms")
 		}
 	}
-	det := Detect(lines)
+	det := ingest.Detect(lines)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	raw, vlines, err := c.classifyRaw(ctx, det)
+	res, err := c.Classify(ctx, det)
 	if err != nil {
-		t.Fatalf("classifyRaw: %v", err)
+		t.Fatalf("Classify: %v", err)
 	}
-	t.Logf("model proposed: timestamp=%+v level=%+v trace=%+v", raw.Timestamp, raw.Level, raw.TraceID)
-	res := validateClassification(ctx, raw, vlines)
 	t.Logf("timestamp=%+v level=%+v trace=%+v", res.Timestamp, res.Level, res.TraceID)
 	if res.TraceID == nil {
 		t.Fatal("the model's trace id proposal did not survive verification (on 10 of 30 lines)")
@@ -72,21 +72,15 @@ func TestLiveRetryProposesExtractorForTwoSpellings(t *testing.T) {
 		"2026-10-15 12:00:04 handled id=ef56 ok",
 		"2026-10-15 12:00:05 handled ID: 0a1b ok",
 	}
-	marks := []ProbeMark{
+	marks := []ingest.ProbeMark{
 		{Line: 0, Prefix: "2026-10-15 12:00:01 handled id=", Text: "ab12"},
 		{Line: 1, Prefix: "2026-10-15 12:00:02 handled ID: ", Text: "cd34"},
 		{Line: 2, None: true},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	rawIn := ProposeInput{Field: ProbeTraceID, Base: ProbeBase{Format: "text"}, Lines: lines, Examples: marks[:2], NoValueLines: []int{2}}
-	if raw, err := c.proposeRaw(ctx, rawIn); err != nil {
-		t.Fatalf("proposeRaw: %v", err)
-	} else {
-		t.Logf("model proposed: %+v", raw.Candidates)
-	}
-	res, err := ProbeContext(ctx, ProbeRequest{
-		Field: ProbeTraceID, Base: ProbeBase{Format: "text"}, Lines: lines, Marks: marks, Proposer: c,
+	res, err := ingest.ProbeContext(ctx, ingest.ProbeRequest{
+		Field: ingest.ProbeTraceID, Base: ingest.ProbeBase{Format: "text"}, Lines: lines, Marks: marks, Proposer: c,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -104,27 +98,6 @@ func TestLiveRetryProposesExtractorForTwoSpellings(t *testing.T) {
 			t.Errorf("line %d: %q, want %q", r.Line, r.Value, want[r.Line])
 		}
 	}
-}
-
-// TestLiveRawToolInput prints what the model actually returns for the
-// classifier tool, before any decoding: the first thing to look at when
-// proposals come back empty.
-func TestLiveRawToolInput(t *testing.T) {
-	c := liveClassifier(t)
-	lines := []string{
-		"2026-10-15 12:00:00.000 INFO handled GET /api/items 200 12ms trace_id=3f9a1c0de4b2a871",
-		"2026-10-15 12:00:01.000 DEBUG handled GET /healthz 200 1ms",
-		"2026-10-15 12:00:02.000 INFO handled GET /api/orders 500 90ms trace_id=aa01bb02cc03dd04",
-		"2026-10-15 12:00:03.000 DEBUG handled GET /healthz 200 1ms",
-	}
-	det := Detect(lines)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	b, err := c.LLM.CallTool(ctx, classifyRequest(det, lines))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("raw tool input: %s", b)
 }
 
 // A span-emitting service interleaves start/done pairs (duration only on
@@ -145,16 +118,13 @@ func TestLiveClassifySpanStartDoneSample(t *testing.T) {
 				fmt.Sprintf(" duration=%d.%09ds duration_ns=%d status=ok", 1+i%4, 1234567+i, 1001234567+i),
 		)
 	}
-	det := Detect(lines)
+	det := ingest.Detect(lines)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	raw, vlines, err := c.classifyRaw(ctx, det)
+	res, err := c.Classify(ctx, det)
 	if err != nil {
-		t.Fatalf("classifyRaw: %v", err)
+		t.Fatalf("Classify: %v", err)
 	}
-	t.Logf("model proposed: ts=%+v level=%+v trace=%+v name=%+v span=%+v parent=%+v dur=%+v",
-		raw.Timestamp, raw.Level, raw.TraceID, raw.SpanName, raw.SpanID, raw.ParentSpanID, raw.DurationNs)
-	res := validateClassification(ctx, raw, vlines)
 	t.Logf("verified: trace=%+v name=%+v span=%+v parent=%+v dur=%+v",
 		res.TraceID, res.SpanName, res.SpanID, res.ParentSpanID, res.DurationNs)
 	if res.DurationNs == nil {
@@ -176,7 +146,7 @@ func TestLiveProposeFirstDurationGuess(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := ProbeContext(ctx, ProbeRequest{Field: ProbeDurationNs, Lines: lines, Propose: true, Proposer: c})
+	res, err := ingest.ProbeContext(ctx, ingest.ProbeRequest{Field: ingest.ProbeDurationNs, Lines: lines, Propose: true, Proposer: c})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +179,7 @@ func TestLiveProposeFirstTraceGuess(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	res, err := ProbeContext(ctx, ProbeRequest{Field: ProbeTraceID, Base: ProbeBase{Format: "text"}, Lines: lines, Propose: true, Proposer: c})
+	res, err := ingest.ProbeContext(ctx, ingest.ProbeRequest{Field: ingest.ProbeTraceID, Base: ingest.ProbeBase{Format: "text"}, Lines: lines, Propose: true, Proposer: c})
 	if err != nil {
 		t.Fatal(err)
 	}

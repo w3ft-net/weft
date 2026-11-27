@@ -441,9 +441,12 @@ func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 	// opt-in since it depends on IAM/model-access provisioned separately
 	// (infrastructure-live), not something the coordinator should refuse
 	// to start over.
-	classifier, err := ingest.NewBedrockClassifierFromEnv(context.Background())
-	if err != nil {
-		weftsdk.Warnf(context.Background(), "WARNING: bedrock classifier disabled: %v", err)
+	var classifier ingest.Classifier
+	if own.Classifier != nil {
+		var err error
+		if classifier, err = own.Classifier(context.Background()); err != nil {
+			weftsdk.Warnf(context.Background(), "WARNING: schema classifier disabled: %v", err)
+		}
 	}
 
 	coordSvc := &coordsvc.Server{

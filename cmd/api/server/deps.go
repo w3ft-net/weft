@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"github.com/w3ft-net/weft/config"
+	"github.com/w3ft-net/weft/ingest"
 
 	weftapi "github.com/w3ft-net/weft/api"
 	"github.com/w3ft-net/weft/deployment"
@@ -19,6 +20,9 @@ import (
 // Own is what only the api asks of a deployment, beside the deployment.Deployment
 // every process shares.
 type Own struct {
+	// Classifier builds the LLM-based schema-field classifier (ext/llm/bedrock),
+	// or returns nil when it is not configured. Nil: the api has none.
+	Classifier func(ctx context.Context) (ingest.Classifier, error)
 	// ConfigKinds are the config sources WEFT_CONFIG_SOURCE can name beyond the
 	// file (ext/config/ssm).
 	ConfigKinds []config.Kind

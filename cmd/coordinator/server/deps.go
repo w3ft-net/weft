@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	weftcfg "github.com/w3ft-net/weft/config"
+	"github.com/w3ft-net/weft/ingest"
 	"strings"
 	"time"
 
@@ -28,6 +29,9 @@ import (
 // deployment.Deployment every process shares. A field marked optional left nil
 // is the open default: no feature, or the one-group behaviour.
 type Own struct {
+	// Classifier builds the LLM-based schema-field classifier (ext/llm/bedrock),
+	// or returns nil when it is not configured. Nil: the coordinator has none.
+	Classifier func(ctx context.Context) (ingest.Classifier, error)
 	// TailBus builds the cross-coordinator tail -f bus for the address given with
 	// --redis-addr (ext/tailfanout/redis). Nil: this build links none, and a
 	// process given an address refuses to start.
