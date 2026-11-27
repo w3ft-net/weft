@@ -1,10 +1,11 @@
-package coordinator
+package redisbus
 
 import (
 	"testing"
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/w3ft-net/weft/coordinator"
 	pb "github.com/w3ft-net/weft/proto/weftpb"
 	"github.com/w3ft-net/weft/shape/shapetest"
 )
@@ -19,7 +20,7 @@ func TestRowFromMessage_TheGroupIsTheChannelsNotTag26(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := rowFromMessage(channelFor(Row{LogRow: &pb.LogRow{Namespace: "ns", Service: "svc", Kind: "main"}, Added: shapetest.Added(7)}), payload)
+	got, err := rowFromMessage(channelFor(coordinator.Row{LogRow: &pb.LogRow{Namespace: "ns", Service: "svc", Kind: "main"}, Added: shapetest.Added(7)}), payload)
 	if err != nil {
 		t.Fatal(err)
 	}

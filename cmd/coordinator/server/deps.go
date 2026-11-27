@@ -28,6 +28,10 @@ import (
 // deployment.Deployment every process shares. A field marked optional left nil
 // is the open default: no feature, or the one-group behaviour.
 type Own struct {
+	// TailBus builds the cross-coordinator tail -f bus for the address given with
+	// --redis-addr (ext/tailfanout/redis). Nil: this build links none, and a
+	// process given an address refuses to start.
+	TailBus func(addr string, tls bool) coordinator.TailBus
 	// ConfigKinds are the config sources WEFT_CONFIG_SOURCE can name beyond the
 	// file (ext/config/ssm).
 	ConfigKinds []weftcfg.Kind

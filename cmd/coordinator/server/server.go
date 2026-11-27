@@ -224,7 +224,10 @@ func Run(flags *Flags, dep *deployment.Deployment, own *Own) {
 	// local to this process.
 	var tailBus coordinator.TailBus
 	if *redisAddr != "" {
-		tailBus = coordinator.NewRedisTailBus(*redisAddr, *redisTLS)
+		if own.TailBus == nil {
+			log.Fatalf("coordinator: --redis-addr is set but this build links no tail fan-out bus")
+		}
+		tailBus = own.TailBus(*redisAddr, *redisTLS)
 	}
 
 	coordCfg := CoordinatorConfig(dep, own, coordinator.CoordinatorConfig{
