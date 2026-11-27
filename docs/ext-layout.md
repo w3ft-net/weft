@@ -94,7 +94,7 @@ Every step leaves core and hosted building and tested.
    go-redis; verify with `go list -deps ./... | grep -E 'aws-sdk|go-redis'` empty.
    Registries that currently name an ext (`config.SourceFromEnv` knows "ssm")
    take the ext's constructor instead.
-4. **Move the zero-dependency implementations** (done, 2026-11-27: `ext/backends/sqlite`, `ext/launcher/docker`, `ext/identity/basic` and `ext/identity/magiclink` are moved and pass; `deployment/local` is now `examples/single-machine/local`; the CLI's Basic credential names its env vars itself; core's tests run on `backends/mem`, and its `go.mod` has no `modernc.org/sqlite`. `backends/history/gitrepo` stays in core: it needs no Go dependency and core's `witrepo` tests use it. Left: `go mod tidy` and tags for the ext modules, which cannot resolve until a core tag carries `backends/mem` and `identity/open`) (`ext/backends/*`,
+4. **Move the zero-dependency implementations** (done, 2026-11-27: `ext/backends/sqlite`, `ext/launcher/docker`, `ext/identity/basic` and `ext/identity/magiclink` are moved and pass; `deployment/local` is now `examples/single-machine/local`; the CLI's Basic credential names its env vars itself; core's tests run on `backends/mem`, and its `go.mod` has no `modernc.org/sqlite`. `backends/history/gitrepo` stays in core: it needs no Go dependency and core's `witrepo` tests use it. Released: core v0.10.0, and `ext/{backends/sqlite,identity/basic,identity/magiclink,launcher/docker}/v0.1.0`; the example pins them and builds standalone with `GOWORK=off`. Hosted still imports the old paths) (`ext/backends/*`,
    `ext/launcher/docker`, `ext/identity/*`). Core's `go.mod` loses
    `modernc.org/sqlite`. Conformance tests move with the implementation; the
    suites stay.
