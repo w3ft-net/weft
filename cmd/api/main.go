@@ -13,7 +13,7 @@ import (
 
 func main() {
 	fl := server.ParseFlags()
-	open, closeOpen, err := local.Open(fl.DBDSN)
+	open, closeOpen, err := local.Open(fl.DBDSN, local.WithBaseURL(fl.BaseURL))
 	if err != nil {
 		log.Fatalf("open database: %v", err)
 	}

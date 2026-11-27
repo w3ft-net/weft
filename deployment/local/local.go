@@ -5,6 +5,9 @@
 package local
 
 import (
+	"fmt"
+	"os"
+
 	shellcore "github.com/graybeardcorp/warp/pkg/shell"
 	"github.com/w3ft-net/weft/alerting"
 	"github.com/w3ft-net/weft/backends/defaults"
@@ -13,9 +16,65 @@ import (
 	"github.com/w3ft-net/weft/cronauthor"
 	"github.com/w3ft-net/weft/dashboard"
 	"github.com/w3ft-net/weft/deployment"
+	"github.com/w3ft-net/weft/deployment/magiclink"
 	"github.com/w3ft-net/weft/mounts"
 	"github.com/w3ft-net/weft/sqlitedb"
 )
+
+// Option adjusts Open.
+type Option func(*options)
+
+type options struct{ baseURL string }
+
+// WithBaseURL is the web app's external origin: the sign-in links of the
+// magic-link identity point at it. The api passes it; the coordinator, which
+// only verifies sessions, does not.
+func WithBaseURL(u string) Option { return func(o *options) { o.baseURL = u } }
+
+// AuthEnv chooses the identity: "basic" (the default) or "magiclink".
+const AuthEnv = "WEFT_AUTH"
+
+type authn struct {
+	deployment.Authn
+	// build, when set, finishes Authn once the stores are open.
+	build func(*defaults.Stores) (deployment.Authn, error)
+}
+
+func authnFromEnv(o *options) (authn, error) {
+	switch mode := os.Getenv(AuthEnv); mode {
+	case "", "basic":
+		basic, err := defaults.BasicFromEnv()
+		if err != nil {
+			return authn{}, err
+		}
+		return authn{Authn: deployment.Authn{API: &Identity{Basic: basic}, GRPC: basic.Server()}}, nil
+	case "magiclink":
+		secret, err := magiclink.SecretFromEnv()
+		if err != nil {
+			return authn{}, err
+		}
+		ver, err := magiclink.Verifier(secret)
+		if err != nil {
+			return authn{}, err
+		}
+		if o.baseURL == "" {
+			// The coordinator: sessions are verified, nobody signs in here.
+			return authn{Authn: deployment.Authn{GRPC: ver}}, nil
+		}
+		return authn{build: func(s *defaults.Stores) (deployment.Authn, error) {
+			id, err := magiclink.New(magiclink.Config{
+				Store: s.Login, Secret: secret, BaseURL: o.baseURL,
+				Mail: magiclink.SMTPMailer{SMTP: alerting.SMTPFromEnv()},
+			})
+			if err != nil {
+				return deployment.Authn{}, err
+			}
+			return deployment.Authn{API: id, GRPC: id.Server()}, nil
+		}}, nil
+	default:
+		return authn{}, fmt.Errorf("%s=%q: want basic or magiclink", AuthEnv, mode)
+	}
+}
 
 // DefaultPath is the SQLite database opened when no path is given.
 const DefaultPath = "weft.db"
@@ -35,8 +94,14 @@ type Local struct {
 // returned func closes both. The credential is read first, so a build without
 // one does not start. The api and the coordinator open the same files; the
 // repository serialises their commits across processes.
-func Open(path string) (*Local, func(), error) {
-	basic, err := defaults.BasicFromEnv()
+func Open(path string, opts ...Option) (*Local, func(), error) {
+	var o options
+	for _, f := range opts {
+		f(&o)
+	}
+	// The identity is chosen before anything is opened, so a build without a
+	// credential or a session key does not start.
+	auth, err := authnFromEnv(&o)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -57,8 +122,14 @@ func Open(path string) (*Local, func(), error) {
 		sdb.Close()
 		return nil, nil, err
 	}
+	if auth.build != nil {
+		if auth.Authn, err = auth.build(stores); err != nil {
+			sdb.Close()
+			return nil, nil, err
+		}
+	}
 	d := &deployment.Deployment{
-		Authn:  deployment.Authn{API: &Identity{Basic: basic}, GRPC: basic.Server()},
+		Authn:  auth.Authn,
 		Access: defaults.OpenAccess(),
 		Backends: deployment.Backends{
 			Tokens:         stores.Tokens,

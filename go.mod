@@ -18,6 +18,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/duckdb/duckdb-go/v2 v2.10501.0
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/graybeardcorp/warp v0.6.0
 	github.com/graybeardcorp/warp-lua v0.1.0

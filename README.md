@@ -41,6 +41,17 @@ pairs (the keys are in `config/runtime.go`). They come from the YAML file at
 by environment variables of the same name. They reload every minute and on
 SIGHUP. `WEFT_CONFIG_SOURCE=ssm` reads an AWS SSM parameter instead of the file.
 
+## Sign-in
+
+The default identity is one HTTP Basic credential (`WEFT_BASIC_AUTH_USER` and
+`WEFT_BASIC_AUTH_PASSWORD`). With `WEFT_AUTH=magiclink` people sign in with an
+emailed link instead: set `WEFT_SESSION_SECRET` (32+ characters, the same on the
+api and the coordinator) and SMTP (`EMAIL_HOST`, `EMAIL_HOST_PASSWORD`,
+`EMAIL_HOST_USER`, `EMAIL_FROM`). Who may sign in is the `login_emails` table;
+add an address with SQL until there is a command:
+
+    sqlite3 weft.db "INSERT INTO login_emails (email, created_at) VALUES ('you@example.com', datetime('now'))"
+
 ## Secrets
 
 Notify secrets (webhook tokens and the like) are encrypted at rest with AES-GCM
